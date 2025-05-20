@@ -53,7 +53,11 @@ yarn install
 sudo sh -c 'echo "127.0.0.1 dev.companionintelligence.com" >> /etc/hosts'
 grep dev.companionintelligence.com /etc/hosts
 
-yarn migrate ./backend/app/api
+cd backend/apps/api
+
+yarn migrate
+
+cd ../../..
 
 ls -al
 npm install -g pm2
