@@ -325,6 +325,7 @@ __metadata:
     nodemon: "npm:^3.1.10"
     path: "npm:^0.12.7"
     pg: "npm:^8.16.0"
+    pgvector: "npm:^0.2.1"
     pino: "npm:^9.6.0"
     pino-pretty: "npm:^13.0.0"
     ts-node: "npm:^10.9.2"
@@ -7198,6 +7199,13 @@ __metadata:
   dependencies:
     split2: "npm:^4.1.0"
   checksum: 10c0/5ea6c9b2de04c33abb08d33a2dded303c4a3c7162a9264519cbe85c0a9857d712463140ba42fad0c7cd4b21f644dd870b45bb2e02fcbe505b4de0744fd802c1d
+  languageName: node
+  linkType: hard
+
+"pgvector@npm:^0.2.1":
+  version: 0.2.1
+  resolution: "pgvector@npm:0.2.1"
+  checksum: 10c0/d48d0ac08e17efbb362dd257e1a511372753818eb70a0a2bc4d67794772c61314b5ab172814e7bdb580a0eb0c8b0b441166515f0fa99913d031d92d43fcd5898
   languageName: node
   linkType: hard
 

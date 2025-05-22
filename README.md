@@ -62,7 +62,7 @@ To spin up your local infrastructure you will need Docker and Docker compose ins
 
 Executing the following command will spin up:
 
-* A PostgreSQL database
+* A PostgreSQL database (with pgvector extension enabled)
 * An Nginx reverse proxy
 * ... more to come
 
