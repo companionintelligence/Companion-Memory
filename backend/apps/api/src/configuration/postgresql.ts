@@ -1,8 +1,6 @@
 // For more information about this file see https://dove.feathersjs.com/guides/cli/databases.html
 import knex from 'knex';
 import type { Knex } from 'knex';
-import { vectorExtension } from 'pgvector/knex';
-import { registerType, toSql, fromSql } from 'pgvector';
 import type { Application } from './types';
 
 declare module './types' {
@@ -14,9 +12,6 @@ declare module './types' {
 export function postgresql(app: Application) {
   const config = app.get('postgresql');
   const db = knex(config!);
-
-  // Register the pgvector type with the pg driver
-  registerType(db.client);
 
   app.set('postgresqlClient', db);
 }
