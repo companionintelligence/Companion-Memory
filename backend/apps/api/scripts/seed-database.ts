@@ -19,14 +19,14 @@ function readCsv(filePath: string) {
     columns: true,
     skip_empty_lines: true,
     trim: true,
-    cast: (value: any) => (value === '' ? null : value)
+    cast: (value: any) => (value === '' ? null : value),
   });
 }
 
 function validateCsvRecords(records: AnyRecord[], requiredFields: string[], fileName: string) {
   const errors: string[] = [];
   records.forEach((record, idx) => {
-    requiredFields.forEach(field => {
+    requiredFields.forEach((field) => {
       if (record[field] === undefined || record[field] === null || record[field] === '') {
         errors.push(`Row ${idx + 2} in ${fileName} is missing required field: ${field}`);
       }
@@ -109,7 +109,25 @@ async function seedPeople(filePath: string) {
   validateCsvRecords(
     records,
     [
-      'id', 'first_name', 'last_name', 'address', 'street_address', 'street_address_2', 'city', 'region', 'country', 'postal_code', 'avatar_url', 'external_avatar_url', 'type', 'created', 'hidden', 'tags', 'contact_ids', 'middle_name', 'gender'
+      'id',
+      'first_name',
+      'last_name',
+      'address',
+      'street_address',
+      'street_address_2',
+      'city',
+      'region',
+      'country',
+      'postal_code',
+      'avatar_url',
+      'external_avatar_url',
+      'type',
+      'created',
+      'hidden',
+      'tags',
+      'contact_ids',
+      'middle_name',
+      'gender',
     ],
     'js1-people.csv',
   );
@@ -159,10 +177,7 @@ async function seedPeople(filePath: string) {
       };
     });
     try {
-      await db('person')
-        .insert(transformedBatch)
-        .onConflict('id')
-        .merge(); // upsert: update on conflict
+      await db('person').insert(transformedBatch).onConflict('id').merge(); // upsert: update on conflict
       logger.info(`Upserted ${transformedBatch.length} people (batch ${i / batchSize + 1})`);
     } catch (err) {
       logger.error('Error upserting people batch:', err);
