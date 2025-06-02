@@ -51,7 +51,6 @@ function useAuth(): Value {
   const getSelfProfile = useCallback(async () => {
     if (credentials == null || isExpired()) {
       setLoading(false);
-
       return false;
     }
 
@@ -59,7 +58,9 @@ function useAuth(): Value {
     setError(null);
 
     try {
-      const data: User = await fetchJson('/api/users/me', {
+      const decoded = jwtDecode<JwtPayload>(credentials);
+      const userId = decoded.sub;
+      const data: User = await fetchJson(`/api/users/${userId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -74,7 +75,7 @@ function useAuth(): Value {
     } finally {
       setLoading(false);
     }
-  }, [setUser, setLoading, setError, isExpired]);
+  }, [setUser, setLoading, setError, credentials, isExpired]);
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -147,8 +148,13 @@ function useAuth(): Value {
   );
 
   useEffect(() => {
-    getSelfProfile();
-  }, [decoded]);
+    // only try to fetch self-profile on first load
+    if (user == null && credentials != null && !isExpired()) {
+      getSelfProfile();
+    } else {
+      setLoading(false);
+    }
+  }, []);
 
   return [
     {
