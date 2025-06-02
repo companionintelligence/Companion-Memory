@@ -20,9 +20,20 @@ export class SignupService {
       provider: undefined, // mark as internal call
     });
 
-    // Return the new user (omit password if needed)
+    // Omit password
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, ...rest } = createdUser;
+
+    // Authenticate
+    const authResult = await this.app.service('authenticate').create({
+      strategy: 'local',
+      email: data.email,
+      password: data.password
+    }, {
+      provider: undefined
+    });
+
+    rest.accessToken = authResult.accessToken
 
     return rest;
   }
