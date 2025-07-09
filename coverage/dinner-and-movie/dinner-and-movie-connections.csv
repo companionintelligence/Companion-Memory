@@ -1,0 +1,7 @@
+user_id,provider,account,connection_id
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Gmail,John.Smith.999@gmail.com,87985eaa-0dc4-43cf-9e06-1aa1689ed1e8
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Gmail,JS.999@gmail.com,caf58652-1742-4695-88d6-5913f67cf7ed
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Acme,JS@Acme.com,39bee853-84d9-4f26-a241-400fb8c5f44f
+01978ff6-f25b-7226-9ba1-531ff5003ad8,WhatsApp,555-555-1111,3b7fcaf0-5eb3-4a92-b066-3af89969b5db
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Companion Capture,555-555-1111,4b1b749c-d0f5-4cb5-93b1-60007b1159a7
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Companion Capture,John.Smith.999@gmail.com,6b5ab14a-d946-4a87-9a0e-a68e75ec5a59

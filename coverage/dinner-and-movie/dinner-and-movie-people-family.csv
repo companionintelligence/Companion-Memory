@@ -1,0 +1,24 @@
+user_id,type,first_name,last_name,gender ,address,street_address,street_address_2,city,avatar_url,region,country,postal_code,external_id,source_data,source_url,connection_id UUID ,created_at  ,updated_at  ,person_tag
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Person,John,Smith,Male,"123 Woodview Ln, Naperville, IL 60540",123 Woodview Ln,,Naperville,https://api.dicebear.com/6.x/personas/svg?seed=JohnSmith,Illinois,USA,60540,john_smith_demo,"{""nickname"": ""John"", ""job"": ""Architect"", ""interests"": [""fish"", ""coffee"", ""work""], ""marital_status"": ""Separated""}",,33cfdc3c-5f38-440b-a0f9-1f05d1858150,2025-06-20 20:57:45,2025-06-20 20:57:45,"primary_user, coffee_lover, father,"
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Person,Kristal,Smith,Female,"123 Woodview Ln, Naperville, IL 60540",123 Woodview Ln,,Naperville,https://api.dicebear.com/6.x/personas/svg?seed=KristalSmith,Illinois,USA,60540,kristal_smith_demo,"{""nickname"": ""Kristal"", ""role"": ""Spouse"", ""diet"": ""no seafood"", ""prefers_frozen_meals"": true}",,2a74cf20-d7a5-4aea-957c-0dc69c3dc2eb,2025-06-20 20:57:45,2025-06-20 20:57:45,"partner, mother, meal_planner"
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Person,Caleb,Smith,Male,"123 Woodview Ln, Naperville, IL 60540",123 Woodview Ln,,Naperville,https://api.dicebear.com/6.x/personas/svg?seed=CalebSmith,Illinois,USA,60540,caleb_smith_demo,"{""nickname"": ""Caleb"", ""age"": 14, ""school"": ""Naperville Middle"", ""interests"": [""gaming"", ""burgers""]}",,58325155-c2e2-407c-adac-a28061ae603d,2025-06-20 20:57:45,2025-06-20 20:57:45,"child, son, gamer, jock, allergic to nuts"
+01978ff6-f25b-7226-9ba1-531ff5003ad8,Person,Jordan,Smith,Nonbinary,"123 Woodview Ln, Naperville, IL 60540",123 Woodview Ln,,Naperville,https://api.dicebear.com/6.x/personas/svg?seed=JordanSmith,Illinois,USA,60540,jordan_smith_demo,"{""nickname"": ""Jordan"", ""age"": 11, ""school"": ""Naperville Elementary"", ""interests"": [""art"", ""mac and cheese""]}",,bc23a5f2-b296-4a76-956d-421a487c88da,2025-06-20 20:57:45,2025-06-20 20:57:45,"child, creative, nonbinary"
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,
+,,,, ,,,,,,,,,,,,,,,

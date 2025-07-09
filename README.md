@@ -73,7 +73,39 @@ ollama pull nomic-embed-text
 
 If the `ollama` daemon is running, just having the model present should be sufficient, you don't need to serve it explicitly.
 
-## Local infrastructure
+
+2 DOCKER FILES THAT MATTER
+
+CICD
+
+
+docker compose --profile infra up -d
+
+
+make init
+vs make install
+
+
+make infra
+make migrate
+make seed
+
+
+make local
+
+vs
+
+make build/staging
+
+
+docker compose --profile staging down
+
+
+
+## Local infrastructure - OUT OF DATE
+
+
+
 
 We run some dependencies as part of the Companion Intelligence service.
 For local development you'll want to have a version of these running.
@@ -110,6 +142,10 @@ Now that you have prerequisites installed and the local infrastructure running y
 
 ```bash
 make init
+```
+
+```bash
+make infra
 ```
 
 To initialize the repository requirements.
