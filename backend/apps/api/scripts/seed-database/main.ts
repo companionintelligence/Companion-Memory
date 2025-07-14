@@ -80,7 +80,7 @@ const logger = new Logger(path.basename(__filename));
 
     // Dinner and A Movie
     await seedEvents(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-events-meals.csv'));
-    await seedPeople(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-people.csv'));
+    await seedPeople(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-people-family.csv'));
     await seedContacts(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-contacts.csv'));
     await seedContent(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-content.csv'));
     await seedThings(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-things.csv'));
