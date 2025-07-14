@@ -67,7 +67,7 @@ class CameraAPIClient {
         headers,
         body: formData,
         // Disable SSL verification for development
-        ...(this.baseUrl.includes('localhost') && {
+        ...(this.baseUrl.includes('localhost') && process.env.NODE_ENV === 'development' && {
           agent: require('https').Agent({ rejectUnauthorized: false })
         })
       });
