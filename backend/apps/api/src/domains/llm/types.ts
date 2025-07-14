@@ -68,13 +68,6 @@ export interface OllamaModel {
 }
 
 // Media Analysis Types
-export interface MediaAnalysisInput {
-  model?: string;
-  analysisType: 'people' | 'places' | 'objects' | 'comprehensive';
-  includeMetadata?: boolean;
-  threadId?: string;
-  fileId?: string;
-}
 
 export interface MediaEntity {
   type: 'person' | 'place' | 'object';
