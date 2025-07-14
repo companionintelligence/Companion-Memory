@@ -78,6 +78,17 @@ const logger = new Logger(path.basename(__filename));
     await seedLocations(db, path.resolve(dataDir, './js1-data/js1-locations.csv'));
     await seedAnswers(db, path.resolve(dataDir, './js1-data/js1-answers.csv'));
 
+    // Dinner and A Movie
+    await seedEvents(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-events-meals.csv'));
+    await seedPeople(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-people.csv'));
+    await seedContacts(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-contacts.csv'));
+    await seedContent(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-content.csv'));
+    await seedThings(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-things.csv'));
+    await seedPlaces(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-places.csv'));
+    await seedLocations(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-locations.csv'));
+    await seedAnswers(db, path.resolve(dataDir, './dinner-and-movie/movie-questions-answers.csv'));
+    await seedQuestions(db, path.resolve(dataDir, './dinner-and-movie/movie-questions-answers.csv'));
+
     process.exit(0);
   } catch (err: unknown) {
     error = err as Error;
