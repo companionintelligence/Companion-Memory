@@ -83,7 +83,7 @@ const logger = new Logger(path.basename(__filename));
     await seedPeople(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-people-family.csv'));
     await seedContacts(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-contacts.csv'));
     await seedContent(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-content.csv'));
-    await seedThings(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-things.csv'));
+    await seedThings(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-things-food.csv'));
     await seedPlaces(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-places.csv'));
     await seedLocations(db, path.resolve(dataDir, './dinner-and-movie/dinner-and-movie-locations.csv'));
     await seedAnswers(db, path.resolve(dataDir, './dinner-and-movie/movie-questions-answers.csv'));
