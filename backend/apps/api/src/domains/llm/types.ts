@@ -6,6 +6,14 @@ export interface PromptInput {
   threadId?: string;
 }
 
+export interface MediaAnalysisInput {
+  model?: string;
+  analysisType: 'people' | 'places' | 'objects' | 'comprehensive';
+  includeMetadata?: boolean;
+  threadId?: string;
+  fileId?: string;
+}
+
 export interface CreateMessageDto {
   threadId: string;
   model: string;
@@ -57,4 +65,50 @@ export interface OllamaModel {
   namespace: string | null;
   name: string;
   tag: string | null;
+}
+
+// Media Analysis Types
+export interface MediaAnalysisInput {
+  model?: string;
+  analysisType: 'people' | 'places' | 'objects' | 'comprehensive';
+  includeMetadata?: boolean;
+  threadId?: string;
+  fileId?: string;
+}
+
+export interface MediaEntity {
+  type: 'person' | 'place' | 'object';
+  name: string;
+  confidence: number;
+  boundingBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  attributes?: Record<string, any>;
+}
+
+export interface MediaAnalysisResult {
+  id: string;
+  filename?: string;
+  url?: string;
+  mimetype: string;
+  analysisType: string;
+  model: string;
+  analysis: {
+    people?: MediaEntity[];
+    places?: MediaEntity[];
+    objects?: MediaEntity[];
+    summary?: string;
+    metadata?: {
+      resolution?: { width: number; height: number };
+      duration?: number;
+      fileSize?: number;
+      format?: string;
+      [key: string]: any;
+    };
+  };
+  processedAt: string;
+  processingTimeMs: number;
 }

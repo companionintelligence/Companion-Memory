@@ -7,9 +7,12 @@ import {
   NotFoundException,
   Post,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { z } from 'zod';
 
@@ -22,11 +25,18 @@ import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/e
 import { MessageService } from '../services/MessageService';
 import { OllamaService } from '../services/OllamaService';
 import { ThreadService } from '../services/ThreadService';
-import type { OllamaModel, PromptInput } from '../types';
+import type { OllamaModel, PromptInput, MediaAnalysisInput } from '../types';
 
 const promptSchema = z.object({
   prompt: z.string(),
   model: z.optional(z.string()),
+  threadId: z.string().nullable().optional(),
+});
+
+const mediaAnalysisSchema = z.object({
+  model: z.optional(z.string()),
+  analysisType: z.enum(['people', 'places', 'objects', 'comprehensive']),
+  includeMetadata: z.optional(z.boolean()),
   threadId: z.string().nullable().optional(),
 });
 
@@ -160,6 +170,49 @@ export class OllamaController {
       });
 
       res.end();
+    }
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('analyze-media')
+  @HttpCode(200)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } })) // 100MB limit
+  async analyzeMedia(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(mediaAnalysisSchema)) input: MediaAnalysisInput,
+    @UploadedFile() file: any, // Using any to avoid Express namespace issues
+  ) {
+    if (!file) {
+      throw new BadRequestException('File is required for media analysis');
+    }
+
+    // Validate that we have a supported media type
+    const mediaType = this.ollamaService.detectMediaType(file.mimetype);
+    if (mediaType === 'unsupported') {
+      throw new BadRequestException(
+        `Unsupported media type: ${file.mimetype}. Supported types: image/*, video/*, audio/*`
+      );
+    }
+
+    try {
+      const result = await this.ollamaService.analyzeMedia(
+        context,
+        file.buffer,
+        file.mimetype,
+        input,
+      );
+
+      this.logger.log('Media analysis completed', {
+        fileSize: file.size,
+        mimetype: file.mimetype,
+        analysisType: input.analysisType,
+        processingTimeMs: result.processingTimeMs,
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Media analysis failed', error as Error);
+      throw new BadRequestException(`Media analysis failed: ${(error as Error).message}`);
     }
   }
 
