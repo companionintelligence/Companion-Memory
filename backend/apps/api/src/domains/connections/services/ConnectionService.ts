@@ -13,8 +13,8 @@ import type { CreateConnectionDto, Connection, UpdateConnectionDto } from '../ty
 @Injectable()
 export class ConnectionService {
   private logger = new LoggerService(ConnectionService.name);
-  private readonly redirectUrl = `${process.env.API_URL || 'https://127.0.0.1:3030'}/connections/callback`;
-  private readonly frontendUrl = process.env.FRONTEND_URL || 'http://127.0.0.1:5173';
+  private readonly apiUrl = process.env.API_URL || 'https://127.0.0.1';
+  private readonly frontendUrl = process.env.FRONTEND_URL || 'https://127.0.0.1';
 
   constructor(
     @InjectRepository(ConnectionEntity)
@@ -160,10 +160,18 @@ export class ConnectionService {
 
     // Prepare authorization parameters
     const authParams: any = {
-      redirect_uri: this.redirectUrl,
+      redirect_uri: `${this.frontendUrl}/oauth-callback.html`,
       scope: provider.scopes || '',
       state: connectionId, // Pass connection ID in state to identify it in callback
     };
+
+    this.logger.debug('OAuth authorization parameters', {
+      redirect_uri: authParams.redirect_uri,
+      apiUrl: this.apiUrl,
+      scope: provider.scopes,
+      state: connectionId,
+      envApiUrl: process.env.API_URL,
+    });
 
     // Add tenant ID for Microsoft connections
     if (provider.id === '018f8b9a-1234-7000-8000-000000000006') {
@@ -171,6 +179,13 @@ export class ConnectionService {
     }
 
     const authorizationUri = client.authorizeURL(authParams);
+
+    this.logger.debug('Generated authorization URL', {
+      authorizationUri,
+      redirect_uri: authParams.redirect_uri,
+      tenant: authParams.tenant,
+      fullUrl: authorizationUri,
+    });
 
     return { url: authorizationUri };
   }
@@ -199,14 +214,24 @@ export class ConnectionService {
 
     try {
       // Get the connection without user context (since this is an OAuth callback)
+      this.logger.debug('Looking for connection in database', { connectionId });
+      
       const entity = await this.connectionRepository.findOne({
         where: { id: connectionId },
         relations: ['provider', 'user'],
       });
 
       if (!entity) {
+        this.logger.error('Connection not found in database', { connectionId });
         throw new NotFoundException('Connection not found');
       }
+
+      this.logger.debug('Connection found in database', {
+        connectionId,
+        connectionName: entity.name,
+        hasProvider: !!entity.provider,
+        providerName: entity.provider?.name,
+      });
 
       const connection = entity.toConnection();
 
@@ -253,7 +278,7 @@ export class ConnectionService {
         code,
         client_id: connection.clientid,
         client_secret: connection.clientsecret,
-        redirect_uri: this.redirectUrl,
+        redirect_uri: `${this.frontendUrl}/oauth-callback.html`,
         grant_type: 'authorization_code',
       });
 
@@ -311,7 +336,14 @@ export class ConnectionService {
       // Store tokens in the connection entity
       const expiryDate = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : null;
 
-      await this.connectionRepository.update(
+      this.logger.debug('About to store tokens in database', {
+        connectionId,
+        hasAccessToken: !!tokenData.access_token,
+        hasRefreshToken: !!tokenData.refresh_token,
+        expiryDate,
+      });
+
+      const updateResult = await this.connectionRepository.update(
         { id: connectionId },
         {
           accessToken: tokenData.access_token,
@@ -320,11 +352,28 @@ export class ConnectionService {
         },
       );
 
+      this.logger.debug('Database update result', {
+        connectionId,
+        affectedRows: updateResult.affected,
+        updateResult,
+      });
+
       this.logger.debug('Tokens stored successfully for connection', { connectionId });
 
+      // Get the updated connection data
+      const updatedConnection = await this.findOne(
+        { userId: entity.user.id, requestId: 'oauth-callback' } as RequestContext, 
+        connectionId
+      );
+
       // Redirect to frontend success page
+      const redirectUrl = `${this.frontendUrl}/connections?oauth=success&connectionId=${connectionId}`;
+      this.logger.debug('Redirecting to frontend', { redirectUrl, frontendUrl: this.frontendUrl });
+      
       return {
-        redirect: `${this.frontendUrl}/connections?oauth=success&connectionId=${connectionId}`,
+        redirect: redirectUrl,
+        connection: updatedConnection,
+        connectionId: connectionId,
       };
     } catch (error) {
       this.logger.error('OAuth2 token exchange failed', {

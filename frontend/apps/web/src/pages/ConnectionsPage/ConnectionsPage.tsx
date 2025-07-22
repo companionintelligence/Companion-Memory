@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
@@ -54,7 +54,7 @@ export function ConnectionsPage() {
   const [oauthInProgress, setOauthInProgress] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
-  const fetchConnections = async () => {
+  const fetchConnections = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -64,7 +64,6 @@ export function ConnectionsPage() {
         throw new Error('Authentication token not found');
       }
 
-      console.log('ConnectionsPage: Making API request to /api/connections');
       const response = await fetch('/api/connections', {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -86,11 +85,10 @@ export function ConnectionsPage() {
         } else if (response.status >= 500) {
           throw new Error('Server error: Please try again later');
         } else {
-          throw new Error(`Error fetching Connectors: ${response.statusText}`);
+          throw new Error(`Error fetching connections: ${response.statusText}`);
         }
       }
 
-      console.log('ConnectionsPage: API request successful, parsing response');
       const data = await response.json();
 
       // Handle both array response and paginated response
@@ -101,24 +99,19 @@ export function ConnectionsPage() {
         ConnectionsData = data.data;
       } else {
         console.error('ConnectionsPage: Invalid response format', data);
-        throw new Error('Invalid response format: Expected an array of Connectors');
+        throw new Error('Invalid response format: Expected an array of connections');
       }
-
-      console.log(`ConnectionsPage: Successfully fetched ${ConnectionsData.length} Connections`, {
-        ConnectionsData,
-      });
       setConnections(ConnectionsData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
-      console.error('ConnectionsPage: Error in fetchConnectors():', errorMessage, err);
+      console.error('ConnectionsPage: Error in fetchConnections():', errorMessage, err);
       setError(errorMessage);
     } finally {
-      console.log('ConnectionsPage: Fetch operation completed');
       setLoading(false);
     }
-  };
+  }, [authToken]);
 
-  const fetchProviders = async () => {
+  const fetchProviders = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -128,7 +121,6 @@ export function ConnectionsPage() {
         throw new Error('Authentication token not found');
       }
 
-      console.log('ConnectionsPage: Making API request to /api/providers');
       const response = await fetch('/api/providers', {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -150,11 +142,10 @@ export function ConnectionsPage() {
         } else if (response.status >= 500) {
           throw new Error('Server error: Please try again later');
         } else {
-          throw new Error(`Error fetching Connectors: ${response.statusText}`);
+          throw new Error(`Error fetching providers: ${response.statusText}`);
         }
       }
 
-      console.log('ConnectionsPage: API request successful, parsing response');
       const data = await response.json();
 
       // Handle both array response and paginated response
@@ -165,31 +156,24 @@ export function ConnectionsPage() {
         ProvidersData = data.data;
       } else {
         console.error('ConnectionsPage: Invalid response format', data);
-        throw new Error('Invalid response format: Expected an array of Connectors');
+        throw new Error('Invalid response format: Expected an array of providers');
       }
-
-      console.log(`ConnectionsPage: Successfully fetched ${ProvidersData.length} Connectors`, {
-        ProvidersData,
-      });
       setProviders(ProvidersData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
-      console.error('ConnectionsPage: Error in fetchConnectors():', errorMessage, err);
+      console.error('ConnectionsPage: Error in fetchProviders():', errorMessage, err);
       setError(errorMessage);
     } finally {
-      console.log('ConnectionsPage: Fetch operation completed');
       setLoading(false);
     }
-  };
+  }, [authToken]);
 
-  const fetchState = async () => {
+  const fetchState = useCallback(async () => {
     await fetchConnections();
     await fetchProviders();
-  };
+  }, [fetchConnections, fetchProviders]);
 
   useEffect(() => {
-    console.log('ConnectionsPage: Component mounted, fetching Connectors');
-
     // Check for OAuth callback
     const urlParams = new URLSearchParams(window.location.search);
     const oauthStatus = urlParams.get('oauth');
@@ -197,21 +181,60 @@ export function ConnectionsPage() {
     const errorMessage = urlParams.get('message');
 
     if (oauthStatus === 'success' && connectionId) {
-      setSuccessMessage(`Successfully authenticated connection!`);
+      // Make API call to complete the OAuth callback
+      completeOAuthCallback(connectionId, true);
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (oauthStatus === 'error') {
-      setError(errorMessage || 'OAuth authentication failed');
+      // Make API call to complete the OAuth callback with error
+      const errorMsg = errorMessage || 'OAuth authentication failed';
+      completeOAuthCallback(connectionId || '', false, errorMsg);
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
     fetchState();
+  }, [authToken, fetchState]);
 
-    return () => {
-      console.log('ConnectionsPage: Component unmounting');
-    };
-  }, []);
+  const completeOAuthCallback = useCallback(async (connectionId: string, success: boolean, error?: string) => {
+    try {
+      if (!authToken) {
+        throw new Error('Authentication token not found');
+      }
+
+      const response = await fetch('/api/connections/callback/complete', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          connectionId,
+          success,
+          error,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Error completing OAuth callback: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        setSuccessMessage(`Successfully authenticated connection: ${result.connection?.name || connectionId}`);
+        // Refresh the connections list to show updated data
+        await fetchConnections();
+      } else {
+        setError(result.error || 'OAuth authentication failed');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      console.error('Error completing OAuth callback:', errorMessage, err);
+      setError(errorMessage);
+    }
+  }, [authToken, fetchConnections]);
 
   const truncateText = (text: string | undefined, maxLength: number = 50) => {
     if (!text) {

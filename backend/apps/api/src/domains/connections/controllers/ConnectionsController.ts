@@ -54,6 +54,18 @@ export class ConnectionsController {
     @Query('scope') scope: string,
     @Res() res: Response,
   ) {
+    console.log('OAuth callback received:', { code, state, scope });
+    
+    // If no code or state, this might be a test request
+    if (!code || !state) {
+      console.log('No code or state provided, returning test response');
+      return res.json({ 
+        message: 'OAuth callback endpoint is working',
+        received: { code, state, scope },
+        frontendUrl: this.frontendUrl 
+      });
+    }
+    
     try {
       // Create a minimal context for the callback
       const context: RequestContext = {
@@ -62,21 +74,37 @@ export class ConnectionsController {
 
       const result = await this.connectionService.callback(context);
 
-      // If the service returns a redirect URL, perform the redirect
+      console.log('OAuth callback result:', result);
+
+      // Return both the redirect URL and the connection data
+      // This allows the frontend to handle both the redirect and make API calls
+      const responseData = {
+        redirect: result.redirect,
+        connection: result.connection,
+        success: true,
+        connectionId: result.connectionId,
+      };
+
+      // If the service returns a redirect URL, include it in the response
       if (result.redirect) {
-        return res.redirect(302, result.redirect);
+        console.log('Including redirect URL in response:', result.redirect);
+        return res.json(responseData);
       }
 
       // Otherwise return the result as JSON
-      return res.json(result);
+      return res.json(responseData);
     } catch (error) {
-      // Log the error and redirect to frontend with error
+      // Log the error and return error response
       console.error('OAuth callback error:', error);
 
-      return res.redirect(
-        302,
-        `${this.frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`,
-      );
+      const errorResponse = {
+        success: false,
+        error: 'Authentication failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        redirect: `${this.frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`,
+      };
+
+      return res.json(errorResponse);
     }
   }
 
@@ -84,6 +112,40 @@ export class ConnectionsController {
   @Get(':id/connect')
   async connect(@Context() context: RequestContext, @Param('id') id: string) {
     return this.connectionService.connect(context, id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('callback/complete')
+  async completeCallback(
+    @Context() context: RequestContext,
+    @Body() body: { connectionId: string; success: boolean; error?: string },
+  ) {
+    console.log('Completing OAuth callback:', body);
+    
+    try {
+      if (body.success) {
+        // Get the updated connection data
+        const connection = await this.connectionService.findOne(context, body.connectionId);
+        return {
+          success: true,
+          connection,
+          message: 'OAuth authentication completed successfully',
+        };
+      } else {
+        return {
+          success: false,
+          error: body.error || 'OAuth authentication failed',
+          message: 'Failed to complete OAuth authentication',
+        };
+      }
+    } catch (error) {
+      console.error('Error completing OAuth callback:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: 'Failed to complete OAuth authentication',
+      };
+    }
   }
 
   @UseGuards(JwtAuthGuard)

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth Callback - Companion Intelligence</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f8fafc;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+        }
+        .spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error {
+            color: #dc2626;
+        }
+        .success {
+            color: #059669;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loading" class="spinner"></div>
+        <div id="message">Processing OAuth callback...</div>
+    </div>
+
+    <script>
+        async function handleOAuthCallback() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const state = urlParams.get('state');
+            const error = urlParams.get('error');
+            const errorDescription = urlParams.get('error_description');
+
+            const messageEl = document.getElementById('message');
+            const loadingEl = document.getElementById('loading');
+
+            try {
+                if (error) {
+                    // OAuth error occurred
+                    messageEl.textContent = `OAuth Error: ${errorDescription || error}`;
+                    messageEl.className = 'error';
+                    loadingEl.style.display = 'none';
+                    
+                    // Redirect to frontend with error
+                    setTimeout(() => {
+                        const frontendUrl = window.location.origin.replace('3000', '5173');
+                        window.location.href = `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent(errorDescription || error)}`;
+                    }, 2000);
+                    return;
+                }
+
+                if (!code || !state) {
+                    throw new Error('Missing OAuth code or state parameter');
+                }
+
+                // Make API call to complete the OAuth callback
+                const apiUrl = `${window.location.origin}/api/connections/callback?code=${code}&state=${state}`;
+                
+                messageEl.textContent = 'Completing OAuth authentication...';
+                
+                const response = await fetch(apiUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API request failed: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    messageEl.textContent = 'OAuth authentication successful!';
+                    messageEl.className = 'success';
+                    loadingEl.style.display = 'none';
+                    
+                    // Redirect to frontend with success
+                    setTimeout(() => {
+                        const frontendUrl = window.location.origin.replace('3000', '5173');
+                        window.location.href = `${frontendUrl}/connections?oauth=success&connectionId=${result.connectionId}`;
+                    }, 1000);
+                } else {
+                    throw new Error(result.error || 'OAuth authentication failed');
+                }
+
+            } catch (err) {
+                console.error('OAuth callback error:', err);
+                messageEl.textContent = `Error: ${err.message}`;
+                messageEl.className = 'error';
+                loadingEl.style.display = 'none';
+                
+                // Redirect to frontend with error
+                setTimeout(() => {
+                    const frontendUrl = window.location.origin.replace('3000', '5173');
+                    window.location.href = `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent(err.message)}`;
+                }, 2000);
+            }
+        }
+
+        // Handle the OAuth callback when the page loads
+        document.addEventListener('DOMContentLoaded', handleOAuthCallback);
+    </script>
+</body>
+</html> 
