@@ -725,6 +725,10 @@ export function ConnectionsPage() {
               <Button
                 variant="secondary"
                 onClick={async () => {
+                  console.log('handleConnect clicked', {
+                    configureFormData,
+                    selectedConnection,
+                  });
                   // Save first if there are changes
                   if (configureFormData.name !== selectedConnection.name ||
                       configureFormData.providerId !== selectedConnection.provider?.id ||

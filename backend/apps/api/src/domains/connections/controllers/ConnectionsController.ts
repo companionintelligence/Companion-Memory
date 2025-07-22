@@ -43,6 +43,8 @@ const updateConnectionSchema = z.object({
 
 @Controller('connections')
 export class ConnectionsController {
+  private readonly frontendUrl = process.env.FRONTEND_URL || 'http://127.0.0.1:5173';
+
   constructor(private readonly connectionService: ConnectionService) {}
 
   @Get('callback')
@@ -70,11 +72,10 @@ export class ConnectionsController {
     } catch (error) {
       // Log the error and redirect to frontend with error
       console.error('OAuth callback error:', error);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://dev.companionintelligence.com';
 
       return res.redirect(
         302,
-        `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`,
+        `${this.frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`,
       );
     }
   }

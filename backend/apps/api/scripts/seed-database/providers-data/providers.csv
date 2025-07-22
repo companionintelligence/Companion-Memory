@@ -4,5 +4,5 @@ id,name,token_host,token_path,authorize_path,api_base_url,scopes,created_at,upda
 018f8b9a-1234-7000-8000-000000000003,apple,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
 018f8b9a-1234-7000-8000-000000000004,facebook,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
 018f8b9a-1234-7000-8000-000000000005,instagram,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000006,microsoft,https://login.microsoftonline.com,/common/oauth2/v2.0/token,/common/oauth2/v2.0/authorize,https://graph.microsoft.com,https://graph.microsoft.com/.default,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
+018f8b9a-1234-7000-8000-000000000006,microsoft,https://login.microsoftonline.com,/common/oauth2/v2.0/token,/common/oauth2/v2.0/authorize,https://graph.microsoft.com,https://graph.microsoft.com/User.Read,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
 018f8b9a-1234-7000-8000-000000000007,github,https://github.com,/login/oauth/access_token,/login/oauth/authorize,https://api.github.com,read:user user:email,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z

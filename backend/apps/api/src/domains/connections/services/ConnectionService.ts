@@ -13,6 +13,8 @@ import type { CreateConnectionDto, Connection, UpdateConnectionDto } from '../ty
 @Injectable()
 export class ConnectionService {
   private logger = new LoggerService(ConnectionService.name);
+  private readonly redirectUrl = `${process.env.API_URL || 'https://127.0.0.1:3030'}/connections/callback`;
+  private readonly frontendUrl = process.env.FRONTEND_URL || 'http://127.0.0.1:5173';
 
   constructor(
     @InjectRepository(ConnectionEntity)
@@ -156,11 +158,19 @@ export class ConnectionService {
       },
     });
 
-    const authorizationUri = client.authorizeURL({
-      redirect_uri: `${process.env.API_URL || 'http://dev.companionintelligence.com/api'}/connections/callback`,
+    // Prepare authorization parameters
+    const authParams: any = {
+      redirect_uri: this.redirectUrl,
       scope: provider.scopes || '',
       state: connectionId, // Pass connection ID in state to identify it in callback
-    });
+    };
+
+    // Add tenant ID for Microsoft connections
+    if (provider.id === '018f8b9a-1234-7000-8000-000000000006') {
+      authParams.tenant = 'common';
+    }
+
+    const authorizationUri = client.authorizeURL(authParams);
 
     return { url: authorizationUri };
   }
@@ -243,9 +253,14 @@ export class ConnectionService {
         code,
         client_id: connection.clientid,
         client_secret: connection.clientsecret,
-        redirect_uri: `${process.env.API_URL || 'http://dev.companionintelligence.com/api'}/connections/callback`,
+        redirect_uri: this.redirectUrl,
         grant_type: 'authorization_code',
       });
+
+      // Add tenant parameter for Microsoft connections
+      if (provider.id === '018f8b9a-1234-7000-8000-000000000006') {
+        tokenParams.append('tenant', 'common');
+      }
 
       this.logger.debug('Making token request to:', tokenEndpoint);
 
@@ -308,10 +323,8 @@ export class ConnectionService {
       this.logger.debug('Tokens stored successfully for connection', { connectionId });
 
       // Redirect to frontend success page
-      const frontendUrl = process.env.FRONTEND_URL || 'http://dev.companionintelligence.com';
-
       return {
-        redirect: `${frontendUrl}/connections?oauth=success&connectionId=${connectionId}`,
+        redirect: `${this.frontendUrl}/connections?oauth=success&connectionId=${connectionId}`,
       };
     } catch (error) {
       this.logger.error('OAuth2 token exchange failed', {
