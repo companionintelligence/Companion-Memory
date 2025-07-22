@@ -1,4 +1,12 @@
-import { Card, CardHeader, CardFooter, CardTitle, CardAction, CardDescription, CardContent } from '../ui/card';
+import {
+  Card,
+  CardHeader,
+  CardFooter,
+  CardTitle,
+  CardAction,
+  CardDescription,
+  CardContent,
+} from '../ui/card';
 
 type CardComponent = typeof Card & {
   Header: typeof CardHeader;

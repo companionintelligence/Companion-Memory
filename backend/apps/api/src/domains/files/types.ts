@@ -5,5 +5,3 @@ export interface File {
   size: number;
   url?: string;
 }
-
-export interface FileUploadDto {}

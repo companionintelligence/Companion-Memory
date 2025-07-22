@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Separator, Tabs } from '@ci/shadcn';
 import {
@@ -15,7 +16,6 @@ import {
   User,
   MapPin,
 } from '@ci/shadcn/icons';
-
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -170,9 +170,12 @@ export function MemoryPage() {
 
   // Initialize and update map when the tab changes or filtered memories change
   useEffect(() => {
-    if (activeTab !== 'map' || !mapContainerRef.current) return;
+    if (activeTab !== 'map' || !mapContainerRef.current) {
+      return;
+    }
 
     // Fix for Leaflet's icon paths
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (L.Icon.Default.prototype as any)._getIconUrl;
     L.Icon.Default.mergeOptions({
       iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
@@ -220,8 +223,7 @@ export function MemoryPage() {
     const bounds = L.latLngBounds([]);
     memoriesWithLocation.forEach((memory) => {
       if (memory.location) {
-        // @ts-expect-error
-        const marker = L.marker([memory.location.lat, memory.location.lng], { icon: customIcon })
+        L.marker([memory.location.lat, memory.location.lng], { icon: customIcon })
           .addTo(mapRef.current!)
           .bindPopup(
             `

@@ -3,11 +3,11 @@ import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
+import { ValidationPipe } from '@ci/common/pipes';
 import type { RequestContext } from '@ci/common/types';
 
 import { MessageService } from '../services/MessageService';
 import { ThreadService } from '../services/ThreadService';
-import { ValidationPipe } from '@ci/common/pipes';
 
 export const includeMessagesSchema = z
   .enum(['true', 'false'])

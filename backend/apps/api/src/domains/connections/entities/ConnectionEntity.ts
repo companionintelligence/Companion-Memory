@@ -8,8 +8,8 @@ import {
   JoinColumn,
 } from 'typeorm';
 
-import { UserEntity } from '@ci/domains/user';
 import { ProviderEntity } from '@ci/domains/providers';
+import { UserEntity } from '@ci/domains/user';
 
 import type { Connection } from '../types';
 

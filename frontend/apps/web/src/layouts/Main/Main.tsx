@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { Outlet } from 'react-router-dom';
+
 import { LoadingPage, Portal } from '@ci/common';
 import { Separator, Sidebar, Toaster, useSidebar } from '@ci/shadcn';
 import {
@@ -15,6 +15,7 @@ import {
   Search,
   Settings2,
 } from '@ci/shadcn/icons';
+import { Outlet } from 'react-router-dom';
 
 import logo from '../../assets/logo.png';
 

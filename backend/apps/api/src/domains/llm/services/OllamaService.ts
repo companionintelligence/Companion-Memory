@@ -21,6 +21,7 @@ type MessagesInput = Pick<Message, 'prompt' | 'text'>[];
 export class OllamaService {
   constructor(private readonly messageService: MessageService) {}
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
     const result = await ollama.list();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));

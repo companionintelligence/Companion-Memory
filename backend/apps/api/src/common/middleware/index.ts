@@ -1,2 +1,2 @@
-export { RequestContextMiddleware } from './RequestContextMiddleware'
-export { RequestLoggerMiddleware } from './RequestLoggerMiddleware'
+export { RequestContextMiddleware } from './RequestContextMiddleware';
+export { RequestLoggerMiddleware } from './RequestLoggerMiddleware';

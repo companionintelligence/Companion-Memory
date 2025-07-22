@@ -1,7 +1,7 @@
 import type { Device } from './types';
-import { useStream } from './useStream';
-import { useRecorder } from './useRecorder';
 import { useInputDevices } from './useInputDevices';
+import { useRecorder } from './useRecorder';
+import { useStream } from './useStream';
 
 type ReturnType = [
   {

@@ -8,7 +8,6 @@ import {
   Patch,
   Post,
   UseGuards,
-  Redirect,
   Res,
   Query,
 } from '@nestjs/common';
@@ -51,13 +50,12 @@ export class ConnectionsController {
     @Query('code') code: string,
     @Query('state') state: string,
     @Query('scope') scope: string,
-    @Res() res: Response
+    @Res() res: Response,
   ) {
-
     try {
       // Create a minimal context for the callback
       const context: RequestContext = {
-        query: { code, state, scope }
+        query: { code, state, scope },
       };
 
       const result = await this.connectionService.callback(context);
@@ -73,7 +71,11 @@ export class ConnectionsController {
       // Log the error and redirect to frontend with error
       console.error('OAuth callback error:', error);
       const frontendUrl = process.env.FRONTEND_URL || 'http://dev.companionintelligence.com';
-      return res.redirect(302, `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`);
+
+      return res.redirect(
+        302,
+        `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`,
+      );
     }
   }
 
@@ -134,7 +136,4 @@ export class ConnectionsController {
   async delete(@Context() context: RequestContext, @Param('id') id: string) {
     await this.connectionService.delete(context, id);
   }
-
-
-
 }

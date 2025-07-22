@@ -13,7 +13,7 @@ export class RequestContextMiddleware implements NestMiddleware {
 
     req.context = {
       requestId,
-      query: req.query
+      query: req.query,
     };
 
     res.setHeader(REQUEST_ID_HEADER, requestId);

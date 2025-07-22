@@ -1,9 +1,9 @@
 import { Module, OnModuleInit, Logger } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { ModuleRef } from '@nestjs/core';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { ConnectionEntity } from './entities/ConnectionEntity';
 import { ConnectionsController } from './controllers/ConnectionsController';
+import { ConnectionEntity } from './entities/ConnectionEntity';
 import { ConnectionService } from './services/ConnectionService';
 
 @Module({

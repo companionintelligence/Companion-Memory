@@ -30,7 +30,7 @@ export class LocationEntity {
   geo_format!: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  geolocation!: Record<string, any> | null;
+  geolocation!: Record<string, unknown> | null;
 
   @Column({ type: 'boolean', nullable: true })
   estimated!: boolean | null;

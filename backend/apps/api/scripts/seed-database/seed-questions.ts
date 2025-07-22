@@ -1,4 +1,5 @@
 import path from 'path';
+
 import { Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
@@ -20,14 +21,12 @@ export async function seedQuestions(db: DataSource, filePath: string) {
   const records = readCsv<CsvQuestion>(filePath);
 
   await db.transaction(async (manager) => {
-    const now = new Date();
-
     for (const record of records) {
       await manager.save(QuestionEntity, {
         id: record.id,
         category: record.category,
         text: record.question_string,
-        example_answer_1: record.example_answer_1
+        example_answer_1: record.example_answer_1,
       });
     }
   });

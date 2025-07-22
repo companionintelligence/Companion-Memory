@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+
 import { Avatar, DropdownMenu, Sidebar, useSidebar } from '@ci/shadcn';
 import { BadgeCheck, Bell, ChevronsUpDown, CreditCard, LogOut, Settings2, Sparkles } from '@ci/shadcn/icons';
 

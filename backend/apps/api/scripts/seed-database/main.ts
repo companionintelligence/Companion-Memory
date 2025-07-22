@@ -1,4 +1,5 @@
 import path from 'path';
+
 import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
@@ -86,7 +87,7 @@ const logger = new Logger(path.basename(__filename));
     await seedAnswers(db, path.resolve(dataDir, './js1-data/js1-answers.csv'));
 
     process.exit(0);
-  } catch (err: unknown) {
+  } catch (err) {
     error = err as Error;
   } finally {
     await db.destroy();

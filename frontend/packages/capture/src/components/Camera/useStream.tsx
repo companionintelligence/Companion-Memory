@@ -1,5 +1,5 @@
-import { type RefObject, useCallback, useRef, useState } from 'react';
 import { createHookContext } from '@ci/common';
+import { type RefObject, useCallback, useRef, useState } from 'react';
 
 type ReturnType = [
   {
@@ -46,6 +46,7 @@ function useStream(): ReturnType {
   const startCamera = useCallback(async () => {
     if (isActive && mediaStreamRef.current) {
       console.log('Camera is already active. Skipping new start request.');
+
       return;
     }
 
@@ -99,19 +100,23 @@ function useStream(): ReturnType {
         setError('Video element reference is null. Cannot attach stream.');
         stopCamera();
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error accessing camera:', err);
 
-      if (err.name === 'NotAllowedError') {
-        setError('Camera access denied. Please grant permission in your browser settings.');
-      } else if (err.name === 'NotFoundError') {
-        setError('No camera found. Please ensure you have a camera connected and enabled.');
-      } else if (err.name === 'NotReadableError') {
-        setError('Camera is in use by another application or device. Please close other camera-using apps.');
-      } else if (err.name === 'OverconstrainedError') {
-        setError('Camera not available with requested constraints (e.g., resolution).');
-      } else {
-        setError(`Failed to access camera: ${err.message || err.name}`);
+      if (err instanceof Error) {
+        if (err.name === 'NotAllowedError') {
+          setError('Camera access denied. Please grant permission in your browser settings.');
+        } else if (err.name === 'NotFoundError') {
+          setError('No camera found. Please ensure you have a camera connected and enabled.');
+        } else if (err.name === 'NotReadableError') {
+          setError(
+            'Camera is in use by another application or device. Please close other camera-using apps.',
+          );
+        } else if (err.name === 'OverconstrainedError') {
+          setError('Camera not available with requested constraints (e.g., resolution).');
+        } else {
+          setError(`Failed to access camera: ${err.message || err.name}`);
+        }
       }
 
       stopCamera();

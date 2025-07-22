@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+
 import { Badge, Button, Card, Input, Progress, Select, Table, Tabs } from '@ci/shadcn';
 import {
   AlertCircle,
@@ -20,6 +21,7 @@ const API_BASE = '/api';
 interface JobStatus {
   id: string;
   name: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any;
   progress: number;
   state: 'waiting' | 'active' | 'completed' | 'failed' | 'delayed' | 'paused';
@@ -28,6 +30,7 @@ interface JobStatus {
   finishedAt?: string;
   attempts: number;
   failedReason?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   returnValue?: any;
   queue: string;
   priority: number;
@@ -62,18 +65,25 @@ export function AdminPage() {
 
       const token = localStorage.getItem('feathers-jwt');
       const params = new URLSearchParams();
-      if (filterQueue) params.append('queue', filterQueue);
-      if (filterState) params.append('state', filterState);
+      if (filterQueue) {
+        params.append('queue', filterQueue);
+      }
+
+      if (filterState) {
+        params.append('state', filterState);
+      }
 
       const res = await fetch(`${API_BASE}/admin/jobs?${params}`, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        throw new Error(res.statusText);
+      }
 
       const data = await res.json();
       setJobs(data.jobs || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch jobs');
+    } catch (err) {
+      setError((err as Error).message || 'Failed to fetch jobs');
     } finally {
       setLoading(false);
     }
@@ -85,12 +95,14 @@ export function AdminPage() {
       const res = await fetch(`${API_BASE}/dashboard/queues`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        throw new Error(res.statusText);
+      }
 
       const data = await res.json();
       setQueueStats(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch queue stats');
+    } catch (err) {
+      setError((err as Error).message || 'Failed to fetch queue stats');
     }
   };
 
@@ -394,6 +406,7 @@ export function AdminPage() {
 
 // System Health Component
 function SystemHealthComponent() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [healthData, setHealthData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -405,11 +418,14 @@ function SystemHealthComponent() {
       const res = await fetch(`${API_BASE}/health/detailed`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        throw new Error(res.statusText);
+      }
+
       const data = await res.json();
       setHealthData(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch health data');
+    } catch (err) {
+      setError((err as Error).message || 'Failed to fetch health data');
     } finally {
       setLoading(false);
     }
@@ -418,11 +434,17 @@ function SystemHealthComponent() {
   useEffect(() => {
     fetchHealthData();
     const interval = setInterval(fetchHealthData, 30000); // Refresh every 30 seconds
+
     return () => clearInterval(interval);
   }, []);
 
-  if (loading) return <div>Loading health data...</div>;
-  if (error) return <div className="text-red-600">Error: {error}</div>;
+  if (loading) {
+    return <div>Loading health data...</div>;
+  }
+
+  if (error) {
+    return <div className="text-red-600">Error: {error}</div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -478,6 +500,7 @@ function SystemHealthComponent() {
         </Card.Header>
         <Card.Content>
           <div className="space-y-3">
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {Object.entries(healthData.services).map(([name, service]: [string, any]) => (
               <div key={name} className="flex items-center justify-between p-3 border rounded">
                 <div className="flex items-center space-x-3">

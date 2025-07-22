@@ -22,4 +22,4 @@ export { FileEntity };
 export { FileService };
 
 // Types
-export type { File, FileUploadDto } from './types';
+export type { File } from './types';

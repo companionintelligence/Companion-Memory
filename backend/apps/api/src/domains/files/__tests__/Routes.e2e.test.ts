@@ -8,7 +8,6 @@ import { IdFormatGuard, JwtAuthGuard } from '@ci/common/guards';
 import { EventService } from '@ci/domains/events';
 
 import { FilesModule } from '..';
-import { FilesController } from '../controllers/FilesController';
 import { FileEntity } from '../entities/FileEntity';
 import { FileService } from '../services/FileService';
 
@@ -20,7 +19,6 @@ class MockJwtAuthGuard {
 
 describe('File routes', () => {
   let app: INestApplication;
-  let controller: FilesController;
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -48,7 +46,6 @@ describe('File routes', () => {
       .compile();
 
     app = module.createNestApplication();
-    controller = module.get(FilesController);
 
     await app.init();
   });

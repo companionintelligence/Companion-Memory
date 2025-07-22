@@ -1,8 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 
 import { App } from '@ci/application';
-import config from '@ci/configuration';
 import { LoggerService } from '@ci/common/services';
+import config from '@ci/configuration';
 
 (async function () {
   const app = await NestFactory.create(App, {

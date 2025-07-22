@@ -1,5 +1,6 @@
 import { Button } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
+
 import balloonImage from '@/assets/balloon-bouquet.jpg';
 
 export function SplashPage() {

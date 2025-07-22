@@ -29,10 +29,10 @@ export class PlaceEntity {
   geo_format!: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  geolocation!: Record<string, any> | null;
+  geolocation!: Record<string, unknown> | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  location_boundary!: Record<string, any> | null;
+  location_boundary!: Record<string, unknown> | null;
 
   @Column({ type: 'boolean', nullable: true })
   estimated!: boolean | null;

@@ -1,8 +1,8 @@
-import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
+import { Injectable, NestMiddleware } from '@nestjs/common';
 import type { Response, NextFunction } from 'express';
 
-import type { RequestWithContext } from '../types';
 import { LoggerService } from '../services';
+import type { RequestWithContext } from '../types';
 
 export const REQUEST_ID_HEADER = 'X-Request-Id';
 

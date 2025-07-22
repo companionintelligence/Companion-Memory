@@ -13,7 +13,12 @@ import { AnswerService } from './services/AnswerService';
 import { QuestionService } from './services/QuestionService';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AnswerEntity, QuestionEntity]), EventsModule, LLMModule, EmbeddingModule],
+  imports: [
+    TypeOrmModule.forFeature([AnswerEntity, QuestionEntity]),
+    EventsModule,
+    LLMModule,
+    EmbeddingModule,
+  ],
   providers: [AnswerService, QuestionService],
   controllers: [AnswersController, QuestionsController],
   exports: [AnswerService, QuestionService],

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card, Table } from '@ci/shadcn';
 import { AlertCircle, RefreshCw } from '@ci/shadcn/icons';
@@ -93,8 +94,14 @@ export function QuestionsPage() {
   }, []);
 
   const truncateText = (text: string | undefined, maxLength: number = 50) => {
-    if (!text) return 'N/A';
-    if (text.length <= maxLength) return text;
+    if (!text) {
+      return 'N/A';
+    }
+
+    if (text.length <= maxLength) {
+      return text;
+    }
+
     return text.substring(0, maxLength) + '...';
   };
 

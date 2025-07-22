@@ -1,6 +1,6 @@
-import { type ReactNode } from 'react';
 import { Button, Tooltip, cn } from '@ci/shadcn';
 import { type LucideIcon } from '@ci/shadcn/icons';
+import { type ReactNode } from 'react';
 
 interface ControlsProps {
   children: ReactNode;
@@ -36,7 +36,10 @@ function ControlsIcon({ icon, tooltip, className, onClick }: ControlsIconProps) 
           onClick={onClick}
         >
           <Icon
-            className={cn('h-1 w-1 text-white hover:drop-shadow-[0_0_2px_rgba(255,255,255,0.5)] transition-transform', className)}
+            className={cn(
+              'h-1 w-1 text-white hover:drop-shadow-[0_0_2px_rgba(255,255,255,0.5)] transition-transform',
+              className,
+            )}
           />
         </Button>
       </Tooltip.Trigger>

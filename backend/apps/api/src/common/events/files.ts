@@ -1,3 +1,0 @@
-interface Event {
-  name: string;
-}

@@ -11,10 +11,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 
-import config from '@ci/configuration';
 import { LoggerService } from '@ci/common/services';
 import { RequestContext } from '@ci/common/types';
-import { EventService, Events, type EventPayloads } from '@ci/domains/events';
+import config from '@ci/configuration';
+import { EventService, Events } from '@ci/domains/events';
 
 import { FileEntity } from '../entities/FileEntity';
 import type { File } from '../types';
@@ -64,6 +64,7 @@ export class FileService implements OnModuleInit {
       );
 
       this.logger.debug('S3 bucket exists, skipping creation');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
         this.logger.debug('S3 bucket does not exist, creating a new bucket');

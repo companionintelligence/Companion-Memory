@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  Body,
   Controller,
   Get,
   HttpCode,
@@ -17,7 +16,6 @@ import { JwtAuthGuard } from '@ci/common/guards';
 import type { RequestContext } from '@ci/common/types';
 
 import { FileService } from '../services/FileService';
-import type { FileUploadDto } from '../types';
 
 @Controller('files')
 export class FilesController {
@@ -51,11 +49,7 @@ export class FilesController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 * 1024 } }))
   // Note that the literal 'file' is referencing the input with name `file` in a hypothetical form.
   // All other fields would show up in the `body` here.
-  async upload(
-    @Context() context: RequestContext,
-    @Body() body: FileUploadDto,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
+  async upload(@Context() context: RequestContext, @UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new BadRequestException('File is required');
     }

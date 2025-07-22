@@ -24,5 +24,11 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Run linter
+      - name: ESLint extraneous files and most packages
         run: yarn lint
+
+      - name: ESLint backend
+        run: yarn workspace @ci/be-api lint
+
+      - name: ESLint frontend
+        run: yarn workspace @ci/fe-web lint

@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
 import { z } from 'zod';
 
-import config from '@ci/configuration';
 import { RequestWithContext } from '@ci/common/types';
+import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
 import { JwtPayload } from '../types';

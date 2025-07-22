@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+
 import { Portal, fetchJson, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Card, Resizable, Textarea, cn } from '@ci/shadcn';
-import { ArrowUp } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Card, Textarea, cn } from '@ci/shadcn';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { ModelSelector } from '@/components/ModelSelector';
 import { useAuth, useModel } from '@/hooks';
@@ -45,7 +45,9 @@ export function ChatThreadingPage() {
   }, [isNew, threadId, navigate]);
 
   const handleSubmit = async () => {
-    if (!input.trim()) return;
+    if (!input.trim()) {
+      return;
+    }
 
     setOutput('');
     setIsLoading(true);
@@ -88,7 +90,7 @@ export function ChatThreadingPage() {
         }
       }
     } catch (err) {
-      if ((err as any).name !== 'AbortError') {
+      if ((err as Error).name !== 'AbortError') {
         console.error('Stream error:', err);
       }
     } finally {
@@ -202,4 +204,3 @@ function useLongPollForThreadName(threadId?: string | null) {
 
   return name;
 }
-

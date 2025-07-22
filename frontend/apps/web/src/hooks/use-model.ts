@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { createHookContext, fetchJson } from '@ci/common';
+
 import { useAuth } from './use-auth';
 
 const ACTIVE_MODEL_KEY = 'activeModel';
@@ -59,7 +60,7 @@ function useModel(): Value {
         setActiveModels(data);
 
         const persistedModel = localStorage.getItem(ACTIVE_MODEL_KEY);
-        const selectedModel = !!data.find((model) => model.model === persistedModel)
+        const selectedModel = data.find((model) => model.model === persistedModel)
           ? persistedModel
           : (data[0].model ?? null);
 
