@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Sidebar } from '@ci/shadcn';
-import { MessageSquare, Plus, Trash2 } from '@ci/shadcn/icons';
+import { MessageSquare, Plus, Trash2, Mic, Square } from '@ci/shadcn/icons';
+import { voiceClient } from './voiceClient';
+import type { VoiceStreamResponse } from './voiceClient';
 
 // Types for our chat data
 interface Message {
@@ -314,6 +316,26 @@ function ChatSidebar({
   );
 }
 
+// Simple waveform component for audio visualization
+function AudioWaveform({ level }: { level: number }) {
+  const bars = 5;
+  const barHeight = Math.max(2, (level / 100) * 20);
+
+  return (
+    <div className="flex items-end gap-1 h-6">
+      {Array.from({ length: bars }).map((_, i) => (
+        <div
+          key={i}
+          className="w-1 bg-primary rounded-full transition-all duration-100"
+          style={{
+            height: `${barHeight * (0.5 + Math.random() * 0.5)}px`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function ChatPage() {
   usePageTitle('Chat - Companion Intelligence');
 
@@ -323,6 +345,16 @@ export function ChatPage() {
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(true);
   const [newMessage, setNewMessage] = useState('');
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [transcribedText, setTranscribedText] = useState('');
+  const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load conversations on mount
   useEffect(() => {
@@ -438,6 +470,207 @@ export function ChatPage() {
     }
   };
 
+  // Handle voice chat functionality
+  const handleVoiceChat = async () => {
+    if (!selectedConversationId) return;
+
+    if (!isVoiceMode) {
+      // Enter voice mode
+      setIsVoiceMode(true);
+      setTranscribedText('');
+    } else {
+      // Exit voice mode - clean up resources
+      setIsVoiceMode(false);
+      
+      if (isRecording) {
+        // Stop recording if active
+        await handleStopRecording();
+      } else {
+        // Just clean up state
+        setIsRecording(false);
+        setAudioLevel(0);
+        setTranscribedText('');
+        setVoiceSessionId(null);
+        
+        // Stop MediaRecorder if active
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
+        
+        // Stop audio level monitoring
+        if (audioLevelIntervalRef.current) {
+          clearInterval(audioLevelIntervalRef.current);
+          audioLevelIntervalRef.current = null;
+        }
+        
+        // Close audio context
+        if (audioContext) {
+          await audioContext.close();
+          setAudioContext(null);
+          setAnalyser(null);
+        }
+      }
+    }
+  };
+
+  // Handle starting voice recording
+  const handleStartRecording = async () => {
+    if (!selectedConversationId) return;
+
+    try {
+      setIsRecording(true);
+      setAudioLevel(0);
+      setTranscribedText('');
+      audioChunksRef.current = [];
+
+      // Request microphone permissions and start recording
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        } 
+      });
+
+      // Set up audio context for level monitoring
+      const context = new AudioContext({ sampleRate: 16000 });
+      const source = context.createMediaStreamSource(stream);
+      const analyserNode = context.createAnalyser();
+      analyserNode.fftSize = 256;
+      source.connect(analyserNode);
+      
+      setAudioContext(context);
+      setAnalyser(analyserNode);
+
+      // Start voice session with backend
+      const sessionResponse = await voiceClient.startVoiceStream();
+      setVoiceSessionId(sessionResponse.sessionId);
+
+      // Set up MediaRecorder for audio capture
+      const recorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus',
+      });
+
+      recorder.ondataavailable = async (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+          
+          // Convert blob to base64 and send to backend
+          const arrayBuffer = await event.data.arrayBuffer();
+          const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+          
+          try {
+            const response = await voiceClient.processAudioChunk(sessionResponse.sessionId, {
+              audioData: base64Audio,
+              sampleRate: 16000,
+              channels: 1,
+              timestamp: Date.now(),
+            });
+
+            if (response.type === 'transcription') {
+              setTranscribedText(response.data.text);
+            }
+          } catch (error) {
+            console.error('Failed to process audio chunk:', error);
+          }
+        }
+      };
+
+      recorder.start(1000); // Capture in 1-second chunks
+      setMediaRecorder(recorder);
+
+      // Start audio level monitoring
+      const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+      audioLevelIntervalRef.current = setInterval(() => {
+        analyserNode.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+        setAudioLevel((average / 255) * 100);
+      }, 100);
+
+    } catch (error) {
+      console.error('Failed to start voice recording:', error);
+      setIsRecording(false);
+      setAudioLevel(0);
+    }
+  };
+
+  // Handle stopping voice recording and sending
+  const handleStopRecording = async () => {
+    if (!selectedConversationId || !voiceSessionId) return;
+
+    try {
+      setIsRecording(false);
+      setAudioLevel(0);
+
+      // Stop MediaRecorder
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+
+      // Stop audio level monitoring
+      if (audioLevelIntervalRef.current) {
+        clearInterval(audioLevelIntervalRef.current);
+        audioLevelIntervalRef.current = null;
+      }
+
+      // Close audio context
+      if (audioContext) {
+        await audioContext.close();
+        setAudioContext(null);
+        setAnalyser(null);
+      }
+
+      // Stop voice session and get final transcription
+      const response = await voiceClient.stopVoiceStream(voiceSessionId);
+      
+      if (response.type === 'transcription' && response.data.text) {
+        const finalText = response.data.text;
+        setTranscribedText(finalText);
+
+        // Add transcribed message to conversation
+        const userMessage = await chatApi.addMessage(selectedConversationId, finalText, 'user');
+
+        if (userMessage && currentConversation) {
+          setCurrentConversation({
+            ...currentConversation,
+            messages: [...currentConversation.messages, userMessage],
+          });
+        }
+
+        // TODO: Implement text-to-speech response using SesameAI/CSM
+        // For now, simulate assistant response
+        setTimeout(async () => {
+          const assistantMessage = await chatApi.addMessage(
+            selectedConversationId!,
+            'This is a simulated voice response from the assistant.',
+            'assistant',
+          );
+
+          if (assistantMessage && currentConversation) {
+            setCurrentConversation((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    messages: [...prev.messages, assistantMessage],
+                  }
+                : null,
+            );
+          }
+        }, 1000);
+      }
+
+      setVoiceSessionId(null);
+      audioChunksRef.current = [];
+
+    } catch (error) {
+      console.error('Failed to process voice message:', error);
+      setIsRecording(false);
+      setAudioLevel(0);
+      setVoiceSessionId(null);
+    }
+  };
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -497,22 +730,74 @@ export function ChatPage() {
               ))}
             </div>
             <div className="border-t pt-4">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                  placeholder="Type your message..."
-                  className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
-                />
-                <button
-                  onClick={handleSendMessage}
-                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2"
-                >
-                  Send
-                </button>
-              </div>
+              {!isVoiceMode ? (
+                // Normal chat mode
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                    placeholder="Type your message..."
+                    className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                  />
+                  <button
+                    onClick={handleSendMessage}
+                    className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2"
+                  >
+                    Send
+                  </button>
+                  <button
+                    onClick={handleVoiceChat}
+                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-border text-foreground hover:bg-border/80 h-10 px-4 py-2"
+                  >
+                    <Mic size={16} />
+                    Voice
+                  </button>
+                </div>
+              ) : (
+                // Voice mode
+                <div className="flex gap-2">
+                  <div className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 flex items-center gap-3">
+                    {isRecording ? (
+                      <>
+                        <AudioWaveform level={audioLevel} />
+                        <span className="text-sm text-muted-foreground">
+                          {transcribedText || 'Listening...'}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        {transcribedText || 'Click to start recording'}
+                      </span>
+                    )}
+                  </div>
+                  {!isRecording ? (
+                    <button
+                      onClick={handleStartRecording}
+                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2"
+                    >
+                      <Mic size={16} />
+                      Start
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleStopRecording}
+                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-10 px-4 py-2"
+                    >
+                      <Square size={16} />
+                      Stop
+                    </button>
+                  )}
+                  <button
+                    onClick={handleVoiceChat}
+                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-border text-foreground hover:bg-border/80 h-10 px-4 py-2"
+                  >
+                    <Mic size={16} />
+                    Exit
+                  </button>
+                </div>
+              )}
             </div>
           </>
         ) : (

@@ -23,6 +23,7 @@ import { EmbeddingModule } from '@ci/domains/search';
 import { UserModule } from '@ci/domains/user';
 import { ConnectionsModule } from '@ci/domains/connections';
 import { ProvidersModule } from '@ci/domains/providers';
+import { VoiceModule } from './domains/voice/voice.module';
 
 @Module({
   imports: [
@@ -48,7 +49,8 @@ import { ProvidersModule } from '@ci/domains/providers';
     MemoryModule,
     UserModule,
     ProvidersModule,
-    ConnectionsModule
+    ConnectionsModule,
+    VoiceModule
   ],
   controllers: [],
   providers: [],
