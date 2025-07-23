@@ -1,4 +1,5 @@
 import path from 'path';
+
 import { Logger } from '@nestjs/common';
 import bcrypt from 'bcrypt';
 import type { DataSource } from 'typeorm';
@@ -23,7 +24,7 @@ export async function seedUsers(db: DataSource, filePath: string) {
   const records = readCsv<CsvRecord>(filePath);
 
   if (process.env.AUTH_DEFAULT_USER_PASSWORD == null) {
-    throw new Error("Default user password not specified");
+    throw new Error('Default user password not specified');
   }
 
   await db.transaction(async (manager) => {

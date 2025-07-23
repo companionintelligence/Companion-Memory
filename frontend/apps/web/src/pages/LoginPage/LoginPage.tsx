@@ -1,5 +1,6 @@
-import { Card } from '@ci/shadcn';
 import type { BaseSyntheticEvent } from 'react';
+
+import { Card } from '@ci/shadcn';
 
 import { useAuth } from '@/hooks';
 

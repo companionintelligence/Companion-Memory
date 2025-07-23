@@ -1,9 +1,4 @@
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
-} from '../ui/tabs';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 
 type TabsComponent = typeof Tabs & {
   List: typeof TabsList;

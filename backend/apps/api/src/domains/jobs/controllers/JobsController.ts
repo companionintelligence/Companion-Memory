@@ -1,8 +1,8 @@
 import { Controller, InternalServerErrorException, Post, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 
-import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/events';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/services';
+import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/events';
 
 @Controller('jobs')
 export class JobsController {
@@ -10,7 +10,7 @@ export class JobsController {
 
   constructor(private readonly eventService: EventService) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post()
   async enqueue() {
     const result = await this.eventService.send(Events.API_ENQUEUE, {

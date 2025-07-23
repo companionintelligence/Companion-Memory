@@ -14,6 +14,7 @@ export function Indexable(type: string, validPaths: string[] = []) {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   return function (target: Function) {
     Reflect.defineMetadata(
       INDEXABLE_KEY,
@@ -27,15 +28,18 @@ export function Indexable(type: string, validPaths: string[] = []) {
 }
 
 export function getIndexableMetadataFromInstance(obj: object) {
-  const constructor = (obj as any).constructor;
+  const constructor = obj.constructor;
 
   return getIndexableMetadataFromClass(constructor);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 function getIndexableMetadataFromClass(target: Function): IndexabaleMetadata | undefined {
   return Reflect.getMetadata(INDEXABLE_KEY, target);
 }
 
 function isJSPropertyPath(str: string): boolean {
-  return /^([a-zA-Z_$][a-zA-Z0-9_$]*|\[(?:'[^']*'|"[^"]*"|\d+)\])(\.([a-zA-Z_$][a-zA-Z0-9_$]*|\[(?:'[^']*'|"[^"]*"|\d+)\]))*$/.test(str);
+  return /^([a-zA-Z_$][a-zA-Z0-9_$]*|\[(?:'[^']*'|"[^"]*"|\d+)\])(\.([a-zA-Z_$][a-zA-Z0-9_$]*|\[(?:'[^']*'|"[^"]*"|\d+)\]))*$/.test(
+    str,
+  );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+
 import { Card, Select, ToggleGroup } from '@ci/shadcn';
 import { Area, AreaChart, CartesianGrid, XAxis } from 'recharts';
 
@@ -134,8 +135,10 @@ export function ChartAreaInteractive() {
     } else if (timeRange === '7d') {
       daysToSubtract = 7;
     }
+
     const startDate = new Date(referenceDate);
     startDate.setDate(startDate.getDate() - daysToSubtract);
+
     return date >= startDate;
   });
 
@@ -203,6 +206,7 @@ export function ChartAreaInteractive() {
               minTickGap={32}
               tickFormatter={(value) => {
                 const date = new Date(value);
+
                 return date.toLocaleDateString('en-US', {
                   month: 'short',
                   day: 'numeric',

@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
+
+import { Camera, getImageDataURL, getVideoPreviewDataURL } from '@ci/capture';
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, useToast } from '@ci/shadcn';
-import { Camera, getImageDataURL, getVideoPreviewDataURL } from '@ci/capture';
 
 import { useAuth } from '@/hooks';
 

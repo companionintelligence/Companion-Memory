@@ -1,5 +1,6 @@
-import dotenv from 'dotenv';
 import path from 'node:path';
+
+import dotenv from 'dotenv';
 
 const envPath = process.env.DOTENV_CONFIG_PATH || '.env';
 

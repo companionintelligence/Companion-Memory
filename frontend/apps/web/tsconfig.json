@@ -27,6 +27,6 @@
     "resolveJsonModule": true,
     "types": ["vite/client"],
   },
-  "include": [".", ".storybook", "src"],
+  "include": [".", ".storybook/**/*", "src"],
   "exclude": ["node_modules", "dist"]
 }

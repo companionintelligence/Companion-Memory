@@ -1,8 +1,8 @@
-import { jwtDecode } from 'jwt-decode';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 
 import { createHookContext, fetchJson } from '@ci/common';
+import { jwtDecode } from 'jwt-decode';
+import { useNavigate } from 'react-router-dom';
 
 const ACCESS_TOKEN_KEY = 'accessToken';
 const SESSION_TOKEN_KEY = 'sessionToken';
@@ -202,20 +202,24 @@ function useAutoRefreshToken(
       return;
     }
 
-    const decoded: any = jwtDecode(accessToken);
-    const exp = decoded.exp * 1000;
+    const decoded = jwtDecode(accessToken);
+    const exp = (decoded.exp || 0) * 1000;
     const now = Date.now();
     const refreshAt = exp - 60 * 1000;
     const delay = Math.max(refreshAt - now, 0);
 
-    timeoutRef.current && clearTimeout(timeoutRef.current);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
 
     timeoutRef.current = setTimeout(() => {
       onRefresh(refreshToken);
     }, delay);
 
     return () => {
-      timeoutRef.current && clearTimeout(timeoutRef.current);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
     };
   }, [accessToken, refreshToken, onRefresh]);
 }

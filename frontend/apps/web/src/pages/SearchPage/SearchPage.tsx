@@ -1,4 +1,5 @@
 import { useState } from 'react';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card, Input, Table } from '@ci/shadcn';
 import { AlertCircle, Search, Loader2 } from '@ci/shadcn/icons';
@@ -25,6 +26,7 @@ export function SearchPage() {
   const performSearch = async () => {
     if (!searchQuery.trim()) {
       setError('Please enter a search query');
+
       return;
     }
 

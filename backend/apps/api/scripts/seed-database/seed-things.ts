@@ -1,4 +1,5 @@
 import path from 'path';
+
 import { Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
@@ -11,14 +12,14 @@ const logger = new Logger(path.basename(__filename));
 export async function seedThings(db: DataSource, filePath: string) {
   type CsvRecord = {
     id: string;
-    type: string,
-    name: string,
-    description: string,
-    dimensions: string,
-    weight: string,
-    user_id: string,
-    connection_id: string,
-    tags: string
+    type: string;
+    name: string;
+    description: string;
+    dimensions: string;
+    weight: string;
+    user_id: string;
+    connection_id: string;
+    tags: string;
   };
 
   const records = readCsv<CsvRecord>(filePath);
@@ -36,7 +37,7 @@ export async function seedThings(db: DataSource, filePath: string) {
         user: {
           id: record.user_id,
         },
-        tags
+        tags,
       });
     }
   });

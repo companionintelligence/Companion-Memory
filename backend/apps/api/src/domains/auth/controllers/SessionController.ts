@@ -63,7 +63,7 @@ export class SessionController {
 
     try {
       payload = this.authService.validateSessionToken(sessionToken);
-    } catch (err) {
+    } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 

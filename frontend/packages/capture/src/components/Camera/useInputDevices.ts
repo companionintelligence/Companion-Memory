@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
 import { createHookContext } from '@ci/common';
+import { useEffect, useState } from 'react';
 
 import type { Device } from './types';
 

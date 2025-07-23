@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Card } from '@ci/shadcn';
 
@@ -148,12 +149,21 @@ export function DashboardPage() {
   useEffect(() => {
     fetchMetrics();
     const interval = setInterval(fetchMetrics, 30000);
+
     return () => clearInterval(interval);
   }, []);
 
-  if (!user) return <div>Please log in to view the dashboard.</div>;
-  if (loading) return <div className="p-6">Loading dashboard...</div>;
-  if (error) return <div className="p-6 text-red-600">Error: {error + ''}</div>;
+  if (!user) {
+    return <div>Please log in to view the dashboard.</div>;
+  }
+
+  if (loading) {
+    return <div className="p-6">Loading dashboard...</div>;
+  }
+
+  if (error) {
+    return <div className="p-6 text-red-600">Error: {error + ''}</div>;
+  }
 
   return (
     <>

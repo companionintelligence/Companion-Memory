@@ -1,8 +1,8 @@
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
 import { Context } from '@ci/common/decorators';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import { EventService, Events, EventPayloads, OnEvent } from '@ci/domains/events';
@@ -24,13 +24,13 @@ export class QuestionsController {
     private readonly questionService: QuestionService,
   ) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get()
   findAll(@Context() context: RequestContext) {
     return this.questionService.findAll(context);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
   findOne(@Context() context: RequestContext, @Param('id') id: string) {
     return this.questionService.findOne(context, id);

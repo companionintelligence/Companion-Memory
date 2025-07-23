@@ -1,3 +1,5 @@
+import type { BaseSyntheticEvent } from 'react';
+
 import {
   Alert,
   Form,
@@ -8,9 +10,8 @@ import {
   formDataSchema as s,
 } from '@ci/shadcn';
 import { AlertCircleIcon } from '@ci/shadcn/icons';
-import type { BaseSyntheticEvent } from 'react';
 
-import { useAuth } from '../../hooks';
+import { useAuth } from '@/hooks';
 
 const LoginFormSchema = s.object({
   email: s.string().email({

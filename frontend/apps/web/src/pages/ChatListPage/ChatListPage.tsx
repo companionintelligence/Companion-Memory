@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card, Table } from '@ci/shadcn';
 import { AlertCircle, Edit, Plus, RefreshCw, Trash2 } from '@ci/shadcn/icons';
+import { Link } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
 
@@ -75,7 +76,9 @@ export function ChatListPage() {
 
   const handleDelete = async (id: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this thread?');
-    if (!confirmed) return;
+    if (!confirmed) {
+      return;
+    }
 
     try {
       const res = await fetch(`/api/threads/${id}`, {

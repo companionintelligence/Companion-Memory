@@ -1,9 +1,10 @@
 import type { LoggerService as NestLoggerService } from '@nestjs/common';
-import pino, { Logger as PinoLogger, LoggerOptions } from 'pino';
+import type { Logger as PinoLogger, LoggerOptions } from 'pino';
+import pino from 'pino';
 
 import config from '@ci/configuration';
 
-type LogData = string | Record<string, any>;
+type LogData = string | Record<string, unknown>;
 
 interface ResolvedData {
   message?: string;
@@ -38,7 +39,7 @@ export class LoggerService implements NestLoggerService {
     }
   }
 
-  error(message: LogData, context: LogData = {}) {
+  error(message: LogData | Error, context: LogData | Error = {}) {
     if (message instanceof Error) {
       const resolvedContext = this.normalizeLogContext(context);
       const childLogger = this.logger.child(resolvedContext);
@@ -63,11 +64,15 @@ export class LoggerService implements NestLoggerService {
     this.logger.debug(rest, msg);
   }
 
-  private normalizeLogContext(context: LogData = {}) {
+  private normalizeLogContext(context: LogData | Error = {}) {
+    if (context instanceof Error) {
+      return { err: context };
+    }
+
     return typeof context === 'string' ? { context } : context;
   }
 
-  private normalizeLogData(message: LogData = {}, context: LogData = {}): ResolvedData {
+  private normalizeLogData(message: LogData = {}, context: LogData | Error = {}): ResolvedData {
     const resolvedMessage = typeof message === 'string' ? { message } : message;
     const resolvedContext = this.normalizeLogContext(context);
 

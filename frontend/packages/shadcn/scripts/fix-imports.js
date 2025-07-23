@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 // scripts/fix-imports.js
 const fs = require('fs');
 const path = require('path');
@@ -49,6 +51,7 @@ function processFile(filePath) {
     (match, before, importPath, after) => {
       const rel = aliasToRelative(filePath, importPath);
       changed = true;
+
       return `${before}${rel}${after}`;
     },
   );

@@ -9,11 +9,11 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
@@ -41,13 +41,13 @@ export class OllamaController {
     private readonly threadService: ThreadService,
   ) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get('models')
   async listModels(@Context() context: RequestContext) {
     return await this.ollamaService.getAvailableModels(context);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post('generate')
   @HttpCode(200)
   async generate(

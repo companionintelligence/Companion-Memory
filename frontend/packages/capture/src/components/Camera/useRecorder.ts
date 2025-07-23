@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
 import { createHookContext } from '@ci/common';
+import { useCallback, useRef, useState } from 'react';
 
 import { useStream } from './useStream';
 
@@ -26,7 +26,9 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
   const chunksRef = useRef<Blob[]>([]);
 
   const toggleRecording = useCallback(() => {
-    if (!mediaStreamRef.current) return;
+    if (!mediaStreamRef.current) {
+      return;
+    }
 
     if (!isRecording) {
       chunksRef.current = [];
@@ -60,7 +62,9 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
   }, [isRecording, mediaStreamRef, onRecordingFinished]);
 
   const captureFrame = useCallback(() => {
-    if (!videoRef.current || !isActive) return;
+    if (!videoRef.current || !isActive) {
+      return;
+    }
 
     const video = videoRef.current;
     const canvas = document.createElement('canvas');

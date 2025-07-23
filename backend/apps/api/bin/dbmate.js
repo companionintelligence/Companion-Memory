@@ -1,13 +1,16 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 const dotenv = require('dotenv');
 
 dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
 
-const { confirm } = require('@inquirer/prompts');
 const { spawnSync } = require('child_process');
-const config = require('config');
-const { Command } = require('commander');
 const { readFileSync } = require('fs');
 const path = require('path');
+
+const { confirm } = require('@inquirer/prompts');
+const { Command } = require('commander');
+const config = require('config');
 const { Client } = require('pg');
 const { z } = require('zod');
 
@@ -56,7 +59,7 @@ if (opts.executeFile) {
 
   try {
     sql = readFileSync(filePath, 'utf8');
-  } catch (err) {
+  } catch {
     console.error(`Failed to read SQL file: ${opts.executeFile}`);
     process.exit(1);
   }
@@ -65,7 +68,7 @@ if (opts.executeFile) {
 
   try {
     client = new Client(DATABASE_URL);
-  } catch (err) {
+  } catch {
     console.error(`Failed to connect to SQL database`);
     process.exit(1);
   }

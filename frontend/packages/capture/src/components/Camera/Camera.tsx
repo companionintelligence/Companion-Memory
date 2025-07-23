@@ -1,4 +1,3 @@
-import { type ReactNode, useEffect } from 'react';
 import { cn } from '@ci/shadcn';
 import {
   Camera as CameraIcon,
@@ -12,13 +11,14 @@ import {
   VideoIcon,
   VideoOff,
 } from '@ci/shadcn/icons';
+import { type ReactNode, useEffect } from 'react';
 
 import { Controls } from './Controls';
+import { FacingModeProvider, useFacingMode } from './useFacingMode';
 import { InputDevicesProvider, useInputDevices } from './useInputDevices';
 import { MuteControlsProvider, useMuteControls } from './useMuteControls';
 import { RecorderProvider, useRecorder } from './useRecorder';
 import { StreamProvider, useStream } from './useStream';
-import { FacingModeProvider, useFacingMode } from './useFacingMode';
 
 interface CameraProps {
   onFrameCaptured?: (file: File) => void;

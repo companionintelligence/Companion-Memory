@@ -3,8 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
-import type { RequestContext } from '@ci/common/types';
-
 import { ProviderEntity } from '../entities/ProviderEntity';
 import type { CreateProviderDto, Provider, UpdateProviderDto } from '../types';
 

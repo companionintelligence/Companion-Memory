@@ -25,6 +25,7 @@ interface Conversation {
 // Mock API for chat functionality
 class ChatAPI {
   private conversations: Conversation[];
+
   private static instance: ChatAPI;
 
   private constructor() {
@@ -151,6 +152,7 @@ class ChatAPI {
     if (!ChatAPI.instance) {
       ChatAPI.instance = new ChatAPI();
     }
+
     return ChatAPI.instance;
   }
 
@@ -158,12 +160,14 @@ class ChatAPI {
   public async getConversations(): Promise<Conversation[]> {
     // Simulate network delay
     await new Promise((resolve) => setTimeout(resolve, 300));
+
     return [...this.conversations];
   }
 
   // Get a specific conversation by ID
   public async getConversation(id: string): Promise<Conversation | undefined> {
     await new Promise((resolve) => setTimeout(resolve, 200));
+
     return this.conversations.find((conv) => conv.id === id);
   }
 
@@ -181,6 +185,7 @@ class ChatAPI {
     };
 
     this.conversations.unshift(newConversation);
+
     return newConversation;
   }
 
@@ -203,7 +208,9 @@ class ChatAPI {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     const conversation = this.conversations.find((conv) => conv.id === conversationId);
-    if (!conversation) return null;
+    if (!conversation) {
+      return null;
+    }
 
     const newMessage: Message = {
       id: `msg-${conversationId}-${Date.now()}`,
@@ -223,6 +230,7 @@ class ChatAPI {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     const conversation = this.conversations.find((conv) => conv.id === conversationId);
+
     return conversation ? [...conversation.messages] : [];
   }
 }
@@ -260,7 +268,9 @@ function ChatSidebar({
       if (!acc[conversation.topic]) {
         acc[conversation.topic] = [];
       }
+
       acc[conversation.topic].push(conversation);
+
       return acc;
     },
     {} as Record<string, Conversation[]>,
@@ -382,6 +392,7 @@ export function ChatPage() {
     const loadConversation = async () => {
       if (!selectedConversationId) {
         setCurrentConversation(null);
+
         return;
       }
 
@@ -412,7 +423,9 @@ export function ChatPage() {
 
   // Handle deleting a conversation
   const handleDeleteConversation = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this conversation?')) return;
+    if (!confirm('Are you sure you want to delete this conversation?')) {
+      return;
+    }
 
     try {
       await chatApi.deleteConversation(id);
@@ -429,7 +442,9 @@ export function ChatPage() {
 
   // Handle sending a new message
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedConversationId) return;
+    if (!newMessage.trim() || !selectedConversationId) {
+      return;
+    }
 
     try {
       // Add user message

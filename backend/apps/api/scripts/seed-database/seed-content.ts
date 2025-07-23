@@ -1,4 +1,5 @@
 import path from 'path';
+
 import { Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
@@ -11,22 +12,22 @@ const logger = new Logger(path.basename(__filename));
 export async function seedContent(db: DataSource, filePath: string) {
   type CsvRecord = {
     id: string;
-    type: string,
-    title: string,
-    text: string,
-    url: string,
-    mimetype: string,
-    embed_content: string,
-    embed_format: string,
-    embed_thumnail: string,
-    hidden: boolean,
-    price: number,
-    remote_id: string,
-    provider_name: string,
-    user_id: string,
-    connection_id: string,
-    provider_id: string,
-    tags: string,
+    type: string;
+    title: string;
+    text: string;
+    url: string;
+    mimetype: string;
+    embed_content: string;
+    embed_format: string;
+    embed_thumnail: string;
+    hidden: boolean;
+    price: number;
+    remote_id: string;
+    provider_name: string;
+    user_id: string;
+    connection_id: string;
+    provider_id: string;
+    tags: string;
     created_at: Date;
     udpated_at: Date;
   };

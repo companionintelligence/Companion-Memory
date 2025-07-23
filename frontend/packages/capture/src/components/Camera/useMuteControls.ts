@@ -1,6 +1,5 @@
-import { useCallback, useState } from 'react';
-
 import { createHookContext } from '@ci/common';
+import { useCallback, useState } from 'react';
 
 function useMuteControls() {
   const [microphoneEnabled, setMicrophoneEnabled] = useState<boolean>(true);

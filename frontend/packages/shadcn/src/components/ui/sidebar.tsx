@@ -1,12 +1,13 @@
 'use client';
 
-import * as React from 'react';
 import { Slot } from '@radix-ui/react-slot';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { PanelLeftIcon } from 'lucide-react';
+import * as React from 'react';
 
 import { useIsMobile } from '../../hooks/use-mobile';
 import { cn } from '../../lib/utils';
+
 import { Button } from './button';
 import { Input } from './input';
 import { Separator } from './separator';
@@ -92,6 +93,7 @@ function SidebarProvider({
     };
 
     window.addEventListener('keydown', handleKeyDown);
+
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleSidebar]);
 

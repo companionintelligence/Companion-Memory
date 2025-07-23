@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "lint": "eslint"
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "prepare": "husky"
   },
   "packageManager": "yarn@4.9.1",
   "workspaces": [
@@ -17,8 +19,12 @@
     "@types/pg": "^8",
     "eslint": "^9.27.0",
     "eslint-config-prettier": "^10.1.5",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-prettier": "^5.4.0",
     "globals": "^16.1.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.2",
     "prettier": "^3.5.3",
     "storybook": "^9.0.8",
     "typescript": "^5.8.3",

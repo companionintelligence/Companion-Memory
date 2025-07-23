@@ -10,12 +10,12 @@ import {
   UseGuards,
   NotFoundException,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { QueryFailedError } from 'typeorm';
 import { z } from 'zod';
 
 import { PgErrorCode } from '@ci/common/constants';
 import { Context } from '@ci/common/decorators';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { RequestContext } from '@ci/common/types';
 
@@ -37,7 +37,7 @@ const updateUserSchema = z.object({
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get('me')
   async selfProfile(@Context() context: RequestContext) {
     const userId = context.userId;
@@ -49,7 +49,7 @@ export class UserController {
     return this.userService.findOne(userId);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post()
   async create(@Body(new ValidationPipe(createUserSchema)) input: CreateUserDto) {
     try {
@@ -64,19 +64,19 @@ export class UserController {
     }
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get()
   findAll() {
     return this.userService.findAll();
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.userService.findOne(id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   async update(@Param('id') id: string, @Body(new ValidationPipe(updateUserSchema)) input: UpdateUserDto) {
     try {
@@ -91,7 +91,7 @@ export class UserController {
     }
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.userService.remove(id);

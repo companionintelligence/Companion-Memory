@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Card } from '@ci/shadcn';
 
@@ -44,8 +45,8 @@ export function FilesGalleryPage() {
         }));
 
         setFiles(metaList);
-      } catch (err: any) {
-        setError(err.message || 'Unknown error');
+      } catch (err) {
+        setError((err as Error).message || 'Unknown error');
       } finally {
         setLoading(false);
       }
@@ -87,8 +88,8 @@ export function FilesGalleryPage() {
 
       // After upload, refresh file list
       window.location.reload(); // Or call fetchFiles() if you refactor fetchFiles out of useEffect
-    } catch (err: any) {
-      setError(err.message || 'Unknown error');
+    } catch (err) {
+      setError((err as Error).message || 'Unknown error');
     } finally {
       setUploading(false);
     }

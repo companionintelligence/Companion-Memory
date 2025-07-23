@@ -1,17 +1,7 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
+import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { ProviderService } from '../services/ProviderService';
@@ -29,25 +19,25 @@ const updateProviderSchema = z.object({
 export class ProvidersController {
   constructor(private readonly providerService: ProviderService) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get()
   async findAll() {
     return this.providerService.findAll();
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.providerService.findOne(id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post()
   async create(@Body(new ValidationPipe(createProviderSchema)) input: CreateProviderDto) {
     return this.providerService.create(input);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   async update(
     @Param('id') id: string,
@@ -56,7 +46,7 @@ export class ProvidersController {
     return this.providerService.update(id, input);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @HttpCode(204)
   async delete(@Param('id') id: string) {

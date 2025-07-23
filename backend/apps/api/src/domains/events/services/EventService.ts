@@ -2,15 +2,16 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import PgBoss from 'pg-boss';
 
-import config from '@ci/configuration';
 import { LoggerService } from '@ci/common/services';
+import config from '@ci/configuration';
+
 import { type EventPayloads } from '../event-registry';
 
 export enum Queues {
   DEFAULT = 'default',
 }
 
-interface EventData extends Object {
+interface EventData {
   name: string;
 }
 

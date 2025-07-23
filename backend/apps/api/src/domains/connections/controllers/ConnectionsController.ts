@@ -8,15 +8,14 @@ import {
   Patch,
   Post,
   UseGuards,
-  Redirect,
   Res,
   Query,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import type { RequestContext } from '@ci/common/types';
 
@@ -50,15 +49,14 @@ export class ConnectionsController {
     @Query('code') code: string,
     @Query('state') state: string,
     @Query('scope') scope: string,
-    @Res() res: Response
+    @Res() res: Response,
   ) {
-
     try {
       // Create a minimal context for the callback
       const context: RequestContext = {
-        query: { code, state, scope }
+        query: { code, state, scope },
       };
-    
+
       const result = await this.connectionService.callback(context);
 
       // If the service returns a redirect URL, perform the redirect
@@ -72,29 +70,33 @@ export class ConnectionsController {
       // Log the error and redirect to frontend with error
       console.error('OAuth callback error:', error);
       const frontendUrl = process.env.FRONTEND_URL || 'http://dev.companionintelligence.com';
-      return res.redirect(302, `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`);
+
+      return res.redirect(
+        302,
+        `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent('Authentication failed')}`,
+      );
     }
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get(':id/connect')
   async connect(@Context() context: RequestContext, @Param('id') id: string) {
     return this.connectionService.connect(context, id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get()
   async findAll(@Context() context: RequestContext) {
     return this.connectionService.findAll(context);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findOne(@Context() context: RequestContext, @Param('id') id: string) {
     return this.connectionService.findOne(context, id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post()
   async create(
     @Context() context: RequestContext,
@@ -103,7 +105,7 @@ export class ConnectionsController {
     return this.connectionService.create(context, input);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   async update(
     @Context() context: RequestContext,
@@ -113,27 +115,24 @@ export class ConnectionsController {
     return this.connectionService.update(context, id, input);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post(':id/activate')
   @HttpCode(200)
   async activate(@Context() context: RequestContext, @Param('id') id: string) {
     return this.connectionService.activate(context, id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post(':id/deactivate')
   @HttpCode(200)
   async deactivate(@Context() context: RequestContext, @Param('id') id: string) {
     return this.connectionService.deactivate(context, id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @HttpCode(204)
   async delete(@Context() context: RequestContext, @Param('id') id: string) {
     await this.connectionService.delete(context, id);
   }
-
-
-
 }

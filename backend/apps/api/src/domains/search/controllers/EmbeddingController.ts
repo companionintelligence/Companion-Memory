@@ -1,8 +1,8 @@
 import { Controller, Get, HttpCode, Post, Body, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { RequestContext } from '@ci/common/types';
 
@@ -16,13 +16,13 @@ const vectorInputSchema = z.object({
 export class EmbeddingController {
   constructor(private readonly embeddingService: EmbeddingService) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get()
   async getEmbeddings(@Context() context: RequestContext) {
     return this.embeddingService.findAll(context);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post('/search')
   @HttpCode(200)
   async searchEmbeddings(
@@ -32,7 +32,7 @@ export class EmbeddingController {
     return this.embeddingService.findNearest(context, input.input);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post()
   @HttpCode(200)
   async calculateEmbedding(

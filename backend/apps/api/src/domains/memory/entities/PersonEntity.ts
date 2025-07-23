@@ -7,7 +7,7 @@ import {
   ManyToMany,
   ManyToOne,
   JoinColumn,
-  JoinTable
+  JoinTable,
 } from 'typeorm';
 
 import { UserEntity } from '@ci/domains/user';
@@ -62,7 +62,7 @@ export class PersonEntity {
   source_url!: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  source_data!: Record<string, any> | null;
+  source_data!: Record<string, unknown> | null;
 
   @ManyToOne(() => UserEntity, { nullable: true })
   @JoinColumn({ name: 'user_id' })

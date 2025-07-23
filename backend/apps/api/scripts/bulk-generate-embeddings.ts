@@ -1,11 +1,11 @@
 import path from 'path';
+
 import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 import config from '@ci/configuration';
-
-import { ContentEntity, EventEntity, TagEntity } from '@ci/domains/memory';
 import { AnswerEntity, QuestionEntity } from '@ci/domains/intelligence';
+import { ContentEntity, EventEntity, TagEntity } from '@ci/domains/memory';
 import { EmbeddingEntity, EmbeddingService } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
@@ -87,7 +87,7 @@ const logger = new Logger(path.basename(__filename));
     });
 
     process.exit(0);
-  } catch (err: unknown) {
+  } catch (err) {
     error = err as Error;
   } finally {
     await db.destroy();

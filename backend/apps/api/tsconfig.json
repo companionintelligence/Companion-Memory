@@ -26,5 +26,5 @@
   "exclude": ["dist"],
   "ts-node": {
     "files": true
-  },
+  }
 }

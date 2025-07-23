@@ -45,7 +45,7 @@ export function getVideoPreviewDataURL(file: File): Promise<string> {
     }
 
     const video = document.createElement('video');
-    let objectURL: string;
+    const objectURL = URL.createObjectURL(file);
 
     video.addEventListener('error', () => {
       if (objectURL) {
@@ -81,9 +81,6 @@ export function getVideoPreviewDataURL(file: File): Promise<string> {
     video.muted = true;
     video.playsInline = true;
     video.crossOrigin = 'anonymous';
-
-    objectURL = URL.createObjectURL(file);
-
     video.src = objectURL;
 
     video.addEventListener('loadedmetadata', () => {

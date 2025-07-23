@@ -1,19 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { AuthorizationCode } from 'simple-oauth2';
 import { Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
+import { LoggerService } from '@ci/common/services/LoggerService';
 import type { RequestContext } from '@ci/common/types';
 
 import { ConnectionEntity } from '../entities/ConnectionEntity';
 import type { CreateConnectionDto, Connection, UpdateConnectionDto } from '../types';
 
-import { LoggerService } from '@ci/common/services/LoggerService';
-import { AuthorizationCode } from 'simple-oauth2';
-
 @Injectable()
 export class ConnectionService {
-
   private logger = new LoggerService(ConnectionService.name);
 
   constructor(
@@ -115,7 +113,7 @@ export class ConnectionService {
 
   async connect(context: RequestContext, connectionId: string): Promise<{ url: string }> {
     const connection = await this.findOne(context, connectionId);
-    
+
     if (!connection.clientid || !connection.clientsecret) {
       throw new NotFoundException('OAuth2 credentials not configured');
     }
@@ -127,17 +125,17 @@ export class ConnectionService {
     }
 
     // Create OAuth2 client based on provider configuration
-    // Handle absolute URLs in authorizePath 
+    // Handle absolute URLs in authorizePath
     let authorizePath = provider.authorizePath || '/o/oauth2/v2/auth';
     let tokenHost = provider.tokenHost;
-    
+
     // If authorizePath is an absolute URL, extract the host and path
     if (authorizePath.startsWith('http')) {
       const authUrl = new URL(authorizePath);
       tokenHost = `${authUrl.protocol}//${authUrl.host}`;
       authorizePath = authUrl.pathname + authUrl.search;
     }
-    
+
     const client = new AuthorizationCode({
       client: {
         id: connection.clientid,
@@ -159,25 +157,26 @@ export class ConnectionService {
     return { url: authorizationUri };
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async callback(context: RequestContext): Promise<any> {
-    this.logger.debug('OAuth2 callback received', { 
+    this.logger.debug('OAuth2 callback received', {
       query: context.query,
       hasCode: !!context.query?.code,
       hasState: !!context.query?.state,
       contextUserId: context.userId,
-      contextRequestId: context.requestId
+      contextRequestId: context.requestId,
     });
 
     if (!context.query || !context.query.code || !context.query.state) {
       this.logger.error('OAuth2 callback missing code or state', {
-        query: context.query
+        query: context.query,
       });
       throw new NotFoundException('Invalid callback parameters');
     }
 
     const connectionId = context.query.state as string;
     const code = context.query.code as string;
-    
+
     this.logger.debug('Processing OAuth callback', { connectionId, codeLength: code.length });
 
     try {
@@ -192,7 +191,7 @@ export class ConnectionService {
       }
 
       const connection = entity.toConnection();
-      
+
       if (!connection.clientid || !connection.clientsecret) {
         throw new NotFoundException('OAuth2 credentials not configured');
       }
@@ -206,14 +205,15 @@ export class ConnectionService {
       // Handle absolute URLs in authorizePath
       let authorizePath = provider.authorizePath || '/o/oauth2/v2/auth';
       let tokenHost = provider.tokenHost;
-      
+
       // If authorizePath is an absolute URL, extract the host and path
       if (authorizePath.startsWith('http')) {
         const authUrl = new URL(authorizePath);
         tokenHost = `${authUrl.protocol}//${authUrl.host}`;
         authorizePath = authUrl.pathname + authUrl.search;
       }
-      
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const client = new AuthorizationCode({
         client: {
           id: connection.clientid,
@@ -229,7 +229,7 @@ export class ConnectionService {
       // Exchange code for tokens
       // @todo note for Google, we need to make a direct POST request to handle the response properly
       this.logger.debug('Exchanging code for tokens');
-      
+
       const tokenEndpoint = `${provider.tokenHost}${provider.tokenPath || '/token'}`;
       const tokenParams = new URLSearchParams({
         code,
@@ -240,14 +240,14 @@ export class ConnectionService {
       });
 
       this.logger.debug('Making token request to:', tokenEndpoint);
-      
+
       this.logger.debug('Token request body:', tokenParams.toString());
-      
+
       const tokenResponse = await fetch(tokenEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json',
+          Accept: 'application/json',
         },
         body: tokenParams.toString(),
       });
@@ -278,7 +278,7 @@ export class ConnectionService {
         });
         throw new Error('Invalid token response format');
       }
-      
+
       this.logger.debug('Token exchange successful', {
         hasAccessToken: !!tokenData.access_token,
         hasRefreshToken: !!tokenData.refresh_token,
@@ -286,10 +286,8 @@ export class ConnectionService {
       });
 
       // Store tokens in the connection entity
-      const expiryDate = tokenData.expires_in 
-        ? new Date(Date.now() + tokenData.expires_in * 1000)
-        : null;
-        
+      const expiryDate = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : null;
+
       await this.connectionRepository.update(
         { id: connectionId },
         {
@@ -298,11 +296,12 @@ export class ConnectionService {
           tokenExpiry: expiryDate,
         },
       );
-      
+
       this.logger.debug('Tokens stored successfully for connection', { connectionId });
 
       // Redirect to frontend success page
       const frontendUrl = process.env.FRONTEND_URL || 'http://dev.companionintelligence.com';
+
       return {
         redirect: `${frontendUrl}/connections?oauth=success&connectionId=${connectionId}`,
       };
@@ -310,15 +309,22 @@ export class ConnectionService {
       this.logger.error('OAuth2 token exchange failed', {
         error: error instanceof Error ? error.message : 'Unknown error',
         connectionId,
-        stack: error instanceof Error ? error.stack : undefined
+        stack: error instanceof Error ? error.stack : undefined,
       });
       throw new NotFoundException('Failed to complete OAuth2 flow');
     }
   }
 
-  async makeApiRequest(context: RequestContext, connectionId: string, endpoint: string, options?: any): Promise<any> {
+  async makeApiRequest(
+    context: RequestContext,
+    connectionId: string,
+    endpoint: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    options?: any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): Promise<any> {
     const connection = await this.findOne(context, connectionId);
-    
+
     if (!connection.accessToken) {
       throw new NotFoundException('Connection not authenticated');
     }
@@ -342,7 +348,7 @@ export class ConnectionService {
         ...options,
         headers: {
           ...options?.headers,
-          'Authorization': `Bearer ${connection.accessToken}`,
+          Authorization: `Bearer ${connection.accessToken}`,
         },
       });
 
@@ -359,7 +365,7 @@ export class ConnectionService {
 
   private async refreshToken(context: RequestContext, connectionId: string): Promise<void> {
     const connection = await this.findOne(context, connectionId);
-    
+
     if (!connection.refreshToken) {
       throw new NotFoundException('No refresh token available');
     }
@@ -372,14 +378,14 @@ export class ConnectionService {
     // Handle absolute URLs in authorizePath
     let authorizePath = provider.authorizePath || '/o/oauth2/v2/auth';
     let tokenHost = provider.tokenHost;
-    
+
     // If authorizePath is an absolute URL, extract the host and path
     if (authorizePath.startsWith('http')) {
       const authUrl = new URL(authorizePath);
       tokenHost = `${authUrl.protocol}//${authUrl.host}`;
       authorizePath = authUrl.pathname + authUrl.search;
     }
-    
+
     const client = new AuthorizationCode({
       client: {
         id: connection.clientid!,
@@ -420,5 +426,4 @@ export class ConnectionService {
       throw new NotFoundException('Failed to refresh token');
     }
   }
-
 }
