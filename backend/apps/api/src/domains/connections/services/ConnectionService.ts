@@ -13,8 +13,8 @@ import type { CreateConnectionDto, Connection, UpdateConnectionDto } from '../ty
 @Injectable()
 export class ConnectionService {
   private logger = new LoggerService(ConnectionService.name);
-  private readonly apiUrl = process.env.API_URL || 'https://127.0.0.1';
-  private readonly frontendUrl = process.env.FRONTEND_URL || 'https://127.0.0.1';
+  private readonly apiUrl = process.env.API_URL || 'https://dev.companionintelligence.com';
+  private readonly frontendUrl = process.env.FRONTEND_URL || 'https://dev.companionintelligence.com';
 
   constructor(
     @InjectRepository(ConnectionEntity)

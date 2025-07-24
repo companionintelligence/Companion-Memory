@@ -69,7 +69,8 @@
                     
                     // Redirect to frontend with error
                     setTimeout(() => {
-                        const frontendUrl = window.location.origin.replace('3000', '5173');
+                        // Use hardcoded frontend URL for reliability
+                        const frontendUrl = 'https://dev.companionintelligence.com';
                         window.location.href = `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent(errorDescription || error)}`;
                     }, 2000);
                     return;
@@ -80,6 +81,7 @@
                 }
 
                 // Make API call to complete the OAuth callback
+                // Use the same origin for the API call since the frontend and API are on the same domain
                 const apiUrl = `${window.location.origin}/api/connections/callback?code=${code}&state=${state}`;
                 
                 messageEl.textContent = 'Completing OAuth authentication...';
@@ -104,7 +106,8 @@
                     
                     // Redirect to frontend with success
                     setTimeout(() => {
-                        const frontendUrl = window.location.origin.replace('3000', '5173');
+                        // Use hardcoded frontend URL for reliability
+                        const frontendUrl = 'https://dev.companionintelligence.com';
                         window.location.href = `${frontendUrl}/connections?oauth=success&connectionId=${result.connectionId}`;
                     }, 1000);
                 } else {
@@ -119,7 +122,8 @@
                 
                 // Redirect to frontend with error
                 setTimeout(() => {
-                    const frontendUrl = window.location.origin.replace('3000', '5173');
+                    // Use hardcoded frontend URL for reliability
+                    const frontendUrl = 'https://dev.companionintelligence.com';
                     window.location.href = `${frontendUrl}/connections?oauth=error&message=${encodeURIComponent(err.message)}`;
                 }, 2000);
             }
