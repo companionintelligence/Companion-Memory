@@ -25,9 +25,9 @@ RUN mkdir -p /app/models
 # Expose port
 EXPOSE 9000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9000/health || exit 1
+# Health check - disabled since curl is not available in the container
+# HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+#     CMD curl -f http://localhost:9000/health || exit 1
 
 # Run the service
 CMD ["python", "voice_service.py"] 

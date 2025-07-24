@@ -57,6 +57,9 @@ class TranscriptionResponse(BaseModel):
 def convert_audio_to_wav(audio_data: bytes, input_format: str = "webm") -> bytes:
     """Convert audio data to WAV format using ffmpeg"""
     try:
+        logger.info(f"Converting audio: {len(audio_data)} bytes, format: {input_format}")
+        logger.info(f"First 100 bytes: {audio_data[:100]}")
+        
         # Create temporary input file
         with tempfile.NamedTemporaryFile(suffix=f".{input_format}", delete=False) as input_file:
             input_file.write(audio_data)
@@ -136,8 +139,24 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
         
         logger.info(f"Processing audio: {len(audio_data)} bytes, sample_rate: {sample_rate}")
         
-        # Convert audio to WAV format if needed
-        wav_audio_data = convert_audio_to_wav(audio_data, "webm")
+        # Detect audio format and convert to WAV format
+        # Try to detect format from the first few bytes
+        if audio_data.startswith(b'RIFF'):
+            # Already WAV format
+            wav_audio_data = audio_data
+            logger.info("Audio is already in WAV format")
+        elif audio_data.startswith(b'\x1a\x45\xdf\xa3'):
+            # WebM format
+            wav_audio_data = convert_audio_to_wav(audio_data, "webm")
+            logger.info("Converting WebM audio to WAV")
+        elif audio_data.startswith(b'ftyp'):
+            # MP4 format
+            wav_audio_data = convert_audio_to_wav(audio_data, "mp4")
+            logger.info("Converting MP4 audio to WAV")
+        else:
+            # Default to WebM
+            wav_audio_data = convert_audio_to_wav(audio_data, "webm")
+            logger.info("Defaulting to WebM conversion")
         
         # Create temporary file for audio
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
@@ -162,19 +181,28 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
                     "confidence": 0.0
                 }
             
-            # Transcribe with 10x more sensitive settings
-            result = model.transcribe(
-                audio, 
-                batch_size=1,  # Smaller batch size for better real-time processing
-                condition_on_previous_text=False,  # Don't condition on previous text for better sensitivity
-                initial_prompt=None,  # No initial prompt for better sensitivity
-                temperature=0.0,  # Lower temperature for more consistent results
-                compression_ratio_threshold=0.5,  # 10x more permissive threshold
-                logprob_threshold=-3.0,  # 10x more permissive threshold
-                no_speech_threshold=0.01,  # 10x more permissive threshold
-            )
+            # Transcribe with only supported parameters
+            result = model.transcribe(audio)
             
-            logger.info(f"Transcription result: '{result['text']}'")
+            logger.info(f"Raw transcription result: {result}")
+            logger.info(f"Result type: {type(result)}")
+            logger.info(f"Result keys: {result.keys() if hasattr(result, 'keys') else 'No keys'}")
+            
+            # Handle different result formats
+            if hasattr(result, 'text'):
+                transcription_text = result.text
+            elif isinstance(result, dict) and 'text' in result:
+                transcription_text = result['text']
+            elif hasattr(result, '__getitem__') and 'text' in result:
+                transcription_text = result['text']
+            elif isinstance(result, dict) and 'segments' in result:
+                # Extract text from segments
+                transcription_text = ' '.join([seg.get('text', '').strip() for seg in result['segments']])
+            else:
+                logger.error(f"Unexpected result format: {result}")
+                transcription_text = ""
+            
+            logger.info(f"Transcription text: '{transcription_text}'")
             
             # Only align if we have segments
             if result["segments"]:
@@ -189,9 +217,9 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
                 confidence = 0.0
             
             return {
-                "text": result["text"],
-                "segments": result["segments"],
-                "language": result["language"],
+                "text": transcription_text,
+                "segments": result.get("segments", []),
+                "language": result.get("language", "en"),
                 "confidence": float(confidence)
             }
             
@@ -207,8 +235,11 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
 async def transcribe_endpoint(request: TranscriptionRequest):
     """Transcribe audio endpoint"""
     try:
+        logger.info(f"Received transcription request: {len(request.audio_data)} chars base64")
+        
         # Decode base64 audio
         audio_data = base64.b64decode(request.audio_data)
+        logger.info(f"Decoded audio data: {len(audio_data)} bytes")
         
         # Transcribe
         result = transcribe_audio(
@@ -282,4 +313,4 @@ if __name__ == "__main__":
         exit(1)
     
     # Run server
-    uvicorn.run(app, host="0.0.0.0", port=9001) 
+    uvicorn.run(app, host="0.0.0.0", port=9000) 

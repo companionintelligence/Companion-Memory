@@ -46,6 +46,9 @@ export class VoiceService {
       });
       this.logger.debug(`Session ${sessionId} created. Total active sessions: ${this.activeStreams.size}`);
     }
+    
+    // Log all active sessions for debugging
+    this.logger.debug(`Active sessions after creation: ${Array.from(this.activeStreams.keys()).join(', ')}`);
   }
 
   /**
@@ -60,11 +63,13 @@ export class VoiceService {
       this.logger.debug(`Processing audio chunk for session ${sessionId}: stream exists=${!!stream}, isActive=${stream?.isActive}`);
       
       if (!stream || !stream.isActive) {
+        this.logger.error(`Session ${sessionId} not found or inactive. Active sessions: ${Array.from(this.activeStreams.keys()).join(', ')}`);
         throw new Error(`Voice stream session ${sessionId} not found or inactive`);
       }
 
       // Update session activity time to keep it alive
       stream.startTime = Date.now();
+      this.logger.debug(`Updated session ${sessionId} activity time`);
 
       // Validate audio format
       if (!this.whisperXService.validateAudioFormat(audioChunk.sampleRate, audioChunk.channels)) {

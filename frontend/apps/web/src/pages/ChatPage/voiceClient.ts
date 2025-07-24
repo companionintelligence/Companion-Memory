@@ -31,14 +31,15 @@ export class VoiceClient {
    * Start a new voice stream session
    */
   async startVoiceStream(sessionId?: string): Promise<{ success: boolean; sessionId: string }> {
-    const sessionIdToUse = sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Let the backend generate the session ID if none is provided
+    const requestBody = sessionId ? { sessionId } : {};
     
     const response = await fetch(`${this.baseUrl}/stream/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ sessionId: sessionIdToUse }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {

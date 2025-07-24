@@ -23,7 +23,7 @@ export class VoiceController {
    */
   @Post('stream/start')
   async startVoiceStream(
-    @Body() body: { sessionId: string },
+    @Body() body: { sessionId?: string },
     @Req() req: any,
   ): Promise<{ success: boolean; sessionId: string }> {
     try {
