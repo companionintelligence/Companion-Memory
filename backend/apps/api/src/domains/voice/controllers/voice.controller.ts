@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   Param,
   UseGuards,
@@ -69,6 +70,19 @@ export class VoiceController {
 
       const response = await this.voiceService.processAudioChunk(sessionId, audioChunk);
       
+      // Return the transcription data directly for easier frontend consumption
+      if (response.type === 'transcription') {
+        return {
+          type: 'transcription',
+          data: {
+            text: response.data.text,
+            confidence: response.data.confidence,
+            isFinal: response.data.isFinal,
+          },
+          timestamp: response.timestamp,
+        };
+      }
+      
       return response;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -88,6 +102,19 @@ export class VoiceController {
   ): Promise<any> {
     try {
       const response = await this.voiceService.stopVoiceStream(sessionId);
+      
+      // Return the transcription data directly for easier frontend consumption
+      if (response.type === 'transcription') {
+        return {
+          type: 'transcription',
+          data: {
+            text: response.data.text,
+            confidence: response.data.confidence,
+            isFinal: response.data.isFinal,
+          },
+          timestamp: response.timestamp,
+        };
+      }
       
       return response;
     } catch (error) {
@@ -183,4 +210,46 @@ export class VoiceController {
       );
     }
   }
+
+  /**
+   * Get session status (for debugging)
+   */
+  @Get('session/:sessionId/status')
+  async getSessionStatus(@Param('sessionId') sessionId: string): Promise<any> {
+    try {
+      const status = this.voiceService.getSessionStatus(sessionId);
+      
+      return { sessionId, status };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new HttpException(
+        `Failed to get session status: ${errorMessage}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Health check for voice services
+   */
+  @Get('health')
+  async healthCheck(): Promise<{ status: string; whisperx: boolean; sesameai: boolean }> {
+    try {
+      const config = this.voiceService.getServiceConfiguration();
+      
+      return {
+        status: 'healthy',
+        whisperx: config.whisperX,
+        sesameai: config.sesameAI,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new HttpException(
+        `Health check failed: ${errorMessage}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+
 } 

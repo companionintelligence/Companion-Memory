@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { WhisperXService } from './whisperx.service';
 import { SesameAIService } from './sesameai.service';
+import { VoiceApiService } from './voice-api.service';
 import { 
   AudioChunk, 
   TranscriptionResult, 
@@ -21,6 +22,7 @@ export class VoiceService {
   constructor(
     private readonly whisperXService: WhisperXService,
     private readonly sesameAIService: SesameAIService,
+    private readonly voiceApiService: VoiceApiService,
   ) {}
 
   /**
@@ -29,11 +31,21 @@ export class VoiceService {
   async startVoiceStream(sessionId: string): Promise<void> {
     this.logger.log(`Starting voice stream session: ${sessionId}`);
     
-    this.activeStreams.set(sessionId, {
-      audioChunks: [],
-      startTime: Date.now(),
-      isActive: true,
-    });
+    // Check if session already exists and reactivate it
+    const existingSession = this.activeStreams.get(sessionId);
+    if (existingSession) {
+      this.logger.debug(`Reactivating existing session: ${sessionId}`);
+      existingSession.isActive = true;
+      existingSession.startTime = Date.now();
+      existingSession.audioChunks = [];
+    } else {
+      this.activeStreams.set(sessionId, {
+        audioChunks: [],
+        startTime: Date.now(),
+        isActive: true,
+      });
+      this.logger.debug(`Session ${sessionId} created. Total active sessions: ${this.activeStreams.size}`);
+    }
   }
 
   /**
@@ -45,9 +57,14 @@ export class VoiceService {
   ): Promise<VoiceStreamResponse> {
     try {
       const stream = this.activeStreams.get(sessionId);
+      this.logger.debug(`Processing audio chunk for session ${sessionId}: stream exists=${!!stream}, isActive=${stream?.isActive}`);
+      
       if (!stream || !stream.isActive) {
         throw new Error(`Voice stream session ${sessionId} not found or inactive`);
       }
+
+      // Update session activity time to keep it alive
+      stream.startTime = Date.now();
 
       // Validate audio format
       if (!this.whisperXService.validateAudioFormat(audioChunk.sampleRate, audioChunk.channels)) {
@@ -173,6 +190,22 @@ export class VoiceService {
   }
 
   /**
+   * Get session status
+   */
+  getSessionStatus(sessionId: string): { exists: boolean; isActive: boolean; startTime: number } | null {
+    const stream = this.activeStreams.get(sessionId);
+    if (!stream) {
+      return null;
+    }
+    
+    return {
+      exists: true,
+      isActive: stream.isActive,
+      startTime: stream.startTime,
+    };
+  }
+
+  /**
    * Clean up inactive sessions
    */
   cleanupInactiveSessions(): void {
@@ -185,6 +218,13 @@ export class VoiceService {
         this.activeStreams.delete(sessionId);
       }
     }
+  }
+
+  /**
+   * Get service configuration status
+   */
+  getServiceConfiguration(): { whisperX: boolean; sesameAI: boolean } {
+    return this.voiceApiService.validateConfiguration();
   }
 
   /**

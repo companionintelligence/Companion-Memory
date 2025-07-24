@@ -33,6 +33,24 @@ services:
     command: server /data
     profiles: [ "all", "local", "infra" ]
 
+  whisperx:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.whisperx
+    image: ci/whisperx
+    container_name: whisperx
+    ports:
+      - 9002:9000
+    volumes:
+      - whisperx-models:/app/models
+      - whisperx-cache:/root/.cache
+    environment:
+      - PYTHONPATH=/app
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "local", "infra" ]
+
   webserver:
     image: nginx:stable
     container_name: webserver
@@ -95,6 +113,8 @@ volumes:
   postgres-data:
   minio-data:
   open-webui:
+  whisperx-models:
+  whisperx-cache:
 
 networks:
   web:

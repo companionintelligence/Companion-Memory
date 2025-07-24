@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dev index infra init install local migrate seed staging useradd userpw
+.PHONY: help build dbclear dev index infra init install local migrate seed staging useradd userpw voice-setup voice-service
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -203,3 +203,12 @@ useradd: ## Add a user to the PostgreSQL database
 userpw: ## Change a user's password
 	@printf "🔑 Changing user password...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
+
+voice-setup: ## Set up WhisperX voice processing service
+	@printf "🔊 Setting up WhisperX voice processing service...\n\n"
+	@chmod +x scripts/setup-whisperx.sh
+	@./scripts/setup-whisperx.sh
+
+voice-service: ## Start the WhisperX voice processing service
+	@printf "🎤 Starting WhisperX voice processing service...\n\n"
+	@cd backend && source voice_env/bin/activate && python voice_service.py

@@ -25,7 +25,7 @@ export interface VoiceStreamResponse {
 }
 
 export class VoiceClient {
-  private baseUrl = 'http://localhost:9000'; // Point to WhisperX service directly
+  private baseUrl = 'https://dev.companionintelligence.com/api/voice'; // Point to nginx reverse proxy
 
   /**
    * Start a new voice stream session
@@ -38,7 +38,7 @@ export class VoiceClient {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ session_id: sessionIdToUse }),
+      body: JSON.stringify({ sessionId: sessionIdToUse }),
     });
 
     if (!response.ok) {
@@ -46,7 +46,7 @@ export class VoiceClient {
     }
 
     const result = await response.json();
-    return { success: result.status === 'started', sessionId: result.session_id };
+    return { success: result.success, sessionId: result.sessionId };
   }
 
   /**
@@ -62,10 +62,10 @@ export class VoiceClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        session_id: sessionId,
-        audio_chunk: audioChunk.audioData,
-        sample_rate: audioChunk.sampleRate,
-        is_final: false,
+        audioData: audioChunk.audioData,
+        sampleRate: audioChunk.sampleRate,
+        channels: audioChunk.channels,
+        timestamp: audioChunk.timestamp,
       }),
     });
 
@@ -74,11 +74,7 @@ export class VoiceClient {
     }
 
     const result = await response.json();
-    return {
-      type: 'transcription',
-      data: { text: result.text },
-      timestamp: result.timestamp,
-    };
+    return result;
   }
 
   /**
@@ -97,11 +93,7 @@ export class VoiceClient {
     }
 
     const result = await response.json();
-    return {
-      type: 'transcription',
-      data: { text: result.text },
-      timestamp: result.timestamp,
-    };
+    return result;
   }
 
   /**
@@ -191,7 +183,7 @@ export class VoiceClient {
     }
 
     const result = await response.json();
-    return result.voices;
+    return result.voices || [];
   }
 
   /**
@@ -210,8 +202,28 @@ export class VoiceClient {
     }
 
     const result = await response.json();
-    return result.sessions;
+    return result.sessions || [];
   }
+
+  /**
+   * Check voice service health
+   */
+  async healthCheck(): Promise<{ status: string; whisperx: boolean; sesameai: boolean }> {
+    const response = await fetch(`${this.baseUrl}/health`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Health check failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+
 }
 
 // Export singleton instance

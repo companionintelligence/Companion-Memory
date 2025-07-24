@@ -9,7 +9,7 @@ export class VoiceApiService {
   private readonly sesameAIApiKey: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.whisperXApiUrl = this.configService.get<string>('WHISPERX_API_URL', 'http://localhost:9000');
+    this.whisperXApiUrl = this.configService.get<string>('WHISPERX_API_URL', 'http://dev.companionintelligence.com:9002');
     this.sesameAIApiUrl = this.configService.get<string>('SESAMEAI_API_URL', 'https://api.sesameai.com');
     this.sesameAIApiKey = this.configService.get<string>('SESAMEAI_API_KEY', '');
   }
@@ -38,7 +38,7 @@ export class VoiceApiService {
           audio_data: base64Audio,
           sample_rate: 16000,
           language: options?.language || 'en',
-          model_size: 'base', // Can be made configurable
+          model_size: 'base',
         }),
       });
 
@@ -78,8 +78,8 @@ export class VoiceApiService {
       }
 
       // TODO: Implement actual SesameAI/CSM API call
-      // For now, return mock audio data
-      return this.generateMockAudioData();
+      // For now, return empty audio data
+      return Buffer.alloc(0);
     } catch (error) {
       this.logger.error('SesameAI/CSM API call failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -104,8 +104,8 @@ export class VoiceApiService {
       }
 
       // TODO: Implement actual SesameAI/CSM streaming API call
-      // For now, return mock audio stream
-      return this.generateMockAudioStream(request.text);
+      // For now, return empty audio stream
+      return this.generateEmptyAudioStream();
     } catch (error) {
       this.logger.error('SesameAI/CSM streaming API call failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -152,55 +152,11 @@ export class VoiceApiService {
   }
 
   /**
-   * Generate mock transcription for development
+   * Generate empty audio stream for TTS placeholder
    */
-  private generateMockTranscription(): string {
-    const mockPhrases = [
-      'Hello, this is a test of the voice chat functionality',
-      'The weather is nice today',
-      'I would like to schedule a meeting',
-      'Can you help me with my project?',
-      'Thank you for your assistance',
-    ];
-    
-    return mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
+  private async *generateEmptyAudioStream(): AsyncGenerator<Buffer> {
+    yield Buffer.alloc(0);
   }
 
-  /**
-   * Generate mock audio data for development
-   */
-  private generateMockAudioData(): Buffer {
-    // Generate a simple sine wave as mock audio
-    const sampleRate = 22050;
-    const duration = 2.5; // seconds
-    const frequency = 440; // Hz (A4 note)
-    const samples = Math.floor(sampleRate * duration);
-    
-    const audioData = Buffer.alloc(samples * 2); // 16-bit samples
-    
-    for (let i = 0; i < samples; i++) {
-      const sample = Math.sin(2 * Math.PI * frequency * i / sampleRate);
-      const value = Math.floor(sample * 32767); // Convert to 16-bit
-      audioData.writeInt16LE(value, i * 2);
-    }
-    
-    return audioData;
-  }
 
-  /**
-   * Generate mock audio stream for development
-   */
-  private async *generateMockAudioStream(text: string): AsyncGenerator<Buffer> {
-    const words = text.split(' ');
-    const wordsPerChunk = Math.max(1, Math.floor(words.length / 3));
-    
-    for (let i = 0; i < words.length; i += wordsPerChunk) {
-      const chunk = words.slice(i, i + wordsPerChunk).join(' ');
-      
-      // Simulate processing delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      yield this.generateMockAudioData();
-    }
-  }
 } 

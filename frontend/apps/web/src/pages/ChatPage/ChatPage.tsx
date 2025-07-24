@@ -303,16 +303,25 @@ function ChatSidebar({
                       >
                         <MessageSquare className="mr-2 h-4 w-4" />
                         <span className="flex-1 truncate">{conversation.title}</span>
-                        <button
+                        <div
                           onClick={(e) => {
                             e.stopPropagation();
                             onDeleteConversation(conversation.id);
                           }}
-                          className="group-hover:opacity-100 p-1 rounded-full hover:bg-muted"
+                          className="group-hover:opacity-100 p-1 rounded-full hover:bg-muted cursor-pointer"
                           title="Delete conversation"
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onDeleteConversation(conversation.id);
+                            }
+                          }}
                         >
                           <Trash2 size={14} />
-                        </button>
+                        </div>
                       </Sidebar.MenuButton>
                     </Sidebar.MenuItem>
                   ))}
@@ -363,6 +372,7 @@ export function ChatPage() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const [voiceServiceStatus, setVoiceServiceStatus] = useState<{ whisperx: boolean; sesameai: boolean } | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -385,6 +395,21 @@ export function ChatPage() {
     };
 
     loadConversations();
+  }, []);
+
+  // Check voice service status on mount
+  useEffect(() => {
+    const checkVoiceServiceStatus = async () => {
+      try {
+        const status = await voiceClient.healthCheck();
+        setVoiceServiceStatus({ whisperx: status.whisperx, sesameai: status.sesameai });
+      } catch (error) {
+        console.error('Failed to check voice service status:', error);
+        setVoiceServiceStatus({ whisperx: false, sesameai: false });
+      }
+    };
+
+    checkVoiceServiceStatus();
   }, []);
 
   // Load selected conversation details
@@ -538,13 +563,14 @@ export function ChatPage() {
       setTranscribedText('');
       audioChunksRef.current = [];
 
-      // Request microphone permissions and start recording
+      // Request microphone permissions and start recording with better audio quality
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           sampleRate: 16000,
           channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false, // Disable echo cancellation for better voice capture
+          noiseSuppression: false, // Disable noise suppression for clearer voice
+          autoGainControl: false, // Disable auto gain control for consistent levels
         } 
       });
 
@@ -562,29 +588,65 @@ export function ChatPage() {
       const sessionResponse = await voiceClient.startVoiceStream();
       setVoiceSessionId(sessionResponse.sessionId);
 
-      // Set up MediaRecorder for audio capture
+      // Set up MediaRecorder for audio capture with better format
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+      }
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/mp4';
+      }
+      
       const recorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus',
+        mimeType: mimeType,
+        audioBitsPerSecond: 128000, // Higher bitrate for better quality
       });
 
       recorder.ondataavailable = async (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
           
+          console.log(`Audio chunk received: ${event.data.size} bytes, type: ${event.data.type}`);
+          
           // Convert blob to base64 and send to backend
           const arrayBuffer = await event.data.arrayBuffer();
           const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
           
           try {
-            const response = await voiceClient.processAudioChunk(sessionResponse.sessionId, {
+            // Use the current voiceSessionId from state to ensure we're using the correct session
+            const currentSessionId = voiceSessionId || sessionResponse.sessionId;
+            if (!currentSessionId) {
+              console.error('No active session ID available');
+              return;
+            }
+            
+            const response = await voiceClient.processAudioChunk(currentSessionId, {
               audioData: base64Audio,
               sampleRate: 16000,
               channels: 1,
               timestamp: Date.now(),
             });
 
-            if (response.type === 'transcription') {
-              setTranscribedText(response.data.text);
+            console.log('WhisperX response:', response);
+            console.log('Response type:', response.type);
+            console.log('Response data:', response.data);
+            console.log('Data type:', typeof response.data);
+
+            if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
+              const transcriptionData = response.data as { text: string; confidence?: number; isFinal?: boolean };
+              const newText = transcriptionData.text.trim();
+              
+              if (newText) {
+                setTranscribedText(prevText => {
+                  // For streaming, append new text to existing transcription
+                  if (prevText && !prevText.endsWith(newText)) {
+                    return prevText + ' ' + newText;
+                  }
+                  return newText;
+                });
+              }
+            } else if (response.type === 'error') {
+              console.error('WhisperX error:', response.data);
             }
           } catch (error) {
             console.error('Failed to process audio chunk:', error);
@@ -592,7 +654,7 @@ export function ChatPage() {
         }
       };
 
-      recorder.start(1000); // Capture in 1-second chunks
+      recorder.start(500); // Capture in 0.5-second chunks for more frequent streaming updates (like C++ example)
       setMediaRecorder(recorder);
 
       // Start audio level monitoring
@@ -639,8 +701,9 @@ export function ChatPage() {
       // Stop voice session and get final transcription
       const response = await voiceClient.stopVoiceStream(voiceSessionId);
       
-      if (response.type === 'transcription' && response.data.text) {
-        const finalText = response.data.text;
+      if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
+        const transcriptionData = response.data as { text: string; confidence?: number; isFinal?: boolean };
+        const finalText = transcriptionData.text;
         setTranscribedText(finalText);
 
         // Add transcribed message to conversation
@@ -764,11 +827,20 @@ export function ChatPage() {
                   </button>
                   <button
                     onClick={handleVoiceChat}
+                    disabled={voiceServiceStatus && !voiceServiceStatus.whisperx}
                     className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-border text-foreground hover:bg-border/80 h-10 px-4 py-2"
+                    title={voiceServiceStatus && !voiceServiceStatus.whisperx ? 'WhisperX service not available' : 'Start voice chat with real-time transcription'}
                   >
                     <Mic size={16} />
                     Voice
+                    {voiceServiceStatus && !voiceServiceStatus.whisperx && (
+                      <span className="text-xs text-muted-foreground">(Offline)</span>
+                    )}
+                    {voiceServiceStatus && voiceServiceStatus.whisperx && (
+                      <span className="text-xs text-green-600">(Live)</span>
+                    )}
                   </button>
+
                 </div>
               ) : (
                 // Voice mode
@@ -777,14 +849,28 @@ export function ChatPage() {
                     {isRecording ? (
                       <>
                         <AudioWaveform level={audioLevel} />
-                        <span className="text-sm text-muted-foreground">
-                          {transcribedText || 'Listening...'}
-                        </span>
+                        <div className="flex-1">
+                          <span className="text-sm text-muted-foreground">
+                            {transcribedText ? 'Real-time transcription:' : 'Listening... (speak now)'}
+                          </span>
+                          {transcribedText && (
+                            <div className="text-sm font-medium text-foreground mt-1">
+                              "{transcribedText}"
+                            </div>
+                          )}
+                        </div>
                       </>
                     ) : (
-                      <span className="text-sm text-muted-foreground">
-                        {transcribedText || 'Click to start recording'}
-                      </span>
+                      <div className="flex-1">
+                        <span className="text-sm text-muted-foreground">
+                          {transcribedText ? 'Final transcription:' : 'Click to start recording'}
+                        </span>
+                        {transcribedText && (
+                          <div className="text-sm font-medium text-foreground mt-1">
+                            "{transcribedText}"
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                   {!isRecording ? (
@@ -808,7 +894,6 @@ export function ChatPage() {
                     onClick={handleVoiceChat}
                     className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-border text-foreground hover:bg-border/80 h-10 px-4 py-2"
                   >
-                    <Mic size={16} />
                     Exit
                   </button>
                 </div>
