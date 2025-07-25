@@ -54,6 +54,21 @@ export class ConnectionService {
     return entities.map((entity) => entity.toConnection());
   }
 
+  async findAllActive(): Promise<Array<Connection & { userId: string }>> {
+    const entities = await this.connectionRepository
+      .createQueryBuilder('connection')
+      .leftJoinAndSelect('connection.provider', 'provider')
+      .leftJoinAndSelect('connection.user', 'user')
+      .where('connection.active = :active', { active: true })
+      .andWhere('connection.accessToken IS NOT NULL')
+      .getMany();
+
+    return entities.map((entity) => ({
+      ...entity.toConnection(),
+      userId: entity.user?.id || 'unknown',
+    }));
+  }
+
   async findOne(context: RequestContext, id: string): Promise<Connection> {
     const entity = await this.connectionRepository.findOne({
       where: {
@@ -119,6 +134,177 @@ export class ConnectionService {
     }
 
     return true;
+  }
+
+  async sync(context: RequestContext, connectionId: string): Promise<{ success: boolean; message: string; data?: any }> {
+    const connection = await this.findOne(context, connectionId);
+
+    if (!connection.accessToken) {
+      throw new NotFoundException('Connection not authenticated');
+    }
+
+    const provider = connection.provider;
+    if (!provider) {
+      throw new NotFoundException('Provider not found');
+    }
+
+    this.logger.log('Starting manual sync for connection', {
+      connectionId,
+      providerName: provider.name,
+      userId: context.userId,
+    });
+
+    const syncResults: any[] = [];
+    const errors: string[] = [];
+
+    try {
+      // Handle Google connections
+      if (provider.id === '018f8b9a-1234-7000-8000-000000000001') {
+        await this.syncGoogleData(connection, syncResults, errors);
+      }
+      // Handle Microsoft connections
+      else if (provider.id === '018f8b9a-1234-7000-8000-000000000006') {
+        await this.syncMicrosoftData(connection, syncResults, errors);
+      }
+      else {
+        throw new Error(`Unsupported provider: ${provider.name}`);
+      }
+
+      this.logger.log('Sync completed', {
+        connectionId,
+        successCount: syncResults.length,
+        errorCount: errors.length,
+        errors,
+      });
+
+      return {
+        success: true,
+        message: `Sync completed. ${syncResults.length} APIs processed successfully. ${errors.length} errors occurred.`,
+        data: {
+          results: syncResults,
+          errors,
+        },
+      };
+    } catch (error) {
+      this.logger.error('Sync failed', {
+        connectionId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      throw error;
+    }
+  }
+
+  private async syncGoogleData(connection: any, syncResults: any[], errors: string[]): Promise<void> {
+    this.logger.log('Syncing Google data', { connectionId: connection.id });
+
+    // Google Calendar API
+    try {
+      const calendarData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/calendar/v3/calendars/primary/events?maxResults=10&timeMin=' + new Date().toISOString(),
+      );
+      syncResults.push({ api: 'Google Calendar', data: calendarData });
+      console.log('Google Calendar data:', calendarData);
+    } catch (error) {
+      const errorMsg = `Google Calendar API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
+
+    // Gmail API
+    try {
+      const gmailData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/gmail/v1/users/me/messages?maxResults=10',
+      );
+      syncResults.push({ api: 'Gmail', data: gmailData });
+      console.log('Gmail data:', gmailData);
+    } catch (error) {
+      const errorMsg = `Gmail API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
+
+    // Google Drive API
+    try {
+      const driveData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/drive/v3/files?pageSize=10',
+      );
+      syncResults.push({ api: 'Google Drive', data: driveData });
+      console.log('Google Drive data:', driveData);
+    } catch (error) {
+      const errorMsg = `Google Drive API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
+  }
+
+  private async syncMicrosoftData(connection: any, syncResults: any[], errors: string[]): Promise<void> {
+    this.logger.log('Syncing Microsoft data', { connectionId: connection.id });
+
+    // Microsoft Graph - User Profile
+    try {
+      const userData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/v1.0/me',
+      );
+      syncResults.push({ api: 'Microsoft Graph - User', data: userData });
+      console.log('Microsoft User data:', userData);
+    } catch (error) {
+      const errorMsg = `Microsoft User API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
+
+    // Microsoft Graph - Calendar
+    try {
+      const calendarData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/v1.0/me/calendar/events?$top=10',
+      );
+      syncResults.push({ api: 'Microsoft Graph - Calendar', data: calendarData });
+      console.log('Microsoft Calendar data:', calendarData);
+    } catch (error) {
+      const errorMsg = `Microsoft Calendar API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
+
+    // Microsoft Graph - Mail
+    try {
+      const mailData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/v1.0/me/messages?$top=10',
+      );
+      syncResults.push({ api: 'Microsoft Graph - Mail', data: mailData });
+      console.log('Microsoft Mail data:', mailData);
+    } catch (error) {
+      const errorMsg = `Microsoft Mail API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
+
+    // Microsoft Graph - OneDrive
+    try {
+      const onedriveData = await this.makeApiRequest(
+        { userId: connection.userId || connection.user?.id } as RequestContext,
+        connection.id,
+        '/v1.0/me/drive/root/children?$top=10',
+      );
+      syncResults.push({ api: 'Microsoft Graph - OneDrive', data: onedriveData });
+      console.log('Microsoft OneDrive data:', onedriveData);
+    } catch (error) {
+      const errorMsg = `Microsoft OneDrive API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      this.logger.error(errorMsg, { connectionId: connection.id, error });
+    }
   }
 
   async connect(context: RequestContext, connectionId: string): Promise<{ url: string }> {

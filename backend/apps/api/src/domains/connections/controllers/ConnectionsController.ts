@@ -11,13 +11,17 @@ import {
   Res,
   Query,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Response } from 'express';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
+import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
+import { Events, EventPayloads, OnEvent } from '@ci/domains/events';
 
 import { ConnectionService } from '../services/ConnectionService';
 import type { CreateConnectionDto, UpdateConnectionDto } from '../types';
@@ -44,8 +48,12 @@ const updateConnectionSchema = z.object({
 @Controller('connections')
 export class ConnectionsController {
   private readonly frontendUrl = process.env.FRONTEND_URL || 'http://127.0.0.1:5173';
+  private logger = new LoggerService(ConnectionsController.name);
 
-  constructor(private readonly connectionService: ConnectionService) {}
+  constructor(
+    private readonly connectionService: ConnectionService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   @Get('callback')
   async callback(
@@ -194,9 +202,56 @@ export class ConnectionsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/sync')
+  async sync(@Context() context: RequestContext, @Param('id') id: string) {
+    return this.connectionService.sync(context, id);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @HttpCode(204)
   async delete(@Context() context: RequestContext, @Param('id') id: string) {
     await this.connectionService.delete(context, id);
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async cronProcessConnections() {
+    this.logger.log('Processing connection sync cron');
+
+    const activeConnections = await this.connectionService.findAllActive();
+
+    for (const connection of activeConnections) {
+      this.eventEmitter.emit(Events.SYNC_CONNECTION, {
+        connectionId: connection.id,
+        userId: connection.userId,
+      });
+    }
+  }
+
+  @OnEvent(Events.SYNC_CONNECTION)
+  async syncConnection(payload: EventPayloads[Events.SYNC_CONNECTION]) {
+    const context: RequestContext = {
+      userId: payload.userId,
+    };
+
+    this.logger.log('Syncing connection', {
+      connectionId: payload.connectionId,
+      userId: payload.userId,
+    });
+
+    try {
+      const result = await this.connectionService.sync(context, payload.connectionId);
+      
+      this.logger.log('Connection sync completed', {
+        connectionId: payload.connectionId,
+        success: result.success,
+        message: result.message,
+      });
+    } catch (error) {
+      this.logger.error('Connection sync failed', {
+        connectionId: payload.connectionId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
   }
 }

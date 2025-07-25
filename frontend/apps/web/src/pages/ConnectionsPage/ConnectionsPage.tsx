@@ -447,6 +447,43 @@ export function ConnectionsPage() {
     }
   };
 
+  const handleSyncConnection = async (connectionId: string) => {
+    if (!confirm('Are you sure you want to sync data for this connection?')) {
+      return;
+    }
+
+    try {
+      setDeleteLoading(connectionId);
+
+      if (!authToken) {
+        throw new Error('Authentication token not found');
+      }
+
+      const response = await fetch(`/api/connections/${connectionId}/sync`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Error syncing connection: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Successfully synced connection:', result);
+      setSuccessMessage(`Data synced successfully for connection: ${result.connection?.name || connectionId}`);
+      await fetchConnections();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      console.error('Error syncing connection:', errorMessage, err);
+      setError(errorMessage);
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -603,6 +640,15 @@ export function ConnectionsPage() {
                                 ) : (
                                   <Trash2 className="h-4 w-4" />
                                 )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleSyncConnection(connection.id)}
+                                disabled={deleteLoading === connection.id || oauthInProgress}
+                                title="Sync Data"
+                              >
+                                <RefreshCw className="h-4 w-4" />
                               </Button>
                             </div>
                           </Table.Cell>
