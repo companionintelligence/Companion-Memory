@@ -1,4 +1,4 @@
-// Frontend voice client for communicating with the backend voice API
+// Frontend voice client for communicating with the voice service
 
 export interface VoiceStreamRequest {
   sessionId?: string;
@@ -25,206 +25,154 @@ export interface VoiceStreamResponse {
 }
 
 export class VoiceClient {
-  private baseUrl = 'https://dev.companionintelligence.com/api/voice'; // Point to nginx reverse proxy
+  private apiBaseUrl = '/api/voice'; // Use nginx proxy to voice-service container
 
   /**
    * Start a new voice stream session
    */
   async startVoiceStream(sessionId?: string): Promise<{ success: boolean; sessionId: string }> {
-    // Let the backend generate the session ID if none is provided
-    const requestBody = sessionId ? { sessionId } : {};
-    
-    const response = await fetch(`${this.baseUrl}/stream/start`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to start voice stream: ${response.statusText}`);
+    try {
+      const sessionIdToUse = sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // For direct voice service, we don't need to call a start endpoint
+      // The session will be created when we send the first audio chunk
+      return {
+        success: true,
+        sessionId: sessionIdToUse,
+      };
+    } catch (error) {
+      console.error('Failed to start voice stream:', error);
+      throw error;
     }
-
-    const result = await response.json();
-    return { success: result.success, sessionId: result.sessionId };
   }
 
   /**
-   * Process audio chunk and get real-time transcription
+   * Process audio chunk and get real-time transcription (streaming)
    */
-  async processAudioChunk(
+  async processAudioChunkStream(
     sessionId: string,
     audioChunk: AudioChunkRequest
   ): Promise<VoiceStreamResponse> {
-    const response = await fetch(`${this.baseUrl}/stream/audio/${sessionId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        audioData: audioChunk.audioData,
-        sampleRate: audioChunk.sampleRate,
-        channels: audioChunk.channels,
-        timestamp: audioChunk.timestamp,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to process audio chunk: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    return result;
-  }
-
-  /**
-   * Stop voice stream and get final transcription
-   */
-  async stopVoiceStream(sessionId: string): Promise<VoiceStreamResponse> {
-    const response = await fetch(`${this.baseUrl}/stream/stop/${sessionId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to stop voice stream: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    return result;
-  }
-
-  /**
-   * Convert text to speech
-   */
-  async textToSpeech(request: TTSRequest): Promise<VoiceStreamResponse> {
-    const response = await fetch(`${this.baseUrl}/tts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to convert text to speech: ${response.statusText}`);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Stream text-to-speech conversion
-   */
-  async streamTextToSpeech(
-    request: TTSRequest,
-    onChunk: (response: VoiceStreamResponse) => void
-  ): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/tts/stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to stream text to speech: ${response.statusText}`);
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Failed to get response reader');
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      console.log(`Sending audio chunk to voice service: ${this.apiBaseUrl}/transcribe-stream`);
+      console.log(`Session ID: ${sessionId}, Audio size: ${audioChunk.audioData.length} chars`);
+      
+      const response = await fetch(`${this.apiBaseUrl}/transcribe-stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_data: audioChunk.audioData,
+          sample_rate: audioChunk.sampleRate,
+          channels: audioChunk.channels,
+          language: 'en',
+          model_size: 'base',
+          enable_diarization: false,
+          sessionId: sessionId,
+        }),
+      });
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              onChunk(data);
-            } catch (error) {
-              console.error('Failed to parse SSE data:', error);
-            }
-          }
-        }
+      console.log(`Voice service response status: ${response.status}`);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Voice service response:', result);
+        return result;
+      } else {
+        const errorText = await response.text();
+        console.error(`Voice service error response: ${response.status} - ${errorText}`);
+        throw new Error(`Voice service error: ${response.status} - ${errorText}`);
       }
-    } finally {
-      reader.releaseLock();
+    } catch (error) {
+      console.error('Voice service streaming transcription failed:', error);
+      return {
+        type: 'error',
+        data: {
+          message: error instanceof Error ? error.message : 'Streaming transcription failed',
+        },
+        timestamp: Date.now(),
+      };
     }
   }
 
   /**
-   * Get available voices for TTS
+   * Get final transcription for streaming session
    */
-  async getAvailableVoices(): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/voices`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+  async getFinalTranscription(sessionId: string): Promise<VoiceStreamResponse> {
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/transcribe-stream-final`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_data: '', // Not needed for final transcription
+          sample_rate: 16000,
+          language: 'en',
+          model_size: 'base',
+          enable_diarization: true,
+          sessionId: sessionId,
+        }),
+      });
 
-    if (!response.ok) {
-      throw new Error(`Failed to get available voices: ${response.statusText}`);
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      } else {
+        throw new Error(`Voice service error: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Voice service final transcription failed:', error);
+      return {
+        type: 'error',
+        data: {
+          message: error instanceof Error ? error.message : 'Final transcription failed',
+        },
+        timestamp: Date.now(),
+      };
     }
-
-    const result = await response.json();
-    return result.voices || [];
-  }
-
-  /**
-   * Get active voice sessions (for debugging)
-   */
-  async getActiveSessions(): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/sessions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to get active sessions: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    return result.sessions || [];
   }
 
   /**
    * Check voice service health
    */
   async healthCheck(): Promise<{ status: string; whisperx: boolean; sesameai: boolean }> {
-    const response = await fetch(`${this.baseUrl}/health`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    try {
+      console.log(`Checking voice service health at: ${this.apiBaseUrl}/health`);
+      
+      const response = await fetch(`${this.apiBaseUrl}/health`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
-    if (!response.ok) {
-      throw new Error(`Health check failed: ${response.statusText}`);
+      console.log(`Health check response status: ${response.status}`);
+
+      if (response.ok) {
+        const health = await response.json();
+        console.log('Health check response:', health);
+        return {
+          status: health.status || 'healthy',
+          whisperx: health.model_loaded || false,
+          sesameai: false // Not implemented in voice service yet
+        };
+      } else {
+        const errorText = await response.text();
+        console.error(`Health check failed with status ${response.status}: ${errorText}`);
+        throw new Error(`Health check failed: ${response.status} - ${errorText}`);
+      }
+    } catch (error) {
+      console.error('Voice service health check failed:', error);
     }
 
-    return response.json();
+    return {
+      status: 'offline',
+      whisperx: false,
+      sesameai: false
+    };
   }
-
-
 }
 
 // Export singleton instance

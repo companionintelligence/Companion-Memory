@@ -45,6 +45,9 @@ export const ConfigSchema = z.object({
       secretAccessKey: z.string(),
     }),
   }),
+  whisperx: z.object({
+    apiUrl: z.string().default('http://voice-service:9000'),
+  }).optional().default({ apiUrl: 'http://voice-service:9000' }),
 });
 
 export default ConfigSchema.parse(config);

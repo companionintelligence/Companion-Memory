@@ -25,9 +25,6 @@ import { MemoryModule } from '@ci/domains/memory';
 import { ProvidersModule } from '@ci/domains/providers';
 import { EmbeddingModule } from '@ci/domains/search';
 import { UserModule } from '@ci/domains/user';
-import { ConnectionsModule } from '@ci/domains/connections';
-import { ProvidersModule } from '@ci/domains/providers';
-import { VoiceModule } from './domains/voice/voice.module';
 
 @Module({
   imports: [
@@ -53,8 +50,7 @@ import { VoiceModule } from './domains/voice/voice.module';
     MemoryModule,
     UserModule,
     ProvidersModule,
-    ConnectionsModule,
-    VoiceModule
+    ConnectionsModule
   ],
   controllers: [],
   providers: [

@@ -10,6 +10,17 @@ import { useAuth, useModel } from '@/hooks';
 import { voiceClient } from '../ChatPage/voiceClient';
 import type { VoiceStreamResponse } from '../ChatPage/voiceClient';
 
+// Utility function to convert binary data to base64
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
 interface Thread {
   id: string;
   name: string | null;
@@ -211,21 +222,13 @@ export function ChatThreadingPage() {
       setVoiceSessionId(sessionId);
       console.log('Voice session created:', sessionId);
       
-      // Verify session is active before proceeding
-      try {
-        const statusResponse = await fetch(`https://dev.companionintelligence.com/api/voice/session/${sessionId}/status`);
-        if (statusResponse.ok) {
-          const status = await statusResponse.json();
-          console.log('Session status:', status);
-        }
-      } catch (error) {
-        console.error('Failed to verify session status:', error);
-      }
+      // Session is managed locally, no need to verify with backend
+      console.log('Voice session created:', sessionId);
 
-      // Set up MediaRecorder for audio capture with WAV format if possible
-      let mimeType = 'audio/wav';
+      // Set up MediaRecorder for audio capture with WAV format for better compatibility
+      let mimeType = 'audio/wav'; // Use WAV for better backend compatibility
       if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/webm;codecs=opus';
+        mimeType = 'audio/webm;codecs=opus'; // Fallback to WebM
       }
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = 'audio/webm';
@@ -238,74 +241,74 @@ export function ChatThreadingPage() {
       
       const recorder = new MediaRecorder(stream, {
         mimeType: mimeType,
-        audioBitsPerSecond: 128000, // Higher bitrate for better quality
+        audioBitsPerSecond: 256000, // Higher bitrate for WAV quality
       });
 
+      // Stream audio chunks for real-time transcription
       recorder.ondataavailable = async (event) => {
         if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-          
           console.log(`Audio chunk received: ${event.data.size} bytes, type: ${event.data.type}`);
           
-          // Only process every 3rd chunk (1.5 seconds of audio) to reduce API calls
-          if (audioChunksRef.current.length >= 3) {
-            // Combine chunks into a single blob
-            const combinedBlob = new Blob(audioChunksRef.current, { type: event.data.type });
-            audioChunksRef.current = []; // Clear the buffer
+          // Convert blob to base64 and send to backend for streaming transcription
+          const arrayBuffer = await event.data.arrayBuffer();
+          const base64Audio = arrayBufferToBase64(arrayBuffer);
+          
+          // Debug: Log audio format and size
+          console.log('Audio format:', event.data.type);
+          console.log('Audio size:', event.data.size, 'bytes');
+          console.log('Base64 size:', base64Audio.length, 'chars');
+          console.log('First 50 chars of base64:', base64Audio.substring(0, 50));
+          
+          try {
+            // Use the captured sessionId from the closure to ensure consistency
+            if (!sessionId) {
+              console.error('No active session ID available');
+              return;
+            }
             
-            // Convert blob to base64 and send to backend
-            const arrayBuffer = await combinedBlob.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-            const base64Audio = btoa(
-              Array.from(uint8Array)
-                .map(byte => String.fromCharCode(byte))
-                .join('')
-            );
-            
-            try {
-              // Use the captured sessionId from the closure to ensure consistency
-              if (!sessionId) {
-                console.error('No active session ID available');
+            console.log('Processing audio chunk for session:', sessionId);
+            const response = await voiceClient.processAudioChunkStream(sessionId, {
+              audioData: base64Audio,
+              sampleRate: 16000,
+              channels: 1,
+              timestamp: Date.now(),
+            });
+
+            console.log('WhisperX streaming response:', response);
+            console.log('Response type:', response.type);
+            console.log('Response data:', response.data);
+
+            if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
+              const transcriptionData = response.data as { 
+                text: string; 
+                confidence?: number; 
+                isFinal?: boolean;
+                status?: string;
+                audioSize?: number;
+                minSize?: number;
+              };
+              
+              if (transcriptionData.status === 'listening') {
+                // Still listening, show progress
+                console.log(`Listening... (${transcriptionData.audioSize}/${transcriptionData.minSize} bytes)`);
                 return;
               }
               
-              console.log('Processing audio chunk for session:', sessionId);
-              const response = await voiceClient.processAudioChunk(sessionId, {
-                audioData: base64Audio,
-                sampleRate: 16000,
-                channels: 1,
-                timestamp: Date.now(),
-              });
-
-              console.log('WhisperX response:', response);
-              console.log('Response type:', response.type);
-              console.log('Response data:', response.data);
-              console.log('Data type:', typeof response.data);
-
-              if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
-                const transcriptionData = response.data as { text: string; confidence?: number; isFinal?: boolean };
-                const newText = transcriptionData.text.trim();
-                
-                if (newText) {
-                  setTranscribedText(prevText => {
-                    // For streaming, append new text to existing transcription
-                    if (prevText && !prevText.endsWith(newText)) {
-                      return prevText + ' ' + newText;
-                    }
-                    return newText;
-                  });
-                }
-              } else if (response.type === 'error') {
-                console.error('WhisperX error:', response.data);
+              const newText = transcriptionData.text.trim();
+              
+              if (newText) {
+                setTranscribedText(newText);
               }
-            } catch (error) {
-              console.error('Failed to process audio chunk:', error);
+            } else if (response.type === 'error') {
+              console.error('WhisperX streaming error:', response.data);
             }
+          } catch (error) {
+            console.error('Failed to process audio chunk:', error);
           }
         }
       };
 
-      recorder.start(500); // Capture in 0.5-second chunks for more frequent streaming updates
+      recorder.start(250); // Capture in 0.25-second chunks for more responsive streaming
       setMediaRecorder(recorder);
 
       // Start audio level monitoring
@@ -349,8 +352,8 @@ export function ChatThreadingPage() {
         setAnalyser(null);
       }
 
-      // Stop voice session and get final transcription
-      const response = await voiceClient.stopVoiceStream(voiceSessionId);
+      // Get final transcription for streaming session
+      const response = await voiceClient.getFinalTranscription(voiceSessionId);
       
       if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
         const transcriptionData = response.data as { text: string; confidence?: number; isFinal?: boolean };
@@ -427,10 +430,10 @@ export function ChatThreadingPage() {
               </Button>
               <Button
                 onClick={handleVoiceChat}
-                disabled={voiceServiceStatus && !voiceServiceStatus.whisperx}
+                disabled={voiceServiceStatus ? !voiceServiceStatus.whisperx : false}
                 variant="outline"
                 className="ml-auto"
-                title={voiceServiceStatus && !voiceServiceStatus.whisperx ? 'WhisperX service not available' : 'Start voice input with real-time transcription'}
+                title={voiceServiceStatus && !voiceServiceStatus.whisperx ? 'Voice service not available' : 'Start voice input with real-time transcription'}
               >
                 <Mic size={16} className="mr-2" />
                 Voice

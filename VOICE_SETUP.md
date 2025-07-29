@@ -6,7 +6,6 @@ This guide explains how to set up and use the voice transcription features in th
 
 The voice features include:
 - **Real-time speech-to-text transcription** using WhisperX
-- **Text-to-speech conversion** using SesameAI/CSM (planned)
 - **Voice chat integration** in the chat interface
 
 ## Prerequisites
@@ -17,15 +16,15 @@ The voice features include:
 
 ## Setup Instructions
 
-### 1. Start the WhisperX Service
+### 1. Start the Voice Service
 
-The WhisperX service runs on port 9002 (changed from 9000 to avoid conflicts with MinIO).
+The Voice Service (powered by WhisperX) runs on port 9002.
 
 #### Option A: Using Docker (Recommended)
 
 ```bash
-# Start the WhisperX service
-docker-compose up whisperx
+# Start the Voice Service
+docker-compose up voice-service
 
 # Or start all services
 docker-compose up
@@ -44,13 +43,13 @@ source voice_env/bin/activate  # On Windows: voice_env\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Start the WhisperX service
+# Start the Voice Service
 python voice_service.py
 ```
 
 ### 2. Verify Service Status
 
-Check if the WhisperX service is running:
+Check if the Voice Service is running:
 
 ```bash
 # Health check endpoint
@@ -78,7 +77,7 @@ curl https://dev.companionintelligence.com/api/voice/health
 
 1. Open the chat page
 2. Click the "Voice" button to enter voice mode
-3. The button will show "(Offline)" if WhisperX is not available
+3. The button will show "(Offline)" if the Voice Service is not available
 
 ### 2. Start Recording
 
@@ -111,16 +110,16 @@ This means WhisperX will now:
 
 ## Troubleshooting
 
-### WhisperX Service Not Starting
+### Voice Service Not Starting
 
-1. **Check port conflicts**: Ensure port 9001 is available
+1. **Check port conflicts**: Ensure port 9002 is available
 2. **Verify Python dependencies**: Make sure all requirements are installed
 3. **Check logs**: Look for error messages in the service logs
 
 ### No Transcription
 
 1. **Check microphone permissions**: Ensure your browser has microphone access
-2. **Verify service status**: Check if WhisperX is running and accessible
+2. **Verify service status**: Check if the Voice Service is running and accessible
 3. **Test with simple audio**: Try speaking clearly and slowly
 
 ### Poor Transcription Quality
@@ -133,15 +132,14 @@ This means WhisperX will now:
 
 ### Environment Variables
 
-- `WHISPERX_API_URL`: Internal URL of the WhisperX service (default: `http://whisperx:9001`)
-- `SESAMEAI_API_KEY`: API key for text-to-speech service (optional)
+- `WHISPERX_API_URL`: Internal URL of the Voice Service (default: `http://voice-service:9000`)
 
 ### Service URLs
 
 - **Frontend Voice Client**: `https://dev.companionintelligence.com/api/voice/*`
 - **Main API Service**: `http://host.docker.internal:3030` (internal)
-- **WhisperX Service**: `http://whisperx:9000` (internal Docker network)
-- **WhisperX External**: `http://localhost:9001` (host port mapping)
+- **Voice Service**: `http://voice-service:9000` (internal Docker network)
+- **Voice Service External**: `http://localhost:9002` (host port mapping)
 
 ### Audio Settings
 
@@ -155,20 +153,20 @@ This means WhisperX will now:
 
 The voice features now use real WhisperX transcription:
 
-- All voice input is processed by the live WhisperX model
+- All voice input is processed by the live Voice Service (WhisperX)
 - High-quality speech-to-text conversion with timestamps
 - Support for multiple languages and model sizes
 - Real-time transcription during voice recording
 
 ### Performance
 
-- **Model Loading**: WhisperX models are loaded on service startup
+- **Model Loading**: Voice Service models are loaded on service startup
 - **Memory Usage**: Large models require significant RAM
 - **GPU Support**: CUDA acceleration is available if configured
 
 ## Architecture
 
-The voice features use a layered architecture:
+The voice features use a clean layered architecture:
 
 ```
 Frontend (ChatPage) 
@@ -177,7 +175,7 @@ dev.companionintelligence.com/api/voice/*
     ↓ (Nginx reverse proxy)
 Main API Service (NestJS on port 3030)
     ↓ (Internal Docker network)
-WhisperX Service (Python on port 9001)
+Voice Service (Python on port 9000)
 ```
 
 This architecture provides:
@@ -185,18 +183,18 @@ This architecture provides:
 - **Error Handling**: Centralized error handling and logging
 - **Session Management**: Voice sessions managed by the main API
 - **Consistency**: All API endpoints follow the same pattern
+- **Simplicity**: Single API gateway for all voice operations
 
 ## API Endpoints
 
-### Public Voice API Endpoints (via Nginx)
+### Voice API Endpoints
 
 - `POST /api/voice/stream/start` - Start voice session
 - `POST /api/voice/stream/audio/:sessionId` - Process audio chunk
 - `POST /api/voice/stream/stop/:sessionId` - Stop voice session
 - `GET /api/voice/health` - Service health check
-- `POST /api/voice/test-whisperx` - Test WhisperX service
 
-### Internal WhisperX Service Endpoints
+### Internal Voice Service Endpoints
 
 - `POST /transcribe` - Transcribe audio (internal only)
 - `GET /health` - Service health (internal only)

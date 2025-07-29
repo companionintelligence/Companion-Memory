@@ -33,17 +33,17 @@ services:
     command: server /data
     profiles: [ "all", "local", "infra" ]
 
-  whisperx:
+  voice-service:
     build:
       context: ./backend
-      dockerfile: Dockerfile.whisperx
-    image: ci/whisperx
-    container_name: whisperx
+      dockerfile: Dockerfile.voice-service
+    image: ci/voice-service
+    container_name: voice-service
     ports:
       - 9002:9000
     volumes:
-      - whisperx-models:/app/models
-      - whisperx-cache:/root/.cache
+      - voice-service-models:/app/models
+      - voice-service-cache:/root/.cache
     environment:
       - PYTHONPATH=/app
     networks:
@@ -113,8 +113,8 @@ volumes:
   postgres-data:
   minio-data:
   open-webui:
-  whisperx-models:
-  whisperx-cache:
+  voice-service-models:
+  voice-service-cache:
 
 networks:
   web:

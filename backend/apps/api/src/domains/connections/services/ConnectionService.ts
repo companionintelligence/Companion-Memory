@@ -151,7 +151,7 @@ export class ConnectionService {
         secret: connection.clientsecret,
       },
       auth: {
-        tokenHost: tokenHost,
+        tokenHost: tokenHost || '',
         tokenPath: provider.tokenPath || '/token',
         authorizePath: authorizePath,
       },
@@ -229,7 +229,7 @@ export class ConnectionService {
           secret: connection.clientsecret,
         },
         auth: {
-          tokenHost: tokenHost,
+          tokenHost: tokenHost || '',
           tokenPath: provider.tokenPath || '/token',
           authorizePath: authorizePath,
         },
@@ -401,7 +401,7 @@ export class ConnectionService {
         secret: connection.clientsecret!,
       },
       auth: {
-        tokenHost: tokenHost,
+        tokenHost: tokenHost || '',
         tokenPath: provider.tokenPath || '/token',
         authorizePath: authorizePath,
       },
@@ -425,9 +425,9 @@ export class ConnectionService {
           },
         },
         {
-          accessToken: refreshedToken.token.access_token,
-          refreshToken: refreshedToken.token.refresh_token || connection.refreshToken,
-          tokenExpiry: refreshedToken.token.expires_at,
+          accessToken: refreshedToken.token.access_token as string,
+          refreshToken: refreshedToken.token.refresh_token as string || connection.refreshToken,
+          tokenExpiry: refreshedToken.token.expires_at as Date,
         },
       );
     } catch (error) {

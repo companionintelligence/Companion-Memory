@@ -8,6 +8,10 @@ accelerate>=0.20.0
 sentencepiece>=0.1.99
 protobuf>=3.20.0
 
+# Speaker diarization
+pyannote.audio>=3.0.0
+pyannote.core>=5.0.0
+
 # Audio processing
 librosa>=0.10.0
 soundfile>=0.12.0
