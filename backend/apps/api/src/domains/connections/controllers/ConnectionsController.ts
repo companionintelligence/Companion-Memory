@@ -33,6 +33,7 @@ const createConnectionSchema = z.object({
 
 const updateConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required').optional(),
+  providerId: z.string().uuid('Invalid provider ID').optional(),
   active: z.boolean().optional(),
   clientid: z.string().optional(),
   clientkey: z.string().optional(),

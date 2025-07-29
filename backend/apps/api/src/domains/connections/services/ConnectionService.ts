@@ -71,6 +71,15 @@ export class ConnectionService {
   }
 
   async update(context: RequestContext, id: string, data: UpdateConnectionDto): Promise<Connection> {
+    const { providerId, ...updateData } = data;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updatePayload: any = { ...updateData };
+
+    if (providerId) {
+      updatePayload.provider = { id: providerId };
+    }
+
     const result = await this.connectionRepository.update(
       {
         id,
@@ -78,7 +87,7 @@ export class ConnectionService {
           id: context.userId,
         },
       },
-      data,
+      updatePayload,
     );
 
     if (result.affected === 0) {

@@ -39,18 +39,22 @@ export function ConnectionsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Modal state
-  const [showConfigureModal, setShowConfigureModal] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<Connection | null>(null);
-  const [configureFormData, setConfigureFormData] = useState({
+  const [createFormData, setCreateFormData] = useState({
     name: '',
     providerId: '',
+  });
+  const [editFormData, setEditFormData] = useState({
+    name: '',
     clientid: '',
     clientkey: '',
     clientsecret: '',
     schedule: 'daily',
   });
-  const [configureLoading, setConfigureLoading] = useState(false);
-  const [configureError, setConfigureError] = useState<string | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [oauthInProgress, setOauthInProgress] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
@@ -236,39 +240,57 @@ export function ConnectionsPage() {
     */
   };
 
-  const connectionConfigure = (connection: Connection) => {
-    console.log('connection configure called - going to oauth url', connection);
-
+  const connectionEdit = (connection: Connection) => {
+    console.log('connection edit called', connection);
     setSelectedConnection(connection);
-    setConfigureFormData({
+    setEditFormData({
       name: connection.name || '',
-      providerId: connection.provider?.id || '',
       clientid: connection.clientid || '',
       clientkey: connection.clientkey || '',
       clientsecret: connection.clientsecret || '',
       schedule: connection.schedule || 'daily',
     });
-    setConfigureError(null);
-    setShowConfigureModal(true);
-
-    // Don't initiate OAuth automatically when opening the configure modal
-    // Wait for user to save the configuration first
+    setModalError(null);
+    setShowEditModal(true);
   };
 
-  const connectionCreate = async () => {
+  const connectionCreate = () => {
     console.log('connection create called');
 
+    if (Providers.length === 0) {
+      setError('No providers available. Please add providers first.');
+
+      return;
+    }
+
+    // Reset form and open create modal
+    setCreateFormData({
+      name: '',
+      providerId: Providers[0].id,
+    });
+    setModalError(null);
+    setShowCreateModal(true);
+  };
+
+  const handleCreateSubmit = async () => {
     try {
+      setModalLoading(true);
+      setModalError(null);
+
       if (!authToken) {
         throw new Error('Authentication token not found');
       }
 
-      if (Providers.length === 0) {
-        throw new Error('No providers available');
+      if (!createFormData.name) {
+        throw new Error('Name is required');
       }
 
-      // Create a new connection with default values
-      const defaultProvider = Providers.find((p) => p.name === 'google') || Providers[0];
+      if (!createFormData.providerId) {
+        throw new Error('Provider is required');
+      }
+
+      console.log('Creating connection with data:', createFormData);
+
       const response = await fetch('/api/connections', {
         method: 'POST',
         headers: {
@@ -276,8 +298,8 @@ export function ConnectionsPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: 'New Connection',
-          providerId: defaultProvider.id,
+          name: createFormData.name,
+          providerId: createFormData.providerId,
         }),
       });
 
@@ -289,32 +311,33 @@ export function ConnectionsPage() {
       const newConnection = await response.json();
       console.log('Successfully created connection:', newConnection);
 
-      // Refresh the connections list
+      // Close modal and refresh the connections list
+      setShowCreateModal(false);
       await fetchConnections();
-
-      // Open configure modal for the new connection
-      connectionConfigure(newConnection);
+      setSuccessMessage('Connection created successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       console.error('Error creating connection:', errorMessage, err);
-      setError(errorMessage);
+      setModalError(errorMessage);
+    } finally {
+      setModalLoading(false);
     }
   };
 
-  const handleConfigureSubmit = async () => {
+  const handleEditSubmit = async () => {
     try {
-      setConfigureLoading(true);
-      setConfigureError(null);
+      setModalLoading(true);
+      setModalError(null);
 
       if (!authToken || !selectedConnection) {
         throw new Error('Authentication token or connection not found');
       }
 
-      if (!configureFormData.name) {
+      if (!editFormData.name) {
         throw new Error('Name is required');
       }
 
-      console.log('Updating connection with data:', configureFormData);
+      console.log('Updating connection with data:', editFormData);
 
       const response = await fetch(`/api/connections/${selectedConnection.id}`, {
         method: 'PATCH',
@@ -323,11 +346,11 @@ export function ConnectionsPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: configureFormData.name,
-          clientid: configureFormData.clientid,
-          clientkey: configureFormData.clientkey,
-          clientsecret: configureFormData.clientsecret,
-          schedule: configureFormData.schedule,
+          name: editFormData.name,
+          clientid: editFormData.clientid,
+          clientkey: editFormData.clientkey,
+          clientsecret: editFormData.clientsecret,
+          schedule: editFormData.schedule,
         }),
       });
 
@@ -340,21 +363,22 @@ export function ConnectionsPage() {
       console.log('Successfully updated connection:', updatedConnection);
 
       // Close modal and refresh the connections list
-      setShowConfigureModal(false);
+      setShowEditModal(false);
       await fetchConnections();
+      setSuccessMessage('Connection updated successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       console.error('Error updating connection:', errorMessage, err);
-      setConfigureError(errorMessage);
+      setModalError(errorMessage);
     } finally {
-      setConfigureLoading(false);
+      setModalLoading(false);
     }
   };
 
   const handleConnect = async (connection: Connection) => {
     if (!connection.clientid || !connection.clientsecret) {
       setError('Please configure OAuth credentials first');
-      connectionConfigure(connection);
+      connectionEdit(connection);
 
       return;
     }
@@ -537,9 +561,9 @@ export function ConnectionsPage() {
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                onClick={() => connectionConfigure(connection)}
+                                onClick={() => connectionEdit(connection)}
                                 disabled={deleteLoading === connection.id || oauthInProgress}
-                                title="Configure"
+                                title="Edit"
                               >
                                 <Settings className="h-4 w-4" />
                               </Button>
@@ -596,47 +620,38 @@ export function ConnectionsPage() {
         </Card.Content>
       </Card>
 
-      {/* Configure Connection Modal */}
-      <Dialog open={showConfigureModal} onOpenChange={setShowConfigureModal}>
+      {/* Create Connection Modal */}
+      <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
         <Dialog.Content className="sm:max-w-[500px]">
           <Dialog.Header>
-            <Dialog.Title>Configure Connection</Dialog.Title>
-            <Dialog.Description>Update the settings for this connection.</Dialog.Description>
+            <Dialog.Title>Create Connection</Dialog.Title>
+            <Dialog.Description>Create a new connection to a provider.</Dialog.Description>
           </Dialog.Header>
 
           <div className="grid gap-4 py-4">
-            {configureError && (
-              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">
-                {configureError}
-              </div>
-            )}
-
-            {selectedConnection?.accessToken && (
-              <div className="bg-green-50 text-green-800 rounded-md p-3 text-sm flex items-center gap-2">
-                <Link2 className="h-4 w-4" />
-                This connection is authenticated. You can reconnect if needed.
-              </div>
+            {modalError && (
+              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">{modalError}</div>
             )}
 
             <div className="grid gap-2">
-              <Label htmlFor="name">Connection Name</Label>
+              <Label htmlFor="create-name">Connection Name</Label>
               <Input
-                id="name"
+                id="create-name"
                 placeholder="My Google Connection"
-                value={configureFormData.name}
-                onChange={(e) => setConfigureFormData({ ...configureFormData, name: e.target.value })}
-                disabled={configureLoading}
+                value={createFormData.name}
+                onChange={(e) => setCreateFormData({ ...createFormData, name: e.target.value })}
+                disabled={modalLoading}
               />
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="provider">Provider</Label>
+              <Label htmlFor="create-provider">Provider</Label>
               <Select
-                value={configureFormData.providerId}
-                onValueChange={(value) => setConfigureFormData({ ...configureFormData, providerId: value })}
-                disabled={configureLoading}
+                value={createFormData.providerId}
+                onValueChange={(value) => setCreateFormData({ ...createFormData, providerId: value })}
+                disabled={modalLoading}
               >
-                <Select.Trigger id="provider">
+                <Select.Trigger id="create-provider">
                   <Select.Value />
                 </Select.Trigger>
                 <Select.Content>
@@ -648,49 +663,111 @@ export function ConnectionsPage() {
                 </Select.Content>
               </Select>
             </div>
+          </div>
+
+          <Dialog.Footer>
+            <Button variant="outline" onClick={() => setShowCreateModal(false)} disabled={modalLoading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateSubmit}
+              disabled={modalLoading || !createFormData.name || !createFormData.providerId}
+            >
+              {modalLoading ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  Creating...
+                </>
+              ) : (
+                'Create'
+              )}
+            </Button>
+          </Dialog.Footer>
+        </Dialog.Content>
+      </Dialog>
+
+      {/* Edit Connection Modal */}
+      <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
+        <Dialog.Content className="sm:max-w-[500px]">
+          <Dialog.Header>
+            <Dialog.Title>Edit Connection</Dialog.Title>
+            <Dialog.Description>Update the settings for this connection.</Dialog.Description>
+          </Dialog.Header>
+
+          <div className="grid gap-4 py-4">
+            {modalError && (
+              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">{modalError}</div>
+            )}
+
+            {selectedConnection?.accessToken && (
+              <div className="bg-green-50 text-green-800 rounded-md p-3 text-sm flex items-center gap-2">
+                <Link2 className="h-4 w-4" />
+                This connection is authenticated. You can reconnect if needed.
+              </div>
+            )}
 
             <div className="grid gap-2">
-              <Label htmlFor="clientid">Client ID (Optional)</Label>
+              <Label htmlFor="edit-name">Connection Name</Label>
               <Input
-                id="clientid"
+                id="edit-name"
+                placeholder="My Google Connection"
+                value={editFormData.name}
+                onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                disabled={modalLoading}
+              />
+            </div>
+
+            {selectedConnection?.provider && (
+              <div className="grid gap-2">
+                <Label>Provider</Label>
+                <div className="text-sm text-muted-foreground bg-muted px-3 py-2 rounded-md">
+                  {selectedConnection.provider.name} (cannot be changed)
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-2">
+              <Label htmlFor="edit-clientid">Client ID (Optional)</Label>
+              <Input
+                id="edit-clientid"
                 placeholder="your-client-id"
-                value={configureFormData.clientid}
-                onChange={(e) => setConfigureFormData({ ...configureFormData, clientid: e.target.value })}
-                disabled={configureLoading}
+                value={editFormData.clientid}
+                onChange={(e) => setEditFormData({ ...editFormData, clientid: e.target.value })}
+                disabled={modalLoading}
               />
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="clientkey">Client Key (Optional)</Label>
+              <Label htmlFor="edit-clientkey">Client Key (Optional)</Label>
               <Input
-                id="clientkey"
+                id="edit-clientkey"
                 placeholder="your-client-key"
-                value={configureFormData.clientkey}
-                onChange={(e) => setConfigureFormData({ ...configureFormData, clientkey: e.target.value })}
-                disabled={configureLoading}
+                value={editFormData.clientkey}
+                onChange={(e) => setEditFormData({ ...editFormData, clientkey: e.target.value })}
+                disabled={modalLoading}
               />
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="clientsecret">Client Secret (Optional)</Label>
+              <Label htmlFor="edit-clientsecret">Client Secret (Optional)</Label>
               <Input
-                id="clientsecret"
+                id="edit-clientsecret"
                 type="password"
                 placeholder="your-client-secret"
-                value={configureFormData.clientsecret}
-                onChange={(e) => setConfigureFormData({ ...configureFormData, clientsecret: e.target.value })}
-                disabled={configureLoading}
+                value={editFormData.clientsecret}
+                onChange={(e) => setEditFormData({ ...editFormData, clientsecret: e.target.value })}
+                disabled={modalLoading}
               />
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="schedule">Sync Schedule</Label>
+              <Label htmlFor="edit-schedule">Sync Schedule</Label>
               <Select
-                value={configureFormData.schedule}
-                onValueChange={(value) => setConfigureFormData({ ...configureFormData, schedule: value })}
-                disabled={configureLoading}
+                value={editFormData.schedule}
+                onValueChange={(value) => setEditFormData({ ...editFormData, schedule: value })}
+                disabled={modalLoading}
               >
-                <Select.Trigger id="schedule">
+                <Select.Trigger id="edit-schedule">
                   <Select.Value />
                 </Select.Trigger>
                 <Select.Content>
@@ -703,15 +780,11 @@ export function ConnectionsPage() {
           </div>
 
           <Dialog.Footer>
-            <Button
-              variant="outline"
-              onClick={() => setShowConfigureModal(false)}
-              disabled={configureLoading}
-            >
+            <Button variant="outline" onClick={() => setShowEditModal(false)} disabled={modalLoading}>
               Cancel
             </Button>
-            <Button onClick={handleConfigureSubmit} disabled={configureLoading || !configureFormData.name}>
-              {configureLoading ? (
+            <Button onClick={handleEditSubmit} disabled={modalLoading || !editFormData.name}>
+              {modalLoading ? (
                 <>
                   <RefreshCw className="h-4 w-4 animate-spin mr-2" />
                   Saving...
@@ -720,29 +793,29 @@ export function ConnectionsPage() {
                 'Save'
               )}
             </Button>
-            {selectedConnection && configureFormData.clientid && configureFormData.clientsecret && (
+            {selectedConnection && editFormData.clientid && editFormData.clientsecret && (
               <Button
                 variant="secondary"
                 onClick={async () => {
                   // Save first if there are changes
                   if (
-                    configureFormData.name !== selectedConnection.name ||
-                    configureFormData.clientid !== selectedConnection.clientid ||
-                    configureFormData.clientsecret !== selectedConnection.clientsecret ||
-                    configureFormData.schedule !== selectedConnection.schedule
+                    editFormData.name !== selectedConnection.name ||
+                    editFormData.clientid !== selectedConnection.clientid ||
+                    editFormData.clientsecret !== selectedConnection.clientsecret ||
+                    editFormData.schedule !== selectedConnection.schedule
                   ) {
-                    await handleConfigureSubmit();
+                    await handleEditSubmit();
                   }
 
-                  setShowConfigureModal(false);
+                  setShowEditModal(false);
                   // Use the updated connection data
                   const updatedConnection = {
                     ...selectedConnection,
-                    ...configureFormData,
+                    ...editFormData,
                   };
                   handleConnect(updatedConnection);
                 }}
-                disabled={configureLoading}
+                disabled={modalLoading}
               >
                 {selectedConnection.accessToken ? 'Save & Reconnect' : 'Save & Connect'}
               </Button>
