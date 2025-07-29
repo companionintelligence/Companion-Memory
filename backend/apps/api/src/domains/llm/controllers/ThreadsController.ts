@@ -1,5 +1,5 @@
 import { Controller, Delete, Get, HttpCode, Param, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
+import { z, ZodTypeDef, type ZodType } from 'zod';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
@@ -9,7 +9,7 @@ import type { RequestContext } from '@ci/common/types';
 import { MessageService } from '../services/MessageService';
 import { ThreadService } from '../services/ThreadService';
 
-export const includeMessagesSchema = z
+const includeMessagesSchema: ZodType<boolean, ZodTypeDef, string | undefined> = z
   .enum(['true', 'false'])
   .optional()
   .transform((v) => v !== 'false');
