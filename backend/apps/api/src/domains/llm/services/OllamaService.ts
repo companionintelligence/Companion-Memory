@@ -137,7 +137,7 @@ export class OllamaService {
     });
   }
 
-  async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
+  async validateModel(context: RequestContext, model: string | null | undefined): Promise<OllamaModel> {
     const resolvedModel = model ?? PROMPT_MODEL;
 
     const availableModels = await this.getAvailableModels(context);

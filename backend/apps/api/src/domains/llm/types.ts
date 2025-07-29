@@ -1,9 +1,13 @@
 import type { User } from '@ci/domains/user';
 
 export interface PromptInput {
-  prompt: string;
+  prompt?: string;
   model?: string;
   threadId?: string;
+}
+
+export interface MultipartPromptInput {
+  input?: string;
 }
 
 export interface CreateMessageDto {

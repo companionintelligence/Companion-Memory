@@ -8,8 +8,12 @@ import {
   Post,
   Res,
   UseGuards,
+  UseInterceptors,
+  UploadedFiles,
+  Req,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
@@ -22,13 +26,18 @@ import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/e
 import { MessageService } from '../services/MessageService';
 import { OllamaService } from '../services/OllamaService';
 import { ThreadService } from '../services/ThreadService';
-import type { OllamaModel, PromptInput } from '../types';
+import type { OllamaModel, MultipartPromptInput, PromptInput } from '../types';
 
-const promptSchema = z.object({
-  prompt: z.string(),
-  model: z.optional(z.string()),
-  threadId: z.string().nullable().optional(),
-});
+const promptSchema = z.union([
+  z
+    .object({
+      prompt: z.string(),
+      model: z.string().nullable().optional(),
+      threadId: z.string().nullable().optional(),
+    })
+    .strict(),
+  z.undefined(),
+]);
 
 @Controller('llm')
 export class OllamaController {
@@ -49,17 +58,39 @@ export class OllamaController {
 
   @UseGuards(JwtAuthGuard)
   @Post('generate')
+  @UseInterceptors(
+    FilesInterceptor('attachments', undefined, {
+      limits: {
+        fileSize: 10 * 1024 * 1024 * 1024,
+      },
+    }),
+  )
   @HttpCode(200)
   async generate(
     @Context() context: RequestContext,
-    @Body(new ValidationPipe(promptSchema)) input: PromptInput,
+    @Req() req: Request,
     @Res() res: Response,
+    @Body() body?: PromptInput | MultipartPromptInput,
+    @UploadedFiles() files?: Express.Multer.File[],
   ) {
-    const resolvedModel = await this.validateModel(context, input.model);
+    const isMultipart = req.headers['content-type']?.includes('multipart/form-data');
+
+    const rawInput: string | PromptInput | undefined = isMultipart
+      ? (body as MultipartPromptInput).input
+      : (body as PromptInput);
+
+    const input = new ValidationPipe(promptSchema, {
+      parseJson: isMultipart,
+    }).transform(rawInput);
+
+    if (input == null && (files?.length ?? 0) === 0) {
+      throw new BadRequestException('No input provided');
+    }
 
     let threadId: string;
+    const resolvedModel = await this.validateModel(context, input?.model);
 
-    if (input.threadId != null) {
+    if (input?.threadId != null) {
       const threadExists = await this.threadService.exists(context, input.threadId);
 
       if (!threadExists) {
@@ -82,7 +113,7 @@ export class OllamaController {
 
     const prompt = await this.messageService.create(context, {
       model: resolvedModel.model,
-      text: input.prompt,
+      text: input?.prompt,
       mimetype: 'text/markdown', // TODO: Make this more flexible.
       prompt: true,
       canceled: false,
@@ -196,7 +227,10 @@ export class OllamaController {
     });
   }
 
-  private async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
+  private async validateModel(
+    context: RequestContext,
+    model: string | null | undefined,
+  ): Promise<OllamaModel> {
     try {
       return this.ollamaService.validateModel(context, model);
     } catch (err) {
