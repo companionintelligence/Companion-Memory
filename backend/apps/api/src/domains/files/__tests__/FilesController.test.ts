@@ -17,7 +17,7 @@ class MockJwtAuthGuard {
   canActivate = mockCanActivate;
 }
 
-describe('File routes', () => {
+describe('FilesController', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
