@@ -22,13 +22,3 @@ node_modules
 .pnp.*
 .aider*
 .env
-
-# Python virtual environment for WhisperX
-backend/voice_env/
-
-# WhisperX model cache directories
-.cache/
-whisperx_cache/
-transformers_cache/
-torch_cache/
-

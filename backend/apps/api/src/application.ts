@@ -50,7 +50,7 @@ import { UserModule } from '@ci/domains/user';
     MemoryModule,
     UserModule,
     ProvidersModule,
-    ConnectionsModule
+    ConnectionsModule,
   ],
   controllers: [],
   providers: [

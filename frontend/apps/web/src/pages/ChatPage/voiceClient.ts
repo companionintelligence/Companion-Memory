@@ -25,7 +25,7 @@ export interface VoiceStreamResponse {
 }
 
 export class VoiceClient {
-  private apiBaseUrl = '/api/voice'; // Use nginx proxy to voice-service container
+  private apiBaseUrl = 'http://localhost:9002'; // Direct connection to voice service
 
   /**
    * Start a new voice stream session
