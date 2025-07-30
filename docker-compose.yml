@@ -36,7 +36,7 @@ services:
   voice-service:
     build:
       context: ./backend
-      dockerfile: Dockerfile.voice-service
+      dockerfile: apps/voice/Dockerfile.voice-service
     image: ci/voice-service
     container_name: voice-service
     ports:

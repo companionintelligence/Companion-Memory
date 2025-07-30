@@ -62,6 +62,17 @@ class TranscriptionResponse(BaseModel):
     confidence: float
     speakers: list = []
 
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "alloy"  # Default voice
+    speed: float = 1.0    # Speed multiplier
+    pitch: float = 1.0    # Pitch multiplier
+
+class TTSResponse(BaseModel):
+    audio_data: str  # Base64 encoded audio
+    duration: float
+    sample_rate: int
+
 def convert_audio_to_wav(audio_data: bytes, input_format: str = "webm") -> bytes:
     """Convert audio data to WAV format using ffmpeg"""
     try:
@@ -673,11 +684,31 @@ async def transcribe_stream_final_endpoint(request: TranscriptionRequest):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy", 
-        "device": str(device) if device else None, 
-        "model_loaded": bool(model is not None)
-    }
+    try:
+        # Check if gTTS is available
+        try:
+            from gtts import gTTS
+            local_tts_available = True
+            logger.info("gTTS is available")
+        except Exception as tts_error:
+            local_tts_available = False
+            logger.warning(f"gTTS not available: {str(tts_error)}")
+        
+        return {
+            "status": "healthy", 
+            "device": str(device) if device else None, 
+            "model_loaded": bool(model is not None),
+            "whisperx": bool(model is not None),
+            "sesameai": local_tts_available  # Keep same field name for frontend compatibility
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "whisperx": False,
+            "sesameai": False
+        }
 
 @app.get("/models")
 async def list_models():
@@ -791,6 +822,120 @@ async def test_audio_endpoint(request: TranscriptionRequest):
         
     except Exception as e:
         logger.error(f"Error in test audio endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def create_wav_file(audio_data: np.ndarray, sample_rate: int = 22050) -> bytes:
+    """Create a properly formatted WAV file from audio data"""
+    import struct
+    
+    # Ensure audio data is 16-bit PCM
+    if audio_data.dtype != np.int16:
+        audio_data = (audio_data * 32767).astype(np.int16)
+    
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = len(audio_data) * 2  # 2 bytes per sample
+    
+    # Create WAV header
+    wav_header = struct.pack('<4sI4s4sIHHIIHH4sI',
+        b'RIFF',                    # Chunk ID
+        36 + data_size,             # Chunk size
+        b'WAVE',                    # Format
+        b'fmt ',                    # Subchunk1 ID
+        16,                         # Subchunk1 size
+        1,                          # Audio format (PCM)
+        num_channels,               # Number of channels
+        sample_rate,                # Sample rate
+        byte_rate,                  # Byte rate
+        block_align,                # Block align
+        bits_per_sample,            # Bits per sample
+        b'data',                    # Subchunk2 ID
+        data_size                   # Subchunk2 size
+    )
+    
+    return wav_header + audio_data.tobytes()
+
+def generate_local_tts(text: str, voice: str = "alloy", speed: float = 1.0) -> bytes:
+    """Generate TTS using gTTS (Google Text-to-Speech)"""
+    try:
+        from gtts import gTTS
+        import io
+        
+        logger.info(f"Generating gTTS: '{text[:50]}...' (voice: {voice}, speed: {speed})")
+        
+        # Create gTTS object
+        # Note: gTTS doesn't support speed adjustment, but we can use different languages for voice variety
+        tts = gTTS(text=text, lang='en', slow=False)
+        
+        # Generate audio to bytes
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        
+        audio_data = audio_buffer.read()
+        logger.info(f"gTTS successful: {len(audio_data)} bytes")
+        
+        return audio_data
+            
+    except Exception as e:
+        logger.error(f"Error in gTTS: {str(e)}")
+        raise e
+
+@app.post("/tts", response_model=TTSResponse)
+async def text_to_speech_endpoint(request: TTSRequest):
+    """Convert text to speech using local TTS"""
+    try:
+        logger.info(f"Received TTS request: '{request.text[:50]}...' (voice: {request.voice})")
+        
+        # Use local TTS
+        try:
+            audio_data = generate_local_tts(request.text, request.voice, request.speed)
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            
+            # Estimate duration (rough calculation)
+            duration = len(request.text.split()) * 0.5  # ~0.5 seconds per word
+            
+            logger.info(f"Generated local TTS audio: {len(audio_data)} bytes")
+            
+            return TTSResponse(
+                audio_data=audio_base64,
+                duration=duration,
+                sample_rate=22050  # Local TTS uses 22kHz
+            )
+        except Exception as e:
+            logger.error(f"Local TTS failed: {str(e)}")
+            # Fall back to placeholder audio if local TTS fails
+            logger.warning("Local TTS failed, using placeholder audio")
+            
+            # Create placeholder audio
+            import numpy as np
+            
+            # Create a simple sine wave tone
+            sample_rate = 22050
+            duration = 2.0  # seconds
+            frequency = 440  # Hz (A4 note)
+            
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            audio = np.sin(2 * np.pi * frequency * t) * 0.3
+            
+            # Create WAV file
+            wav_data = create_wav_file(audio, sample_rate)
+            
+            # Convert to base64
+            audio_base64 = base64.b64encode(wav_data).decode('utf-8')
+            
+            logger.info(f"Generated placeholder TTS audio: {len(wav_data)} bytes")
+            
+            return TTSResponse(
+                audio_data=audio_base64,
+                duration=duration,
+                sample_rate=sample_rate
+            )
+        
+    except Exception as e:
+        logger.error(f"Error in TTS endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

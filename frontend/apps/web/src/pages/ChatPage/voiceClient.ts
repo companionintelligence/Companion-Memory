@@ -135,9 +135,50 @@ export class VoiceClient {
   }
 
   /**
+   * Convert text to speech using local TTS
+   */
+  async textToSpeech(text: string, voice: string = "alloy", speed: number = 1.0, pitch: number = 1.0): Promise<{ audioData: string; duration: number; sampleRate: number }> {
+    try {
+      console.log(`Converting text to speech: "${text.substring(0, 50)}..."`);
+      
+      const response = await fetch(`${this.apiBaseUrl}/tts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text,
+          voice,
+          speed,
+          pitch,
+        }),
+      });
+
+      console.log(`TTS response status: ${response.status}`);
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('TTS response received');
+        return {
+          audioData: result.audio_data,
+          duration: result.duration,
+          sampleRate: result.sample_rate,
+        };
+      } else {
+        const errorText = await response.text();
+        console.error(`TTS error response: ${response.status} - ${errorText}`);
+        throw new Error(`TTS error: ${response.status} - ${errorText}`);
+      }
+    } catch (error) {
+      console.error('Text-to-speech failed:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Check voice service health
    */
-  async healthCheck(): Promise<{ status: string; whisperx: boolean; sesameai: boolean }> {
+  async healthCheck(): Promise<{ status: string; whisperx: boolean; localTTS: boolean }> {
     try {
       console.log(`Checking voice service health at: ${this.apiBaseUrl}/health`);
       
@@ -155,8 +196,8 @@ export class VoiceClient {
         console.log('Health check response:', health);
         return {
           status: health.status || 'healthy',
-          whisperx: health.model_loaded || false,
-          sesameai: false // Not implemented in voice service yet
+          whisperx: health.whisperx || health.model_loaded || false,
+          localTTS: health.sesameai || false
         };
       } else {
         const errorText = await response.text();
@@ -170,7 +211,7 @@ export class VoiceClient {
     return {
       status: 'offline',
       whisperx: false,
-      sesameai: false
+      localTTS: false
     };
   }
 }

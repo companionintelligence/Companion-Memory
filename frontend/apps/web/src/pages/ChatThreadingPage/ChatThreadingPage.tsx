@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 
 import { Portal, fetchJson, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card, Textarea, cn } from '@ci/shadcn';
-import { Mic, Square } from '@ci/shadcn/icons';
+import { Mic, Square, Volume2 } from '@ci/shadcn/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { ModelSelector } from '@/components/ModelSelector';
@@ -50,6 +50,9 @@ export function ChatThreadingPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   
+  // Chat history state
+  const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  
   // Voice-related state
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -59,7 +62,8 @@ export function ChatThreadingPage() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
-  const [voiceServiceStatus, setVoiceServiceStatus] = useState<{ whisperx: boolean; sesameai: boolean } | null>(null);
+  const [voiceServiceStatus, setVoiceServiceStatus] = useState<{ whisperx: boolean; localTTS: boolean } | null>(null);
+  const [isPlayingTTS, setIsPlayingTTS] = useState(false);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -68,10 +72,10 @@ export function ChatThreadingPage() {
     const checkVoiceServiceStatus = async () => {
       try {
         const status = await voiceClient.healthCheck();
-        setVoiceServiceStatus({ whisperx: status.whisperx, sesameai: status.sesameai });
+        setVoiceServiceStatus({ whisperx: status.whisperx, localTTS: status.localTTS });
       } catch (error) {
         console.error('Failed to check voice service status:', error);
-        setVoiceServiceStatus({ whisperx: false, sesameai: false });
+                  setVoiceServiceStatus({ whisperx: false, localTTS: false });
       }
     };
 
@@ -120,6 +124,7 @@ export function ChatThreadingPage() {
 
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
 
+      let assistantResponse = '';
       while (true) {
         const { value, done } = await reader.read();
 
@@ -128,9 +133,18 @@ export function ChatThreadingPage() {
         }
 
         if (value) {
-          setOutput((prev) => prev + value);
+          assistantResponse += value;
+          setOutput(assistantResponse);
         }
       }
+      
+      // Add the assistant's response to chat history
+      if (assistantResponse.trim()) {
+        setChatHistory(prev => [...prev, { role: 'assistant', content: assistantResponse }]);
+      }
+      
+      // Clear the input field for the next message
+      setInput('');
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         console.error('Stream error:', err);
@@ -144,6 +158,71 @@ export function ChatThreadingPage() {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setIsLoading(false);
+  };
+
+  // Handle text-to-speech
+  const handleTextToSpeech = async () => {
+    const lastAssistantMessage = chatHistory
+      .filter(msg => msg.role === 'assistant')
+      .pop();
+    
+    if (!lastAssistantMessage?.content.trim()) {
+      return;
+    }
+
+    try {
+      setIsPlayingTTS(true);
+      
+      // Get TTS audio from voice service using local TTS
+      const ttsResult = await voiceClient.textToSpeech(lastAssistantMessage.content, "alloy", 1.0, 1.0);
+      
+      // Convert base64 audio to blob
+      const audioData = atob(ttsResult.audioData);
+      const audioArray = new Uint8Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        audioArray[i] = audioData.charCodeAt(i);
+      }
+      
+      // Create blob - OpenAI TTS returns MP3, but we'll try both formats
+      const audioBlob = new Blob([audioArray], { type: 'audio/mpeg' });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      
+      // Play the audio
+      const audio = new Audio(audioUrl);
+      
+      // Add better error handling and logging
+      audio.onloadstart = () => console.log('Audio loading started');
+      audio.oncanplay = () => console.log('Audio can play');
+      audio.oncanplaythrough = () => console.log('Audio can play through');
+      audio.onloadeddata = () => console.log('Audio data loaded');
+      
+      audio.onended = () => {
+        console.log('Audio playback ended');
+        setIsPlayingTTS(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        console.error('Audio error details:', audio.error);
+        setIsPlayingTTS(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      // Try to play the audio
+      try {
+        await audio.play();
+        console.log('Audio playback started successfully');
+      } catch (playError) {
+        console.error('Failed to start audio playback:', playError);
+        setIsPlayingTTS(false);
+        URL.revokeObjectURL(audioUrl);
+      }
+      
+    } catch (error) {
+      console.error('Text-to-speech failed:', error);
+      setIsPlayingTTS(false);
+    }
   };
 
   // Voice chat functionality
@@ -165,6 +244,7 @@ export function ChatThreadingPage() {
         setAudioLevel(0);
         setTranscribedText('');
         setVoiceSessionId(null);
+        setInput(''); // Clear input field when exiting voice mode
         
         // Stop MediaRecorder if active
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -355,13 +435,28 @@ export function ChatThreadingPage() {
       // Get final transcription for streaming session
       const response = await voiceClient.getFinalTranscription(voiceSessionId);
       
+      console.log('Final transcription response:', response);
+      
       if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
         const transcriptionData = response.data as { text: string; confidence?: number; isFinal?: boolean };
         const finalText = transcriptionData.text;
+        
+        console.log('Transcription data:', transcriptionData);
+        console.log('isFinal:', transcriptionData.isFinal);
+        console.log('finalText:', finalText);
+        
         setTranscribedText(finalText);
 
         // Set the transcribed text as input
         setInput(finalText);
+        
+        // Only add to chat history if this is the final transcription
+        if (transcriptionData.isFinal && finalText.trim()) {
+          console.log('Adding to chat history:', finalText);
+          setChatHistory(prev => [...prev, { role: 'user', content: finalText }]);
+        } else {
+          console.log('Not adding to chat history - isFinal:', transcriptionData.isFinal, 'text:', finalText);
+        }
       }
 
       setVoiceSessionId(null);
@@ -497,12 +592,64 @@ export function ChatThreadingPage() {
           </>
         )}
 
-        <Card.Content
-          ref={containerRef}
-          className="whitespace-pre-wrap text-sm bg-muted rounded-lg p-4 max-h-96 overflow-y-auto font-mono"
-        >
-          {output || (isLoading ? 'Generating...' : 'Response will appear here.')}
-        </Card.Content>
+        <div className="space-y-2">
+          <Card.Content
+            ref={containerRef}
+            className="space-y-4 max-h-96 overflow-y-auto"
+          >
+            {chatHistory.length === 0 && !isLoading && (
+              <div className="text-sm text-muted-foreground text-center py-8">
+                Start a conversation by typing or using voice input.
+              </div>
+            )}
+            
+            {chatHistory.map((message, index) => (
+              <div
+                key={index}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                    message.role === 'user'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-foreground'
+                  }`}
+                >
+                  {message.content}
+                </div>
+              </div>
+            ))}
+            
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-muted text-foreground rounded-lg px-3 py-2 text-sm">
+                  {output || 'Generating...'}
+                </div>
+              </div>
+            )}
+          </Card.Content>
+          
+          {chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'assistant' && (
+            <div className="flex justify-end">
+              <Button
+                onClick={handleTextToSpeech}
+                disabled={isPlayingTTS || (voiceServiceStatus ? !voiceServiceStatus.localTTS : false)}
+                variant="outline"
+                size="sm"
+                title={voiceServiceStatus && !voiceServiceStatus.localTTS ? 'Local TTS not available' : 'Listen to the generated response using local TTS'}
+              >
+                <Volume2 size={16} className="mr-2" />
+                {isPlayingTTS ? 'Playing...' : 'Listen'}
+                {voiceServiceStatus && voiceServiceStatus.localTTS && (
+                  <span className="text-xs text-green-600 ml-1">(Local TTS)</span>
+                )}
+                {voiceServiceStatus && !voiceServiceStatus.localTTS && (
+                  <span className="text-xs text-muted-foreground ml-1">(Offline)</span>
+                )}
+              </Button>
+            </div>
+          )}
+        </div>
       </Card>
     </>
   );

@@ -372,7 +372,7 @@ export function ChatPage() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
-  const [voiceServiceStatus, setVoiceServiceStatus] = useState<{ whisperx: boolean; sesameai: boolean } | null>(null);
+  const [voiceServiceStatus, setVoiceServiceStatus] = useState<{ whisperx: boolean; localTTS: boolean } | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -402,10 +402,10 @@ export function ChatPage() {
     const checkVoiceServiceStatus = async () => {
       try {
         const status = await voiceClient.healthCheck();
-        setVoiceServiceStatus({ whisperx: status.whisperx, sesameai: status.sesameai });
+        setVoiceServiceStatus({ whisperx: status.whisperx, localTTS: status.localTTS });
       } catch (error) {
         console.error('Failed to check voice service status:', error);
-        setVoiceServiceStatus({ whisperx: false, sesameai: false });
+        setVoiceServiceStatus({ whisperx: false, localTTS: false });
       }
     };
 
@@ -716,7 +716,7 @@ export function ChatPage() {
           });
         }
 
-        // TODO: Implement text-to-speech response using SesameAI/CSM
+        // TODO: Implement text-to-speech response using local TTS
         // For now, simulate assistant response
         setTimeout(async () => {
           const assistantMessage = await chatApi.addMessage(

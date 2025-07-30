@@ -11,13 +11,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY requirements.txt .
+COPY apps/voice/requirements.txt ./requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the voice service
-COPY voice_service.py .
+COPY apps/voice/voice_service.py ./voice_service.py
 
 # Create models directory
 RUN mkdir -p /app/models

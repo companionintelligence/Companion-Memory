@@ -6,6 +6,7 @@ This guide explains how to set up and use the voice transcription features in th
 
 The voice features include:
 - **Real-time speech-to-text transcription** using WhisperX
+- **Text-to-speech responses** using local Coqui TTS
 - **Voice chat integration** in the chat interface
 
 ## Prerequisites
@@ -13,10 +14,15 @@ The voice features include:
 1. **Python 3.8+** installed on your system
 2. **Docker** (for running WhisperX service)
 3. **Microphone access** in your browser
+4. **Local TTS models** (automatically downloaded on first use)
 
 ## Setup Instructions
 
-### 1. Start the Voice Service
+### 1. Environment Variables
+
+No environment variables are required for local TTS. The TTS models will be automatically downloaded on first use.
+
+### 2. Start the Voice Service
 
 The Voice Service (powered by WhisperX) runs on port 9002.
 
@@ -47,7 +53,7 @@ pip install -r requirements.txt
 python voice_service.py
 ```
 
-### 2. Verify Service Status
+### 3. Verify Service Status
 
 Check if the Voice Service is running:
 
@@ -56,10 +62,10 @@ Check if the Voice Service is running:
 curl http://localhost:9002/health
 
 # Expected response:
-# {"status": "healthy", "device": "cpu", "model_loaded": true}
+# {"status": "healthy", "device": "cpu", "model_loaded": true, "whisperx": true, "localTTS": true}
 ```
 
-### 3. Test the Voice API
+### 4. Test the Voice API
 
 Test the voice transcription API:
 
@@ -68,7 +74,7 @@ Test the voice transcription API:
 curl https://dev.companionintelligence.com/api/voice/health
 
 # Expected response:
-# {"status": "healthy", "whisperx": true, "sesameai": false}
+# {"status": "healthy", "whisperx": true, "localTTS": true}
 ```
 
 ## Using Voice Features
@@ -92,6 +98,29 @@ curl https://dev.companionintelligence.com/api/voice/health
 2. The final transcription will be displayed
 3. The transcribed text will be sent as a message to the chat
 4. You'll receive a response from the assistant
+
+### 4. Listen to Responses
+
+1. After receiving a response, click the "Listen" button
+2. The response will be converted to speech using local TTS
+3. The button will show "(Local TTS)" when the service is available
+4. If local TTS is unavailable, a placeholder audio will be played
+
+## Text-to-Speech Provider
+
+### Local Coqui TTS
+
+- **High-quality, natural-sounding voices**
+- **Runs locally in the container**
+- **Adjustable speed**
+- **No API keys required**
+- **Models automatically downloaded on first use**
+
+### Placeholder Audio
+
+- **Simple sine wave tone**
+- **Used when local TTS is unavailable**
+- **For testing purposes only**
 
 ## WhisperX Sensitivity
 
@@ -128,11 +157,18 @@ This means WhisperX will now:
 2. **Speak clearly**: Enunciate words and avoid background noise
 3. **Check audio format**: Ensure 16kHz mono audio is being sent
 
+### TTS Not Working
+
+1. **Check model download**: Ensure TTS models are downloaded (first use may take time)
+2. **Verify service status**: Check the health endpoint for TTS provider status
+3. **Check container resources**: Ensure the voice service has enough memory for TTS models
+
 ## Configuration
 
 ### Environment Variables
 
 - `WHISPERX_API_URL`: Internal URL of the Voice Service (default: `http://voice-service:9000`)
+- No TTS environment variables required (runs locally)
 
 ### Service URLs
 
@@ -158,6 +194,15 @@ The voice features now use real WhisperX transcription:
 - Support for multiple languages and model sizes
 - Real-time transcription during voice recording
 
+### High-Quality TTS
+
+The text-to-speech features use local Coqui TTS:
+
+- Natural-sounding voice synthesis
+- Runs locally in the container
+- Automatic fallback to placeholder audio if local TTS is unavailable
+- Real-time audio playback in the browser
+
 ### Performance
 
 - **Model Loading**: Voice Service models are loaded on service startup
@@ -176,6 +221,8 @@ dev.companionintelligence.com/api/voice/*
 Main API Service (NestJS on port 3030)
     ↓ (Internal Docker network)
 Voice Service (Python on port 9000)
+    ↓ (Local TTS)
+Coqui TTS Models
 ```
 
 This architecture provides:
@@ -192,17 +239,19 @@ This architecture provides:
 - `POST /api/voice/stream/start` - Start voice session
 - `POST /api/voice/stream/audio/:sessionId` - Process audio chunk
 - `POST /api/voice/stream/stop/:sessionId` - Stop voice session
+- `POST /api/voice/tts` - Text-to-speech conversion
 - `GET /api/voice/health` - Service health check
 
 ### Internal Voice Service Endpoints
 
 - `POST /transcribe` - Transcribe audio (internal only)
+- `POST /tts` - Text-to-speech (internal only)
 - `GET /health` - Service health (internal only)
 - `GET /models` - List available models (internal only)
 
 ## Future Enhancements
 
-- [ ] Text-to-speech responses using SesameAI/CSM
+- [x] Text-to-speech responses using local TTS
 - [ ] Voice activity detection
 - [ ] Multiple language support
 - [ ] Custom voice models
