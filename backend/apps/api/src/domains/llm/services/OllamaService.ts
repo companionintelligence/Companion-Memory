@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import ollama, { type ChatResponse, type GenerateResponse, type Message as OllamaMessage } from 'ollama';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
+import ollama, { type ChatResponse, type GenerateResponse, type Message as OllamaMessage, type Tool } from 'ollama';
 
 import type { RequestContext } from '@ci/common/types';
+import { LoggerService } from '@ci/common/services';
 
 import type { Message, OllamaModel } from '../types';
+import { ToolRegistry, GetUserPreferencesTool, GetFamilyMembersTool, type ToolSchema } from '../tools';
 
 import { MessageService } from './MessageService';
 
@@ -13,13 +17,23 @@ const INTERNAL_MODELS = new Set(['nomic-embed-text']);
 interface PromptOptions {
   model?: string;
   signal?: AbortSignal;
+  enableTools?: boolean;
 }
 
 type MessagesInput = Pick<Message, 'prompt' | 'text'>[];
 
 @Injectable()
 export class OllamaService {
-  constructor(private readonly messageService: MessageService) {}
+  private readonly logger = new LoggerService(OllamaService.name);
+  private readonly toolRegistry = new ToolRegistry();
+
+  constructor(
+    private readonly messageService: MessageService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
+  ) {
+    this.initializeTools();
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
@@ -129,12 +143,56 @@ export class OllamaService {
     options?: Omit<PromptOptions, 'signal'>,
   ): Promise<ChatResponse> {
     const resolvedOptions = options ?? ({} as PromptOptions);
-    const { model = PROMPT_MODEL } = resolvedOptions;
+    const { model = PROMPT_MODEL, enableTools = false } = resolvedOptions;
+
+    // If tools are enabled, use function calling
+    if (enableTools) {
+      return this.chatWithTools(context, messages, options);
+    }
 
     return ollama.chat({
       model,
       messages: this.toOllamaMessages(messages),
     });
+  }
+
+  /**
+   * Chat with function calling support
+   */
+  async chatWithTools(
+    context: RequestContext,
+    messages: MessagesInput,
+    options?: Omit<PromptOptions, 'signal'>,
+  ): Promise<ChatResponse> {
+    const resolvedOptions = options ?? ({} as PromptOptions);
+    const { model = PROMPT_MODEL } = resolvedOptions;
+
+    // Get available tools
+    const availableTools = this.toolRegistry.getAvailableTools(context);
+    const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
+
+    const requestPayload = {
+      model,
+      messages: this.toOllamaMessages(messages),
+      ...(ollamaTools.length > 0 && { tools: ollamaTools }),
+    };
+
+    this.logger.debug('Sending chat request with tools', {
+      model,
+      messageCount: messages.length,
+      toolCount: ollamaTools.length,
+      toolNames: availableTools.map(t => t.name),
+      userId: context.userId,
+    });
+
+    const response = await ollama.chat(requestPayload);
+
+    // Handle tool calls if present
+    if (response.message.tool_calls && response.message.tool_calls.length > 0) {
+      return await this.handleToolCalls(context, messages, response, options);
+    }
+
+    return response;
   }
 
   async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
@@ -183,6 +241,113 @@ export class OllamaService {
       namespace: null,
       name: parts[0],
       tag,
+    };
+  }
+
+  /**
+   * Initialize tools registry with available tools
+   */
+  private initializeTools(): void {
+    const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
+    const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource);
+
+    this.toolRegistry.register(getUserPreferencesTool);
+    this.toolRegistry.register(getFamilyMembersTool);
+
+    this.logger.debug('Initialized tools registry', {
+      toolCount: this.toolRegistry.getRegisteredToolNames().length,
+      tools: this.toolRegistry.getRegisteredToolNames(),
+    });
+  }
+
+  /**
+   * Process tool calls and return final response
+   */
+  private async handleToolCalls(
+    context: RequestContext,
+    originalMessages: MessagesInput,
+    toolCallResponse: ChatResponse,
+    options?: Omit<PromptOptions, 'signal'>,
+  ): Promise<ChatResponse> {
+    const { model = PROMPT_MODEL } = options ?? {};
+    const toolCalls = toolCallResponse.message.tool_calls || [];
+
+    this.logger.debug('Processing tool calls', {
+      toolCallCount: toolCalls.length,
+      toolNames: toolCalls.map(tc => tc.function.name),
+      userId: context.userId,
+    });
+
+    // Execute each tool call
+    const toolResults = await Promise.all(
+      toolCalls.map(async (toolCall) => {
+        const { name, arguments: args } = toolCall.function;
+        
+        try {
+          const result = await this.toolRegistry.executeTool(name, context, args);
+          
+          return {
+            call: toolCall,
+            result: result.success ? result.data : { error: result.error },
+            success: result.success,
+          };
+        } catch (error) {
+          this.logger.error('Tool execution failed', {
+            toolName: name,
+            error: error instanceof Error ? error.message : String(error),
+            userId: context.userId,
+          });
+          
+          return {
+            call: toolCall,
+            result: { error: 'Tool execution failed' },
+            success: false,
+          };
+        }
+      })
+    );
+
+    // Build messages with tool results
+    const messagesWithToolResults = [
+      ...this.toOllamaMessages(originalMessages),
+      {
+        role: 'assistant' as const,
+        content: toolCallResponse.message.content,
+        tool_calls: toolCalls,
+      },
+      ...toolResults.map(({ call, result }) => ({
+        role: 'tool' as const,
+        content: JSON.stringify(result),
+        tool_call_id: call.function.name,
+      })),
+    ];
+
+    // Get final response incorporating tool results
+    const finalResponse = await ollama.chat({
+      model,
+      messages: messagesWithToolResults,
+    });
+
+    this.logger.debug('Completed tool-assisted conversation', {
+      toolResultsCount: toolResults.length,
+      successfulTools: toolResults.filter(r => r.success).length,
+      userId: context.userId,
+    });
+
+    return finalResponse;
+  }
+
+  /**
+   * Convert our ToolSchema to Ollama Tool format
+   */
+  private convertToOllamaTool(toolSchema: ToolSchema): Tool {
+    return {
+      type: 'function',
+      function: {
+        name: toolSchema.name,
+        description: toolSchema.description,
+        parameters: toolSchema.parameters,
+      },
     };
   }
 }
