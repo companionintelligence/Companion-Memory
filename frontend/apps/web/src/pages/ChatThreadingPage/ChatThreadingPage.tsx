@@ -66,6 +66,7 @@ export function ChatThreadingPage() {
           prompt: input,
           model: selectedModel,
           threadId,
+          enableTools: true,
         }),
         signal: controller.signal,
       });

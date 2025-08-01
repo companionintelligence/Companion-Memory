@@ -28,14 +28,6 @@ const promptSchema = z.object({
   prompt: z.string(),
   model: z.optional(z.string()),
   threadId: z.string().nullable().optional(),
-});
-
-const chatWithToolsSchema = z.object({
-  messages: z.array(z.object({
-    prompt: z.boolean(),
-    text: z.string(),
-  })),
-  model: z.string().optional(),
   enableTools: z.boolean().default(false),
 });
 
@@ -132,6 +124,7 @@ export class OllamaController {
     const stream = await this.ollamaService.chatStream(context, filteredMessages, {
       model: resolvedModel.model,
       signal,
+      enableTools: input.enableTools,
     });
 
     try {
@@ -203,33 +196,6 @@ export class OllamaController {
       payload,
       summary: result.message.content,
     });
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post('chat-with-tools')
-  @HttpCode(200)
-  async chatWithTools(
-    @Context() context: RequestContext,
-    @Body(new ValidationPipe(chatWithToolsSchema)) body: z.infer<typeof chatWithToolsSchema>,
-  ) {
-    const { messages, model, enableTools } = body;
-
-    // Validate model if provided
-    if (model) {
-      await this.validateModel(context, model);
-    }
-
-    const response = await this.ollamaService.chat(context, messages, {
-      model,
-      enableTools,
-    });
-
-    return {
-      message: response.message.content,
-      model: response.model,
-      toolCallsUsed: response.message.tool_calls?.length || 0,
-      done: response.done,
-    };
   }
 
   private async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
