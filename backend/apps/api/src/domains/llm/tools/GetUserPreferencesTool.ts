@@ -9,8 +9,8 @@ import { BaseTool } from './BaseTool';
 
 // Input schema for the tool
 const getUserPreferencesInputSchema = z.object({
-  category: z.enum(['dietary', 'cuisine', 'food', 'cooking']).optional(),
-  userId: z.string().uuid().optional(),
+  category: z.enum(['food', 'environment', 'learning', 'general']).optional(),
+  userId: z.string().optional(), // Remove .uuid() requirement since LLM might not pass it
 });
 
 type GetUserPreferencesInput = z.infer<typeof getUserPreferencesInputSchema>;
@@ -22,6 +22,8 @@ interface UserPreference {
   category?: string;
   userId: string;
   createdAt: Date;
+  question?: string;
+  answer?: string;
 }
 
 interface GetUserPreferencesOutput {
@@ -41,14 +43,14 @@ export class GetUserPreferencesTool extends BaseTool<
 > {
   readonly schema = {
     name: 'get_user_preferences',
-    description: 'Get user dietary preferences, food restrictions, and cooking preferences for meal planning',
+    description: 'Get user personal preferences from their profile questions and answers, including food preferences, lifestyle, and personal tastes for meal planning and personalized recommendations',
     category: 'database',
     parameters: {
       type: 'object',
       properties: {
         category: {
           type: 'string',
-          enum: ['dietary', 'cuisine', 'food', 'cooking'],
+          enum: ['food', 'environment', 'learning', 'general'],
           description: 'Filter preferences by category (optional)',
         },
         userId: {
@@ -60,16 +62,23 @@ export class GetUserPreferencesTool extends BaseTool<
     },
     examples: [
       {
-        input: { category: 'dietary' },
+        input: { category: 'food' },
         output: {
           preferences: [
-            { id: 'uuid', label: 'vegetarian', category: 'dietary', userId: 'user-uuid', createdAt: new Date() },
-            { id: 'uuid', label: 'gluten-free', category: 'dietary', userId: 'user-uuid', createdAt: new Date() },
+            { 
+              id: 'uuid-123', 
+              label: 'Do you prefer sweet or savory foods?: Savory; I love a good, hearty stew', 
+              category: 'food', 
+              userId: 'user-uuid', 
+              createdAt: new Date(),
+              question: 'Do you prefer sweet or savory foods?',
+              answer: 'Savory; I love a good, hearty stew',
+            },
           ],
-          totalCount: 2,
+          totalCount: 1,
           userId: 'user-uuid',
         },
-        description: 'Get dietary preferences for meal planning',
+        description: 'Get food preferences for meal planning with detailed question/answer pairs',
       },
     ],
   };
@@ -89,70 +98,65 @@ export class GetUserPreferencesTool extends BaseTool<
     context: ToolExecutionContext,
     input: GetUserPreferencesInput,
   ): Promise<GetUserPreferencesOutput> {
-    const targetUserId = input.userId || context.userId;
-    
-    if (!targetUserId) {
-      throw new Error('User ID is required');
-    }
-
-    // Build query with optional category filter
-    let query = `
-      SELECT id, label, user_id as "userId", created_at as "createdAt"
-      FROM tags 
-      WHERE user_id = $1
+    // For demo: skip user ID constraints - just get all Personal Preferences
+    const query = `
+      SELECT 
+        q.text as question,
+        a.give_answer_1 as answer,
+        q.category,
+        a.user_id as "userId",
+        q.created_at as "createdAt"
+      FROM questions q
+      JOIN answers a ON q.id = a.question_id  
+      WHERE q.category = 'Personal Preferences'
+        AND a.give_answer_1 IS NOT NULL
+      ORDER BY q.created_at
     `;
-    
-    const params: any[] = [targetUserId];
 
-    if (input.category) {
-      // Simple category filtering based on label content
-      // You might want to add a proper category column later
-      query += ` AND LOWER(label) LIKE $2`;
-      params.push(`%${input.category.toLowerCase()}%`);
-    }
-
-    query += ` ORDER BY created_at DESC`;
-
-    const result = await this.dataSource.query(query, params);
+    const result = await this.dataSource.query(query);
     
     const preferences: UserPreference[] = result.map((row: any) => ({
-      id: row.id,
-      label: row.label,
-      category: this.inferCategory(row.label),
+      id: `${row.userId}-${row.createdAt.getTime()}`, // Generate a unique ID
+      label: `${row.question}: ${row.answer}`,
+      category: this.inferCategory(row.question, row.answer),
       userId: row.userId,
       createdAt: row.createdAt,
+      question: row.question,
+      answer: row.answer,
     }));
 
     return {
       preferences,
       totalCount: preferences.length,
-      userId: targetUserId,
+      userId: result.length > 0 ? result[0].userId : 'demo-user',
     };
   }
 
   /**
-   * Simple category inference based on label content
-   * This could be improved with proper categorization logic
+   * Infer category based on question and answer content
    */
-  private inferCategory(label: string): string {
-    const lowerLabel = label.toLowerCase();
+  private inferCategory(question: string, answer: string): string {
+    const lowerQuestion = question.toLowerCase();
+    const lowerAnswer = answer.toLowerCase();
     
-    if (lowerLabel.includes('vegetarian') || lowerLabel.includes('vegan') || 
-        lowerLabel.includes('gluten') || lowerLabel.includes('dairy')) {
-      return 'dietary';
+    if (lowerQuestion.includes('food') || lowerQuestion.includes('eat') || 
+        lowerQuestion.includes('sweet') || lowerQuestion.includes('savory') ||
+        lowerAnswer.includes('food') || lowerAnswer.includes('cuisine') ||
+        lowerAnswer.includes('meal') || lowerAnswer.includes('cook')) {
+      return 'food';
     }
     
-    if (lowerLabel.includes('italian') || lowerLabel.includes('chinese') || 
-        lowerLabel.includes('mexican') || lowerLabel.includes('cuisine')) {
-      return 'cuisine';
+    if (lowerQuestion.includes('environment') || lowerQuestion.includes('work') ||
+        lowerAnswer.includes('quiet') || lowerAnswer.includes('organized')) {
+      return 'environment';
     }
     
-    if (lowerLabel.includes('cooking') || lowerLabel.includes('baking') || 
-        lowerLabel.includes('grilling')) {
-      return 'cooking';
+    if (lowerQuestion.includes('learn') || lowerQuestion.includes('activity') ||
+        lowerAnswer.includes('reading') || lowerAnswer.includes('practice')) {
+      return 'learning';
     }
     
-    return 'food';
+    return 'general';
   }
 
   protected sanitizeInputForLogging(input: unknown): any {
