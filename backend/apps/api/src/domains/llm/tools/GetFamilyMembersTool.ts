@@ -43,7 +43,7 @@ export class GetFamilyMembersTool extends BaseTool<
 > {
   readonly schema = {
     name: 'get_family_members',
-    description: 'Get information about family members for meal planning and context',
+    description: 'Get information about family members and their names. Use this tool when you need to know WHO the family members are, not their food preferences.',
     category: 'database',
     parameters: {
       type: 'object',

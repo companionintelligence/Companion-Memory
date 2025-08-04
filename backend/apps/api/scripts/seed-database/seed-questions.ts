@@ -16,6 +16,7 @@ export async function seedQuestions(db: DataSource, filePath: string) {
     user_id: string;
     question_string: string;
     example_answer_1: string;
+    subcategory: string;
   };
 
   const records = readCsv<CsvQuestion>(filePath);
@@ -27,6 +28,7 @@ export async function seedQuestions(db: DataSource, filePath: string) {
         category: record.category,
         text: record.question_string,
         example_answer_1: record.example_answer_1,
+        subcategory: record.subcategory,
       });
     }
   });

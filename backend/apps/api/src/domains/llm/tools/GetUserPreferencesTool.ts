@@ -20,6 +20,7 @@ interface UserPreference {
   id: string;
   label: string;
   category?: string;
+  subcategory?: string;
   userId: string;
   createdAt: Date;
   question?: string;
@@ -43,7 +44,7 @@ export class GetUserPreferencesTool extends BaseTool<
 > {
   readonly schema = {
     name: 'get_user_preferences',
-    description: 'Get user personal preferences from their profile questions and answers, including food preferences, lifestyle, and personal tastes for meal planning and personalized recommendations',
+    description: 'Get user food preferences, dietary restrictions, allergies, and eating habits. Use this tool when planning meals, cooking, or discussing food choices.',
     category: 'database',
     parameters: {
       type: 'object',
@@ -51,7 +52,7 @@ export class GetUserPreferencesTool extends BaseTool<
         category: {
           type: 'string',
           enum: ['food', 'environment', 'learning', 'general'],
-          description: 'Filter preferences by category (optional)',
+          description: 'Filter preferences by category (optional) - not used currently as we focus on food subcategory',
         },
         userId: {
           type: 'string',
@@ -62,23 +63,24 @@ export class GetUserPreferencesTool extends BaseTool<
     },
     examples: [
       {
-        input: { category: 'food' },
+        input: {},
         output: {
           preferences: [
             { 
               id: 'uuid-123', 
-              label: 'Do you prefer sweet or savory foods?: Savory; I love a good, hearty stew', 
-              category: 'food', 
+              label: 'Do you have any food allergies?: No known allergies', 
+              category: 'Physical Health', 
+              subcategory: 'Food',
               userId: 'user-uuid', 
               createdAt: new Date(),
-              question: 'Do you prefer sweet or savory foods?',
-              answer: 'Savory; I love a good, hearty stew',
+              question: 'Do you have any food allergies?',
+              answer: 'No known allergies',
             },
           ],
           totalCount: 1,
           userId: 'user-uuid',
         },
-        description: 'Get food preferences for meal planning with detailed question/answer pairs',
+        description: 'Get food-related preferences for comprehensive meal planning',
       },
     ],
   };
@@ -98,17 +100,18 @@ export class GetUserPreferencesTool extends BaseTool<
     context: ToolExecutionContext,
     input: GetUserPreferencesInput,
   ): Promise<GetUserPreferencesOutput> {
-    // For demo: skip user ID constraints - just get all Personal Preferences
+    // Query for questions with subcategory = 'Food' (much more focused than all Personal Preferences)
     const query = `
       SELECT 
         q.text as question,
         a.give_answer_1 as answer,
         q.category,
+        q.subcategory,
         a.user_id as "userId",
         q.created_at as "createdAt"
       FROM questions q
       JOIN answers a ON q.id = a.question_id  
-      WHERE q.category = 'Personal Preferences'
+      WHERE q.subcategory = 'Food'
         AND a.give_answer_1 IS NOT NULL
       ORDER BY q.created_at
     `;
@@ -118,7 +121,8 @@ export class GetUserPreferencesTool extends BaseTool<
     const preferences: UserPreference[] = result.map((row: any) => ({
       id: `${row.userId}-${row.createdAt.getTime()}`, // Generate a unique ID
       label: `${row.question}: ${row.answer}`,
-      category: this.inferCategory(row.question, row.answer),
+      category: row.category, // Use the actual category from the database
+      subcategory: row.subcategory,
       userId: row.userId,
       createdAt: row.createdAt,
       question: row.question,

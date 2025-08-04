@@ -44,6 +44,9 @@ export class QuestionEntity {
   @UpdateDateColumn({ type: 'timestamptz' })
   updated_at!: Date;
 
+  @Column()
+  subcategory!: string;
+
   toQuestion() {
     return {
       id: this.id,

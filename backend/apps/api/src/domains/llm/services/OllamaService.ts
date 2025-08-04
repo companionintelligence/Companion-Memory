@@ -251,10 +251,10 @@ export class OllamaService {
    */
   private initializeTools(): void {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
-    const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource);
+    // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
-    this.toolRegistry.register(getFamilyMembersTool);
+    // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
 
     this.logger.debug('Initialized tools registry', {
       toolCount: this.toolRegistry.getRegisteredToolNames().length,
