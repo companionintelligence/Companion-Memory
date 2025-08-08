@@ -11,10 +11,10 @@ import {
 } from 'typeorm';
 
 import { Indexable } from '@ci/common/decorators';
+import { TagEntity } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
 import { EventEntity } from './EventEntity';
-import { TagEntity } from './TagEntity';
 
 @Indexable('content', ['text'])
 @Entity({ name: 'content' })

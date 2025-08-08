@@ -3,10 +3,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EmbeddingController } from './controllers/EmbeddingController';
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
+import { TagEntity } from './entities/TagEntity';
 import { EmbeddingService } from './services/EmbeddingService';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([EmbeddingEntity])],
+  imports: [TypeOrmModule.forFeature([EmbeddingEntity, TagEntity])],
   providers: [EmbeddingService],
   controllers: [EmbeddingController],
   exports: [EmbeddingService],
@@ -14,7 +15,7 @@ import { EmbeddingService } from './services/EmbeddingService';
 export class EmbeddingModule {}
 
 // Entities
-export { EmbeddingEntity };
+export { EmbeddingEntity, TagEntity };
 
 // Services
 export { EmbeddingService };

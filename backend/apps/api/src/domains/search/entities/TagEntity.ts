@@ -33,4 +33,8 @@ export class TagEntity {
       this.label = this.label.toLowerCase();
     }
   }
+
+  toTag(): string | null {
+    return this.label;
+  }
 }

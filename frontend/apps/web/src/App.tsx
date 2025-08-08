@@ -4,7 +4,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { AuthProvider, ModelProvider } from '@/hooks';
-import { Main as MainLayout } from '@/layouts';
+import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import LoginPage from '@/pages/LoginPage';
 import NotFound from '@/pages/NotFound';
 import SplashPage from '@/pages/SplashPage';
@@ -15,12 +15,13 @@ const CapturePage = lazy(() => import('@/pages/CapturePage'));
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const ChatListPage = lazy(() => import('@/pages/ChatListPage'));
 const ChatThreadingPage = lazy(() => import('@/pages/ChatThreadingPage'));
+const ConnectionsPage = lazy(() => import('@/pages/ConnectionsPage'));
 const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const FilesGalleryPage = lazy(() => import('@/pages/FilesGalleryPage'));
+const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
 const MemoryPage = lazy(() => import('@/pages/MemoryPage'));
 const QuestionsPage = lazy(() => import('@/pages/QuestionsPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
-const ConnectionsPage = lazy(() => import('@/pages/ConnectionsPage'));
 
 function Providers({ children }: { children: ReactNode }) {
   return (
@@ -37,7 +38,11 @@ function AppRoutes() {
     <Routes>
       {/* No navigation for these pages */}
       <Route path="/" element={<SplashPage />} />
-      <Route path="/login" element={<LoginPage />} />
+
+      <Route element={<CenteredLayout />}>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+      </Route>
 
       {/* Main layout routes */}
       <Route element={<MainLayout />}>

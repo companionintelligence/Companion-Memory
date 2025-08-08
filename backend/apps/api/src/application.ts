@@ -1,3 +1,5 @@
+import { networkInterfaces } from 'node:os';
+
 import {
   MiddlewareConsumer,
   Module,
@@ -22,7 +24,6 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { JobsModule } from '@ci/domains/jobs';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
-import { ProvidersModule } from '@ci/domains/providers';
 import { EmbeddingModule } from '@ci/domains/search';
 import { UserModule } from '@ci/domains/user';
 
@@ -36,11 +37,12 @@ import { UserModule } from '@ci/domains/user';
       username: config.db.username,
       password: config.db.password,
       entities: [__dirname + '/domains/**/*Entity.{ts,js}'],
-      logging: config.db.logging,
+      logging: ['error', ...(config.environment['database.query.logging'] ? (['query'] as const) : [])],
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
     AuthModule,
+    ConnectionsModule,
     EmbeddingModule,
     EventsModule,
     FilesModule,
@@ -49,8 +51,6 @@ import { UserModule } from '@ci/domains/user';
     LLMModule,
     MemoryModule,
     UserModule,
-    ProvidersModule,
-    ConnectionsModule,
   ],
   controllers: [],
   providers: [
@@ -69,9 +69,22 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
   }
 
   onApplicationBootstrap() {
+    let bindings: string[];
+
+    if (config.host === '0.0.0.0') {
+      const nets = networkInterfaces();
+
+      bindings = Object.values(nets)
+        .flatMap((netList) => netList || [])
+        .filter((net) => net.family === 'IPv4')
+        .map((net) => net.address)
+        .map((address) => `http://${address}:${config.port}`);
+    } else {
+      bindings = [`http://${config.host}:${config.port}`];
+    }
+
     this.logger.log('Application listening', {
-      host: config.host,
-      port: config.port,
+      bindings,
     });
   }
 

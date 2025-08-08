@@ -8,10 +8,11 @@ import {
   JoinColumn,
 } from 'typeorm';
 
-import { ProviderEntity } from '@ci/domains/providers';
 import { UserEntity } from '@ci/domains/user';
 
 import type { Connection } from '../types';
+
+import { ProviderEntity } from './ProviderEntity';
 
 @Entity({ name: 'connections' })
 export class ConnectionEntity {

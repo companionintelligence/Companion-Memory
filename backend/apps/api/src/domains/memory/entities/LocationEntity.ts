@@ -10,10 +10,10 @@ import {
   JoinTable,
 } from 'typeorm';
 
+import { TagEntity } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
 import { PlaceEntity } from './PlaceEntity';
-import { TagEntity } from './TagEntity';
 
 @Entity({ name: 'locations' })
 export class LocationEntity {

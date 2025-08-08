@@ -1,5 +1,15 @@
 import type { User } from '@ci/domains/user';
 
+export interface Action {
+  id: string;
+
+  title: string | null;
+  text: string | null;
+
+  user?: User;
+  tags?: string[];
+}
+
 export interface Answer {
   id: string;
 

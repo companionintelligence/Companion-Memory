@@ -3,6 +3,18 @@ import './bootstrap';
 import config from 'config';
 import { z } from 'zod';
 
+const booleanStringSchema = z.preprocess((val) => {
+  if (val === 'true') {
+    return true;
+  }
+
+  if (val === 'false') {
+    return false;
+  }
+
+  return val;
+}, z.boolean());
+
 export const ConfigSchema = z.object({
   host: z.string(),
   port: z.number(),
@@ -24,6 +36,17 @@ export const ConfigSchema = z.object({
       fieldPepper: z.string(),
       duration: z.string(),
     }),
+    providers: z.object({
+      google: z.object({
+        id: z.string(),
+      }),
+      microsoft: z.object({
+        id: z.string(),
+      }),
+    }),
+    oauth: z.object({
+      callbackUrl: z.string(),
+    }),
   }),
   db: z.object({
     type: z.literal('postgres'), // restrict to 'postgres' (or z.string() for other DBs)
@@ -32,7 +55,6 @@ export const ConfigSchema = z.object({
     database: z.string(),
     username: z.string(),
     password: z.string(),
-    logging: z.union([z.literal(false), z.array(z.enum(['query', 'error']))]),
   }),
   staticfiles: z.object({
     storageUrl: z.string(),
@@ -44,6 +66,13 @@ export const ConfigSchema = z.object({
       accessKeyId: z.string(),
       secretAccessKey: z.string(),
     }),
+  }),
+  features: z.object({
+    'scheduled.answer.inferencing': booleanStringSchema,
+    'scheduled.connection.fetching': booleanStringSchema,
+  }),
+  environment: z.object({
+    'database.query.logging': booleanStringSchema,
   }),
 });
 

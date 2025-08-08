@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
@@ -23,6 +23,7 @@ export interface Connection {
   readonly refreshToken: string | null;
   readonly tokenExpiry: Date | null;
   readonly provider?: Provider;
+  lastSyncedAt?: string;
 }
 
 export function ConnectionsPage() {
@@ -58,7 +59,7 @@ export function ConnectionsPage() {
   const [oauthInProgress, setOauthInProgress] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
 
-  const fetchConnections = async () => {
+  const fetchConnections = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -68,7 +69,6 @@ export function ConnectionsPage() {
         throw new Error('Authentication token not found');
       }
 
-      console.log('ConnectionsPage: Making API request to /api/connections');
       const response = await fetch('/api/connections', {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -90,11 +90,10 @@ export function ConnectionsPage() {
         } else if (response.status >= 500) {
           throw new Error('Server error: Please try again later');
         } else {
-          throw new Error(`Error fetching Connectors: ${response.statusText}`);
+          throw new Error(`Error fetching connections: ${response.statusText}`);
         }
       }
 
-      console.log('ConnectionsPage: API request successful, parsing response');
       const data = await response.json();
 
       // Handle both array response and paginated response
@@ -105,24 +104,20 @@ export function ConnectionsPage() {
         ConnectionsData = data.data;
       } else {
         console.error('ConnectionsPage: Invalid response format', data);
-        throw new Error('Invalid response format: Expected an array of Connectors');
+        throw new Error('Invalid response format: Expected an array of connections');
       }
 
-      console.log(`ConnectionsPage: Successfully fetched ${ConnectionsData.length} Connections`, {
-        ConnectionsData,
-      });
       setConnections(ConnectionsData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
-      console.error('ConnectionsPage: Error in fetchConnectors():', errorMessage, err);
+      console.error('ConnectionsPage: Error in fetchConnections():', errorMessage, err);
       setError(errorMessage);
     } finally {
-      console.log('ConnectionsPage: Fetch operation completed');
       setLoading(false);
     }
-  };
+  }, [authToken]);
 
-  const fetchProviders = async () => {
+  const fetchProviders = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -132,7 +127,6 @@ export function ConnectionsPage() {
         throw new Error('Authentication token not found');
       }
 
-      console.log('ConnectionsPage: Making API request to /api/providers');
       const response = await fetch('/api/providers', {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -154,11 +148,10 @@ export function ConnectionsPage() {
         } else if (response.status >= 500) {
           throw new Error('Server error: Please try again later');
         } else {
-          throw new Error(`Error fetching Connectors: ${response.statusText}`);
+          throw new Error(`Error fetching providers: ${response.statusText}`);
         }
       }
 
-      console.log('ConnectionsPage: API request successful, parsing response');
       const data = await response.json();
 
       // Handle both array response and paginated response
@@ -169,31 +162,25 @@ export function ConnectionsPage() {
         ProvidersData = data.data;
       } else {
         console.error('ConnectionsPage: Invalid response format', data);
-        throw new Error('Invalid response format: Expected an array of Connectors');
+        throw new Error('Invalid response format: Expected an array of providers');
       }
 
-      console.log(`ConnectionsPage: Successfully fetched ${ProvidersData.length} Connectors`, {
-        ProvidersData,
-      });
       setProviders(ProvidersData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
-      console.error('ConnectionsPage: Error in fetchConnectors():', errorMessage, err);
+      console.error('ConnectionsPage: Error in fetchProviders():', errorMessage, err);
       setError(errorMessage);
     } finally {
-      console.log('ConnectionsPage: Fetch operation completed');
       setLoading(false);
     }
-  };
+  }, [authToken]);
 
-  const fetchState = async () => {
+  const fetchState = useCallback(async () => {
     await fetchConnections();
     await fetchProviders();
-  };
+  }, [fetchConnections, fetchProviders]);
 
   useEffect(() => {
-    console.log('ConnectionsPage: Component mounted, fetching Connectors');
-
     // Check for OAuth callback
     const urlParams = new URLSearchParams(window.location.search);
     const oauthStatus = urlParams.get('oauth');
@@ -201,21 +188,72 @@ export function ConnectionsPage() {
     const errorMessage = urlParams.get('message');
 
     if (oauthStatus === 'success' && connectionId) {
-      setSuccessMessage(`Successfully authenticated connection!`);
+      // Make API call to complete the OAuth callback
+      completeOAuthCallback(connectionId, true);
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (oauthStatus === 'error') {
-      setError(errorMessage || 'OAuth authentication failed');
+      // Make API call to complete the OAuth callback with error
+      const errorMsg = errorMessage || 'OAuth authentication failed';
+      completeOAuthCallback(connectionId || '', false, errorMsg);
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
     fetchState();
+  }, [authToken, fetchState]);
 
-    return () => {
-      console.log('ConnectionsPage: Component unmounting');
-    };
-  }, []);
+  const completeOAuthCallback = useCallback(
+    async (connectionId: string, success: boolean, error?: string) => {
+      try {
+        if (!authToken) {
+          throw new Error('Authentication token not found');
+        }
+
+        const response = await fetch('/api/connections/callback/complete', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            connectionId,
+            success,
+            error,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.message || `Error completing OAuth callback: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+          setSuccessMessage(
+            `Successfully authenticated connection: ${result.connection?.name || connectionId}`,
+          );
+          // Update the connection in the local state if we have the updated data
+          if (result.connection) {
+            setConnections((prevConnections) =>
+              prevConnections.map((conn) => (conn.id === connectionId ? result.connection : conn)),
+            );
+          } else {
+            // Only fetch if we don't have the updated connection data
+            await fetchConnections();
+          }
+        } else {
+          setError(result.error || 'OAuth authentication failed');
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+        console.error('Error completing OAuth callback:', errorMessage, err);
+        setError(errorMessage);
+      }
+    },
+    [authToken, fetchConnections],
+  );
 
   const truncateText = (text: string | undefined, maxLength: number = 50) => {
     if (!text) {
@@ -311,9 +349,11 @@ export function ConnectionsPage() {
       const newConnection = await response.json();
       console.log('Successfully created connection:', newConnection);
 
-      // Close modal and refresh the connections list
+      // Add the new connection to the local state
+      setConnections((prevConnections) => [...prevConnections, newConnection]);
+
+      // Close modal
       setShowCreateModal(false);
-      await fetchConnections();
       setSuccessMessage('Connection created successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
@@ -362,9 +402,13 @@ export function ConnectionsPage() {
       const updatedConnection = await response.json();
       console.log('Successfully updated connection:', updatedConnection);
 
-      // Close modal and refresh the connections list
+      // Update the connection in the local state
+      setConnections((prevConnections) =>
+        prevConnections.map((conn) => (conn.id === updatedConnection.id ? updatedConnection : conn)),
+      );
+
+      // Close modal
       setShowEditModal(false);
-      await fetchConnections();
       setSuccessMessage('Connection updated successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
@@ -435,12 +479,58 @@ export function ConnectionsPage() {
         throw new Error(errorData.message || `Error deleting connection: ${response.statusText}`);
       }
 
-      // Refresh the connections list
-      await fetchConnections();
+      // Remove the connection from the local state
+      setConnections((prevConnections) => prevConnections.filter((conn) => conn.id !== connectionId));
       setSuccessMessage('Connection deleted successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       console.error('Error deleting connection:', errorMessage, err);
+      setError(errorMessage);
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
+  const handleSyncConnection = async (connectionId: string) => {
+    if (!confirm('Are you sure you want to sync data for this connection?')) {
+      return;
+    }
+
+    try {
+      setDeleteLoading(connectionId);
+
+      if (!authToken) {
+        throw new Error('Authentication token not found');
+      }
+
+      const response = await fetch(`/api/connections/${connectionId}/sync`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Error syncing connection: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Successfully synced connection:', result);
+
+      // Update the connection's last sync time in the local state
+      setConnections((prevConnections) =>
+        prevConnections.map((conn) =>
+          conn.id === connectionId ? { ...conn, lastSyncedAt: new Date().toISOString() } : conn,
+        ),
+      );
+
+      setSuccessMessage(
+        `Data synced successfully for connection: ${result.connection?.name || connectionId}`,
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      console.error('Error syncing connection:', errorMessage, err);
       setError(errorMessage);
     } finally {
       setDeleteLoading(null);
@@ -603,6 +693,15 @@ export function ConnectionsPage() {
                                 ) : (
                                   <Trash2 className="h-4 w-4" />
                                 )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleSyncConnection(connection.id)}
+                                disabled={deleteLoading === connection.id || oauthInProgress}
+                                title="Sync Data"
+                              >
+                                <RefreshCw className="h-4 w-4" />
                               </Button>
                             </div>
                           </Table.Cell>
@@ -797,6 +896,10 @@ export function ConnectionsPage() {
               <Button
                 variant="secondary"
                 onClick={async () => {
+                  console.log('handleConnect clicked', {
+                    editFormData,
+                    selectedConnection,
+                  });
                   // Save first if there are changes
                   if (
                     editFormData.name !== selectedConnection.name ||

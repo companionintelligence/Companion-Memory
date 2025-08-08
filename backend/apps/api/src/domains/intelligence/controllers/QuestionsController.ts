@@ -5,6 +5,7 @@ import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
+import config from '@ci/configuration';
 import { EventService, Events, EventPayloads, OnEvent } from '@ci/domains/events';
 import { OllamaService } from '@ci/domains/llm';
 import { EmbeddingService } from '@ci/domains/search';
@@ -38,6 +39,10 @@ export class QuestionsController {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async cronProcessQuestions() {
+    if (!config.features['scheduled.answer.inferencing']) {
+      return;
+    }
+
     this.logger.log('Processing question answer inference cron');
 
     const unansweredQuestions = await this.questionService.findUnansweredByUserId();

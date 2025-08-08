@@ -4,7 +4,7 @@ import { parse } from 'csv-parse/sync';
 import { In, type EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { TagEntity } from '@ci/domains/memory';
+import { TagEntity } from '@ci/domains/search';
 
 function isIsoDate(value: string): boolean {
   // Checks for ISO date strings with optional timezone offset
@@ -79,7 +79,7 @@ export async function getOrCreateTags(
   const missingLabels = transformedTagNames.filter((label) => !existingLabels.has(label));
 
   if (missingLabels.length > 0) {
-    const newTags = missingLabels.map((label) =>
+    const newTags: TagEntity[] = missingLabels.map((label) =>
       manager.create(TagEntity, {
         id: uuidv7(),
         label,

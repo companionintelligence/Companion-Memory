@@ -194,6 +194,16 @@ yarn lint
 
 To execute repository-wide linting.
 
+#### Useful development commands
+
+To generate a stable access token (24 hour expiration) for a user use:
+
+```
+make gentoken
+```
+
+And provide the user's email address. If they exist in the database you should get an access token printed.
+
 ### Backend API Commands (`backend/apps/api`)
 
 Navigate to `backend/apps/api` and run:

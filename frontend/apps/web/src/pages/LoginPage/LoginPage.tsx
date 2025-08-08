@@ -16,19 +16,17 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
-      <div className="w-full max-w-sm">
-        <Card>
-          <Card.Header>
-            <Card.Title>Log In</Card.Title>
-            <Card.Description>Enter your information to access your account</Card.Description>
-          </Card.Header>
+    <div className="w-full max-w-sm">
+      <Card>
+        <Card.Header>
+          <Card.Title>Log In</Card.Title>
+          <Card.Description>Enter your information to access your account</Card.Description>
+        </Card.Header>
 
-          <Card.Content>
-            <LoginForm onSubmit={handleSubmit} />
-          </Card.Content>
-        </Card>
-      </div>
+        <Card.Content>
+          <LoginForm onSubmit={handleSubmit} />
+        </Card.Content>
+      </Card>
     </div>
   );
 }

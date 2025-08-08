@@ -5,8 +5,8 @@ import { DataSource } from 'typeorm';
 
 import config from '@ci/configuration';
 import { AnswerEntity, QuestionEntity } from '@ci/domains/intelligence';
-import { ContentEntity, EventEntity, TagEntity } from '@ci/domains/memory';
-import { EmbeddingEntity, EmbeddingService } from '@ci/domains/search';
+import { ContentEntity, EventEntity } from '@ci/domains/memory';
+import { EmbeddingEntity, EmbeddingService, TagEntity } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
 const logger = new Logger(path.basename(__filename));

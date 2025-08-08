@@ -3,7 +3,7 @@ import path from 'path';
 import { Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
-import { ProviderEntity } from '@ci/domains/providers';
+import { ProviderEntity } from '@ci/domains/connections';
 
 import { readCsv } from './utils';
 

@@ -1,8 +1,3 @@
-id,name,token_host,token_path,authorize_path,api_base_url,scopes,created_at,updated_at
-018f8b9a-1234-7000-8000-000000000001,google,https://oauth2.googleapis.com,/token,https://accounts.google.com/o/oauth2/v2/auth,https://www.googleapis.com,https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000002,amazon,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000003,apple,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000004,facebook,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000005,instagram,,,,,,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000006,microsoft,https://login.microsoftonline.com,/common/oauth2/v2.0/token,/common/oauth2/v2.0/authorize,https://graph.microsoft.com,https://graph.microsoft.com/.default,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
-018f8b9a-1234-7000-8000-000000000007,github,https://github.com,/login/oauth/access_token,/login/oauth/authorize,https://api.github.com,read:user user:email,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z
+id,name,token_host,token_path,authorize_path,api_base_url,scopes
+0198779b-182c-716e-9275-b81d99a47fdb,Google,https://oauth2.googleapis.com,/token,https://accounts.google.com/o/oauth2/v2/auth,https://www.googleapis.com,https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly
+0198779b-3c33-73da-84e5-82e0df145260,Microsoft,https://login.microsoftonline.com,/common/oauth2/v2.0/token,/common/oauth2/v2.0/authorize,https://graph.microsoft.com,https://graph.microsoft.com/User.Read
