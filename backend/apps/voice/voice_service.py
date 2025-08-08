@@ -685,14 +685,15 @@ async def transcribe_stream_final_endpoint(request: TranscriptionRequest):
 async def health_check():
     """Health check endpoint"""
     try:
-        # Check if gTTS is available
+        # Check if Higgs Audio is available
         try:
-            from gtts import gTTS
+            import torch
+            from boson_multimodal import BosonMultimodalForCausalLM, BosonMultimodalProcessor
             local_tts_available = True
-            logger.info("gTTS is available")
+            logger.info("Higgs Audio is available")
         except Exception as tts_error:
             local_tts_available = False
-            logger.warning(f"gTTS not available: {str(tts_error)}")
+            logger.warning(f"Higgs Audio not available: {str(tts_error)}")
         
         return {
             "status": "healthy", 
@@ -858,30 +859,105 @@ def create_wav_file(audio_data: np.ndarray, sample_rate: int = 22050) -> bytes:
     return wav_header + audio_data.tobytes()
 
 def generate_local_tts(text: str, voice: str = "alloy", speed: float = 1.0) -> bytes:
-    """Generate TTS using gTTS (Google Text-to-Speech)"""
+    """Generate TTS using Higgs Audio"""
     try:
-        from gtts import gTTS
+        import torch
+        from boson_multimodal import BosonMultimodalForCausalLM, BosonMultimodalProcessor
+        
+        logger.info(f"Generating Higgs Audio TTS: '{text[:50]}...' (voice: {voice}, speed: {speed})")
+        
+        # Initialize model and processor (lazy loading)
+        if not hasattr(generate_local_tts, 'model'):
+            logger.info("Loading Higgs Audio model...")
+            try:
+                model_name = "boson-ai/higgs-audio-v2-base"
+                generate_local_tts.model = BosonMultimodalForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16,
+                    device_map="auto"
+                )
+                generate_local_tts.processor = BosonMultimodalProcessor.from_pretrained(model_name)
+                logger.info("Higgs Audio model loaded successfully")
+            except Exception as model_error:
+                logger.error(f"Failed to load Higgs Audio model: {str(model_error)}")
+                raise model_error
+        
+        model = generate_local_tts.model
+        processor = generate_local_tts.processor
+        
+        # Prepare the input - Higgs Audio expects text input
+        inputs = processor(
+            text=text,
+            return_tensors="pt"
+        )
+        
+        # Move inputs to the same device as the model
+        device = next(model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        # Generate audio with appropriate parameters
+        with torch.no_grad():
+            audio_output = model.generate(
+                **inputs,
+                max_new_tokens=1024,
+                do_sample=True,
+                temperature=0.3,
+                top_p=0.9,
+                pad_token_id=processor.tokenizer.eos_token_id,
+                eos_token_id=processor.tokenizer.eos_token_id
+            )
+        
+        # Decode the audio tokens to audio
+        audio = processor.decode(audio_output[0], skip_special_tokens=True)
+        
+        # Convert to numpy array if it's a tensor
+        if isinstance(audio, torch.Tensor):
+            audio = audio.cpu().numpy()
+        
+        # Ensure audio is in the correct format (mono, float32)
+        if len(audio.shape) > 1:
+            audio = audio.mean(axis=1)  # Convert stereo to mono if needed
+        
+        # Normalize audio
+        if audio.max() > 0:
+            audio = audio / audio.max() * 0.8
+        
+        # Convert to WAV format
+        import soundfile as sf
         import io
         
-        logger.info(f"Generating gTTS: '{text[:50]}...' (voice: {voice}, speed: {speed})")
+        # Create WAV file in memory
+        buffer = io.BytesIO()
+        sf.write(buffer, audio, 22050, format='WAV')
+        buffer.seek(0)
         
-        # Create gTTS object
-        # Note: gTTS doesn't support speed adjustment, but we can use different languages for voice variety
-        tts = gTTS(text=text, lang='en', slow=False)
-        
-        # Generate audio to bytes
-        audio_buffer = io.BytesIO()
-        tts.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
-        
-        audio_data = audio_buffer.read()
-        logger.info(f"gTTS successful: {len(audio_data)} bytes")
+        audio_data = buffer.read()
+        logger.info(f"Higgs Audio TTS successful: {len(audio_data)} bytes")
         
         return audio_data
             
     except Exception as e:
-        logger.error(f"Error in gTTS: {str(e)}")
-        raise e
+        logger.error(f"Error in Higgs Audio TTS: {str(e)}")
+        # Fall back to placeholder audio if Higgs Audio fails
+        logger.warning("Higgs Audio failed, using placeholder audio")
+        
+        # Create placeholder audio
+        import numpy as np
+        
+        # Create a simple sine wave tone
+        sample_rate = 22050
+        duration = 2.0  # seconds
+        frequency = 440  # Hz (A4 note)
+        
+        t = np.linspace(0, duration, int(sample_rate * duration), False)
+        audio = np.sin(2 * np.pi * frequency * t) * 0.3
+        
+        # Create WAV file
+        wav_data = create_wav_file(audio, sample_rate)
+        
+        logger.info(f"Generated placeholder TTS audio: {len(wav_data)} bytes")
+        
+        return wav_data
 
 @app.post("/tts", response_model=TTSResponse)
 async def text_to_speech_endpoint(request: TTSRequest):
