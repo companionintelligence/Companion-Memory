@@ -1,0 +1,10 @@
+# Higgs Audio TTS dependencies
+# This requires an older version of transformers for compatibility
+transformers==4.21.0
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=2.0.0
+soundfile>=0.12.0
+
+# Higgs Audio TTS
+git+https://github.com/boson-ai/higgs-audio.git

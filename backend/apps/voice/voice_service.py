@@ -685,12 +685,20 @@ async def transcribe_stream_final_endpoint(request: TranscriptionRequest):
 async def health_check():
     """Health check endpoint"""
     try:
-        # Check if Higgs Audio is available
+        # Check if Higgs Audio is available in the separate environment
         try:
-            import torch
-            from boson_multimodal import BosonMultimodalForCausalLM, BosonMultimodalProcessor
-            local_tts_available = True
-            logger.info("Higgs Audio is available")
+            import subprocess
+            result = subprocess.run([
+                '/opt/higgs-env/bin/python', '-c',
+                'import sys; sys.path.append("/opt/higgs-env/lib/python3.11/site-packages"); from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel; print("SUCCESS")'
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and "SUCCESS" in result.stdout:
+                local_tts_available = True
+                logger.info("Higgs Audio is available in separate environment")
+            else:
+                local_tts_available = False
+                logger.warning(f"Higgs Audio not available: {result.stderr}")
         except Exception as tts_error:
             local_tts_available = False
             logger.warning(f"Higgs Audio not available: {str(tts_error)}")
@@ -859,82 +867,130 @@ def create_wav_file(audio_data: np.ndarray, sample_rate: int = 22050) -> bytes:
     return wav_header + audio_data.tobytes()
 
 def generate_local_tts(text: str, voice: str = "alloy", speed: float = 1.0) -> bytes:
-    """Generate TTS using Higgs Audio"""
+    """Generate TTS using Higgs Audio or fallback to placeholder"""
     try:
         import torch
-        from boson_multimodal import BosonMultimodalForCausalLM, BosonMultimodalProcessor
+        import subprocess
+        import tempfile
+        import json
+        
+        # Check if Higgs Audio is available and compatible
+        if not hasattr(generate_local_tts, 'higgs_available'):
+            try:
+                # Try to use the separate Higgs Audio environment
+                result = subprocess.run([
+                    '/opt/higgs-env/bin/python', '-c',
+                    'import sys; sys.path.append("/opt/higgs-env/lib/python3.11/site-packages"); from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel; print("SUCCESS")'
+                ], capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0 and "SUCCESS" in result.stdout:
+                    generate_local_tts.higgs_available = True
+                    logger.info("Higgs Audio is available in separate environment")
+                else:
+                    generate_local_tts.higgs_available = False
+                    logger.warning(f"Higgs Audio not available: {result.stderr}")
+            except Exception as e:
+                logger.warning(f"Higgs Audio not available due to compatibility issues: {str(e)}")
+                generate_local_tts.higgs_available = False
+        
+        if not getattr(generate_local_tts, 'higgs_available', False):
+            raise ImportError("Higgs Audio not available")
         
         logger.info(f"Generating Higgs Audio TTS: '{text[:50]}...' (voice: {voice}, speed: {speed})")
         
-        # Initialize model and processor (lazy loading)
-        if not hasattr(generate_local_tts, 'model'):
-            logger.info("Loading Higgs Audio model...")
-            try:
-                model_name = "boson-ai/higgs-audio-v2-base"
-                generate_local_tts.model = BosonMultimodalForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.float16,
-                    device_map="auto"
-                )
-                generate_local_tts.processor = BosonMultimodalProcessor.from_pretrained(model_name)
-                logger.info("Higgs Audio model loaded successfully")
-            except Exception as model_error:
-                logger.error(f"Failed to load Higgs Audio model: {str(model_error)}")
-                raise model_error
-        
-        model = generate_local_tts.model
-        processor = generate_local_tts.processor
-        
-        # Prepare the input - Higgs Audio expects text input
-        inputs = processor(
-            text=text,
-            return_tensors="pt"
+        # Create a temporary script to run Higgs Audio in the separate environment
+        script_content = f'''
+import sys
+import torch
+import tempfile
+import json
+import base64
+import soundfile as sf
+import io
+
+# Add the Higgs Audio environment to the path
+sys.path.append("/opt/higgs-env/lib/python3.11/site-packages")
+
+try:
+    from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel
+    from transformers import AutoTokenizer
+    
+    # Load model and tokenizer
+    model_name = "boson-ai/higgs-audio-v2-base"
+    model = HiggsAudioModel.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    # Prepare input
+    inputs = tokenizer("{text}", return_tensors="pt", padding=True, truncation=True)
+    
+    # Move inputs to device
+    device = next(model.parameters()).device
+    inputs = {{k: v.to(device) for k, v in inputs.items()}}
+    
+    # Generate audio
+    with torch.no_grad():
+        audio_output = model.generate(
+            **inputs,
+            max_new_tokens=1024,
+            do_sample=True,
+            temperature=0.3,
+            top_p=0.9,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id
         )
+    
+    # Decode audio
+    audio = model.decode_audio(audio_output[0], skip_special_tokens=True)
+    
+    # Convert to numpy array
+    if isinstance(audio, torch.Tensor):
+        audio = audio.cpu().numpy()
+    
+    # Ensure mono format
+    if len(audio.shape) > 1:
+        audio = audio.mean(axis=1)
+    
+    # Normalize audio
+    if audio.max() > 0:
+        audio = audio / audio.max() * 0.8
+    
+    # Convert to WAV format
+    buffer = io.BytesIO()
+    sf.write(buffer, audio, 22050, format='WAV')
+    buffer.seek(0)
+    
+    # Return base64 encoded audio
+    audio_data = buffer.read()
+    print(base64.b64encode(audio_data).decode('utf-8'))
+    
+except Exception as e:
+    print(f"ERROR: {{str(e)}}")
+    sys.exit(1)
+'''
         
-        # Move inputs to the same device as the model
-        device = next(model.parameters()).device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        # Write the script to a temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script_content)
+            script_path = f.name
         
-        # Generate audio with appropriate parameters
-        with torch.no_grad():
-            audio_output = model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                do_sample=True,
-                temperature=0.3,
-                top_p=0.9,
-                pad_token_id=processor.tokenizer.eos_token_id,
-                eos_token_id=processor.tokenizer.eos_token_id
-            )
-        
-        # Decode the audio tokens to audio
-        audio = processor.decode(audio_output[0], skip_special_tokens=True)
-        
-        # Convert to numpy array if it's a tensor
-        if isinstance(audio, torch.Tensor):
-            audio = audio.cpu().numpy()
-        
-        # Ensure audio is in the correct format (mono, float32)
-        if len(audio.shape) > 1:
-            audio = audio.mean(axis=1)  # Convert stereo to mono if needed
-        
-        # Normalize audio
-        if audio.max() > 0:
-            audio = audio / audio.max() * 0.8
-        
-        # Convert to WAV format
-        import soundfile as sf
-        import io
-        
-        # Create WAV file in memory
-        buffer = io.BytesIO()
-        sf.write(buffer, audio, 22050, format='WAV')
-        buffer.seek(0)
-        
-        audio_data = buffer.read()
-        logger.info(f"Higgs Audio TTS successful: {len(audio_data)} bytes")
-        
-        return audio_data
+        try:
+            # Run the script in the Higgs Audio environment
+            result = subprocess.run([
+                '/opt/higgs-env/bin/python', script_path
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0:
+                # Decode the base64 audio data
+                audio_data = base64.b64decode(result.stdout.strip())
+                logger.info(f"Higgs Audio TTS successful: {len(audio_data)} bytes")
+                return audio_data
+            else:
+                raise Exception(f"Higgs Audio failed: {result.stderr}")
+                
+        finally:
+            # Clean up the temporary script
+            import os
+            os.unlink(script_path)
             
     except Exception as e:
         logger.error(f"Error in Higgs Audio TTS: {str(e)}")
