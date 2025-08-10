@@ -7,7 +7,7 @@ import type { RequestContext } from '@ci/common/types';
 import { LoggerService } from '@ci/common/services';
 
 import type { Message, OllamaModel } from '../types';
-import { ToolRegistry, GetUserPreferencesTool, GetFamilyMembersTool, GetEntertainmentPreferencesTool, type ToolSchema } from '../tools';
+import { ToolRegistry, GetUserPreferencesTool, GetFamilyMembersTool, GetEntertainmentPreferencesTool, GetStreamingAvailabilityTool, type ToolSchema } from '../tools';
 
 import { MessageService } from './MessageService';
 
@@ -252,10 +252,12 @@ export class OllamaService {
   private initializeTools(): void {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
+    const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
     // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
     this.toolRegistry.register(getEntertainmentPreferencesTool);
+    this.toolRegistry.register(getStreamingAvailabilityTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
 
     this.logger.debug('Initialized tools registry', {
