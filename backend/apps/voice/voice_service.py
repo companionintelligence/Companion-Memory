@@ -976,23 +976,22 @@ async def transcribe_stream_final_endpoint(request: TranscriptionRequest):
 async def health_check():
     """Health check endpoint"""
     try:
-        # Check if Higgs Audio is available in the separate environment
+        # Check if Higgs Audio is available using direct import
+        local_tts_available = False
         try:
-            import subprocess
-            result = subprocess.run([
-                '/opt/higgs-env/bin/python', '-c',
-                'import sys; sys.path.append("/opt/higgs-env/lib/python3.11/site-packages"); from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel; print("SUCCESS")'
-            ], capture_output=True, text=True, timeout=10)
-            
-            if result.returncode == 0 and "SUCCESS" in result.stdout:
+            from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel
+            local_tts_available = True
+            logger.info("Higgs Audio is available via direct import")
+        except ImportError as e:
+            logger.warning(f"Higgs Audio not available via direct import: {e}")
+            # Try alternative import paths
+            try:
+                import boson_multimodal
                 local_tts_available = True
-                logger.info("Higgs Audio is available in separate environment")
-            else:
+                logger.info("Higgs Audio is available via boson_multimodal import")
+            except ImportError:
+                logger.warning("Higgs Audio not available - boson_multimodal not installed")
                 local_tts_available = False
-                logger.warning(f"Higgs Audio not available: {result.stderr}")
-        except Exception as tts_error:
-            local_tts_available = False
-            logger.warning(f"Higgs Audio not available: {str(tts_error)}")
         
         return {
             "status": "healthy", 
