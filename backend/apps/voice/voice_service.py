@@ -8,6 +8,7 @@ import os
 import base64
 import tempfile
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -45,7 +46,169 @@ compute_type = None
 diarization_pipeline = None
 
 # Session management for streaming audio
-audio_sessions = {}  # session_id -> {audio_buffer, last_transcription, start_time}
+audio_sessions = {}  # session_id -> {audio_buffer, last_transcription, start_time, last_process_time, window_size}
+
+# Background processing queue
+processing_queue = asyncio.Queue()
+processing_tasks = {}  # session_id -> task
+
+# Configuration for streaming optimization
+STREAMING_CONFIG = {
+    'min_window_size': 8000,   # 0.5 seconds of audio at 16kHz (reduced for faster response)
+    'max_window_size': 48000,  # 3 seconds of audio at 16kHz (reduced for faster processing)
+    'process_interval': 0.5,   # Process every 0.5 seconds (reduced for more responsive updates)
+    'overlap_size': 4000,      # 0.25 seconds overlap to maintain context
+    'silence_threshold': 0.0001,  # RMS threshold for silence detection
+    'chunk_timeout': 30.0,     # Clean up sessions after 30 seconds of inactivity
+    'max_concurrent_processing': 2,  # Maximum concurrent processing tasks
+}
+
+def cleanup_expired_sessions():
+    """Clean up expired audio sessions"""
+    current_time = time.time()
+    expired_sessions = []
+    
+    for session_id, session in audio_sessions.items():
+        if current_time - session.get('last_activity', 0) > STREAMING_CONFIG['chunk_timeout']:
+            expired_sessions.append(session_id)
+    
+    for session_id in expired_sessions:
+        del audio_sessions[session_id]
+        logger.info(f"Cleaned up expired session: {session_id}")
+
+def detect_speech_activity(audio_data: bytes) -> bool:
+    """Detect if audio chunk contains speech activity"""
+    try:
+        # Convert audio data to numpy array for analysis
+        import struct
+        
+        # Skip WAV header if present
+        if audio_data.startswith(b'RIFF'):
+            # Skip 44-byte WAV header
+            audio_bytes = audio_data[44:]
+        else:
+            audio_bytes = audio_data
+        
+        # Convert bytes to 16-bit PCM samples
+        if len(audio_bytes) % 2 != 0:
+            audio_bytes = audio_bytes[:-1]  # Remove odd byte
+        
+        samples = struct.unpack(f'<{len(audio_bytes)//2}h', audio_bytes)
+        audio_array = np.array(samples, dtype=np.float32) / 32768.0
+        
+        # Calculate RMS level
+        rms = np.sqrt(np.mean(audio_array**2))
+        
+        return rms > STREAMING_CONFIG['silence_threshold']
+        
+    except Exception as e:
+        logger.warning(f"Speech activity detection failed: {e}")
+        return True  # Assume speech if detection fails
+
+def process_audio_window(audio_buffer: bytes, sample_rate: int = 16000) -> Dict[str, Any]:
+    """Process a window of audio with WhisperX"""
+    try:
+        # Convert audio buffer to WAV format
+        wav_audio_data = None
+        
+        if audio_buffer.startswith(b'RIFF'):
+            wav_audio_data = audio_buffer
+        else:
+            # Convert to WAV format
+            wav_audio_data = convert_audio_to_wav(audio_buffer, "webm")
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            temp_file.write(wav_audio_data)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Load audio
+            audio = whisperx.load_audio(temp_file_path, sample_rate)
+            
+            # Check for silence
+            audio_rms = np.sqrt(np.mean(audio**2))
+            if audio_rms < STREAMING_CONFIG['silence_threshold']:
+                return {
+                    "text": "",
+                    "segments": [],
+                    "confidence": 0.0,
+                    "is_silence": True
+                }
+            
+            # Transcribe with WhisperX
+            model, device, compute_type = load_whisperx_model()
+            result = model.transcribe(audio)
+            
+            # Extract text
+            if hasattr(result, 'text'):
+                transcription_text = result.text
+            elif isinstance(result, dict) and 'text' in result:
+                transcription_text = result['text']
+            elif isinstance(result, dict) and 'segments' in result:
+                transcription_text = ' '.join([seg.get('text', '').strip() for seg in result['segments']])
+            else:
+                transcription_text = ""
+            
+            # Calculate confidence
+            confidence = 0.8  # Default confidence for streaming
+            if result.get("segments"):
+                confidence = np.mean([seg.get("avg_logprob", 0.0) for seg in result["segments"]])
+            
+            return {
+                "text": transcription_text,
+                "segments": result.get("segments", []),
+                "confidence": confidence,
+                "is_silence": False
+            }
+            
+        finally:
+            os.unlink(temp_file_path)
+            
+    except Exception as e:
+        logger.error(f"Audio window processing failed: {e}")
+        return {
+            "text": "",
+            "segments": [],
+            "confidence": 0.0,
+            "is_silence": False
+        }
+
+async def background_processing_worker():
+    """Background worker to process audio chunks asynchronously"""
+    while True:
+        try:
+            # Get task from queue
+            task = await processing_queue.get()
+            session_id, audio_buffer, sample_rate = task
+            
+            # Process audio in background
+            result = process_audio_window(audio_buffer, sample_rate)
+            
+            # Update session with result
+            if session_id in audio_sessions:
+                session = audio_sessions[session_id]
+                session['processing_result'] = result
+                session['processing_complete'] = True
+                logger.info(f"Background processing completed for session {session_id}")
+            
+            # Mark task as done
+            processing_queue.task_done()
+            
+        except Exception as e:
+            logger.error(f"Background processing worker error: {e}")
+            # Mark task as done even if it failed
+            if 'task' in locals():
+                processing_queue.task_done()
+
+async def start_background_workers():
+    """Start background processing workers"""
+    workers = []
+    for i in range(STREAMING_CONFIG['max_concurrent_processing']):
+        worker = asyncio.create_task(background_processing_worker())
+        workers.append(worker)
+        logger.info(f"Started background processing worker {i+1}")
+    return workers
 
 class TranscriptionRequest(BaseModel):
     audio_data: str  # Base64 encoded audio
@@ -510,18 +673,17 @@ async def transcribe_endpoint(request: TranscriptionRequest):
 
 @app.post("/transcribe-stream")
 async def transcribe_stream_endpoint(request: TranscriptionRequest):
-    """Streaming transcription endpoint for real-time WAV chunks"""
+    """Optimized streaming transcription endpoint with sliding window approach"""
     try:
+        # Clean up expired sessions periodically
+        cleanup_expired_sessions()
+        
         session_id = request.sessionId if hasattr(request, 'sessionId') else None
         if not session_id:
             raise HTTPException(status_code=400, detail="sessionId is required for streaming")
         
-        logger.info(f"Received streaming transcription request for session: {session_id}")
-        logger.info(f"Audio data size: {len(request.audio_data)} chars base64")
-        
         # Decode base64 audio
         audio_data = base64.b64decode(request.audio_data)
-        logger.info(f"Decoded audio data: {len(audio_data)} bytes")
         
         # Initialize session if it doesn't exist
         if session_id not in audio_sessions:
@@ -529,35 +691,95 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
                 'audio_buffer': b'',
                 'last_transcription': '',
                 'start_time': time.time(),
-                'chunk_count': 0
+                'last_activity': time.time(),
+                'last_process_time': 0,
+                'chunk_count': 0,
+                'window_start': 0,
+                'processed_text': ''
             }
             logger.info(f"Created new audio session: {session_id}")
         
         session = audio_sessions[session_id]
         session['chunk_count'] += 1
+        session['last_activity'] = time.time()
+        
+        # Check for speech activity in the chunk
+        has_speech = detect_speech_activity(audio_data)
         
         # Append audio chunk to session buffer
         session['audio_buffer'] += audio_data
-        logger.info(f"Session {session_id}: Total audio buffer size: {len(session['audio_buffer'])} bytes")
+        current_time = time.time()
         
-        # Only transcribe if we have enough audio (at least 0.5 seconds worth)
-        # For compressed audio (WebM), we need much less data than raw PCM
-        min_audio_size = 8000  # 8KB should be enough for 0.5 seconds of compressed audio
+        # Determine if we should process the audio window
+        should_process = False
+        process_reason = ""
         
-        if len(session['audio_buffer']) >= min_audio_size:
+        # Process if we have enough audio and enough time has passed
+        if (len(session['audio_buffer']) >= STREAMING_CONFIG['min_window_size'] and 
+            current_time - session['last_process_time'] >= STREAMING_CONFIG['process_interval']):
+            should_process = True
+            process_reason = "time_interval"
+        
+        # Process if we have a lot of audio accumulated
+        elif len(session['audio_buffer']) >= STREAMING_CONFIG['max_window_size']:
+            should_process = True
+            process_reason = "buffer_full"
+        
+        # Process if we detect speech after silence
+        elif has_speech and session.get('last_was_silence', False):
+            should_process = True
+            process_reason = "speech_detected"
+        
+        session['last_was_silence'] = not has_speech
+        
+        if should_process:
             try:
-                # Transcribe the accumulated audio
-                result = transcribe_audio(
+                logger.info(f"Session {session_id}: Processing audio window ({process_reason})")
+                logger.info(f"Buffer size: {len(session['audio_buffer'])} bytes")
+                
+                # Process the current audio window
+                result = process_audio_window(
                     session['audio_buffer'],
-                    sample_rate=request.sample_rate,
-                    language=request.language,
-                    enable_diarization=False  # Disable for streaming
+                    sample_rate=request.sample_rate
                 )
                 
-                # Update session with latest transcription
-                session['last_transcription'] = result.get('text', '')
+                # Update session state
+                session['last_process_time'] = current_time
                 
-                logger.info(f"Session {session_id}: Transcription: '{session['last_transcription']}'")
+                if result.get('is_silence', False):
+                    # Silence detected, don't update transcription
+                    logger.info(f"Session {session_id}: Silence detected, skipping transcription")
+                    return {
+                        "type": "transcription",
+                        "data": {
+                            "text": session['last_transcription'],
+                            "confidence": 0.0,
+                            "isFinal": False,
+                            "segments": [],
+                            "status": "silence",
+                        },
+                        "timestamp": current_time,
+                        "sessionId": session_id,
+                        "chunkCount": session['chunk_count']
+                    }
+                
+                # Update transcription with new text
+                new_text = result.get('text', '').strip()
+                if new_text:
+                    # Combine with previous transcription
+                    if session['last_transcription']:
+                        session['last_transcription'] += " " + new_text
+                    else:
+                        session['last_transcription'] = new_text
+                    
+                    logger.info(f"Session {session_id}: Updated transcription: '{session['last_transcription']}'")
+                
+                # Implement sliding window: keep only recent audio
+                if len(session['audio_buffer']) > STREAMING_CONFIG['max_window_size']:
+                    # Keep the last portion of audio for context
+                    keep_size = STREAMING_CONFIG['max_window_size'] - STREAMING_CONFIG['overlap_size']
+                    session['audio_buffer'] = session['audio_buffer'][-keep_size:]
+                    logger.info(f"Session {session_id}: Applied sliding window, buffer size: {len(session['audio_buffer'])}")
                 
                 return {
                     "type": "transcription",
@@ -566,37 +788,40 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
                         "confidence": result.get('confidence', 0.8),
                         "isFinal": False,
                         "segments": result.get('segments', []),
+                        "status": "transcribed",
                     },
-                    "timestamp": time.time(),
+                    "timestamp": current_time,
                     "sessionId": session_id,
                     "chunkCount": session['chunk_count']
                 }
                 
             except Exception as e:
-                logger.error(f"Transcription failed for session {session_id}: {str(e)}")
+                logger.error(f"Audio window processing failed for session {session_id}: {str(e)}")
                 return {
                     "type": "error",
                     "data": {
-                        "message": f"Transcription failed: {str(e)}"
+                        "message": f"Processing failed: {str(e)}"
                     },
-                    "timestamp": time.time(),
+                    "timestamp": current_time,
                     "sessionId": session_id
                 }
         else:
-            # Not enough audio yet, return status update
-            logger.info(f"Session {session_id}: Not enough audio yet ({len(session['audio_buffer'])} bytes)")
+            # Not processing yet, return status update
+            buffer_duration = len(session['audio_buffer']) / 16000  # Approximate duration in seconds
+            logger.debug(f"Session {session_id}: Buffering audio ({buffer_duration:.1f}s)")
+            
             return {
                 "type": "transcription",
                 "data": {
-                    "text": "",
+                    "text": session['last_transcription'],
                     "confidence": 0.0,
                     "isFinal": False,
                     "segments": [],
-                    "status": "listening",
+                    "status": "buffering",
                     "audioSize": len(session['audio_buffer']),
-                    "minSize": min_audio_size,
+                    "bufferDuration": buffer_duration,
                 },
-                "timestamp": time.time(),
+                "timestamp": current_time,
                 "sessionId": session_id,
                 "chunkCount": session['chunk_count']
             }
@@ -1089,5 +1314,20 @@ if __name__ == "__main__":
         logger.error(f"Failed to load WhisperX model: {str(e)}")
         exit(1)
     
-    # Run server
-    uvicorn.run(app, host="0.0.0.0", port=9000) 
+    # Start background workers
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Start background workers
+        workers = loop.run_until_complete(start_background_workers())
+        logger.info(f"Started {len(workers)} background processing workers")
+        
+        # Run server
+        uvicorn.run(app, host="0.0.0.0", port=9000)
+    finally:
+        # Clean up workers
+        for worker in workers:
+            worker.cancel()
+        loop.close() 

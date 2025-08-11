@@ -324,20 +324,12 @@ export function ChatThreadingPage() {
         audioBitsPerSecond: 256000, // Higher bitrate for WAV quality
       });
 
-      // Stream audio chunks for real-time transcription
+      // Stream audio chunks for real-time transcription with optimized processing
       recorder.ondataavailable = async (event) => {
         if (event.data.size > 0) {
-          console.log(`Audio chunk received: ${event.data.size} bytes, type: ${event.data.type}`);
-          
           // Convert blob to base64 and send to backend for streaming transcription
           const arrayBuffer = await event.data.arrayBuffer();
           const base64Audio = arrayBufferToBase64(arrayBuffer);
-          
-          // Debug: Log audio format and size
-          console.log('Audio format:', event.data.type);
-          console.log('Audio size:', event.data.size, 'bytes');
-          console.log('Base64 size:', base64Audio.length, 'chars');
-          console.log('First 50 chars of base64:', base64Audio.substring(0, 50));
           
           try {
             // Use the captured sessionId from the closure to ensure consistency
@@ -346,17 +338,12 @@ export function ChatThreadingPage() {
               return;
             }
             
-            console.log('Processing audio chunk for session:', sessionId);
             const response = await voiceClient.processAudioChunkStream(sessionId, {
               audioData: base64Audio,
               sampleRate: 16000,
               channels: 1,
               timestamp: Date.now(),
             });
-
-            console.log('WhisperX streaming response:', response);
-            console.log('Response type:', response.type);
-            console.log('Response data:', response.data);
 
             if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
               const transcriptionData = response.data as { 
@@ -365,19 +352,26 @@ export function ChatThreadingPage() {
                 isFinal?: boolean;
                 status?: string;
                 audioSize?: number;
-                minSize?: number;
+                bufferDuration?: number;
               };
               
-              if (transcriptionData.status === 'listening') {
-                // Still listening, show progress
-                console.log(`Listening... (${transcriptionData.audioSize}/${transcriptionData.minSize} bytes)`);
+              // Handle different status types
+              if (transcriptionData.status === 'buffering') {
+                // Still buffering, show progress
+                const duration = transcriptionData.bufferDuration || 0;
+                console.log(`Buffering audio... (${duration.toFixed(1)}s)`);
                 return;
-              }
-              
-              const newText = transcriptionData.text.trim();
-              
-              if (newText) {
-                setTranscribedText(newText);
+              } else if (transcriptionData.status === 'silence') {
+                // Silence detected, keep current transcription
+                console.log('Silence detected, maintaining current transcription');
+                return;
+              } else if (transcriptionData.status === 'transcribed') {
+                // New transcription available
+                const newText = transcriptionData.text.trim();
+                if (newText) {
+                  setTranscribedText(newText);
+                  console.log('Updated transcription:', newText);
+                }
               }
             } else if (response.type === 'error') {
               console.error('WhisperX streaming error:', response.data);
@@ -388,7 +382,7 @@ export function ChatThreadingPage() {
         }
       };
 
-      recorder.start(250); // Capture in 0.25-second chunks for more responsive streaming
+      recorder.start(500); // Capture in 0.5-second chunks for better performance
       setMediaRecorder(recorder);
 
       // Start audio level monitoring
