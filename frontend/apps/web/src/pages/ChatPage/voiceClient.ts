@@ -200,6 +200,41 @@ export class VoiceClient {
   }
 
   /**
+   * Pre-load the Higgs Audio model for faster TTS
+   */
+  async preloadHiggsAudio(): Promise<{ status: string; message: string }> {
+    try {
+      console.log('Pre-loading Higgs Audio model...');
+      
+      const response = await fetch(`${this.apiBaseUrl}/preload-higgs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(300000), // 5 minutes timeout for model loading
+      });
+
+      console.log(`Pre-load response status: ${response.status}`);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Pre-load response:', result);
+        return {
+          status: result.status || 'unknown',
+          message: result.message || 'Unknown status',
+        };
+      } else {
+        const errorText = await response.text();
+        console.error(`Pre-load error response: ${response.status} - ${errorText}`);
+        throw new Error(`Pre-load error: ${response.status} - ${errorText}`);
+      }
+    } catch (error) {
+      console.error('Pre-load failed:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Convert text to speech using local TTS
    */
   async textToSpeech(text: string, voice: string = "alloy", speed: number = 1.0, pitch: number = 1.0): Promise<{ audioData: string; duration: number; sampleRate: number }> {
@@ -217,6 +252,8 @@ export class VoiceClient {
           speed,
           pitch,
         }),
+        // Add timeout for TTS generation
+        signal: AbortSignal.timeout(120000), // 2 minutes timeout
       });
 
       console.log(`TTS response status: ${response.status}`);

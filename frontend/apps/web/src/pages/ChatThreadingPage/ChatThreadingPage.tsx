@@ -65,15 +65,31 @@ export function ChatThreadingPage() {
   const [isPlayingTTS, setIsPlayingTTS] = useState(false);
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Check voice service status on mount
+  // Check voice service status and pre-load Higgs Audio on mount
   useEffect(() => {
     const checkVoiceServiceStatus = async () => {
       try {
         const status = await voiceClient.healthCheck();
         setVoiceServiceStatus({ whisperx: status.whisperx, localTTS: status.localTTS });
+        
+        // Pre-load Higgs Audio model for faster TTS
+        try {
+          console.log('Pre-loading Higgs Audio model...');
+          const preloadResult = await voiceClient.preloadHiggsAudio();
+          console.log('Higgs Audio pre-load result:', preloadResult);
+          
+          if (preloadResult.status === 'loaded' || preloadResult.status === 'already_loaded') {
+            console.log('Higgs Audio model is ready for TTS');
+          } else {
+            console.warn('Higgs Audio model pre-load failed:', preloadResult.message);
+          }
+        } catch (preloadError) {
+          console.warn('Failed to pre-load Higgs Audio model:', preloadError);
+          // Don't fail the entire voice service check for this
+        }
       } catch (error) {
         console.error('Failed to check voice service status:', error);
-                  setVoiceServiceStatus({ whisperx: false, localTTS: false });
+        setVoiceServiceStatus({ whisperx: false, localTTS: false });
       }
     };
 
@@ -181,8 +197,8 @@ export function ChatThreadingPage() {
         audioArray[i] = audioData.charCodeAt(i);
       }
       
-      // Create blob - OpenAI TTS returns MP3, but we'll try both formats
-      const audioBlob = new Blob([audioArray], { type: 'audio/mpeg' });
+      // Create blob - Higgs Audio returns WAV format
+      const audioBlob = new Blob([audioArray], { type: 'audio/wav' });
       const audioUrl = URL.createObjectURL(audioBlob);
       
       // Play the audio
