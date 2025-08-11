@@ -976,16 +976,18 @@ async def transcribe_stream_final_endpoint(request: TranscriptionRequest):
 async def health_check():
     """Health check endpoint"""
     try:
-        # Check if Higgs Audio is available using direct import
+        # Check if Higgs Audio is available using the correct import path
         local_tts_available = False
         try:
-            from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel
+            # Try the correct Higgs Audio serve engine import
+            from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
+            from boson_multimodal.data_types import ChatMLSample, Message, AudioContent
             local_tts_available = True
-            logger.info("Higgs Audio is available via direct import")
+            logger.info("Higgs Audio is available via serve engine import")
         except ImportError as e:
-            logger.warning(f"Higgs Audio not available via direct import: {e}")
-            # Try alternative import paths
+            logger.warning(f"Higgs Audio serve engine import failed: {e}")
             try:
+                # Fallback: just check if boson_multimodal is installed
                 import boson_multimodal
                 local_tts_available = True
                 logger.info("Higgs Audio is available via boson_multimodal import")
@@ -1198,27 +1200,50 @@ def load_higgs_audio_model():
         logger.info("Loading Higgs Audio model...")
         
         import torch
-        from transformers import AutoTokenizer
         
-        # Try to import Higgs Audio model
+        # Import the correct Higgs Audio components
         try:
-            from boson_multimodal.model.higgs_audio.modeling_higgs_audio import HiggsAudioModel
-            logger.info("Successfully imported Higgs Audio model")
+            from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
+            from boson_multimodal.data_types import ChatMLSample, Message, AudioContent
+            logger.info("Successfully imported Higgs Audio serve engine")
         except ImportError as e:
-            logger.warning(f"Could not import Higgs Audio: {e}")
+            logger.warning(f"Failed to import Higgs Audio serve engine: {e}")
             higgs_audio_loading = False
             return False
         
-        # Load model and tokenizer
-        model_name = "boson-ai/higgs-audio-v2-base"
-        logger.info(f"Loading model: {model_name}")
+        # Model paths - use the correct model names
+        MODEL_PATH = "bosonai/higgs-audio-v2-generation-3B-base"
+        AUDIO_TOKENIZER_PATH = "bosonai/higgs-audio-v2-tokenizer"
         
-        higgs_audio_model = HiggsAudioModel.from_pretrained(
-            model_name, 
-            torch_dtype=torch.float16, 
-            device_map="auto"
-        )
-        higgs_audio_tokenizer = AutoTokenizer.from_pretrained(model_name)
+        logger.info(f"Loading model: {MODEL_PATH}")
+        logger.info(f"Loading tokenizer: {AUDIO_TOKENIZER_PATH}")
+        
+        # Determine device
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Using device: {device}")
+        
+        # Load the serve engine
+        try:
+            higgs_audio_model = HiggsAudioServeEngine(MODEL_PATH, AUDIO_TOKENIZER_PATH, device=device)
+            logger.info("Successfully loaded Higgs Audio serve engine")
+        except Exception as e:
+            logger.error(f"Failed to load serve engine: {e}")
+            # Try alternative model paths
+            try:
+                MODEL_PATH = "bosonai/higgs-audio-v2-base"
+                logger.info(f"Trying alternative model: {MODEL_PATH}")
+                higgs_audio_model = HiggsAudioServeEngine(MODEL_PATH, AUDIO_TOKENIZER_PATH, device=device)
+                logger.info("Successfully loaded alternative Higgs Audio model")
+            except Exception as e2:
+                logger.error(f"Failed to load alternative model: {e2}")
+                raise
+        
+        # Store the model paths for later use
+        higgs_audio_tokenizer = {
+            "model_path": MODEL_PATH,
+            "tokenizer_path": AUDIO_TOKENIZER_PATH,
+            "device": device
+        }
         
         higgs_audio_loaded = True
         higgs_audio_loading = False
@@ -1230,12 +1255,12 @@ def load_higgs_audio_model():
         higgs_audio_loading = False
         return False
 
-def generate_local_tts(text: str, voice: str = "alloy", speed: float = 1.0) -> bytes:
-    """Generate TTS using Higgs Audio - simplified direct approach"""
+def generate_local_tts(text: str, voice: str = "belinda", speed: float = 1.0) -> bytes:
+    """Generate TTS using Higgs Audio with Belinda voice"""
     global higgs_audio_model, higgs_audio_tokenizer, higgs_audio_loaded
     
     try:
-        logger.info(f"Generating TTS for text: '{text[:50]}...'")
+        logger.info(f"Generating TTS for text: '{text[:50]}...' with voice: {voice}")
         
         # Check if model is loaded, if not try to load it
         if not higgs_audio_loaded:
@@ -1244,61 +1269,63 @@ def generate_local_tts(text: str, voice: str = "alloy", speed: float = 1.0) -> b
                 raise ImportError("Failed to load Higgs Audio model")
         
         # Use cached model and tokenizer
-        model = higgs_audio_model
-        tokenizer = higgs_audio_tokenizer
+        serve_engine = higgs_audio_model
+        tokenizer_info = higgs_audio_tokenizer
         
-        if model is None or tokenizer is None:
+        if serve_engine is None or tokenizer_info is None:
             raise ImportError("Higgs Audio model not available")
         
         logger.info("Using cached Higgs Audio model")
         
-        # Prepare input text
-        logger.info(f"Processing text: {text}")
-        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        # Import required components
+        from boson_multimodal.data_types import ChatMLSample, Message, AudioContent
         
-        # Move inputs to device
-        device = next(model.parameters()).device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        # Prepare the system prompt with Belinda voice
+        system_prompt = (
+            "Generate audio following instruction.\n\n<|scene_desc_start|>\nAudio is recorded from a quiet room.\n<|scene_desc_end|>"
+        )
         
-        logger.info("Generating audio...")
+        # Create messages with voice specification
+        messages = [
+            Message(
+                role="system",
+                content=system_prompt,
+            ),
+            Message(
+                role="user",
+                content=f"Generate audio in {voice} voice: {text}",
+            ),
+        ]
         
-        # Generate audio
-        with torch.no_grad():
-            audio_output = model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                do_sample=True,
-                temperature=0.3,
-                top_p=0.9,
-                pad_token_id=tokenizer.eos_token_id,
-                eos_token_id=tokenizer.eos_token_id
-            )
+        logger.info(f"Generating audio with {voice} voice...")
         
-        logger.info("Audio generation completed, decoding...")
+        # Generate audio using the serve engine with Belinda voice parameters
+        output = serve_engine.generate(
+            chat_ml_sample=ChatMLSample(messages=messages),
+            max_new_tokens=1024,
+            temperature=0.3,
+            top_p=0.95,
+            top_k=50,
+            stop_strings=["<|end_of_text|>", "<|eot_id|>"],
+            # Add voice-specific parameters
+            ref_audio=voice,  # Use Belinda voice reference
+            seed=12345,  # Consistent seed for voice quality
+        )
         
-        # Decode audio
-        audio = model.decode_audio(audio_output[0], skip_special_tokens=True)
+        logger.info("Audio generation completed")
         
-        # Convert to numpy array
-        if isinstance(audio, torch.Tensor):
-            audio = audio.cpu().numpy()
+        # Get the audio data
+        audio = output.audio
+        sampling_rate = output.sampling_rate
         
-        # Ensure mono format
-        if len(audio.shape) > 1:
-            audio = audio.mean(axis=1)
-        
-        # Normalize audio
-        if audio.max() > 0:
-            audio = audio / audio.max() * 0.8
-        
-        logger.info(f"Audio decoded: {len(audio)} samples")
+        logger.info(f"Audio generated: {len(audio)} samples, {sampling_rate} Hz")
         
         # Convert to WAV format
         import soundfile as sf
         import io
         
         buffer = io.BytesIO()
-        sf.write(buffer, audio, 22050, format='WAV')
+        sf.write(buffer, audio, sampling_rate, format='WAV')
         buffer.seek(0)
         
         audio_data = buffer.read()

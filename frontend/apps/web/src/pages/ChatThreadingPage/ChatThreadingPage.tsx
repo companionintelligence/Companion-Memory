@@ -187,8 +187,8 @@ export function ChatThreadingPage() {
     try {
       setIsPlayingTTS(true);
       
-      // Get TTS audio from voice service using local TTS
-      const ttsResult = await voiceClient.textToSpeech(lastAssistantMessage.content, "alloy", 1.0, 1.0);
+      // Get TTS audio from voice service using local TTS with Belinda voice
+      const ttsResult = await voiceClient.textToSpeech(lastAssistantMessage.content, "belinda", 1.0, 1.0);
       
       // Convert base64 audio to blob
       const audioData = atob(ttsResult.audioData);

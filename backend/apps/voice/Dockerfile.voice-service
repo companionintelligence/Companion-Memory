@@ -1,6 +1,9 @@
 # Use Python 3.11 slim image as base
 FROM python:3.11-slim
 
+# Fix potential credential issues
+ENV DOCKER_BUILDKIT=1
+
 # Set working directory
 WORKDIR /app
 
@@ -8,21 +11,36 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
+    wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements files
 COPY apps/voice/requirements.txt ./requirements.txt
-COPY apps/voice/requirements_higgs.txt ./requirements_higgs.txt
 
 # Install main Python dependencies (WhisperX compatible)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create a separate environment for Higgs Audio
-RUN python -m venv /opt/higgs-env
-ENV PATH="/opt/higgs-env/bin:$PATH"
+# Install Higgs Audio dependencies
+RUN pip install --no-cache-dir \
+    torch>=2.0.0 \
+    torchaudio>=2.0.0 \
+    numpy>=1.21.0 \
+    soundfile>=0.12.0 \
+    transformers>=4.30.0
 
-# Install Higgs Audio dependencies in the separate environment (skip problematic packages)
-RUN /opt/higgs-env/bin/pip install --no-cache-dir torch torchaudio numpy soundfile transformers==4.21.0 || true
+# Clone and install Higgs Audio
+RUN git clone https://github.com/boson-ai/higgs-audio.git /opt/higgs-audio
+WORKDIR /opt/higgs-audio
+
+# Install Higgs Audio requirements
+RUN pip install -r requirements.txt
+
+# Install Higgs Audio in development mode
+RUN pip install -e .
+
+# Return to app directory
+WORKDIR /app
 
 # Copy the voice service
 COPY apps/voice/voice_service.py ./voice_service.py
