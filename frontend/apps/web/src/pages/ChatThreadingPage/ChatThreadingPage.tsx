@@ -348,11 +348,13 @@ export function ChatThreadingPage() {
             if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
               const transcriptionData = response.data as { 
                 text: string; 
+                partialText?: string;
                 confidence?: number; 
                 isFinal?: boolean;
                 status?: string;
                 audioSize?: number;
                 bufferDuration?: number;
+                isPartial?: boolean;
               };
               
               // Handle different status types
@@ -362,15 +364,23 @@ export function ChatThreadingPage() {
                 console.log(`Buffering audio... (${duration.toFixed(1)}s)`);
                 return;
               } else if (transcriptionData.status === 'silence') {
-                // Silence detected, keep current transcription
+                // Silence detected, maintain current transcription
                 console.log('Silence detected, maintaining current transcription');
                 return;
               } else if (transcriptionData.status === 'transcribed') {
-                // New transcription available
-                const newText = transcriptionData.text.trim();
-                if (newText) {
-                  setTranscribedText(newText);
-                  console.log('Updated transcription:', newText);
+                // Real-time transcription available
+                const fullText = transcriptionData.text.trim();
+                const partialText = transcriptionData.partialText?.trim() || '';
+                
+                if (fullText) {
+                  // Show the full accumulated text
+                  setTranscribedText(fullText);
+                  
+                  // If we have partial text, it means new words were just transcribed
+                  if (partialText && transcriptionData.isPartial) {
+                    console.log('New words transcribed:', partialText);
+                    console.log('Full transcription so far:', fullText);
+                  }
                 }
               }
             } else if (response.type === 'error') {
@@ -382,7 +392,7 @@ export function ChatThreadingPage() {
         }
       };
 
-      recorder.start(500); // Capture in 0.5-second chunks for better performance
+      recorder.start(250); // Capture in 0.25-second chunks for more responsive streaming
       setMediaRecorder(recorder);
 
       // Start audio level monitoring

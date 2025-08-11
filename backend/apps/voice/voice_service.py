@@ -54,27 +54,42 @@ processing_tasks = {}  # session_id -> task
 
 # Configuration for streaming optimization
 STREAMING_CONFIG = {
-    'min_window_size': 8000,   # 0.5 seconds of audio at 16kHz (reduced for faster response)
-    'max_window_size': 48000,  # 3 seconds of audio at 16kHz (reduced for faster processing)
-    'process_interval': 0.5,   # Process every 0.5 seconds (reduced for more responsive updates)
-    'overlap_size': 4000,      # 0.25 seconds overlap to maintain context
+    'min_window_size': 4000,   # 0.25 seconds of audio at 16kHz (reduced for faster response)
+    'max_window_size': 32000,  # 2 seconds of audio at 16kHz (reduced for faster processing)
+    'process_interval': 0.25,  # Process every 0.25 seconds (reduced for more responsive updates)
+    'overlap_size': 2000,      # 0.125 seconds overlap to maintain context
     'silence_threshold': 0.0001,  # RMS threshold for silence detection
     'chunk_timeout': 30.0,     # Clean up sessions after 30 seconds of inactivity
     'max_concurrent_processing': 2,  # Maximum concurrent processing tasks
+    'streaming_buffer_size': 16000,  # 1 second buffer for streaming
 }
 
+# Real-time streaming sessions
+streaming_sessions = {}  # session_id -> {audio_buffer, partial_text, segments, last_update}
+
 def cleanup_expired_sessions():
-    """Clean up expired audio sessions"""
+    """Clean up expired audio and streaming sessions"""
     current_time = time.time()
-    expired_sessions = []
+    expired_audio_sessions = []
+    expired_streaming_sessions = []
     
+    # Clean up audio sessions
     for session_id, session in audio_sessions.items():
         if current_time - session.get('last_activity', 0) > STREAMING_CONFIG['chunk_timeout']:
-            expired_sessions.append(session_id)
+            expired_audio_sessions.append(session_id)
     
-    for session_id in expired_sessions:
+    for session_id in expired_audio_sessions:
         del audio_sessions[session_id]
-        logger.info(f"Cleaned up expired session: {session_id}")
+        logger.info(f"Cleaned up expired audio session: {session_id}")
+    
+    # Clean up streaming sessions
+    for session_id, session in streaming_sessions.items():
+        if current_time - session.get('last_update', 0) > STREAMING_CONFIG['chunk_timeout']:
+            expired_streaming_sessions.append(session_id)
+    
+    for session_id in expired_streaming_sessions:
+        del streaming_sessions[session_id]
+        logger.info(f"Cleaned up expired streaming session: {session_id}")
 
 def detect_speech_activity(audio_data: bytes) -> bool:
     """Detect if audio chunk contains speech activity"""
@@ -105,8 +120,8 @@ def detect_speech_activity(audio_data: bytes) -> bool:
         logger.warning(f"Speech activity detection failed: {e}")
         return True  # Assume speech if detection fails
 
-def process_audio_window(audio_buffer: bytes, sample_rate: int = 16000) -> Dict[str, Any]:
-    """Process a window of audio with WhisperX"""
+def process_audio_window_streaming(audio_buffer: bytes, sample_rate: int = 16000) -> Dict[str, Any]:
+    """Process a window of audio with WhisperX for real-time streaming"""
     try:
         # Convert audio buffer to WAV format
         wav_audio_data = None
@@ -133,14 +148,15 @@ def process_audio_window(audio_buffer: bytes, sample_rate: int = 16000) -> Dict[
                     "text": "",
                     "segments": [],
                     "confidence": 0.0,
-                    "is_silence": True
+                    "is_silence": True,
+                    "partial_text": ""
                 }
             
             # Transcribe with WhisperX
             model, device, compute_type = load_whisperx_model()
             result = model.transcribe(audio)
             
-            # Extract text
+            # Extract text and segments
             if hasattr(result, 'text'):
                 transcription_text = result.text
             elif isinstance(result, dict) and 'text' in result:
@@ -150,16 +166,20 @@ def process_audio_window(audio_buffer: bytes, sample_rate: int = 16000) -> Dict[
             else:
                 transcription_text = ""
             
+            # Get segments for word-level timing
+            segments = result.get('segments', []) if isinstance(result, dict) else []
+            
             # Calculate confidence
             confidence = 0.8  # Default confidence for streaming
-            if result.get("segments"):
-                confidence = np.mean([seg.get("avg_logprob", 0.0) for seg in result["segments"]])
+            if segments:
+                confidence = np.mean([seg.get("avg_logprob", 0.0) for seg in segments])
             
             return {
                 "text": transcription_text,
-                "segments": result.get("segments", []),
+                "segments": segments,
                 "confidence": confidence,
-                "is_silence": False
+                "is_silence": False,
+                "partial_text": transcription_text
             }
             
         finally:
@@ -171,7 +191,8 @@ def process_audio_window(audio_buffer: bytes, sample_rate: int = 16000) -> Dict[
             "text": "",
             "segments": [],
             "confidence": 0.0,
-            "is_silence": False
+            "is_silence": False,
+            "partial_text": ""
         }
 
 async def background_processing_worker():
@@ -183,7 +204,7 @@ async def background_processing_worker():
             session_id, audio_buffer, sample_rate = task
             
             # Process audio in background
-            result = process_audio_window(audio_buffer, sample_rate)
+            result = process_audio_window_streaming(audio_buffer, sample_rate)
             
             # Update session with result
             if session_id in audio_sessions:
@@ -673,7 +694,7 @@ async def transcribe_endpoint(request: TranscriptionRequest):
 
 @app.post("/transcribe-stream")
 async def transcribe_stream_endpoint(request: TranscriptionRequest):
-    """Optimized streaming transcription endpoint with sliding window approach"""
+    """Real-time streaming transcription endpoint that returns words as they're spoken"""
     try:
         # Clean up expired sessions periodically
         cleanup_expired_sessions()
@@ -685,32 +706,32 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
         # Decode base64 audio
         audio_data = base64.b64decode(request.audio_data)
         
-        # Initialize session if it doesn't exist
-        if session_id not in audio_sessions:
-            audio_sessions[session_id] = {
+        # Initialize streaming session if it doesn't exist
+        if session_id not in streaming_sessions:
+            streaming_sessions[session_id] = {
                 'audio_buffer': b'',
-                'last_transcription': '',
-                'start_time': time.time(),
-                'last_activity': time.time(),
-                'last_process_time': 0,
+                'partial_text': '',
+                'segments': [],
+                'last_update': time.time(),
                 'chunk_count': 0,
-                'window_start': 0,
-                'processed_text': ''
+                'last_process_time': 0,
+                'current_text': '',
+                'word_buffer': []
             }
-            logger.info(f"Created new audio session: {session_id}")
+            logger.info(f"Created new streaming session: {session_id}")
         
-        session = audio_sessions[session_id]
+        session = streaming_sessions[session_id]
         session['chunk_count'] += 1
-        session['last_activity'] = time.time()
+        session['last_update'] = time.time()
         
-        # Check for speech activity in the chunk
+        # Check for speech activity
         has_speech = detect_speech_activity(audio_data)
         
-        # Append audio chunk to session buffer
+        # Append audio chunk to buffer
         session['audio_buffer'] += audio_data
         current_time = time.time()
         
-        # Determine if we should process the audio window
+        # Process audio more frequently for real-time streaming
         should_process = False
         process_reason = ""
         
@@ -734,11 +755,10 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
         
         if should_process:
             try:
-                logger.info(f"Session {session_id}: Processing audio window ({process_reason})")
-                logger.info(f"Buffer size: {len(session['audio_buffer'])} bytes")
+                logger.debug(f"Session {session_id}: Processing audio window ({process_reason})")
                 
                 # Process the current audio window
-                result = process_audio_window(
+                result = process_audio_window_streaming(
                     session['audio_buffer'],
                     sample_rate=request.sample_rate
                 )
@@ -747,48 +767,58 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
                 session['last_process_time'] = current_time
                 
                 if result.get('is_silence', False):
-                    # Silence detected, don't update transcription
-                    logger.info(f"Session {session_id}: Silence detected, skipping transcription")
+                    # Silence detected, maintain current text
                     return {
                         "type": "transcription",
                         "data": {
-                            "text": session['last_transcription'],
+                            "text": session['current_text'],
+                            "partialText": session['partial_text'],
                             "confidence": 0.0,
                             "isFinal": False,
-                            "segments": [],
+                            "segments": session['segments'],
                             "status": "silence",
+                            "isPartial": True
                         },
                         "timestamp": current_time,
                         "sessionId": session_id,
                         "chunkCount": session['chunk_count']
                     }
                 
-                # Update transcription with new text
+                # Get new text and segments
                 new_text = result.get('text', '').strip()
-                if new_text:
-                    # Combine with previous transcription
-                    if session['last_transcription']:
-                        session['last_transcription'] += " " + new_text
-                    else:
-                        session['last_transcription'] = new_text
-                    
-                    logger.info(f"Session {session_id}: Updated transcription: '{session['last_transcription']}'")
+                new_segments = result.get('segments', [])
                 
-                # Implement sliding window: keep only recent audio
+                if new_text:
+                    # Update partial text for real-time display
+                    session['partial_text'] = new_text
+                    
+                    # Merge with current text
+                    if session['current_text']:
+                        # Simple append for now - could be improved with better merging
+                        session['current_text'] += " " + new_text
+                    else:
+                        session['current_text'] = new_text
+                    
+                    # Update segments
+                    session['segments'].extend(new_segments)
+                    
+                    logger.debug(f"Session {session_id}: Updated text: '{session['current_text']}'")
+                
+                # Implement sliding window for audio buffer
                 if len(session['audio_buffer']) > STREAMING_CONFIG['max_window_size']:
-                    # Keep the last portion of audio for context
                     keep_size = STREAMING_CONFIG['max_window_size'] - STREAMING_CONFIG['overlap_size']
                     session['audio_buffer'] = session['audio_buffer'][-keep_size:]
-                    logger.info(f"Session {session_id}: Applied sliding window, buffer size: {len(session['audio_buffer'])}")
                 
                 return {
                     "type": "transcription",
                     "data": {
-                        "text": session['last_transcription'],
+                        "text": session['current_text'],
+                        "partialText": session['partial_text'],
                         "confidence": result.get('confidence', 0.8),
                         "isFinal": False,
-                        "segments": result.get('segments', []),
+                        "segments": session['segments'],
                         "status": "transcribed",
+                        "isPartial": True
                     },
                     "timestamp": current_time,
                     "sessionId": session_id,
@@ -796,7 +826,7 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
                 }
                 
             except Exception as e:
-                logger.error(f"Audio window processing failed for session {session_id}: {str(e)}")
+                logger.error(f"Audio processing failed for session {session_id}: {str(e)}")
                 return {
                     "type": "error",
                     "data": {
@@ -806,20 +836,22 @@ async def transcribe_stream_endpoint(request: TranscriptionRequest):
                     "sessionId": session_id
                 }
         else:
-            # Not processing yet, return status update
-            buffer_duration = len(session['audio_buffer']) / 16000  # Approximate duration in seconds
+            # Not processing yet, return current state
+            buffer_duration = len(session['audio_buffer']) / 16000
             logger.debug(f"Session {session_id}: Buffering audio ({buffer_duration:.1f}s)")
             
             return {
                 "type": "transcription",
                 "data": {
-                    "text": session['last_transcription'],
+                    "text": session['current_text'],
+                    "partialText": session['partial_text'],
                     "confidence": 0.0,
                     "isFinal": False,
-                    "segments": [],
+                    "segments": session['segments'],
                     "status": "buffering",
                     "audioSize": len(session['audio_buffer']),
                     "bufferDuration": buffer_duration,
+                    "isPartial": True
                 },
                 "timestamp": current_time,
                 "sessionId": session_id,
@@ -838,67 +870,100 @@ async def transcribe_stream_final_endpoint(request: TranscriptionRequest):
         if not session_id:
             raise HTTPException(status_code=400, detail="sessionId is required")
         
-        if session_id not in audio_sessions:
+        # Check both streaming and audio sessions
+        session = None
+        session_type = None
+        
+        if session_id in streaming_sessions:
+            session = streaming_sessions[session_id]
+            session_type = "streaming"
+        elif session_id in audio_sessions:
+            session = audio_sessions[session_id]
+            session_type = "audio"
+        else:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        session = audio_sessions[session_id]
-        audio_buffer = session['audio_buffer']
+        logger.info(f"Final transcription request for session: {session_id} (type: {session_type})")
         
-        logger.info(f"Final transcription request for session: {session_id}")
-        logger.info(f"Total audio buffer size: {len(audio_buffer)} bytes")
-        
-        if len(audio_buffer) == 0:
-            # No audio recorded
+        if session_type == "streaming":
+            # Use the accumulated text from streaming session
+            final_text = session.get('current_text', '')
+            segments = session.get('segments', [])
+            
             result = {
                 "type": "transcription",
                 "data": {
-                    "text": "",
-                    "confidence": 0.0,
+                    "text": final_text,
+                    "confidence": 0.9,  # High confidence for final result
                     "isFinal": True,
-                    "segments": [],
+                    "segments": segments,
+                    "speakers": [],
                 },
                 "timestamp": time.time(),
                 "sessionId": session_id
             }
+            
+            logger.info(f"Final transcription for streaming session {session_id}: '{final_text}'")
+            
         else:
-            try:
-                # Transcribe with diarization for final result
-                transcription_result = transcribe_audio(
-                    audio_buffer,
-                    sample_rate=request.sample_rate,
-                    language=request.language,
-                    enable_diarization=True  # Enable for final transcription
-                )
-                
+            # Legacy audio session processing
+            audio_buffer = session['audio_buffer']
+            logger.info(f"Total audio buffer size: {len(audio_buffer)} bytes")
+            
+            if len(audio_buffer) == 0:
                 result = {
                     "type": "transcription",
                     "data": {
-                        "text": transcription_result.get('text', ''),
-                        "confidence": transcription_result.get('confidence', 0.9),
+                        "text": "",
+                        "confidence": 0.0,
                         "isFinal": True,
-                        "segments": transcription_result.get('segments', []),
-                        "speakers": transcription_result.get('speakers', []),
+                        "segments": [],
                     },
                     "timestamp": time.time(),
                     "sessionId": session_id
                 }
-                
-                logger.info(f"Final transcription for session {session_id}: '{result['data']['text']}'")
-                
-            except Exception as e:
-                logger.error(f"Final transcription failed for session {session_id}: {str(e)}")
-                result = {
-                    "type": "error",
-                    "data": {
-                        "message": f"Final transcription failed: {str(e)}"
-                    },
-                    "timestamp": time.time(),
-                    "sessionId": session_id
-                }
+            else:
+                try:
+                    # Transcribe with diarization for final result
+                    transcription_result = transcribe_audio(
+                        audio_buffer,
+                        sample_rate=request.sample_rate,
+                        language=request.language,
+                        enable_diarization=True
+                    )
+                    
+                    result = {
+                        "type": "transcription",
+                        "data": {
+                            "text": transcription_result.get('text', ''),
+                            "confidence": transcription_result.get('confidence', 0.9),
+                            "isFinal": True,
+                            "segments": transcription_result.get('segments', []),
+                            "speakers": transcription_result.get('speakers', []),
+                        },
+                        "timestamp": time.time(),
+                        "sessionId": session_id
+                    }
+                    
+                    logger.info(f"Final transcription for audio session {session_id}: '{result['data']['text']}'")
+                    
+                except Exception as e:
+                    logger.error(f"Final transcription failed for session {session_id}: {str(e)}")
+                    result = {
+                        "type": "error",
+                        "data": {
+                            "message": f"Final transcription failed: {str(e)}"
+                        },
+                        "timestamp": time.time(),
+                        "sessionId": session_id
+                    }
         
         # Clean up session
-        del audio_sessions[session_id]
-        logger.info(f"Cleaned up session: {session_id}")
+        if session_type == "streaming":
+            del streaming_sessions[session_id]
+        else:
+            del audio_sessions[session_id]
+        logger.info(f"Cleaned up {session_type} session: {session_id}")
         
         return result
         
