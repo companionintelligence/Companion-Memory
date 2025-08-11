@@ -11,6 +11,23 @@ export interface AudioChunkRequest {
   timestamp: number;
 }
 
+export interface TranscriptionRequest {
+  audioData: string; // Base64 encoded audio
+  sampleRate: number;
+  channels: number;
+  language: string;
+  modelSize: string;
+  enableDiarization: boolean;
+}
+
+export interface TranscriptionResponse {
+  text: string;
+  segments: any[];
+  language: string;
+  confidence: number;
+  speakers: any[];
+}
+
 export interface TTSRequest {
   text: string;
   voice?: string;
@@ -27,6 +44,53 @@ export interface VoiceStreamResponse {
 export class VoiceClient {
   // Use nginx proxy for voice service - accessible via /voice/ path
   private apiBaseUrl = '/voice';
+
+  /**
+   * Transcribe audio using WhisperX (simple, non-streaming)
+   */
+  async transcribeAudio(request: TranscriptionRequest): Promise<TranscriptionResponse> {
+    try {
+      console.log(`Sending audio for transcription: ${this.apiBaseUrl}/transcribe`);
+      console.log(`Audio size: ${request.audioData.length} chars`);
+      
+      const response = await fetch(`${this.apiBaseUrl}/transcribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_data: request.audioData,
+          sample_rate: request.sampleRate,
+          language: request.language,
+          model_size: request.modelSize,
+          enable_diarization: request.enableDiarization,
+        }),
+        // Add timeout to prevent hanging requests
+        signal: AbortSignal.timeout(30000), // 30 second timeout
+      });
+
+      console.log(`Transcription response status: ${response.status}`);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Transcription response:', result);
+        return {
+          text: result.text || '',
+          segments: result.segments || [],
+          language: result.language || 'en',
+          confidence: result.confidence || 0.0,
+          speakers: result.speakers || [],
+        };
+      } else {
+        const errorText = await response.text();
+        console.error(`Transcription error response: ${response.status} - ${errorText}`);
+        throw new Error(`Transcription error: ${response.status} - ${errorText}`);
+      }
+    } catch (error) {
+      console.error('Transcription failed:', error);
+      throw error;
+    }
+  }
 
   /**
    * Start a new voice stream session

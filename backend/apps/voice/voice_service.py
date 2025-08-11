@@ -433,7 +433,7 @@ def perform_speaker_diarization(audio_path: str, segments: list) -> list:
 def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str = "en", enable_diarization: bool = False) -> Dict[str, Any]:
     """Transcribe audio data using WhisperX with improved sensitivity"""
     try:
-        # Load model if not already loaded
+        # Load model if not already loaded (cached globally)
         model, device, compute_type = load_whisperx_model()
         
         logger.info(f"Processing audio: {len(audio_data)} bytes, sample_rate: {sample_rate}")
@@ -460,8 +460,18 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
         elif audio_data.startswith(b'\x1a\x45\xdf\xa3'):
             # WebM format
             logger.info("Detected WebM format, converting to WAV")
-            wav_audio_data = convert_audio_to_wav(audio_data, "webm")
-            logger.info("Converting WebM audio to WAV")
+            try:
+                wav_audio_data = convert_audio_to_wav(audio_data, "webm")
+                logger.info("WebM to WAV conversion successful")
+            except Exception as e:
+                logger.error(f"WebM conversion failed: {e}")
+                # Try alternative approach for WebM
+                try:
+                    wav_audio_data = convert_audio_to_wav(audio_data, "webm")
+                    logger.info("Alternative WebM conversion successful")
+                except Exception as e2:
+                    logger.error(f"Alternative WebM conversion also failed: {e2}")
+                    raise RuntimeError(f"Failed to convert WebM audio: {e}")
         elif audio_data.startswith(b'ftyp'):
             # MP4 format
             logger.info("Detected MP4 format, converting to WAV")
@@ -526,7 +536,7 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
             audio_rms = np.sqrt(np.mean(audio**2))
             logger.info(f"Audio RMS level: {audio_rms:.6f}")
             
-            if np.isnan(audio_rms) or audio_rms < 0.00001:  # 100x more sensitive threshold (like the C++ example)
+            if np.isnan(audio_rms) or audio_rms < 0.0001:  # More reasonable threshold for speech detection
                 logger.warning("Audio appears to be silence or very quiet")
                 return {
                     "text": "",
@@ -559,24 +569,9 @@ def transcribe_audio(audio_data: bytes, sample_rate: int = 16000, language: str 
             
             logger.info(f"Transcription text: '{transcription_text}'")
             
-            # Perform alignment with proper format conversion
-            if result["segments"]:
-                try:
-                    logger.info("Performing word-level alignment...")
-                    # Convert audio to torch tensor for alignment
-                    import torch
-                    audio_tensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
-                    
-                    # Load alignment model
-                    model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-                    
-                    # Perform alignment
-                    result = whisperx.align(result["segments"], model_a, metadata, audio_tensor, device, return_char_alignments=False)
-                    logger.info("Word-level alignment completed successfully")
-                    
-                except Exception as e:
-                    logger.warning(f"Alignment failed, using basic transcription: {e}")
-                    # Continue with basic transcription if alignment fails
+            # Skip alignment for faster processing - only do basic transcription
+            # Alignment can be enabled later if needed for word-level timing
+            logger.info("Skipping word-level alignment for faster processing")
             
             # Calculate confidence
             if result["segments"]:

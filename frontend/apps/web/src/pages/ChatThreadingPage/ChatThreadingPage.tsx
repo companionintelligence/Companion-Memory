@@ -58,13 +58,11 @@ export function ChatThreadingPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [transcribedText, setTranscribedText] = useState('');
-  const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const [voiceServiceStatus, setVoiceServiceStatus] = useState<{ whisperx: boolean; localTTS: boolean } | null>(null);
   const [isPlayingTTS, setIsPlayingTTS] = useState(false);
-  const audioChunksRef = useRef<Blob[]>([]);
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Check voice service status on mount
@@ -243,7 +241,6 @@ export function ChatThreadingPage() {
         setIsRecording(false);
         setAudioLevel(0);
         setTranscribedText('');
-        setVoiceSessionId(null);
         setInput(''); // Clear input field when exiting voice mode
         
         // Stop MediaRecorder if active
@@ -273,126 +270,100 @@ export function ChatThreadingPage() {
       setIsRecording(true);
       setAudioLevel(0);
       setTranscribedText('');
-      audioChunksRef.current = [];
 
-      // Request microphone permissions and start recording with better audio quality
+      // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           sampleRate: 16000,
           channelCount: 1,
-          echoCancellation: false, // Disable echo cancellation for better voice capture
-          noiseSuppression: false, // Disable noise suppression for clearer voice
-          autoGainControl: false, // Disable auto gain control for consistent levels
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
         } 
       });
 
-      // Set up audio context for level monitoring
-      const context = new AudioContext({ sampleRate: 16000 });
-      const source = context.createMediaStreamSource(stream);
-      const analyserNode = context.createAnalyser();
+      // Create audio context for level monitoring
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyserNode = audioContext.createAnalyser();
       analyserNode.fftSize = 256;
       source.connect(analyserNode);
       
-      setAudioContext(context);
+      setAudioContext(audioContext);
       setAnalyser(analyserNode);
 
-      // Start voice session with backend - let the backend generate the session ID
-      const sessionResponse = await voiceClient.startVoiceStream();
-      const sessionId = sessionResponse.sessionId;
-      setVoiceSessionId(sessionId);
-      console.log('Voice session created:', sessionId);
+      // Determine supported MIME type - prefer WebM with Opus codec for better quality
+      const mimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/wav'
+      ];
       
-      // Session is managed locally, no need to verify with backend
-      console.log('Voice session created:', sessionId);
-
-      // Set up MediaRecorder for audio capture with WAV format for better compatibility
-      let mimeType = 'audio/wav'; // Use WAV for better backend compatibility
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/webm;codecs=opus'; // Fallback to WebM
-      }
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/webm';
-      }
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/mp4';
-      }
-      
+      const mimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type)) || 'audio/webm';
+      console.log('Supported MIME types:', mimeTypes.filter(type => MediaRecorder.isTypeSupported(type)));
       console.log('Using MIME type:', mimeType);
       
       const recorder = new MediaRecorder(stream, {
         mimeType: mimeType,
-        audioBitsPerSecond: 256000, // Higher bitrate for WAV quality
+        audioBitsPerSecond: 256000,
       });
 
-      // Stream audio chunks for real-time transcription with optimized processing
-      recorder.ondataavailable = async (event) => {
+      // Collect audio chunks
+      const audioChunks: Blob[] = [];
+      
+      recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          // Convert blob to base64 and send to backend for streaming transcription
-          const arrayBuffer = await event.data.arrayBuffer();
-          const base64Audio = arrayBufferToBase64(arrayBuffer);
-          
-          try {
-            // Use the captured sessionId from the closure to ensure consistency
-            if (!sessionId) {
-              console.error('No active session ID available');
-              return;
-            }
-            
-            const response = await voiceClient.processAudioChunkStream(sessionId, {
-              audioData: base64Audio,
-              sampleRate: 16000,
-              channels: 1,
-              timestamp: Date.now(),
-            });
-
-            if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
-              const transcriptionData = response.data as { 
-                text: string; 
-                partialText?: string;
-                confidence?: number; 
-                isFinal?: boolean;
-                status?: string;
-                audioSize?: number;
-                bufferDuration?: number;
-                isPartial?: boolean;
-              };
-              
-              // Handle different status types
-              if (transcriptionData.status === 'buffering') {
-                // Still buffering, show progress
-                const duration = transcriptionData.bufferDuration || 0;
-                console.log(`Buffering audio... (${duration.toFixed(1)}s)`);
-                return;
-              } else if (transcriptionData.status === 'silence') {
-                // Silence detected, maintain current transcription
-                console.log('Silence detected, maintaining current transcription');
-                return;
-              } else if (transcriptionData.status === 'transcribed') {
-                // Real-time transcription available
-                const fullText = transcriptionData.text.trim();
-                const partialText = transcriptionData.partialText?.trim() || '';
-                
-                if (fullText) {
-                  // Show the full accumulated text
-                  setTranscribedText(fullText);
-                  
-                  // If we have partial text, it means new words were just transcribed
-                  if (partialText && transcriptionData.isPartial) {
-                    console.log('New words transcribed:', partialText);
-                    console.log('Full transcription so far:', fullText);
-                  }
-                }
-              }
-            } else if (response.type === 'error') {
-              console.error('WhisperX streaming error:', response.data);
-            }
-          } catch (error) {
-            console.error('Failed to process audio chunk:', error);
-          }
+          audioChunks.push(event.data);
         }
       };
 
-      recorder.start(250); // Capture in 0.25-second chunks for more responsive streaming
+      // When recording stops, process the audio
+      recorder.onstop = async () => {
+        try {
+          // Create audio blob
+          const audioBlob = new Blob(audioChunks, { type: mimeType });
+          console.log('Recording completed, audio size:', audioBlob.size, 'bytes');
+          
+          // Convert to base64
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          const base64Audio = arrayBufferToBase64(arrayBuffer);
+          
+          console.log('Sending audio for transcription...');
+          console.log('Audio blob size:', audioBlob.size, 'bytes');
+          console.log('Base64 size:', base64Audio.length, 'chars');
+          
+          // Send to backend for transcription
+          const response = await voiceClient.transcribeAudio({
+            audioData: base64Audio,
+            sampleRate: 16000,
+            channels: 1,
+            language: 'en',
+            modelSize: 'base',
+            enableDiarization: false,
+          });
+
+          console.log('Transcription response:', response);
+          
+          if (response.text && response.text.trim()) {
+            const transcribedText = response.text.trim();
+            setTranscribedText(transcribedText);
+            setInput(transcribedText);
+            console.log('Transcription completed successfully:', transcribedText);
+          } else {
+            console.log('No transcription text received - audio may be silence or too short');
+            setTranscribedText('No speech detected');
+          }
+          
+        } catch (error) {
+          console.error('Failed to process audio:', error);
+        } finally {
+          setIsRecording(false);
+          setAudioLevel(0);
+        }
+      };
+
+      recorder.start(100); // Collect chunks every 100ms
       setMediaRecorder(recorder);
 
       // Start audio level monitoring
@@ -410,10 +381,8 @@ export function ChatThreadingPage() {
     }
   };
 
-  // Handle stopping voice recording and sending
+  // Handle stopping voice recording
   const handleStopRecording = async () => {
-    if (!voiceSessionId) return;
-
     try {
       setIsRecording(false);
       setAudioLevel(0);
@@ -436,41 +405,10 @@ export function ChatThreadingPage() {
         setAnalyser(null);
       }
 
-      // Get final transcription for streaming session
-      const response = await voiceClient.getFinalTranscription(voiceSessionId);
-      
-      console.log('Final transcription response:', response);
-      
-      if (response.type === 'transcription' && response.data && typeof response.data === 'object' && 'text' in response.data) {
-        const transcriptionData = response.data as { text: string; confidence?: number; isFinal?: boolean };
-        const finalText = transcriptionData.text;
-        
-        console.log('Transcription data:', transcriptionData);
-        console.log('isFinal:', transcriptionData.isFinal);
-        console.log('finalText:', finalText);
-        
-        setTranscribedText(finalText);
-
-        // Set the transcribed text as input
-        setInput(finalText);
-        
-        // Only add to chat history if this is the final transcription
-        if (transcriptionData.isFinal && finalText.trim()) {
-          console.log('Adding to chat history:', finalText);
-          setChatHistory(prev => [...prev, { role: 'user', content: finalText }]);
-        } else {
-          console.log('Not adding to chat history - isFinal:', transcriptionData.isFinal, 'text:', finalText);
-        }
-      }
-
-      setVoiceSessionId(null);
-      audioChunksRef.current = [];
-
     } catch (error) {
-      console.error('Failed to process voice message:', error);
+      console.error('Failed to stop voice recording:', error);
       setIsRecording(false);
       setAudioLevel(0);
-      setVoiceSessionId(null);
     }
   };
 
