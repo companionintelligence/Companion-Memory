@@ -14,6 +14,7 @@ import {
   MessageCircleQuestion,
   Search,
   Settings2,
+  Zap,
 } from '@ci/shadcn/icons';
 import { Outlet } from 'react-router-dom';
 
@@ -27,6 +28,11 @@ const INTELLIGENCE = [
     name: 'Search',
     url: '/search',
     icon: Search,
+  },
+  {
+    name: 'Actions',
+    url: '/actions',
+    icon: Zap,
   },
   {
     name: 'Questions',

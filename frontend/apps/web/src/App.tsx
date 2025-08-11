@@ -9,6 +9,7 @@ import LoginPage from '@/pages/LoginPage';
 import NotFound from '@/pages/NotFound';
 import SplashPage from '@/pages/SplashPage';
 
+const ActionsPage = lazy(() => import('@/pages/ActionsPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
 const AnswersPage = lazy(() => import('@/pages/AnswersPage'));
 const CapturePage = lazy(() => import('@/pages/CapturePage'));
@@ -51,6 +52,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/actions"
+          element={
+            <ProtectedRoute>
+              <ActionsPage />
             </ProtectedRoute>
           }
         />
