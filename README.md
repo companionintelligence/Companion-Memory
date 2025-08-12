@@ -31,6 +31,28 @@ This is a Yarn workspace monorepo with the following structure:
 
 If you're on MacOS, install Homebrew with the instructions found [here](https://brew.sh/).
 
+### NVM
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+```
+
+### NodeJS
+
+```bash
+nvm install 22.15.1
+nvm alias default 22.15.1
+nvm use default
+```
+
+### Yarn
+
+Install Corepack, an intermediary tool that lets you configure yarn on a per-project basis:
+
+```bash
+npm install -g corepack
+```
+
 #### Docker
 
 You'll want to install Docker on your machine to run containerized versions of our dependencies during development.
