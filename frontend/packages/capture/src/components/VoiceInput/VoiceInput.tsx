@@ -6,12 +6,14 @@ interface VoiceInputProps {
   onTranscription: (text: string) => void;
   disabled?: boolean;
   className?: string;
+  voiceServiceUrl?: string; // Add configurable voice service URL
 }
 
 export const VoiceInput: React.FC<VoiceInputProps> = ({
   onTranscription,
   disabled = false,
   className = '',
+  voiceServiceUrl = 'http://dev.companionintelligence.com/voice/transcribe', // Default to local voice service
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -75,7 +77,7 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
           });
           
           // Send to voice service
-          const response = await fetch('/voice/transcribe', {
+          const response = await fetch(voiceServiceUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -114,7 +116,7 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
       console.error('Failed to start recording:', err);
       setError(err instanceof Error ? err.message : 'Failed to access microphone');
     }
-  }, [onTranscription]);
+  }, [onTranscription, voiceServiceUrl]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {

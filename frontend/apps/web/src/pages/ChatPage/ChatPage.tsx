@@ -19,6 +19,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useAuth, useModel } from '@/hooks';
 import { VoiceInput, TTSButton } from '@ci/capture';
+import { getVoiceServiceUrl } from '../../config/voice';
 
 import { ChatMessage } from './ChatMessage';
 
@@ -862,6 +863,7 @@ export default function ChatPage() {
                       onTranscription={handleVoiceTranscription}
                       disabled={isLoading}
                       className="ml-auto"
+                      voiceServiceUrl={getVoiceServiceUrl('transcribe')}
                     />
                   </div>
                 </form>
