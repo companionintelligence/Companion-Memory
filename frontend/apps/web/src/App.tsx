@@ -9,18 +9,14 @@ import LoginPage from '@/pages/LoginPage';
 import NotFound from '@/pages/NotFound';
 import SplashPage from '@/pages/SplashPage';
 
-const AdminPage = lazy(() => import('@/pages/AdminPage'));
-const AnswersPage = lazy(() => import('@/pages/AnswersPage'));
+const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'));
 const CapturePage = lazy(() => import('@/pages/CapturePage'));
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
-const ChatListPage = lazy(() => import('@/pages/ChatListPage'));
-const ChatThreadingPage = lazy(() => import('@/pages/ChatThreadingPage'));
 const ConnectionsPage = lazy(() => import('@/pages/ConnectionsPage'));
-const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const FilesGalleryPage = lazy(() => import('@/pages/FilesGalleryPage'));
-const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
+const InsightsPage = lazy(() => import('@/pages/InsightsPage'));
 const MemoryPage = lazy(() => import('@/pages/MemoryPage'));
-const QuestionsPage = lazy(() => import('@/pages/QuestionsPage'));
+const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
 
 function Providers({ children }: { children: ReactNode }) {
@@ -46,75 +42,12 @@ function AppRoutes() {
 
       {/* Main layout routes */}
       <Route element={<MainLayout />}>
+        {/* Intelligence */}
         <Route
-          path="/dashboard"
+          path="/feed"
           element={
             <ProtectedRoute>
-              <DashboardPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin/*"
-          element={
-            <ProtectedRoute>
-              <AdminPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/chat"
-          element={
-            <ProtectedRoute>
-              <ChatPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/chat/list"
-          element={
-            <ProtectedRoute>
-              <ChatListPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/chat/new"
-          element={
-            <ProtectedRoute>
-              <ChatThreadingPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/chat/:id"
-          element={
-            <ProtectedRoute>
-              <ChatThreadingPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/memory"
-          element={
-            <ProtectedRoute>
-              <MemoryPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/questions"
-          element={
-            <ProtectedRoute>
-              <QuestionsPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/answers"
-          element={
-            <ProtectedRoute>
-              <AnswersPage />
+              <div>Feed page</div>
             </ProtectedRoute>
           }
         />
@@ -127,10 +60,68 @@ function AppRoutes() {
           }
         />
         <Route
+          path="/memory"
+          element={
+            <ProtectedRoute>
+              <MemoryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/insights"
+          element={
+            <ProtectedRoute>
+              <InsightsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/actions"
+          element={
+            <ProtectedRoute>
+              <div>Actions page</div>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/chat/*"
+          element={
+            <ProtectedRoute>
+              <ChatPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/files"
           element={
             <ProtectedRoute>
               <FilesGalleryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/capture"
+          element={
+            <ProtectedRoute>
+              <CapturePage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Admin / System */}
+        <Route
+          path="/analytics"
+          element={
+            <ProtectedRoute>
+              <AnalyticsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/jobs"
+          element={
+            <ProtectedRoute>
+              <div>Jobs page</div>
             </ProtectedRoute>
           }
         />
@@ -143,10 +134,10 @@ function AppRoutes() {
           }
         />
         <Route
-          path="/capture"
+          path="/settings"
           element={
             <ProtectedRoute>
-              <CapturePage />
+              <div>Settings page</div>
             </ProtectedRoute>
           }
         />

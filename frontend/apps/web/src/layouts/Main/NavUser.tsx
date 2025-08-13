@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 import { Avatar, DropdownMenu, Sidebar, useSidebar } from '@ci/shadcn';
-import { BadgeCheck, Bell, ChevronsUpDown, CreditCard, LogOut, Settings2, Sparkles } from '@ci/shadcn/icons';
+import { ChevronsUpDown, CreditCard, LogOut, Sparkles, User } from '@ci/shadcn/icons';
 
 import { useAuth } from '@/hooks';
 
@@ -24,7 +24,7 @@ export function NavUser() {
     const first = parts[0][0] ?? '';
     const last = parts.length > 1 ? parts[parts.length - 1][0] : '';
 
-    return (first + last || 'JD').toUpperCase();
+    return (first + last).toUpperCase();
   }, [currentUser]);
 
   return (
@@ -75,20 +75,12 @@ export function NavUser() {
             <DropdownMenu.Separator />
             <DropdownMenu.Group>
               <DropdownMenu.Item>
-                <BadgeCheck />
+                <User />
                 Account
-              </DropdownMenu.Item>
-              <DropdownMenu.Item>
-                <Settings2 />
-                Settings
               </DropdownMenu.Item>
               <DropdownMenu.Item>
                 <CreditCard />
                 Billing
-              </DropdownMenu.Item>
-              <DropdownMenu.Item>
-                <Bell />
-                Notifications
               </DropdownMenu.Item>
             </DropdownMenu.Group>
             <DropdownMenu.Separator />

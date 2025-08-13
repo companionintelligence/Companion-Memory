@@ -28,6 +28,7 @@ const promptSchema = z.object({
   prompt: z.string(),
   model: z.optional(z.string()),
   threadId: z.string().nullable().optional(),
+  enableTools: z.boolean().default(false),
 });
 
 @Controller('llm')
@@ -123,6 +124,7 @@ export class OllamaController {
     const stream = await this.ollamaService.chatStream(context, filteredMessages, {
       model: resolvedModel.model,
       signal,
+      enableTools: input.enableTools,
     });
 
     try {

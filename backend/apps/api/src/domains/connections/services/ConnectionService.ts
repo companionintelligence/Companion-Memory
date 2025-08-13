@@ -139,8 +139,8 @@ export class ConnectionService {
 
     const rows = (await this.dataSource.query(`
       SELECT
-        questions.id as id,
-        answers.user_id as user_id
+        connections.id as id,
+        connections.user_id as user_id
       FROM
         connections
       WHERE active = true;

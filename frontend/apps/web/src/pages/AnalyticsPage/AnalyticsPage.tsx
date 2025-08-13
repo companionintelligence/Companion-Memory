@@ -73,7 +73,7 @@ const RecommendationItem = ({
   </div>
 );
 
-export function DashboardPage() {
+export function AnalyticsPage() {
   usePageTitle('Dashboard - Companion Intelligence');
 
   const [{ user, loading, error }] = useAuth();

@@ -37,7 +37,7 @@ You'll want to install Docker on your machine to run containerized versions of o
 The easiest method here is downloading and installing the Docker Desktop app from [here](https://www.docker.com/products/docker-desktop/).
 The CLI tools should be automatically installed alongside the app.
 
-After it's installed, boot Docker Desktop and verify that it's running and accessible from the command line.
+After it's installed, boot Docker Desktop and verify that it's running and accessible from the command line. We don't run "docker compose up" but rather "make local" below will do this work.
 
 ```bash
 docker --version
@@ -240,3 +240,9 @@ docker compose logs -f <service-name>    # Follow specific service logs
 docker compose ps                        # List running containers
 docker compose restart <service-name>    # Restart specific service
 ```
+
+
+### Tool Use 
+Right now, the LLM has limited access to tools. There are two tools developed, one for getting user preferences and one for getting family members. The LLM itself has discression over when and how to use the tools, but it seems to have a strong preference for the family member tool which is now disabled. 
+
+Tools are defined in `backend/apps/api/src/domains/llm/tools`.

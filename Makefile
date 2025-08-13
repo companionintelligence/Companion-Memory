@@ -167,6 +167,9 @@ init: ## Initialize repository after checkout
 	@yarn install
 	@printf "\n"
 	@yarn dlx @yarnpkg/sdks vscode
+	@printf "\n"
+	@yarn prepare
+	@printf "\n"
 	@printf "\nRepository initialized.\n"
 
 install: ## Install project dependencies

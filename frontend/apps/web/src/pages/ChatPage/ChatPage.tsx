@@ -1,458 +1,655 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Sidebar } from '@ci/shadcn';
-import { MessageSquare, Plus, Trash2 } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Card, Textarea, cn, Sidebar } from '@ci/shadcn';
+import {
+  Square,
+  Plus,
+  RefreshCw,
+  Trash2,
+  MessageSquare,
+  Bot,
+  Sparkles,
+  Send,
+  X,
+  ChevronLeft,
+} from '@ci/shadcn/icons';
+import { useLocation, useNavigate } from 'react-router-dom';
 
-// Types for our chat data
-interface Message {
+import { ModelSelector } from '@/components/ModelSelector';
+import { useAuth, useModel } from '@/hooks';
+
+import { ChatMessage } from './ChatMessage';
+
+// Custom scrollbar styles
+const scrollbarStyles = `
+  .chat-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .chat-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .chat-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 3px;
+  }
+
+  .chat-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.3);
+  }
+`;
+
+interface Thread {
   id: string;
-  content: string;
-  sender: 'user' | 'assistant';
-  timestamp: string;
+  name: string | null;
+  model: string;
+  description: string | null;
 }
 
-interface Conversation {
-  id: string;
-  title: string;
-  topic: string;
-  messages: Message[];
-  createdAt: string;
-  updatedAt: string;
+interface ChatSidebarProps {
+  threads: Thread[];
+  selectedThreadId: string | null;
+  onSelectThread: (id: string) => void;
+  onNewThread: () => void;
+  onDeleteThread: (id: string) => void;
+  loading: boolean;
+  onRefresh: () => void;
 }
 
-// Mock API for chat functionality
-class ChatAPI {
-  private conversations: Conversation[];
+const ChatSidebar = memo(function ChatSidebar({
+  threads,
+  selectedThreadId,
+  onSelectThread,
+  onNewThread,
+  onDeleteThread,
+  loading,
+  onRefresh,
+}: ChatSidebarProps) {
+  const [isExpanded, setIsExpanded] = useState(true);
 
-  private static instance: ChatAPI;
-
-  private constructor() {
-    // Initialize with sample data
-    this.conversations = [
-      {
-        id: 'conv-1',
-        title: 'What should I have for dinner?',
-        topic: 'Food & Cooking',
-        createdAt: '2025-05-20T18:30:00Z',
-        updatedAt: '2025-05-20T18:45:00Z',
-        messages: [
-          {
-            id: 'msg-1-1',
-            content: 'What should I have for dinner tonight?',
-            sender: 'user',
-            timestamp: '2025-05-20T18:30:00Z',
-          },
-          {
-            id: 'msg-1-2',
-            content:
-              "Based on seasonal ingredients available now, I'd recommend a spring vegetable pasta with asparagus, peas, and lemon. It's quick to make and nutritious!",
-            sender: 'assistant',
-            timestamp: '2025-05-20T18:31:00Z',
-          },
-          {
-            id: 'msg-1-3',
-            content: "That sounds good but I don't have asparagus. Any alternatives?",
-            sender: 'user',
-            timestamp: '2025-05-20T18:33:00Z',
-          },
-          {
-            id: 'msg-1-4',
-            content:
-              'No problem! You can substitute with broccoli, green beans, or even zucchini. Any green vegetable will work well in this dish.',
-            sender: 'assistant',
-            timestamp: '2025-05-20T18:34:00Z',
-          },
-        ],
-      },
-      {
-        id: 'conv-2',
-        title: 'What is the best toaster?',
-        topic: 'Shopping & Products',
-        createdAt: '2025-05-19T14:20:00Z',
-        updatedAt: '2025-05-19T14:35:00Z',
-        messages: [
-          {
-            id: 'msg-2-1',
-            content: "I need to buy a new toaster. What's the best one on the market?",
-            sender: 'user',
-            timestamp: '2025-05-19T14:20:00Z',
-          },
-          {
-            id: 'msg-2-2',
-            content:
-              "The best toaster depends on your needs and budget. For overall value, the Breville Die-Cast 2-Slice Smart Toaster offers consistent results and durability. If you're on a budget, the Cuisinart CPT-122 2-Slice Compact Toaster is well-reviewed.",
-            sender: 'assistant',
-            timestamp: '2025-05-19T14:21:00Z',
-          },
-        ],
-      },
-      {
-        id: 'conv-3',
-        title: 'What is fun today?',
-        topic: 'Entertainment',
-        createdAt: '2025-05-18T10:15:00Z',
-        updatedAt: '2025-05-18T10:30:00Z',
-        messages: [
-          {
-            id: 'msg-3-1',
-            content: "I'm bored. What's something fun I could do today?",
-            sender: 'user',
-            timestamp: '2025-05-18T10:15:00Z',
-          },
-          {
-            id: 'msg-3-2',
-            content:
-              "Since it's a nice day out, you could try visiting a local park, having a picnic, or renting a bike to explore your city. If you prefer indoor activities, you could try a new recipe, start a DIY project, or have a movie marathon with friends.",
-            sender: 'assistant',
-            timestamp: '2025-05-18T10:16:00Z',
-          },
-        ],
-      },
-      {
-        id: 'conv-4',
-        title: 'How long do batteries last?',
-        topic: 'Technology',
-        createdAt: '2025-05-17T09:45:00Z',
-        updatedAt: '2025-05-17T10:00:00Z',
-        messages: [
-          {
-            id: 'msg-4-1',
-            content: 'How long do lithium-ion batteries typically last in laptops?',
-            sender: 'user',
-            timestamp: '2025-05-17T09:45:00Z',
-          },
-          {
-            id: 'msg-4-2',
-            content:
-              'Lithium-ion batteries in laptops typically last between 2-4 years or about 300-500 complete charge cycles. However, this varies based on usage patterns, charging habits, and the specific laptop model.',
-            sender: 'assistant',
-            timestamp: '2025-05-17T09:46:00Z',
-          },
-          {
-            id: 'msg-4-3',
-            content: 'Is there anything I can do to make my laptop battery last longer?',
-            sender: 'user',
-            timestamp: '2025-05-17T09:48:00Z',
-          },
-          {
-            id: 'msg-4-4',
-            content:
-              'Yes, several practices can extend battery life: avoid complete discharges, keep your laptop cool, update your software regularly, reduce screen brightness, and if possible, use battery-saving modes. Also, consider removing the battery when using AC power for extended periods if your laptop allows it.',
-            sender: 'assistant',
-            timestamp: '2025-05-17T09:49:00Z',
-          },
-        ],
-      },
-    ];
-  }
-
-  public static getInstance(): ChatAPI {
-    if (!ChatAPI.instance) {
-      ChatAPI.instance = new ChatAPI();
-    }
-
-    return ChatAPI.instance;
-  }
-
-  // Get all conversations
-  public async getConversations(): Promise<Conversation[]> {
-    // Simulate network delay
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    return [...this.conversations];
-  }
-
-  // Get a specific conversation by ID
-  public async getConversation(id: string): Promise<Conversation | undefined> {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    return this.conversations.find((conv) => conv.id === id);
-  }
-
-  // Create a new conversation
-  public async createConversation(title: string, topic: string = 'General'): Promise<Conversation> {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    const newConversation: Conversation = {
-      id: `conv-${Date.now()}`,
-      title,
-      topic,
-      messages: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.conversations.unshift(newConversation);
-
-    return newConversation;
-  }
-
-  // Delete a conversation
-  public async deleteConversation(id: string): Promise<boolean> {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const initialLength = this.conversations.length;
-    this.conversations = this.conversations.filter((conv) => conv.id !== id);
-
-    return initialLength > this.conversations.length;
-  }
-
-  // Add a message to a conversation
-  public async addMessage(
-    conversationId: string,
-    content: string,
-    sender: 'user' | 'assistant',
-  ): Promise<Message | null> {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const conversation = this.conversations.find((conv) => conv.id === conversationId);
-    if (!conversation) {
-      return null;
-    }
-
-    const newMessage: Message = {
-      id: `msg-${conversationId}-${Date.now()}`,
-      content,
-      sender,
-      timestamp: new Date().toISOString(),
-    };
-
-    conversation.messages.push(newMessage);
-    conversation.updatedAt = new Date().toISOString();
-
-    return newMessage;
-  }
-
-  // Get all messages for a conversation
-  public async getMessages(conversationId: string): Promise<Message[]> {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const conversation = this.conversations.find((conv) => conv.id === conversationId);
-
-    return conversation ? [...conversation.messages] : [];
-  }
-}
-
-// Hook to use the chat API
-function useChatAPI() {
-  const api = ChatAPI.getInstance();
-
-  return {
-    getConversations: api.getConversations.bind(api),
-    getConversation: api.getConversation.bind(api),
-    createConversation: api.createConversation.bind(api),
-    deleteConversation: api.deleteConversation.bind(api),
-    addMessage: api.addMessage.bind(api),
-    getMessages: api.getMessages.bind(api),
-  };
-}
-
-function ChatSidebar({
-  conversations,
-  selectedConversationId,
-  onSelectConversation,
-  onNewConversation,
-  onDeleteConversation,
-}: {
-  conversations: Conversation[];
-  selectedConversationId: string | null;
-  onSelectConversation: (id: string) => void;
-  onNewConversation: () => void;
-  onDeleteConversation: (id: string) => void;
-}) {
-  // Group conversations by topic
-  const conversationsByTopic = conversations.reduce(
-    (acc, conversation) => {
-      if (!acc[conversation.topic]) {
-        acc[conversation.topic] = [];
-      }
-
-      acc[conversation.topic].push(conversation);
-
-      return acc;
-    },
-    {} as Record<string, Conversation[]>,
-  );
-
-  return (
-    <>
-      <div className="border-l grow">
-        <Sidebar.Header className="flex justify-between items-center">
-          <h2 className="text-lg font-semibold">Conversations</h2>
-          <button
-            onClick={onNewConversation}
-            className="p-1 rounded-full hover:bg-muted"
-            title="New conversation"
-          >
-            <Plus size={20} />
-          </button>
-        </Sidebar.Header>
-        <Sidebar.Content>
-          {Object.entries(conversationsByTopic).map(([topic, topicConversations]) => (
-            <Sidebar.Group key={topic}>
-              <Sidebar.GroupLabel>{topic}</Sidebar.GroupLabel>
-              <Sidebar.GroupContent>
-                <Sidebar.Menu>
-                  {topicConversations.map((conversation) => (
-                    <Sidebar.MenuItem key={conversation.id}>
-                      <Sidebar.MenuButton
-                        onClick={() => onSelectConversation(conversation.id)}
-                        className={selectedConversationId === conversation.id ? 'bg-muted' : ''}
-                      >
-                        <MessageSquare className="mr-2 h-4 w-4" />
-                        <span className="flex-1 truncate">{conversation.title}</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteConversation(conversation.id);
-                          }}
-                          className="group-hover:opacity-100 p-1 rounded-full hover:bg-muted"
-                          title="Delete conversation"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </Sidebar.MenuButton>
-                    </Sidebar.MenuItem>
-                  ))}
-                </Sidebar.Menu>
-              </Sidebar.GroupContent>
-            </Sidebar.Group>
-          ))}
-        </Sidebar.Content>
-      </div>
-    </>
-  );
-}
-
-export function ChatPage() {
-  usePageTitle('Chat - Companion Intelligence');
-
-  const chatApi = useChatAPI();
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [newMessage, setNewMessage] = useState('');
-
-  // Load conversations on mount
+  // Auto-collapse on mobile screens
   useEffect(() => {
-    const loadConversations = async () => {
-      try {
-        const data = await chatApi.getConversations();
-        setConversations(data);
-        setLoading(false);
-
-        // Select the first conversation by default if available
-        if (data.length > 0 && !selectedConversationId) {
-          setSelectedConversationId(data[0].id);
-        }
-      } catch (error) {
-        console.error('Failed to load conversations:', error);
-        setLoading(false);
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        // md breakpoint
+        setIsExpanded(false);
+      } else {
+        setIsExpanded(true);
       }
     };
 
-    loadConversations();
+    // Set initial state
+    handleResize();
+
+    window.addEventListener('resize', handleResize);
+
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Load selected conversation details
-  useEffect(() => {
-    const loadConversation = async () => {
-      if (!selectedConversationId) {
-        setCurrentConversation(null);
+  return (
+    <div
+      className={cn(
+        'border-r bg-gradient-to-b from-background/50 to-muted/20 backdrop-blur-sm flex-shrink-0 transition-all duration-300 ease-in-out h-full',
+        isExpanded ? 'w-72 lg:w-80' : 'w-16 lg:w-20',
+      )}
+    >
+      <Sidebar.Header
+        className={cn(
+          'flex flex-row items-center border-b border-border/50 bg-background/80 backdrop-blur-sm',
+          isExpanded ? 'gap-3 p-4' : 'justify-center p-2',
+        )}
+      >
+        <button
+          onClick={() => !isExpanded && setIsExpanded(true)}
+          className={cn(
+            'w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 transition-all duration-200',
+            !isExpanded && 'hover:bg-primary/20 cursor-pointer hover:scale-105',
+          )}
+          title={!isExpanded ? 'Click to expand sidebar' : undefined}
+        >
+          <MessageSquare className="h-5 w-5 text-primary" />
+        </button>
+        {isExpanded && (
+          <>
+            <h2 className="text-lg font-semibold flex-shrink-0">Chat Threads</h2>
+            <button
+              onClick={onRefresh}
+              className="p-2 rounded-lg hover:bg-muted/80 transition-all duration-200 hover:scale-105 flex-shrink-0"
+              title="Refresh threads"
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </>
+        )}
+        {isExpanded && (
+          <button
+            onClick={() => setIsExpanded(false)}
+            className="p-2 rounded-lg hover:bg-muted/80 transition-all duration-200 hover:scale-105 flex-shrink-0 ml-auto"
+            title="Collapse sidebar"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+        )}
+      </Sidebar.Header>
+      <Sidebar.Content className={cn('transition-all duration-300 ease-in-out', isExpanded ? 'p-3' : 'p-2')}>
+        {isExpanded ? (
+          <>
+            {threads.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                {loading ? (
+                  <>
+                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                      <RefreshCw className="h-8 w-8 animate-spin text-primary/50" />
+                    </div>
+                    <p className="font-medium">Loading threads...</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-4">
+                      <MessageSquare className="h-8 w-8 opacity-30" />
+                    </div>
+                    <p className="font-medium mb-2">No threads found</p>
+                    <p className="text-sm">Create a new thread to get started</p>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* New Thread Option */}
+                <div className="p-2">
+                  <button
+                    onClick={onNewThread}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-dashed border-muted-foreground/30 hover:border-primary/50 hover:bg-primary/5 transition-all duration-200 group hover:scale-[1.02]',
+                      !selectedThreadId && 'border-primary/50 bg-primary/5 shadow-sm',
+                    )}
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                      <Plus className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                    </div>
+                    <span className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">
+                      New Thread
+                    </span>
+                  </button>
+                </div>
 
+                {/* Separator */}
+                {threads.length > 0 && (
+                  <div className="relative py-3">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t border-border/50" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase tracking-wider">
+                      <span className="bg-gradient-to-r from-background/50 to-muted/20 px-3 text-muted-foreground font-medium">
+                        Recent Threads
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Existing Threads */}
+                <div className="space-y-2">
+                  {threads.map((thread) => (
+                    <div key={thread.id} className="group">
+                      <button
+                        onClick={() => onSelectThread(thread.id)}
+                        className={cn(
+                          'w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-muted/60 transition-all duration-200 relative hover:scale-[1.01]',
+                          selectedThreadId === thread.id &&
+                            'bg-primary/10 border border-primary/20 shadow-md ring-2 ring-primary/10',
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            'w-2 h-2 rounded-full transition-all duration-200',
+                            selectedThreadId === thread.id
+                              ? 'bg-primary scale-125'
+                              : 'bg-muted-foreground/30',
+                          )}
+                        />
+                        <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center flex-shrink-0">
+                          <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1 min-w-0 text-left">
+                          <div className="truncate font-medium text-sm">
+                            {thread.name || `Thread ${thread.id.slice(0, 8)}`}
+                          </div>
+                          {thread.description && (
+                            <div className="text-xs text-muted-foreground truncate mt-0.5">
+                              {thread.description}
+                            </div>
+                          )}
+                        </div>
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteThread(thread.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all duration-200 hover:scale-110 cursor-pointer"
+                          title="Delete thread"
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onDeleteThread(thread.id);
+                            }
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          // Collapsed state - show only icons
+          <div className="space-y-2">
+            {/* New Thread Option */}
+            <div className="flex justify-center">
+              <button
+                onClick={onNewThread}
+                className={cn(
+                  'w-10 h-10 rounded-lg bg-primary/10 hover:bg-primary/20 transition-all duration-200 flex items-center justify-center',
+                  !selectedThreadId && 'bg-primary/20 ring-2 ring-primary/30',
+                )}
+                title="New Thread"
+              >
+                <Plus className="h-5 w-5 text-primary" />
+              </button>
+            </div>
+
+            {/* Existing Threads */}
+            {threads.map((thread) => (
+              <div key={thread.id} className="flex justify-center">
+                <button
+                  onClick={() => onSelectThread(thread.id)}
+                  className={cn(
+                    'w-10 h-10 rounded-lg hover:bg-muted/60 transition-all duration-200 relative flex items-center justify-center',
+                    selectedThreadId === thread.id && 'bg-primary/10 ring-2 ring-primary/20',
+                  )}
+                  title={thread.name || `Thread ${thread.id.slice(0, 8)}`}
+                >
+                  <div
+                    className={cn(
+                      'w-2 h-2 rounded-full transition-all duration-200 absolute -top-1 -right-1',
+                      selectedThreadId === thread.id ? 'bg-primary scale-125' : 'bg-muted-foreground/30',
+                    )}
+                  />
+                  <MessageSquare className="h-5 w-5 text-muted-foreground" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Sidebar.Content>
+    </div>
+  );
+});
+
+export default function ChatPage() {
+  usePageTitle('Chat - Companion Intelligence');
+
+  const [{ authToken }] = useAuth();
+  const [{ selectedModel }] = useModel();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Extract route information from pathname instead of useParams
+  const pathSegments = location.pathname.split('/').filter(Boolean);
+  // const isNew = pathSegments.includes('new'); // we're on /chat/new
+  const threadId = pathSegments.length > 1 && pathSegments[1] !== 'new' ? pathSegments[1] : null;
+
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(threadId);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Chat input state
+  const [input, setInput] = useState('');
+
+  // Input handlers
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+  };
+
+  const clearInput = () => {
+    setInput('');
+  };
+
+  const inputHasValue = input.trim() !== '';
+
+  const [output, setOutput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingThread, setLoadingThread] = useState(false);
+  const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Add custom scrollbar styles
+  useEffect(() => {
+    const styleElement = document.createElement('style');
+    styleElement.textContent = scrollbarStyles;
+    document.head.appendChild(styleElement);
+
+    return () => {
+      document.head.removeChild(styleElement);
+    };
+  }, []);
+
+  // Fetch threads
+  const fetchThreads = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      if (!authToken) {
+        throw new Error('Authentication token not found');
+      }
+
+      const response = await fetch('/api/threads', {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Unauthorized: You do not have permission to access this resource');
+        } else if (response.status === 403) {
+          throw new Error('Forbidden: Access denied');
+        } else if (response.status === 404) {
+          throw new Error('API endpoint not found');
+        } else if (response.status >= 500) {
+          throw new Error('Server error: Please try again later');
+        } else {
+          throw new Error(`Error fetching threads: ${response.statusText}`);
+        }
+      }
+
+      const data = await response.json();
+
+      let threadsData: Thread[] = [];
+
+      if (Array.isArray(data)) {
+        threadsData = data;
+      } else if (data.data && Array.isArray(data.data)) {
+        threadsData = data.data;
+      } else {
+        throw new Error('Invalid response format: Expected an array of threads');
+      }
+
+      setThreads(threadsData);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  }, [authToken]);
+
+  // Load threads on mount
+  useEffect(() => {
+    fetchThreads();
+  }, [authToken]);
+
+  // Handle URL changes and update state accordingly
+  useEffect(() => {
+    const pathSegments = location.pathname.split('/').filter(Boolean);
+    const isNewRoute = pathSegments.includes('new');
+    const routeThreadId = pathSegments.length > 1 && pathSegments[1] !== 'new' ? pathSegments[1] : null;
+
+    if (isNewRoute) {
+      setSelectedThreadId(null);
+      setChatHistory([]);
+      clearInput();
+      setOutput('');
+      setIsLoading(false);
+    } else if (routeThreadId && routeThreadId !== selectedThreadId) {
+      setSelectedThreadId(routeThreadId);
+    }
+  }, [location.pathname, selectedThreadId, clearInput]);
+
+  // Load thread data when selectedThreadId changes
+  const loadThreadData = useCallback(async () => {
+    if (!selectedThreadId || !authToken) {
+      return;
+    }
+
+    setLoadingThread(true);
+    try {
+      // Use the correct endpoint based on the backend API
+      const response = await fetch(`/api/threads/${selectedThreadId}?includeMessages=true`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to load thread: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const messages = data.messages || data.data || [];
+
+      const formattedMessages = messages.map((msg: { prompt: boolean; text: string }) => ({
+        role: msg.prompt ? 'user' : 'assistant',
+        content: msg.text || '',
+      }));
+
+      setChatHistory(formattedMessages);
+    } catch (err) {
+      console.error('Failed to load thread data:', err);
+      setError('Failed to load thread data');
+    } finally {
+      setLoadingThread(false);
+    }
+  }, [selectedThreadId, authToken]);
+
+  useEffect(() => {
+    loadThreadData();
+  }, [loadThreadData]);
+
+  // Handle thread selection
+  const handleSelectThread = useCallback(
+    (threadId: string) => {
+      setSelectedThreadId(threadId);
+      // Update URL using React Router navigation
+      navigate(`/chat/${threadId}`, { replace: true });
+    },
+    [navigate],
+  );
+
+  // Handle new thread creation
+  const handleNewThread = useCallback(() => {
+    setSelectedThreadId(null);
+    setChatHistory([]);
+    clearInput();
+    setOutput('');
+    setIsLoading(false);
+    // Update URL using React Router navigation
+    navigate('/chat');
+    // Note: Thread will be created automatically when the first message is sent
+  }, [clearInput, navigate]);
+
+  // Handle thread deletion
+  const handleDeleteThread = useCallback(
+    async (threadId: string) => {
+      const confirmed = window.confirm('Are you sure you want to delete this thread?');
+      if (!confirmed) {
         return;
       }
 
       try {
-        const conversation = await chatApi.getConversation(selectedConversationId);
-        setCurrentConversation(conversation || null);
-      } catch (error) {
-        console.error('Failed to load conversation:', error);
-      }
-    };
-
-    loadConversation();
-  }, [selectedConversationId]);
-
-  // Handle creating a new conversation
-  const handleNewConversation = async () => {
-    try {
-      const title = prompt('Enter a title for the new conversation:') || 'New Conversation';
-      const topic = prompt('Enter a topic for the conversation:') || 'General';
-
-      const newConversation = await chatApi.createConversation(title, topic);
-      setConversations((prev) => [newConversation, ...prev]);
-      setSelectedConversationId(newConversation.id);
-    } catch (error) {
-      console.error('Failed to create conversation:', error);
-    }
-  };
-
-  // Handle deleting a conversation
-  const handleDeleteConversation = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this conversation?')) {
-      return;
-    }
-
-    try {
-      await chatApi.deleteConversation(id);
-      setConversations((prev) => prev.filter((conv) => conv.id !== id));
-
-      if (selectedConversationId === id) {
-        const nextConversation = conversations.find((conv) => conv.id !== id);
-        setSelectedConversationId(nextConversation?.id || null);
-      }
-    } catch (error) {
-      console.error('Failed to delete conversation:', error);
-    }
-  };
-
-  // Handle sending a new message
-  const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedConversationId) {
-      return;
-    }
-
-    try {
-      // Add user message
-      const userMessage = await chatApi.addMessage(selectedConversationId, newMessage, 'user');
-
-      if (userMessage && currentConversation) {
-        // Update the current conversation with the new message
-        setCurrentConversation({
-          ...currentConversation,
-          messages: [...currentConversation.messages, userMessage],
+        const res = await fetch(`/api/threads/${threadId}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
         });
+
+        if (!res.ok) {
+          throw new Error(`Failed to delete thread ${threadId}`);
+        }
+
+        setThreads((prev) => prev.filter((t) => t.id !== threadId));
+
+        if (selectedThreadId === threadId) {
+          const nextThread = threads.find((t) => t.id !== threadId);
+          if (nextThread) {
+            setSelectedThreadId(nextThread.id);
+            // Update URL using React Router navigation
+            navigate(`/chat/${nextThread.id}`, { replace: true });
+          } else {
+            setSelectedThreadId(null);
+            // Update URL using React Router navigation
+            navigate('/chat/new', { replace: true });
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Failed to delete thread.');
+      }
+    },
+    [authToken, selectedThreadId, threads],
+  );
+
+  // Handle form submission
+  const handleSubmit = useCallback(async () => {
+    if (!input.trim()) {
+      return;
+    }
+
+    // Add user message to chat history immediately
+    const userMessage = { role: 'user' as const, content: input.trim() };
+    setChatHistory((prev) => [...prev, userMessage]);
+
+    setOutput('');
+    setIsLoading(true);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const res = await fetch('/api/llm/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          prompt: input,
+          model: selectedModel,
+          threadId: selectedThreadId,
+          enableTools: true,
+        }),
+        signal: controller.signal,
+      });
+
+      const newThreadId = res.headers.get('X-Thread-Id') as string;
+      if (newThreadId && !selectedThreadId) {
+        setSelectedThreadId(newThreadId);
+        // Update URL using React Router navigation
+        navigate(`/chat/${newThreadId}`, { replace: true });
+
+        // Add the new thread to the threads list
+        const newThread: Thread = {
+          id: newThreadId,
+          name: input.trim().slice(0, 50) + (input.trim().length > 50 ? '...' : ''),
+          model: selectedModel || 'default',
+          description: input.trim().slice(0, 100) + (input.trim().length > 100 ? '...' : ''),
+        };
+        setThreads((prev) => [newThread, ...prev]);
       }
 
-      setNewMessage('');
+      if (!res.body) {
+        throw new Error('No response body');
+      }
 
-      // Simulate assistant response after a short delay
-      setTimeout(async () => {
-        const assistantMessage = await chatApi.addMessage(
-          selectedConversationId!,
-          'This is a simulated response from the assistant. In a real application, this would come from an AI service.',
-          'assistant',
-        );
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
 
-        if (assistantMessage && currentConversation) {
-          // Update the current conversation with the assistant's response
-          setCurrentConversation((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  messages: [...prev.messages, assistantMessage],
-                }
-              : null,
-          );
+      let assistantResponse = '';
+      while (true) {
+        const { value, done } = await reader.read();
+
+        if (done) {
+          break;
         }
-      }, 1000);
-    } catch (error) {
-      console.error('Failed to send message:', error);
+
+        if (value) {
+          assistantResponse += value;
+          setOutput(assistantResponse);
+        }
+      }
+
+      // Add the assistant's response to chat history
+      if (assistantResponse.trim()) {
+        setChatHistory((prev) => [...prev, { role: 'assistant', content: assistantResponse }]);
+      }
+
+      // Clear the input field for the next message
+      clearInput();
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Stream error:', err);
+      }
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, [input, authToken, selectedModel, selectedThreadId]);
+
+  const handleStop = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsLoading(false);
+  }, []);
+
+  // Memoized computed values to prevent unnecessary re-renders
+  const isSubmitDisabled = useMemo(() => {
+    return isLoading || selectedModel == null || !inputHasValue;
+  }, [isLoading, selectedModel, inputHasValue]);
+
+  const inputPlaceholder = useMemo(() => {
+    return !selectedThreadId ? 'Start a new conversation...' : 'Continue the conversation...';
+  }, [selectedThreadId]);
+
+  const submitButtonText = useMemo(() => {
+    return !selectedThreadId ? (
+      <>
+        <Sparkles className="h-4 w-4" />
+        Start Chat
+      </>
+    ) : (
+      <>
+        <Send className="h-4 w-4" />
+        Send
+      </>
+    );
+  }, [selectedThreadId]);
+
+  // Memoize threads data to prevent unnecessary re-renders
+  const memoizedThreads = useMemo(() => threads, [threads]);
+  const selectedThread = useMemo(
+    () => threads.find((t) => t.id === selectedThreadId),
+    [threads, selectedThreadId],
+  );
+
+  useEffect(() => {
+    containerRef.current?.scrollTo({
+      top: containerRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
+  }, [output]);
 
   return (
     <>
@@ -466,11 +663,11 @@ export function ChatPage() {
             <Breadcrumb.Item>
               <Breadcrumb.Page>Chat</Breadcrumb.Page>
             </Breadcrumb.Item>
-            {currentConversation?.title && (
+            {selectedThreadId && (
               <>
                 <Breadcrumb.Separator className="hidden md:block" />
                 <Breadcrumb.Item>
-                  <Breadcrumb.Page>{currentConversation.title}</Breadcrumb.Page>
+                  <Breadcrumb.Page>{selectedThread?.name || selectedThreadId.slice(0, 8)}</Breadcrumb.Page>
                 </Breadcrumb.Item>
               </>
             )}
@@ -478,62 +675,202 @@ export function ChatPage() {
         </Breadcrumb>
       </Portal.Slot>
 
+      <Portal.Slot id="actions">
+        <ModelSelector />
+      </Portal.Slot>
+
       <Portal.Slot id="tertiary-navigation">
         <ChatSidebar
-          conversations={conversations}
-          selectedConversationId={selectedConversationId}
-          onSelectConversation={setSelectedConversationId}
-          onNewConversation={handleNewConversation}
-          onDeleteConversation={handleDeleteConversation}
+          threads={memoizedThreads}
+          selectedThreadId={selectedThreadId}
+          onSelectThread={handleSelectThread}
+          onNewThread={handleNewThread}
+          onDeleteThread={handleDeleteThread}
+          loading={loading}
+          onRefresh={fetchThreads}
         />
       </Portal.Slot>
 
-      <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <span>Loading conversations...</span>
-          </div>
-        ) : currentConversation ? (
-          <>
-            <div className="flex-1 overflow-y-auto py-4">
-              {currentConversation.messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`mb-4 p-3 rounded-lg max-w-[80%] ${
-                    message.sender === 'user'
-                      ? 'ml-auto bg-primary text-primary-foreground'
-                      : 'mr-auto bg-muted'
-                  }`}
-                >
-                  <p>{message.content}</p>
-                  <div className="text-xs opacity-70 mt-1 text-right">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </div>
+      <div className="flex flex-1 flex-col gap-4 lg:gap-6 pl-0 pr-2 lg:p-6 pt-0">
+        {error ? (
+          <Card className="border-destructive/20 bg-destructive/5">
+            <Card.Content className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-full bg-destructive/20 flex items-center justify-center flex-shrink-0">
+                  <X className="h-5 w-5 text-destructive" />
                 </div>
-              ))}
-            </div>
-            <div className="border-t pt-4">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                  placeholder="Type your message..."
-                  className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
-                />
-                <button
-                  onClick={handleSendMessage}
-                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2"
-                >
-                  Send
-                </button>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-destructive mb-2">Error loading threads</h3>
+                  <p className="text-sm text-destructive/80 mb-4">{error}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={fetchThreads}
+                    className="border-destructive/20 text-destructive hover:bg-destructive/10"
+                  >
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Try Again
+                  </Button>
+                </div>
               </div>
-            </div>
-          </>
+            </Card.Content>
+          </Card>
         ) : (
-          <div className="min-h-[50vh] flex-1 rounded-xl bg-muted/50 flex items-center justify-center md:min-h-min">
-            <span className="text-xl font-medium">Select a conversation or create a new one</span>
+          <div className="w-full space-y-4 lg:space-y-6">
+            {/* Single Conversation Pane */}
+            <Card className="border-0 shadow-none bg-transparent">
+              <Card.Content className="p-0">
+                {/* Welcome Message Section - shown when no thread is selected */}
+                {!selectedThreadId && (
+                  <div className="text-center max-w-md mx-auto mb-6 lg:mb-8">
+                    <div className="w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gradient-to-br from-primary/10 to-primary/20 flex items-center justify-center mx-auto mb-4 lg:mb-6 shadow-lg border border-primary/20">
+                      <MessageSquare className="h-8 w-8 lg:h-10 lg:w-10 text-primary" />
+                    </div>
+                    <h2 className="text-xl lg:text-2xl font-semibold mb-3 bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
+                      Welcome to Chat
+                    </h2>
+                    <p className="text-muted-foreground mb-4 lg:mb-6 leading-relaxed text-sm lg:text-base">
+                      Choose a thread from the sidebar or create a new one to start chatting with AI
+                    </p>
+                    <Button
+                      onClick={handleNewThread}
+                      size="lg"
+                      className="gap-2 shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105 text-sm lg:text-base px-4 lg:px-6 py-2 lg:py-3"
+                    >
+                      <Plus className="h-4 w-4 lg:h-5 lg:w-5" />
+                      Create New Thread
+                    </Button>
+                  </div>
+                )}
+
+                {/* Chat History Section */}
+                <div
+                  ref={containerRef}
+                  className="space-y-4 lg:space-y-6 max-h-[500px] overflow-y-auto chat-scrollbar mb-4 lg:mb-6"
+                  style={{
+                    scrollbarWidth: 'thin',
+                    scrollbarColor: 'hsl(var(--muted-foreground) / 0.2) transparent',
+                  }}
+                >
+                  {loadingThread ? (
+                    <div className="text-center py-12">
+                      <RefreshCw className="h-12 w-12 animate-spin mx-auto mb-4 text-primary/50" />
+                      <p className="text-muted-foreground font-medium">Loading conversation...</p>
+                    </div>
+                  ) : chatHistory.length === 0 && !isLoading && selectedThreadId ? (
+                    <div className="text-center py-12">
+                      <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <p className="text-muted-foreground">Start a conversation by typing a message.</p>
+                    </div>
+                  ) : null}
+
+                  {chatHistory.map((message, index) => (
+                    <ChatMessage
+                      key={`${message.role}-${index}-${message.content.slice(0, 20)}`}
+                      message={message}
+                      index={index}
+                    />
+                  ))}
+
+                  {isLoading && (
+                    <div className="flex justify-start animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shadow-sm">
+                          <Bot className="h-4 w-4 text-primary" />
+                        </div>
+                        <div className="bg-muted text-foreground rounded-2xl px-4 py-3 text-sm border border-border/50 shadow-sm">
+                          {output || (
+                            <div className="flex items-center gap-2">
+                              <div className="flex space-x-1">
+                                <div
+                                  className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce"
+                                  style={{ animationDelay: '0ms' }}
+                                />
+                                <div
+                                  className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce"
+                                  style={{ animationDelay: '150ms' }}
+                                />
+                                <div
+                                  className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce"
+                                  style={{ animationDelay: '300ms' }}
+                                />
+                              </div>
+                              <span className="text-muted-foreground">Generating...</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* TTS Button */}
+                {chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'assistant' && (
+                  <div className="flex justify-end pt-4 border-t border-border/50 mb-6">
+                    <Button
+                      disabled
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 shadow-sm opacity-50 cursor-not-allowed"
+                      title="Local TTS is currently disabled"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      Listen (Disabled)
+                    </Button>
+                  </div>
+                )}
+
+                {/* Chat Input Section - always at the bottom */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSubmit();
+                  }}
+                  className="space-y-4"
+                >
+                  <div className="relative">
+                    <Textarea
+                      name="message"
+                      placeholder={inputPlaceholder}
+                      value={input}
+                      onChange={handleInputChange}
+                      className="resize-none min-h-[120px] text-base leading-relaxed pr-12 bg-background/80 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all duration-200 placeholder:text-muted-foreground/60"
+                    />
+                    <Button
+                      type="submit"
+                      disabled={isSubmitDisabled}
+                      size="sm"
+                      className="absolute bottom-3 right-3 h-8 w-8 p-0 shadow-sm hover:shadow-md transition-all duration-200 hover:scale-105"
+                    >
+                      <Send className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <Button type="submit" disabled={isSubmitDisabled} className="gap-2 shadow-sm">
+                      {submitButtonText}
+                    </Button>
+
+                    {isLoading && (
+                      <Button variant="destructive" onClick={handleStop} size="sm" className="shadow-sm">
+                        <Square className="h-4 w-4 mr-2" />
+                        Stop
+                      </Button>
+                    )}
+
+                    <Button
+                      disabled
+                      variant="outline"
+                      className="ml-auto gap-2 shadow-sm opacity-50 cursor-not-allowed"
+                      title="Voice input is currently disabled"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      Voice (Disabled)
+                    </Button>
+                  </div>
+                </form>
+              </Card.Content>
+            </Card>
           </div>
         )}
       </div>

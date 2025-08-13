@@ -5,13 +5,14 @@ import { Separator, Sidebar, Toaster, useSidebar } from '@ci/shadcn';
 import {
   BookA,
   BookImage,
-  Bot,
   Brain,
+  Cable,
   Camera,
   ChartPie,
+  Inbox,
   Lightbulb,
   ListTodo,
-  MessageCircleQuestion,
+  MessagesSquare,
   Search,
   Settings2,
 } from '@ci/shadcn/icons';
@@ -24,19 +25,19 @@ import { NavUser } from './NavUser';
 
 const INTELLIGENCE = [
   {
+    name: 'Feed',
+    url: '/feed',
+    icon: Inbox,
+  },
+  {
     name: 'Search',
     url: '/search',
     icon: Search,
   },
   {
-    name: 'Questions',
-    url: '/questions',
-    icon: MessageCircleQuestion,
-  },
-  {
-    name: 'Answers',
-    url: '/answers',
-    icon: BookA,
+    name: 'Memory',
+    url: '/memory',
+    icon: Brain,
   },
   {
     name: 'Insights',
@@ -44,23 +45,18 @@ const INTELLIGENCE = [
     icon: Lightbulb,
   },
   {
-    name: 'Chat',
-    url: '/chat',
-    icon: Bot,
+    name: 'Actions',
+    url: '/actions',
+    icon: BookA,
   },
   {
-    name: 'Connections',
-    url: '/connections',
-    icon: Bot,
+    name: 'Chat',
+    url: '/chat',
+    icon: MessagesSquare,
   },
 ];
 
-const MEMORY = [
-  {
-    name: 'Memory',
-    url: '/memory',
-    icon: Brain,
-  },
+const CONTENT = [
   {
     name: 'Content',
     url: '/files',
@@ -75,14 +71,19 @@ const MEMORY = [
 
 const SYSTEM = [
   {
-    name: 'Dashboard',
-    url: '/dashboard',
+    name: 'Analytics',
+    url: '/analytics',
     icon: ChartPie,
   },
   {
     name: 'Jobs',
     url: '/jobs',
     icon: ListTodo,
+  },
+  {
+    name: 'Connections',
+    url: '/connections',
+    icon: Cable,
   },
   {
     name: 'Settings',
@@ -105,10 +106,10 @@ function SecondaryNavigation() {
         </Sidebar.Header>
         <Sidebar.Content className="gap-0">
           <NavSection title="Intelligence" items={INTELLIGENCE} />
-          <NavSection title="Memory" items={MEMORY} />
-          <NavSection title="System" items={SYSTEM} />
+          <NavSection title="Content" items={CONTENT} />
         </Sidebar.Content>
         <Sidebar.Footer>
+          <NavSection items={SYSTEM} />
           <NavUser />
         </Sidebar.Footer>
       </Sidebar>
@@ -140,12 +141,12 @@ export function Main() {
               </header>
 
               <div className="flex flex-row grow">
-                <main className="flex grow p-4">
-                  <Outlet />
-                </main>
                 <aside className="flex flex-col">
                   <Portal id="tertiary-navigation" className="flex flex-col grow" />
                 </aside>
+                <main className="flex grow p-4">
+                  <Outlet />
+                </main>
               </div>
             </div>
           </Suspense>

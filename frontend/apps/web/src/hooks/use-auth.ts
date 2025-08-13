@@ -100,7 +100,7 @@ function useAuth(): Value {
         localStorage.setItem(SESSION_TOKEN_KEY, data.sessionToken);
         setUser(data.user);
 
-        navigate('/dashboard');
+        navigate('/feed');
       } catch (error: unknown) {
         setUser(null);
         setError(error as Error);
