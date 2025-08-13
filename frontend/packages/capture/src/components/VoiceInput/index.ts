@@ -1,0 +1,1 @@
+export { VoiceInput } from './VoiceInput';

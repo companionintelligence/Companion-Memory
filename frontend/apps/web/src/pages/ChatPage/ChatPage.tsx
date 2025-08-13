@@ -18,6 +18,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import { ModelSelector } from '@/components/ModelSelector';
 import { useAuth, useModel } from '@/hooks';
+import { VoiceInput, TTSButton } from '@ci/capture';
 
 import { ChatMessage } from './ChatMessage';
 
@@ -323,6 +324,11 @@ export default function ChatPage() {
   const clearInput = () => {
     setInput('');
   };
+
+  // Handle voice transcription
+  const handleVoiceTranscription = useCallback((transcribedText: string) => {
+    setInput(prev => prev + (prev ? ' ' : '') + transcribedText);
+  }, []);
 
   const inputHasValue = input.trim() !== '';
 
@@ -807,16 +813,10 @@ export default function ChatPage() {
                 {/* TTS Button */}
                 {chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'assistant' && (
                   <div className="flex justify-end pt-4 border-t border-border/50 mb-6">
-                    <Button
-                      disabled
-                      variant="outline"
-                      size="sm"
-                      className="gap-2 shadow-sm opacity-50 cursor-not-allowed"
-                      title="Local TTS is currently disabled"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                      Listen (Disabled)
-                    </Button>
+                    <TTSButton
+                      text={chatHistory[chatHistory.length - 1].content}
+                      disabled={isLoading}
+                    />
                   </div>
                 )}
 
@@ -858,15 +858,11 @@ export default function ChatPage() {
                       </Button>
                     )}
 
-                    <Button
-                      disabled
-                      variant="outline"
-                      className="ml-auto gap-2 shadow-sm opacity-50 cursor-not-allowed"
-                      title="Voice input is currently disabled"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                      Voice (Disabled)
-                    </Button>
+                    <VoiceInput
+                      onTranscription={handleVoiceTranscription}
+                      disabled={isLoading}
+                      className="ml-auto"
+                    />
                   </div>
                 </form>
               </Card.Content>
