@@ -28,5 +28,8 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 
+# TTS Engines
 # Higgs Audio TTS
-git+https://github.com/boson-ai/higgs-audio.git 
+git+https://github.com/boson-ai/higgs-audio.git
+# Piper TTS
+piper-tts>=1.2.0 

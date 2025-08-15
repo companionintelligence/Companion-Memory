@@ -817,6 +817,7 @@ export default function ChatPage() {
                     <TTSButton
                       text={chatHistory[chatHistory.length - 1].content}
                       disabled={isLoading}
+                      voiceServiceUrl={getVoiceServiceUrl('tts')}
                     />
                   </div>
                 )}
