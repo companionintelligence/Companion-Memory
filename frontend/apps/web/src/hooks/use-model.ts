@@ -71,7 +71,7 @@ function useModel(): Value {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [authToken]);
 
   return [
     {

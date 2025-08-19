@@ -1,15 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import ollama, {
+import {
   type ChatResponse,
   type GenerateResponse,
   type Message as OllamaMessage,
   type Tool,
+  type ToolCall,
+  Ollama,
 } from 'ollama';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
+import config from '@ci/configuration';
 
 import {
   ToolRegistry,
@@ -18,7 +21,7 @@ import {
   GetStreamingAvailabilityTool,
   type ToolSchema,
 } from '../tools';
-import type { Message, OllamaModel } from '../types';
+import type { OllamaModel } from '../types';
 
 import { MessageService } from './MessageService';
 
@@ -29,13 +32,16 @@ interface PromptOptions {
   model?: string;
   signal?: AbortSignal;
   enableTools?: boolean;
+  enableThinking?: boolean;
 }
-
-type MessagesInput = Pick<Message, 'prompt' | 'text'>[];
 
 @Injectable()
 export class OllamaService {
   private readonly logger = new LoggerService(OllamaService.name);
+
+  private readonly ollama = new Ollama({
+    host: config.ollama.host,
+  });
 
   private readonly toolRegistry = new ToolRegistry();
 
@@ -49,7 +55,7 @@ export class OllamaService {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
-    const result = await ollama.list();
+    const result = await this.ollama.list();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));
 
     return models.filter((model) => !INTERNAL_MODELS.has(model.name));
@@ -62,11 +68,11 @@ export class OllamaService {
   ): Promise<AsyncGenerator<GenerateResponse> & { buffer: string }> {
     const chunks: string[] = [];
 
-    const stream = (async function* () {
+    const stream = (async function* (self) {
       const resolvedOptions = options ?? {};
       const { model = PROMPT_MODEL, signal } = resolvedOptions;
 
-      const iterator = await ollama.generate({
+      const iterator = await self.ollama.generate({
         model,
         prompt,
         stream: true,
@@ -83,7 +89,7 @@ export class OllamaService {
 
         yield chunk;
       }
-    })();
+    })(this);
 
     Object.defineProperty(stream, 'buffer', {
       enumerable: true,
@@ -101,7 +107,7 @@ export class OllamaService {
     const resolvedOptions = options ?? ({} as PromptOptions);
     const { model = PROMPT_MODEL } = resolvedOptions;
 
-    return ollama.generate({
+    return this.ollama.generate({
       model,
       prompt,
     });
@@ -109,105 +115,178 @@ export class OllamaService {
 
   async chatStream(
     context: RequestContext,
-    messages: MessagesInput,
+    messages: OllamaMessage[],
     options?: PromptOptions,
-  ): Promise<AsyncGenerator<ChatResponse> & { buffer: string }> {
+  ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[] }> {
     const resolvedOptions = options ?? {};
-    const { model = PROMPT_MODEL, signal, enableTools = false } = resolvedOptions;
+    const { model = PROMPT_MODEL, signal, enableTools = false, enableThinking = true } = resolvedOptions;
 
-    // If tools are enabled, handle function calling before streaming
-    if (enableTools) {
-      return this.chatStreamWithTools(context, messages, options);
-    }
+    const inputMessages = messages.slice();
+    const availableTools = enableTools ? this.toolRegistry.getAvailableTools(context) : [];
+    const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
 
-    // Original streaming implementation
-    const chunks: string[] = [];
-    const ollamaMessages = this.toOllamaMessages(messages);
+    const textChunks: string[] = [];
+    const thinkChunks: string[] = [];
+    const toolCalls: ToolCall[] = [];
+    const accumulatedMessages: OllamaMessage[] = [];
 
-    const stream = (async function* () {
-      const iterator = await ollama.chat({
-        model,
-        messages: ollamaMessages,
-        stream: true,
-      });
-
-      signal?.addEventListener('abort', () => {
-        iterator.abort();
-      });
-
-      for await (const chunk of iterator) {
-        if (chunk && !!chunk.message) {
-          chunks.push(chunk.message.content);
+    const stream = (async function* (self) {
+      do {
+        if (signal?.aborted) {
+          break;
         }
 
-        yield chunk;
-      }
-    })();
+        let lastChunk: ChatResponse | undefined;
+        let handleAbort = () => {};
 
-    Object.defineProperty(stream, 'buffer', {
+        // Flush the chunk buffers at the start of every iteration.
+        textChunks.splice(0, textChunks.length);
+        thinkChunks.splice(0, thinkChunks.length);
+
+        // Pop off any previously required tool calls and evaluate them.
+        // Notably this will always be empty on the first iteration.
+        const iterationToolCalls = toolCalls.splice(0, toolCalls.length);
+        const toolEvaluations = await self.handleToolCalls(context, iterationToolCalls);
+
+        // Tool evaluations may result in new accumulated messages.
+        // We feed these forward into additional Ollama calls.
+        accumulatedMessages.push(...toolEvaluations);
+
+        // We only enable tools in this iteration if:
+        //
+        //   1. Tools are enabled for the service call
+        //   2. Tools are configured / available in the system
+        //   3. We did not evaluate any tools from the previous iteration
+        //
+        // This is important to get right.
+        const iterationWillCallTools = enableTools && ollamaTools.length > 0 && toolEvaluations.length === 0;
+
+        try {
+          const iterator = await self.ollama.chat({
+            model,
+            messages: inputMessages.concat(accumulatedMessages),
+            stream: true,
+            ...(enableThinking && { think: true }),
+            ...(iterationWillCallTools && { tools: ollamaTools }),
+          });
+
+          handleAbort = () => iterator.abort();
+
+          signal?.addEventListener('abort', handleAbort);
+
+          for await (const chunk of iterator) {
+            lastChunk = chunk;
+
+            if (chunk.message.content) {
+              textChunks.push(chunk.message.content);
+            }
+
+            if (chunk.message.thinking) {
+              thinkChunks.push(chunk.message.thinking);
+            }
+
+            if (chunk.message.tool_calls) {
+              toolCalls.push(...chunk.message.tool_calls);
+            }
+
+            yield chunk;
+          }
+
+          if (lastChunk?.done) {
+            self.logger.log('Ollama prompt evaluation completed', {
+              model: lastChunk.model,
+              totalDuration: lastChunk.total_duration ? lastChunk.total_duration / 1_000_000 : undefined,
+              loadDuration: lastChunk.load_duration ? lastChunk.load_duration / 1_000_000 : undefined,
+              evalDuration: lastChunk.prompt_eval_duration
+                ? lastChunk.prompt_eval_duration / 1_000_000
+                : undefined,
+              promptCount: lastChunk.prompt_eval_count,
+              evalCount: lastChunk.eval_count,
+              doneReason: lastChunk.done_reason,
+            });
+          }
+        } catch (err) {
+          if (!(err instanceof DOMException && err.name === 'AbortError')) {
+            self.logger.error('Ollama prompt evaluation completed', {
+              model: lastChunk?.model ?? resolvedOptions.model,
+              doneReason: 'error',
+            });
+
+            break;
+          }
+        } finally {
+          const think = thinkChunks.join('');
+          const content = textChunks.join('');
+
+          const message = {
+            role: 'assistant',
+            content: (think ? `<think>${think}</think>` : '') + content,
+            ...(toolCalls.length > 0 && { tool_calls: toolCalls.slice() }),
+          } satisfies OllamaMessage;
+
+          accumulatedMessages.push(message);
+
+          signal?.removeEventListener('abort', handleAbort);
+
+          if (signal?.aborted) {
+            self.logger.log('Ollama prompt evaluation completed', {
+              model: lastChunk?.model ?? resolvedOptions.model,
+              doneReason: 'canceled',
+            });
+          }
+        }
+      } while (toolCalls.length > 0);
+    })(this);
+
+    Object.defineProperty(stream, 'messages', {
       enumerable: true,
-      get: () => chunks.join(''),
+      get: () => accumulatedMessages,
     });
 
-    return stream as typeof stream & { buffer: string };
+    return stream as typeof stream & { messages: OllamaMessage[] };
   }
 
   async chat(
     context: RequestContext,
-    messages: MessagesInput,
+    messages: OllamaMessage[],
     options?: Omit<PromptOptions, 'signal'>,
   ): Promise<ChatResponse> {
     const resolvedOptions = options ?? ({} as PromptOptions);
     const { model = PROMPT_MODEL, enableTools = false } = resolvedOptions;
 
-    // If tools are enabled, use function calling
-    if (enableTools) {
-      return this.chatWithTools(context, messages, options);
-    }
-
-    return ollama.chat({
-      model,
-      messages: this.toOllamaMessages(messages),
-    });
-  }
-
-  /**
-   * Chat with function calling support
-   */
-  async chatWithTools(
-    context: RequestContext,
-    messages: MessagesInput,
-    options?: Omit<PromptOptions, 'signal'>,
-  ): Promise<ChatResponse> {
-    const resolvedOptions = options ?? ({} as PromptOptions);
-    const { model = PROMPT_MODEL } = resolvedOptions;
-
-    // Get available tools
-    const availableTools = this.toolRegistry.getAvailableTools(context);
+    const inputMessages = messages.slice();
+    const availableTools = enableTools ? this.toolRegistry.getAvailableTools(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
 
-    const requestPayload = {
-      model,
-      messages: this.toOllamaMessages(messages),
-      ...(ollamaTools.length > 0 && { tools: ollamaTools }),
-    };
+    const accumulatedMessages: OllamaMessage[] = [];
 
-    this.logger.debug('Sending chat request with tools', {
+    const response = await this.ollama.chat({
       model,
-      messageCount: messages.length,
-      toolCount: ollamaTools.length,
-      toolNames: availableTools.map((t) => t.name),
-      userId: context.userId,
+      messages: inputMessages,
+      ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
     });
 
-    const response = await ollama.chat(requestPayload);
+    const willCallTools =
+      enableTools && response.message.tool_calls && response.message.tool_calls.length > 0;
 
-    // Handle tool calls if present
-    if (response.message.tool_calls && response.message.tool_calls.length > 0) {
-      return await this.handleToolCalls(context, messages, response, options);
+    accumulatedMessages.push({
+      role: response.message.role,
+      content: response.message.content,
+      ...(willCallTools && { tool_calls: response.message.tool_calls }),
+    } satisfies OllamaMessage);
+
+    if (!willCallTools) {
+      return response;
     }
 
-    return response;
+    const toolEvaluations = await this.handleToolCalls(context, response.message.tool_calls ?? []);
+
+    accumulatedMessages.push(...toolEvaluations);
+
+    return this.ollama.chat({
+      model,
+      messages: inputMessages.concat(accumulatedMessages),
+    });
   }
 
   async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
@@ -222,18 +301,6 @@ export class OllamaService {
     }
 
     return validModel;
-  }
-
-  private toOllamaMessages(messages: MessagesInput): OllamaMessage[] {
-    const ollamaMessages: OllamaMessage[] = messages.map(
-      (message) =>
-        ({
-          role: message.prompt ? 'user' : 'system',
-          content: message.text ?? '',
-        }) satisfies OllamaMessage,
-    );
-
-    return ollamaMessages;
   }
 
   private parseOllamaModel(model: string): OllamaModel {
@@ -279,17 +346,14 @@ export class OllamaService {
     });
   }
 
-  /**
-   * Process tool calls and return final response
-   */
-  private async handleToolCalls(
-    context: RequestContext,
-    originalMessages: MessagesInput,
-    toolCallResponse: ChatResponse,
-    options?: Omit<PromptOptions, 'signal'>,
-  ): Promise<ChatResponse> {
-    const { model = PROMPT_MODEL } = options ?? {};
-    const toolCalls = toolCallResponse.message.tool_calls || [];
+  private async handleToolCalls(context: RequestContext, toolCalls: ToolCall[]): Promise<OllamaMessage[]> {
+    if (toolCalls.length === 0) {
+      this.logger.debug('No tool calls to evaluate, skipping handling', {
+        userId: context.userId,
+      });
+
+      return [];
+    }
 
     this.logger.debug('Processing tool calls', {
       toolCallCount: toolCalls.length,
@@ -327,33 +391,14 @@ export class OllamaService {
     );
 
     // Build messages with tool results
-    const messagesWithToolResults = [
-      ...this.toOllamaMessages(originalMessages),
-      {
-        role: 'assistant' as const,
-        content: toolCallResponse.message.content,
-        tool_calls: toolCalls,
-      },
-      ...toolResults.map(({ call, result }) => ({
-        role: 'tool' as const,
-        content: JSON.stringify(result),
-        tool_call_id: call.function.name,
-      })),
-    ];
 
-    // Get final response incorporating tool results
-    const finalResponse = await ollama.chat({
-      model,
-      messages: messagesWithToolResults,
-    });
-
-    this.logger.debug('Completed tool-assisted conversation', {
-      toolResultsCount: toolResults.length,
-      successfulTools: toolResults.filter((r) => r.success).length,
-      userId: context.userId,
-    });
-
-    return finalResponse;
+    return toolResults.map(
+      ({ result }) =>
+        ({
+          role: 'tool' as const,
+          content: JSON.stringify(result),
+        }) satisfies OllamaMessage,
+    );
   }
 
   /**
@@ -368,187 +413,5 @@ export class OllamaService {
         parameters: toolSchema.parameters,
       },
     };
-  }
-
-  /**
-   * Streaming chat with function calling support
-   * Strategy: Check for tool calls first, execute them, then stream the final response
-   */
-  private async chatStreamWithTools(
-    context: RequestContext,
-    messages: MessagesInput,
-    options?: PromptOptions,
-  ): Promise<AsyncGenerator<ChatResponse> & { buffer: string }> {
-    const resolvedOptions = options ?? {};
-    const { model = PROMPT_MODEL } = resolvedOptions;
-
-    // Step 1: Get available tools and make initial non-streaming call to check for tool calls
-    const availableTools = this.toolRegistry.getAvailableTools(context);
-    const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
-
-    try {
-      const initialResponse = await ollama.chat({
-        model,
-        messages: this.toOllamaMessages(messages),
-        ...(ollamaTools.length > 0 && { tools: ollamaTools }),
-      });
-
-      // Step 2: If there are tool calls, execute them and prepare for final streaming response
-      if (initialResponse.message.tool_calls && initialResponse.message.tool_calls.length > 0) {
-        return this.handleToolCallsAndStream(context, messages, initialResponse, options);
-      }
-
-      // No tool calls needed, proceed with regular streaming
-      return this.regularStream(context, messages, options);
-    } catch (error) {
-      // Handle case where model doesn't support tools
-      if (error instanceof Error && error.message.includes('does not support tools')) {
-        this.logger.warn('Model does not support tools, falling back to regular chat', {
-          model,
-          userId: context.userId,
-        });
-
-        return this.regularStream(context, messages, options);
-      }
-
-      // Re-throw other errors
-      throw error;
-    }
-  }
-
-  /**
-   * Handle tool calls and stream the final response
-   */
-  private async handleToolCallsAndStream(
-    context: RequestContext,
-    originalMessages: MessagesInput,
-    toolCallResponse: ChatResponse,
-    options?: PromptOptions,
-  ): Promise<AsyncGenerator<ChatResponse> & { buffer: string }> {
-    const resolvedOptions = options ?? {};
-    const { model = PROMPT_MODEL, signal } = resolvedOptions;
-    const toolCalls = toolCallResponse.message.tool_calls || [];
-
-    this.logger.debug('Processing tool calls in stream', {
-      toolCallCount: toolCalls.length,
-      toolNames: toolCalls.map((tc) => tc.function.name),
-      userId: context.userId,
-    });
-
-    // Execute tool calls
-    const toolResults = await Promise.all(
-      toolCalls.map(async (toolCall) => {
-        const { name, arguments: args } = toolCall.function;
-
-        try {
-          const result = await this.toolRegistry.executeTool(name, context, args);
-
-          return {
-            call: toolCall,
-            result: result.success ? result.data : { error: result.error },
-            success: result.success,
-          };
-        } catch (error) {
-          this.logger.error('Tool execution failed in stream', {
-            toolName: name,
-            error: error instanceof Error ? error.message : String(error),
-            userId: context.userId,
-          });
-
-          return {
-            call: toolCall,
-            result: { error: 'Tool execution failed' },
-            success: false,
-          };
-        }
-      }),
-    );
-
-    // Build messages with tool results
-    const messagesWithToolResults = [
-      ...this.toOllamaMessages(originalMessages),
-      {
-        role: 'assistant' as const,
-        content: toolCallResponse.message.content,
-        tool_calls: toolCalls,
-      },
-      ...toolResults.map(({ call, result }) => ({
-        role: 'tool' as const,
-        content: JSON.stringify(result),
-        tool_call_id: call.function.name,
-      })),
-    ];
-
-    // Stream the final response with tool context
-    const chunks: string[] = [];
-
-    const stream = (async function* () {
-      const iterator = await ollama.chat({
-        model,
-        messages: messagesWithToolResults,
-        stream: true,
-      });
-
-      signal?.addEventListener('abort', () => {
-        iterator.abort();
-      });
-
-      for await (const chunk of iterator) {
-        if (chunk && !!chunk.message) {
-          chunks.push(chunk.message.content);
-        }
-
-        yield chunk;
-      }
-    })();
-
-    Object.defineProperty(stream, 'buffer', {
-      enumerable: true,
-      get: () => chunks.join(''),
-    });
-
-    return stream as typeof stream & { buffer: string };
-  }
-
-  /**
-   * Regular streaming without tools
-   */
-  private async regularStream(
-    context: RequestContext,
-    messages: MessagesInput,
-    options?: PromptOptions,
-  ): Promise<AsyncGenerator<ChatResponse> & { buffer: string }> {
-    const resolvedOptions = options ?? {};
-    const { model = PROMPT_MODEL, signal } = resolvedOptions;
-
-    const chunks: string[] = [];
-    const ollamaMessages = this.toOllamaMessages(messages);
-
-    const stream = (async function* () {
-      const iterator = await ollama.chat({
-        model,
-        messages: ollamaMessages,
-        stream: true,
-      });
-
-      signal?.addEventListener('abort', () => {
-        iterator.abort();
-      });
-
-      for await (const chunk of iterator) {
-        if (chunk && !!chunk.message) {
-          chunks.push(chunk.message.content);
-        }
-
-        yield chunk;
-      }
-    })();
-
-    Object.defineProperty(stream, 'buffer', {
-      enumerable: true,
-      get: () => chunks.join(''),
-    });
-
-    return stream as typeof stream & { buffer: string };
   }
 }

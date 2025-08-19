@@ -1,4 +1,4 @@
-import type { Preview } from '@storybook/react-vite';
+import type { Preview, StoryContext, StoryFn } from '@storybook/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import '../src/styles/index.css';
@@ -19,11 +19,7 @@ const preview = {
 } satisfies Preview;
 
 export const decorators = [
-  (Story) => (
-    <MemoryRouter>
-      <Story />
-    </MemoryRouter>
-  ),
+  (story: StoryFn, context: StoryContext) => <MemoryRouter>{story(context.args, context)}</MemoryRouter>,
 ];
 
 export default preview;

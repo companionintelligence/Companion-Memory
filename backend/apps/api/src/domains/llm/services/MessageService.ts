@@ -16,11 +16,13 @@ export class MessageService {
   ) {}
 
   async create(context: RequestContext, data: CreateMessageDto): Promise<Message> {
-    const { threadId, promptMessageId, ...rest } = data;
+    const { threadId, content, toolCalls, promptMessageId, ...rest } = data;
 
     const instance = this.messsageRepository.create({
       ...rest,
       id: uuid7(),
+      text: content,
+      tool_calls: toolCalls,
       user: {
         id: context.userId,
       },
@@ -69,6 +71,9 @@ export class MessageService {
         thread: {
           id: threadId,
         },
+      },
+      order: {
+        id: 'asc',
       },
     });
 

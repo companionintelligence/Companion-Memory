@@ -2,10 +2,16 @@ import { Button } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
 import balloonImage from '@/assets/balloon-bouquet.jpg';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 export function SplashPage() {
   return (
-    <div className="flex flex-col md:flex-row min-h-svh">
+    <div className="relative flex flex-col md:flex-row min-h-svh">
+      {/* Theme Toggle */}
+      <div className="absolute top-4 right-4 z-10">
+        <ThemeToggle />
+      </div>
+
       {/* Image Section */}
       <div className="w-full md:w-1/2 relative">
         <img src={balloonImage} alt="Colorful balloon bouquet" className="w-full h-full object-cover" />

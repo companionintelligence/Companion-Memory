@@ -8,15 +8,11 @@ interface TTSButtonProps {
   className?: string;
 }
 
-export const TTSButton: React.FC<TTSButtonProps> = ({
-  text,
-  disabled = false,
-  className = '',
-}) => {
+export const TTSButton: React.FC<TTSButtonProps> = ({ text, disabled = false, className = '' }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
 
   const playTTS = useCallback(async () => {
@@ -55,7 +51,7 @@ export const TTSButton: React.FC<TTSButtonProps> = ({
         for (let i = 0; i < binaryString.length; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        
+
         const audioBlob = new Blob([bytes], { type: 'audio/wav' });
         const audioUrl = URL.createObjectURL(audioBlob);
 
@@ -76,11 +72,9 @@ export const TTSButton: React.FC<TTSButtonProps> = ({
 
         await audio.play();
         setIsPlaying(true);
-
       } else {
         throw new Error('No audio data received');
       }
-
     } catch (err) {
       console.error('TTS error:', err);
       setError(err instanceof Error ? err.message : 'Failed to generate speech');
@@ -125,19 +119,11 @@ export const TTSButton: React.FC<TTSButtonProps> = ({
         disabled={disabled || isProcessing || !text.trim()}
         className="gap-2"
       >
-        {isProcessing ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Volume2 className="h-4 w-4" />
-        )}
+        {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
         {isProcessing ? 'Generating...' : isPlaying ? 'Stop' : 'Listen'}
       </Button>
-      
-      {error && (
-        <div className="text-sm text-destructive">
-          {error}
-        </div>
-      )}
+
+      {error && <div className="text-sm text-destructive">{error}</div>}
     </div>
   );
 };

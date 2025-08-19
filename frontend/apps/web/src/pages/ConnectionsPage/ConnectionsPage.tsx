@@ -267,7 +267,9 @@ export function ConnectionsPage() {
     return text.substring(0, maxLength) + '...';
   };
 
-  const connectionToggle = (/* connection: Connection */) => {
+  const connectionToggle = (connection: Connection) => {
+    console.log('Toggling connection', connection);
+
     /*
     const c = connections.find(c => c.id === connector.id);
     if(c) {
@@ -588,7 +590,7 @@ export function ConnectionsPage() {
               <div>
                 <h3 className="font-medium">Error loading</h3>
                 <p className="text-sm">{error}</p>
-                <Button variant="outline" size="sm" className="mt-2" onClick={fetchState()}>
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchState()}>
                   Try Again
                 </Button>
               </div>
@@ -635,7 +637,9 @@ export function ConnectionsPage() {
                               </span>
                             )}
                           </Table.Cell>
-                          <Table.Cell className="text-sm">{truncateText(connection.schedule)}</Table.Cell>
+                          <Table.Cell className="text-sm">
+                            {truncateText(connection.schedule ?? '')}
+                          </Table.Cell>
                           <Table.Cell className="text-sm">
                             <Toggle
                               aria-label="Toggle italic"

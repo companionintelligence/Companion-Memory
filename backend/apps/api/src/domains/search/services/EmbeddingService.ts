@@ -3,12 +3,13 @@ import crypto from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import dlv from 'dlv';
-import ollama from 'ollama';
+import { Ollama } from 'ollama';
 import { Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { getIndexableMetadata } from '@ci/common/decorators';
 import type { RequestContext } from '@ci/common/types';
+import config from '@ci/configuration';
 
 import { EmbeddingEntity } from '../entities/EmbeddingEntity';
 
@@ -32,6 +33,10 @@ interface Entity {
 
 @Injectable()
 export class EmbeddingService {
+  private readonly ollama = new Ollama({
+    host: config.ollama.host,
+  });
+
   constructor(
     @InjectRepository(EmbeddingEntity)
     private embeddingRepo: Repository<EmbeddingEntity>,
@@ -178,7 +183,7 @@ export class EmbeddingService {
   }
 
   private async calculateVector(input: string) {
-    const response = await ollama.embeddings({
+    const response = await this.ollama.embeddings({
       model: EMBEDDING_MODEL,
       prompt: input,
     });

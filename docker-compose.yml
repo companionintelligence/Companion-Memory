@@ -16,7 +16,7 @@ services:
     networks:
       - web
     restart: unless-stopped
-    profiles: [ "all", "local", "infra" ]
+    profiles: [ "all", "infra" ]
 
   minio:
     image: minio/minio
@@ -31,7 +31,7 @@ services:
     networks:
       - web
     command: server /data
-    profiles: [ "all", "local", "infra" ]
+    profiles: [ "all", "infra" ]
 
   voice-service:
     build:
@@ -88,8 +88,7 @@ services:
     image: ci/nginx
     container_name: staging-webserver
     ports:
-      - 80:80
-      - 443:443
+      - 8642:8642
     volumes:
       - ./infrastructure/nginx/nginx.staging.conf:/etc/nginx/nginx.conf:ro
       - ./infrastructure/nginx/ssl/:/etc/nginx/ssl/:ro

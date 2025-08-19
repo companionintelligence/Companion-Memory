@@ -1,5 +1,3 @@
 {
-  "**/*.{ts,tsx,js,mjs}": "yarn lint:fix",
-  "backend/apps/api/**/*.{ts,tsx,js,mjs}": "yarn workspace @ci/be-api lint:fix",
-  "frontend/apps/web/**/*.{ts,tsx,js,mjs}": "yarn workspace @ci/fe-web lint:fix"
+  "**/*.{ts,tsx,js,mjs}": "yarn lint:fix"
 }

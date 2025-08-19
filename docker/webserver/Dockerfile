@@ -4,8 +4,7 @@ RUN apt-get update && apt-get install -y tini && apt-get clean
 
 COPY frontend/apps/web/dist /usr/share/nginx/html/ci/web
 
-EXPOSE 80
-EXPOSE 443
+EXPOSE 8642
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 

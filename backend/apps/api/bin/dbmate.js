@@ -19,7 +19,7 @@ const UNSAFE_OPERATIONS = new Set(['drop_all_pg_data.sql']);
 const schema = z.object({
   type: z.literal('postgres'),
   host: z.string(),
-  port: z.number(),
+  port: z.coerce.number().int(),
   database: z.string(),
   username: z.string(),
   password: z.string(),
@@ -110,6 +110,7 @@ if (opts.executeFile) {
       ...process.env,
       DATABASE_URL,
       DBMATE_MIGRATIONS_DIR: './db/postgres/migrations',
+      DBMATE_SCHEMA_FILE: './db/postgres/schema.sql',
     },
   });
 

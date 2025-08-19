@@ -9,14 +9,20 @@
     }
   },
   "db": {
+    "host": "POSTGRES_HOST",
+    "port": "POSTGRES_PORT",
     "username": "POSTGRES_USERNAME",
     "password": "POSTGRES_PASSWORD"
   },
   "staticfiles": {
+    "storageUrl": "S3_URL",
     "auth": {
       "accessKeyId": "S3_ACCESS_KEY_ID",
       "secretAccessKey": "S3_SECRET_ACCESS_KEY"
     }
+  },
+  "ollama": {
+    "host": "OLLAMA_HOST"
   },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",

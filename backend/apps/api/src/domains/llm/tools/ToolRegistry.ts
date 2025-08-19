@@ -76,7 +76,7 @@ export class ToolRegistry {
       };
     }
 
-    this.logger.debug(`Executing tool: ${name}`, {
+    this.logger.log(`Executing tool: ${name}`, {
       toolName: name,
       userId: context.userId,
     });

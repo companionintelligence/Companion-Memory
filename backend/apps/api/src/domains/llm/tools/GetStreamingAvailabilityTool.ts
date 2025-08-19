@@ -2,9 +2,8 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
-import type { ToolExecutionContext } from '../types';
-
 import { BaseTool } from './BaseTool';
+import type { ToolExecutionContext } from './types';
 
 // Input schema for the tool
 const getStreamingAvailabilityInputSchema = z.object({
@@ -147,7 +146,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
       // Process the API response (now async to get real streaming data)
       const titles = await this.processTMDBResponse(apiResponse, input);
 
-      const result = {
+      return {
         titles,
         totalCount: titles.length,
         filters: {
@@ -160,9 +159,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
           country: input.country,
         },
       };
-
-      return result;
-    } catch {
+    } catch (error) {
       throw new Error(
         `Failed to get streaming availability: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -242,7 +239,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
       const data = await response.json();
       const genreMap = new Map(data.genres?.map((g: any) => [g.id, g.name]) || []);
 
-      return genreIds.map((id) => genreMap.get(id)).filter(Boolean);
+      return genreIds.map((id) => genreMap.get(id)).filter(Boolean) as string[];
     } catch {
       return [];
     }
@@ -454,7 +451,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
 
-      const batchPromises = batch.map(async (item) => {
+      const batchPromises = batch.map(async (item: any) => {
         // Determine type
         const type: 'movie' | 'tv' = item.media_type === 'movie' || item.title ? 'movie' : 'tv';
 

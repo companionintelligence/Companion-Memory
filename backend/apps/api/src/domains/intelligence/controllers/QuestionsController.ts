@@ -80,8 +80,8 @@ export class QuestionsController {
 
       const ragThread = [
         {
-          prompt: true,
-          text: `
+          role: 'system',
+          content: `
             I am going to provide you a question that I would ask a user directly.
             I am also going to provide you a list of questions and answers the user has already provided that I consider related context.
             I want you to impersonate the user and infer an answer for the question I provide.
@@ -96,12 +96,12 @@ export class QuestionsController {
           `,
         },
         {
-          prompt: true,
-          text: 'The next message will be a list of related questions that the user has responded to.',
+          role: 'system',
+          content: 'The next message will be a list of related questions that the user has responded to.',
         },
         {
-          prompt: true,
-          text: resolvedAnswers
+          role: 'system',
+          content: resolvedAnswers
             .map(
               (answer) => `
             Question: ${answer.question?.text}
@@ -111,12 +111,13 @@ export class QuestionsController {
             .join('\n\n'),
         },
         {
-          prompt: true,
-          text: 'The next message will be the question I need you to generate an inferred answer for while impersonating the user.',
+          role: 'system',
+          content:
+            'The next message will be the question I need you to generate an inferred answer for while impersonating the user.',
         },
         {
-          prompt: true,
-          text: question.text,
+          role: 'system',
+          content: question.text,
         },
       ];
 

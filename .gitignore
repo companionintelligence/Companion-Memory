@@ -22,3 +22,6 @@ node_modules
 .pnp.*
 .aider*
 .env
+
+
+.specstory/ 

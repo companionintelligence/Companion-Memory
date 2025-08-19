@@ -24,10 +24,16 @@ export class MessageEntity {
   model!: string | null;
 
   @Column({ type: 'text', nullable: true })
+  role!: string | null;
+
+  @Column({ type: 'text', nullable: true })
   text!: string | null;
 
   @Column({ type: 'text', nullable: true })
   mimetype!: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  tool_calls!: Record<string, unknown>[] | null;
 
   @Column({ type: 'boolean' })
   prompt!: boolean;
@@ -57,12 +63,24 @@ export class MessageEntity {
   deleted_at!: Date;
 
   toMessage(): Message {
+    let role: string | undefined;
+
+    if (this.role) {
+      role = this.role;
+    } else if (this.prompt === true) {
+      role = 'user';
+    } else if (this.prompt === false) {
+      role = 'assistant';
+    }
+
     return {
       id: this.id,
       model: this.model ?? null,
-      text: this.text ?? null,
+      // TODO: This is a little janky and is symptomatic of lax nullability in the DB, fix this later.
+      role: role ?? 'assistant',
+      content: this.text ?? '',
       mimetype: this.mimetype ?? null,
-      prompt: this.prompt ?? null,
+      toolCalls: this.tool_calls ?? null,
       canceled: this.canceled ?? null,
 
       user: this.user?.toUser(),

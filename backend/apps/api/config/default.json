@@ -50,6 +50,9 @@
       "secretAccessKey": "S3_SECRET_ACCESS_KEY"
     }
   },
+  "ollama": {
+    "host": "http://localhost:11434"
+  },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.fetching": true

@@ -4,9 +4,8 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { z } from 'zod';
 
-import type { ToolExecutionContext } from '../types';
-
 import { BaseTool } from './BaseTool';
+import type { ToolExecutionContext } from './types';
 
 // Input schema for the tool
 const getEntertainmentPreferencesInputSchema = z.object({
@@ -115,7 +114,7 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
   ): Promise<GetEntertainmentPreferencesOutput> {
     // Query for questions with subcategory = 'Entertainment'
     const query = `
-      SELECT 
+      SELECT
         q.text as question,
         a.give_answer_1 as answer,
         q.category,
@@ -123,7 +122,7 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
         a.user_id as "userId",
         q.created_at as "createdAt"
       FROM questions q
-      JOIN answers a ON q.id = a.question_id  
+      JOIN answers a ON q.id = a.question_id
       WHERE q.subcategory = 'Entertainment'
         AND a.give_answer_1 IS NOT NULL
       ORDER BY q.created_at
