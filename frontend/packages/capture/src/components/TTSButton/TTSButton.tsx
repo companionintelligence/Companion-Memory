@@ -6,9 +6,15 @@ interface TTSButtonProps {
   text: string;
   disabled?: boolean;
   className?: string;
+  voiceServiceUrl?: string;
 }
 
-export const TTSButton: React.FC<TTSButtonProps> = ({ text, disabled = false, className = '' }) => {
+export const TTSButton: React.FC<TTSButtonProps> = ({
+  text,
+  disabled = false,
+  className = '',
+  voiceServiceUrl = '/voice/tts',
+}) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +31,7 @@ export const TTSButton: React.FC<TTSButtonProps> = ({ text, disabled = false, cl
       setIsProcessing(true);
 
       // Send TTS request to voice service
-      const response = await fetch('/voice/tts', {
+      const response = await fetch(voiceServiceUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

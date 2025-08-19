@@ -21,13 +21,14 @@ COPY apps/voice/requirements.txt ./requirements.txt
 # Install main Python dependencies (WhisperX compatible)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Higgs Audio dependencies
+# Install TTS dependencies
 RUN pip install --no-cache-dir \
     torch>=2.0.0 \
     torchaudio>=2.0.0 \
     numpy>=1.21.0 \
     soundfile>=0.12.0 \
-    transformers>=4.30.0
+    transformers>=4.30.0 \
+    piper-tts>=1.2.0
 
 # Clone and install Higgs Audio
 RUN git clone https://github.com/boson-ai/higgs-audio.git /opt/higgs-audio
@@ -38,6 +39,15 @@ RUN pip install -r requirements.txt
 
 # Install Higgs Audio in development mode
 RUN pip install -e .
+
+# Return to app directory
+WORKDIR /app
+
+# Download default Piper model
+RUN mkdir -p /app/models/piper
+WORKDIR /app/models/piper
+RUN wget -O en_US-amy-low.onnx https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/low/en_US-amy-low.onnx
+RUN wget -O en_US-amy-low.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/low/en_US-amy-low.onnx.json
 
 # Return to app directory
 WORKDIR /app

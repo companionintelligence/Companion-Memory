@@ -46,6 +46,7 @@ services:
       - voice-service-cache:/root/.cache
     environment:
       - PYTHONPATH=/app
+      - TTS_ENGINE=${TTS_ENGINE:-higgs}
     networks:
       - web
     restart: unless-stopped

@@ -45,11 +45,21 @@ device = None
 compute_type = None
 diarization_pipeline = None
 
+# TTS Engine Configuration
+TTS_ENGINE = os.getenv('TTS_ENGINE', 'higgs').lower()  # 'higgs' or 'piper'
+logger.info(f"TTS Engine configured: {TTS_ENGINE}")
+
 # Higgs Audio model caching
 higgs_audio_model = None
 higgs_audio_tokenizer = None
 higgs_audio_loaded = False
 higgs_audio_loading = False
+
+# Piper TTS model caching
+piper_model = None
+piper_config = None
+piper_loaded = False
+piper_loading = False
 
 # Session management for streaming audio
 audio_sessions = {}  # session_id -> {audio_buffer, last_transcription, start_time, last_process_time, window_size}
@@ -995,13 +1005,26 @@ async def health_check():
                 logger.warning("Higgs Audio not available - boson_multimodal not installed")
                 local_tts_available = False
         
+        # Check if Piper is available
+        piper_available = False
+        try:
+            from piper import PiperVoice
+            piper_available = True
+            logger.info("Piper TTS is available")
+        except ImportError as e:
+            logger.warning(f"Piper TTS not available: {e}")
+            piper_available = False
+        
         return {
             "status": "healthy", 
             "device": str(device) if device else None, 
             "model_loaded": bool(model is not None),
             "whisperx": bool(model is not None),
             "sesameai": local_tts_available,  # Keep same field name for frontend compatibility
-            "higgs_audio_loaded": higgs_audio_loaded
+            "higgs_audio_loaded": higgs_audio_loaded,
+            "tts_engine": TTS_ENGINE,
+            "piper_available": piper_available,
+            "piper_loaded": piper_loaded
         }
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
@@ -1042,6 +1065,30 @@ async def preload_higgs_audio():
             
     except Exception as e:
         logger.error(f"Pre-load Higgs Audio failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/preload-piper")
+async def preload_piper():
+    """Pre-load the Piper TTS model for faster TTS"""
+    try:
+        logger.info("Received request to pre-load Piper TTS model")
+        
+        if piper_loaded:
+            return {"status": "already_loaded", "message": "Piper TTS model is already loaded"}
+        
+        if piper_loading:
+            return {"status": "loading", "message": "Piper TTS model is currently loading"}
+        
+        # Start loading in background
+        success = load_piper_model()
+        
+        if success:
+            return {"status": "loaded", "message": "Piper TTS model loaded successfully"}
+        else:
+            return {"status": "failed", "message": "Failed to load Piper TTS model"}
+            
+    except Exception as e:
+        logger.error(f"Pre-load Piper TTS failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/transcribe-with-diarization", response_model=TranscriptionResponse)
@@ -1255,7 +1302,86 @@ def load_higgs_audio_model():
         higgs_audio_loading = False
         return False
 
+def load_piper_model():
+    """Pre-load the Piper TTS model for faster TTS generation"""
+    global piper_model, piper_config, piper_loaded, piper_loading
+    
+    if piper_loaded:
+        logger.info("Piper model already loaded")
+        return True
+        
+    if piper_loading:
+        logger.info("Piper model is currently loading...")
+        return False
+        
+    try:
+        piper_loading = True
+        logger.info("Loading Piper TTS model...")
+        
+        # Import Piper components
+        try:
+            from piper import PiperVoice
+            logger.info("Successfully imported Piper TTS")
+        except ImportError as e:
+            logger.warning(f"Failed to import Piper TTS: {e}")
+            piper_loading = False
+            return False
+        
+        # Default Piper model path - you can customize this
+        MODEL_PATH = os.getenv('PIPER_MODEL_PATH', '/app/models/piper/en_US-amy-low.onnx')
+        CONFIG_PATH = os.getenv('PIPER_CONFIG_PATH', '/app/models/piper/en_US-amy-low.onnx.json')
+        
+        # Check if model files exist
+        if not os.path.exists(MODEL_PATH):
+            logger.warning(f"Piper model not found at {MODEL_PATH}")
+            # Try to download a default model
+            try:
+                import urllib.request
+                import json
+                
+                # Download a default model from Piper's model repository
+                model_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/low/en_US-amy-low.onnx"
+                config_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/low/en_US-amy-low.onnx.json"
+                
+                logger.info("Downloading default Piper model...")
+                urllib.request.urlretrieve(model_url, MODEL_PATH)
+                urllib.request.urlretrieve(config_url, CONFIG_PATH)
+                logger.info("Default Piper model downloaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to download Piper model: {e}")
+                piper_loading = False
+                return False
+        
+        # Load the Piper model
+        piper_model = PiperVoice.load(MODEL_PATH, CONFIG_PATH)
+        piper_config = {
+            "model_path": MODEL_PATH,
+            "config_path": CONFIG_PATH,
+            "device": device
+        }
+        
+        piper_loaded = True
+        piper_loading = False
+        logger.info("Piper TTS model loaded successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to load Piper TTS model: {e}")
+        piper_loading = False
+        return False
+
 def generate_local_tts(text: str, voice: str = "belinda", speed: float = 1.0) -> bytes:
+    """Generate TTS using the configured engine (Higgs Audio or Piper)"""
+    global higgs_audio_model, higgs_audio_tokenizer, higgs_audio_loaded
+    global piper_model, piper_config, piper_loaded
+    
+    # Choose TTS engine based on configuration
+    if TTS_ENGINE == 'piper':
+        return generate_piper_tts(text, voice, speed)
+    else:
+        return generate_higgs_tts(text, voice, speed)
+
+def generate_higgs_tts(text: str, voice: str = "belinda", speed: float = 1.0) -> bytes:
     """Generate TTS using Higgs Audio with Belinda voice"""
     global higgs_audio_model, higgs_audio_tokenizer, higgs_audio_loaded
     
@@ -1363,6 +1489,63 @@ def generate_local_tts(text: str, voice: str = "belinda", speed: float = 1.0) ->
         
         return wav_data
 
+def generate_piper_tts(text: str, voice: str = "amy", speed: float = 1.0) -> bytes:
+    """Generate TTS using Piper with specified voice"""
+    global piper_model, piper_config, piper_loaded
+    
+    try:
+        logger.info(f"Generating Piper TTS for text: '{text[:50]}...' with voice: {voice}")
+        
+        # Check if model is loaded, if not try to load it
+        if not piper_loaded:
+            logger.info("Piper model not loaded, attempting to load...")
+            if not load_piper_model():
+                raise ImportError("Failed to load Piper model")
+        
+        # Use cached model
+        if piper_model is None:
+            raise ImportError("Piper model not available")
+        
+        logger.info("Using cached Piper model")
+        
+        # Generate audio using Piper
+        # Piper supports speed control and voice selection
+        audio_data = piper_model.synthesize(
+            text=text,
+            speaker_id=0,  # Default speaker
+            length_scale=1.0 / speed,  # Speed control (inverse relationship)
+            noise_scale=0.667,  # Voice quality parameter
+            noise_w=0.8,  # Voice quality parameter
+        )
+        
+        logger.info("Piper audio generation completed")
+        
+        # Get the audio data and sample rate
+        audio = audio_data.audio
+        sampling_rate = audio_data.sample_rate
+        
+        logger.info(f"Audio generated: {len(audio)} samples, {sampling_rate} Hz")
+        
+        # Convert to WAV format
+        import soundfile as sf
+        import io
+        
+        buffer = io.BytesIO()
+        sf.write(buffer, audio, sampling_rate, format='WAV')
+        buffer.seek(0)
+        
+        audio_data_bytes = buffer.read()
+        logger.info(f"Generated WAV audio: {len(audio_data_bytes)} bytes")
+        
+        return audio_data_bytes
+        
+    except ImportError as e:
+        logger.error(f"Import error: {e}")
+        raise ImportError(f"Piper TTS not available: {e}")
+    except Exception as e:
+        logger.error(f"Piper TTS generation failed: {e}")
+        raise RuntimeError(f"TTS generation failed: {e}")
+
 @app.post("/tts", response_model=TTSResponse)
 async def text_to_speech_endpoint(request: TTSRequest):
     """Convert text to speech using local TTS"""
@@ -1433,6 +1616,21 @@ if __name__ == "__main__":
             logger.info("Speaker diarization will be disabled")
         
         logger.info("WhisperX service started successfully")
+        
+        # Preload TTS engine based on configuration
+        if TTS_ENGINE == 'piper':
+            try:
+                load_piper_model()
+                logger.info("Piper TTS model preloaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to preload Piper TTS model: {str(e)}")
+        else:
+            try:
+                load_higgs_audio_model()
+                logger.info("Higgs Audio model preloaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to preload Higgs Audio model: {str(e)}")
+        
     except Exception as e:
         logger.error(f"Failed to load WhisperX model: {str(e)}")
         exit(1)
