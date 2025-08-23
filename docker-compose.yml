@@ -33,24 +33,43 @@ services:
     command: server /data
     profiles: [ "all", "infra" ]
 
-  voice-service:
+  stt-service:
     build:
-      context: ./backend
-      dockerfile: apps/voice/Dockerfile.voice-service
-    image: ci/voice-service
-    container_name: voice-service
+      context: ./backend/apps/stt
+      dockerfile: Dockerfile
+    image: ci/stt-service
+    container_name: stt-service
     ports:
-      - 9002:9000
+      - 9001:9001
     volumes:
-      - voice-service-models:/app/models
-      - voice-service-cache:/root/.cache
+      - stt-service-models:/app/models
+      - stt-service-cache:/root/.cache
     environment:
       - PYTHONPATH=/app
-      - TTS_ENGINE=${TTS_ENGINE:-higgs}
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
     networks:
       - web
     restart: unless-stopped
-    profiles: [ "all", "local", "infra" ]
+    profiles: [ "all", "local", "infra", "staging" ]
+
+  tts-service:
+    build:
+      context: ./backend/apps/tts
+      dockerfile: Dockerfile
+    image: ci/tts-service
+    container_name: tts-service
+    ports:
+      - 9002:9002
+    volumes:
+      - tts-service-models:/app/models
+      - tts-service-cache:/root/.cache
+    environment:
+      - PYTHONPATH=/app
+      - VOICE_MODEL=${VOICE_MODEL:-vllm-higgs}
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "local", "infra", "staging" ]
 
   webserver:
     image: nginx:stable
@@ -78,11 +97,38 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-      OLLAMA_HOST: http://host.docker.internal:11434
+      OLLAMA_HOST: ${OLLAMA_HOST}
     networks:
       - web
     extra_hosts:
       - host.docker.internal:host-gateway
+    profiles: [ "all", "staging" ]
+
+  higgs-audio-vllm:
+    image: bosonai/higgs-audio-vllm:latest
+    container_name: higgs-audio-vllm
+    ports:
+      - 8000:8000
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      --served-model-name "higgs-audio-v2-generation-3B-base"
+      --model "bosonai/higgs-audio-v2-generation-3B-base"
+      --audio-tokenizer-type "bosonai/higgs-audio-v2-tokenizer"
+      --limit-mm-per-prompt audio=50
+      --max-model-len 8192
+      --port 8000
+      --gpu-memory-utilization 0.8
+      --disable-mm-preprocessor-cache
+    networks:
+      - web
     profiles: [ "all", "staging" ]
 
   staging-webserver:
@@ -90,6 +136,7 @@ services:
     container_name: staging-webserver
     ports:
       - 8642:8642
+      - 8643:8643
     volumes:
       - ./infrastructure/nginx/nginx.staging.conf:/etc/nginx/nginx.conf:ro
       - ./infrastructure/nginx/ssl/:/etc/nginx/ssl/:ro
@@ -113,8 +160,10 @@ volumes:
   postgres-data:
   minio-data:
   open-webui:
-  voice-service-models:
-  voice-service-cache:
+  stt-service-models:
+  stt-service-cache:
+  tts-service-models:
+  tts-service-cache:
 
 networks:
   web:
