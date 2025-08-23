@@ -13,7 +13,7 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
   onTranscription,
   disabled = false,
   className = '',
-  voiceServiceUrl = 'http://dev.companionintelligence.com/voice/transcribe', // Default to local voice service
+  voiceServiceUrl = '/stt/transcribe', // Default to STT service
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -27,6 +27,47 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
     try {
       setError(null);
 
+      // Debug logging
+
+      console.log('Starting voice recording...');
+
+      console.log('navigator:', navigator);
+
+      console.log('navigator.mediaDevices:', navigator?.mediaDevices);
+
+      console.log('window:', typeof window);
+
+      // Check if we're in a browser environment
+      if (typeof window === 'undefined') {
+        throw new Error('Voice input is not available in this environment');
+      }
+
+      // Check if navigator is available
+      if (!navigator) {
+        throw new Error('Navigator API not available');
+      }
+
+      // Check if mediaDevices is available
+      if (!navigator.mediaDevices) {
+        throw new Error(
+          'MediaDevices API not supported in this browser. Please use a modern browser with microphone support.',
+        );
+      }
+
+      // Check if getUserMedia is available
+      if (!navigator.mediaDevices.getUserMedia) {
+        throw new Error(
+          'getUserMedia not supported in this browser. Please use a modern browser with microphone support.',
+        );
+      }
+
+      // Check if MediaRecorder is available
+      if (!window.MediaRecorder) {
+        throw new Error('MediaRecorder not supported in this browser. Please use a modern browser.');
+      }
+
+      console.log('All browser APIs are available, requesting microphone access...');
+
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -37,6 +78,8 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
           autoGainControl: true,
         },
       });
+
+      console.log('Microphone access granted, creating MediaRecorder...');
 
       streamRef.current = stream;
 
@@ -147,14 +190,119 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
     };
   }, []);
 
+  // Check for browser compatibility on mount
+  useEffect(() => {
+    const checkBrowserCompatibility = async () => {
+      try {
+        // Check if we're in a browser environment
+        if (typeof window === 'undefined') {
+          setError('Voice input is not available in this environment');
+
+          return;
+        }
+
+        console.log('Checking browser compatibility...');
+        console.log('navigator:', navigator);
+        console.log('navigator.mediaDevices:', navigator?.mediaDevices);
+        console.log('window.MediaRecorder:', window.MediaRecorder);
+
+        // Check if mediaDevices is supported
+        if (!navigator.mediaDevices) {
+          setError(
+            'MediaDevices API not supported in this browser. Please use a modern browser with microphone support.',
+          );
+
+          return;
+        }
+
+        if (!navigator.mediaDevices.getUserMedia) {
+          setError(
+            'getUserMedia not supported in this browser. Please use a modern browser with microphone support.',
+          );
+
+          return;
+        }
+
+        // Check if MediaRecorder is supported
+        if (!window.MediaRecorder) {
+          setError('MediaRecorder not supported in this browser. Please use a modern browser.');
+
+          return;
+        }
+
+        // Test if we can actually access the microphone (this will trigger permission request)
+        console.log('Testing microphone access...');
+        try {
+          const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          testStream.getTracks().forEach((track) => track.stop());
+          console.log('Microphone access test successful');
+          setError(null);
+        } catch (permissionError) {
+          console.error('Microphone permission error:', permissionError);
+          if (permissionError instanceof Error) {
+            if (permissionError.name === 'NotAllowedError') {
+              setError('Microphone access denied. Please allow microphone access and try again.');
+            } else if (permissionError.name === 'NotFoundError') {
+              setError('No microphone found. Please connect a microphone and try again.');
+            } else {
+              setError(`Microphone error: ${permissionError.message}`);
+            }
+          } else {
+            setError('Failed to access microphone. Please check your browser settings.');
+          }
+        }
+      } catch (error) {
+        console.error('Browser compatibility check error:', error);
+        setError('Failed to check browser compatibility. Please refresh the page and try again.');
+      }
+    };
+
+    // Delay the check slightly to ensure the component is fully mounted
+    const timeoutId = setTimeout(checkBrowserCompatibility, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, []);
+
   return (
     <div className={`flex items-center gap-2 ${className}`}>
+      {error && (
+        <div className="text-sm text-destructive mr-2">
+          {error}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setError(null);
+              // Retry the browser compatibility check
+              setTimeout(() => {
+                const checkBrowserCompatibility = async () => {
+                  try {
+                    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                      const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                      testStream.getTracks().forEach((track) => track.stop());
+                      setError(null);
+                    }
+                  } catch (error) {
+                    console.error('Retry failed:', error);
+                  }
+                };
+
+                checkBrowserCompatibility();
+              }, 100);
+            }}
+            className="ml-2 text-xs"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
       <Button
         type="button"
         variant={isRecording ? 'destructive' : 'outline'}
         size="sm"
         onClick={toggleRecording}
-        disabled={disabled || isProcessing}
+        disabled={disabled || isProcessing || !!error}
         className="gap-2"
       >
         {isProcessing ? (
@@ -166,8 +314,6 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({
         )}
         {isProcessing ? 'Processing...' : isRecording ? 'Stop' : 'Voice'}
       </Button>
-
-      {error && <div className="text-sm text-destructive">{error}</div>}
     </div>
   );
 };

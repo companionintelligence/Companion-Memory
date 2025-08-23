@@ -11,5 +11,9 @@ export const TextBlock: React.FC<TextBlockProps> = ({ content }) => {
     return null;
   }
 
-  return <div className="whitespace-pre-wrap leading-relaxed">{trimmedContent}</div>;
+  return (
+    <div className="relative group">
+      <div className="whitespace-pre-wrap leading-relaxed pr-12">{trimmedContent}</div>
+    </div>
+  );
 };

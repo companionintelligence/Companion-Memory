@@ -17,7 +17,6 @@ const meta: Meta<Props> = {
   },
   args: {
     onAttach: fn(),
-    onRecord: fn(),
     onStop: fn(),
     onSubmit: fn(() => Promise.resolve(true)),
   },

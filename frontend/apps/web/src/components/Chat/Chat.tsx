@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useMemo,
 } from 'react';
 
 import { flushSync } from 'react-dom';
@@ -56,6 +57,22 @@ export function Chat({ messages, readable, loading, emptyState, onSubmit, ...cha
   // If we receive a message in a new channel we'll know to kick off
   // the clone / swap flow.
   const lastChannelRef = useRef<number | null>(null);
+
+  // Get the last assistant message for TTS functionality
+  const lastAssistantMessage = useMemo(() => {
+    if (!messages || messages.length === 0) {
+      return undefined;
+    }
+
+    // Find the last assistant message (role === 'assistant')
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        return messages[i].content;
+      }
+    }
+
+    return undefined;
+  }, [messages]);
 
   const flushStream = useCallback((channel: Channel) => {
     if (channel === Channel.TEXT) {
@@ -230,7 +247,12 @@ export function Chat({ messages, readable, loading, emptyState, onSubmit, ...cha
       <div className="p-4 pt-4 pl-1 w-full relative">
         {loading && <ChatLoader />}
 
-        <ChatInput loading={loading} onSubmit={handleSubmit} {...chatInputProps} />
+        <ChatInput
+          loading={loading}
+          onSubmit={handleSubmit}
+          lastAssistantMessage={lastAssistantMessage}
+          {...chatInputProps}
+        />
       </div>
     </div>
   );

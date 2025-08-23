@@ -22,10 +22,10 @@ export interface TranscriptionRequest {
 
 export interface TranscriptionResponse {
   text: string;
-  segments: any[];
+  segments: unknown[];
   language: string;
   confidence: number;
-  speakers: any[];
+  speakers: unknown[];
 }
 
 export interface TTSRequest {
@@ -37,23 +37,25 @@ export interface TTSRequest {
 
 export interface VoiceStreamResponse {
   type: 'transcription' | 'tts' | 'error';
-  data: any;
+  data: unknown;
   timestamp: number;
 }
 
 export class VoiceClient {
-  // Use nginx proxy for voice service - accessible via /voice/ path
-  private apiBaseUrl = '/voice';
+  // Use nginx proxy for STT service - accessible via /stt/ path
+  private sttApiBaseUrl = '/stt';
+
+  private ttsApiBaseUrl = '/tts';
 
   /**
    * Transcribe audio using WhisperX (simple, non-streaming)
    */
   async transcribeAudio(request: TranscriptionRequest): Promise<TranscriptionResponse> {
     try {
-      console.log(`Sending audio for transcription: ${this.apiBaseUrl}/transcribe`);
+      console.log(`Sending audio for transcription: ${this.sttApiBaseUrl}/transcribe`);
       console.log(`Audio size: ${request.audioData.length} chars`);
-      
-      const response = await fetch(`${this.apiBaseUrl}/transcribe`, {
+
+      const response = await fetch(`${this.sttApiBaseUrl}/transcribe`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -70,10 +72,11 @@ export class VoiceClient {
       });
 
       console.log(`Transcription response status: ${response.status}`);
-      
+
       if (response.ok) {
         const result = await response.json();
         console.log('Transcription response:', result);
+
         return {
           text: result.text || '',
           segments: result.segments || [],
@@ -98,7 +101,7 @@ export class VoiceClient {
   async startVoiceStream(sessionId?: string): Promise<{ success: boolean; sessionId: string }> {
     try {
       const sessionIdToUse = sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
+
       // For direct voice service, we don't need to call a start endpoint
       // The session will be created when we send the first audio chunk
       return {
@@ -116,13 +119,13 @@ export class VoiceClient {
    */
   async processAudioChunkStream(
     sessionId: string,
-    audioChunk: AudioChunkRequest
+    audioChunk: AudioChunkRequest,
   ): Promise<VoiceStreamResponse> {
     try {
-      console.log(`Sending audio chunk to voice service: ${this.apiBaseUrl}/transcribe-stream`);
+      console.log(`Sending audio chunk to voice service: ${this.sttApiBaseUrl}/transcribe-stream`);
       console.log(`Session ID: ${sessionId}, Audio size: ${audioChunk.audioData.length} chars`);
-      
-      const response = await fetch(`${this.apiBaseUrl}/transcribe-stream`, {
+
+      const response = await fetch(`${this.sttApiBaseUrl}/transcribe-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -139,10 +142,11 @@ export class VoiceClient {
       });
 
       console.log(`Voice service response status: ${response.status}`);
-      
+
       if (response.ok) {
         const result = await response.json();
         console.log('Voice service response:', result);
+
         return result;
       } else {
         const errorText = await response.text();
@@ -151,6 +155,7 @@ export class VoiceClient {
       }
     } catch (error) {
       console.error('Voice service streaming transcription failed:', error);
+
       return {
         type: 'error',
         data: {
@@ -166,7 +171,7 @@ export class VoiceClient {
    */
   async getFinalTranscription(sessionId: string): Promise<VoiceStreamResponse> {
     try {
-      const response = await fetch(`${this.apiBaseUrl}/transcribe-stream-final`, {
+      const response = await fetch(`${this.sttApiBaseUrl}/transcribe-stream-final`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -183,12 +188,14 @@ export class VoiceClient {
 
       if (response.ok) {
         const result = await response.json();
+
         return result;
       } else {
         throw new Error(`Voice service error: ${response.statusText}`);
       }
     } catch (error) {
       console.error('Voice service final transcription failed:', error);
+
       return {
         type: 'error',
         data: {
@@ -205,8 +212,8 @@ export class VoiceClient {
   async preloadHiggsAudio(): Promise<{ status: string; message: string }> {
     try {
       console.log('Pre-loading Higgs Audio model...');
-      
-      const response = await fetch(`${this.apiBaseUrl}/preload-higgs`, {
+
+      const response = await fetch(`${this.ttsApiBaseUrl}/preload-higgs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -215,10 +222,11 @@ export class VoiceClient {
       });
 
       console.log(`Pre-load response status: ${response.status}`);
-      
+
       if (response.ok) {
         const result = await response.json();
         console.log('Pre-load response:', result);
+
         return {
           status: result.status || 'unknown',
           message: result.message || 'Unknown status',
@@ -237,11 +245,16 @@ export class VoiceClient {
   /**
    * Convert text to speech using local TTS
    */
-  async textToSpeech(text: string, voice: string = "alloy", speed: number = 1.0, pitch: number = 1.0): Promise<{ audioData: string; duration: number; sampleRate: number }> {
+  async textToSpeech(
+    text: string,
+    voice: string = 'alloy',
+    speed: number = 1.0,
+    pitch: number = 1.0,
+  ): Promise<{ audioData: string; duration: number; sampleRate: number }> {
     try {
       console.log(`Converting text to speech: "${text.substring(0, 50)}..."`);
-      
-      const response = await fetch(`${this.apiBaseUrl}/tts`, {
+
+      const response = await fetch(`${this.ttsApiBaseUrl}/tts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -261,6 +274,7 @@ export class VoiceClient {
       if (response.ok) {
         const result = await response.json();
         console.log('TTS response received');
+
         return {
           audioData: result.audio_data,
           duration: result.duration,
@@ -282,9 +296,9 @@ export class VoiceClient {
    */
   async healthCheck(): Promise<{ status: string; whisperx: boolean; localTTS: boolean }> {
     try {
-      console.log(`Checking voice service health at: ${this.apiBaseUrl}/health`);
-      
-      const response = await fetch(`${this.apiBaseUrl}/health`, {
+      console.log(`Checking voice service health at: ${this.sttApiBaseUrl}/health`);
+
+      const response = await fetch(`${this.sttApiBaseUrl}/health`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -296,10 +310,11 @@ export class VoiceClient {
       if (response.ok) {
         const health = await response.json();
         console.log('Health check response:', health);
+
         return {
           status: health.status || 'healthy',
           whisperx: health.whisperx || health.model_loaded || false,
-          localTTS: health.sesameai || false
+          localTTS: health.sesameai || false,
         };
       } else {
         const errorText = await response.text();
@@ -313,10 +328,10 @@ export class VoiceClient {
     return {
       status: 'offline',
       whisperx: false,
-      localTTS: false
+      localTTS: false,
     };
   }
 }
 
 // Export singleton instance
-export const voiceClient = new VoiceClient(); 
+export const voiceClient = new VoiceClient();
