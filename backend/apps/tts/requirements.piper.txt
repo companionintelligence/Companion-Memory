@@ -1,0 +1,5 @@
+-r requirements.base.txt
+
+# Piper TTS specific dependencies
+piper-tts>=1.2.0
+transformers>=4.35.0
