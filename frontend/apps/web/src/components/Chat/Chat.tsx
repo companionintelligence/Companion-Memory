@@ -86,8 +86,17 @@ export function Chat({
   // the clone / swap flow.
   const lastChannelRef = useRef<number | null>(null);
 
+  // Track the current assistant message content as it streams in
+  const [currentAssistantMessage, setCurrentAssistantMessage] = useState<string>('');
+
   // Get the last assistant message for TTS functionality
   const lastAssistantMessage = useMemo(() => {
+    // If we have a current streaming message, use that
+    if (currentAssistantMessage) {
+      return currentAssistantMessage;
+    }
+
+    // Otherwise fall back to the last assistant message in the messages array
     if (!messages || messages.length === 0) {
       return undefined;
     }
@@ -100,7 +109,7 @@ export function Chat({
     }
 
     return undefined;
-  }, [messages]);
+  }, [messages, currentAssistantMessage]);
 
   const [accumulatedMessages, setAccumulatedMessages] = useState<ReactNode[]>([
     <Fragment key={uuid7()}>
@@ -180,6 +189,8 @@ export function Chat({
 
         if (chunk.channel === Channel.TEXT) {
           targetRef = textStreamingRef;
+          // Update the current assistant message as text streams in
+          setCurrentAssistantMessage((prev) => prev + payload);
         } else if (chunk.channel === Channel.THINK) {
           targetRef = thinkStreamingRef;
         }
@@ -199,7 +210,7 @@ export function Chat({
 
       return true; // consumed → read next chunk
     },
-    [flushStream],
+    [flushStream, maybeAutoScroll],
   );
 
   const handleSubmit = useCallback(
@@ -210,6 +221,9 @@ export function Chat({
         try {
           const block = <UserMessage key={uuid7()} content={data.message} />;
 
+          // Reset the current assistant message when starting a new turn
+          setCurrentAssistantMessage('');
+          
           flushStream(block);
           maybeAutoScroll(true);
         } catch (err) {
