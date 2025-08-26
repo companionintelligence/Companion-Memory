@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { fetchJson } from '@ci/common';
-import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
 
@@ -20,15 +19,8 @@ type ReturnType = [
 ];
 
 export function useThreadListService(): ReturnType {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  // Extract route information from pathname instead of useParams
-  // This needs to happen because this page handles /chat and /chat/:id
-  const pathSegments = location.pathname.split('/').filter(Boolean);
-  const threadId = pathSegments.length > 1 ? pathSegments[1] : null;
-
   const [{ authToken }] = useAuth();
+
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -67,14 +59,8 @@ export function useThreadListService(): ReturnType {
       }
 
       setThreads((prev) => prev.filter((t) => t.id !== id));
-
-      if (threadId === id) {
-        navigate('/chat', {
-          replace: true,
-        });
-      }
     },
-    [setThreads],
+    [authToken],
   );
 
   useEffect(() => {

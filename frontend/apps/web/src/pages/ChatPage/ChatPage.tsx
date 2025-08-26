@@ -1,56 +1,101 @@
-import { useCallback, type FormEvent, type ReactNode } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card } from '@ci/shadcn';
 import { RefreshCw, MessageSquare, X } from '@ci/shadcn/icons';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { Chat, type FormData } from '@/components/Chat';
 import { ModelSelector } from '@/components/ModelSelector';
-import { useChatRequester, useModel } from '@/hooks';
+import { useChatRequester, useCounter, useModel } from '@/hooks';
 
 import { ChatSidebar } from './ChatSidebar';
+import { type Message } from './types';
 import { useThreadListService } from './useThreadListService';
 import { useThreadService } from './useThreadService';
 
 export default function ChatPage() {
   usePageTitle('Chat - Companion Intelligence');
 
+  const resolvedThreadId = useRef<string | null>(null);
+  const hasSetInitialMessages = useRef(false);
+
   const navigate = useNavigate();
-  const location = useLocation();
 
-  // Extract route information from pathname instead of useParams
-  // This needs to happen because this page handles /chat and /chat/:id
-  const pathSegments = location.pathname.split('/').filter(Boolean);
-  const threadId = pathSegments.length > 1 ? pathSegments[1] : null;
-
+  const { id: initialThreadId } = useParams<{ id?: string }>();
+  const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [{ selectedModel }] = useModel();
 
   const [
     { threads, loading: threadsLoading, error: threadsError },
-    { refetch: refetchThreads, delete: handleDeleteThread },
+    { refetch: refetchThreads, delete: deleteThread },
   ] = useThreadListService();
 
-  const [{ thread, loading: threadLoading }] = useThreadService(threadId);
+  const [{ thread, loading: threadLoading }, { refetch: refetchThread }] = useThreadService(
+    resolvedThreadId.current,
+  );
+
+  const [{ count: newThreadCount }, { increment: incrementNewThreadCount }] = useCounter();
+
+  const handleNewThread = useCallback(
+    (threadId: string) => {
+      resolvedThreadId.current = threadId;
+      window.history.replaceState({}, '', `/chat/${threadId}`);
+      refetchThreads();
+      refetchThread();
+    },
+    [refetchThreads],
+  );
 
   const [
-    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, threadId: chatRequestThreadId },
+    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming },
     { submit: submitChatRequest, stop: stopChatRequest },
-  ] = useChatRequester(threadId);
+  ] = useChatRequester({
+    threadId: resolvedThreadId.current,
+    onNewThread: handleNewThread,
+  });
 
-  const handleCreateThread = useCallback(() => {
-    // Note: Thread will be created automatically when the first message is sent
+  const navigateToChatList = useCallback(() => {
+    incrementNewThreadCount();
+    stopChatRequest();
+    resolvedThreadId.current = null;
     navigate('/chat');
-  }, [navigate]);
+  }, [incrementNewThreadCount]);
+
+  useEffect(() => {
+    setInitialMessages([]);
+    hasSetInitialMessages.current = initialThreadId ? false : true;
+    resolvedThreadId.current = initialThreadId ?? null;
+  }, [initialThreadId]);
+
+  useEffect(() => {
+    if (thread && !hasSetInitialMessages.current) {
+      setInitialMessages(thread.messages ?? []);
+      hasSetInitialMessages.current = true;
+    }
+  }, [thread]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
-      navigate(`/chat/${threadId}`);
+      if (resolvedThreadId.current !== threadId) {
+        stopChatRequest();
+        navigate(`/chat/${threadId}`);
+      }
     },
     [navigate],
   );
 
-  // Handle form submission
+  const handleDeleteThread = useCallback(
+    (threadId: string) => {
+      deleteThread(threadId);
+
+      if (resolvedThreadId.current === threadId) {
+        navigateToChatList();
+      }
+    },
+    [deleteThread, navigateToChatList],
+  );
+
   const handleSubmit = useCallback(
     async (data: FormData, e?: FormEvent) => {
       e?.preventDefault();
@@ -63,7 +108,7 @@ export default function ChatPage() {
   const loading = threadsLoading || threadLoading || chatRequestLoading;
   const isSubmitDisabled = selectedModel == null;
   const inputPlaceholder =
-    chatRequestThreadId == null ? 'Start a new conversation...' : 'Continue the conversation...';
+    resolvedThreadId.current == null ? 'Start a new conversation...' : 'Continue the conversation...';
 
   let emptyState: ReactNode;
 
@@ -92,7 +137,7 @@ export default function ChatPage() {
         </Card.Content>
       </Card>
     );
-  } else if (chatRequestThreadId == null) {
+  } else if (resolvedThreadId.current == null) {
     emptyState = (
       <div className="text-center max-w-md mx-auto mb-6 lg:mb-8">
         <div className="w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gradient-to-br from-primary/10 to-primary/20 flex items-center justify-center mx-auto mb-4 lg:mb-6 shadow-lg border border-primary/20">
@@ -120,11 +165,11 @@ export default function ChatPage() {
             <Breadcrumb.Item>
               <Breadcrumb.Link href="/chat">Chat</Breadcrumb.Link>
             </Breadcrumb.Item>
-            {threadId && (
+            {thread && (
               <>
                 <Breadcrumb.Separator className="hidden md:block" />
                 <Breadcrumb.Item>
-                  <Breadcrumb.Page>{thread?.name || thread?.id.slice(0, 8)}</Breadcrumb.Page>
+                  <Breadcrumb.Page>{thread.name || thread.id}</Breadcrumb.Page>
                 </Breadcrumb.Item>
               </>
             )}
@@ -140,20 +185,21 @@ export default function ChatPage() {
         <ChatSidebar
           threads={threads}
           loading={loading}
-          selectedThreadId={threadId}
+          selectedThreadId={resolvedThreadId.current}
           onSelectThread={handleSelectThread}
-          onNewThread={handleCreateThread}
+          onNewThread={navigateToChatList}
           onDeleteThread={handleDeleteThread}
           onRefresh={refetchThreads}
         />
       </Portal.Slot>
 
       <Chat
+        key={initialThreadId ?? `new-thread-${newThreadCount}`}
         loading={loading}
         streaming={chatRequestStreaming}
         disabled={isSubmitDisabled}
         placeholder={inputPlaceholder}
-        messages={thread?.messages}
+        messages={initialMessages}
         emptyState={emptyState}
         readable={stream ?? undefined}
         onSubmit={handleSubmit}

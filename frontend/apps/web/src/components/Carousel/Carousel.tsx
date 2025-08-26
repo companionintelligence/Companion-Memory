@@ -1,101 +1,81 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { type ReactNode, Children, useCallback, useEffect, useState } from 'react';
 
 import { Button, cn } from '@ci/shadcn';
 import { ChevronLeft, ChevronRight } from '@ci/shadcn/icons';
-import useEmblaCarousel from 'embla-carousel-react';
+import useEmblaCarousel, { type UseEmblaCarouselType } from 'embla-carousel-react';
+
+type EmblaCarouselType = UseEmblaCarouselType[1];
 
 interface CarouselProps {
-  /** React children to render as carousel slides */
-  children: React.ReactNode;
-  /** Title displayed above the carousel */
-  title?: string;
-  /** Additional CSS classes for the carousel container */
+  children: ReactNode;
+  /** Additional CSS classes for the carousel elements */
   className?: string;
+  containerClassName?: string;
+  slideClassName?: string;
 }
 
-export function Carousel({ children, title, className }: CarouselProps) {
+export function Carousel({ children, className, containerClassName, slideClassName }: CarouselProps) {
   const [emblaRef, emblaApi] = useEmblaCarousel({
     align: 'start',
     containScroll: 'trimSnaps',
     dragFree: true,
+    // We could expose this as a property, for now we're
+    // explicitly setting it to the default value.
+    loop: false,
   });
 
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(false);
 
-  const scrollPrev = useCallback(() => {
-    if (emblaApi) {
-      emblaApi.scrollPrev();
-    }
-  }, [emblaApi]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [scrollSnaps, setScrollSnaps] = useState<number[]>([]);
 
-  const scrollNext = useCallback(() => {
-    if (emblaApi) {
-      emblaApi.scrollNext();
-    }
-  }, [emblaApi]);
-
-  const onSelect = useCallback(() => {
-    if (!emblaApi) {
-      return;
-    }
-
-    setCanScrollPrev(emblaApi.canScrollPrev());
-    setCanScrollNext(emblaApi.canScrollNext());
-  }, [emblaApi]);
+  const scrollPrev = useCallback(() => emblaApi?.scrollPrev(), [emblaApi]);
+  const scrollNext = useCallback(() => emblaApi?.scrollNext(), [emblaApi]);
+  const scrollTo = useCallback((index: number) => emblaApi?.scrollTo(index), [emblaApi]);
 
   useEffect(() => {
     if (!emblaApi) {
       return;
     }
 
-    onSelect();
-    emblaApi.on('select', onSelect);
-    emblaApi.on('reInit', onSelect);
+    const onUpdate = (api: EmblaCarouselType) => {
+      if (api) {
+        setScrollSnaps(api.scrollSnapList());
+        setSelectedIndex(api.selectedScrollSnap());
+        setCanScrollPrev(api.canScrollPrev());
+        setCanScrollNext(api.canScrollNext());
+      }
+    };
+
+    emblaApi.on('select', onUpdate);
+    emblaApi.on('reInit', onUpdate);
+
+    onUpdate(emblaApi);
 
     return () => {
-      emblaApi.off('select', onSelect);
-      emblaApi.off('reInit', onSelect);
+      emblaApi.off('select', onUpdate);
+      emblaApi.off('reInit', onUpdate);
     };
-  }, [emblaApi, onSelect]);
+  }, [emblaApi]);
 
   return (
-    <div className={className}>
-      {title && <h2 className="text-xl font-semibold text-gray-800 mb-4">{title}</h2>}
-      <div className="relative">
-        <div className="embla overflow-hidden w-full relative" ref={emblaRef}>
-          <div
-            className="embla__container flex flex-row select-none touch-none"
-            style={{
-              WebkitTouchCallout: 'none',
-              WebkitTapHighlightColor: 'transparent',
-              willChange: 'transform',
-            }}
-          >
-            {React.Children.map(children, (child, index) => (
-              <div
-                key={index}
-                className="embla__slide relative"
-                style={{
-                  flex: '0 0 550px',
-                  minWidth: '550px',
-                  marginRight: '24px',
-                }}
-              >
-                {child}
-              </div>
-            ))}
-          </div>
+    <div className="space-y-2">
+      <div ref={emblaRef} className={cn(className, 'overflow-hidden')}>
+        <div className={cn(containerClassName, 'flex will-change-transform')}>
+          {Children.map(children, (child, index) => (
+            <div key={index} className={cn('min-w-0 flex-none basis-full', slideClassName)}>
+              {child}
+            </div>
+          ))}
         </div>
+      </div>
 
-        {/* Navigation Buttons */}
+      <div className="flex items-center justify-center">
         <Button
-          variant="outline"
+          variant="ghost"
           size="icon"
-          className={cn(
-            'absolute left-4 top-1/2 transform -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/90 backdrop-blur-sm shadow-lg border border-gray-200 hover:bg-white transition-all duration-200',
-            canScrollPrev ? 'opacity-100' : 'opacity-50 cursor-not-allowed',
-          )}
+          className="cursor-pointer"
           onClick={scrollPrev}
           disabled={!canScrollPrev}
           aria-label="Previous slide"
@@ -103,13 +83,30 @@ export function Carousel({ children, title, className }: CarouselProps) {
           <ChevronLeft className="h-4 w-4" />
         </Button>
 
+        <div className="flex items-center justify-center">
+          {scrollSnaps.map((_, index) => (
+            <Button
+              key={index}
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer"
+              onClick={() => scrollTo(index)}
+              aria-label={`Go to slide ${index + 1}`}
+            >
+              <div
+                className={cn(
+                  'h-2 w-2 m-2 rounded-full transition-all duration-200',
+                  index === selectedIndex ? 'bg-slate-800 scale-115' : 'bg-slate-300',
+                )}
+              ></div>
+            </Button>
+          ))}
+        </div>
+
         <Button
-          variant="outline"
+          variant="ghost"
           size="icon"
-          className={cn(
-            'absolute right-4 top-1/2 transform -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/90 backdrop-blur-sm shadow-lg border border-gray-200 hover:bg-white transition-all duration-200',
-            canScrollNext ? 'opacity-100' : 'opacity-50 cursor-not-allowed',
-          )}
+          className="cursor-pointer"
           onClick={scrollNext}
           disabled={!canScrollNext}
           aria-label="Next slide"

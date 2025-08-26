@@ -257,6 +257,19 @@ export function Chat({
   }, [readable, handleFinished, handleFrameChunk]);
 
   useEffect(() => {
+    const el = scrollRef.current;
+
+    if (el) {
+      requestAnimationFrame(() => {
+        el.scrollTo({
+          top: el.scrollHeight,
+          behavior: 'instant',
+        });
+      });
+    }
+  }, [messages]);
+
+  useEffect(() => {
     maybeAutoScroll();
   }, [accumulatedMessages]);
 
@@ -267,11 +280,11 @@ export function Chat({
 
   return (
     <div className="flex flex-col h-full min-h-0 w-full">
-      {(messages?.length ?? 0) === 0 && accumulatedMessages.length === 0 && (
+      {(messages?.length ?? 0) === 0 && accumulatedMessages.length === 1 && (
         <div className="flex flex-col flex-1 min-h-0 p4 items-center justify-center">{emptyState}</div>
       )}
 
-      {((messages?.length ?? 0) > 0 || accumulatedMessages.length > 0) && (
+      {((messages?.length ?? 0) > 0 || accumulatedMessages.length > 1) && (
         <div
           ref={setScrollRef}
           onScroll={onScroll}

@@ -1,7 +1,9 @@
 import { type MouseEvent, type MouseEventHandler, type ReactNode, useCallback } from 'react';
 
-import { Badge, Button, cn } from '@ci/shadcn';
+import { Button, cn } from '@ci/shadcn';
 import { MessagesSquare, ThumbsDown, ThumbsUp } from '@ci/shadcn/icons';
+
+import { Tag } from '@/components/Tag';
 
 interface Props {
   title: string;
@@ -73,7 +75,7 @@ export function BentoCard({
             <div>
               <div className="flex flex-wrap gap-1 justify-end">
                 {tags.map((tag) => (
-                  <Badge className="bg-teal-600">{tag}</Badge>
+                  <Tag key={tag} text={tag} />
                 ))}
               </div>
             </div>
@@ -147,7 +149,7 @@ export function BentoCard({
         {tags && (
           <div className="flex flex-wrap gap-1 justify-end relative z-10 p-4 [background-image:radial-gradient(circle_at_top_right,_rgba(255,255,255,0.9),_rgba(255,255,255,0.1))]">
             {tags.map((tag) => (
-              <Badge className="bg-teal-600">{tag}</Badge>
+              <Tag key={tag} text={tag} />
             ))}
           </div>
         )}

@@ -5,13 +5,17 @@ import type { FormData } from '@/components/Chat';
 import { useAuth } from './use-auth';
 import { useModel } from './use-model';
 
+type Opts = {
+  threadId: string | null;
+  onNewThread?: (threadId: string) => void;
+};
+
 type ReturnType = [
   {
     stream: ReadableStream<Uint8Array> | null;
     loading: boolean;
     error: unknown | null;
     streaming: boolean;
-    threadId: string | null;
   },
   {
     submit: (data: FormData) => Promise<boolean>;
@@ -19,7 +23,7 @@ type ReturnType = [
   },
 ];
 
-export function useChatRequester(threadId: string | null): ReturnType {
+export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
   const [{ authToken }] = useAuth();
   const [{ selectedModel }] = useModel();
 
@@ -29,7 +33,6 @@ export function useChatRequester(threadId: string | null): ReturnType {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<unknown | null>(null);
   const [streaming, setStreaming] = useState<boolean>(false);
-  const [resThreadId, setResThreadId] = useState<string | null>(threadId);
 
   const submit = useCallback(
     async (data: FormData) => {
@@ -47,7 +50,6 @@ export function useChatRequester(threadId: string | null): ReturnType {
       setLoading(true);
       setError(null);
       setStreaming(false);
-      setResThreadId(null);
 
       let success = false;
 
@@ -78,7 +80,11 @@ export function useChatRequester(threadId: string | null): ReturnType {
 
         success = true;
 
-        setResThreadId(res.headers.get('X-Thread-Id') as string);
+        const newThreadId = res.headers.get('X-Thread-Id') as string;
+
+        if (newThreadId && newThreadId !== threadId) {
+          onNewThread?.(newThreadId);
+        }
 
         const monitor = new TransformStream({
           transform(chunk, controller) {
@@ -105,7 +111,7 @@ export function useChatRequester(threadId: string | null): ReturnType {
 
       return success;
     },
-    [authToken, selectedModel, threadId],
+    [authToken, selectedModel, threadId, onNewThread],
   );
 
   const stop = useCallback(() => {
@@ -128,7 +134,6 @@ export function useChatRequester(threadId: string | null): ReturnType {
       loading,
       error,
       streaming,
-      threadId: resThreadId,
     },
     {
       submit,

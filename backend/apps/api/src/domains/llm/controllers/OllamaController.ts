@@ -19,11 +19,10 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { Channel, FrameEncoder } from '@ci/common/rpc';
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
+import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/events';
 
-import { MessageService } from '../services/MessageService';
 import { OllamaService } from '../services/OllamaService';
-import { ThreadService } from '../services/ThreadService';
 import type { OllamaModel, PromptInput } from '../types';
 
 const promptSchema = z.object({

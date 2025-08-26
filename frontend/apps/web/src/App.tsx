@@ -94,7 +94,7 @@ function AppRoutes() {
         />
 
         <Route
-          path="/chat/*"
+          path="/chat/:id?"
           element={
             <ProtectedRoute>
               <ChatPage />

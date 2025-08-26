@@ -13,6 +13,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
+import { MessageService } from '@ci/domains/conversations';
 
 import {
   ToolRegistry,
@@ -22,8 +23,6 @@ import {
   type ToolSchema,
 } from '../tools';
 import type { OllamaModel } from '../types';
-
-import { MessageService } from './MessageService';
 
 const PROMPT_MODEL = 'gemma3:1b';
 const INTERNAL_MODELS = new Set(['nomic-embed-text']);

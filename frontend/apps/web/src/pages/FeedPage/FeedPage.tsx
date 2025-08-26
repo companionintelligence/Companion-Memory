@@ -1,382 +1,102 @@
-import React, { useCallback, useState } from 'react';
+import { useCallback, useState } from 'react';
+
+import { Portal } from '@ci/common';
+import { Breadcrumb } from '@ci/shadcn';
+
+import { PageContent } from '@/components/layout';
+import { useModalControls } from '@/hooks';
 
 import { BentoCard } from '../../components/BentoCard';
 import { Carousel } from '../../components/Carousel';
-import { FeedModal } from '../../components/FeedModal';
 
-interface FeedItem {
-  id: string;
-  title: string;
-  description: React.ReactNode;
-  tags: string[];
-  imageUrl?: string;
-}
+import { actionInsightData, feedData } from './data';
+import { FeedModal } from './FeedModal';
+import type { FeedItem } from './types';
 
-const feedData: FeedItem[] = [
-  {
-    id: '1',
-    title: 'Anniversary Gift Ideas',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">
-          Your anniversary is coming up! Here are some thoughtful gift ideas based on your preferences:
-        </p>
-        <ul className="text-sm space-y-1">
-          <li>• Weekend getaway to that mountain cabin you mentioned</li>
-          <li>• Custom photo album of your favorite memories</li>
-          <li>• Cooking class for two at the local culinary school</li>
-          <li>• Personalized jewelry with your anniversary date</li>
-        </ul>
-        <p className="text-xs text-gray-500 mt-2">Would you like me to help you plan any of these options?</p>
-      </div>
-    ),
-    tags: ['Anniversary', 'Gift Ideas', 'Planning'],
-    imageUrl: 'https://images.unsplash.com/photo-1518895949257-7621c3c786d7?w=400&h=300&fit=crop&crop=center',
-  },
-  {
-    id: '2',
-    title: 'Dinner with the Kids Tonight',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">
-          Since you have dinner with the kids tonight, here are some family-friendly meal suggestions:
-        </p>
-        <div className="text-sm space-y-2">
-          <div>
-            <strong>Quick & Easy:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• Homemade pizza with their favorite toppings</li>
-              <li>• Build-your-own taco night</li>
-              <li>• Pasta with simple marinara sauce</li>
-            </ul>
-          </div>
-          <div>
-            <strong>Healthy Options:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• Grilled chicken with roasted vegetables</li>
-              <li>• Stir-fry with rice</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Dinner', 'Family', 'Kids', 'Meal Planning'],
-    imageUrl: 'https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=400&h=300&fit=crop&crop=center',
-  },
-  {
-    id: '3',
-    title: 'Movie Night Options',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Perfect evening for a movie! Here are your options:</p>
-        <div className="text-sm space-y-3">
-          <div>
-            <strong className="text-blue-600">At Home:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• "The Princess Bride" (family classic)</li>
-              <li>• "Inside Out" (great for kids)</li>
-              <li>• "The Greatest Showman" (musical fun)</li>
-            </ul>
-          </div>
-          <div>
-            <strong className="text-green-600">In Theaters:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• "Elemental" (animated, family-friendly)</li>
-              <li>• "Indiana Jones" (action adventure)</li>
-              <li>• "Mission Impossible" (thriller)</li>
-            </ul>
-          </div>
-        </div>
-        <p className="text-xs text-gray-500">Showtimes available at 7:00 PM and 9:30 PM</p>
-      </div>
-    ),
-    tags: ['Entertainment', 'Movies', 'Family Time'],
-    imageUrl: 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=400&h=300&fit=crop&crop=center',
-  },
-  {
-    id: '4',
-    title: 'Weekend Activity Suggestions',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">
-          Looking ahead to the weekend? Here are some activities the whole family might enjoy:
-        </p>
-        <div className="text-sm space-y-2">
-          <div>
-            <strong>Outdoor:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• Hiking at the local nature preserve</li>
-              <li>• Bike ride along the river trail</li>
-              <li>• Picnic at the park</li>
-            </ul>
-          </div>
-          <div>
-            <strong>Indoor:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• Board game tournament</li>
-              <li>• DIY craft project</li>
-              <li>• Family cooking challenge</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Weekend', 'Activities', 'Family'],
-    imageUrl: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=300&fit=crop&crop=center',
-  },
-  {
-    id: '5',
-    title: 'Grocery Shopping Reminder',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">
-          Based on your meal plans, here's what you might need to pick up:
-        </p>
-        <div className="text-sm space-y-2">
-          <div>
-            <strong>For Dinner Tonight:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• Ground beef or chicken</li>
-              <li>• Fresh vegetables</li>
-              <li>• Pasta or rice</li>
-              <li>• Cheese for pizza</li>
-            </ul>
-          </div>
-          <div>
-            <strong>Snacks for Movie Night:</strong>
-            <ul className="ml-4 space-y-1">
-              <li>• Popcorn kernels</li>
-              <li>• Movie theater candy</li>
-              <li>• Soda or juice</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Shopping', 'Groceries', 'Planning'],
-    imageUrl: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&h=300&fit=crop&crop=center',
-  },
-  {
-    id: '6',
-    title: 'Weather Update',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Today's weather forecast for your area:</p>
-        <div className="text-sm space-y-2">
-          <div className="flex justify-between">
-            <span>Current:</span>
-            <span className="font-semibold">72°F, Sunny</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Tonight:</span>
-            <span className="font-semibold">65°F, Clear</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Tomorrow:</span>
-            <span className="font-semibold">75°F, Partly Cloudy</span>
-          </div>
-        </div>
-        <p className="text-xs text-gray-500">Perfect weather for outdoor activities this weekend!</p>
-      </div>
-    ),
-    tags: ['Weather', 'Forecast'],
-    imageUrl: 'https://images.unsplash.com/photo-1592210454359-9043f067919b?w=400&h=300&fit=crop&crop=center',
-  },
-];
+export function FeedPage() {
+  const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls();
 
-// Action and Insight cards (no images)
-const actionInsightData: FeedItem[] = [
-  {
-    id: 'action-1',
-    title: 'Quick Actions',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Common tasks you might want to complete:</p>
-        <div className="text-sm space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-            <span>Schedule anniversary dinner reservation</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-            <span>Add movie night to calendar</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
-            <span>Create grocery shopping list</span>
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Actions', 'Quick Tasks'],
-  },
-  {
-    id: 'insight-1',
-    title: 'Family Time Insights',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Based on your recent activities:</p>
-        <div className="text-sm space-y-2">
-          <div>
-            <strong>Trend:</strong> You've been spending more quality time with family
-          </div>
-          <div>
-            <strong>Recommendation:</strong> Consider planning a monthly family outing
-          </div>
-          <div>
-            <strong>Opportunity:</strong> Kids seem to enjoy cooking activities
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Insights', 'Family', 'Analytics'],
-  },
-  {
-    id: 'action-2',
-    title: 'Upcoming Reminders',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Don't forget these important dates:</p>
-        <div className="text-sm space-y-2">
-          <div className="flex justify-between">
-            <span>Anniversary:</span>
-            <span className="font-semibold text-red-600">Next Friday</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Kids' School Event:</span>
-            <span className="font-semibold">Next Tuesday</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Dentist Appointment:</span>
-            <span className="font-semibold">Next Thursday</span>
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Reminders', 'Calendar', 'Important'],
-  },
-  {
-    id: 'insight-2',
-    title: 'Productivity Patterns',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Your productivity insights this week:</p>
-        <div className="text-sm space-y-2">
-          <div>
-            <strong>Peak Hours:</strong> 9:00 AM - 11:00 AM
-          </div>
-          <div>
-            <strong>Most Productive Day:</strong> Wednesday
-          </div>
-          <div>
-            <strong>Focus Areas:</strong> Family planning, meal prep, entertainment
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['Productivity', 'Analytics', 'Patterns'],
-  },
-  {
-    id: 'action-3',
-    title: 'Smart Suggestions',
-    description: (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">AI-powered recommendations:</p>
-        <div className="text-sm space-y-2">
-          <div>
-            <strong>Weather-based:</strong> Perfect day for outdoor activities
-          </div>
-          <div>
-            <strong>Time-based:</strong> Consider meal prep for the week
-          </div>
-          <div>
-            <strong>Family-based:</strong> Kids might enjoy the new park opening
-          </div>
-        </div>
-      </div>
-    ),
-    tags: ['AI', 'Suggestions', 'Smart'],
-  },
-];
-
-export default function FeedPage() {
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null);
 
   const handleCardClick = useCallback((id: string) => {
-    console.log('Card clicked:', id);
     const item = [...feedData, ...actionInsightData].find((item) => item.id === id);
+
     if (item) {
       setSelectedItem(item);
-      setIsModalOpen(true);
+      openModal();
     }
   }, []);
 
-  const handleLike = useCallback((id: string) => {
-    console.log('Liked card:', id);
-    // Handle like action
-  }, []);
-
-  const handleDislike = useCallback((id: string) => {
-    console.log('Disliked card:', id);
-    // Handle dislike action
-  }, []);
-
   const handleModalClose = useCallback(() => {
-    setIsModalOpen(false);
+    closeModal();
     setSelectedItem(null);
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Your Feed</h1>
-          <p className="text-gray-600">Personalized recommendations and updates for John Smith</p>
-        </div>
+    <>
+      <Portal.Slot id="breadcrumbs">
+        <Breadcrumb>
+          <Breadcrumb.List>
+            <Breadcrumb.Item className="hidden md:block">
+              <Breadcrumb.Link href="/">Home</Breadcrumb.Link>
+            </Breadcrumb.Item>
+            <Breadcrumb.Separator className="hidden md:block" />
+            <Breadcrumb.Item>
+              <Breadcrumb.Page>Feed</Breadcrumb.Page>
+            </Breadcrumb.Item>
+          </Breadcrumb.List>
+        </Breadcrumb>
+      </Portal.Slot>
 
-        {/* Featured Content Carousel */}
-        <div className="mb-8">
-          <Carousel title="Featured Content">
-            {feedData.map((item) => (
-              <BentoCard
-                key={item.id}
-                title={item.title}
-                description={item.description}
-                tags={item.tags}
-                imageUrl={item.imageUrl}
-                onClick={() => handleCardClick(item.id)}
-                className="hover:shadow-lg transition-shadow duration-200"
-              />
-            ))}
-          </Carousel>
-        </div>
+      <PageContent>
+        <h2 className="text-2xl font-bold text-gray-900">Featured Content</h2>
 
-        {/* Actions & Insights Carousel */}
-        <div>
-          <Carousel title="Actions & Insights">
-            {actionInsightData.map((item) => (
-              <BentoCard
-                key={item.id}
-                title={item.title}
-                description={item.description}
-                tags={item.tags}
-                onClick={() => handleCardClick(item.id)}
-                className="hover:shadow-lg transition-shadow duration-200"
-              />
-            ))}
-          </Carousel>
-        </div>
-      </div>
+        <Carousel
+          className="-mx-6"
+          containerClassName="px-6 pb-6 pt-1"
+          slideClassName="flex-none min-w-[550px] basis-[550px] mr-6"
+        >
+          {feedData.map((item) => (
+            <BentoCard
+              key={item.id}
+              title={item.title}
+              description={item.description}
+              tags={item.tags}
+              imageUrl={item.imageUrl}
+              onClick={() => handleCardClick(item.id)}
+              className="hover:shadow-lg transition-shadow duration-200"
+            />
+          ))}
+        </Carousel>
 
-      {/* Feed Modal */}
+        <h2 className="text-2xl font-bold text-gray-900">Actions & Insights</h2>
+
+        <Carousel
+          className="-mx-6"
+          containerClassName="px-6 pb-6"
+          slideClassName="flex-none min-w-[550px] basis-[550px] mr-6"
+        >
+          {actionInsightData.map((item) => (
+            <BentoCard
+              key={item.id}
+              title={item.title}
+              description={item.description}
+              tags={item.tags}
+              onClick={() => handleCardClick(item.id)}
+              className="hover:shadow-lg transition-shadow duration-200"
+            />
+          ))}
+        </Carousel>
+      </PageContent>
+
       <FeedModal
-        isOpen={isModalOpen}
+        open={isModalOpen}
+        title={selectedItem?.title}
+        description={selectedItem?.description}
+        tags={selectedItem?.tags}
+        imageUrl={selectedItem?.imageUrl}
         onClose={handleModalClose}
-        item={selectedItem}
-        onLike={handleLike}
-        onDislike={handleDislike}
       />
-    </div>
+    </>
   );
 }
