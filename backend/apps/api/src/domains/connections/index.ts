@@ -21,7 +21,7 @@ import { ProviderService } from './services/ProviderService';
 export class ConnectionsModule {}
 
 // Entities
-export { ProviderEntity };
+export { ConnectionEntity, ProviderEntity };
 
 // Services
 export {};

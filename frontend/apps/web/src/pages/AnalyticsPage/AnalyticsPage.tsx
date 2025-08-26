@@ -4,6 +4,7 @@ import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Card } from '@ci/shadcn';
 
 import { ChartAreaInteractive } from '@/components/chart-area-interactive';
+import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
 interface StatCard {
@@ -181,7 +182,7 @@ export function AnalyticsPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <div className="flex flex-col w-full">
+      <PageContent>
         <div className="flex-1 space-y-4">
           {/* Stats Grid */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -289,7 +290,7 @@ export function AnalyticsPage() {
             </Card>
           </div>
         </div>
-      </div>
+      </PageContent>
     </>
   );
 }

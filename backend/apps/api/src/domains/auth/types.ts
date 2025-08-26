@@ -19,3 +19,7 @@ export interface RotateSessionDto {
   ip?: string;
   userAgent?: string;
 }
+
+export interface SignedRequest extends Request {
+  userId: string;
+}

@@ -10,6 +10,7 @@ import {
   JoinTable,
 } from 'typeorm';
 
+import { ConnectionEntity } from '@ci/domains/connections';
 import { TagEntity } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
@@ -46,6 +47,10 @@ export class EventEntity {
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
 
+  @ManyToOne(() => ConnectionEntity, { nullable: true })
+  @JoinColumn({ name: 'connection_id' })
+  connection?: ConnectionEntity;
+
   @ManyToMany(() => TagEntity, { nullable: true })
   @JoinTable({
     name: 'event_tag',
@@ -59,4 +64,21 @@ export class EventEntity {
 
   @UpdateDateColumn({ type: 'timestamptz' })
   updated_at!: Date;
+
+  toEvent() {
+    return {
+      id: this.id,
+      name: this.name,
+      type: this.type,
+      description: this.description,
+      start_time: this.start_time,
+      end_time: this.end_time,
+      external_id: this.external_id,
+      source_url: this.source_url,
+      source_data: this.source_data,
+      user_id: this.user?.id,
+      connection_id: this.connection?.id,
+      tags: this.tags?.map((tag) => tag.toTag()),
+    };
+  }
 }

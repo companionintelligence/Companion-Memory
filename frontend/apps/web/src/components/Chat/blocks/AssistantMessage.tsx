@@ -1,4 +1,4 @@
-import { type ForwardedRef, type RefObject, forwardRef, useMemo } from 'react';
+import { type RefObject, useMemo } from 'react';
 
 import { cn, Button, Tooltip } from '@ci/shadcn';
 import { Bot, Volume2 } from '@ci/shadcn/icons';
@@ -11,10 +11,9 @@ interface Props {
   streamingRef?: RefObject<HTMLDivElement | null> | ((el: HTMLDivElement | null) => void);
 }
 
-function AssistantMessage(
-  { content, renderEmptyContent = false, streamingRef }: Props,
-  ref: ForwardedRef<HTMLDivElement>,
-) {
+function AssistantMessage(props: Props) {
+  const { content, renderEmptyContent = false, streamingRef } = props;
+
   const trimmedContent = useMemo(() => content?.trim(), [content]);
 
   if (!trimmedContent && !renderEmptyContent) {
@@ -23,7 +22,6 @@ function AssistantMessage(
 
   return (
     <div
-      ref={ref}
       className={cn(
         'relative rounded-xl rounded-tl-none px-4 py-3 text-sm shadow-sm bg-gradient-to-br from-muted to-muted/80 text-foreground border border-border/50 backdrop-blur-sm group',
         'has-[>.streaming-content:empty]:hidden',
@@ -124,6 +122,4 @@ function AssistantMessage(
   );
 }
 
-const AssistantMessageRef = forwardRef<HTMLDivElement, Props>(AssistantMessage);
-
-export { AssistantMessageRef as AssistantMessage };
+export { AssistantMessage };

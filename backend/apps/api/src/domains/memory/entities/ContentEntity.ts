@@ -23,7 +23,7 @@ export class ContentEntity {
   id!: string;
 
   @Column({ type: 'text', nullable: true })
-  type!: string | null;
+  type!: string;
 
   @Column({ type: 'text', nullable: true })
   title!: string | null;
@@ -67,4 +67,21 @@ export class ContentEntity {
 
   @UpdateDateColumn({ type: 'timestamptz' })
   updated_at!: Date;
+
+  toContent() {
+    return {
+      id: this.id,
+      type: this.type,
+      title: this.title || null,
+      text: this.text || null,
+      url: this.url || null,
+      mimetype: this.mimetype || null,
+      external_id: this.external_id || null,
+      source_url: this.source_url || null,
+      source_data: this.source_data || null,
+      user_id: this.user?.id || null,
+      event_id: this.event?.id || null,
+      tags: this.tags?.map((tag) => tag.id) || [],
+    };
+  }
 }

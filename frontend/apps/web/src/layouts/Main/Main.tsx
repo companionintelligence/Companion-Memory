@@ -1,24 +1,19 @@
 import { Suspense } from 'react';
 
 import { LoadingPage, Portal } from '@ci/common';
-import { Sidebar, Toaster, cn } from '@ci/shadcn';
+import { Sidebar, Toaster } from '@ci/shadcn';
 import { Outlet } from 'react-router-dom';
 
 import { PrimaryNavigation } from './PrimaryNavigation';
 import { SecondaryNavigation } from './SecondaryNavigation';
 
-interface Props {
-  contentPadding?: boolean;
-  delegateScrolling?: boolean;
-}
-
-export function Main({ contentPadding = true, delegateScrolling = false }: Props) {
+export function Main() {
   return (
     <>
       <Sidebar.Provider>
         <SecondaryNavigation />
 
-        <Sidebar.Inset>
+        <Sidebar.Inset className="overflow-hidden">
           <Suspense fallback={<LoadingPage />}>
             <Toaster />
 
@@ -26,20 +21,9 @@ export function Main({ contentPadding = true, delegateScrolling = false }: Props
               <PrimaryNavigation />
 
               <div className="flex flex-row flex-1 min-h-0">
-                <aside className="flex flex-col">
-                  <Portal
-                    id="tertiary-navigation"
-                    className="flex flex-col flex-1 h-full min-h-0 overflow-hidden"
-                  />
-                </aside>
+                <Portal id="tertiary-navigation" className="h-full" />
 
-                <main
-                  className={cn(
-                    'flex flex-1 h-full min-h-0',
-                    delegateScrolling ? 'overflow-hidden' : 'overflow-y-auto',
-                    contentPadding ? 'p-4' : '',
-                  )}
-                >
+                <main className="flex-1 min-w-0">
                   <Outlet />
                 </main>
               </div>

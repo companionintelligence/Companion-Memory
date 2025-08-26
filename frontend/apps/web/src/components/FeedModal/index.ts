@@ -1,0 +1,1 @@
+export { FeedModal } from './FeedModal';

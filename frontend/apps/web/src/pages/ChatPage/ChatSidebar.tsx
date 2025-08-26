@@ -48,7 +48,7 @@ export const ChatSidebar = memo(function ChatSidebar({
   return (
     <div
       className={cn(
-        'border-r bg-gradient-to-b from-background/50 to-muted/20 backdrop-blur-sm flex-shrink-0 transition-all duration-300 ease-in-out h-full',
+        'border-r bg-gradient-to-b from-background/50 to-muted/20 backdrop-blur-sm flex-shrink-0 transition-all duration-300 ease-in-out h-full overflow-auto',
         isExpanded ? 'w-72 lg:w-80' : 'w-16 lg:w-20',
       )}
     >

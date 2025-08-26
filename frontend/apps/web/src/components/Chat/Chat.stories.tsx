@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 
-import { type ComponentProps, useEffect, useMemo } from 'react';
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
@@ -125,9 +125,10 @@ export const WithoutChildren: Story = {
 export const StreamingText: Story = {
   decorators: [
     (Story, ctx) => {
+      const abortControllerRef = useRef<AbortController | null>(null);
       const channel = useMemo(() => makeByteChannel(), []);
+      const [streaming, setStreaming] = useState(true);
 
-      // The generator is now much cleaner, with no manual checks.
       async function* scriptedChunks(signal: AbortSignal) {
         const thinking = `Hmm... let me piece this together. I'm considering how the structure flows, and whether the sequence of tokens aligns with the intended pattern. It looks like there are multiple possible branches here, but one seems more consistent. If I break this down step by step, I should be able to maintain coherence. I might need to reconcile a few edge cases, but overall the direction seems clear. I'll refine the output so it's both logical and natural. Yes, I think this is the right path forward.`;
 
@@ -170,29 +171,53 @@ export const StreamingText: Story = {
         }
       }
 
+      const handleStop = useCallback(() => {
+        abortControllerRef.current?.abort();
+      }, []);
+
       useEffect(() => {
         const controller = new AbortController();
 
-        (async () => {
+        abortControllerRef.current = controller;
+        setStreaming(true);
+
+        const runStream = async () => {
           try {
             for await (const chunk of scriptedChunks(controller.signal)) {
+              if (controller.signal.aborted) {
+                break;
+              }
+
               channel.write(Buffer.from(chunk));
             }
           } catch (error) {
             if ((error as Error).name !== 'AbortError') {
-              console.error('Stream encountered an unhandled error:', error);
+              console.error('Stream encountered an unhandled error', error);
+              channel.error(error as Error);
             }
           } finally {
             channel.close();
+            setStreaming(false);
           }
-        })();
+        };
+
+        runStream();
 
         return () => {
           controller.abort();
         };
       }, [channel]);
 
-      return <Story args={{ ...ctx.args, readable: channel.readable }} />;
+      return (
+        <Story
+          args={{
+            ...ctx.args,
+            readable: channel.readable,
+            streaming,
+            onStop: handleStop,
+          }}
+        />
+      );
     },
   ],
   args: {

@@ -4,6 +4,7 @@ services:
       context: ./docker/postgres
       dockerfile: Dockerfile
     image: ci/postgres
+    pull_policy: build
     container_name: postgres
     ports:
       - 5432:5432

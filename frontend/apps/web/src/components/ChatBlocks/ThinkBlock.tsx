@@ -1,4 +1,4 @@
-import { type ForwardedRef, type RefObject, forwardRef, useMemo, useState } from 'react';
+import { type RefObject, useMemo, useState } from 'react';
 
 import { ChevronDown, ChevronRight, Brain } from '@ci/shadcn/icons';
 
@@ -11,10 +11,7 @@ interface Props {
   streamingRef?: RefObject<HTMLDivElement | null> | ((el: HTMLDivElement | null) => void);
 }
 
-function ThinkBlock(
-  { content, renderEmptyContent = false, defaultExpanded = true, streamingRef }: Props,
-  ref: ForwardedRef<HTMLDivElement>,
-) {
+function ThinkBlock({ content, renderEmptyContent = false, defaultExpanded = true, streamingRef }: Props) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   const trimmedContent = useMemo(() => content?.trim(), [content]);
@@ -25,7 +22,6 @@ function ThinkBlock(
 
   return (
     <div
-      ref={ref}
       className={cn(
         'border border-amber-200 dark:border-amber-800/50 text-sm rounded-lg bg-amber-50/50 dark:bg-amber-950/20',
         'has-[.streaming-content:empty]:hidden',
@@ -62,6 +58,4 @@ function ThinkBlock(
   );
 }
 
-const ThinkBlockRef = forwardRef<HTMLDivElement, Props>(ThinkBlock);
-
-export { ThinkBlockRef as ThinkBlock };
+export { ThinkBlock };

@@ -4,7 +4,7 @@ import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 import config from '@ci/configuration';
-import { ProviderEntity } from '@ci/domains/connections';
+import { ConnectionEntity, ProviderEntity } from '@ci/domains/connections';
 import { ActionEntity, AnswerEntity, QuestionEntity } from '@ci/domains/intelligence';
 import {
   ContactEntity,
@@ -57,6 +57,7 @@ const logger = new Logger(path.basename(__filename));
       AnswerEntity,
       QuestionEntity,
       // Providers
+      ConnectionEntity,
       ProviderEntity,
       // Search,
       TagEntity,
@@ -93,12 +94,14 @@ const logger = new Logger(path.basename(__filename));
     process.exit(0);
   } catch (err) {
     error = err as Error;
-  } finally {
-    await db.destroy();
   }
 
   if (error) {
     logger.error(error);
+  }
+
+  if (db.isInitialized) {
+    await db.destroy();
   }
 
   process.exit(error == null ? 0 : 1);

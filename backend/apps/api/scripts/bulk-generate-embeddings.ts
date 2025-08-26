@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 import config from '@ci/configuration';
+import { ConnectionEntity, ProviderEntity } from '@ci/domains/connections';
 import { AnswerEntity, QuestionEntity } from '@ci/domains/intelligence';
 import { ContentEntity, EventEntity } from '@ci/domains/memory';
 import { EmbeddingEntity, EmbeddingService, TagEntity } from '@ci/domains/search';
@@ -21,9 +22,11 @@ const logger = new Logger(path.basename(__filename));
     password: config.db.password,
     entities: [
       AnswerEntity,
+      ConnectionEntity, // Unused, but relationally dependent
       ContentEntity,
       EmbeddingEntity,
       EventEntity, // Unused, but relationally dependent
+      ProviderEntity, // Unused, but relationally dependent
       QuestionEntity,
       TagEntity, // Unused, but relationally dependent
       UserEntity, // Unused, but relationally dependent
@@ -89,12 +92,14 @@ const logger = new Logger(path.basename(__filename));
     process.exit(0);
   } catch (err) {
     error = err as Error;
-  } finally {
-    await db.destroy();
   }
 
   if (error) {
     logger.error(error);
+  }
+
+  if (db.isInitialized) {
+    await db.destroy();
   }
 
   process.exit(error == null ? 0 : 1);

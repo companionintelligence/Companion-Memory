@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type FormEvent, type ReactNode } from 'react';
+import { useCallback, type FormEvent, type ReactNode } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card } from '@ci/shadcn';
@@ -7,7 +7,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import { Chat, type FormData } from '@/components/Chat';
 import { ModelSelector } from '@/components/ModelSelector';
-import { useAuth, useModel } from '@/hooks';
+import { useChatRequester, useModel } from '@/hooks';
 
 import { ChatSidebar } from './ChatSidebar';
 import { useThreadListService } from './useThreadListService';
@@ -24,7 +24,6 @@ export default function ChatPage() {
   const pathSegments = location.pathname.split('/').filter(Boolean);
   const threadId = pathSegments.length > 1 ? pathSegments[1] : null;
 
-  const [{ authToken }] = useAuth();
   const [{ selectedModel }] = useModel();
 
   const [
@@ -34,10 +33,15 @@ export default function ChatPage() {
 
   const [{ thread, loading: threadLoading }] = useThreadService(threadId);
 
-  const [promptLoading, setPromptLoading] = useState<boolean>(false);
-  const [reader, setReader] = useState<ReadableStream<Uint8Array> | null>(null);
+  const [
+    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, threadId: chatRequestThreadId },
+    { submit: submitChatRequest, stop: stopChatRequest },
+  ] = useChatRequester(threadId);
 
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const handleCreateThread = useCallback(() => {
+    // Note: Thread will be created automatically when the first message is sent
+    navigate('/chat');
+  }, [navigate]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
@@ -46,81 +50,20 @@ export default function ChatPage() {
     [navigate],
   );
 
-  const handleCreateThread = useCallback(() => {
-    // Note: Thread will be created automatically when the first message is sent
-    navigate('/chat');
-  }, [navigate]);
-
   // Handle form submission
   const handleSubmit = useCallback(
     async (data: FormData, e?: FormEvent) => {
       e?.preventDefault();
 
-      if (!data.message.trim()) {
-        return;
-      }
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      let success = false;
-
-      try {
-        const res = await fetch('/api/llm/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({
-            prompt: data.message.trim(),
-            model: selectedModel,
-            threadId: threadId,
-            enableTools: true,
-            enableThinking: true,
-          }),
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          throw new Error('Request error');
-        }
-
-        if (!res.body) {
-          throw new Error('No response body');
-        }
-
-        const resThreadId = res.headers.get('X-Thread-Id') as string;
-
-        // TODO: This is jank cause it'll refetch the thread.
-        if (threadId !== resThreadId) {
-          navigate(`/chat/${resThreadId}`);
-        }
-
-        setReader(res.body);
-        success = true;
-      } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
-          console.error('Stream error:', err);
-        }
-      } finally {
-        setPromptLoading(false);
-      }
-
-      return success;
+      return submitChatRequest(data);
     },
-    [authToken, selectedModel, threadId],
+    [submitChatRequest],
   );
 
-  const handleStop = useCallback(() => {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    setPromptLoading(false);
-  }, []);
-
-  const loading = threadsLoading || threadLoading || promptLoading;
-  const isSubmitDisabled = loading || selectedModel == null;
-  const inputPlaceholder = threadId == null ? 'Start a new conversation...' : 'Continue the conversation...';
+  const loading = threadsLoading || threadLoading || chatRequestLoading;
+  const isSubmitDisabled = selectedModel == null;
+  const inputPlaceholder =
+    chatRequestThreadId == null ? 'Start a new conversation...' : 'Continue the conversation...';
 
   let emptyState: ReactNode;
 
@@ -149,7 +92,7 @@ export default function ChatPage() {
         </Card.Content>
       </Card>
     );
-  } else if (threadId == null) {
+  } else if (chatRequestThreadId == null) {
     emptyState = (
       <div className="text-center max-w-md mx-auto mb-6 lg:mb-8">
         <div className="w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gradient-to-br from-primary/10 to-primary/20 flex items-center justify-center mx-auto mb-4 lg:mb-6 shadow-lg border border-primary/20">
@@ -206,15 +149,16 @@ export default function ChatPage() {
       </Portal.Slot>
 
       <Chat
-        // key={threadId ?? ''}
         loading={loading}
+        streaming={chatRequestStreaming}
         disabled={isSubmitDisabled}
         placeholder={inputPlaceholder}
         messages={thread?.messages}
         emptyState={emptyState}
-        readable={reader ?? undefined}
+        readable={stream ?? undefined}
         onSubmit={handleSubmit}
-        onStop={handleStop}
+        onStop={stopChatRequest}
+        autoFocus={true}
       />
     </>
   );

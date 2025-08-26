@@ -27,6 +27,8 @@ import {
   Filter,
 } from '@ci/shadcn/icons';
 
+import { PageContent } from '@/components/layout';
+
 export interface Job {
   readonly id: string;
   readonly title: string;
@@ -307,8 +309,8 @@ export function JobsPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      {/* Header and Stats Section */}
-      <div className="mb-4">
+      <PageContent>
+        {/* Header and Stats Section */}
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Job Queue</h1>
@@ -576,7 +578,7 @@ export function JobsPage() {
             )}
           </Tabs.Content>
         </Tabs>
-      </div>
+      </PageContent>
 
       {/* Create Job Modal */}
       <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>

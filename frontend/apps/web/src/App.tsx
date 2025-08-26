@@ -5,6 +5,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { AuthProvider, ModelProvider, ThemeProvider } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
+import FeedPage from '@/pages/FeedPage';
 import LoginPage from '@/pages/LoginPage';
 import NotFound from '@/pages/NotFound';
 import SplashPage from '@/pages/SplashPage';
@@ -45,17 +46,17 @@ function AppRoutes() {
         <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
       </Route>
 
-      {/* Main layout routes */}
       <Route element={<MainLayout />}>
         {/* Intelligence */}
         <Route
           path="/feed"
           element={
             <ProtectedRoute>
-              <div>Feed page</div>
+              <FeedPage />
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/search"
           element={
@@ -64,6 +65,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/memory"
           element={
@@ -72,6 +74,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/insights"
           element={
@@ -80,6 +83,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/actions"
           element={
@@ -88,6 +92,16 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
+        <Route
+          path="/chat/*"
+          element={
+            <ProtectedRoute>
+              <ChatPage />
+            </ProtectedRoute>
+          }
+        />
+
         <Route
           path="/files"
           element={
@@ -96,6 +110,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/capture"
           element={
@@ -114,6 +129,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/jobs"
           element={
@@ -122,6 +138,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/connections"
           element={
@@ -130,22 +147,12 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/settings"
           element={
             <ProtectedRoute>
               <SettingsPage />
-            </ProtectedRoute>
-          }
-        />
-      </Route>
-
-      <Route element={<MainLayout delegateScrolling={true} contentPadding={false} />}>
-        <Route
-          path="/chat/*"
-          element={
-            <ProtectedRoute>
-              <ChatPage />
             </ProtectedRoute>
           }
         />

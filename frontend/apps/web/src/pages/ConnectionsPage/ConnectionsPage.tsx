@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Card, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
+import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
 import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
 
+import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
 export interface Provider {
@@ -555,173 +556,158 @@ export function ConnectionsPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <Card className="w-full">
-        <Card.Header className="flex flex-row items-center justify-between">
-          <Card.Title className="text-2xl">Connections</Card.Title>
-          <Button variant="outline" size="icon" disabled={loading} title="Refresh Providers">
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            disabled={loading}
-            onClick={connectionCreate}
-            title="Create Connection"
-          >
-            Create
-          </Button>
-        </Card.Header>
-        <Card.Content>
-          {successMessage && (
-            <div className="bg-green-50 text-green-800 rounded-md p-4 mb-4 flex items-start gap-3">
-              <div>
-                <p className="text-sm">{successMessage}</p>
-              </div>
+      <PageContent>
+        <div className="flex flex-row items-center justify-between">
+          <h1 className="text-2xl font-bold">Connections</h1>
+
+          <div className="flex flex-row items-center gap-2">
+            <Button variant="outline" size="icon" disabled={loading} title="Refresh Providers">
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+            <Button variant="outline" disabled={loading} onClick={connectionCreate} title="Create Connection">
+              Create
+            </Button>
+          </div>
+        </div>
+
+        {successMessage && (
+          <div className="bg-green-50 text-green-800 rounded-md p-4 text-sm">{successMessage}</div>
+        )}
+
+        {loading || oauthInProgress ? (
+          <div className="text-center py-8">
+            <RefreshCw className="h-8 w-8 animate-spin mx-auto" />
+            <p>{oauthInProgress ? 'Redirecting to authentication...' : 'Loading...'}</p>
+          </div>
+        ) : error ? (
+          <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="font-medium">Error loading</h3>
+              <p className="text-sm">{error}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchState()}>
+                Try Again
+              </Button>
             </div>
-          )}
-          {loading || oauthInProgress ? (
-            <div className="text-center py-8">
-              <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-4" />
-              <p>{oauthInProgress ? 'Redirecting to authentication...' : 'Loading...'}</p>
-            </div>
-          ) : error ? (
-            <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
-              <div>
-                <h3 className="font-medium">Error loading</h3>
-                <p className="text-sm">{error}</p>
-                <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchState()}>
-                  Try Again
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <hr></hr>
-                <h1>Connections</h1>
-                <hr></hr>
-                <Table>
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.Head>Name</Table.Head>
-                      <Table.Head>Provider</Table.Head>
-                      <Table.Head>Status</Table.Head>
-                      <Table.Head>Schedule</Table.Head>
-                      <Table.Head>Enabled</Table.Head>
-                      <Table.Head>Actions</Table.Head>
-                    </Table.Row>
-                  </Table.Header>
-                  <Table.Body>
-                    {Providers.length === 0 ? (
-                      <Table.Row>
-                        <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
-                          No Providers found in the system
-                        </Table.Cell>
-                      </Table.Row>
-                    ) : (
-                      Connections.map((connection) => (
-                        <Table.Row key={connection.id}>
-                          <Table.Cell className="text-sm">{connection.name}</Table.Cell>
-                          <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
-                          <Table.Cell className="text-sm">
+          </div>
+        ) : (
+          <>
+            <Table>
+              <Table.Header>
+                <Table.Row>
+                  <Table.Head>Name</Table.Head>
+                  <Table.Head>Provider</Table.Head>
+                  <Table.Head>Status</Table.Head>
+                  <Table.Head>Schedule</Table.Head>
+                  <Table.Head>Enabled</Table.Head>
+                  <Table.Head>Actions</Table.Head>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {Providers.length === 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      No Providers found in the system
+                    </Table.Cell>
+                  </Table.Row>
+                ) : (
+                  Connections.map((connection) => (
+                    <Table.Row key={connection.id}>
+                      <Table.Cell className="text-sm">{connection.name}</Table.Cell>
+                      <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
+                      <Table.Cell className="text-sm">
+                        {connection.accessToken ? (
+                          <span className="flex items-center gap-1 text-green-600">
+                            <Link2 className="h-3 w-3" />
+                            Connected
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-muted-foreground">
+                            <X className="h-3 w-3" />
+                            Not connected
+                          </span>
+                        )}
+                      </Table.Cell>
+                      <Table.Cell className="text-sm">{truncateText(connection.schedule ?? '')}</Table.Cell>
+                      <Table.Cell className="text-sm">
+                        <Toggle
+                          aria-label="Toggle italic"
+                          onClick={() => {
+                            connectionToggle(connection);
+                          }}
+                        >
+                          {connection.active ? 'enabled' : 'disabled'}
+                        </Toggle>
+                      </Table.Cell>
+                      <Table.Cell className="text-sm">
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => connectionEdit(connection)}
+                            disabled={deleteLoading === connection.id || oauthInProgress}
+                            title="Edit"
+                          >
+                            <Settings className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleConnect(connection)}
+                            disabled={
+                              deleteLoading === connection.id ||
+                              oauthInProgress ||
+                              !connection.clientid ||
+                              !connection.clientsecret
+                            }
+                            title={
+                              !connection.clientid || !connection.clientsecret
+                                ? 'Configure OAuth credentials first'
+                                : connection.accessToken
+                                  ? 'Reconnect'
+                                  : 'Connect'
+                            }
+                          >
                             {connection.accessToken ? (
-                              <span className="flex items-center gap-1 text-green-600">
-                                <Link2 className="h-3 w-3" />
-                                Connected
-                              </span>
+                              <RefreshCw className="h-4 w-4" />
                             ) : (
-                              <span className="flex items-center gap-1 text-muted-foreground">
-                                <X className="h-3 w-3" />
-                                Not connected
-                              </span>
+                              <Link2 className="h-4 w-4" />
                             )}
-                          </Table.Cell>
-                          <Table.Cell className="text-sm">
-                            {truncateText(connection.schedule ?? '')}
-                          </Table.Cell>
-                          <Table.Cell className="text-sm">
-                            <Toggle
-                              aria-label="Toggle italic"
-                              onClick={() => {
-                                connectionToggle(connection);
-                              }}
-                            >
-                              {connection.active ? 'enabled' : 'disabled'}
-                            </Toggle>
-                          </Table.Cell>
-                          <Table.Cell className="text-sm">
-                            <div className="flex gap-2">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => connectionEdit(connection)}
-                                disabled={deleteLoading === connection.id || oauthInProgress}
-                                title="Edit"
-                              >
-                                <Settings className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleConnect(connection)}
-                                disabled={
-                                  deleteLoading === connection.id ||
-                                  oauthInProgress ||
-                                  !connection.clientid ||
-                                  !connection.clientsecret
-                                }
-                                title={
-                                  !connection.clientid || !connection.clientsecret
-                                    ? 'Configure OAuth credentials first'
-                                    : connection.accessToken
-                                      ? 'Reconnect'
-                                      : 'Connect'
-                                }
-                              >
-                                {connection.accessToken ? (
-                                  <RefreshCw className="h-4 w-4" />
-                                ) : (
-                                  <Link2 className="h-4 w-4" />
-                                )}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleDeleteConnection(connection.id)}
-                                disabled={deleteLoading === connection.id || oauthInProgress}
-                                title="Delete"
-                              >
-                                {deleteLoading === connection.id ? (
-                                  <RefreshCw className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4" />
-                                )}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleSyncConnection(connection.id)}
-                                disabled={deleteLoading === connection.id || oauthInProgress}
-                                title="Sync Data"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </Table.Cell>
-                        </Table.Row>
-                      ))
-                    )}
-                  </Table.Body>
-                </Table>
-              </div>
-              <div className="text-xs text-muted-foreground mt-4">
-                Total Connections: {Connections.length}
-              </div>
-            </>
-          )}
-        </Card.Content>
-      </Card>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDeleteConnection(connection.id)}
+                            disabled={deleteLoading === connection.id || oauthInProgress}
+                            title="Delete"
+                          >
+                            {deleteLoading === connection.id ? (
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleSyncConnection(connection.id)}
+                            disabled={deleteLoading === connection.id || oauthInProgress}
+                            title="Sync Data"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </Table.Cell>
+                    </Table.Row>
+                  ))
+                )}
+              </Table.Body>
+            </Table>
+
+            <div className="text-xs text-muted-foreground">Total Connections: {Connections.length}</div>
+          </>
+        )}
+      </PageContent>
 
       {/* Create Connection Modal */}
       <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>

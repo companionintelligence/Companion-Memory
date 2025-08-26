@@ -20,6 +20,7 @@
     "@ci/shadcn": "workspace:*",
     "buffer": "^6.0.3",
     "clsx": "^2.1.1",
+    "embla-carousel-react": "^8.6.0",
     "jwt-decode": "^4.0.0",
     "leaflet": "^1.9.4",
     "react": "^19.1.0",
@@ -27,6 +28,7 @@
     "react-router-dom": "^7.6.1",
     "recharts": "^2.15.3",
     "tailwind-merge": "^3.3.0",
+    "uuid": "^11.1.0",
     "zod": "^3.25.6"
   },
   "devDependencies": {

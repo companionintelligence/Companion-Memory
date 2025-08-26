@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Card } from '@ci/shadcn';
+import { Breadcrumb } from '@ci/shadcn';
 
+import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
 interface FileMeta {
@@ -111,7 +112,7 @@ export function FilesGalleryPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <Card className="w-full p-4">
+      <PageContent>
         <form className="flex items-center gap-4 mb-8" onSubmit={handleUpload} encType="multipart/form-data">
           <input
             type="file"
@@ -178,7 +179,7 @@ export function FilesGalleryPage() {
             })}
           </div>
         )}
-      </Card>
+      </PageContent>
     </>
   );
 }

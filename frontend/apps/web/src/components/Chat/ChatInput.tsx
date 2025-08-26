@@ -1,8 +1,10 @@
 import {
   type BaseSyntheticEvent,
   type FormEvent,
+  type ForwardedRef,
   type KeyboardEvent,
   type MouseEvent,
+  forwardRef,
   useCallback,
 } from 'react';
 
@@ -39,24 +41,31 @@ const handleEnterSubmit = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 interface Props {
   disabled?: boolean;
   loading?: boolean;
+  streaming?: boolean;
   placeholder?: string;
   lastAssistantMessage?: string;
   onAttach?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
+  //onRecord?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
 }
 
-export function ChatInput({
-  disabled = false,
-  loading = false,
-  placeholder,
-  lastAssistantMessage,
-  onAttach,
-  onSubmit,
-  onStop,
-}: Props) {
-  const SendIcon = loading ? Square : Send;
-  const sendIconClassName = loading ? '' : 'left-[-0.5px] top-[0.5px]';
+function ChatInput(
+  {
+    disabled = false,
+    loading = false,
+    streaming = false,
+    placeholder,
+    lastAssistantMessage,
+    onAttach,
+    //onRecord,
+    onSubmit,
+    onStop,
+  }: Props,
+  forwardedRef: ForwardedRef<HTMLTextAreaElement>,
+) {
+  const SendIcon = streaming ? Square : Send;
+  const sendIconClassName = streaming ? '' : 'left-[-0.5px] top-[0.5px]';
 
   const form = useForm<FormData>({
     resolver: formDataResolver(FormSchema),
@@ -72,6 +81,8 @@ export function ChatInput({
 
   const handleStop = useCallback(
     (e: MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+
       onStop?.(e);
     },
     [onStop],
@@ -79,10 +90,14 @@ export function ChatInput({
 
   const handleSubmit = useCallback(
     async (data: FormData, e?: BaseSyntheticEvent) => {
-      const success = await onSubmit?.(data, e as FormEvent<HTMLFormElement>);
+      e?.preventDefault();
 
-      if (success === true) {
-        form.reset();
+      if (data.message.trim()) {
+        const success = await onSubmit?.(data, e as FormEvent<HTMLFormElement>);
+
+        if (success === true) {
+          form.reset();
+        }
       }
     },
     [form, onSubmit],
@@ -106,7 +121,7 @@ export function ChatInput({
               <Tooltip.Trigger asChild>
                 <Button
                   type="button"
-                  disabled={loading || disabled}
+                  disabled={loading || streaming || disabled}
                   size="sm"
                   variant="ghost"
                   className="cursor-pointer h-8 w-8 p-0 -mr-1 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
@@ -159,8 +174,9 @@ export function ChatInput({
                 render={({ field }) => (
                   <Textarea
                     {...field}
+                    ref={forwardedRef}
                     placeholder={placeholder}
-                    disabled={loading || disabled}
+                    disabled={loading || streaming || disabled}
                     className="
                       !w-full
                       !flex-1
@@ -211,7 +227,7 @@ export function ChatInput({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={loading || disabled || !form.watch('message')?.trim()}
+                    disabled={loading || streaming || disabled || !form.watch('message')?.trim()}
                     className="h-8 w-8 p-0"
                     onClick={async () => {
                       const messageText = form.watch('message') || '';
@@ -360,14 +376,14 @@ export function ChatInput({
               )}
 
               <Tooltip>
-                <Tooltip.Content side="bottom">{loading ? 'Stop' : 'Send'}</Tooltip.Content>
+                <Tooltip.Content side="bottom">{streaming ? 'Stop' : 'Send'}</Tooltip.Content>
                 <Tooltip.Trigger asChild>
                   <Button
-                    type={loading ? 'button' : 'submit'}
-                    disabled={disabled}
+                    type={streaming ? 'button' : 'submit'}
+                    disabled={loading || disabled}
                     size="sm"
                     className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-                    onClick={loading ? handleStop : undefined}
+                    onClick={streaming ? handleStop : undefined}
                   >
                     <SendIcon className={cn('h-4 w-4 relative', sendIconClassName)} />
                   </Button>
@@ -380,3 +396,7 @@ export function ChatInput({
     </Tooltip.Provider>
   );
 }
+
+const ChatInputForwarded = forwardRef(ChatInput);
+
+export { ChatInputForwarded as ChatInput };

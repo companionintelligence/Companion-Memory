@@ -4,6 +4,7 @@ import { Camera, getImageDataURL, getVideoPreviewDataURL } from '@ci/capture';
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, useToast } from '@ci/shadcn';
 
+import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
 export function CapturePage() {
@@ -88,13 +89,13 @@ export function CapturePage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <div>
+      <PageContent>
         <Camera onFrameCaptured={handleFrameCaptured} onRecordingFinished={handleRecordingFinished}>
           <div>
             <Camera.Feed />
           </div>
         </Camera>
-      </div>
+      </PageContent>
     </>
   );
 }

@@ -2,6 +2,8 @@ import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Card, Switch } from '@ci/shadcn';
 import { Bot, Clapperboard, Play, Utensils } from '@ci/shadcn/icons';
 
+import { PageContent } from '@/components/layout';
+
 import { useToolPreferences } from './useToolPreferences';
 
 interface ToolCard {
@@ -202,7 +204,7 @@ export function ActionsPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <div className="flex flex-col w-full space-y-6">
+      <PageContent>
         {/* Header Section */}
         <div className="space-y-2">
           <h1 className="text-2xl font-bold">Available Actions</h1>
@@ -256,7 +258,7 @@ export function ActionsPage() {
             <li>• Your preferences are saved locally and will persist between sessions</li>
           </ul>
         </div>
-      </div>
+      </PageContent>
     </>
   );
 }

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Card, Table } from '@ci/shadcn';
+import { Breadcrumb, Button, Table } from '@ci/shadcn';
 import { AlertCircle, RefreshCw } from '@ci/shadcn/icons';
 
+import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
 interface Answer {
@@ -126,9 +127,9 @@ export function InsightsPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <Card className="w-full">
-        <Card.Header className="flex flex-row items-center justify-between">
-          <Card.Title className="text-2xl">Insights</Card.Title>
+      <PageContent>
+        <div className="flex flex-row items-center justify-between">
+          <h1 className="text-2xl font-bold">Insights</h1>
           <Button
             variant="outline"
             size="icon"
@@ -138,61 +139,58 @@ export function InsightsPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-        </Card.Header>
-        <Card.Content>
-          {loading ? (
-            <div className="text-center py-8">
-              <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-4" />
-              <p>Loading answers...</p>
+        </div>
+
+        {loading ? (
+          <div className="text-center py-8">
+            <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p>Loading answers...</p>
+          </div>
+        ) : error ? (
+          <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="font-medium">Error loading answers</h3>
+              <p className="text-sm">{error}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={fetchAnswers}>
+                Try Again
+              </Button>
             </div>
-          ) : error ? (
-            <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
-              <div>
-                <h3 className="font-medium">Error loading answers</h3>
-                <p className="text-sm">{error}</p>
-                <Button variant="outline" size="sm" className="mt-2" onClick={fetchAnswers}>
-                  Try Again
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <Table>
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.Head>ID</Table.Head>
-                      <Table.Head>Question</Table.Head>
-                      <Table.Head>Answer</Table.Head>
-                      <Table.Head>RAG Answer</Table.Head>
+          </div>
+        ) : (
+          <>
+            <Table>
+              <Table.Header>
+                <Table.Row>
+                  <Table.Head>ID</Table.Head>
+                  <Table.Head>Question</Table.Head>
+                  <Table.Head>Answer</Table.Head>
+                  <Table.Head>RAG Answer</Table.Head>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {answers.length === 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      No answers found in the system
+                    </Table.Cell>
+                  </Table.Row>
+                ) : (
+                  answers.map((answer) => (
+                    <Table.Row key={answer.id}>
+                      <Table.Cell className="font-mono text-xs">{answer.id}</Table.Cell>
+                      <Table.Cell className="text-sm">{answer.question?.text}</Table.Cell>
+                      <Table.Cell className="text-sm">{truncateText(answer.answer)}</Table.Cell>
+                      <Table.Cell className="text-sm">{truncateText(answer.ragAnswer)}</Table.Cell>
                     </Table.Row>
-                  </Table.Header>
-                  <Table.Body>
-                    {answers.length === 0 ? (
-                      <Table.Row>
-                        <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
-                          No answers found in the system
-                        </Table.Cell>
-                      </Table.Row>
-                    ) : (
-                      answers.map((answer) => (
-                        <Table.Row key={answer.id}>
-                          <Table.Cell className="font-mono text-xs">{answer.id}</Table.Cell>
-                          <Table.Cell className="text-sm">{answer.question?.text}</Table.Cell>
-                          <Table.Cell className="text-sm">{truncateText(answer.answer)}</Table.Cell>
-                          <Table.Cell className="text-sm">{truncateText(answer.ragAnswer)}</Table.Cell>
-                        </Table.Row>
-                      ))
-                    )}
-                  </Table.Body>
-                </Table>
-              </div>
-              <div className="text-xs text-muted-foreground mt-4">Total answers: {answers.length}</div>
-            </>
-          )}
-        </Card.Content>
-      </Card>
+                  ))
+                )}
+              </Table.Body>
+            </Table>
+            <div className="text-xs text-muted-foreground text-right">Total insights: {answers.length}</div>
+          </>
+        )}
+      </PageContent>
     </>
   );
 }

@@ -95,6 +95,10 @@ function useAuth(): Value {
             password,
           }),
         });
+        const accessDecoded = jwtDecode(data.accessToken);
+        document.cookie = `CI_accessToken=${data.accessToken}; SameSite=None; Secure; expires=${new Date(accessDecoded.exp! * 1000).toUTCString()}`;
+        const sessionDecoded = jwtDecode(data.accessToken);
+        document.cookie = `CI_sessionToken=${data.sessionToken}; SameSite=None; Secure; expires=${new Date(sessionDecoded.exp! * 1000).toUTCString()}`;
 
         localStorage.setItem(ACCESS_TOKEN_KEY, data.accessToken);
         localStorage.setItem(SESSION_TOKEN_KEY, data.sessionToken);
