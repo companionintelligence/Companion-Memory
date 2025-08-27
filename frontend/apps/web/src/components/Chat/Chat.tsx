@@ -223,7 +223,7 @@ export function Chat({
 
           // Reset the current assistant message when starting a new turn
           setCurrentAssistantMessage('');
-          
+
           flushStream(block);
           maybeAutoScroll(true);
         } catch (err) {
