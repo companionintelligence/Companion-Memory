@@ -5,6 +5,7 @@ import { Breadcrumb, Button, Card } from '@ci/shadcn';
 import { RefreshCw, MessageSquare, X } from '@ci/shadcn/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 
+import { useThreadService } from '@/api';
 import { Chat, type FormData } from '@/components/Chat';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useChatRequester, useCounter, useModel } from '@/hooks';
@@ -12,7 +13,6 @@ import { useChatRequester, useCounter, useModel } from '@/hooks';
 import { ChatSidebar } from './ChatSidebar';
 import { type Message } from './types';
 import { useThreadListService } from './useThreadListService';
-import { useThreadService } from './useThreadService';
 
 export default function ChatPage() {
   usePageTitle('Chat - Companion Intelligence');

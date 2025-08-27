@@ -414,7 +414,7 @@ export class MemoryService {
     return memory;
   }
 
-  private async contentToMemory(content: ContentEntity): Promise<Memory> {
+  private async contentToMemory(content: ContentEntity, event: EventEntity): Promise<Memory> {
     // Content might be associated with an event that has location
     let location: MemoryLocation | undefined;
 
@@ -445,7 +445,7 @@ export class MemoryService {
       type: 'content',
       title: content.title || 'Untitled Content',
       description: content.text,
-      timestamp: content.created_at,
+      timestamp: event.start_time || event.created_at || content.created_at,
       category: content.type || 'Content',
       location,
       tags: (content.tags?.map((t) => t.label).filter(Boolean) as string[]) || [],
@@ -949,13 +949,13 @@ export class MemoryService {
     try {
       // Try to find the actual content entity
       const content = await this.contentRepo.findOne({
-        where: { external_id: contentRef },
+        where: { id: contentRef.replace('content_', '') },
         relations: ['tags', 'user', 'event'],
       });
 
       if (content) {
         // Use actual content data
-        const memory = await this.contentToMemory(content);
+        const memory = await this.contentToMemory(content, event);
         // Override ID to maintain relationship with event
         memory.id = `memory-${event.id}-content-${index}`;
         memory.metadata = {

@@ -22,7 +22,7 @@ import { RequestContext } from '@ci/common/types';
 import { ContentService } from '../services/ContentService';
 import { CreateContentDto, UpdateContentDto } from '../types';
 
-const createContentSchema = z.object({
+export const createContentSchema = z.object({
   type: z.string().optional(),
   title: z.string().optional(),
   text: z.string().optional(),
@@ -55,18 +55,32 @@ export class ContentController {
   async create(
     @Req() req: Request,
     @Context() context: RequestContext,
-    @Body(new ValidationPipe(createContentSchema)) input: CreateContentDto,
+    @Body(new ValidationPipe(createContentSchema)) input: CreateContentDto | CreateContentDto[],
   ) {
     try {
       if (context.userId) {
-        input.user = { id: context.userId };
+        if (Array.isArray(input)) {
+          input = input.map((item) => {
+            item.user = { id: context.userId! };
+
+            return item;
+          });
+        } else {
+          input.user = { id: context.userId! };
+        }
       }
 
-      if (input.event_id) {
-        input.event = { id: input.event_id };
+      if (Array.isArray(input)) {
+        input = input.map((item) => {
+          item.event = { id: item.event_id! };
+
+          return item;
+        });
+      } else {
+        input.event = { id: input.event_id! };
       }
 
-      return await this.contentService.create(input);
+      return await this.contentService.create(context, input);
     } catch (error) {
       if (error instanceof QueryFailedError && error.driverError?.code === PgErrorCode.UNIQUE_VIOLATION) {
         // TODO: Obfuscate this error message? We're revealing DB details here.

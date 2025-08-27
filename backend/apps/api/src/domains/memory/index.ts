@@ -32,7 +32,7 @@ import { MemoryService } from './services/MemoryService';
   ],
   providers: [MemoryService, ContentService, EventService],
   controllers: [MemoryController, ContentController, EventController],
-  exports: [MemoryService],
+  exports: [MemoryService, ContentService, EventService],
 })
 export class MemoryModule {}
 

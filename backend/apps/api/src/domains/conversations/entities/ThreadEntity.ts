@@ -5,10 +5,13 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  ManyToMany,
+  JoinTable,
   JoinColumn,
   DeleteDateColumn,
 } from 'typeorm';
 
+import { FileEntity } from '@ci/domains/files';
 import { UserEntity } from '@ci/domains/user';
 
 import type { Thread } from '../types';
@@ -40,12 +43,21 @@ export class ThreadEntity {
   @DeleteDateColumn({ type: 'timestamptz' })
   deleted_at!: Date;
 
+  @ManyToMany(() => FileEntity, { nullable: true })
+  @JoinTable({
+    name: 'thread_file',
+    joinColumn: { name: 'thread_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'file_id', referencedColumnName: 'id' },
+  })
+  files?: FileEntity[];
+
   toThread() {
     return {
       id: this.id,
       name: this.name ?? null,
       model: this.model ?? null,
       description: this.description ?? null,
+      files: this.files || [],
 
       user: this.user?.toUser(),
     } satisfies Thread;

@@ -24,4 +24,4 @@ export { MessageEntity, ThreadEntity };
 export { MessageService, ThreadService };
 
 // Types
-export type {} from './types';
+export type { Message, Thread } from './types';

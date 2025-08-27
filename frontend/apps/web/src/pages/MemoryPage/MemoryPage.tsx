@@ -455,6 +455,40 @@ export function MemoryPage() {
                               <span>{memory.metadata.url as string}</span>
                             </Link>
                           )}
+                          {memory.category === 'Audio' && memory.metadata?.url != null && (
+                            <div
+                              style={{
+                                left: 0,
+                                width: '50%',
+                                height: 0,
+                                position: 'relative',
+                                paddingBottom: '28.125%',
+                              }}
+                              className="mt-2"
+                            >
+                              {memory.metadata.mimetype === 'text/html' ? (
+                                <iframe
+                                  src={memory.metadata.url as string}
+                                  allowFullScreen={true}
+                                  style={{
+                                    border: 0,
+                                    top: 0,
+                                    left: 0,
+                                    width: '100%',
+                                    height: '100%',
+                                    position: 'absolute',
+                                  }}
+                                />
+                              ) : (
+                                <audio controls>
+                                  <source
+                                    src={memory.metadata.url as string}
+                                    type={memory.metadata.mimetype as string}
+                                  />
+                                </audio>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}

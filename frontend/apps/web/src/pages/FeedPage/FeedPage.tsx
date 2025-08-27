@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { Portal } from '@ci/common';
 import { Breadcrumb } from '@ci/shadcn';
 
+import { type Action, useActionListService } from '@/api';
 import { PageContent } from '@/components/layout';
 import { useModalControls } from '@/hooks';
 
@@ -14,21 +15,34 @@ import { FeedModal } from './FeedModal';
 import type { FeedItem } from './types';
 
 export function FeedPage() {
+  const [{ data: actions, loading, error }] = useActionListService();
+
   const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls();
 
+  const [selectedAction, setSelectedAction] = useState<Action | null>(null);
   const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null);
 
-  const handleCardClick = useCallback((id: string) => {
-    const item = [...feedData, ...actionInsightData].find((item) => item.id === id);
+  const handleCardClick = useCallback(
+    (id: string) => {
+      const action = actions.find((item) => item.id === id);
+      const item = [...feedData, ...actionInsightData].find((item) => item.id === id);
 
-    if (item) {
-      setSelectedItem(item);
-      openModal();
-    }
-  }, []);
+      if (action) {
+        setSelectedAction(action);
+        setSelectedItem(null);
+        openModal();
+      } else if (item) {
+        setSelectedAction(null);
+        setSelectedItem(item);
+        openModal();
+      }
+    },
+    [actions],
+  );
 
   const handleModalClose = useCallback(() => {
     closeModal();
+    setSelectedAction(null);
     setSelectedItem(null);
   }, []);
 
@@ -56,6 +70,20 @@ export function FeedPage() {
           containerClassName="px-6 pb-6 pt-1"
           slideClassName="flex-none min-w-[550px] basis-[550px] mr-6"
         >
+          {!loading &&
+            !error &&
+            actions.map((action) => (
+              <BentoCard
+                key={action.id}
+                title={action.title}
+                description={action.text}
+                tags={action.tags}
+                imageUrl={action.imageUrl}
+                onClick={() => handleCardClick(action.id)}
+                className="hover:shadow-lg transition-shadow duration-200"
+              />
+            ))}
+
           {feedData.map((item) => (
             <BentoCard
               key={item.id}
@@ -91,10 +119,11 @@ export function FeedPage() {
 
       <FeedModal
         open={isModalOpen}
-        title={selectedItem?.title}
-        description={selectedItem?.description}
-        tags={selectedItem?.tags}
-        imageUrl={selectedItem?.imageUrl}
+        threadId={selectedAction?.threadId}
+        title={(selectedAction ?? selectedItem)?.title}
+        description={selectedAction?.text ?? selectedItem?.description}
+        tags={(selectedAction ?? selectedItem)?.tags}
+        imageUrl={(selectedAction ?? selectedItem)?.imageUrl}
         onClose={handleModalClose}
       />
     </>

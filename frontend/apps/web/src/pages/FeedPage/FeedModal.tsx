@@ -3,8 +3,10 @@ import { type ReactNode, useCallback } from 'react';
 import { Button, Dialog } from '@ci/shadcn';
 import { Send } from '@ci/shadcn/icons';
 
+import { useThreadService } from '@/api';
 import { Chat } from '@/components/Chat';
 import { Tag } from '@/components/Tag';
+import { useChatRequester } from '@/hooks';
 
 interface Props {
   open?: boolean;
@@ -12,13 +14,21 @@ interface Props {
   description?: ReactNode;
   tags?: string[];
   imageUrl?: string;
+  threadId?: string;
   onClose?: () => void;
 }
 
-export function FeedModal({ open = false, title, description, tags, imageUrl, onClose }: Props) {
+export function FeedModal({ open = false, title, description, tags, imageUrl, threadId, onClose }: Props) {
   if (!title && !description) {
     return null;
   }
+
+  const [{ thread }] = useThreadService(threadId ?? null);
+
+  const [{ stream, streaming: chatRequestStreaming }, { submit: submitChatRequest, stop: stopChatRequest }] =
+    useChatRequester({
+      threadId: threadId ?? null,
+    });
 
   const handleOpenChange = useCallback((open: boolean) => {
     if (!open) {
@@ -44,8 +54,8 @@ export function FeedModal({ open = false, title, description, tags, imageUrl, on
           )}
         </Dialog.Header>
 
-        <div className="flex flex-1">
-          <div className="flex flex-col gap-4 p-4 border-r">
+        <div className="flex flex-1 min-h-0">
+          <div className="flex flex-col gap-4 p-4 border-r flex-1/2">
             {imageUrl && (
               <div className="aspect-video rounded-lg overflow-hidden bg-stone-100">
                 <img src={imageUrl} alt={title} className="w-full h-full object-cover" />
@@ -72,6 +82,11 @@ export function FeedModal({ open = false, title, description, tags, imageUrl, on
 
           <Chat
             placeholder="Ask about this content..."
+            streaming={chatRequestStreaming}
+            messages={thread?.messages}
+            readable={stream ?? undefined}
+            onSubmit={submitChatRequest}
+            onStop={stopChatRequest}
             emptyState={
               <div className="text-center text-gray-500 mt-8">
                 <div className="w-16 h-16 mx-auto mb-4 bg-stone-100 rounded-full flex items-center justify-center">

@@ -1,0 +1,2 @@
+id,model,text,mimetype,canceled,user_id,thread_id,role
+0198e4bf-71dd-7039-8ef3-f0bceb762041,qwen3:8b,"Would you like me to help you plan a meal you can eat and a movie you can watch together?",text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,f47ac10b-58cc-4372-a567-0e02b2c3d479,assistant

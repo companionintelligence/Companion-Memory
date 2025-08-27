@@ -8,8 +8,10 @@ import {
   ManyToOne,
   JoinColumn,
   JoinTable,
+  OneToOne,
 } from 'typeorm';
 
+import { ThreadEntity } from '@ci/domains/conversations';
 import { TagEntity } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
@@ -25,6 +27,16 @@ export class ActionEntity {
 
   @Column({ type: 'text', nullable: true })
   text!: string | null;
+
+  @Column({ type: 'text', name: 'image_url', nullable: true })
+  imageUrl!: string | null;
+
+  @Column({ type: 'text', name: 'thread_id', nullable: true })
+  threadId!: string;
+
+  @OneToOne(() => ThreadEntity, { nullable: true })
+  @JoinColumn({ name: 'thread_id' })
+  thread?: ThreadEntity;
 
   @ManyToOne(() => UserEntity, { nullable: true })
   @JoinColumn({ name: 'user_id' })
@@ -49,6 +61,9 @@ export class ActionEntity {
       id: this.id,
       title: this.title,
       text: this.text,
+      imageUrl: this.imageUrl,
+      threadId: this.threadId,
+      thread: this.thread?.toThread(),
       user: this.user?.toUser(),
       tags: this.tags?.map((tag) => tag.toTag()).filter((tag) => !!tag) as string[],
     } satisfies Action;

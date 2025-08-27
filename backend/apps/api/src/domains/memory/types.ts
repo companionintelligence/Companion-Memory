@@ -61,19 +61,20 @@ export interface Event {
 
 export interface CreateEventDto {
   id: string;
-  name: string;
+  name?: string;
   type: string;
-  description: string;
-  start_time: Date;
-  end_time: Date;
-  external_id: string;
-  source_url: string;
-  source_data: object;
-  user_id: string;
+  description?: string;
+  start_time?: Date;
+  end_time?: Date;
+  external_id?: string;
+  source_url?: string;
+  source_data?: object;
+  user_id?: string;
   connection_id?: string;
   user?: {
     id: string;
   };
+  content?: CreateContentDto[];
 }
 
 export interface UpdateEventDto {
@@ -88,6 +89,7 @@ export interface UpdateEventDto {
   source_data?: object;
   user_id?: string;
   connection_id?: string;
+  content?: CreateContentDto[];
 }
 
 export interface Content {
@@ -123,14 +125,17 @@ export interface CreateContentDto {
 }
 
 export interface UpdateContentDto {
-  id: string;
-  type: string;
-  title: string;
-  text: string;
-  url: string;
-  mimetype: string;
-  external_id: string;
-  source_url: string;
-  user_id: string;
-  event_id: string;
+  type?: string;
+  title?: string;
+  text?: string;
+  url?: string;
+  mimetype?: string;
+  external_id?: string;
+  source_url?: string;
+  event?: {
+    id: string;
+  };
+  user?: {
+    id: string;
+  };
 }

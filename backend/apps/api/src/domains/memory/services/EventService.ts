@@ -15,15 +15,23 @@ export class EventService {
     private readonly eventRepository: Repository<EventEntity>,
   ) {}
 
-  async create(data: CreateEventDto): Promise<Event> {
-    const event = this.eventRepository.create({
-      ...data,
-      id: uuidv7(),
-    });
+  async create(context: RequestContext, data: CreateEventDto | CreateEventDto[]): Promise<Event | Event[]> {
+    const isSingle = !Array.isArray(data);
+    const dataArray: CreateEventDto[] = isSingle ? [data] : data;
 
-    const eventResult = await this.eventRepository.save(event);
+    const returned = await Promise.all(
+      dataArray.map(async (item) => {
+        const event = await this.eventRepository.create({
+          ...item,
+          id: uuidv7(),
+        });
+        const eventResult = await this.eventRepository.save(event);
 
-    return eventResult.toEvent();
+        return eventResult.toEvent();
+      }),
+    );
+
+    return isSingle ? returned[0] : returned;
   }
 
   async findAll(context: RequestContext): Promise<Event[]> {

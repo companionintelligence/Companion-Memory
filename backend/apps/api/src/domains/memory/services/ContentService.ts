@@ -15,23 +15,35 @@ export class ContentService {
     private readonly contentRepository: Repository<ContentEntity>,
   ) {}
 
-  async create(data: CreateContentDto): Promise<Content> {
-    const content = this.contentRepository.create({
-      ...data,
-      id: uuidv7(),
-    });
+  async create(
+    context: RequestContext,
+    data: CreateContentDto | CreateContentDto[],
+  ): Promise<Content | Content[]> {
+    const isSingle = !Array.isArray(data);
+    const dataArray: CreateContentDto[] = isSingle ? [data] : data;
 
-    const contentResult = await this.contentRepository.save(content);
+    const returned = await Promise.all(
+      dataArray.map(async (item) => {
+        const content = await this.contentRepository.create({
+          ...item,
+          id: uuidv7(),
+        });
 
-    await this.contentRepository.update(contentResult.id, {
-      external_id: `content_${contentResult.id}`,
-    });
+        const contentResult = await this.contentRepository.save(content);
 
-    return (await this.contentRepository.findOne({
-      where: {
-        id: contentResult.id,
-      },
-    }))!.toContent();
+        await this.contentRepository.update(contentResult.id, {
+          external_id: `content_${contentResult.id}`,
+        });
+
+        return (await this.contentRepository.findOne({
+          where: {
+            id: contentResult.id,
+          },
+        }))!.toContent();
+      }),
+    );
+
+    return isSingle ? returned[0] : returned;
   }
 
   async findAll(context: RequestContext): Promise<Content[]> {

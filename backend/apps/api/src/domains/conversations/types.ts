@@ -1,3 +1,4 @@
+import type { FileEntity } from '@ci/domains/files';
 import type { User } from '@ci/domains/user';
 
 export interface CreateMessageDto {
@@ -20,11 +21,17 @@ export interface CreateThreadDto {
   name?: string;
   model?: string;
   description?: string;
+  files?: {
+    id: string;
+  }[];
 }
 
 export interface UpdateThreadDto {
   name?: string;
   description?: string;
+  files?: {
+    id: string;
+  }[];
 }
 
 export interface Message {
@@ -46,4 +53,5 @@ export interface Thread {
   readonly model: string | null;
   readonly description: string | null;
   readonly user?: User;
+  readonly files?: FileEntity[];
 }

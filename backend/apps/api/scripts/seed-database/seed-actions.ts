@@ -14,6 +14,8 @@ export async function seedActions(db: DataSource, filePath: string) {
     id: string;
     title: string;
     text: string;
+    image_url: string;
+    thread_id: string;
     user_id: string;
     tags: string;
   };
@@ -29,6 +31,10 @@ export async function seedActions(db: DataSource, filePath: string) {
         id: record.id,
         title: record.title,
         text: record.text,
+        imageUrl: record.image_url,
+        thread: {
+          id: record.thread_id,
+        },
         user: {
           id: record.user_id,
         },
