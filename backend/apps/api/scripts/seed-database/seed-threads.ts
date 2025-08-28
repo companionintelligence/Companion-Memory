@@ -20,8 +20,10 @@ export async function seedThreads(db: DataSource, filePath: string) {
 
   const records = readCsv<CsvRecord>(filePath);
 
+  console.log('creating thread records', records);
   await db.transaction(async (manager) => {
     for (const record of records) {
+      console.log('creating thread record', record);
       await manager.save(ThreadEntity, {
         id: record.id,
         name: record.name,
