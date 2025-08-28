@@ -96,6 +96,7 @@ class TTSRequest(BaseModel):
     text: str
     speed: float = 1.0
     voice_id: str = "default"
+    enable_diarization: bool = True  # New option, enabled by default
 
 class TTSResponse(BaseModel):
     audio_data: str  # base64 encoded audio
@@ -103,6 +104,47 @@ class TTSResponse(BaseModel):
     sample_rate: int
     voice_used: str
     audio_format: str  # "wav" or "mp3"
+    diarization: Optional[Dict[str, Any]] = None  # Diarization results
+
+async def call_stt_diarization(audio_bytes: bytes, sample_rate: int = 16000) -> Dict[str, Any]:
+    """Call STT service for diarization"""
+    try:
+        logger.info("Calling STT service for diarization...")
+        
+        # Convert audio to base64
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        
+        # Make request to STT service
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://stt:9001/transcribe",
+                json={
+                    "audio_data": audio_base64,
+                    "sample_rate": sample_rate,
+                    "language": "en",
+                    "enable_diarization": True
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"STT diarization request failed: {response.status_code}")
+                return None
+            
+            result = response.json()
+            logger.info("STT diarization request successful")
+            
+            # Extract relevant diarization data
+            return {
+                "text": result.get("text", ""),
+                "segments": result.get("segments", []),
+                "speakers": result.get("speakers", []),
+                "confidence": result.get("confidence")
+            }
+            
+    except Exception as e:
+        logger.error(f"Error calling STT diarization: {e}")
+        return None
 
 def convert_audio_to_mp3(audio_bytes: bytes, sample_rate: int = 22050) -> bytes:
     """Convert audio bytes to MP3 format"""
@@ -230,12 +272,18 @@ async def text_to_speech(request: TTSRequest):
         # Calculate duration (approximate)
         duration = len(audio_bytes) / (sample_rate * 2)  # 2 bytes per sample for 16-bit
         
+        # Call STT diarization if enabled
+        diarization_results = None
+        if request.enable_diarization:
+            diarization_results = await call_stt_diarization(audio_bytes, sample_rate)
+        
         return TTSResponse(
             audio_data=audio_base64,
             duration=duration,
             sample_rate=sample_rate,
             voice_used=voice_used,
-            audio_format=audio_format
+            audio_format=audio_format,
+            diarization=diarization_results
         )
         
     except HTTPException:
