@@ -22,8 +22,13 @@ import subprocess
 import io
 import time
 
-# Conditional torch import for Piper model only
-torch = None
+# Always bring in piper even if not using it
+import torch  # Import torch only for Piper
+import piper
+piper_model = piper.PiperVoice.load(
+    model_path="/app/models/piper/en_US-amy-low.onnx",
+    config_path="/app/models/piper/en_US-amy-low.onnx.json"
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +46,6 @@ except ImportError as e:
 from contextlib import asynccontextmanager
 
 # Global variables for model state
-piper_model = None
 VOICE_MODEL = None
 
 @asynccontextmanager
@@ -57,18 +61,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize Piper model if needed
     if VOICE_MODEL == "piper":
-        try:
-            logger.info("Loading Piper TTS model...")
-            import torch  # Import torch only for Piper
-            import piper
-            piper_model = piper.PiperVoice.load(
-                model_path="/app/models/piper/en_US-amy-low.onnx",
-                config_path="/app/models/piper/en_US-amy-low.onnx.json"
-            )
-            logger.info("Piper TTS model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load Piper TTS model: {e}")
-            raise
+        logger.info("Piper TTS model loaded successfully")
     elif VOICE_MODEL in ["higgs", "vllm-higgs"]:
         logger.info(f"Using Higgs Audio {'vLLM container' if VOICE_MODEL == 'vllm-higgs' else 'local model'} - no local model loading required")
     else:
@@ -218,7 +211,7 @@ async def generate_higgs_audio(text: str) -> bytes:
         raise
 
 def generate_piper_audio(text: str, speed: float = 1.0) -> bytes:
-    """Generate audio using Piper TTS"""
+    """Generate audio using Piper TTS - v1.3"""
     global piper_model
     
     if piper_model is None:
@@ -228,7 +221,7 @@ def generate_piper_audio(text: str, speed: float = 1.0) -> bytes:
         logger.info(f"Generating Piper audio for text: {text[:100]}...")
         
         # Generate audio using Piper
-        audio_data = piper_model.synthesize(text, speed=speed)
+        audio_data = piper_model.synthesize(text)
         
         # Convert to WAV format
         wav_bytes = io.BytesIO()
@@ -256,7 +249,7 @@ async def text_to_speech(request: TTSRequest):
             sample_rate = 22050  # Higgs default sample rate
             voice_used = VOICE_MODEL
         elif VOICE_MODEL == "piper":
-            audio_bytes = generate_piper_audio(request.text, request.speed)
+            audio_bytes = generate_piper_audio(request.text)
             sample_rate = 22050  # Piper default sample rate
             voice_used = "piper"
         else:
@@ -296,7 +289,7 @@ async def text_to_speech(request: TTSRequest):
 async def health_check():
     """Health check endpoint"""
     return {
-        "status": "healthy",
+        "status": "healthy - v1.3",
         "voice_model": VOICE_MODEL,
         "piper_loaded": piper_model is not None if VOICE_MODEL == "piper" else None
     }

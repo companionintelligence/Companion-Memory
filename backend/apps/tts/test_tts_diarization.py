@@ -131,12 +131,12 @@ async def main():
     
     # Test 1: Simple text with diarization
     total_tests += 1
-    if await test_tts_endpoint(TEST_TEXTS[0], enable_diarization=True):
+    if await test_tts_endpoint(TEST_TEXTS[0], enable_diarization=False):
         success_count += 1
     
     # Test 2: Same text without diarization
     total_tests += 1
-    if await test_tts_endpoint(TEST_TEXTS[0], enable_diarization=False):
+    if await test_tts_endpoint(TEST_TEXTS[0], enable_diarization=True):
         success_count += 1
     
     # Test 3: Longer text with diarization

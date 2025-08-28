@@ -12,3 +12,6 @@ httpx>=0.25.0
 
 # Audio file handling
 librosa>=0.10.1
+
+torch>=2.0.0
+torchaudio>=2.0.0

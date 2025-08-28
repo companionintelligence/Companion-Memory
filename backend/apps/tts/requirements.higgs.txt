@@ -2,6 +2,5 @@
 
 # Higgs Audio specific dependencies (original implementation)
 transformers==4.25.0
-torch>=2.0.0
-torchaudio>=2.0.0
+
 -e git+https://github.com/boson-ai/higgs-audio.git
