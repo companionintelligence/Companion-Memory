@@ -18,6 +18,7 @@ import {
 
 import { PageContent } from '@/components/layout';
 import { ThemePicker } from '@/components/ThemePicker';
+import { TagManager } from '@/components/TagManager';
 
 interface SettingsState {
   // Data Storage
@@ -538,6 +539,9 @@ export function SettingsPage() {
             </div>
           </Card.Content>
         </Card>
+
+        {/* Tag Management */}
+        <TagManager />
       </PageContent>
     </>
   );
