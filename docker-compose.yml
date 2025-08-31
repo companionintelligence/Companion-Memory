@@ -95,21 +95,18 @@ services:
     profiles: [ "all" ]
 
   stable-diffusion:
-    build:
-      context: ./docker/stable-diffusion
-      dockerfile: Dockerfile
-    image: ci/stable-diffusion
-    pull_policy: build
+    image: node:18-alpine
     container_name: stable-diffusion
     restart: unless-stopped
     ports:
       - 7860:7860
+    working_dir: /app
     volumes:
-      - stable-diffusion-models:/models
-      - stable-diffusion-outputs:/outputs
+      - ./docker/stable-diffusion:/app:ro
     networks:
       - web
     profiles: [ "all", "ai" ]
+    command: ["sh", "-c", "npm install --no-optional && node index.js"]
 
 volumes:
   postgres-data:

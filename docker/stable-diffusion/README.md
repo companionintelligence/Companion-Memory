@@ -1,20 +1,31 @@
-# Local Stable Diffusion Image Generation
+# Local AI Image Generation Service
 
-This directory contains a containerized Stable Diffusion service that provides local AI image generation capabilities without requiring external API keys.
+This directory contains a local AI image generation service that provides image generation capabilities without requiring external API keys.
 
-## Features
+## Current Implementation
 
-- **Local AI**: Runs entirely locally using Stable Diffusion v1.5
-- **API Compatible**: Provides a compatible API endpoint for the CI Server
-- **CPU/GPU Support**: Automatically detects and uses available hardware
-- **Memory Efficient**: Optimized for running on various hardware configurations
+The current implementation is a **placeholder service** that creates styled placeholder images with the user's prompt text. This provides:
+
+- **Immediate functionality**: Works out of the box without large model downloads
+- **API compatibility**: Provides the same API interface as production Stable Diffusion
+- **Easy upgrading**: Can be replaced with full Stable Diffusion when needed
+
+## Upgrading to Full Stable Diffusion
+
+To upgrade to actual AI image generation, replace the current service with:
+
+1. **AUTOMATIC1111 Stable Diffusion WebUI**
+2. **ComfyUI**
+3. **Custom Diffusers implementation**
+
+The API interface is already compatible with Stable Diffusion Web UI format.
 
 ## Usage
 
 The service is automatically started as part of the Docker Compose setup:
 
 ```bash
-# Start all services including Stable Diffusion
+# Start all services including image generation
 docker-compose --profile all up -d
 
 # Or start just the AI services
@@ -28,18 +39,14 @@ docker-compose --profile ai up -d
 
 ## Configuration
 
-The service is configured to:
-- Run on port 7860
-- Use Stable Diffusion v1.5 model
-- Support various image sizes (1024x1024, 1792x1024, 1024x1792)
-- Optimize for quality vs speed based on the request
+The service runs on port 7860 and supports various image sizes:
+- 1024x1024 (square)
+- 1792x1024 (landscape) 
+- 1024x1792 (portrait)
 
-## Hardware Requirements
+## Benefits of Local AI
 
-- **Minimum**: 4GB RAM, CPU-only (slower generation)
-- **Recommended**: 8GB+ RAM, NVIDIA GPU with 4GB+ VRAM
-- **Generation Time**: 30-60 seconds per image depending on hardware
-
-## Model Downloads
-
-The first startup will download the Stable Diffusion model (~4GB). Subsequent starts will be faster as the model is cached.
+- **Privacy**: No data sent to external services
+- **Cost**: No API usage fees
+- **Control**: Full control over models and generation parameters
+- **Offline**: Works without internet connection
