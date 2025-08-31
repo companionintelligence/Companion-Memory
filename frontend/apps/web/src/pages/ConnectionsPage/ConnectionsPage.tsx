@@ -1,10 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
-import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select, Collapsible } from '@ci/shadcn';
+import {
+  AlertCircle,
+  RefreshCw,
+  Settings,
+  Trash2,
+  Link2,
+  X,
+  ChevronDown,
+  ChevronUp,
+  HelpCircle,
+} from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
+import { PlatformInstructions, type PlatformKey } from '@/components/PlatformInstructions';
 import { useAuth } from '@/hooks';
 
 export interface Provider {
@@ -59,6 +70,10 @@ export function ConnectionsPage() {
   const [modalError, setModalError] = useState<string | null>(null);
   const [oauthInProgress, setOauthInProgress] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
+
+  // Instructions state
+  const [showInstructionsInCreate, setShowInstructionsInCreate] = useState(false);
+  const [showInstructionsInEdit, setShowInstructionsInEdit] = useState(false);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -266,6 +281,50 @@ export function ConnectionsPage() {
     }
 
     return text.substring(0, maxLength) + '...';
+  };
+
+  // Helper function to get platform key from provider name
+  const getPlatformKey = (providerName: string | null): PlatformKey | null => {
+    if (!providerName) {
+      return null;
+    }
+
+    const normalizedName = providerName.toLowerCase();
+
+    // Map provider names to platform keys
+    if (normalizedName.includes('google')) {
+      return 'google';
+    }
+
+    if (normalizedName.includes('facebook') || normalizedName.includes('meta')) {
+      return 'meta';
+    }
+
+    if (normalizedName.includes('microsoft') || normalizedName.includes('azure')) {
+      return 'microsoft';
+    }
+
+    if (normalizedName.includes('spotify')) {
+      return 'spotify';
+    }
+
+    if (normalizedName.includes('apple')) {
+      return 'apple';
+    }
+
+    return null;
+  };
+
+  // Get platform instructions component
+  const getPlatformInstructions = (providerName: string | null) => {
+    const platformKey = getPlatformKey(providerName);
+    if (!platformKey) {
+      return null;
+    }
+
+    const InstructionComponent = PlatformInstructions[platformKey];
+
+    return InstructionComponent ? <InstructionComponent /> : null;
   };
 
   const connectionToggle = (connection: Connection) => {
@@ -711,7 +770,7 @@ export function ConnectionsPage() {
 
       {/* Create Connection Modal */}
       <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-        <Dialog.Content className="sm:max-w-[500px]">
+        <Dialog.Content className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
           <Dialog.Header>
             <Dialog.Title>Create Connection</Dialog.Title>
             <Dialog.Description>Create a new connection to a provider.</Dialog.Description>
@@ -752,6 +811,36 @@ export function ConnectionsPage() {
                 </Select.Content>
               </Select>
             </div>
+
+            {/* Platform Instructions */}
+            {createFormData.providerId &&
+              (() => {
+                const selectedProvider = Providers.find((p) => p.id === createFormData.providerId);
+                const instructions = selectedProvider ? getPlatformInstructions(selectedProvider.name) : null;
+
+                if (!instructions) {
+                  return null;
+                }
+
+                return (
+                  <Collapsible open={showInstructionsInCreate} onOpenChange={setShowInstructionsInCreate}>
+                    <div className="flex items-center gap-2">
+                      <Collapsible.Trigger asChild>
+                        <Button variant="outline" size="sm" className="justify-start">
+                          <HelpCircle className="h-4 w-4 mr-2" />
+                          API Setup Instructions
+                          {showInstructionsInCreate ? (
+                            <ChevronUp className="h-4 w-4 ml-2" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 ml-2" />
+                          )}
+                        </Button>
+                      </Collapsible.Trigger>
+                    </div>
+                    <Collapsible.Content className="mt-2">{instructions}</Collapsible.Content>
+                  </Collapsible>
+                );
+              })()}
           </div>
 
           <Dialog.Footer>
@@ -777,7 +866,7 @@ export function ConnectionsPage() {
 
       {/* Edit Connection Modal */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <Dialog.Content className="sm:max-w-[500px]">
+        <Dialog.Content className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
           <Dialog.Header>
             <Dialog.Title>Edit Connection</Dialog.Title>
             <Dialog.Description>Update the settings for this connection.</Dialog.Description>
@@ -815,11 +904,57 @@ export function ConnectionsPage() {
               </div>
             )}
 
+            {/* Platform Instructions */}
+            {selectedConnection?.provider &&
+              (() => {
+                const instructions = getPlatformInstructions(selectedConnection.provider.name);
+
+                if (!instructions) {
+                  return null;
+                }
+
+                return (
+                  <Collapsible open={showInstructionsInEdit} onOpenChange={setShowInstructionsInEdit}>
+                    <div className="flex items-center gap-2">
+                      <Collapsible.Trigger asChild>
+                        <Button variant="outline" size="sm" className="justify-start">
+                          <HelpCircle className="h-4 w-4 mr-2" />
+                          API Setup Instructions
+                          {showInstructionsInEdit ? (
+                            <ChevronUp className="h-4 w-4 ml-2" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 ml-2" />
+                          )}
+                        </Button>
+                      </Collapsible.Trigger>
+                    </div>
+                    <Collapsible.Content className="mt-2">{instructions}</Collapsible.Content>
+                  </Collapsible>
+                );
+              })()}
+
             <div className="grid gap-2">
-              <Label htmlFor="edit-clientid">Client ID (Optional)</Label>
+              <Label htmlFor="edit-clientid">
+                Client ID{' '}
+                {selectedConnection?.provider &&
+                getPlatformKey(selectedConnection.provider.name) === 'microsoft'
+                  ? '(Application ID)'
+                  : selectedConnection?.provider &&
+                      getPlatformKey(selectedConnection.provider.name) === 'meta'
+                    ? '(App ID)'
+                    : ''}
+              </Label>
               <Input
                 id="edit-clientid"
-                placeholder="your-client-id"
+                placeholder={
+                  selectedConnection?.provider &&
+                  getPlatformKey(selectedConnection.provider.name) === 'microsoft'
+                    ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+                    : selectedConnection?.provider &&
+                        getPlatformKey(selectedConnection.provider.name) === 'meta'
+                      ? '1234567890123456'
+                      : 'your-client-id'
+                }
                 value={editFormData.clientid}
                 onChange={(e) => setEditFormData({ ...editFormData, clientid: e.target.value })}
                 disabled={modalLoading}
@@ -827,10 +962,19 @@ export function ConnectionsPage() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="edit-clientkey">Client Key (Optional)</Label>
+              <Label htmlFor="edit-clientkey">
+                Client Key{' '}
+                {selectedConnection?.provider && getPlatformKey(selectedConnection.provider.name) === 'apple'
+                  ? '(Team ID / Key ID)'
+                  : '(Optional)'}
+              </Label>
               <Input
                 id="edit-clientkey"
-                placeholder="your-client-key"
+                placeholder={
+                  selectedConnection?.provider && getPlatformKey(selectedConnection.provider.name) === 'apple'
+                    ? 'XXXXXXXXXX'
+                    : 'your-client-key'
+                }
                 value={editFormData.clientkey}
                 onChange={(e) => setEditFormData({ ...editFormData, clientkey: e.target.value })}
                 disabled={modalLoading}
@@ -838,7 +982,12 @@ export function ConnectionsPage() {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="edit-clientsecret">Client Secret (Optional)</Label>
+              <Label htmlFor="edit-clientsecret">
+                Client Secret{' '}
+                {selectedConnection?.provider && getPlatformKey(selectedConnection.provider.name) === 'meta'
+                  ? '(App Secret)'
+                  : ''}
+              </Label>
               <Input
                 id="edit-clientsecret"
                 type="password"
