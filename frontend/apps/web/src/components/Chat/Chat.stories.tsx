@@ -23,7 +23,7 @@ const meta: Meta<Props> = {
   },
   decorators: [
     (Story) => (
-      <div className="h-screen overflow-hidden">
+      <div className="h-dvh overflow-hidden">
         <Story />
       </div>
     ),
