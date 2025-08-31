@@ -63,7 +63,8 @@
   },
   "features": {
     "scheduled.answer.inferencing": true,
-    "scheduled.connection.fetching": true
+    "scheduled.connection.fetching": true,
+    "vision.demo.mode": false
   },
   "environment": {
     "database.query.logging": false

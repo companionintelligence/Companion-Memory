@@ -81,6 +81,7 @@ export const ConfigSchema = z.object({
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     'scheduled.connection.fetching': booleanStringSchema,
+    'vision.demo.mode': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

@@ -118,15 +118,20 @@ export class OllamaController {
     const messages = await this.messageService.findByThread(context, threadId);
     const files = await this.fileService.findByThread(context, threadId);
 
+    // Filter for image files only
+    const imageFiles = files.filter(file => 
+      file.contentType && file.contentType.startsWith('image/')
+    );
+
     const images = await Promise.all(
-      files.map(async (file) => this.fileService.getFileContent(context, file.key)),
+      imageFiles.map(async (file) => this.fileService.getFileContent(context, file.key)),
     );
 
     const inputMessages: Message[] = [
       {
         role: 'user',
         content: '',
-        images,
+        ...(images.length > 0 && { images }),
       },
 
       ...messages.map((message) => ({

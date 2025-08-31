@@ -25,7 +25,30 @@ import {
 import type { OllamaModel } from '../types';
 
 const PROMPT_MODEL = 'gemma3:1b';
+const DEFAULT_VISION_MODEL = 'llava:13b';
 const INTERNAL_MODELS = new Set(['nomic-embed-text']);
+
+// Known vision models patterns
+const VISION_MODEL_PATTERNS = [
+  'llava',
+  'vision', 
+  'minicpm-v',
+  'minicpm',
+  'moondream',
+  'bakllava',
+  'cogvlm',
+  'qwen-vl',
+  'llama3.2-vision'
+];
+
+// Demo vision responses for fallback mode
+const DEMO_VISION_RESPONSES = [
+  "I can see what appears to be a photo that was just taken. The image shows various objects and details that I can analyze for you.",
+  "This looks like a freshly captured image. I can observe several interesting elements and details in the scene.",
+  "I'm looking at what seems to be a photograph that was recently taken. There are various visual elements I can describe.",
+  "I can see this is an image that appears to have been captured with a camera. Let me analyze what's visible in the scene.",
+  "This looks like a photo that was just taken. I can observe different objects, colors, and details in the image.",
+];
 
 interface PromptOptions {
   model?: string;
@@ -118,7 +141,37 @@ export class OllamaService {
     options?: PromptOptions,
   ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[] }> {
     const resolvedOptions = options ?? {};
-    const { model = PROMPT_MODEL, signal, enableTools = false, enableThinking = true } = resolvedOptions;
+    const { signal, enableTools = false, enableThinking = true } = resolvedOptions;
+
+    // Select appropriate model based on whether images are present
+    const selectedModel = await this.selectModelForMessages(context, resolvedOptions.model, messages);
+
+    // Handle demo vision mode
+    if (selectedModel === 'demo-vision') {
+      const demoStream = this.generateDemoVisionResponseStream(messages);
+      const accumulatedMessages: OllamaMessage[] = [];
+      
+      // Consume the demo stream to build messages array
+      const messageContent: string[] = [];
+      for await (const chunk of this.generateDemoVisionResponseStream(messages)) {
+        if (chunk.message.content) {
+          messageContent.push(chunk.message.content);
+        }
+      }
+      
+      accumulatedMessages.push({
+        role: 'assistant',
+        content: messageContent.join(''),
+      });
+
+      const stream = this.generateDemoVisionResponseStream(messages);
+      Object.defineProperty(stream, 'messages', {
+        enumerable: true,
+        get: () => accumulatedMessages,
+      });
+
+      return stream as typeof stream & { messages: OllamaMessage[] };
+    }
 
     const inputMessages = messages.slice();
     const availableTools = enableTools ? this.toolRegistry.getAvailableTools(context) : [];
@@ -162,7 +215,7 @@ export class OllamaService {
 
         try {
           const iterator = await self.ollama.chat({
-            model,
+            model: selectedModel,
             messages: inputMessages.concat(accumulatedMessages),
             stream: true,
             ...(enableThinking && { think: true }),
@@ -207,7 +260,7 @@ export class OllamaService {
         } catch (err) {
           if (!(err instanceof DOMException && err.name === 'AbortError')) {
             self.logger.error('Ollama prompt evaluation completed', {
-              model: lastChunk?.model ?? resolvedOptions.model,
+              model: lastChunk?.model ?? selectedModel,
               doneReason: 'error',
             });
 
@@ -229,7 +282,7 @@ export class OllamaService {
 
           if (signal?.aborted) {
             self.logger.log('Ollama prompt evaluation completed', {
-              model: lastChunk?.model ?? resolvedOptions.model,
+              model: lastChunk?.model ?? selectedModel,
               doneReason: 'canceled',
             });
           }
@@ -251,7 +304,15 @@ export class OllamaService {
     options?: Omit<PromptOptions, 'signal'>,
   ): Promise<ChatResponse> {
     const resolvedOptions = options ?? ({} as PromptOptions);
-    const { model = PROMPT_MODEL, enableTools = false } = resolvedOptions;
+    const { enableTools = false } = resolvedOptions;
+
+    // Select appropriate model based on whether images are present  
+    const selectedModel = await this.selectModelForMessages(context, resolvedOptions.model, messages);
+
+    // Handle demo vision mode
+    if (selectedModel === 'demo-vision') {
+      return this.generateDemoVisionResponse(messages);
+    }
 
     const inputMessages = messages.slice();
     const availableTools = enableTools ? this.toolRegistry.getAvailableTools(context) : [];
@@ -260,7 +321,7 @@ export class OllamaService {
     const accumulatedMessages: OllamaMessage[] = [];
 
     const response = await this.ollama.chat({
-      model,
+      model: selectedModel,
       messages: inputMessages,
       ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
     });
@@ -283,9 +344,160 @@ export class OllamaService {
     accumulatedMessages.push(...toolEvaluations);
 
     return this.ollama.chat({
-      model,
+      model: selectedModel,
       messages: inputMessages.concat(accumulatedMessages),
     });
+  }
+
+  /**
+   * Check if a model supports vision based on its name
+   */
+  private isVisionModel(modelName: string): boolean {
+    const lowerName = modelName.toLowerCase();
+    return VISION_MODEL_PATTERNS.some(pattern => lowerName.includes(pattern));
+  }
+
+  /**
+   * Check if messages contain images
+   */
+  private hasImages(messages: OllamaMessage[]): boolean {
+    return messages.some(msg => msg.images && msg.images.length > 0);
+  }
+
+  /**
+   * Get the first available vision model from the available models
+   */
+  private async getDefaultVisionModel(context: RequestContext): Promise<OllamaModel | null> {
+    const availableModels = await this.getAvailableModels(context);
+    const visionModel = availableModels.find(model => this.isVisionModel(model.model));
+    return visionModel || null;
+  }
+
+  /**
+   * Validate that the model supports vision when images are present
+   */
+  private async validateVisionModelForImages(
+    context: RequestContext, 
+    model: string, 
+    messages: OllamaMessage[]
+  ): Promise<void> {
+    if (this.hasImages(messages) && !this.isVisionModel(model)) {
+      throw new Error(
+        `Model '${model}' does not support image input. Please use a vision model like 'llava', 'minicpm-v', or 'moondream'.`
+      );
+    }
+  }
+
+  /**
+   * Generate a demo vision response when in demo mode
+   */
+  private generateDemoVisionResponse(messages: OllamaMessage[]): ChatResponse {
+    const randomResponse = DEMO_VISION_RESPONSES[Math.floor(Math.random() * DEMO_VISION_RESPONSES.length)];
+    
+    return {
+      model: 'demo-vision',
+      created_at: new Date(),
+      message: {
+        role: 'assistant',
+        content: randomResponse,
+      },
+      done: true,
+      done_reason: 'stop',
+      total_duration: 1000000,
+      load_duration: 100000,
+      prompt_eval_count: 10,
+      prompt_eval_duration: 200000,
+      eval_count: 15,
+      eval_duration: 700000,
+    };
+  }
+
+  /**
+   * Generate a demo vision response stream when in demo mode
+   */
+  private async *generateDemoVisionResponseStream(messages: OllamaMessage[]): AsyncGenerator<ChatResponse> {
+    const response = this.generateDemoVisionResponse(messages);
+    const content = response.message.content;
+    
+    // Split content into chunks to simulate streaming
+    const words = content.split(' ');
+    const chunkSize = Math.max(1, Math.floor(words.length / 4));
+    
+    for (let i = 0; i < words.length; i += chunkSize) {
+      const chunk = words.slice(i, i + chunkSize).join(' ');
+      const isLast = i + chunkSize >= words.length;
+      
+      yield {
+        model: 'demo-vision',
+        created_at: new Date(),
+        message: {
+          role: 'assistant',
+          content: chunk + (isLast ? '' : ' '),
+        },
+        done: isLast,
+        done_reason: isLast ? 'stop' : '',
+        total_duration: isLast ? 1000000 : 0,
+        load_duration: isLast ? 100000 : 0,
+        prompt_eval_count: isLast ? 10 : 0,
+        prompt_eval_duration: isLast ? 200000 : 0,
+        eval_count: isLast ? 15 : 0,
+        eval_duration: isLast ? 700000 : 0,
+      };
+      
+      // Add slight delay to make it feel more realistic
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  /**
+   * Select appropriate model based on whether images are present
+   */
+  private async selectModelForMessages(
+    context: RequestContext,
+    requestedModel: string | undefined,
+    messages: OllamaMessage[]
+  ): Promise<string> {
+    const hasImagesInMessages = this.hasImages(messages);
+    
+    if (hasImagesInMessages) {
+      // Check if demo mode is enabled
+      if (config.features['vision.demo.mode']) {
+        this.logger.warn('Vision demo mode is enabled - using demo responses for image input');
+        return 'demo-vision';
+      }
+      
+      // If images are present, ensure we use a vision model
+      if (requestedModel && this.isVisionModel(requestedModel)) {
+        return requestedModel;
+      }
+      
+      // Try to find a default vision model
+      const defaultVisionModel = await this.getDefaultVisionModel(context);
+      if (defaultVisionModel) {
+        this.logger.warn(`Auto-selecting vision model for image input`, {
+          requestedModel,
+          selectedModel: defaultVisionModel.model,
+        });
+        return defaultVisionModel.model;
+      }
+      
+      // Fallback to a known vision model if available
+      const availableModels = await this.getAvailableModels(context);
+      if (availableModels.some(m => m.model === DEFAULT_VISION_MODEL)) {
+        this.logger.warn(`Using fallback vision model for image input`, {
+          requestedModel,
+          selectedModel: DEFAULT_VISION_MODEL,
+        });
+        return DEFAULT_VISION_MODEL;
+      }
+      
+      throw new Error(
+        'Images detected but no vision model is available. Please install a vision model like llava:13b or enable vision.demo.mode'
+      );
+    }
+    
+    // No images present, use requested model or default
+    return requestedModel || PROMPT_MODEL;
   }
 
   async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
