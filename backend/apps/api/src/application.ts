@@ -24,6 +24,7 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { JobsModule } from '@ci/domains/jobs';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
+import { MobileModule } from '@ci/domains/mobile';
 import { EmbeddingModule } from '@ci/domains/search';
 import { UserModule } from '@ci/domains/user';
 
@@ -52,6 +53,7 @@ import { SpeechModule } from './domains/speech';
     JobsModule,
     LLMModule,
     MemoryModule,
+    MobileModule,
     SpeechModule,
     UserModule,
   ],
