@@ -30,6 +30,9 @@
     },
     "tts": {
       "host": "TTS_HOST"
+    },
+    "iframely": {
+      "host": "IFRAMELY_HOST"
     }
   },
   "features": {

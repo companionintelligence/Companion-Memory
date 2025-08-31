@@ -61,6 +61,7 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
       OLLAMA_HOST: http://host.docker.internal:11434
+      IFRAMELY_HOST: http://iframely:8061
     networks:
       - web
     extra_hosts:
@@ -90,6 +91,30 @@ services:
     volumes:
       - open-webui:/app/backend/data
     profiles: [ "all" ]
+
+  iframely:
+    image: iframely/iframely:latest
+    container_name: iframely
+    ports:
+      - 8061:8061
+    environment:
+      IFRAMELY_CONFIG_JSON: |
+        {
+          "port": 8061,
+          "host": "0.0.0.0",
+          "DEBUG": false,
+          "CACHE_TTL": 3600,
+          "providers": {
+            "twitter.com": {
+              "consumer_key": "",
+              "consumer_secret": ""
+            }
+          }
+        }
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "staging" ]
 
 volumes:
   postgres-data:

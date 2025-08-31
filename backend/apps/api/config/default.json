@@ -59,6 +59,9 @@
     },
     "tts": {
       "host": "http://localhost:9002"
+    },
+    "iframely": {
+      "host": "http://localhost:8061"
     }
   },
   "features": {
