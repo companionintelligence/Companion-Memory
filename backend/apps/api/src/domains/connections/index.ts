@@ -24,7 +24,7 @@ export class ConnectionsModule {}
 export { ConnectionEntity, ProviderEntity };
 
 // Services
-export {};
+export { ConnectionService, ProviderService };
 
 // Types
 export type {} from './types';
