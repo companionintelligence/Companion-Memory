@@ -3,12 +3,13 @@ import { Module } from '@nestjs/common';
 import { EventsModule } from '@ci/domains/events';
 
 import { JobsController } from './controllers/JobsController';
+import { JobsService } from './services/JobsService';
 
 @Module({
   imports: [EventsModule],
-  providers: [],
+  providers: [JobsService],
   controllers: [JobsController],
-  exports: [],
+  exports: [JobsService],
 })
 export class JobsModule {}
 
@@ -16,7 +17,7 @@ export class JobsModule {}
 export {};
 
 // Services
-export {};
+export { JobsService } from './services/JobsService';
 
 // Types
 export type {} from './types';
