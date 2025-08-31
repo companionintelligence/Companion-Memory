@@ -34,6 +34,16 @@ services:
     command: server /data
     profiles: [ "all", "infra" ]
 
+  iframely:
+    image: dogbin/iframely
+    container_name: iframely
+    ports:
+      - 8061:8061
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "infra" ]
+
   webserver:
     image: nginx:stable
     container_name: webserver
