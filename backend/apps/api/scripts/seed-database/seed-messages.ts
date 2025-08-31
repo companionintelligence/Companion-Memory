@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import { MessageEntity } from '@ci/domains/conversations';
+import type { MessageRole } from '@ci/domains/conversations/types';
 
 import { readCsv } from './utils';
 
@@ -25,10 +26,14 @@ export async function seedMessages(db: DataSource, filePath: string) {
 
   await db.transaction(async (manager) => {
     for (const record of records) {
+      const validRole: MessageRole = ['user', 'assistant', 'system', 'tool'].includes(record.role) 
+        ? (record.role as MessageRole) 
+        : 'assistant';
+      
       await manager.save(MessageEntity, {
         id: record.id,
         model: record.model,
-        role: record.role,
+        role: validRole,
         text: record.text,
         mimetype: record.mimetype,
         canceled: record.canceled,

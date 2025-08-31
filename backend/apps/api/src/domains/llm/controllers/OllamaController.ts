@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { ToolCall, Message } from 'ollama';
+import { ToolCall, Message as OllamaMessage } from 'ollama';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
@@ -20,6 +20,7 @@ import { Channel, FrameEncoder } from '@ci/common/rpc';
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
+import type { MessageRole } from '@ci/domains/conversations/types';
 import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 
@@ -122,7 +123,7 @@ export class OllamaController {
       files.map(async (file) => this.fileService.getFileContent(context, file.key)),
     );
 
-    const inputMessages: Message[] = [
+    const inputMessages: OllamaMessage[] = [
       {
         role: 'user',
         content: '',
@@ -175,10 +176,15 @@ export class OllamaController {
     } finally {
       for (let i = 0; i < stream.messages.length; i++) {
         const message = stream.messages[i];
+        
+        // Ensure the role is compatible with our MessageRole type
+        const validRole: MessageRole = ['user', 'assistant', 'system', 'tool'].includes(message.role) 
+          ? (message.role as MessageRole) 
+          : 'assistant';
 
         await this.messageService.create(context, {
           model: resolvedModel.model,
-          role: message.role,
+          role: validRole,
           content: message.content,
           canceled: i === stream.messages.length - 1 && signal.aborted,
           threadId,

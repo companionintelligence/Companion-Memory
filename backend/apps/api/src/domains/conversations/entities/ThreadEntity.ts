@@ -21,18 +21,18 @@ export class ThreadEntity {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   name!: string | null;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'varchar', length: 100, nullable: true })
   model!: string | null;
 
   @Column({ type: 'text', nullable: true })
   description!: string | null;
 
-  @ManyToOne(() => UserEntity)
+  @ManyToOne(() => UserEntity, { nullable: false })
   @JoinColumn({ name: 'user_id' })
-  user?: UserEntity;
+  user!: UserEntity;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;
@@ -41,7 +41,7 @@ export class ThreadEntity {
   updated_at!: Date;
 
   @DeleteDateColumn({ type: 'timestamptz' })
-  deleted_at!: Date;
+  deleted_at?: Date;
 
   @ManyToMany(() => FileEntity, { nullable: true })
   @JoinTable({
@@ -51,15 +51,15 @@ export class ThreadEntity {
   })
   files?: FileEntity[];
 
-  toThread() {
+  toThread(): Thread {
     return {
       id: this.id,
-      name: this.name ?? null,
-      model: this.model ?? null,
-      description: this.description ?? null,
+      name: this.name,
+      model: this.model,
+      description: this.description,
       files: this.files || [],
 
-      user: this.user?.toUser(),
-    } satisfies Thread;
+      user: this.user.toUser(),
+    };
   }
 }

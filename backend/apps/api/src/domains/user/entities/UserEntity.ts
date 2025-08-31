@@ -4,16 +4,16 @@ import { User } from '../types';
 
 @Entity('users')
 export class UserEntity {
-  @PrimaryColumn()
+  @PrimaryColumn('uuid')
   id!: string;
 
-  @Column()
+  @Column({ type: 'varchar', length: 255 })
   name!: string;
 
-  @Column({ unique: true })
+  @Column({ type: 'varchar', length: 255, unique: true })
   email!: string;
 
-  @Column()
+  @Column({ type: 'varchar', length: 255 })
   password!: string;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
@@ -22,11 +22,11 @@ export class UserEntity {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 
-  toUser() {
+  toUser(): User {
     return {
       id: this.id,
       name: this.name,
       email: this.email,
-    } satisfies User;
+    };
   }
 }

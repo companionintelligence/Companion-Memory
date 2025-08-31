@@ -1,9 +1,11 @@
 import type { FileEntity } from '@ci/domains/files';
 import type { User } from '@ci/domains/user';
 
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
 export interface CreateMessageDto {
   threadId: string;
-  role: string;
+  role: MessageRole;
   model: string;
   content: string;
   mimetype?: string;
@@ -37,7 +39,7 @@ export interface UpdateThreadDto {
 export interface Message {
   readonly id: string;
   readonly model: string | null;
-  readonly role: string;
+  readonly role: MessageRole;
   readonly content: string;
   readonly mimetype: string | null;
   readonly toolCalls: Record<string, unknown>[] | null;
