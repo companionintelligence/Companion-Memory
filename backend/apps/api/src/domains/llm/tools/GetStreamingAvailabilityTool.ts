@@ -2,6 +2,8 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import config from '@ci/configuration';
+
 import { BaseTool } from './BaseTool';
 import type { ToolExecutionContext } from './types';
 
@@ -170,7 +172,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
    * Get TMDB genre ID from genre name
    */
   private async getGenreId(genreName: string, mediaType: 'movie' | 'tv'): Promise<number | null> {
-    const TMDB_API_KEY = process.env.TMDB_API_KEY;
+    const TMDB_API_KEY = config.dataProviders.tmdb.apiKey;
 
     if (!TMDB_API_KEY || TMDB_API_KEY === 'demo-key') {
       return null;
@@ -215,7 +217,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
    * Get genre names from TMDB genre IDs
    */
   private async getGenreNames(genreIds: number[], mediaType: 'movie' | 'tv'): Promise<string[]> {
-    const TMDB_API_KEY = process.env.TMDB_API_KEY;
+    const TMDB_API_KEY = config.dataProviders.tmdb.apiKey;
 
     if (!TMDB_API_KEY || TMDB_API_KEY === 'demo-key') {
       return [];
@@ -249,10 +251,10 @@ export class GetStreamingAvailabilityTool extends BaseTool<
    * Fetch data from TMDB API (reliable, documented API)
    */
   private async fetchFromTMDB(input: GetStreamingAvailabilityInput): Promise<any> {
-    const TMDB_API_KEY = process.env.TMDB_API_KEY || 'demo-key';
+    const TMDB_API_KEY = config.dataProviders.tmdb.apiKey || 'demo-key';
 
     if (TMDB_API_KEY === 'demo-key') {
-      throw new Error('TMDB_API_KEY environment variable not set');
+      throw new Error('TMDB_API_KEY not configured in application settings');
     }
 
     // If genre is specified, use discover endpoint for better filtering
@@ -358,7 +360,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     tmdbId: string,
     mediaType: 'movie' | 'tv',
   ): Promise<StreamingTitle['streamingServices']> {
-    const TMDB_API_KEY = process.env.TMDB_API_KEY;
+    const TMDB_API_KEY = config.dataProviders.tmdb.apiKey;
 
     if (!TMDB_API_KEY || TMDB_API_KEY === 'demo-key') {
       return []; // Return empty array if no API key

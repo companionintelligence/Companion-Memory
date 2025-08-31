@@ -78,6 +78,11 @@ export const ConfigSchema = z.object({
       host: z.string(),
     }),
   }),
+  dataProviders: z.object({
+    tmdb: z.object({
+      apiKey: z.string(),
+    }),
+  }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     'scheduled.connection.fetching': booleanStringSchema,

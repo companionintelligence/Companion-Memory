@@ -61,6 +61,11 @@
       "host": "http://localhost:9002"
     }
   },
+  "dataProviders": {
+    "tmdb": {
+      "apiKey": "demo-key"
+    }
+  },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.fetching": true
