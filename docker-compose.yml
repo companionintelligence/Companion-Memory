@@ -91,10 +91,52 @@ services:
       - open-webui:/app/backend/data
     profiles: [ "all" ]
 
+  speech-services-stt:
+    build:
+      context: ./docker/speech-services
+      dockerfile: Dockerfile
+    image: ci/speech-services
+    container_name: speech-services-stt
+    ports:
+      - 9001:8000
+    environment:
+      - STT_ENGINE=whisper
+      - TTS_ENGINE=mock
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - MODEL_CACHE_DIR=/app/models
+    volumes:
+      - speech-models:/app/models
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "local", "infra" ]
+
+  speech-services-tts:
+    build:
+      context: ./docker/speech-services
+      dockerfile: Dockerfile
+    image: ci/speech-services
+    container_name: speech-services-tts
+    ports:
+      - 9002:8000
+    environment:
+      - STT_ENGINE=mock
+      - TTS_ENGINE=piper
+      - PIPER_VOICE=en_US-ljspeech-medium
+      - MODEL_CACHE_DIR=/app/models
+    volumes:
+      - speech-models:/app/models
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "local", "infra" ]
+
 volumes:
   postgres-data:
   minio-data:
   open-webui:
+  speech-models:
 
 networks:
   web:

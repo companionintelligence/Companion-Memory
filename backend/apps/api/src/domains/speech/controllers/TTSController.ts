@@ -18,6 +18,6 @@ export class TTSController {
       throw new UnauthorizedException();
     }
 
-    return this.proxyService.proxyRequest(req, res, `${config.services.stt.host}/tts`);
+    return this.proxyService.proxyRequest(req, res, `${config.services.tts.host}/tts`);
   }
 }
