@@ -26,7 +26,6 @@ interface SettingsState {
   cacheSize: string;
 
   // API Keys
-  openaiKey: string;
   githubToken: string;
   slackToken: string;
 
@@ -59,7 +58,6 @@ export function SettingsPage() {
     cacheSize: '2048',
 
     // API Keys defaults (masked)
-    openaiKey: 'sk-***********************************',
     githubToken: 'ghp_********************************',
     slackToken: 'xoxb-***************************',
 
@@ -83,7 +81,6 @@ export function SettingsPage() {
   });
 
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({
-    openaiKey: false,
     githubToken: false,
     slackToken: false,
   });
@@ -230,27 +227,6 @@ export function SettingsPage() {
               <Card.Description>Manage your personal access tokens and API credentials</Card.Description>
             </Card.Header>
             <Card.Content className="space-y-4">
-              <div className="grid gap-2">
-                <Label htmlFor="openai">OpenAI API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="openai"
-                    type={showKeys.openaiKey ? 'text' : 'password'}
-                    value={settings.openaiKey}
-                    onChange={(e) => updateSetting('openaiKey', e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('openaiKey')}>
-                    {showKeys.openaiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span className="text-sm text-muted-foreground">Connected</span>
-                  <Badge variant="secondary">Valid</Badge>
-                </div>
-              </div>
-
               <div className="grid gap-2">
                 <Label htmlFor="github">GitHub Personal Access Token</Label>
                 <div className="flex gap-2">

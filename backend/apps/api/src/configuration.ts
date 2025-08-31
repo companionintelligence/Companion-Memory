@@ -77,8 +77,8 @@ export const ConfigSchema = z.object({
     tts: z.object({
       host: z.string(),
     }),
-    openai: z.object({
-      apiKey: z.string(),
+    stableDiffusion: z.object({
+      host: z.string(),
     }),
   }),
   features: z.object({

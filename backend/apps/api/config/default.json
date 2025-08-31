@@ -60,8 +60,8 @@
     "tts": {
       "host": "http://localhost:9002"
     },
-    "openai": {
-      "apiKey": "OPENAI_API_KEY"
+    "stableDiffusion": {
+      "host": "http://localhost:7860"
     }
   },
   "features": {

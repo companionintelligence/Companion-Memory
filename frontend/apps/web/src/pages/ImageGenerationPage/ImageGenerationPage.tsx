@@ -79,7 +79,7 @@ export default function ImageGenerationPage() {
         AI Image Generation
       </h2>
       <p className="text-muted-foreground mb-4 lg:mb-6 leading-relaxed text-sm lg:text-base">
-        Describe any image you'd like to create and I'll generate it for you using AI
+        Describe any image you'd like to create and I'll generate it for you using local AI powered by Stable Diffusion
       </p>
 
       <div className="grid grid-cols-1 gap-3 text-xs">

@@ -31,8 +31,8 @@
     "tts": {
       "host": "TTS_HOST"
     },
-    "openai": {
-      "apiKey": "OPENAI_API_KEY"
+    "stableDiffusion": {
+      "host": "STABLE_DIFFUSION_HOST"
     }
   },
   "features": {
