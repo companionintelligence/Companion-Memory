@@ -4,4 +4,5 @@ export { useCounter } from './use-counter';
 export { DeviceLayoutProvider, useDeviceLayout } from './use-device-layout';
 export { useModalControls } from './use-modal-controls';
 export { ModelProvider, useModel } from './use-model';
+export { usePWAInstall } from './usePWAInstall';
 export { ThemeProvider, useTheme } from './use-theme';

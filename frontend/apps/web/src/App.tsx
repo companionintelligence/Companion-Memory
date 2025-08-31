@@ -3,6 +3,7 @@ import { type ReactNode, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { PWAInstall } from '@/components/PWAInstall';
 import { AuthProvider, DeviceLayoutProvider, ModelProvider, ThemeProvider } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import FeedPage from '@/pages/FeedPage';
@@ -160,6 +161,7 @@ export default function App() {
   return (
     <Providers>
       <AppRoutes />
+      <PWAInstall />
     </Providers>
   );
 }
