@@ -109,8 +109,7 @@ async def call_stt_diarization(audio_bytes: bytes, sample_rate: int = 16000) -> 
         
         # Make request to STT service
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://stt:9001/transcribe",
+                "http://stt-service:9001/transcribe",
                 json={
                     "audio_data": audio_base64,
                     "sample_rate": sample_rate,
