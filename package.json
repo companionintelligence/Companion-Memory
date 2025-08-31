@@ -16,6 +16,7 @@
   "devDependencies": {
     "@eslint/js": "^9.27.0",
     "@storybook/react-vite": "^9.0.8",
+    "@types/node": "^24.3.0",
     "@types/pg": "^8",
     "eslint": "^9.27.0",
     "eslint-config-prettier": "^10.1.5",
