@@ -205,7 +205,73 @@ export class OllamaService {
             });
           }
         } catch (err) {
-          if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            // Handle abort normally
+            break;
+          } else if (self.isToolSupportError(err) && iterationWillCallTools) {
+            // If it's a tool support error and we were trying to use tools, retry without tools
+            self.logger.warn('Model does not support tools, retrying without tools', {
+              model,
+              userId: context.userId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+
+            try {
+              const iterator = await self.ollama.chat({
+                model,
+                messages: inputMessages.concat(accumulatedMessages),
+                stream: true,
+                ...(enableThinking && { think: true }),
+                // Explicitly exclude tools in retry
+              });
+
+              handleAbort = () => iterator.abort();
+
+              signal?.addEventListener('abort', handleAbort);
+
+              for await (const chunk of iterator) {
+                lastChunk = chunk;
+
+                if (chunk.message.content) {
+                  textChunks.push(chunk.message.content);
+                }
+
+                if (chunk.message.thinking) {
+                  thinkChunks.push(chunk.message.thinking);
+                }
+
+                if (chunk.message.tool_calls) {
+                  toolCalls.push(...chunk.message.tool_calls);
+                }
+
+                yield chunk;
+              }
+
+              if (lastChunk?.done) {
+                self.logger.log('Ollama prompt evaluation completed', {
+                  model: lastChunk.model,
+                  totalDuration: lastChunk.total_duration ? lastChunk.total_duration / 1_000_000 : undefined,
+                  loadDuration: lastChunk.load_duration ? lastChunk.load_duration / 1_000_000 : undefined,
+                  evalDuration: lastChunk.prompt_eval_duration
+                    ? lastChunk.prompt_eval_duration / 1_000_000
+                    : undefined,
+                  promptCount: lastChunk.prompt_eval_count,
+                  evalCount: lastChunk.eval_count,
+                  doneReason: lastChunk.done_reason,
+                });
+              }
+            } catch (retryErr) {
+              // If retry also fails, log error and break
+              self.logger.error('Ollama prompt evaluation failed after retry without tools', {
+                model: lastChunk?.model ?? resolvedOptions.model,
+                doneReason: 'error',
+                error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+              });
+
+              break;
+            }
+          } else {
+            // Handle other errors
             self.logger.error('Ollama prompt evaluation completed', {
               model: lastChunk?.model ?? resolvedOptions.model,
               doneReason: 'error',
@@ -259,11 +325,33 @@ export class OllamaService {
 
     const accumulatedMessages: OllamaMessage[] = [];
 
-    const response = await this.ollama.chat({
-      model,
-      messages: inputMessages,
-      ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
-    });
+    let response: ChatResponse;
+
+    try {
+      response = await this.ollama.chat({
+        model,
+        messages: inputMessages,
+        ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
+      });
+    } catch (error) {
+      // Check if this is a tool-related error and retry without tools
+      if (this.isToolSupportError(error) && enableTools && ollamaTools.length > 0) {
+        this.logger.warn('Model does not support tools, retrying without tools', {
+          model,
+          userId: context.userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+
+        response = await this.ollama.chat({
+          model,
+          messages: inputMessages,
+          // Explicitly exclude tools in retry
+        });
+      } else {
+        // Re-throw non-tool-related errors
+        throw error;
+      }
+    }
 
     const willCallTools =
       enableTools && response.message.tool_calls && response.message.tool_calls.length > 0;
@@ -412,5 +500,25 @@ export class OllamaService {
         parameters: toolSchema.parameters,
       },
     };
+  }
+
+  /**
+   * Check if an error indicates that the model doesn't support tools
+   */
+  private isToolSupportError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const message = error.message.toLowerCase();
+
+    // Common patterns for tool support errors from Ollama
+    return (
+      message.includes('tools are not supported') ||
+      (message.includes('tool') && message.includes('not supported')) ||
+      (message.includes('function calling') && message.includes('not supported')) ||
+      (message.includes('invalid parameter') && message.includes('tools')) ||
+      (message.includes('unknown parameter') && message.includes('tools'))
+    );
   }
 }
