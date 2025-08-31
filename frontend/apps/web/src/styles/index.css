@@ -121,3 +121,34 @@
   }
 }
 
+/* iOS Safari streaming optimizations */
+@media screen and (-webkit-min-device-pixel-ratio: 1) {
+  .streaming-content {
+    /* Force hardware acceleration for smoother rendering on iOS */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    
+    /* Enable smoother scrolling and rendering */
+    -webkit-overflow-scrolling: touch;
+    
+    /* Optimize for streaming text updates */
+    will-change: contents;
+    
+    /* Reduce layout thrashing during streaming */
+    contain: layout;
+  }
+  
+  /* Optimize chat scroll container for iOS */
+  .chat-scroll-container {
+    /* Smooth scrolling on iOS */
+    -webkit-overflow-scrolling: touch;
+    
+    /* Hardware acceleration */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    
+    /* Optimize for frequent updates */
+    will-change: scroll-position;
+  }
+}
+

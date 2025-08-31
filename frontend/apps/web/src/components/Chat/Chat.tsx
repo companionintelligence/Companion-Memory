@@ -178,6 +178,20 @@ export function Chat({
 
         el.appendChild(textNode);
 
+        // Force a reflow on iOS Safari to ensure incremental rendering
+        // iOS Safari optimizes DOM updates and may not render them immediately
+        // without an explicit trigger that causes a layout recalculation
+        if (typeof window !== 'undefined') {
+          // Force reflow by accessing offsetHeight (causes layout calculation)
+          void el.offsetHeight;
+
+          // Use requestAnimationFrame to ensure the update is painted
+          requestAnimationFrame(() => {
+            // Additional paint trigger for iOS
+            void el.scrollTop;
+          });
+        }
+
         maybeAutoScroll();
       }
 
@@ -273,6 +287,7 @@ export function Chat({
           ref={setScrollRef}
           onScroll={onScroll}
           className="
+            chat-scroll-container
             flex flex-col gap-4 flex-1 min-h-0 overflow-y-scroll p-4 pb-8
             [mask-image:linear-gradient(to_top,transparent,hsl(0_0%_100%)_2rem)]
             [mask-repeat:no-repeat] [mask-size:100%_100%]
