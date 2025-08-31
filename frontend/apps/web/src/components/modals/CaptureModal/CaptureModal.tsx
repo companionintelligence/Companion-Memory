@@ -101,18 +101,20 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <Dialog.Content className="sm:max-w-[70vw] max-h-[70vh] p-0 flex flex-col gap-0">
-        <Dialog.Header className="flex flex-row items-center gap-4 p-4 pb-3 border-b bg-stone-50 rounded-t-2xl">
+      <Dialog.Content className="w-full h-full max-w-none max-h-none sm:w-[90vw] sm:h-[90vh] sm:max-w-[90vw] sm:max-h-[90vh] p-0 flex flex-col gap-0 inset-0 translate-x-0 translate-y-0 sm:inset-auto sm:top-[50%] sm:left-[50%] sm:translate-x-[-50%] sm:translate-y-[-50%] rounded-none sm:rounded-lg">
+        <Dialog.Header className="flex flex-row items-center gap-4 p-4 pb-3 border-b bg-stone-50 rounded-none sm:rounded-t-lg">
           <Dialog.Title>Upload Images and Videos</Dialog.Title>
           <Dialog.Description className="hidden">Capture audio or video and upload to CI</Dialog.Description>
         </Dialog.Header>
 
         {files.length === 0 && (
-          <Camera onFrameCaptured={handleMediaCaptured} onRecordingFinished={handleMediaCaptured}>
-            <div>
-              <Camera.Feed />
-            </div>
-          </Camera>
+          <div className="flex-1 flex flex-col min-h-0">
+            <Camera onFrameCaptured={handleMediaCaptured} onRecordingFinished={handleMediaCaptured}>
+              <div className="flex-1 min-h-0">
+                <Camera.Feed />
+              </div>
+            </Camera>
+          </div>
         )}
         {files.length > 0 && (
           <div className="flex flex-1 max-h-100">
