@@ -15,10 +15,7 @@ import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
 import { MessageService } from '@ci/domains/conversations';
 
-import {
-  ToolRegistry,
-  type ToolSchema,
-} from '../tools';
+import { ToolRegistry, type ToolSchema } from '../tools';
 import type { OllamaModel } from '../types';
 
 const PROMPT_MODEL = 'gemma3:1b';

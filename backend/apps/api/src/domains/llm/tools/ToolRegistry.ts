@@ -6,9 +6,9 @@ import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 
 import { BaseTool } from './BaseTool';
-import { GetUserPreferencesTool } from './GetUserPreferencesTool';
 import { GetEntertainmentPreferencesTool } from './GetEntertainmentPreferencesTool';
 import { GetStreamingAvailabilityTool } from './GetStreamingAvailabilityTool';
+import { GetUserPreferencesTool } from './GetUserPreferencesTool';
 import type { ToolSchema, ToolResult } from './types';
 
 /**
