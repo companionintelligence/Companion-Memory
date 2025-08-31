@@ -1,9 +1,14 @@
 import { Injectable } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 
 import { BaseTool } from './BaseTool';
+import { GetUserPreferencesTool } from './GetUserPreferencesTool';
+import { GetEntertainmentPreferencesTool } from './GetEntertainmentPreferencesTool';
+import { GetStreamingAvailabilityTool } from './GetStreamingAvailabilityTool';
 import type { ToolSchema, ToolResult } from './types';
 
 /**
@@ -14,6 +19,33 @@ export class ToolRegistry {
   private readonly logger = new LoggerService(ToolRegistry.name);
 
   private readonly tools = new Map<string, BaseTool>();
+
+  constructor(
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
+  ) {
+    this.initializeTools();
+  }
+
+  /**
+   * Initialize all available tools
+   */
+  private initializeTools(): void {
+    const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
+    const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
+    const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
+    // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
+
+    this.register(getUserPreferencesTool);
+    this.register(getEntertainmentPreferencesTool);
+    this.register(getStreamingAvailabilityTool);
+    // this.register(getFamilyMembersTool); // Disabled for demo
+
+    this.logger.debug('Initialized tools registry', {
+      toolCount: this.getRegisteredToolNames().length,
+      tools: this.getRegisteredToolNames(),
+    });
+  }
 
   /**
    * Register a tool instance
