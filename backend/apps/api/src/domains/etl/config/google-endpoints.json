@@ -1,0 +1,104 @@
+[
+  {
+    "id": "google.calendar.events.list",
+    "name": "List Calendar Events",
+    "provider": "google",
+    "endpoint": "/calendar/v3/calendars/primary/events",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "maxResults": "250",
+      "singleEvents": "true",
+      "orderBy": "startTime"
+    },
+    "rateLimit": {
+      "requests": 1000,
+      "window": 100
+    },
+    "pagination": {
+      "type": "page",
+      "param": "pageToken",
+      "limit": 250
+    }
+  },
+  {
+    "id": "google.gmail.messages.list",
+    "name": "List Gmail Messages", 
+    "provider": "google",
+    "endpoint": "/gmail/v1/users/me/messages",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "maxResults": "500"
+    },
+    "rateLimit": {
+      "requests": 250,
+      "window": 1
+    },
+    "pagination": {
+      "type": "page",
+      "param": "pageToken",
+      "limit": 500
+    }
+  },
+  {
+    "id": "google.gmail.messages.get",
+    "name": "Get Gmail Message",
+    "provider": "google", 
+    "endpoint": "/gmail/v1/users/me/messages/{messageId}",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "format": "full"
+    },
+    "dependencies": ["google.gmail.messages.list"],
+    "rateLimit": {
+      "requests": 250,
+      "window": 1
+    }
+  },
+  {
+    "id": "google.drive.files.list",
+    "name": "List Drive Files",
+    "provider": "google",
+    "endpoint": "/drive/v3/files",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "pageSize": "1000",
+      "fields": "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, parents)"
+    },
+    "rateLimit": {
+      "requests": 1000,
+      "window": 100
+    },
+    "pagination": {
+      "type": "page",
+      "param": "pageToken",
+      "limit": 1000
+    }
+  },
+  {
+    "id": "google.docs.documents.get",
+    "name": "Get Google Doc",
+    "provider": "google",
+    "endpoint": "/docs/v1/documents/{documentId}",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "dependencies": ["google.drive.files.list"],
+    "rateLimit": {
+      "requests": 100,
+      "window": 100
+    }
+  }
+]

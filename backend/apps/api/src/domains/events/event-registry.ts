@@ -8,6 +8,9 @@ export enum Events {
   CHAT_SUMMARIZATION = 'chat.summarization',
   INFER_QUESTION_ANSWER = 'infer.question.answer',
   SYNC_CONNECTION = 'sync.connection',
+  ETL_DATA_COLLECTION = 'etl.data.collection',
+  ETL_TRANSFORM = 'etl.transform',
+  ETL_SCHEDULE = 'etl.schedule',
 }
 
 interface ApiEnqueuePayload extends EventPayload {
@@ -34,10 +37,29 @@ interface SyncConnectionPayload extends EventPayload {
   userId: string;
 }
 
+interface EtlDataCollectionPayload extends EventPayload {
+  jobId: string;
+  connectionId: string;
+  endpointConfigId: string;
+}
+
+interface EtlTransformPayload extends EventPayload {
+  jobId: string;
+  transformMapId: string;
+  sourceData: unknown;
+}
+
+interface EtlSchedulePayload extends EventPayload {
+  jobId: string;
+}
+
 export type EventPayloads = {
   [Events.API_ENQUEUE]: ApiEnqueuePayload;
   [Events.FILE_UPLOAD]: FileUploadPayload;
   [Events.CHAT_SUMMARIZATION]: ChatSummarizationPayload;
   [Events.INFER_QUESTION_ANSWER]: InferQuestionAnswerPayload;
   [Events.SYNC_CONNECTION]: SyncConnectionPayload;
+  [Events.ETL_DATA_COLLECTION]: EtlDataCollectionPayload;
+  [Events.ETL_TRANSFORM]: EtlTransformPayload;
+  [Events.ETL_SCHEDULE]: EtlSchedulePayload;
 };

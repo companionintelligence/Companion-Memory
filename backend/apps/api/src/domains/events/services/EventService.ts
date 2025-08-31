@@ -9,6 +9,9 @@ import { type EventPayloads } from '../event-registry';
 
 export enum Queues {
   DEFAULT = 'default',
+  ETL_DATA_COLLECTION = 'etl.data.collection',
+  ETL_TRANSFORM = 'etl.transform',
+  ETL_SCHEDULE = 'etl.schedule',
 }
 
 interface EventData {

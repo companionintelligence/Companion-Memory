@@ -1,0 +1,92 @@
+[
+  {
+    "id": "microsoft.calendar.events.list",
+    "name": "List Calendar Events",
+    "provider": "microsoft",
+    "endpoint": "/v1.0/me/events",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "$top": "999",
+      "$orderby": "createdDateTime desc"
+    },
+    "rateLimit": {
+      "requests": 10000,
+      "window": 600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "$skiptoken",
+      "limit": 999
+    }
+  },
+  {
+    "id": "microsoft.mail.messages.list",
+    "name": "List Mail Messages",
+    "provider": "microsoft", 
+    "endpoint": "/v1.0/me/messages",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "$top": "999",
+      "$orderby": "receivedDateTime desc"
+    },
+    "rateLimit": {
+      "requests": 10000,
+      "window": 600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "$skiptoken",
+      "limit": 999
+    }
+  },
+  {
+    "id": "microsoft.drive.items.list",
+    "name": "List OneDrive Items",
+    "provider": "microsoft",
+    "endpoint": "/v1.0/me/drive/root/children",
+    "method": "GET", 
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "$top": "999"
+    },
+    "rateLimit": {
+      "requests": 10000,
+      "window": 600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "$skiptoken",
+      "limit": 999
+    }
+  },
+  {
+    "id": "microsoft.teams.messages.list",
+    "name": "List Teams Messages",
+    "provider": "microsoft",
+    "endpoint": "/v1.0/me/chats/{chatId}/messages", 
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "queryParams": {
+      "$top": "50"
+    },
+    "rateLimit": {
+      "requests": 60,
+      "window": 60
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "$skiptoken",
+      "limit": 50
+    }
+  }
+]
