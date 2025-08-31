@@ -61,100 +61,100 @@ function generateThemeColors(baseHue: number, isDark: boolean = true): Record<st
   }
 
   if (isDark) {
-    // Dark mode color generation
+    // Dark mode color generation - enhanced vibrancy
     return {
-      // Backgrounds - very dark with subtle color
-      background: `oklch(0.129 0.042 ${baseHue})`,
-      card: `oklch(0.208 0.042 ${(baseHue + 5) % 360})`,
-      popover: `oklch(0.208 0.042 ${(baseHue + 5) % 360})`,
+      // Backgrounds - darker with more noticeable color
+      background: `oklch(0.11 0.04 ${baseHue})`,
+      card: `oklch(0.16 0.05 ${(baseHue + 5) % 360})`,
+      popover: `oklch(0.16 0.05 ${(baseHue + 5) % 360})`,
 
-      // Interactive elements
-      primary: `oklch(0.929 0.013 ${(baseHue - 5) % 360})`,
-      secondary: `oklch(0.279 0.041 ${baseHue})`,
-      accent: `oklch(0.279 0.041 ${(baseHue + 10) % 360})`,
-      muted: `oklch(0.279 0.041 ${baseHue})`,
+      // Interactive elements - more saturated
+      primary: `oklch(0.75 0.2 ${baseHue})`,
+      secondary: `oklch(0.25 0.06 ${baseHue})`,
+      accent: `oklch(0.35 0.15 ${(baseHue + 30) % 360})`,
+      muted: `oklch(0.22 0.05 ${baseHue})`,
 
-      // Destructive (use red-orange regardless of base)
-      destructive: `oklch(0.704 0.191 22.216)`,
+      // Destructive - more vibrant red
+      destructive: `oklch(0.65 0.25 25)`,
 
-      // Borders and inputs - keep some color but subtle
-      border: `oklch(1 0 0 / 10%)`,
-      input: `oklch(1 0 0 / 15%)`,
-      ring: `oklch(0.551 0.027 ${(baseHue + 4) % 360})`,
+      // Borders and inputs - subtle color
+      border: `oklch(0.25 0.04 ${baseHue})`,
+      input: `oklch(0.2 0.03 ${baseHue})`,
+      ring: `oklch(0.75 0.2 ${baseHue})`,
 
-      // Text colors
-      foreground: `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'card-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'popover-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'primary-foreground': `oklch(0.208 0.042 ${(baseHue + 5) % 360})`,
-      'secondary-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'accent-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'muted-foreground': `oklch(0.704 0.04 ${(baseHue - 4) % 360})`,
+      // Text colors - better contrast
+      foreground: `oklch(0.92 0.02 ${(baseHue + 180) % 360})`,
+      'card-foreground': `oklch(0.92 0.02 ${(baseHue + 180) % 360})`,
+      'popover-foreground': `oklch(0.92 0.02 ${(baseHue + 180) % 360})`,
+      'primary-foreground': `oklch(0.08 0.02 ${baseHue})`,
+      'secondary-foreground': `oklch(0.85 0.03 ${(baseHue + 180) % 360})`,
+      'accent-foreground': `oklch(0.9 0.03 ${(baseHue + 30) % 360})`,
+      'muted-foreground': `oklch(0.65 0.08 ${baseHue})`,
 
-      // Chart colors - spread across color wheel for contrast
-      'chart-1': `oklch(0.488 0.243 ${baseHue})`,
-      'chart-2': `oklch(0.696 0.17 ${(baseHue + 120) % 360})`,
-      'chart-3': `oklch(0.769 0.188 ${(baseHue + 240) % 360})`,
-      'chart-4': `oklch(0.627 0.265 ${(baseHue + 60) % 360})`,
-      'chart-5': `oklch(0.645 0.246 ${(baseHue + 300) % 360})`,
+      // Chart colors - more distinctive and vibrant
+      'chart-1': `oklch(0.65 0.28 ${baseHue})`,
+      'chart-2': `oklch(0.7 0.25 ${(baseHue + 90) % 360})`,
+      'chart-3': `oklch(0.75 0.22 ${(baseHue + 180) % 360})`,
+      'chart-4': `oklch(0.68 0.26 ${(baseHue + 270) % 360})`,
+      'chart-5': `oklch(0.72 0.24 ${(baseHue + 45) % 360})`,
 
-      // Sidebar colors
-      sidebar: `oklch(0.208 0.042 ${(baseHue + 5) % 360})`,
-      'sidebar-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'sidebar-primary': `oklch(0.488 0.243 ${baseHue})`,
-      'sidebar-primary-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'sidebar-accent': `oklch(0.279 0.041 ${baseHue})`,
-      'sidebar-accent-foreground': `oklch(0.984 0.003 ${(baseHue - 15) % 360})`,
-      'sidebar-border': `oklch(1 0 0 / 10%)`,
-      'sidebar-ring': `oklch(0.551 0.027 ${(baseHue + 4) % 360})`,
+      // Sidebar colors - enhanced
+      sidebar: `oklch(0.14 0.04 ${(baseHue + 10) % 360})`,
+      'sidebar-foreground': `oklch(0.88 0.03 ${(baseHue + 180) % 360})`,
+      'sidebar-primary': `oklch(0.6 0.22 ${baseHue})`,
+      'sidebar-primary-foreground': `oklch(0.92 0.02 ${(baseHue + 180) % 360})`,
+      'sidebar-accent': `oklch(0.3 0.12 ${(baseHue + 30) % 360})`,
+      'sidebar-accent-foreground': `oklch(0.85 0.03 ${(baseHue + 30) % 360})`,
+      'sidebar-border': `oklch(0.22 0.04 ${baseHue})`,
+      'sidebar-ring': `oklch(0.6 0.18 ${baseHue})`,
     };
   } else {
-    // Light mode color generation
+    // Light mode color generation - enhanced vibrancy
     return {
       // Backgrounds - very light with subtle color
-      background: `oklch(0.98 0.005 ${baseHue})`,
-      card: `oklch(0.95 0.008 ${(baseHue + 5) % 360})`,
-      popover: `oklch(0.95 0.008 ${(baseHue + 5) % 360})`,
+      background: `oklch(0.98 0.008 ${baseHue})`,
+      card: `oklch(0.94 0.015 ${(baseHue + 5) % 360})`,
+      popover: `oklch(0.94 0.015 ${(baseHue + 5) % 360})`,
 
-      // Interactive elements
-      primary: `oklch(0.35 0.12 ${baseHue})`,
-      secondary: `oklch(0.85 0.02 ${(baseHue + 5) % 360})`,
-      accent: `oklch(0.85 0.02 ${(baseHue + 10) % 360})`,
-      muted: `oklch(0.85 0.02 ${(baseHue + 5) % 360})`,
+      // Interactive elements - more saturated
+      primary: `oklch(0.45 0.18 ${baseHue})`,
+      secondary: `oklch(0.88 0.04 ${(baseHue + 5) % 360})`,
+      accent: `oklch(0.82 0.08 ${(baseHue + 30) % 360})`,
+      muted: `oklch(0.9 0.03 ${(baseHue + 5) % 360})`,
 
-      // Destructive
-      destructive: `oklch(0.577 0.245 27.325)`,
+      // Destructive - vibrant red
+      destructive: `oklch(0.55 0.28 25)`,
 
-      // Borders and inputs
-      border: `oklch(0.9 0.01 ${(baseHue + 5) % 360})`,
-      input: `oklch(0.9 0.01 ${(baseHue + 5) % 360})`,
-      ring: `oklch(0.45 0.08 ${(baseHue + 4) % 360})`,
+      // Borders and inputs - subtle color
+      border: `oklch(0.85 0.025 ${(baseHue + 5) % 360})`,
+      input: `oklch(0.9 0.02 ${(baseHue + 5) % 360})`,
+      ring: `oklch(0.45 0.18 ${baseHue})`,
 
-      // Text colors
-      foreground: `oklch(0.15 0.02 ${(baseHue + 10) % 360})`,
-      'card-foreground': `oklch(0.15 0.02 ${(baseHue + 10) % 360})`,
-      'popover-foreground': `oklch(0.15 0.02 ${(baseHue + 10) % 360})`,
-      'primary-foreground': `oklch(0.98 0.005 ${(baseHue - 5) % 360})`,
-      'secondary-foreground': `oklch(0.35 0.08 ${baseHue})`,
-      'accent-foreground': `oklch(0.35 0.08 ${baseHue})`,
-      'muted-foreground': `oklch(0.5 0.04 ${(baseHue + 4) % 360})`,
+      // Text colors - better contrast
+      foreground: `oklch(0.18 0.04 ${(baseHue + 180) % 360})`,
+      'card-foreground': `oklch(0.18 0.04 ${(baseHue + 180) % 360})`,
+      'popover-foreground': `oklch(0.18 0.04 ${(baseHue + 180) % 360})`,
+      'primary-foreground': `oklch(0.95 0.008 ${baseHue})`,
+      'secondary-foreground': `oklch(0.25 0.12 ${baseHue})`,
+      'accent-foreground': `oklch(0.2 0.15 ${(baseHue + 30) % 360})`,
+      'muted-foreground': `oklch(0.45 0.08 ${baseHue})`,
 
-      // Chart colors - vibrant but lighter
-      'chart-1': `oklch(0.55 0.18 ${baseHue})`,
-      'chart-2': `oklch(0.6 0.15 ${(baseHue + 120) % 360})`,
-      'chart-3': `oklch(0.65 0.14 ${(baseHue + 240) % 360})`,
-      'chart-4': `oklch(0.5 0.2 ${(baseHue + 60) % 360})`,
-      'chart-5': `oklch(0.58 0.17 ${(baseHue + 300) % 360})`,
+      // Chart colors - vibrant and distinctive
+      'chart-1': `oklch(0.6 0.25 ${baseHue})`,
+      'chart-2': `oklch(0.55 0.22 ${(baseHue + 90) % 360})`,
+      'chart-3': `oklch(0.5 0.2 ${(baseHue + 180) % 360})`,
+      'chart-4': `oklch(0.65 0.28 ${(baseHue + 270) % 360})`,
+      'chart-5': `oklch(0.58 0.24 ${(baseHue + 45) % 360})`,
 
-      // Sidebar colors
-      sidebar: `oklch(0.95 0.008 ${(baseHue + 5) % 360})`,
-      'sidebar-foreground': `oklch(0.15 0.02 ${(baseHue + 10) % 360})`,
-      'sidebar-primary': `oklch(0.35 0.12 ${baseHue})`,
-      'sidebar-primary-foreground': `oklch(0.98 0.005 ${(baseHue - 5) % 360})`,
-      'sidebar-accent': `oklch(0.85 0.02 ${(baseHue + 10) % 360})`,
-      'sidebar-accent-foreground': `oklch(0.35 0.08 ${baseHue})`,
-      'sidebar-border': `oklch(0.9 0.01 ${(baseHue + 5) % 360})`,
-      'sidebar-ring': `oklch(0.45 0.08 ${(baseHue + 4) % 360})`,
+      // Sidebar colors - enhanced
+      sidebar: `oklch(0.92 0.02 ${(baseHue + 10) % 360})`,
+      'sidebar-foreground': `oklch(0.22 0.06 ${(baseHue + 180) % 360})`,
+      'sidebar-primary': `oklch(0.45 0.18 ${baseHue})`,
+      'sidebar-primary-foreground': `oklch(0.95 0.008 ${baseHue})`,
+      'sidebar-accent': `oklch(0.78 0.12 ${(baseHue + 30) % 360})`,
+      'sidebar-accent-foreground': `oklch(0.25 0.15 ${(baseHue + 30) % 360})`,
+      'sidebar-border': `oklch(0.85 0.025 ${(baseHue + 5) % 360})`,
+      'sidebar-ring': `oklch(0.45 0.18 ${baseHue})`,
     };
   }
 }

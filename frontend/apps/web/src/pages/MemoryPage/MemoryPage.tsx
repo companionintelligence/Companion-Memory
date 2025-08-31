@@ -22,6 +22,41 @@ import {
   Phone,
   Loader2,
   AlertCircle,
+  Heart,
+  Music,
+  Camera,
+  Gamepad2,
+  Plane,
+  Home,
+  Building,
+  GraduationCap,
+  Stethoscope,
+  Briefcase,
+  PizzaIcon as Pizza,
+  Wine,
+  CakeSlice as Cake,
+  TreePine,
+  Mountain,
+  Waves,
+  Sun,
+  Moon,
+  Star,
+  Gift,
+  PartyPopper,
+  Theater,
+  Palette,
+  Wrench,
+  Scissors,
+  Hammer,
+  PaintBucket,
+  Brush,
+  Zap,
+  Lightbulb,
+  Target,
+  Trophy,
+  Medal,
+  Crown,
+  Sparkles,
 } from '@ci/shadcn/icons';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -76,27 +111,160 @@ function getMemoryIcon(memory: MemoryItem): React.ReactNode {
       return <FileText className={iconClass} />;
   }
 
-  // Then check by category for events
+  // Enhanced category-based icon selection for events
   const category = memory.category.toLowerCase();
-  if (category.includes('food') || category.includes('drink') || category.includes('meal')) {
+  const title = memory.title.toLowerCase();
+  const description = memory.description?.toLowerCase() || '';
+  const combinedText = `${category} ${title} ${description}`;
+
+  // Food & Drink (more specific)
+  if (combinedText.includes('pizza')) return <Pizza className={iconClass} />;
+  if (combinedText.includes('wine') || combinedText.includes('alcohol') || combinedText.includes('beer')) return <Wine className={iconClass} />;
+  if (combinedText.includes('cake') || combinedText.includes('dessert') || combinedText.includes('birthday')) return <Cake className={iconClass} />;
+  if (combinedText.includes('coffee')) return <Coffee className={iconClass} />;
+  if (combinedText.includes('food') || combinedText.includes('drink') || combinedText.includes('meal') || combinedText.includes('lunch') || combinedText.includes('dinner') || combinedText.includes('breakfast')) {
     return <Utensils className={iconClass} />;
-  } else if (category.includes('coffee')) {
-    return <Coffee className={iconClass} />;
-  } else if (category.includes('work') || category.includes('meeting')) {
+  }
+
+  // Work & Professional
+  if (combinedText.includes('work') || combinedText.includes('meeting') || combinedText.includes('office') || combinedText.includes('job')) {
     return <Laptop className={iconClass} />;
-  } else if (category.includes('fitness') || category.includes('gym') || category.includes('exercise')) {
+  }
+  if (combinedText.includes('business') || combinedText.includes('corporate') || combinedText.includes('company')) {
+    return <Briefcase className={iconClass} />;
+  }
+  if (combinedText.includes('building') || combinedText.includes('office')) return <Building className={iconClass} />;
+
+  // Health & Fitness
+  if (combinedText.includes('fitness') || combinedText.includes('gym') || combinedText.includes('exercise') || combinedText.includes('workout')) {
     return <Dumbbell className={iconClass} />;
-  } else if (category.includes('shopping') || category.includes('grocery')) {
-    return <ShoppingCart className={iconClass} />;
-  } else if (category.includes('learning') || category.includes('reading') || category.includes('book')) {
+  }
+  if (combinedText.includes('health') || combinedText.includes('doctor') || combinedText.includes('medical') || combinedText.includes('hospital')) {
+    return <Stethoscope className={iconClass} />;
+  }
+
+  // Education & Learning
+  if (combinedText.includes('learning') || combinedText.includes('reading') || combinedText.includes('book') || combinedText.includes('study')) {
     return <BookOpen className={iconClass} />;
-  } else if (category.includes('family') || category.includes('social')) {
-    return <Users className={iconClass} />;
-  } else if (category.includes('transport') || category.includes('drive') || category.includes('car')) {
+  }
+  if (combinedText.includes('school') || combinedText.includes('university') || combinedText.includes('college') || combinedText.includes('education')) {
+    return <GraduationCap className={iconClass} />;
+  }
+
+  // Transportation
+  if (combinedText.includes('transport') || combinedText.includes('drive') || combinedText.includes('car') || combinedText.includes('taxi') || combinedText.includes('uber')) {
     return <Car className={iconClass} />;
-  } else if (category.includes('entertainment') || category.includes('tv') || category.includes('movie')) {
+  }
+  if (combinedText.includes('flight') || combinedText.includes('airplane') || combinedText.includes('travel') || combinedText.includes('airport')) {
+    return <Plane className={iconClass} />;
+  }
+
+  // Entertainment & Media
+  if (combinedText.includes('entertainment') || combinedText.includes('tv') || combinedText.includes('movie') || combinedText.includes('film') || combinedText.includes('cinema')) {
     return <Tv className={iconClass} />;
-  } else if (category.includes('event')) {
+  }
+  if (combinedText.includes('music') || combinedText.includes('concert') || combinedText.includes('song') || combinedText.includes('band')) {
+    return <Music className={iconClass} />;
+  }
+  if (combinedText.includes('game') || combinedText.includes('gaming') || combinedText.includes('video game') || combinedText.includes('play')) {
+    return <Gamepad2 className={iconClass} />;
+  }
+  if (combinedText.includes('photo') || combinedText.includes('picture') || combinedText.includes('camera') || combinedText.includes('photography')) {
+    return <Camera className={iconClass} />;
+  }
+  if (combinedText.includes('theater') || combinedText.includes('theatre') || combinedText.includes('show') || combinedText.includes('performance')) {
+    return <Theater className={iconClass} />;
+  }
+
+  // Social & Relationships
+  if (combinedText.includes('family') || combinedText.includes('social') || combinedText.includes('friends') || combinedText.includes('party')) {
+    return <Users className={iconClass} />;
+  }
+  if (combinedText.includes('love') || combinedText.includes('romance') || combinedText.includes('relationship') || combinedText.includes('valentine')) {
+    return <Heart className={iconClass} />;
+  }
+  if (combinedText.includes('celebration') || combinedText.includes('party') || combinedText.includes('festival')) {
+    return <PartyPopper className={iconClass} />;
+  }
+
+  // Shopping & Commerce
+  if (combinedText.includes('shopping') || combinedText.includes('grocery') || combinedText.includes('store') || combinedText.includes('market')) {
+    return <ShoppingCart className={iconClass} />;
+  }
+  if (combinedText.includes('gift') || combinedText.includes('present') || combinedText.includes('surprise')) {
+    return <Gift className={iconClass} />;
+  }
+
+  // Home & Living
+  if (combinedText.includes('home') || combinedText.includes('house') || combinedText.includes('apartment') || combinedText.includes('residence')) {
+    return <Home className={iconClass} />;
+  }
+
+  // Nature & Outdoors
+  if (combinedText.includes('nature') || combinedText.includes('tree') || combinedText.includes('forest') || combinedText.includes('park')) {
+    return <TreePine className={iconClass} />;
+  }
+  if (combinedText.includes('mountain') || combinedText.includes('hiking') || combinedText.includes('climbing')) {
+    return <Mountain className={iconClass} />;
+  }
+  if (combinedText.includes('beach') || combinedText.includes('ocean') || combinedText.includes('sea') || combinedText.includes('swimming')) {
+    return <Waves className={iconClass} />;
+  }
+  if (combinedText.includes('sunny') || combinedText.includes('sunshine') || combinedText.includes('bright')) {
+    return <Sun className={iconClass} />;
+  }
+  if (combinedText.includes('night') || combinedText.includes('evening') || combinedText.includes('moon')) {
+    return <Moon className={iconClass} />;
+  }
+
+  // Creative & Arts
+  if (combinedText.includes('art') || combinedText.includes('creative') || combinedText.includes('design') || combinedText.includes('drawing') || combinedText.includes('painting')) {
+    return <Palette className={iconClass} />;
+  }
+  if (combinedText.includes('craft') || combinedText.includes('diy') || combinedText.includes('making')) {
+    return <Brush className={iconClass} />;
+  }
+
+  // Tools & Maintenance
+  if (combinedText.includes('repair') || combinedText.includes('fix') || combinedText.includes('maintenance')) {
+    return <Wrench className={iconClass} />;
+  }
+  if (combinedText.includes('build') || combinedText.includes('construction') || combinedText.includes('hammer')) {
+    return <Hammer className={iconClass} />;
+  }
+
+  // Achievements & Goals
+  if (combinedText.includes('achievement') || combinedText.includes('success') || combinedText.includes('accomplish')) {
+    return <Trophy className={iconClass} />;
+  }
+  if (combinedText.includes('award') || combinedText.includes('prize') || combinedText.includes('medal')) {
+    return <Medal className={iconClass} />;
+  }
+  if (combinedText.includes('goal') || combinedText.includes('target') || combinedText.includes('objective')) {
+    return <Target className={iconClass} />;
+  }
+
+  // Ideas & Innovation
+  if (combinedText.includes('idea') || combinedText.includes('inspiration') || combinedText.includes('brainstorm')) {
+    return <Lightbulb className={iconClass} />;
+  }
+  if (combinedText.includes('energy') || combinedText.includes('power') || combinedText.includes('electric')) {
+    return <Zap className={iconClass} />;
+  }
+
+  // Special & Memorable
+  if (combinedText.includes('special') || combinedText.includes('magical') || combinedText.includes('amazing') || combinedText.includes('wonderful')) {
+    return <Sparkles className={iconClass} />;
+  }
+  if (combinedText.includes('important') || combinedText.includes('significant') || combinedText.includes('milestone')) {
+    return <Star className={iconClass} />;
+  }
+  if (combinedText.includes('royal') || combinedText.includes('premium') || combinedText.includes('luxury')) {
+    return <Crown className={iconClass} />;
+  }
+
+  // General categories
+  if (combinedText.includes('event')) {
     return <Calendar className={iconClass} />;
   }
 
