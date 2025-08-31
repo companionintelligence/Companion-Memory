@@ -1,13 +1,16 @@
 // Voice service configuration
 // Replace YOUR_SERVER_IP with your actual server IP address
+// Use environment variable for server IP, fallback to dev value if not set
+const SERVER_IP = import.meta.env.VITE_SERVER_IP || 'dev.companionintelligence.com';
+
 export const VOICE_CONFIG = {
   // Your server's IP address where the voice service is running
-  SERVER_IP: 'dev.companionintelligence.com', // Replace this with your actual server IP
+  SERVER_IP,
 
   // Voice service endpoints (via nginx proxy)
-  TRANSCRIBE_URL: 'https://dev.companionintelligence.com:8643/stt/transcribe',
-  HEALTH_URL: 'https://dev.companionintelligence.com:8643/stt/health',
-  TTS_URL: 'https://dev.companionintelligence.com:8643/tts/v1/chat/completions',
+  TRANSCRIBE_URL: `https://${SERVER_IP}:8643/stt/transcribe`,
+  HEALTH_URL: `https://${SERVER_IP}:8643/stt/health`,
+  TTS_URL: `https://${SERVER_IP}:8643/tts/v1/chat/completions`,
 };
 
 // Helper function to get the voice service URL
