@@ -117,9 +117,9 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
           </div>
         )}
         {files.length > 0 && (
-          <div className="flex flex-1 max-h-100">
+          <div className="flex flex-col sm:flex-row flex-1 max-h-100">
             {/* Left side: file preview or fallback */}
-            <div className="flex flex-col gap-4 p-4 border-r min-w-[320px] max-w-[480px] w-full">
+            <div className="flex flex-col gap-4 p-4 sm:border-r sm:min-w-[320px] sm:max-w-[480px] w-full">
               {files.map((file) => {
                 const fileType = getMediaType(file.contentType);
                 switch (fileType) {
