@@ -59,6 +59,9 @@
     },
     "tts": {
       "host": "http://localhost:9002"
+    },
+    "openai": {
+      "apiKey": "OPENAI_API_KEY"
     }
   },
   "features": {

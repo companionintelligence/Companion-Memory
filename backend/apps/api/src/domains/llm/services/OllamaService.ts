@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   type ChatResponse,
   type GenerateResponse,
@@ -8,18 +8,22 @@ import {
   type ToolCall,
   Ollama,
 } from 'ollama';
-import { DataSource } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
 import { MessageService } from '@ci/domains/conversations';
+import { EventService } from '@ci/domains/events';
+import { FileEntity } from '@ci/domains/files/entities/FileEntity';
+import { FileService } from '@ci/domains/files/services/FileService';
 
 import {
   ToolRegistry,
   GetUserPreferencesTool,
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
+  ImageGenerationTool,
   type ToolSchema,
 } from '../tools';
 import type { OllamaModel } from '../types';
@@ -46,8 +50,12 @@ export class OllamaService {
 
   constructor(
     private readonly messageService: MessageService,
+    private readonly fileService: FileService,
+    private readonly eventService: EventService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    @InjectRepository(FileEntity)
+    private readonly fileRepository: Repository<FileEntity>,
   ) {
     this.initializeTools();
   }
@@ -332,11 +340,13 @@ export class OllamaService {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
+    const imageGenerationTool = new ImageGenerationTool(this.fileService, this.eventService, this.fileRepository);
     // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
     this.toolRegistry.register(getEntertainmentPreferencesTool);
     this.toolRegistry.register(getStreamingAvailabilityTool);
+    this.toolRegistry.register(imageGenerationTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
 
     this.logger.debug('Initialized tools registry', {

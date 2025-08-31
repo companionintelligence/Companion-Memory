@@ -77,6 +77,9 @@ export const ConfigSchema = z.object({
     tts: z.object({
       host: z.string(),
     }),
+    openai: z.object({
+      apiKey: z.string(),
+    }),
   }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,

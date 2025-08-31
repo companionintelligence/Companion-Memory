@@ -9,6 +9,60 @@ interface Props {
   streamingRef?: RefObject<HTMLDivElement | null> | ((el: HTMLDivElement | null) => void);
 }
 
+// Helper function to extract image URLs from content
+function extractImageUrls(content: string): string[] {
+  const imageUrlRegex = /!\[([^\]]*)\]\(([^)]+)\)/g; // Markdown image format
+  const matches = [];
+  let match;
+  
+  while ((match = imageUrlRegex.exec(content)) !== null) {
+    matches.push(match[2]); // URL is in the second capture group
+  }
+  
+  return matches;
+}
+
+// Helper function to render content with images
+function renderContentWithImages(content: string) {
+  const imageUrls = extractImageUrls(content);
+  
+  if (imageUrls.length === 0) {
+    return <>{content}</>;
+  }
+
+  // Split content and render with images
+  const parts = content.split(/!\[([^\]]*)\]\(([^)]+)\)/g);
+  const elements = [];
+  
+  for (let i = 0; i < parts.length; i += 3) {
+    // Text before image
+    if (parts[i]) {
+      elements.push(<span key={`text-${i}`}>{parts[i]}</span>);
+    }
+    
+    // Image (if exists)
+    if (parts[i + 2]) {
+      const altText = parts[i + 1] || 'Generated image';
+      const imageUrl = parts[i + 2];
+      elements.push(
+        <div key={`image-${i}`} className="my-3">
+          <img 
+            src={imageUrl} 
+            alt={altText}
+            className="max-w-full h-auto rounded-lg border border-border/50 shadow-sm"
+            style={{ maxHeight: '400px' }}
+          />
+          {altText && (
+            <p className="text-xs text-muted-foreground mt-1 italic">{altText}</p>
+          )}
+        </div>
+      );
+    }
+  }
+  
+  return <>{elements}</>;
+}
+
 function AssistantMessage(props: Props) {
   const { content, renderEmptyContent = false, streamingRef } = props;
 
@@ -26,7 +80,7 @@ function AssistantMessage(props: Props) {
       )}
     >
       <div className="streaming-content" ref={streamingRef}>
-        {trimmedContent}
+        {trimmedContent ? renderContentWithImages(trimmedContent) : null}
       </div>
 
       <div className="absolute -top-2 -left-2 p-1 rounded-full bg-gradient-to-br from-gray-400 to-gray-400">

@@ -30,6 +30,9 @@
     },
     "tts": {
       "host": "TTS_HOST"
+    },
+    "openai": {
+      "apiKey": "OPENAI_API_KEY"
     }
   },
   "features": {
