@@ -10,13 +10,16 @@ interface Props {
 }
 
 // Helper function to extract image URLs from content
-function extractImageUrls(content: string): string[] {
+function extractImageUrls(content: string): Array<{ url: string; alt: string }> {
   const imageUrlRegex = /!\[([^\]]*)\]\(([^)]+)\)/g; // Markdown image format
   const matches = [];
   let match;
   
   while ((match = imageUrlRegex.exec(content)) !== null) {
-    matches.push(match[2]); // URL is in the second capture group
+    matches.push({
+      alt: match[1] || 'Generated image',
+      url: match[2]
+    });
   }
   
   return matches;
@@ -24,9 +27,9 @@ function extractImageUrls(content: string): string[] {
 
 // Helper function to render content with images
 function renderContentWithImages(content: string) {
-  const imageUrls = extractImageUrls(content);
+  const imageData = extractImageUrls(content);
   
-  if (imageUrls.length === 0) {
+  if (imageData.length === 0) {
     return <>{content}</>;
   }
 
@@ -45,15 +48,23 @@ function renderContentWithImages(content: string) {
       const altText = parts[i + 1] || 'Generated image';
       const imageUrl = parts[i + 2];
       elements.push(
-        <div key={`image-${i}`} className="my-3">
-          <img 
-            src={imageUrl} 
-            alt={altText}
-            className="max-w-full h-auto rounded-lg border border-border/50 shadow-sm"
-            style={{ maxHeight: '400px' }}
-          />
-          {altText && (
-            <p className="text-xs text-muted-foreground mt-1 italic">{altText}</p>
+        <div key={`image-${i}`} className="my-4 first:mt-2 last:mb-2">
+          <div className="relative group">
+            <img 
+              src={imageUrl} 
+              alt={altText}
+              className="max-w-full h-auto rounded-lg border border-border/50 shadow-sm transition-shadow hover:shadow-md"
+              style={{ maxHeight: '400px' }}
+              loading="lazy"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+              }}
+            />
+            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors rounded-lg pointer-events-none" />
+          </div>
+          {altText && altText !== 'Generated image' && (
+            <p className="text-xs text-muted-foreground mt-2 italic">{altText}</p>
           )}
         </div>
       );

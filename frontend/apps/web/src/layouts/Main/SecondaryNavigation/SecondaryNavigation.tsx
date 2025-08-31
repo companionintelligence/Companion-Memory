@@ -10,6 +10,7 @@ import {
   MessagesSquare,
   Search,
   Settings2,
+  Wand2,
   Zap,
 } from '@ci/shadcn/icons';
 
@@ -48,6 +49,11 @@ const INTELLIGENCE = [
     name: 'Chat',
     url: '/chat',
     icon: MessagesSquare,
+  },
+  {
+    name: 'Images',
+    url: '/images',
+    icon: Wand2,
   },
 ];
 

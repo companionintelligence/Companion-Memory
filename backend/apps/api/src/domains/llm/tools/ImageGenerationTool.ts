@@ -19,18 +19,19 @@ const imageGenerationInputSchema = z.object({
   style: z.enum(['natural', 'vivid']).optional().default('natural'),
   size: z.enum(['1024x1024', '1792x1024', '1024x1792']).optional().default('1024x1024'),
   quality: z.enum(['standard', 'hd']).optional().default('standard'),
+  editImageUrl: z.string().optional(), // For future image editing functionality
+  mask: z.string().optional(), // For future inpainting functionality
 });
 
 type ImageGenerationInput = z.infer<typeof imageGenerationInputSchema>;
 
 // Output interface
 interface ImageGenerationOutput {
-  success: boolean;
   imageUrl: string;
   fileId: string;
   prompt: string;
   revisedPrompt?: string;
-  message: string;
+  altText: string;
 }
 
 /**
@@ -43,7 +44,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
   readonly schema = {
     name: 'generate_image',
     description:
-      'Generate images using AI based on text descriptions. Use this tool when users ask to create, generate, make, or draw images, pictures, artwork, or visual content.',
+      'Generate images using AI based on text descriptions. Use this tool when users ask to create, generate, make, or draw images, pictures, artwork, or visual content. After calling this tool, display the generated image using markdown syntax: ![alt text](imageUrl)',
     category: 'ai',
     parameters: {
       type: 'object',
@@ -72,18 +73,36 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
           description: 'The quality of the generated image',
           default: 'standard',
         },
+        editImageUrl: {
+          type: 'string',
+          description: 'URL of an existing image to edit (for future image editing functionality)',
+        },
+        mask: {
+          type: 'string',
+          description: 'Mask for inpainting/editing specific areas (for future functionality)',
+        },
       },
       required: ['prompt'],
     },
     examples: [
       {
         input: { prompt: 'A serene mountain landscape at sunset with a lake reflection' },
-        output: { success: true, imageUrl: 'https://...', prompt: 'A serene mountain landscape...' },
+        output: { 
+          imageUrl: 'https://storage.example.com/generated-image.png', 
+          fileId: 'uuid-123',
+          prompt: 'A serene mountain landscape at sunset with a lake reflection',
+          altText: 'A serene mountain landscape at sunset with a lake reflection'
+        },
         description: 'Generate a nature landscape image',
       },
       {
         input: { prompt: 'A futuristic city with flying cars', style: 'vivid', size: '1792x1024' },
-        output: { success: true, imageUrl: 'https://...', prompt: 'A futuristic city...' },
+        output: { 
+          imageUrl: 'https://storage.example.com/generated-city.png', 
+          fileId: 'uuid-456',
+          prompt: 'A futuristic city with flying cars',
+          altText: 'A futuristic city with flying cars'
+        },
         description: 'Generate a sci-fi cityscape with specific style and size',
       },
     ],
@@ -147,12 +166,11 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       });
 
       return {
-        success: true,
         imageUrl: signedFile.url || '',
         fileId: file.id,
         prompt: input.prompt,
         revisedPrompt,
-        message: `I've generated an image for you: "${input.prompt}". Here it is:\n\n![Generated Image](${signedFile.url})\n\n${revisedPrompt ? `The prompt was refined to: "${revisedPrompt}"` : ''}`,
+        altText: revisedPrompt || input.prompt,
       };
     } catch (error) {
       this.logger.error('Image generation failed', {
@@ -161,13 +179,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
         error: error instanceof Error ? error.message : String(error),
       });
 
-      return {
-        success: false,
-        imageUrl: '',
-        fileId: '',
-        prompt: input.prompt,
-        message: `Failed to generate image: ${error instanceof Error ? error.message : 'Unknown error during image generation'}`,
-      };
+      throw error; // Let the BaseTool handle the error formatting
     }
   }
 
