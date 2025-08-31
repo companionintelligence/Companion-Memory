@@ -1,5 +1,6 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
@@ -116,11 +117,7 @@ describe('McpService', () => {
       expect(result.success).toBe(true);
       expect(result.content).toEqual({ output: 'test result' });
       expect(result.executionTimeMs).toBeDefined();
-      expect(mockToolRegistry.executeTool).toHaveBeenCalledWith(
-        'test_tool',
-        mockContext,
-        { input: 'test' },
-      );
+      expect(mockToolRegistry.executeTool).toHaveBeenCalledWith('test_tool', mockContext, { input: 'test' });
     });
 
     it('should handle tool execution failure', async () => {
