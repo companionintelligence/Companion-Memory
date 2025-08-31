@@ -1,4 +1,5 @@
 .env
 .aider*
 dist
+storybook-static
 todo.md
