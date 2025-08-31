@@ -340,7 +340,11 @@ export class OllamaService {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
-    const imageGenerationTool = new ImageGenerationTool(this.fileService, this.eventService, this.fileRepository);
+    const imageGenerationTool = new ImageGenerationTool(
+      this.fileService,
+      this.eventService,
+      this.fileRepository,
+    );
     // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);

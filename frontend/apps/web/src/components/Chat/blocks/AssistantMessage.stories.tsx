@@ -42,6 +42,6 @@ export const WithImage: Story = {
 export const WithMultipleImages: Story = {
   args: {
     content:
-      'Here are a couple of images I created:\n\n![First Image](https://via.placeholder.com/300x200/e74c3c/ffffff?text=First+Image)\n\nThis is the first image showing a simple red design.\n\n![Second Image](https://via.placeholder.com/300x200/2ecc71/ffffff?text=Second+Image)\n\nAnd here\'s a second image with a green theme.',
+      "Here are a couple of images I created:\n\n![First Image](https://via.placeholder.com/300x200/e74c3c/ffffff?text=First+Image)\n\nThis is the first image showing a simple red design.\n\n![Second Image](https://via.placeholder.com/300x200/2ecc71/ffffff?text=Second+Image)\n\nAnd here's a second image with a green theme.",
   },
 };

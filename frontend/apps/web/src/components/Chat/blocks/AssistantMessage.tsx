@@ -14,21 +14,21 @@ function extractImageUrls(content: string): Array<{ url: string; alt: string }> 
   const imageUrlRegex = /!\[([^\]]*)\]\(([^)]+)\)/g; // Markdown image format
   const matches = [];
   let match;
-  
+
   while ((match = imageUrlRegex.exec(content)) !== null) {
     matches.push({
       alt: match[1] || 'Generated image',
-      url: match[2]
+      url: match[2],
     });
   }
-  
+
   return matches;
 }
 
 // Helper function to render content with images
 function renderContentWithImages(content: string) {
   const imageData = extractImageUrls(content);
-  
+
   if (imageData.length === 0) {
     return <>{content}</>;
   }
@@ -36,13 +36,13 @@ function renderContentWithImages(content: string) {
   // Split content and render with images
   const parts = content.split(/!\[([^\]]*)\]\(([^)]+)\)/g);
   const elements = [];
-  
+
   for (let i = 0; i < parts.length; i += 3) {
     // Text before image
     if (parts[i]) {
       elements.push(<span key={`text-${i}`}>{parts[i]}</span>);
     }
-    
+
     // Image (if exists)
     if (parts[i + 2]) {
       const altText = parts[i + 1] || 'Generated image';
@@ -50,8 +50,8 @@ function renderContentWithImages(content: string) {
       elements.push(
         <div key={`image-${i}`} className="my-4 first:mt-2 last:mb-2">
           <div className="relative group">
-            <img 
-              src={imageUrl} 
+            <img
+              src={imageUrl}
               alt={altText}
               className="max-w-full h-auto rounded-lg border border-border/50 shadow-sm transition-shadow hover:shadow-md"
               style={{ maxHeight: '400px' }}
@@ -66,11 +66,11 @@ function renderContentWithImages(content: string) {
           {altText && altText !== 'Generated image' && (
             <p className="text-xs text-muted-foreground mt-2 italic">{altText}</p>
           )}
-        </div>
+        </div>,
       );
     }
   }
-  
+
   return <>{elements}</>;
 }
 

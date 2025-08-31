@@ -23,9 +23,7 @@ export default function ImageGenerationPage() {
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [{ selectedModel }] = useModel();
 
-  const [{ loading: threadLoading }, { refetch: refetchThread }] = useThreadService(
-    resolvedThreadId.current,
-  );
+  const [{ loading: threadLoading }, { refetch: refetchThread }] = useThreadService(resolvedThreadId.current);
 
   const [{ count: newThreadCount }, { increment: incrementNewThreadCount }] = useCounter();
 
@@ -62,6 +60,7 @@ export default function ImageGenerationPage() {
   const handleSubmit = useCallback(
     async (data: FormData, e?: FormEvent) => {
       e?.preventDefault();
+
       return submitChatRequest(data);
     },
     [submitChatRequest],
@@ -82,7 +81,7 @@ export default function ImageGenerationPage() {
       <p className="text-muted-foreground mb-4 lg:mb-6 leading-relaxed text-sm lg:text-base">
         Describe any image you'd like to create and I'll generate it for you using AI
       </p>
-      
+
       <div className="grid grid-cols-1 gap-3 text-xs">
         <Card className="p-3 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20 border-blue-200 dark:border-blue-800/50">
           <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
@@ -90,14 +89,14 @@ export default function ImageGenerationPage() {
             <span className="font-medium">Try: "A futuristic city at sunset"</span>
           </div>
         </Card>
-        
+
         <Card className="p-3 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950/20 dark:to-emerald-950/20 border-green-200 dark:border-green-800/50">
           <div className="flex items-center gap-2 text-green-700 dark:text-green-300">
             <Palette className="h-3 w-3" />
             <span className="font-medium">Try: "A painting of a serene forest"</span>
           </div>
         </Card>
-        
+
         <Card className="p-3 bg-gradient-to-r from-purple-50 to-violet-50 dark:from-purple-950/20 dark:to-violet-950/20 border-purple-200 dark:border-purple-800/50">
           <div className="flex items-center gap-2 text-purple-700 dark:text-purple-300">
             <Wand2 className="h-3 w-3" />
@@ -127,7 +126,7 @@ export default function ImageGenerationPage() {
       <Portal.Slot id="actions">
         <div className="flex items-center gap-2">
           <Button
-            variant="outline" 
+            variant="outline"
             size="sm"
             onClick={navigateToNewChat}
             className="border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950/20"

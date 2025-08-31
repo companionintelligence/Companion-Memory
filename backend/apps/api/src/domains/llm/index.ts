@@ -10,12 +10,7 @@ import { OllamaController } from './controllers/OllamaController';
 import { OllamaService } from './services/OllamaService';
 
 @Module({
-  imports: [
-    ConversationModule, 
-    EventsModule, 
-    FilesModule,
-    TypeOrmModule.forFeature([FileEntity])
-  ],
+  imports: [ConversationModule, EventsModule, FilesModule, TypeOrmModule.forFeature([FileEntity])],
   providers: [OllamaService],
   controllers: [OllamaController],
   exports: [OllamaService],
