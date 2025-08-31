@@ -261,14 +261,14 @@ export class OllamaService {
                 });
               }
             } catch (retryErr) {
-              // If retry also fails, log error and break
+              // If retry also fails, log error and throw to propagate error to caller
               self.logger.error('Ollama prompt evaluation failed after retry without tools', {
                 model: lastChunk?.model ?? resolvedOptions.model,
                 doneReason: 'error',
                 error: retryErr instanceof Error ? retryErr.message : String(retryErr),
               });
 
-              break;
+              throw retryErr;
             }
           } else {
             // Handle other errors
