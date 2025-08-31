@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
 import { z } from 'zod';
+
+import { MemoryService } from '@ci/domains/memory';
 
 import { BaseTool } from './BaseTool';
 import type { ToolExecutionContext } from './types';
@@ -82,8 +82,7 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
   };
 
   constructor(
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
+    private readonly memoryService: MemoryService,
   ) {
     super();
   }
@@ -96,51 +95,12 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
     context: ToolExecutionContext,
     input: GetFamilyMembersInput,
   ): Promise<GetFamilyMembersOutput> {
-    // For demo: skip user ID constraints - just get all people
-    const peopleQuery = `
-      SELECT id, type, first_name as "firstName", last_name as "lastName", user_id as "userId"
-      FROM people 
-      ORDER BY first_name, last_name
-    `;
-
-    const peopleResult = await this.dataSource.query(peopleQuery);
-
-    const familyMembers: FamilyMember[] = [];
-
-    for (const person of peopleResult) {
-      const fullName = [person.firstName, person.lastName].filter(Boolean).join(' ') || 'Unknown';
-
-      let preferences: string[] = [];
-
-      if (input.includePreferences) {
-        // Get preferences through person_tag relationship
-        const preferencesQuery = `
-          SELECT t.label
-          FROM tags t
-          JOIN person_tag pt ON t.id = pt.tag_id
-          WHERE pt.person_id = $1
-          ORDER BY t.label
-        `;
-
-        const prefResult = await this.dataSource.query(preferencesQuery, [person.id]);
-        preferences = prefResult.map((row: any) => row.label);
-      }
-
-      familyMembers.push({
-        id: person.id,
-        firstName: person.firstName,
-        lastName: person.lastName,
-        fullName,
-        type: person.type,
-        preferences: input.includePreferences ? preferences : undefined,
-        userId: person.userId,
-      });
-    }
+    const familyMembers = await this.memoryService.findFamilyMembers(input.includePreferences);
 
     return {
       familyMembers,
       totalCount: familyMembers.length,
-      userId: peopleResult.length > 0 ? peopleResult[0].userId : 'demo-user',
+      userId: familyMembers.length > 0 ? familyMembers[0].userId : 'demo-user',
     };
   }
 

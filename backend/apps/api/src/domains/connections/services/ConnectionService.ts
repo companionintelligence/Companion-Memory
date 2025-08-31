@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/services/LoggerService';
@@ -21,7 +21,6 @@ export class ConnectionService {
   private logger = new LoggerService(ConnectionService.name);
 
   constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(ConnectionEntity)
     private readonly connectionRepository: Repository<ConnectionEntity>,
     @InjectRepository(ApiLogEntity)
@@ -137,7 +136,7 @@ export class ConnectionService {
       user_id: string;
     };
 
-    const rows = (await this.dataSource.query(`
+    const rows = (await this.connectionRepository.query(`
       SELECT
         connections.id as id,
         connections.user_id as user_id

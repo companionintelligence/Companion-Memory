@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
 import {
   type ChatResponse,
   type GenerateResponse,
@@ -8,12 +7,13 @@ import {
   type ToolCall,
   Ollama,
 } from 'ollama';
-import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
 import { MessageService } from '@ci/domains/conversations';
+import { AnswerService } from '@ci/domains/intelligence';
+import { MemoryService } from '@ci/domains/memory';
 
 import {
   ToolRegistry,
@@ -46,8 +46,8 @@ export class OllamaService {
 
   constructor(
     private readonly messageService: MessageService,
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
+    private readonly answerService: AnswerService,
+    private readonly memoryService: MemoryService,
   ) {
     this.initializeTools();
   }
@@ -329,10 +329,10 @@ export class OllamaService {
    * Initialize tools registry with available tools
    */
   private initializeTools(): void {
-    const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
-    const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
+    const getUserPreferencesTool = new GetUserPreferencesTool(this.answerService);
+    const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.answerService);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
-    // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
+    // const getFamilyMembersTool = new GetFamilyMembersTool(this.memoryService); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
     this.toolRegistry.register(getEntertainmentPreferencesTool);

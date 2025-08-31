@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
 import { z } from 'zod';
+
+import { AnswerService } from '@ci/domains/intelligence';
 
 import { BaseTool } from './BaseTool';
 import type { ToolExecutionContext } from './types';
@@ -96,8 +96,7 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
   };
 
   constructor(
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
+    private readonly answerService: AnswerService,
   ) {
     super();
   }
@@ -113,38 +112,12 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
     _input: GetEntertainmentPreferencesInput,
   ): Promise<GetEntertainmentPreferencesOutput> {
     // Query for questions with subcategory = 'Entertainment'
-    const query = `
-      SELECT
-        q.text as question,
-        a.give_answer_1 as answer,
-        q.category,
-        q.subcategory,
-        a.user_id as "userId",
-        q.created_at as "createdAt"
-      FROM questions q
-      JOIN answers a ON q.id = a.question_id
-      WHERE q.subcategory = 'Entertainment'
-        AND a.give_answer_1 IS NOT NULL
-      ORDER BY q.created_at
-    `;
-
-    const result = await this.dataSource.query(query);
-
-    const preferences: EntertainmentPreference[] = result.map((row: any) => ({
-      id: `${row.userId}-${row.createdAt.getTime()}`, // Generate a unique ID
-      label: `${row.question}: ${row.answer}`,
-      category: row.category, // Use the actual category from the database
-      subcategory: row.subcategory,
-      userId: row.userId,
-      createdAt: row.createdAt,
-      question: row.question,
-      answer: row.answer,
-    }));
+    const preferences = await this.answerService.findPreferencesBySubcategory('Entertainment');
 
     return {
       preferences,
       totalCount: preferences.length,
-      userId: result.length > 0 ? result[0].userId : 'demo-user',
+      userId: preferences.length > 0 ? preferences[0].userId : 'demo-user',
     };
   }
 

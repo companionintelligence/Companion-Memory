@@ -1,18 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import type { RequestContext } from '@ci/common/types';
 
 import { QuestionEntity } from '../entities/QuestionEntity';
 import type { Question } from '../types';
+import { AnswerService } from './AnswerService';
 
 @Injectable()
 export class QuestionService {
   constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(QuestionEntity)
     private readonly questionRepository: Repository<QuestionEntity>,
+    private readonly answerService: AnswerService,
   ) {}
 
   async findAll(context: RequestContext): Promise<Question[]> {
@@ -77,34 +78,6 @@ export class QuestionService {
     // Point being that there are rough edges here that we need to refine. But the
     // concept of "get me unaswered questions by user," can clearly live here.
 
-    type Row = {
-      id: string;
-      user_id: string;
-    };
-
-    const rows = (await this.dataSource.query(`
-      SELECT
-        questions.id as id,
-        answers.user_id as user_id
-      FROM
-        questions
-      LEFT JOIN answers ON answers.question_id = questions.id
-      WHERE answers.rag_answer_1 IS NULL
-      LIMIT 5;
-    `)) satisfies Array<Row>;
-
-    const groupedByUserId = new Map<string, string[]>();
-
-    for (const row of rows) {
-      const userId = row.user_id;
-
-      if (!groupedByUserId.has(userId)) {
-        groupedByUserId.set(userId, []);
-      }
-
-      groupedByUserId.get(userId)!.push(row.id);
-    }
-
-    return groupedByUserId;
+    return this.answerService.findUnansweredQuestionsByUserId(5);
   }
 }

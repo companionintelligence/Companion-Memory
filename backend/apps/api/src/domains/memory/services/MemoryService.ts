@@ -1047,7 +1047,7 @@ export class MemoryService {
     }
   }
 
-  private async getEventLocation(event: EventEntity): Promise<MemoryLocation | undefined> {
+  async getEventLocation(event: EventEntity): Promise<MemoryLocation | undefined> {
     // Extract location from event using existing logic
     let location: MemoryLocation | undefined;
 
@@ -1103,5 +1103,51 @@ export class MemoryService {
     }
 
     return location;
+  }
+
+  /**
+   * Find family members with optional preferences.
+   * Used by LLM tools to get family information.
+   */
+  async findFamilyMembers(includePreferences = false): Promise<Array<{
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+    fullName: string;
+    type: string | null;
+    preferences?: string[];
+    userId: string;
+  }>> {
+    // Get all people
+    const people = await this.personRepo
+      .createQueryBuilder('person')
+      .leftJoinAndSelect('person.tags', 'tags')
+      .orderBy('person.first_name, person.last_name')
+      .getMany();
+
+    const familyMembers = [];
+
+    for (const person of people) {
+      const fullName = [person.first_name, person.last_name].filter(Boolean).join(' ') || 'Unknown';
+
+      let preferences: string[] = [];
+
+      if (includePreferences) {
+        // Get preferences through person_tag relationship  
+        preferences = person.tags?.map(tag => tag.label) || [];
+      }
+
+      familyMembers.push({
+        id: person.id,
+        firstName: person.first_name,
+        lastName: person.last_name,
+        fullName,
+        type: person.type,
+        preferences: includePreferences ? preferences : undefined,
+        userId: person.user?.id || '',
+      });
+    }
+
+    return familyMembers;
   }
 }
