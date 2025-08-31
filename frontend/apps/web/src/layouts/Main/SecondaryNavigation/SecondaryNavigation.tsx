@@ -10,6 +10,7 @@ import {
   MessagesSquare,
   Search,
   Settings2,
+  Smartphone,
   Zap,
 } from '@ci/shadcn/icons';
 
@@ -74,6 +75,11 @@ const SYSTEM = [
     name: 'Connections',
     url: '/connections',
     icon: Cable,
+  },
+  {
+    name: 'Devices',
+    url: '/devices',
+    icon: Smartphone,
   },
   {
     name: 'Settings',
