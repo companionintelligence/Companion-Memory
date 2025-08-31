@@ -54,10 +54,20 @@ export class OllamaService {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
-    const result = await this.ollama.list();
-    const models = result.models.map((model) => this.parseOllamaModel(model.name));
+    try {
+      const result = await this.ollama.list();
+      const models = result.models.map((model) => this.parseOllamaModel(model.name));
 
-    return models.filter((model) => !INTERNAL_MODELS.has(model.name));
+      return models.filter((model) => !INTERNAL_MODELS.has(model.name));
+    } catch (error) {
+      this.logger.warn('Failed to connect to Ollama service', {
+        host: config.services.ollama.host,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      // Return empty array when Ollama is not available
+      return [];
+    }
   }
 
   async generateStream(
@@ -106,10 +116,22 @@ export class OllamaService {
     const resolvedOptions = options ?? ({} as PromptOptions);
     const { model = PROMPT_MODEL } = resolvedOptions;
 
-    return this.ollama.generate({
-      model,
-      prompt,
-    });
+    try {
+      return this.ollama.generate({
+        model,
+        prompt,
+      });
+    } catch (error) {
+      this.logger.error('Failed to generate response from Ollama', {
+        model,
+        host: config.services.ollama.host,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      throw new Error(
+        `Ollama service unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async chatStream(
@@ -259,39 +281,61 @@ export class OllamaService {
 
     const accumulatedMessages: OllamaMessage[] = [];
 
-    const response = await this.ollama.chat({
-      model,
-      messages: inputMessages,
-      ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
-    });
+    try {
+      const response = await this.ollama.chat({
+        model,
+        messages: inputMessages,
+        ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
+      });
 
-    const willCallTools =
-      enableTools && response.message.tool_calls && response.message.tool_calls.length > 0;
+      const willCallTools =
+        enableTools && response.message.tool_calls && response.message.tool_calls.length > 0;
 
-    accumulatedMessages.push({
-      role: response.message.role,
-      content: response.message.content,
-      ...(willCallTools && { tool_calls: response.message.tool_calls }),
-    } satisfies OllamaMessage);
+      accumulatedMessages.push({
+        role: response.message.role,
+        content: response.message.content,
+        ...(willCallTools && { tool_calls: response.message.tool_calls }),
+      } satisfies OllamaMessage);
 
-    if (!willCallTools) {
-      return response;
+      if (!willCallTools) {
+        return response;
+      }
+
+      const toolEvaluations = await this.handleToolCalls(context, response.message.tool_calls ?? []);
+
+      accumulatedMessages.push(...toolEvaluations);
+
+      return this.ollama.chat({
+        model,
+        messages: inputMessages.concat(accumulatedMessages),
+      });
+    } catch (error) {
+      this.logger.error('Failed to chat with Ollama', {
+        model,
+        host: config.services.ollama.host,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      throw new Error(
+        `Ollama service unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-
-    const toolEvaluations = await this.handleToolCalls(context, response.message.tool_calls ?? []);
-
-    accumulatedMessages.push(...toolEvaluations);
-
-    return this.ollama.chat({
-      model,
-      messages: inputMessages.concat(accumulatedMessages),
-    });
   }
 
   async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
     const resolvedModel = model ?? PROMPT_MODEL;
 
     const availableModels = await this.getAvailableModels(context);
+
+    // If no models are available (e.g., Ollama is not running), create a default model
+    if (availableModels.length === 0) {
+      this.logger.warn('No models available from Ollama, using default model', {
+        requestedModel: model,
+        resolvedModel,
+      });
+
+      return this.parseOllamaModel(resolvedModel);
+    }
 
     const validModel = availableModels.find((availableModel) => availableModel.model === resolvedModel);
 
