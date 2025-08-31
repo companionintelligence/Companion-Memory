@@ -4,6 +4,7 @@ import config from '@ci/configuration';
 
 import { BaseClient as Client } from './BaseClient';
 import { GoogleClient } from './GoogleClient';
+import { MetaClient } from './MetaClient';
 import { MicrosoftClient } from './MicrosoftClient';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class ClientFactory {
   constructor() {
     this.providers.set(config.auth.providers.google.id, new GoogleClient());
     this.providers.set(config.auth.providers.microsoft.id, new MicrosoftClient());
+    this.providers.set(config.auth.providers.meta.id, new MetaClient());
   }
 
   getClientByProviderId(providerId: string | null | undefined): Client {

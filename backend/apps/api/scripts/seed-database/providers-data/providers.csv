@@ -1,3 +1,4 @@
 id,name,token_host,token_path,authorize_path,api_base_url,scopes
 0198779b-182c-716e-9275-b81d99a47fdb,Google,https://oauth2.googleapis.com,/token,https://accounts.google.com/o/oauth2/v2/auth,https://www.googleapis.com,https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly
 0198779b-3c33-73da-84e5-82e0df145260,Microsoft,https://login.microsoftonline.com,/common/oauth2/v2.0/token,/common/oauth2/v2.0/authorize,https://graph.microsoft.com,https://graph.microsoft.com/User.Read
+0198779b-4d44-84eb-95f6-93f1ae256371,Meta,https://graph.facebook.com,/oauth/access_token,https://www.facebook.com/dialog/oauth,https://graph.facebook.com,user_posts user_photos instagram_basic
