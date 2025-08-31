@@ -5,7 +5,7 @@ import { Breadcrumb, Button, Input, Table } from '@ci/shadcn';
 import { AlertCircle, Search, Loader2 } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
-import { useAuth } from '@/hooks';
+import { useAuth, useDeviceLayout } from '@/hooks';
 
 interface SearchResult {
   text: string;
@@ -16,6 +16,7 @@ interface SearchResult {
 
 export function SearchPage() {
   usePageTitle('Search - Companion Intelligence');
+  const { isMobile } = useDeviceLayout();
   const [{ authToken }] = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -122,17 +123,21 @@ export function SearchPage() {
 
       <PageContent>
         {/* Search Input */}
-        <div className="flex gap-2">
+        <div className={`flex ${isMobile ? 'flex-col' : 'flex-row'} gap-3 mb-6`}>
           <Input
             type="text"
             placeholder="Enter your search query..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={handleKeyPress}
-            className="flex-1"
+            className={`${isMobile ? 'w-full' : 'flex-1'} transition-all duration-200 focus:scale-[1.02]`}
             disabled={loading}
           />
-          <Button onClick={performSearch} disabled={loading}>
+          <Button
+            onClick={performSearch}
+            disabled={loading}
+            className={`${isMobile ? 'w-full py-3' : ''} transition-all duration-200 hover:scale-105 active:scale-95`}
+          >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             <span className="ml-2">Search</span>
           </Button>

@@ -18,6 +18,7 @@ import {
 
 import { PageContent } from '@/components/layout';
 import { ThemePicker } from '@/components/ThemePicker';
+import { useDeviceLayout } from '@/hooks';
 
 interface SettingsState {
   // Data Storage
@@ -51,6 +52,8 @@ interface SettingsState {
 
 export function SettingsPage() {
   usePageTitle('Settings - Companion Intelligence');
+
+  const { isMobile } = useDeviceLayout();
 
   const [settings, setSettings] = useState<SettingsState>({
     // Data Storage defaults
@@ -130,18 +133,27 @@ export function SettingsPage() {
 
       <PageContent>
         {/* Header */}
-        <div className="flex flex-row items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-            <p className="text-muted-foreground">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Settings</h1>
+            <p className="text-muted-foreground text-sm sm:text-base">
               Configure your personal assistant preferences and system settings
             </p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={handleReset} disabled={!unsavedChanges}>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <Button
+              variant="outline"
+              onClick={handleReset}
+              disabled={!unsavedChanges}
+              className="flex-1 sm:flex-none transition-all duration-200 hover:scale-105 active:scale-95"
+            >
               Reset
             </Button>
-            <Button onClick={handleSave} disabled={!unsavedChanges} className="min-w-[100px]">
+            <Button
+              onClick={handleSave}
+              disabled={!unsavedChanges}
+              className="min-w-[100px] flex-1 sm:flex-none transition-all duration-200 hover:scale-105 active:scale-95"
+            >
               <Save className="h-4 w-4 mr-2" />
               Save Changes
             </Button>
@@ -150,7 +162,7 @@ export function SettingsPage() {
 
         {/* Unsaved Changes Alert */}
         {unsavedChanges && (
-          <Alert>
+          <Alert className="mb-6 transition-all duration-300 animate-in slide-in-from-top-2">
             <Info className="h-4 w-4" />
             <Alert.Title>Unsaved Changes</Alert.Title>
             <Alert.Description>
@@ -160,9 +172,11 @@ export function SettingsPage() {
         )}
 
         {/* Settings Grid */}
-        <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-2">
+        <div
+          className={`grid gap-6 ${isMobile ? 'grid-cols-1' : 'md:grid-cols-1 lg:grid-cols-2'} transition-all duration-300`}
+        >
           {/* Data Storage Settings */}
-          <Card>
+          <Card className="transition-all duration-200 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]">
             <Card.Header>
               <Card.Title className="flex items-center gap-2">
                 <Database className="h-5 w-5" />
@@ -177,7 +191,7 @@ export function SettingsPage() {
                   value={settings.dataRetentionDays}
                   onValueChange={(value) => updateSetting('dataRetentionDays', value)}
                 >
-                  <Select.Trigger id="retention">
+                  <Select.Trigger id="retention" className="transition-all duration-200 focus:scale-[1.02]">
                     <Select.Value />
                   </Select.Trigger>
                   <Select.Content>
@@ -195,7 +209,7 @@ export function SettingsPage() {
                   value={settings.backupFrequency}
                   onValueChange={(value) => updateSetting('backupFrequency', value)}
                 >
-                  <Select.Trigger id="backup">
+                  <Select.Trigger id="backup" className="transition-all duration-200 focus:scale-[1.02]">
                     <Select.Value />
                   </Select.Trigger>
                   <Select.Content>
@@ -215,13 +229,14 @@ export function SettingsPage() {
                   value={settings.cacheSize}
                   onChange={(e) => updateSetting('cacheSize', e.target.value)}
                   placeholder="2048"
+                  className="transition-all duration-200 focus:scale-[1.02]"
                 />
               </div>
             </Card.Content>
           </Card>
 
           {/* API Keys & Tokens */}
-          <Card>
+          <Card className="transition-all duration-200 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]">
             <Card.Header>
               <Card.Title className="flex items-center gap-2">
                 <Key className="h-5 w-5" />
@@ -238,9 +253,14 @@ export function SettingsPage() {
                     type={showKeys.openaiKey ? 'text' : 'password'}
                     value={settings.openaiKey}
                     onChange={(e) => updateSetting('openaiKey', e.target.value)}
-                    className="flex-1"
+                    className="flex-1 transition-all duration-200 focus:scale-[1.02]"
                   />
-                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('openaiKey')}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => toggleKeyVisibility('openaiKey')}
+                    className="transition-all duration-200 hover:scale-110 active:scale-95"
+                  >
                     {showKeys.openaiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
@@ -259,9 +279,14 @@ export function SettingsPage() {
                     type={showKeys.githubToken ? 'text' : 'password'}
                     value={settings.githubToken}
                     onChange={(e) => updateSetting('githubToken', e.target.value)}
-                    className="flex-1"
+                    className="flex-1 transition-all duration-200 focus:scale-[1.02]"
                   />
-                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('githubToken')}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => toggleKeyVisibility('githubToken')}
+                    className="transition-all duration-200 hover:scale-110 active:scale-95"
+                  >
                     {showKeys.githubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
@@ -296,7 +321,7 @@ export function SettingsPage() {
           </Card>
 
           {/* LLM Behavior Configuration */}
-          <Card>
+          <Card className="transition-all duration-200 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]">
             <Card.Header>
               <Card.Title className="flex items-center gap-2">
                 <Brain className="h-5 w-5" />
@@ -388,7 +413,7 @@ export function SettingsPage() {
           </Card>
 
           {/* Update Frequencies */}
-          <Card>
+          <Card className="transition-all duration-200 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]">
             <Card.Header>
               <Card.Title className="flex items-center gap-2">
                 <RefreshCw className="h-5 w-5" />
@@ -461,7 +486,7 @@ export function SettingsPage() {
         </div>
 
         {/* System Preferences - Full Width */}
-        <Card>
+        <Card className="lg:col-span-2 transition-all duration-200 hover:shadow-md hover:scale-[1.01] active:scale-[0.99]">
           <Card.Header>
             <Card.Title className="flex items-center gap-2">
               <Settings className="h-5 w-5" />

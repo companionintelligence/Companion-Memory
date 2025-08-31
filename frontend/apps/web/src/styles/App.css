@@ -5,6 +5,39 @@
   text-align: center;
 }
 
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  #root {
+    padding: 0;
+    max-width: 100vw;
+  }
+  
+  /* Improve touch targets */
+  button {
+    min-height: 44px;
+  }
+  
+  /* Better mobile form interactions */
+  input:focus,
+  select:focus,
+  textarea:focus {
+    transform: scale(1.02);
+    transition: transform 200ms ease-out;
+  }
+}
+
+/* Enhanced animations for better UX */
+@media (prefers-reduced-motion: no-preference) {
+  .animate-in {
+    animation-fill-mode: both;
+  }
+  
+  /* Smooth page transitions */
+  main {
+    transition: all 300ms ease-out;
+  }
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;

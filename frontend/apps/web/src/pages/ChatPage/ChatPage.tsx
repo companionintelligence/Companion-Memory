@@ -8,7 +8,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useThreadService } from '@/api';
 import { Chat, type FormData } from '@/components/Chat';
 import { ModelSelector } from '@/components/ModelSelector';
-import { useChatRequester, useCounter, useModel } from '@/hooks';
+import { useChatRequester, useCounter, useModel, useDeviceLayout } from '@/hooks';
 
 import { ChatSidebar } from './ChatSidebar';
 import { type Message } from './types';
@@ -17,6 +17,7 @@ import { useThreadListService } from './useThreadListService';
 export default function ChatPage() {
   usePageTitle('Chat - Companion Intelligence');
 
+  const { isMobile } = useDeviceLayout();
   const resolvedThreadId = useRef<string | null>(null);
   const hasSetInitialMessages = useRef(false);
 
@@ -193,19 +194,21 @@ export default function ChatPage() {
         />
       </Portal.Slot>
 
-      <Chat
-        key={initialThreadId ?? `new-thread-${newThreadCount}`}
-        loading={loading}
-        streaming={chatRequestStreaming}
-        disabled={isSubmitDisabled}
-        placeholder={inputPlaceholder}
-        messages={initialMessages}
-        emptyState={emptyState}
-        readable={stream ?? undefined}
-        onSubmit={handleSubmit}
-        onStop={stopChatRequest}
-        autoFocus={true}
-      />
+      <div className="transition-all duration-300 animate-in fade-in slide-in-from-bottom-4">
+        <Chat
+          key={initialThreadId ?? `new-thread-${newThreadCount}`}
+          loading={loading}
+          streaming={chatRequestStreaming}
+          disabled={isSubmitDisabled}
+          placeholder={inputPlaceholder}
+          messages={initialMessages}
+          emptyState={emptyState}
+          readable={stream ?? undefined}
+          onSubmit={handleSubmit}
+          onStop={stopChatRequest}
+          autoFocus={!isMobile} // Don't auto-focus on mobile to prevent keyboard popup
+        />
+      </div>
     </>
   );
 }

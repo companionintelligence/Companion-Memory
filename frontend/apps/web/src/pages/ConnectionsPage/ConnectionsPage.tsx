@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
+import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select, Card } from '@ci/shadcn';
 import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
-import { useAuth } from '@/hooks';
+import { useAuth, useDeviceLayout } from '@/hooks';
 
 export interface Provider {
   readonly id: string;
@@ -30,6 +30,7 @@ export interface Connection {
 export function ConnectionsPage() {
   usePageTitle('Connections - Companion Intelligence');
 
+  const { isMobile } = useDeviceLayout();
   const [{ authToken }] = useAuth();
 
   const [Providers, setProviders] = useState<Provider[]>([]);
@@ -540,6 +541,116 @@ export function ConnectionsPage() {
     }
   };
 
+  // Mobile Card Component
+  const ConnectionCard = ({ connection }: { connection: Connection }) => (
+    <Card className="transition-all duration-200 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]">
+      <Card.Header className="pb-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+              <Link2 className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <Card.Title className="text-base">{connection.name}</Card.Title>
+              <Card.Description className="text-sm">{connection.provider?.name || 'N/A'}</Card.Description>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {connection.accessToken ? (
+              <div className="flex items-center gap-1 text-green-600 text-xs">
+                <Link2 className="h-3 w-3" />
+                Connected
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                <X className="h-3 w-3" />
+                Not connected
+              </div>
+            )}
+          </div>
+        </div>
+      </Card.Header>
+      <Card.Content className="space-y-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Schedule:</span>
+          <span>{truncateText(connection.schedule ?? 'N/A')}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Enabled:</span>
+          <Toggle
+            size="sm"
+            onClick={() => {
+              connectionToggle(connection);
+            }}
+            className="transition-all duration-200"
+          >
+            {connection.active ? 'On' : 'Off'}
+          </Toggle>
+        </div>
+        <div className="grid grid-cols-2 gap-2 pt-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => connectionEdit(connection)}
+            disabled={deleteLoading === connection.id || oauthInProgress}
+            className="transition-all duration-200 hover:scale-105 active:scale-95"
+          >
+            <Settings className="h-4 w-4 mr-1" />
+            Edit
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleConnect(connection)}
+            disabled={
+              deleteLoading === connection.id ||
+              oauthInProgress ||
+              !connection.clientid ||
+              !connection.clientsecret
+            }
+            className="transition-all duration-200 hover:scale-105 active:scale-95"
+          >
+            {connection.accessToken ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Reconnect
+              </>
+            ) : (
+              <>
+                <Link2 className="h-4 w-4 mr-1" />
+                Connect
+              </>
+            )}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleSyncConnection(connection.id)}
+            disabled={deleteLoading === connection.id || oauthInProgress}
+            className="transition-all duration-200 hover:scale-105 active:scale-95"
+          >
+            <RefreshCw className="h-4 w-4 mr-1" />
+            Sync
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => handleDeleteConnection(connection.id)}
+            disabled={deleteLoading === connection.id || oauthInProgress}
+            className="transition-all duration-200 hover:scale-105 active:scale-95"
+          >
+            {deleteLoading === connection.id ? (
+              <RefreshCw className="h-4 w-4 animate-spin mr-1" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-1" />
+            )}
+            Delete
+          </Button>
+        </div>
+      </Card.Content>
+    </Card>
+  );
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -557,169 +668,236 @@ export function ConnectionsPage() {
       </Portal.Slot>
 
       <PageContent>
-        <div className="flex flex-row items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
           <h1 className="text-2xl font-bold">Connections</h1>
 
-          <div className="flex flex-row items-center gap-2">
-            <Button variant="outline" size="icon" disabled={loading} title="Refresh Providers">
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          <div className="flex flex-row items-center gap-2 w-full sm:w-auto">
+            <Button
+              variant="outline"
+              size={isMobile ? 'default' : 'icon'}
+              disabled={loading}
+              title="Refresh Providers"
+              className="transition-all duration-200 hover:scale-105 active:scale-95 flex-1 sm:flex-none"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''} ${isMobile ? 'mr-2' : ''}`} />
+              {isMobile && 'Refresh'}
             </Button>
-            <Button variant="outline" disabled={loading} onClick={connectionCreate} title="Create Connection">
-              Create
+            <Button
+              variant="outline"
+              disabled={loading}
+              onClick={connectionCreate}
+              title="Create Connection"
+              className="transition-all duration-200 hover:scale-105 active:scale-95 flex-1 sm:flex-none"
+            >
+              {isMobile ? 'Create Connection' : 'Create'}
             </Button>
           </div>
         </div>
 
         {successMessage && (
-          <div className="bg-green-50 text-green-800 rounded-md p-4 text-sm">{successMessage}</div>
+          <div className="bg-green-50 text-green-800 rounded-md p-4 text-sm mb-6 transition-all duration-300 animate-in slide-in-from-top-2">
+            {successMessage}
+          </div>
         )}
 
         {loading || oauthInProgress ? (
-          <div className="text-center py-8">
-            <RefreshCw className="h-8 w-8 animate-spin mx-auto" />
-            <p>{oauthInProgress ? 'Redirecting to authentication...' : 'Loading...'}</p>
+          <div className="text-center py-12">
+            <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p className="text-lg">{oauthInProgress ? 'Redirecting to authentication...' : 'Loading...'}</p>
           </div>
         ) : error ? (
-          <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
+          <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3 mb-6 transition-all duration-300 animate-in slide-in-from-top-2">
             <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
-            <div>
+            <div className="flex-1">
               <h3 className="font-medium">Error loading</h3>
               <p className="text-sm">{error}</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchState()}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3 transition-all duration-200 hover:scale-105 active:scale-95"
+                onClick={() => fetchState()}
+              >
                 Try Again
               </Button>
             </div>
           </div>
         ) : (
           <>
-            <Table>
-              <Table.Header>
-                <Table.Row>
-                  <Table.Head>Name</Table.Head>
-                  <Table.Head>Provider</Table.Head>
-                  <Table.Head>Status</Table.Head>
-                  <Table.Head>Schedule</Table.Head>
-                  <Table.Head>Enabled</Table.Head>
-                  <Table.Head>Actions</Table.Head>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
+            {isMobile ? (
+              // Mobile Grid Layout
+              <>
                 {Providers.length === 0 ? (
-                  <Table.Row>
-                    <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
-                      No Providers found in the system
-                    </Table.Cell>
-                  </Table.Row>
+                  <div className="text-center py-12 text-muted-foreground">
+                    <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p className="text-lg">No Providers found in the system</p>
+                  </div>
+                ) : Connections.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <Link2 className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p className="text-lg">No connections yet</p>
+                    <p className="text-sm">Create your first connection to get started</p>
+                  </div>
                 ) : (
-                  Connections.map((connection) => (
-                    <Table.Row key={connection.id}>
-                      <Table.Cell className="text-sm">{connection.name}</Table.Cell>
-                      <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
-                      <Table.Cell className="text-sm">
-                        {connection.accessToken ? (
-                          <span className="flex items-center gap-1 text-green-600">
-                            <Link2 className="h-3 w-3" />
-                            Connected
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-muted-foreground">
-                            <X className="h-3 w-3" />
-                            Not connected
-                          </span>
-                        )}
-                      </Table.Cell>
-                      <Table.Cell className="text-sm">{truncateText(connection.schedule ?? '')}</Table.Cell>
-                      <Table.Cell className="text-sm">
-                        <Toggle
-                          aria-label="Toggle italic"
-                          onClick={() => {
-                            connectionToggle(connection);
-                          }}
-                        >
-                          {connection.active ? 'enabled' : 'disabled'}
-                        </Toggle>
-                      </Table.Cell>
-                      <Table.Cell className="text-sm">
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => connectionEdit(connection)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Edit"
-                          >
-                            <Settings className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleConnect(connection)}
-                            disabled={
-                              deleteLoading === connection.id ||
-                              oauthInProgress ||
-                              !connection.clientid ||
-                              !connection.clientsecret
-                            }
-                            title={
-                              !connection.clientid || !connection.clientsecret
-                                ? 'Configure OAuth credentials first'
-                                : connection.accessToken
-                                  ? 'Reconnect'
-                                  : 'Connect'
-                            }
-                          >
-                            {connection.accessToken ? (
-                              <RefreshCw className="h-4 w-4" />
-                            ) : (
-                              <Link2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleDeleteConnection(connection.id)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Delete"
-                          >
-                            {deleteLoading === connection.id ? (
-                              <RefreshCw className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleSyncConnection(connection.id)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Sync Data"
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </Table.Cell>
-                    </Table.Row>
-                  ))
+                  <div className="grid gap-4 animate-in slide-in-from-bottom-4 duration-500">
+                    {Connections.map((connection, index) => (
+                      <div
+                        key={connection.id}
+                        className="animate-in slide-in-from-bottom-4"
+                        style={{ animationDelay: `${index * 100}ms` }}
+                      >
+                        <ConnectionCard connection={connection} />
+                      </div>
+                    ))}
+                  </div>
                 )}
-              </Table.Body>
-            </Table>
+              </>
+            ) : (
+              // Desktop Table Layout
+              <div className="transition-all duration-300 animate-in fade-in slide-in-from-bottom-4">
+                <Table>
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.Head>Name</Table.Head>
+                      <Table.Head>Provider</Table.Head>
+                      <Table.Head>Status</Table.Head>
+                      <Table.Head>Schedule</Table.Head>
+                      <Table.Head>Enabled</Table.Head>
+                      <Table.Head>Actions</Table.Head>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {Providers.length === 0 ? (
+                      <Table.Row>
+                        <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
+                          No Providers found in the system
+                        </Table.Cell>
+                      </Table.Row>
+                    ) : (
+                      Connections.map((connection) => (
+                        <Table.Row
+                          key={connection.id}
+                          className="transition-colors duration-200 hover:bg-muted/50"
+                        >
+                          <Table.Cell className="text-sm">{connection.name}</Table.Cell>
+                          <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
+                          <Table.Cell className="text-sm">
+                            {connection.accessToken ? (
+                              <span className="flex items-center gap-1 text-green-600">
+                                <Link2 className="h-3 w-3" />
+                                Connected
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-muted-foreground">
+                                <X className="h-3 w-3" />
+                                Not connected
+                              </span>
+                            )}
+                          </Table.Cell>
+                          <Table.Cell className="text-sm">
+                            {truncateText(connection.schedule ?? '')}
+                          </Table.Cell>
+                          <Table.Cell className="text-sm">
+                            <Toggle
+                              aria-label="Toggle connection"
+                              onClick={() => {
+                                connectionToggle(connection);
+                              }}
+                              className="transition-all duration-200"
+                            >
+                              {connection.active ? 'enabled' : 'disabled'}
+                            </Toggle>
+                          </Table.Cell>
+                          <Table.Cell className="text-sm">
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => connectionEdit(connection)}
+                                disabled={deleteLoading === connection.id || oauthInProgress}
+                                title="Edit"
+                                className="transition-all duration-200 hover:scale-110 active:scale-95"
+                              >
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleConnect(connection)}
+                                disabled={
+                                  deleteLoading === connection.id ||
+                                  oauthInProgress ||
+                                  !connection.clientid ||
+                                  !connection.clientsecret
+                                }
+                                title={
+                                  !connection.clientid || !connection.clientsecret
+                                    ? 'Configure OAuth credentials first'
+                                    : connection.accessToken
+                                      ? 'Reconnect'
+                                      : 'Connect'
+                                }
+                                className="transition-all duration-200 hover:scale-110 active:scale-95"
+                              >
+                                {connection.accessToken ? (
+                                  <RefreshCw className="h-4 w-4" />
+                                ) : (
+                                  <Link2 className="h-4 w-4" />
+                                )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDeleteConnection(connection.id)}
+                                disabled={deleteLoading === connection.id || oauthInProgress}
+                                title="Delete"
+                                className="transition-all duration-200 hover:scale-110 active:scale-95"
+                              >
+                                {deleteLoading === connection.id ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleSyncConnection(connection.id)}
+                                disabled={deleteLoading === connection.id || oauthInProgress}
+                                title="Sync Data"
+                                className="transition-all duration-200 hover:scale-110 active:scale-95"
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </Table.Cell>
+                        </Table.Row>
+                      ))
+                    )}
+                  </Table.Body>
+                </Table>
+              </div>
+            )}
 
-            <div className="text-xs text-muted-foreground">Total Connections: {Connections.length}</div>
+            <div className="text-xs text-muted-foreground mt-4 transition-all duration-300">
+              Total Connections: {Connections.length}
+            </div>
           </>
         )}
       </PageContent>
 
       {/* Create Connection Modal */}
       <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-        <Dialog.Content className="sm:max-w-[500px]">
+        <Dialog.Content className="sm:max-w-[500px] w-[95vw] sm:w-full transition-all duration-300">
           <Dialog.Header>
-            <Dialog.Title>Create Connection</Dialog.Title>
+            <Dialog.Title className="text-lg">Create Connection</Dialog.Title>
             <Dialog.Description>Create a new connection to a provider.</Dialog.Description>
           </Dialog.Header>
 
           <div className="grid gap-4 py-4">
             {modalError && (
-              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">{modalError}</div>
+              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm animate-in slide-in-from-top-2">
+                {modalError}
+              </div>
             )}
 
             <div className="grid gap-2">
@@ -730,6 +908,7 @@ export function ConnectionsPage() {
                 value={createFormData.name}
                 onChange={(e) => setCreateFormData({ ...createFormData, name: e.target.value })}
                 disabled={modalLoading}
+                className="transition-all duration-200 focus:scale-[1.02]"
               />
             </div>
 
@@ -740,7 +919,10 @@ export function ConnectionsPage() {
                 onValueChange={(value) => setCreateFormData({ ...createFormData, providerId: value })}
                 disabled={modalLoading}
               >
-                <Select.Trigger id="create-provider">
+                <Select.Trigger
+                  id="create-provider"
+                  className="transition-all duration-200 focus:scale-[1.02]"
+                >
                   <Select.Value />
                 </Select.Trigger>
                 <Select.Content>
@@ -754,13 +936,19 @@ export function ConnectionsPage() {
             </div>
           </div>
 
-          <Dialog.Footer>
-            <Button variant="outline" onClick={() => setShowCreateModal(false)} disabled={modalLoading}>
+          <Dialog.Footer className="gap-2 flex-col sm:flex-row">
+            <Button
+              variant="outline"
+              onClick={() => setShowCreateModal(false)}
+              disabled={modalLoading}
+              className="w-full sm:w-auto transition-all duration-200 hover:scale-105 active:scale-95"
+            >
               Cancel
             </Button>
             <Button
               onClick={handleCreateSubmit}
               disabled={modalLoading || !createFormData.name || !createFormData.providerId}
+              className="w-full sm:w-auto transition-all duration-200 hover:scale-105 active:scale-95"
             >
               {modalLoading ? (
                 <>
@@ -777,19 +965,21 @@ export function ConnectionsPage() {
 
       {/* Edit Connection Modal */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <Dialog.Content className="sm:max-w-[500px]">
+        <Dialog.Content className="sm:max-w-[500px] w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto transition-all duration-300">
           <Dialog.Header>
-            <Dialog.Title>Edit Connection</Dialog.Title>
+            <Dialog.Title className="text-lg">Edit Connection</Dialog.Title>
             <Dialog.Description>Update the settings for this connection.</Dialog.Description>
           </Dialog.Header>
 
           <div className="grid gap-4 py-4">
             {modalError && (
-              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">{modalError}</div>
+              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm animate-in slide-in-from-top-2">
+                {modalError}
+              </div>
             )}
 
             {selectedConnection?.accessToken && (
-              <div className="bg-green-50 text-green-800 rounded-md p-3 text-sm flex items-center gap-2">
+              <div className="bg-green-50 text-green-800 rounded-md p-3 text-sm flex items-center gap-2 animate-in slide-in-from-top-2">
                 <Link2 className="h-4 w-4" />
                 This connection is authenticated. You can reconnect if needed.
               </div>
@@ -803,6 +993,7 @@ export function ConnectionsPage() {
                 value={editFormData.name}
                 onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
                 disabled={modalLoading}
+                className="transition-all duration-200 focus:scale-[1.02]"
               />
             </div>
 
@@ -823,6 +1014,7 @@ export function ConnectionsPage() {
                 value={editFormData.clientid}
                 onChange={(e) => setEditFormData({ ...editFormData, clientid: e.target.value })}
                 disabled={modalLoading}
+                className="transition-all duration-200 focus:scale-[1.02]"
               />
             </div>
 
@@ -834,6 +1026,7 @@ export function ConnectionsPage() {
                 value={editFormData.clientkey}
                 onChange={(e) => setEditFormData({ ...editFormData, clientkey: e.target.value })}
                 disabled={modalLoading}
+                className="transition-all duration-200 focus:scale-[1.02]"
               />
             </div>
 
@@ -846,6 +1039,7 @@ export function ConnectionsPage() {
                 value={editFormData.clientsecret}
                 onChange={(e) => setEditFormData({ ...editFormData, clientsecret: e.target.value })}
                 disabled={modalLoading}
+                className="transition-all duration-200 focus:scale-[1.02]"
               />
             </div>
 
@@ -856,7 +1050,7 @@ export function ConnectionsPage() {
                 onValueChange={(value) => setEditFormData({ ...editFormData, schedule: value })}
                 disabled={modalLoading}
               >
-                <Select.Trigger id="edit-schedule">
+                <Select.Trigger id="edit-schedule" className="transition-all duration-200 focus:scale-[1.02]">
                   <Select.Value />
                 </Select.Trigger>
                 <Select.Content>
@@ -868,11 +1062,20 @@ export function ConnectionsPage() {
             </div>
           </div>
 
-          <Dialog.Footer>
-            <Button variant="outline" onClick={() => setShowEditModal(false)} disabled={modalLoading}>
+          <Dialog.Footer className="gap-2 flex-col sm:flex-row">
+            <Button
+              variant="outline"
+              onClick={() => setShowEditModal(false)}
+              disabled={modalLoading}
+              className="w-full sm:w-auto transition-all duration-200 hover:scale-105 active:scale-95"
+            >
               Cancel
             </Button>
-            <Button onClick={handleEditSubmit} disabled={modalLoading || !editFormData.name}>
+            <Button
+              onClick={handleEditSubmit}
+              disabled={modalLoading || !editFormData.name}
+              className="w-full sm:w-auto transition-all duration-200 hover:scale-105 active:scale-95"
+            >
               {modalLoading ? (
                 <>
                   <RefreshCw className="h-4 w-4 animate-spin mr-2" />
@@ -909,6 +1112,7 @@ export function ConnectionsPage() {
                   handleConnect(updatedConnection);
                 }}
                 disabled={modalLoading}
+                className="w-full sm:w-auto transition-all duration-200 hover:scale-105 active:scale-95"
               >
                 {selectedConnection.accessToken ? 'Save & Reconnect' : 'Save & Connect'}
               </Button>
