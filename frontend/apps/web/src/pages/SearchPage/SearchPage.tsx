@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Input, Table } from '@ci/shadcn';
@@ -17,25 +18,50 @@ interface SearchResult {
 export function SearchPage() {
   usePageTitle('Search - Companion Intelligence');
   const [{ authToken }] = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [searchQuery, setSearchQuery] = useState('');
+  // Get initial query from URL params
+  const initialQuery = searchParams.get('q') || '';
+  
+  const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [hasSearched, setHasSearched] = useState(!!initialQuery);
 
-  const performSearch = async () => {
-    if (!searchQuery.trim()) {
+  // Perform search when component mounts if there's an initial query
+  useEffect(() => {
+    if (initialQuery) {
+      performSearch(initialQuery);
+    }
+  }, [initialQuery, authToken]);
+
+  // Update URL params when search query changes
+  const updateSearchParams = (query: string) => {
+    const params = new URLSearchParams(searchParams);
+    if (query) {
+      params.set('q', query);
+    } else {
+      params.delete('q');
+    }
+    setSearchParams(params);
+  };
+
+  const performSearch = async (query?: string) => {
+    const searchTerm = query || searchQuery;
+    if (!searchTerm.trim()) {
       setError('Please enter a search query');
-
       return;
     }
 
     try {
-      console.log('SearchPage: Starting search with query:', searchQuery);
+      console.log('SearchPage: Starting search with query:', searchTerm);
       setLoading(true);
       setError(null);
       setHasSearched(true);
+      
+      // Update URL with search query
+      updateSearchParams(searchTerm);
 
       console.log('SearchPage: Making API request to search service');
       const response = await fetch(`/api/embeddings/search`, {
@@ -45,7 +71,7 @@ export function SearchPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          input: searchQuery,
+          input: searchTerm,
         }),
       });
 
@@ -104,6 +130,10 @@ export function SearchPage() {
     }
   };
 
+  const handleSearchQueryChange = (value: string) => {
+    setSearchQuery(value);
+  };
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -127,12 +157,13 @@ export function SearchPage() {
             type="text"
             placeholder="Enter your search query..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchQueryChange(e.target.value)}
             onKeyPress={handleKeyPress}
             className="flex-1"
             disabled={loading}
+            autoFocus
           />
-          <Button onClick={performSearch} disabled={loading}>
+          <Button onClick={() => performSearch()} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             <span className="ml-2">Search</span>
           </Button>

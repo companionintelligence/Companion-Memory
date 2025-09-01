@@ -1,9 +1,10 @@
-import { type ReactNode, lazy } from 'react';
+import { type ReactNode, lazy, useState } from 'react';
 
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
+import { GlobalSearch } from '@/components/GlobalSearch';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { AuthProvider, DeviceLayoutProvider, ModelProvider, ThemeProvider } from '@/hooks';
+import { AuthProvider, DeviceLayoutProvider, ModelProvider, ThemeProvider, useGlobalSearch } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import FeedPage from '@/pages/FeedPage';
 import LoginPage from '@/pages/LoginPage';
@@ -37,8 +38,16 @@ function Providers({ children }: { children: ReactNode }) {
 }
 
 function AppRoutes() {
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  
+  // Global keyboard shortcut for search (Cmd+K / Ctrl+K)
+  useGlobalSearch(() => {
+    setGlobalSearchOpen(true);
+  });
+
   return (
-    <Routes>
+    <>
+      <Routes>
       {/* No navigation for these pages */}
       <Route path="/" element={<SplashPage />} />
 
@@ -153,7 +162,13 @@ function AppRoutes() {
       {/* Fallback */}
       <Route path="*" element={<NotFound />} />
     </Routes>
-  );
+    
+    {/* Global Search Modal */}
+    <GlobalSearch 
+      open={globalSearchOpen} 
+      onOpenChange={setGlobalSearchOpen} 
+    />
+  </>);
 }
 
 export default function App() {
