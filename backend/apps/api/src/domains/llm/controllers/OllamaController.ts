@@ -21,18 +21,25 @@ import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/events';
-import { FileService } from '@ci/domains/files';
+import { FileService, FileProcessingService } from '@ci/domains/files';
 
 import { OllamaService } from '../services/OllamaService';
 import type { OllamaModel, PromptInput } from '../types';
 
 const promptSchema = z.object({
-  prompt: z.string(),
+  prompt: z.string().optional(),
   model: z.optional(z.string()),
   threadId: z.string().nullable().optional(),
   enableTools: z.boolean().default(true),
   enableThinking: z.boolean().default(true),
-});
+  fileIds: z.array(z.string().uuid()).optional(),
+}).refine(
+  (data) => data.prompt || (data.fileIds && data.fileIds.length > 0),
+  {
+    message: "Either 'prompt' or 'fileIds' must be provided",
+    path: ["prompt", "fileIds"],
+  }
+);
 
 @Controller('llm')
 export class OllamaController {
@@ -46,6 +53,7 @@ export class OllamaController {
     private readonly ollamaService: OllamaService,
     private readonly threadService: ThreadService,
     private readonly fileService: FileService,
+    private readonly fileProcessingService: FileProcessingService,
   ) {}
 
   @UseGuards(JwtAuthGuard)
@@ -87,11 +95,34 @@ export class OllamaController {
       });
     }
 
+    // Process any uploaded files first
+    let processedFiles: any[] = [];
+    let finalPrompt = input.prompt || '';
+    
+    if (input.fileIds && input.fileIds.length > 0) {
+      try {
+        processedFiles = await this.fileProcessingService.processFiles(context, input.fileIds);
+        
+        // If no text prompt provided, generate one based on the files
+        if (!input.prompt) {
+          finalPrompt = await this.fileProcessingService.generateFileAnalysisPrompt(processedFiles);
+        }
+        
+        // Associate files with the thread
+        if (input.fileIds && input.fileIds.length > 0) {
+          await this.threadService.associateFiles(context, threadId, input.fileIds);
+        }
+      } catch (error) {
+        this.logger.error('Error processing files:', error as Error);
+        throw new BadRequestException(`Error processing files: ${(error as Error).message}`);
+      }
+    }
+
     // Create a message for the user prompt
     const promptMessage = await this.messageService.create(context, {
       model: resolvedModel.model,
       role: 'user',
-      content: input.prompt,
+      content: finalPrompt,
       mimetype: 'text/markdown', // TODO: Make this more flexible.
       canceled: false,
       threadId,
@@ -118,8 +149,18 @@ export class OllamaController {
     const messages = await this.messageService.findByThread(context, threadId);
     const files = await this.fileService.findByThread(context, threadId);
 
+    // Combine existing thread files with newly uploaded files
+    const allImageFiles = [...files];
+    if (processedFiles.length > 0) {
+      // Add processed files that are images to the image array
+      const newImageFiles = processedFiles
+        .filter(pf => pf.file.content_type.startsWith('image/'))
+        .map(pf => pf.file);
+      allImageFiles.push(...newImageFiles);
+    }
+
     const images = await Promise.all(
-      files.map(async (file) => this.fileService.getFileContent(context, file.key)),
+      allImageFiles.map(async (file) => this.fileService.getFileContent(context, file.key)),
     );
 
     const inputMessages: Message[] = [

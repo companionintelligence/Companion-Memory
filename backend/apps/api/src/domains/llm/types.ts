@@ -1,9 +1,10 @@
 export interface PromptInput {
-  prompt: string;
+  prompt?: string;
   model?: string;
   threadId?: string;
   enableTools?: boolean;
   enableThinking?: boolean;
+  fileIds?: string[];
 }
 
 export interface OllamaModel {

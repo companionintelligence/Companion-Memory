@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { RequestContext } from '@ci/common/types';
+import { FileEntity } from '@ci/domains/files';
 
 import { MessageEntity } from '../entities/MessageEntity';
 import { ThreadEntity } from '../entities/ThreadEntity';
@@ -16,6 +17,8 @@ export class ThreadService {
     private readonly messageRepository: Repository<MessageEntity>,
     @InjectRepository(ThreadEntity)
     private readonly threadRepository: Repository<ThreadEntity>,
+    @InjectRepository(FileEntity)
+    private readonly fileRepository: Repository<FileEntity>,
   ) {}
 
   async create(context: RequestContext, data: CreateThreadDto): Promise<Thread> {
@@ -135,5 +138,44 @@ export class ThreadService {
     }
 
     return true;
+  }
+
+  async associateFiles(context: RequestContext, threadId: string, fileIds: string[]): Promise<void> {
+    const thread = await this.threadRepository.findOne({
+      where: {
+        id: threadId,
+        user: {
+          id: context.userId,
+        },
+      },
+      relations: ['files'],
+    });
+
+    if (!thread) {
+      throw new NotFoundException('Thread not found');
+    }
+
+    const files = await this.fileRepository.find({
+      where: fileIds.map(id => ({
+        id,
+        user: {
+          id: context.userId,
+        },
+      })),
+    });
+
+    if (files.length !== fileIds.length) {
+      const foundIds = files.map(f => f.id);
+      const missingIds = fileIds.filter(id => !foundIds.includes(id));
+      throw new NotFoundException(`Files not found: ${missingIds.join(', ')}`);
+    }
+
+    // Add the new files to existing files
+    const existingFileIds = thread.files?.map(f => f.id) || [];
+    const newFiles = files.filter(file => !existingFileIds.includes(file.id));
+    
+    thread.files = [...(thread.files || []), ...newFiles];
+    
+    await this.threadRepository.save(thread);
   }
 }
