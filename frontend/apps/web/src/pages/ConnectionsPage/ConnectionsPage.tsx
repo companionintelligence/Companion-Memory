@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
-import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select, Alert } from '@ci/shadcn';
+import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X, CheckCircle, Key, Database } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
@@ -557,21 +557,42 @@ export function ConnectionsPage() {
       </Portal.Slot>
 
       <PageContent>
-        <div className="flex flex-row items-center justify-between">
-          <h1 className="text-2xl font-bold">Connections</h1>
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Data Connections</h1>
+            <p className="text-lg text-muted-foreground">
+              Connect and manage your data sources for comprehensive tracking
+            </p>
+          </div>
 
-          <div className="flex flex-row items-center gap-2">
-            <Button variant="outline" size="icon" disabled={loading} title="Refresh Providers">
+          <div className="flex items-center gap-3">
+            <Button 
+              variant="outline" 
+              size="icon" 
+              disabled={loading} 
+              onClick={() => fetchState()}
+              title="Refresh connections and providers"
+              className="shrink-0"
+            >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
-            <Button variant="outline" disabled={loading} onClick={connectionCreate} title="Create Connection">
-              Create
+            <Button 
+              disabled={loading} 
+              onClick={connectionCreate} 
+              title="Create a new data connection"
+              className="shrink-0"
+            >
+              Create Connection
             </Button>
           </div>
         </div>
 
         {successMessage && (
-          <div className="bg-green-50 text-green-800 rounded-md p-4 text-sm">{successMessage}</div>
+          <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-400">
+            <CheckCircle className="h-4 w-4" />
+            <Alert.Title>Success</Alert.Title>
+            <Alert.Description>{successMessage}</Alert.Description>
+          </Alert>
         )}
 
         {loading || oauthInProgress ? (
@@ -580,73 +601,124 @@ export function ConnectionsPage() {
             <p>{oauthInProgress ? 'Redirecting to authentication...' : 'Loading...'}</p>
           </div>
         ) : error ? (
-          <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
-            <div>
-              <h3 className="font-medium">Error loading</h3>
-              <p className="text-sm">{error}</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchState()}>
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <Alert.Title>Failed to Load Connections</Alert.Title>
+            <Alert.Description className="space-y-3">
+              <p>{error}</p>
+              <Button variant="outline" size="sm" onClick={() => fetchState()}>
+                <RefreshCw className="h-4 w-4 mr-2" />
                 Try Again
               </Button>
-            </div>
-          </div>
+            </Alert.Description>
+          </Alert>
         ) : (
           <>
             <Table>
               <Table.Header>
                 <Table.Row>
-                  <Table.Head>Name</Table.Head>
-                  <Table.Head>Provider</Table.Head>
-                  <Table.Head>Status</Table.Head>
-                  <Table.Head>Schedule</Table.Head>
-                  <Table.Head>Enabled</Table.Head>
-                  <Table.Head>Actions</Table.Head>
+                  <Table.Head className="font-semibold">Connection Name</Table.Head>
+                  <Table.Head className="font-semibold">Data Source</Table.Head>
+                  <Table.Head className="font-semibold">Connection Status</Table.Head>
+                  <Table.Head className="font-semibold">Sync Schedule</Table.Head>
+                  <Table.Head className="font-semibold">Tracking Mode</Table.Head>
+                  <Table.Head className="font-semibold text-right">Actions</Table.Head>
                 </Table.Row>
               </Table.Header>
               <Table.Body>
                 {Providers.length === 0 ? (
                   <Table.Row>
-                    <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
-                      No Providers found in the system
+                    <Table.Cell colSpan={7} className="text-center py-12">
+                      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                        <Database className="h-12 w-12 opacity-50" />
+                        <div>
+                          <p className="font-medium">No Data Sources Available</p>
+                          <p className="text-sm">Contact your administrator to set up data providers</p>
+                        </div>
+                      </div>
+                    </Table.Cell>
+                  </Table.Row>
+                ) : Connections.length === 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={7} className="text-center py-12">
+                      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                        <Link2 className="h-12 w-12 opacity-50" />
+                        <div>
+                          <p className="font-medium">No Connections Configured</p>
+                          <p className="text-sm">Create your first connection to start tracking data</p>
+                        </div>
+                        <Button onClick={connectionCreate} size="sm" className="mt-2">
+                          Create Your First Connection
+                        </Button>
+                      </div>
                     </Table.Cell>
                   </Table.Row>
                 ) : (
                   Connections.map((connection) => (
-                    <Table.Row key={connection.id}>
-                      <Table.Cell className="text-sm">{connection.name}</Table.Cell>
-                      <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
-                      <Table.Cell className="text-sm">
+                    <Table.Row key={connection.id} className="hover:bg-muted/50">
+                      <Table.Cell className="font-medium">
+                        <div className="flex flex-col gap-1">
+                          <span>{connection.name}</span>
+                          {connection.lastSyncedAt && (
+                            <span className="text-xs text-muted-foreground">
+                              Last synced: {new Date(connection.lastSyncedAt).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-2 rounded-full bg-blue-500" />
+                          <span className="font-medium">{connection.provider?.name || 'Unknown'}</span>
+                        </div>
+                      </Table.Cell>
+                      <Table.Cell>
                         {connection.accessToken ? (
-                          <span className="flex items-center gap-1 text-green-600">
-                            <Link2 className="h-3 w-3" />
-                            Connected
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 w-2 rounded-full bg-green-500" />
+                            <span className="text-green-700 dark:text-green-400 font-medium">
+                              Connected & Active
+                            </span>
+                          </div>
                         ) : (
-                          <span className="flex items-center gap-1 text-muted-foreground">
-                            <X className="h-3 w-3" />
-                            Not connected
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 w-2 rounded-full bg-orange-500" />
+                            <span className="text-orange-700 dark:text-orange-400 font-medium">
+                              Authentication Required
+                            </span>
+                          </div>
                         )}
                       </Table.Cell>
-                      <Table.Cell className="text-sm">{truncateText(connection.schedule ?? '')}</Table.Cell>
-                      <Table.Cell className="text-sm">
-                        <Toggle
-                          aria-label="Toggle italic"
-                          onClick={() => {
-                            connectionToggle(connection);
-                          }}
-                        >
-                          {connection.active ? 'enabled' : 'disabled'}
-                        </Toggle>
+                      <Table.Cell>
+                        <div className="flex items-center gap-2">
+                          <RefreshCw className="h-3 w-3 text-muted-foreground" />
+                          <span className="capitalize">
+                            {connection.schedule || 'Manual'}
+                          </span>
+                        </div>
                       </Table.Cell>
-                      <Table.Cell className="text-sm">
-                        <div className="flex gap-2">
+                      <Table.Cell>
+                        <div className="flex items-center justify-between max-w-[120px]">
+                          <span className={`text-sm font-medium ${connection.active ? 'text-green-700 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                            {connection.active ? 'Domain Tracking' : 'Disabled'}
+                          </span>
+                          <Toggle
+                            aria-label={`Toggle ${connection.active ? 'disable' : 'enable'} tracking for ${connection.name}`}
+                            pressed={connection.active}
+                            onPressedChange={() => connectionToggle(connection)}
+                            size="sm"
+                          />
+                        </div>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <div className="flex gap-1 justify-end">
                           <Button
                             size="sm"
                             variant="ghost"
                             onClick={() => connectionEdit(connection)}
                             disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Edit"
+                            title="Configure connection settings"
+                            className="h-8 w-8 p-0"
                           >
                             <Settings className="h-4 w-4" />
                           </Button>
@@ -664,9 +736,10 @@ export function ConnectionsPage() {
                               !connection.clientid || !connection.clientsecret
                                 ? 'Configure OAuth credentials first'
                                 : connection.accessToken
-                                  ? 'Reconnect'
-                                  : 'Connect'
+                                  ? 'Reconnect to refresh authentication'
+                                  : 'Authenticate this connection'
                             }
+                            className="h-8 w-8 p-0"
                           >
                             {connection.accessToken ? (
                               <RefreshCw className="h-4 w-4" />
@@ -677,24 +750,26 @@ export function ConnectionsPage() {
                           <Button
                             size="sm"
                             variant="ghost"
+                            onClick={() => handleSyncConnection(connection.id)}
+                            disabled={deleteLoading === connection.id || oauthInProgress}
+                            title="Manually sync data from this connection"
+                            className="h-8 w-8 p-0"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
                             onClick={() => handleDeleteConnection(connection.id)}
                             disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Delete"
+                            title="Delete this connection permanently"
+                            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                           >
                             {deleteLoading === connection.id ? (
                               <RefreshCw className="h-4 w-4 animate-spin" />
                             ) : (
                               <Trash2 className="h-4 w-4" />
                             )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleSyncConnection(connection.id)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Sync Data"
-                          >
-                            <RefreshCw className="h-4 w-4" />
                           </Button>
                         </div>
                       </Table.Cell>
@@ -704,53 +779,81 @@ export function ConnectionsPage() {
               </Table.Body>
             </Table>
 
-            <div className="text-xs text-muted-foreground">Total Connections: {Connections.length}</div>
+            <div className="flex items-center justify-between text-sm text-muted-foreground border-t pt-4 mt-6">
+              <div className="flex items-center gap-4">
+                <span>Total Connections: {Connections.length}</span>
+                <span>Active: {Connections.filter(c => c.active).length}</span>
+                <span>Connected: {Connections.filter(c => c.accessToken).length}</span>
+              </div>
+              <div className="text-xs">
+                💡 Domain tracking monitors entire websites, page tracking focuses on specific URLs
+              </div>
+            </div>
           </>
         )}
       </PageContent>
 
       {/* Create Connection Modal */}
       <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-        <Dialog.Content className="sm:max-w-[500px]">
+        <Dialog.Content className="sm:max-w-[600px]">
           <Dialog.Header>
-            <Dialog.Title>Create Connection</Dialog.Title>
-            <Dialog.Description>Create a new connection to a provider.</Dialog.Description>
+            <Dialog.Title className="text-xl font-semibold">Create New Data Connection</Dialog.Title>
+            <Dialog.Description className="text-base">
+              Connect to a data source to track domain-wide activity or specific pages. 
+              Domain tracking captures all activity across a website (e.g., all of www.youtube.com), 
+              while page tracking focuses on specific URLs (e.g., www.youtube.com/watch?v=abc123).
+            </Dialog.Description>
           </Dialog.Header>
 
-          <div className="grid gap-4 py-4">
+          <div className="grid gap-6 py-6">
             {modalError && (
-              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">{modalError}</div>
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <Alert.Title>Error</Alert.Title>
+                <Alert.Description>{modalError}</Alert.Description>
+              </Alert>
             )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="create-name">Connection Name</Label>
+            <div className="grid gap-3">
+              <Label htmlFor="create-name" className="text-sm font-medium">
+                Connection Display Name
+              </Label>
               <Input
                 id="create-name"
-                placeholder="My Google Connection"
+                placeholder="e.g., My YouTube Tracking, Work Gmail, Personal Calendar"
                 value={createFormData.name}
                 onChange={(e) => setCreateFormData({ ...createFormData, name: e.target.value })}
                 disabled={modalLoading}
+                className="text-base"
               />
+              <p className="text-xs text-muted-foreground">
+                Choose a descriptive name to help you identify this connection later
+              </p>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="create-provider">Provider</Label>
+            <div className="grid gap-3">
+              <Label htmlFor="create-provider" className="text-sm font-medium">
+                Data Source Provider
+              </Label>
               <Select
                 value={createFormData.providerId}
                 onValueChange={(value) => setCreateFormData({ ...createFormData, providerId: value })}
                 disabled={modalLoading}
               >
-                <Select.Trigger id="create-provider">
-                  <Select.Value />
+                <Select.Trigger id="create-provider" className="text-base">
+                  <Select.Value placeholder="Select a data source provider" />
                 </Select.Trigger>
                 <Select.Content>
                   {Providers.map((provider) => (
-                    <Select.Item key={provider.id} value={provider.id}>
+                    <Select.Item key={provider.id} value={provider.id} className="text-base">
                       {provider.name}
                     </Select.Item>
                   ))}
                 </Select.Content>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                The service you want to connect to for data tracking
+              </p>
             </div>
           </div>
 
@@ -777,94 +880,156 @@ export function ConnectionsPage() {
 
       {/* Edit Connection Modal */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <Dialog.Content className="sm:max-w-[500px]">
+        <Dialog.Content className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
           <Dialog.Header>
-            <Dialog.Title>Edit Connection</Dialog.Title>
-            <Dialog.Description>Update the settings for this connection.</Dialog.Description>
+            <Dialog.Title className="text-xl font-semibold">Configure Data Connection</Dialog.Title>
+            <Dialog.Description className="text-base">
+              Set up authentication and tracking preferences for this data source. 
+              You can configure whether to track the entire domain or specific pages.
+            </Dialog.Description>
           </Dialog.Header>
 
-          <div className="grid gap-4 py-4">
+      {/* Edit Connection Modal */}
+      <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
+        <Dialog.Content className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+          <Dialog.Header>
+            <Dialog.Title className="text-xl font-semibold">Configure Data Connection</Dialog.Title>
+            <Dialog.Description className="text-base">
+              Set up authentication and tracking preferences for this data source. 
+              You can configure whether to track the entire domain or specific pages.
+            </Dialog.Description>
+          </Dialog.Header>
+
+          <div className="grid gap-6 py-6">
             {modalError && (
-              <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">{modalError}</div>
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <Alert.Title>Configuration Error</Alert.Title>
+                <Alert.Description>{modalError}</Alert.Description>
+              </Alert>
             )}
 
             {selectedConnection?.accessToken && (
-              <div className="bg-green-50 text-green-800 rounded-md p-3 text-sm flex items-center gap-2">
-                <Link2 className="h-4 w-4" />
-                This connection is authenticated. You can reconnect if needed.
-              </div>
+              <Alert>
+                <CheckCircle className="h-4 w-4" />
+                <Alert.Title>Connection Authenticated</Alert.Title>
+                <Alert.Description>
+                  This connection is successfully authenticated and ready to sync data. 
+                  You can reconnect if needed to refresh the authentication.
+                </Alert.Description>
+              </Alert>
             )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="edit-name">Connection Name</Label>
+            <div className="grid gap-3">
+              <Label htmlFor="edit-name" className="text-sm font-medium">
+                Connection Display Name
+              </Label>
               <Input
                 id="edit-name"
-                placeholder="My Google Connection"
+                placeholder="e.g., My YouTube Domain Tracking, Work Gmail Pages"
                 value={editFormData.name}
                 onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
                 disabled={modalLoading}
+                className="text-base"
               />
+              <p className="text-xs text-muted-foreground">
+                A descriptive name to help identify this connection
+              </p>
             </div>
 
             {selectedConnection?.provider && (
-              <div className="grid gap-2">
-                <Label>Provider</Label>
-                <div className="text-sm text-muted-foreground bg-muted px-3 py-2 rounded-md">
-                  {selectedConnection.provider.name} (cannot be changed)
+              <div className="grid gap-3">
+                <Label className="text-sm font-medium">Data Source Provider</Label>
+                <div className="flex items-center gap-3 bg-muted/50 px-4 py-3 rounded-lg">
+                  <div className="h-3 w-3 rounded-full bg-blue-500" />
+                  <span className="font-medium">{selectedConnection.provider.name}</span>
+                  <span className="text-xs text-muted-foreground ml-auto">Cannot be changed</span>
                 </div>
               </div>
             )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="edit-clientid">Client ID (Optional)</Label>
-              <Input
-                id="edit-clientid"
-                placeholder="your-client-id"
-                value={editFormData.clientid}
-                onChange={(e) => setEditFormData({ ...editFormData, clientid: e.target.value })}
-                disabled={modalLoading}
-              />
+            <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center gap-2">
+                <Key className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">OAuth Authentication Settings</h3>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Configure OAuth credentials to authenticate with the data source provider
+              </p>
+
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-clientid" className="text-sm">
+                    Application Client ID
+                  </Label>
+                  <Input
+                    id="edit-clientid"
+                    placeholder="your-app-client-id"
+                    value={editFormData.clientid}
+                    onChange={(e) => setEditFormData({ ...editFormData, clientid: e.target.value })}
+                    disabled={modalLoading}
+                    type="text"
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-clientkey" className="text-sm">
+                    Application Client Key <span className="text-xs text-muted-foreground">(if required)</span>
+                  </Label>
+                  <Input
+                    id="edit-clientkey"
+                    placeholder="your-app-client-key"
+                    value={editFormData.clientkey}
+                    onChange={(e) => setEditFormData({ ...editFormData, clientkey: e.target.value })}
+                    disabled={modalLoading}
+                    type="text"
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-clientsecret" className="text-sm">
+                    Application Client Secret
+                  </Label>
+                  <Input
+                    id="edit-clientsecret"
+                    type="password"
+                    placeholder="your-app-client-secret"
+                    value={editFormData.clientsecret}
+                    onChange={(e) => setEditFormData({ ...editFormData, clientsecret: e.target.value })}
+                    disabled={modalLoading}
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="edit-clientkey">Client Key (Optional)</Label>
-              <Input
-                id="edit-clientkey"
-                placeholder="your-client-key"
-                value={editFormData.clientkey}
-                onChange={(e) => setEditFormData({ ...editFormData, clientkey: e.target.value })}
-                disabled={modalLoading}
-              />
-            </div>
+            <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">Data Synchronization Settings</h3>
+              </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="edit-clientsecret">Client Secret (Optional)</Label>
-              <Input
-                id="edit-clientsecret"
-                type="password"
-                placeholder="your-client-secret"
-                value={editFormData.clientsecret}
-                onChange={(e) => setEditFormData({ ...editFormData, clientsecret: e.target.value })}
-                disabled={modalLoading}
-              />
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="edit-schedule">Sync Schedule</Label>
-              <Select
-                value={editFormData.schedule}
-                onValueChange={(value) => setEditFormData({ ...editFormData, schedule: value })}
-                disabled={modalLoading}
-              >
-                <Select.Trigger id="edit-schedule">
-                  <Select.Value />
-                </Select.Trigger>
-                <Select.Content>
-                  <Select.Item value="hourly">Hourly</Select.Item>
-                  <Select.Item value="daily">Daily</Select.Item>
-                  <Select.Item value="weekly">Weekly</Select.Item>
-                </Select.Content>
-              </Select>
+              <div className="grid gap-3">
+                <Label htmlFor="edit-schedule" className="text-sm font-medium">
+                  Automatic Sync Frequency
+                </Label>
+                <Select
+                  value={editFormData.schedule}
+                  onValueChange={(value) => setEditFormData({ ...editFormData, schedule: value })}
+                  disabled={modalLoading}
+                >
+                  <Select.Trigger id="edit-schedule" className="text-base">
+                    <Select.Value />
+                  </Select.Trigger>
+                  <Select.Content>
+                    <Select.Item value="hourly">Every Hour - High frequency tracking</Select.Item>
+                    <Select.Item value="daily">Daily - Standard tracking (recommended)</Select.Item>
+                    <Select.Item value="weekly">Weekly - Light tracking for less active sources</Select.Item>
+                  </Select.Content>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  How often to automatically sync new data from this source
+                </p>
+              </div>
             </div>
           </div>
 
