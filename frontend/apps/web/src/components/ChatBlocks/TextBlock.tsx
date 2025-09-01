@@ -1,5 +1,7 @@
 import React from 'react';
 
+import ReactMarkdown from 'react-markdown';
+
 interface TextBlockProps {
   content: string;
 }
@@ -11,5 +13,9 @@ export const TextBlock: React.FC<TextBlockProps> = ({ content }) => {
     return null;
   }
 
-  return <div className="whitespace-pre-wrap leading-relaxed">{trimmedContent}</div>;
+  return (
+    <div className="prose prose-stone max-w-none leading-relaxed dark:prose-invert">
+      <ReactMarkdown>{trimmedContent}</ReactMarkdown>
+    </div>
+  );
 };
