@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as exifr from 'exifr';
+import pdfParse from 'pdf-parse';
 
 import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
@@ -59,7 +61,8 @@ export class FileProcessingService {
 
   async generateFileAnalysisPrompt(processedFiles: ProcessedFile[]): Promise<string> {
     const analyses = processedFiles.map(({ file, metadata }) => {
-      let analysis = `File: ${file.original_name} (${file.content_type})`;
+      const fileType = this.getFileTypeDescription(file.content_type);
+      let analysis = `File: ${file.original_name} (${fileType})`;
       
       if (metadata.dimensions) {
         analysis += `\nDimensions: ${metadata.dimensions.width}x${metadata.dimensions.height}`;
@@ -74,12 +77,15 @@ export class FileProcessingService {
       }
       
       if (metadata.textContent) {
-        analysis += `\nText content: ${metadata.textContent.substring(0, 500)}...`;
+        const preview = metadata.textContent.length > 500 
+          ? `${metadata.textContent.substring(0, 500)}...` 
+          : metadata.textContent;
+        analysis += `\nContent preview: ${preview}`;
       }
       
       if (metadata.exif && Object.keys(metadata.exif).length > 0) {
         const relevantExif = Object.entries(metadata.exif)
-          .filter(([key, value]) => value && key.match(/date|camera|lens|iso|exposure/i))
+          .filter(([key, value]) => value && this.isRelevantExifField(key))
           .slice(0, 5);
         
         if (relevantExif.length > 0) {
@@ -90,7 +96,36 @@ export class FileProcessingService {
       return analysis;
     });
 
-    return `I've uploaded ${processedFiles.length} file(s). Please analyze and discuss them:\n\n${analyses.join('\n\n')}`;
+    const fileTypesSummary = this.generateFileTypesSummary(processedFiles);
+    return `I've uploaded ${processedFiles.length} file(s): ${fileTypesSummary}. Please analyze and discuss them:\n\n${analyses.join('\n\n')}`;
+  }
+
+  private getFileTypeDescription(contentType: string): string {
+    if (contentType.startsWith('image/')) return 'Image';
+    if (contentType.startsWith('video/')) return 'Video';
+    if (contentType.startsWith('audio/')) return 'Audio';
+    if (contentType.startsWith('text/') || this.isTextFile(contentType)) return 'Text Document';
+    if (contentType === 'application/pdf') return 'PDF Document';
+    if (contentType.includes('word') || contentType.includes('msword')) return 'Word Document';
+    if (contentType.includes('excel') || contentType.includes('spreadsheet')) return 'Spreadsheet';
+    if (contentType.includes('powerpoint') || contentType.includes('presentation')) return 'Presentation';
+    return 'File';
+  }
+
+  private generateFileTypesSummary(processedFiles: ProcessedFile[]): string {
+    const typeCounts = processedFiles.reduce((acc, { file }) => {
+      const type = this.getFileTypeDescription(file.content_type);
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    return Object.entries(typeCounts)
+      .map(([type, count]) => count === 1 ? type : `${count} ${type}s`)
+      .join(', ');
+  }
+
+  private isRelevantExifField(key: string): boolean {
+    return key.match(/date|camera|lens|iso|exposure|focal|aperture|make|model|software/i) !== null;
   }
 
   private async getValidatedFiles(context: RequestContext, fileIds: string[]): Promise<FileEntity[]> {
@@ -122,6 +157,8 @@ export class FileProcessingService {
         await this.extractVideoMetadata(metadata, content);
       } else if (file.content_type.startsWith('audio/')) {
         await this.extractAudioMetadata(metadata, content);
+      } else if (file.content_type === 'application/pdf') {
+        await this.extractPdfContent(metadata, content);
       } else if (this.isTextFile(file.content_type)) {
         await this.extractTextContent(metadata, content);
       }
@@ -133,14 +170,35 @@ export class FileProcessingService {
   }
 
   private async extractImageMetadata(metadata: FileMetadata, content: Uint8Array): Promise<void> {
-    // TODO: Implement EXIF extraction using a library like 'exifr' or 'piexifjs'
-    // For now, we'll just extract basic info
     try {
-      // Basic image analysis placeholder
-      // In a real implementation, you would use libraries like:
-      // - exifr for EXIF data
-      // - sharp for image processing and metadata
-      metadata.exif = {}; // Placeholder for EXIF data
+      // Use exifr to extract EXIF data from images
+      const exifData = await exifr.parse(content, {
+        gps: true,
+        tiff: true,
+        exif: true,
+        iptc: false,
+        icc: false,
+      });
+
+      if (exifData) {
+        metadata.exif = exifData;
+        
+        // Extract GPS location if available
+        if (exifData.latitude && exifData.longitude) {
+          metadata.location = {
+            latitude: exifData.latitude,
+            longitude: exifData.longitude,
+          };
+        }
+        
+        // Extract image dimensions
+        if (exifData.ImageWidth && exifData.ImageHeight) {
+          metadata.dimensions = {
+            width: exifData.ImageWidth,
+            height: exifData.ImageHeight,
+          };
+        }
+      }
     } catch (error) {
       this.logger.warn(`Failed to extract image metadata: ${(error as Error).message}`);
     }
@@ -183,14 +241,45 @@ export class FileProcessingService {
     }
   }
 
+  private async extractPdfContent(metadata: FileMetadata, content: Uint8Array): Promise<void> {
+    try {
+      // Use pdf-parse to extract text content from PDF
+      const buffer = Buffer.from(content);
+      const data = await pdfParse(buffer);
+      
+      metadata.textContent = data.text;
+      
+      // Additional PDF metadata
+      if (data.info) {
+        metadata.exif = {
+          title: data.info.Title,
+          author: data.info.Author,
+          subject: data.info.Subject,
+          creator: data.info.Creator,
+          producer: data.info.Producer,
+          creationDate: data.info.CreationDate,
+          modificationDate: data.info.ModDate,
+          pages: data.numpages,
+        };
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to extract PDF content: ${(error as Error).message}`);
+    }
+  }
+
   private isTextFile(contentType: string): boolean {
     return (
       contentType.startsWith('text/') ||
       contentType === 'application/json' ||
       contentType === 'application/xml' ||
+      contentType === 'application/yaml' ||
+      contentType === 'application/x-yaml' ||
       contentType.includes('javascript') ||
       contentType.includes('typescript') ||
-      contentType.includes('markdown')
+      contentType.includes('markdown') ||
+      contentType === 'application/csv' ||
+      contentType === 'text/csv' ||
+      contentType === 'application/sql'
     );
   }
 }
