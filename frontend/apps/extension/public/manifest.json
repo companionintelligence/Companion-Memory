@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Companion Intelligence",
+  "version": "1.0.0",
+  "description": "Your AI companion for enhanced productivity and intelligent assistance",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "identity"
+  ],
+  "host_permissions": [
+    "https://companionintelligence.com/*",
+    "https://*.companionintelligence.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Open Companion Intelligence",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

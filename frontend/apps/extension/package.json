@@ -1,0 +1,42 @@
+{
+  "name": "@ci/browser-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:chrome": "vite build --mode chrome",
+    "build:firefox": "vite build --mode firefox",
+    "package": "yarn build:chrome && yarn build:firefox",
+    "clean": "rimraf dist dist-chrome dist-firefox",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "packageManager": "yarn@4.9.1",
+  "dependencies": {
+    "@ci/common": "workspace:*",
+    "@ci/shadcn": "workspace:*",
+    "clsx": "^2.1.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwind-merge": "^3.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.7",
+    "@types/chrome": "^0.0.277",
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.1.5",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.4.1",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.27.0",
+    "postcss": "^8.5.3",
+    "rimraf": "^6.0.1",
+    "tailwindcss": "^4.1.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "webext-core": "^1.5.0"
+  }
+}
