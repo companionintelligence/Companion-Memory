@@ -8,9 +8,7 @@ import { AuthBrokerService } from './services/AuthBrokerService';
 import { OAuthProviderService } from './services/OAuthProviderService';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([OAuthProviderEntity, BrokerTokenEntity]),
-  ],
+  imports: [TypeOrmModule.forFeature([OAuthProviderEntity, BrokerTokenEntity])],
   providers: [AuthBrokerService, OAuthProviderService],
   controllers: [AuthBrokerController],
   exports: [AuthBrokerService],
@@ -24,4 +22,11 @@ export { OAuthProviderEntity, BrokerTokenEntity };
 export { AuthBrokerService };
 
 // Types
-export type { AuthorizeRequestDto, AuthorizeResponseDto, TokenExchangeDto, BrokerToken, OAuthProvider, SupportedProvider } from './types';
+export type {
+  AuthorizeRequestDto,
+  AuthorizeResponseDto,
+  TokenExchangeDto,
+  BrokerToken,
+  OAuthProvider,
+  SupportedProvider,
+} from './types';

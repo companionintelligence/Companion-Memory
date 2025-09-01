@@ -1,4 +1,5 @@
-import { Injectable, LoggerService as NestLoggerService } from '@nestjs/common';
+import type { LoggerService as NestLoggerService } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import pino from 'pino';
 
 @Injectable()
@@ -12,23 +13,23 @@ export class LoggerService implements NestLoggerService {
     });
   }
 
-  log(message: any, context?: string): void {
+  log(message: string, context?: string): void {
     this.logger.info({ context }, message);
   }
 
-  error(message: any, trace?: string, context?: string): void {
+  error(message: string, trace?: string, context?: string): void {
     this.logger.error({ context, trace }, message);
   }
 
-  warn(message: any, context?: string): void {
+  warn(message: string, context?: string): void {
     this.logger.warn({ context }, message);
   }
 
-  debug(message: any, context?: string): void {
+  debug(message: string, context?: string): void {
     this.logger.debug({ context }, message);
   }
 
-  verbose(message: any, context?: string): void {
+  verbose(message: string, context?: string): void {
     this.logger.trace({ context }, message);
   }
 }

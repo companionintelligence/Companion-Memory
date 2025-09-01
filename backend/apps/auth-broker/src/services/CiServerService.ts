@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import axios, { AxiosInstance } from 'axios';
+import type { AxiosInstance } from 'axios';
+import axios from 'axios';
 import * as config from 'config';
 
 export interface UserInfo {
@@ -26,7 +27,7 @@ export class CiServerService {
           Authorization: `Bearer ${token}`,
         },
       });
-      
+
       return {
         id: response.data.id,
         username: response.data.username,
@@ -35,21 +36,26 @@ export class CiServerService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('Failed to validate user token:', errorMessage);
+
       return null;
     }
   }
 
   async notifyTokenUpdate(userId: string, providerId: string, hasToken: boolean): Promise<void> {
     try {
-      await this.httpClient.post('/internal/oauth-tokens/update', {
-        userId,
-        providerId,
-        hasToken,
-      }, {
-        headers: {
-          'X-Internal-Secret': config.get('ciServer.internalSecret'),
+      await this.httpClient.post(
+        '/internal/oauth-tokens/update',
+        {
+          userId,
+          providerId,
+          hasToken,
         },
-      });
+        {
+          headers: {
+            'X-Internal-Secret': config.get('ciServer.internalSecret'),
+          },
+        },
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('Failed to notify CI-Server of token update:', errorMessage);

@@ -1,26 +1,30 @@
-import { 
-  Body, 
-  Controller, 
-  Delete, 
-  Get, 
-  HttpCode, 
-  Param, 
-  Post, 
-  Query, 
-  UseGuards, 
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  UseGuards,
   UsePipes,
   ValidationPipe as NestValidationPipe,
   Request,
   UnauthorizedException,
-  BadRequestException
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { z } from 'zod';
 
 import { LoggerService } from '../common/logger.service';
-import { AuthBrokerService } from '../services/AuthBrokerService';
-import { OAuthProviderService } from '../services/OAuthProviderService';
+import type { AuthBrokerService } from '../services/AuthBrokerService';
+import type { OAuthProviderService } from '../services/OAuthProviderService';
 import type { AuthorizeRequestDto, TokenExchangeDto } from '../types';
+
+interface AuthenticatedRequest {
+  user?: { userId: string; username: string; email: string };
+}
 
 const authorizeRequestSchema = z.object({
   providerId: z.string().uuid('Invalid provider ID'),
@@ -52,10 +56,7 @@ export class AuthBrokerController {
   @Post('authorize')
   @HttpCode(200)
   @UsePipes(new NestValidationPipe({ transform: true }))
-  async authorize(
-    @Request() req: any,
-    @Body() body: AuthorizeRequestDto,
-  ) {
+  async authorize(@Request() req: AuthenticatedRequest, @Body() body: AuthorizeRequestDto) {
     const result = authorizeRequestSchema.safeParse(body);
     if (!result.success) {
       throw new BadRequestException('Invalid request data');
@@ -66,7 +67,10 @@ export class AuthBrokerController {
       throw new UnauthorizedException('User not authenticated');
     }
 
-    this.logger.log(`OAuth authorization request - User: ${userId}, Provider: ${body.providerId}`, AuthBrokerController.name);
+    this.logger.log(
+      `OAuth authorization request - User: ${userId}, Provider: ${body.providerId}`,
+      AuthBrokerController.name,
+    );
 
     return this.authBrokerService.authorize(userId, body);
   }
@@ -84,41 +88,42 @@ export class AuthBrokerController {
     }
 
     const exchange: TokenExchangeDto = { code, state, providerId };
-    
+
     const result = tokenExchangeSchema.safeParse(exchange);
     if (!result.success) {
       throw new BadRequestException('Invalid callback parameters');
     }
-    
-    this.logger.log(`OAuth callback received - Provider: ${providerId}, State: ${state}`, AuthBrokerController.name);
+
+    this.logger.log(
+      `OAuth callback received - Provider: ${providerId}, State: ${state}`,
+      AuthBrokerController.name,
+    );
 
     return this.authBrokerService.exchangeToken(exchange);
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('tokens')
-  async getUserTokens(@Request() req: any) {
+  async getUserTokens(@Request() req: AuthenticatedRequest) {
     const userId = req.user?.userId;
     if (!userId) {
       throw new UnauthorizedException('User not authenticated');
     }
+
     return this.authBrokerService.getUserTokens(userId);
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Delete('tokens/:tokenId')
   @HttpCode(204)
-  async revokeToken(
-    @Request() req: any,
-    @Param('tokenId') tokenId: string,
-  ) {
+  async revokeToken(@Request() req: AuthenticatedRequest, @Param('tokenId') tokenId: string) {
     const userId = req.user?.userId;
     if (!userId) {
       throw new UnauthorizedException('User not authenticated');
     }
 
     const revoked = await this.authBrokerService.revokeToken(userId, tokenId);
-    
+
     if (!revoked) {
       throw new BadRequestException('Token not found or already revoked');
     }
@@ -129,10 +134,7 @@ export class AuthBrokerController {
   @UseGuards(AuthGuard('jwt'))
   @Post('refresh/:tokenId')
   @HttpCode(200)
-  async refreshToken(
-    @Request() req: any,
-    @Param('tokenId') tokenId: string,
-  ) {
+  async refreshToken() {
     // TODO: Implement token refresh logic
     throw new BadRequestException('Token refresh not yet implemented');
   }

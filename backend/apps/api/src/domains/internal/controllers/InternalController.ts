@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { ValidationPipe } from '@ci/common/pipes';
 import { LoggerService } from '@ci/common/services';
+
 import { InternalApiGuard } from '../guards/InternalApiGuard';
 
 const tokenUpdateSchema = z.object({
@@ -20,9 +21,7 @@ export class InternalController {
   @UseGuards(InternalApiGuard)
   @Post('oauth-tokens/update')
   @HttpCode(200)
-  async updateTokenStatus(
-    @Body(new ValidationPipe(tokenUpdateSchema)) body: TokenUpdateDto,
-  ) {
+  async updateTokenStatus(@Body(new ValidationPipe(tokenUpdateSchema)) body: TokenUpdateDto) {
     this.logger.log('OAuth token status update received from auth-broker', {
       userId: body.userId,
       providerId: body.providerId,
@@ -31,7 +30,7 @@ export class InternalController {
 
     // TODO: Update user's OAuth provider connection status
     // This could trigger notifications, update UI states, etc.
-    
+
     return { success: true };
   }
 }

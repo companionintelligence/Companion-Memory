@@ -1,18 +1,22 @@
-import { Injectable, BadRequestException, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import type { Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 
 import { LoggerService } from '../common/logger.service';
 import { BrokerTokenEntity } from '../entities/BrokerTokenEntity';
-import { OAuthProviderService } from './OAuthProviderService';
-import { CiServerService } from './CiServerService';
+import type { OAuthProviderService } from './OAuthProviderService';
+import type { CiServerService } from './CiServerService';
 import type { AuthorizeRequestDto, AuthorizeResponseDto, TokenExchangeDto, BrokerToken } from '../types';
 
 @Injectable()
 export class AuthBrokerService {
   private logger = new LoggerService(AuthBrokerService.name);
-  private readonly stateStore = new Map<string, { userId: string; providerId: string; timestamp: number; scopes?: string[] }>();
+
+  private readonly stateStore = new Map<
+    string,
+    { userId: string; providerId: string; timestamp: number; scopes?: string[] }
+  >();
 
   constructor(
     @InjectRepository(BrokerTokenEntity)
@@ -33,7 +37,7 @@ export class AuthBrokerService {
     // Generate secure state parameter
     const state = randomBytes(32).toString('hex');
     const timestamp = Date.now();
-    
+
     // Store state with user context
     this.stateStore.set(state, {
       userId,
@@ -45,7 +49,7 @@ export class AuthBrokerService {
     // Build authorization URL
     const scopes = request.scopes && request.scopes.length > 0 ? request.scopes : provider.scopes;
     const authUrl = new URL(provider.authorizationUrl);
-    
+
     authUrl.searchParams.set('client_id', provider.clientId);
     authUrl.searchParams.set('redirect_uri', provider.redirectUri);
     authUrl.searchParams.set('scope', scopes.join(' '));
@@ -53,7 +57,10 @@ export class AuthBrokerService {
     authUrl.searchParams.set('state', state);
     authUrl.searchParams.set('access_type', 'offline'); // Request refresh token
 
-    this.logger.log(`OAuth authorization initiated - User: ${userId}, Provider: ${request.providerId}`, AuthBrokerService.name);
+    this.logger.log(
+      `OAuth authorization initiated - User: ${userId}, Provider: ${request.providerId}`,
+      AuthBrokerService.name,
+    );
 
     return {
       authorizationUrl: authUrl.toString(),
@@ -86,13 +93,18 @@ export class AuthBrokerService {
 
     try {
       // Exchange authorization code for tokens
-      const tokenResponse = await this.exchangeCodeForTokens(
+      const tokenResponse = (await this.exchangeCodeForTokens(
         provider.tokenUrl,
         provider.clientId,
         provider.clientSecret,
         exchange.code,
         provider.redirectUri,
-      ) as any;
+      )) as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in?: number;
+        token_type?: string;
+      };
 
       // Check if user already has a token for this provider
       const existingToken = await this.brokerTokenRepository.findOne({
@@ -103,18 +115,21 @@ export class AuthBrokerService {
         // Update existing token
         existingToken.accessToken = tokenResponse.access_token;
         existingToken.refreshToken = tokenResponse.refresh_token;
-        existingToken.expiresAt = tokenResponse.expires_in 
-          ? new Date(Date.now() + tokenResponse.expires_in * 1000) 
+        existingToken.expiresAt = tokenResponse.expires_in
+          ? new Date(Date.now() + tokenResponse.expires_in * 1000)
           : undefined;
         existingToken.scopes = stateData.scopes || provider.scopes;
         existingToken.tokenType = tokenResponse.token_type || 'Bearer';
 
         const updatedToken = await this.brokerTokenRepository.save(existingToken);
-        
+
         // Notify CI-Server of token update
         await this.ciServerService.notifyTokenUpdate(stateData.userId, exchange.providerId, true);
-        
-        this.logger.log(`OAuth token updated - User: ${stateData.userId}, Token: ${updatedToken.id}`, AuthBrokerService.name);
+
+        this.logger.log(
+          `OAuth token updated - User: ${stateData.userId}, Token: ${updatedToken.id}`,
+          AuthBrokerService.name,
+        );
 
         return this.tokenEntityToDto(updatedToken);
       } else {
@@ -124,8 +139,8 @@ export class AuthBrokerService {
           providerId: exchange.providerId,
           accessToken: tokenResponse.access_token,
           refreshToken: tokenResponse.refresh_token,
-          expiresAt: tokenResponse.expires_in 
-            ? new Date(Date.now() + tokenResponse.expires_in * 1000) 
+          expiresAt: tokenResponse.expires_in
+            ? new Date(Date.now() + tokenResponse.expires_in * 1000)
             : undefined,
           scopes: stateData.scopes || provider.scopes,
           tokenType: tokenResponse.token_type || 'Bearer',
@@ -133,17 +148,24 @@ export class AuthBrokerService {
         });
 
         const savedToken = await this.brokerTokenRepository.save(brokerToken);
-        
+
         // Notify CI-Server of token creation
         await this.ciServerService.notifyTokenUpdate(stateData.userId, exchange.providerId, true);
-        
-        this.logger.log(`OAuth token created - User: ${stateData.userId}, Token: ${savedToken.id}`, AuthBrokerService.name);
+
+        this.logger.log(
+          `OAuth token created - User: ${stateData.userId}, Token: ${savedToken.id}`,
+          AuthBrokerService.name,
+        );
 
         return this.tokenEntityToDto(savedToken);
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Token exchange failed - User: ${stateData.userId}, Error: ${errorMsg}`, undefined, AuthBrokerService.name);
+      this.logger.error(
+        `Token exchange failed - User: ${stateData.userId}, Error: ${errorMsg}`,
+        undefined,
+        AuthBrokerService.name,
+      );
       throw new BadRequestException('Failed to exchange authorization code');
     } finally {
       // Clean up state
@@ -158,7 +180,7 @@ export class AuthBrokerService {
       order: { createdAt: 'DESC' },
     });
 
-    return tokens.map(token => this.tokenEntityToDto(token));
+    return tokens.map((token) => this.tokenEntityToDto(token));
   }
 
   async revokeToken(userId: string, tokenId: string): Promise<boolean> {
@@ -192,7 +214,7 @@ export class AuthBrokerService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
+        Accept: 'application/json',
       },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
@@ -228,15 +250,16 @@ export class AuthBrokerService {
   private cleanupExpiredStates(): void {
     const now = Date.now();
     const expired = [];
-    
+
     for (const [state, data] of this.stateStore.entries()) {
-      if (now - data.timestamp > 15 * 60 * 1000) { // 15 minutes
+      if (now - data.timestamp > 15 * 60 * 1000) {
+        // 15 minutes
         expired.push(state);
       }
     }
 
-    expired.forEach(state => this.stateStore.delete(state));
-    
+    expired.forEach((state) => this.stateStore.delete(state));
+
     if (expired.length > 0) {
       this.logger.debug(`Cleaned up ${expired.length} expired OAuth states`, AuthBrokerService.name);
     }

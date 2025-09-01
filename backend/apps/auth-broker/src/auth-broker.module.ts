@@ -34,12 +34,6 @@ import { JwtStrategy } from './auth/jwt.strategy';
     }),
   ],
   controllers: [AuthBrokerController],
-  providers: [
-    AuthBrokerService,
-    OAuthProviderService,
-    CiServerService,
-    LoggerService,
-    JwtStrategy,
-  ],
+  providers: [AuthBrokerService, OAuthProviderService, CiServerService, LoggerService, JwtStrategy],
 })
 export class AuthBrokerModule {}

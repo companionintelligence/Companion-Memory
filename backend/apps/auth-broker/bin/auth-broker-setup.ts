@@ -29,6 +29,7 @@ async function createDataSource() {
   });
 
   await dataSource.initialize();
+
   return dataSource;
 }
 
@@ -44,10 +45,10 @@ program
     try {
       const dataSource = await createDataSource();
       const providerRepository = dataSource.getRepository(OAuthProviderEntity);
-      
+
       // Get all providers
       const providers = await providerRepository.find();
-      
+
       if (providers.length === 0) {
         logger.error('No OAuth providers found. Please run migrations first.');
         process.exit(1);
@@ -55,15 +56,15 @@ program
 
       const providerId = await select({
         message: 'Select OAuth provider to configure:',
-        choices: providers.map(p => ({
+        choices: providers.map((p) => ({
           name: `${p.displayName} (${p.name})`,
           value: p.id,
           description: p.description,
         })),
       });
 
-      const provider = providers.find(p => p.id === providerId)!;
-      
+      const provider = providers.find((p) => p.id === providerId)!;
+
       logger.log('Current configuration:', {
         name: provider.name,
         displayName: provider.displayName,
@@ -74,7 +75,7 @@ program
       });
 
       const shouldConfigure = await confirm({
-        message: 'Do you want to update this provider\'s credentials?',
+        message: "Do you want to update this provider's credentials?",
         default: true,
       });
 
@@ -126,16 +127,17 @@ program
     try {
       const dataSource = await createDataSource();
       const providerRepository = dataSource.getRepository(OAuthProviderEntity);
-      
+
       const providers = await providerRepository.find({
         order: { name: 'ASC' },
       });
 
       console.log('\nOAuth Providers:');
       console.log('================');
-      
+
       providers.forEach((provider) => {
-        const configured = !provider.clientId.startsWith('your-') && !provider.clientSecret.startsWith('your-');
+        const configured =
+          !provider.clientId.startsWith('your-') && !provider.clientSecret.startsWith('your-');
         console.log(`${provider.displayName} (${provider.name})`);
         console.log(`  Status: ${provider.active ? 'Active' : 'Inactive'}`);
         console.log(`  Configured: ${configured ? 'Yes' : 'No'}`);
@@ -158,13 +160,13 @@ program
     try {
       logger.log('Auth Broker Configuration Test');
       logger.log('==============================');
-      
+
       logger.log('Base URL:', config.auth.broker.baseUrl);
       logger.log('Callback URL:', config.auth.broker.callbackUrl);
-      
+
       const dataSource = await createDataSource();
       const providerRepository = dataSource.getRepository(OAuthProviderEntity);
-      
+
       const activeProviders = await providerRepository.count({ where: { active: true } });
       const configuredProviders = await providerRepository
         .createQueryBuilder('provider')
@@ -174,7 +176,7 @@ program
 
       logger.log('Active providers:', activeProviders);
       logger.log('Configured providers:', configuredProviders);
-      
+
       if (configuredProviders === 0) {
         logger.warn('No OAuth providers are configured with valid credentials!');
         logger.info('Run: yarn exec bin/auth-broker-setup.ts configure-provider');

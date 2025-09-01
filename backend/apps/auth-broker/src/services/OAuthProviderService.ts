@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import type { Repository } from 'typeorm';
 
 import { LoggerService } from '../common/logger.service';
 
@@ -37,8 +37,8 @@ export class OAuthProviderService {
 
   async getSupportedProviders(): Promise<SupportedProvider[]> {
     const providers = await this.findAll();
-    
-    return providers.map(provider => ({
+
+    return providers.map((provider) => ({
       id: provider.id,
       name: provider.name,
       displayName: provider.displayName,
@@ -56,7 +56,7 @@ export class OAuthProviderService {
 
     const savedProvider = await this.oauthProviderRepository.save(provider);
     this.logger.log(`OAuth provider created - ${savedProvider.name}`, OAuthProviderService.name);
-    
+
     return savedProvider;
   }
 
@@ -68,19 +68,21 @@ export class OAuthProviderService {
 
     Object.assign(provider, updates);
     const updatedProvider = await this.oauthProviderRepository.save(provider);
-    
+
     this.logger.log(`OAuth provider updated - ${id}`, OAuthProviderService.name);
+
     return updatedProvider;
   }
 
   async deactivateProvider(id: string): Promise<boolean> {
     const result = await this.oauthProviderRepository.update(id, { active: false });
-    
+
     if (result.affected && result.affected > 0) {
       this.logger.log(`OAuth provider deactivated - ${id}`, OAuthProviderService.name);
+
       return true;
     }
-    
+
     return false;
   }
 }
