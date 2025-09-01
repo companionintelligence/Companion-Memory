@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useState, type FormEvent } from 'react';
 
 import { Camera } from '@ci/capture';
 import { Dialog } from '@ci/shadcn';
@@ -17,11 +17,12 @@ interface Props {
 
 export function CaptureModal({ open = false, initialFiles = [], onClose }: Props) {
   const [files, setFiles] = useState<CIFile[]>(initialFiles);
-  const threadId = useRef<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
 
   const handleOpenChange = useCallback((open: boolean) => {
     if (!open) {
       setFiles([]);
+      setThreadId(null);
       onClose?.();
     }
   }, []);
@@ -31,7 +32,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
 
   const [{ stream, loading, streaming }, { submit: submitChatRequest, stop: stopChatRequest }] =
     useChatRequester({
-      threadId: threadId.current,
+      threadId,
       enableTools: false,
       enableThinking: false,
     });
@@ -87,7 +88,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
         console.error('Linking file to thread failed', threadResJson);
       }
 
-      threadId.current = threadResJson.id;
+      setThreadId(threadResJson.id);
 
       setFiles(
         files.concat({
@@ -96,7 +97,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
         }),
       );
     },
-    [authToken, selectedModel],
+    [authToken, selectedModel, files],
   );
 
   return (
