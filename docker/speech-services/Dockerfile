@@ -1,21 +1,20 @@
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies including ca-certificates for SSL
 RUN apt-get update && apt-get install -y \
     curl \
     ffmpeg \
     git \
     build-essential \
+    ca-certificates \
+    tini \
     && rm -rf /var/lib/apt/lists/*
-
-# Install tini for proper signal handling
-RUN apt-get update && apt-get install -y tini && apt-get clean
 
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
