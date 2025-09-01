@@ -129,9 +129,9 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     ],
   };
 
-  constructor() {
+  constructor(tmdbClient: TMDBClient) {
     super();
-    this.tmdbClient = new TMDBClient();
+    this.tmdbClient = tmdbClient;
   }
 
   protected validateInput(input: unknown): GetStreamingAvailabilityInput {
