@@ -21,6 +21,7 @@ const JobsPage = lazy(() => import('@/pages/JobsPage'));
 const MemoryPage = lazy(() => import('@/pages/MemoryPage'));
 const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
+const EntityPage = lazy(() => import('@/pages/EntityPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
 function Providers({ children }: { children: ReactNode }) {
@@ -72,6 +73,15 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <SearchPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/entity/:type/:id"
+          element={
+            <ProtectedRoute>
+              <EntityPage />
             </ProtectedRoute>
           }
         />

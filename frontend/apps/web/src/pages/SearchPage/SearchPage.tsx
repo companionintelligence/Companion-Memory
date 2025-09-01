@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Input, Table, Badge, Sheet } from '@ci/shadcn';
-import { AlertCircle, Search, Loader2, Star, BookmarkPlus, Menu } from '@ci/shadcn/icons';
+import { AlertCircle, Search, Loader2, Star, BookmarkPlus, Menu, Sparkles } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
+import { TagInput } from '@/components/TagInput';
+import { SmartSearchBuilder, type SearchFilter } from '@/components/SmartSearchBuilder';
 import { useAuth, useSavedSearches } from '@/hooks';
 
 interface SearchResult {
@@ -19,6 +21,7 @@ export function SearchPage() {
   usePageTitle('Search - Companion Intelligence');
   const [{ authToken }] = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { savedSearches, createSavedSearch } = useSavedSearches();
 
   // Get initial query from URL params
@@ -32,6 +35,9 @@ export function SearchPage() {
   const [showSavedSearches, setShowSavedSearches] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const [saveTags, setSaveTags] = useState<string[]>([]);
+  const [showSmartSearch, setShowSmartSearch] = useState(false);
+  const [smartFilters, setSmartFilters] = useState<SearchFilter[]>([]);
 
   // Perform search when component mounts if there's an initial query
   useEffect(() => {
@@ -152,13 +158,29 @@ export function SearchPage() {
       await createSavedSearch({
         name: saveName,
         query: searchQuery,
-        tags: [], // TODO: Add tag input
+        tags: saveTags,
+        is_smart_search: smartFilters.length > 0,
+        filters: smartFilters.length > 0 ? { conditions: smartFilters } : undefined,
       });
       setSaveName('');
+      setSaveTags([]);
       setShowSaveDialog(false);
     } catch (error) {
       console.error('Failed to save search:', error);
     }
+  };
+
+  const handleSmartSearchApply = (filters: SearchFilter[]) => {
+    // Convert smart search filters to a query string
+    const query = filters.map(f => `${f.field}:${f.operator}:${f.value}`).join(' AND ');
+    setSearchQuery(query);
+    updateSearchParams(query);
+    performSearch(query);
+  };
+
+  const handleResultClick = (result: SearchResult) => {
+    // Navigate to the entity page
+    navigate(`/entity/${result.type}/${result.id}`);
   };
 
   return (
@@ -198,6 +220,14 @@ export function SearchPage() {
             disabled={loading}
             autoFocus
           />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setShowSmartSearch(!showSmartSearch)}
+            className={`shrink-0 ${showSmartSearch ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300' : ''}`}
+          >
+            <Sparkles className="h-4 w-4" />
+          </Button>
           <Button onClick={() => performSearch()} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             <span className="ml-2">Search</span>
@@ -214,6 +244,17 @@ export function SearchPage() {
           )}
         </div>
 
+        {/* Smart Search Builder */}
+        {showSmartSearch && (
+          <div className="border border-purple-200 dark:border-purple-800 rounded-lg p-4 bg-purple-50/50 dark:bg-purple-900/20">
+            <SmartSearchBuilder
+              filters={smartFilters}
+              onFiltersChange={setSmartFilters}
+              onApply={handleSmartSearchApply}
+            />
+          </div>
+        )}
+
         {/* Quick Save Dialog */}
         {showSaveDialog && (
           <div className="bg-muted/50 border border-border rounded-lg p-4 space-y-3">
@@ -227,17 +268,29 @@ export function SearchPage() {
                 ×
               </Button>
             </div>
-            <div className="flex gap-2">
+            <div className="space-y-3">
               <Input
                 placeholder="Enter a name for this search..."
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                className="flex-1"
-                onKeyPress={(e) => e.key === 'Enter' && handleSaveSearch()}
+                onKeyPress={(e) => e.key === 'Enter' && saveTags.length === 0 && handleSaveSearch()}
               />
-              <Button onClick={handleSaveSearch} disabled={!saveName.trim()}>
-                Save
-              </Button>
+              <TagInput
+                tags={saveTags}
+                onTagsChange={setSaveTags}
+                placeholder="Add tags to organize your search..."
+              />
+              <div className="flex justify-end gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setShowSaveDialog(false)}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveSearch} disabled={!saveName.trim()}>
+                  Save Search
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -275,15 +328,41 @@ export function SearchPage() {
                     <Table.Head>ID</Table.Head>
                     <Table.Head>Data Path</Table.Head>
                     <Table.Head>Content</Table.Head>
+                    <Table.Head className="w-20">Actions</Table.Head>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
                   {searchResults.map((result) => (
-                    <Table.Row key={result.id}>
-                      <Table.Cell>{result.type}</Table.Cell>
-                      <Table.Cell>{result.id}</Table.Cell>
-                      <Table.Cell className="max-w-md">{result.path}</Table.Cell>
-                      <Table.Cell className="font-mono text-xs">{result.text}</Table.Cell>
+                    <Table.Row 
+                      key={result.id}
+                      className="cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => handleResultClick(result)}
+                    >
+                      <Table.Cell>
+                        <Badge variant="outline">{result.type}</Badge>
+                      </Table.Cell>
+                      <Table.Cell className="font-mono text-xs">
+                        {result.id}
+                      </Table.Cell>
+                      <Table.Cell className="max-w-md truncate">
+                        <span className="text-muted-foreground">{result.path}</span>
+                      </Table.Cell>
+                      <Table.Cell className="max-w-lg">
+                        <p className="truncate text-sm">{result.text}</p>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleResultClick(result);
+                          }}
+                        >
+                          View
+                        </Button>
+                      </Table.Cell>
                     </Table.Row>
                   ))}
                 </Table.Body>
