@@ -13,8 +13,8 @@
   }
   
   /* Improve touch targets */
-  button {
     min-height: 44px;
+    min-width: 44px;
   }
   
   /* Better mobile form interactions */
