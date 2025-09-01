@@ -97,6 +97,37 @@ If the `ollama` daemon is running, just having the model present should be suffi
 
 You'll want to edit your hostfile so that `dev.companionintelligence.com` resolves to 127.0.0.1.
 
+## Configuration
+
+### Server URL Configuration
+
+The CI Server supports configurable URLs to allow deployment to different environments. The default configuration uses `dev.companionintelligence.com`, but you can customize this for your deployment.
+
+#### Environment Variables
+
+The following environment variables can be set in your `.env` file:
+
+- `CI_SERVER_URL` - The base URL for your CI Server instance (default: `https://dev.companionintelligence.com`)
+- `CI_SERVER_OAUTH_CALLBACK_URL` - The OAuth callback URL for authentication (default: `https://dev.companionintelligence.com/oauth/callback`)
+
+#### Examples
+
+For the demo server:
+```bash
+CI_SERVER_URL=https://alpha.companionintel.com
+CI_SERVER_OAUTH_CALLBACK_URL=https://alpha.companionintel.com/oauth/callback
+```
+
+For a custom deployment:
+```bash
+CI_SERVER_URL=https://your-ci-server.example.com
+CI_SERVER_OAUTH_CALLBACK_URL=https://your-ci-server.example.com/oauth/callback
+```
+
+#### Development
+
+When running in development mode, the frontend will automatically configure itself to use the server URL specified in the environment variables. The Vite development server will also allow connections from the configured domain.
+
 ## Running the application
 
 Now that you have prerequisites installed you should be able to run a few Make commands to get everything booted.

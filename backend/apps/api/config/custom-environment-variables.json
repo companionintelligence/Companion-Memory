@@ -6,6 +6,9 @@
     },
     "session": {
       "fieldPepper": "AUTH_SESSION_PEPPER"
+    },
+    "oauth": {
+      "callbackUrl": "CI_SERVER_OAUTH_CALLBACK_URL"
     }
   },
   "db": {

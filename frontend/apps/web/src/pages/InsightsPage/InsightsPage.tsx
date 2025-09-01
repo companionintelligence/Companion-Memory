@@ -38,7 +38,7 @@ export function InsightsPage() {
         throw new Error('Authentication token not found');
       }
 
-      console.log('AnswersPage: Making API request to http://dev.companionintelligence.com/api/answers');
+      console.log(`AnswersPage: Making API request to ${__CI_SERVER_URL__}/api/answers`);
       const response = await fetch('/api/answers', {
         headers: {
           Authorization: `Bearer ${authToken}`,
