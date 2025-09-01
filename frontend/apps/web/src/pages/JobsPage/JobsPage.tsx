@@ -69,7 +69,7 @@ export interface MockJob {
 }
 
 export function JobsPage() {
-  usePageTitle('Jobs Queue - Companion Intelligence');
+  usePageTitle('Server Task Scheduler - Companion Intelligence');
 
   const {
     jobs,
@@ -418,7 +418,7 @@ export function JobsPage() {
             </Breadcrumb.Item>
             <Breadcrumb.Separator className="hidden md:block" />
             <Breadcrumb.Item>
-              <Breadcrumb.Page>Jobs Queue</Breadcrumb.Page>
+              <Breadcrumb.Page>Server Task Scheduler</Breadcrumb.Page>
             </Breadcrumb.Item>
           </Breadcrumb.List>
         </Breadcrumb>
