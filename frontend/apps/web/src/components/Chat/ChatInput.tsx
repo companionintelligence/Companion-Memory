@@ -120,7 +120,7 @@ function ChatInput(
                   disabled={loading || streaming || disabled}
                   size="sm"
                   variant="ghost"
-                  className="cursor-pointer h-8 w-8 p-0 -mr-1 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
+                  className="cursor-pointer h-8 w-8 p-0 -mr-1 active:scale-90 transition-transform duration-200 ease-out will-change-transform mobile-button"
                   onClick={handleAttach}
                 >
                   <Plus className="h-4 w-4" />
@@ -194,10 +194,14 @@ function ChatInput(
                       disabled:!bg-transparent
 
                       resize-none
-                      text-base
+                      mobile-input
                       leading-relaxed
                     "
                     onKeyDown={handleEnterSubmit}
+                    autoComplete="off"
+                    autoCapitalize="sentences"
+                    autoCorrect="on"
+                    spellCheck="true"
                   />
                 )}
               />
@@ -210,7 +214,7 @@ function ChatInput(
                     disabled={loading || streaming || disabled}
                     size="sm"
                     variant="ghost"
-                    className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
+                    className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform mobile-button"
                     onClick={handleRecord}
                   >
                     <Mic className="h-4 w-4" />
@@ -225,7 +229,7 @@ function ChatInput(
                     type={streaming ? 'button' : 'submit'}
                     disabled={loading || disabled}
                     size="sm"
-                    className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
+                    className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform mobile-button"
                     onClick={streaming ? handleStop : undefined}
                   >
                     <SendIcon className={cn('h-4 w-4 relative', sendIconClassName)} />

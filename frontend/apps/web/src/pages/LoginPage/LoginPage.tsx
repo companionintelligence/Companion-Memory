@@ -16,14 +16,14 @@ export function LoginPage() {
   };
 
   return (
-    <div className="w-full max-w-sm">
-      <Card>
-        <Card.Header>
-          <Card.Title>Log In</Card.Title>
+    <div className="w-full">
+      <Card className="mobile-spacing">
+        <Card.Header className="text-center">
+          <Card.Title className="text-xl">Log In</Card.Title>
           <Card.Description>Enter your information to access your account</Card.Description>
         </Card.Header>
 
-        <Card.Content>
+        <Card.Content className="pt-4">
           <LoginForm onSubmit={handleSubmit} />
         </Card.Content>
       </Card>

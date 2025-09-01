@@ -45,7 +45,15 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
             <Form.Item>
               <Form.Label>Email</Form.Label>
               <Form.Control>
-                <Input {...field} />
+                <Input 
+                  {...field} 
+                  className="mobile-input"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
               </Form.Control>
               <Form.Message />
             </Form.Item>
@@ -59,7 +67,14 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
             <Form.Item>
               <Form.Label>Password</Form.Label>
               <Form.Control>
-                <Input {...field} type="password" />
+                <Input 
+                  {...field} 
+                  type="password" 
+                  className="mobile-input"
+                  autoComplete="current-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
               </Form.Control>
               <Form.Message />
             </Form.Item>
@@ -67,13 +82,13 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
         />
 
         {error && (
-          <Alert variant={'destructive'}>
+          <Alert variant={'destructive'} className="mt-4">
             <AlertCircleIcon />
             <Alert.Title>{error.message}</Alert.Title>
           </Alert>
         )}
 
-        <LoadingButton className="w-full" type="submit" loading={loading}>
+        <LoadingButton className="w-full mobile-button" type="submit" loading={loading}>
           Log in
         </LoadingButton>
       </form>

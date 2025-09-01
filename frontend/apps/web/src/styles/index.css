@@ -121,3 +121,100 @@
   }
 }
 
+@layer utilities {
+  /* iOS-specific improvements */
+  .ios-safe-area-top {
+    padding-top: max(1rem, env(safe-area-inset-top));
+  }
+  
+  .ios-safe-area-bottom {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+  
+  .ios-safe-area-left {
+    padding-left: max(1rem, env(safe-area-inset-left));
+  }
+  
+  .ios-safe-area-right {
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+  
+  /* Improved touch scrolling */
+  .smooth-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+  
+  /* Better form inputs for mobile */
+  .mobile-input {
+    @apply text-base; /* Prevents zoom on iOS */
+    -webkit-appearance: none;
+    border-radius: 0.5rem;
+  }
+  
+  /* Fix iOS button styling */
+  .mobile-button {
+    -webkit-appearance: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  
+  /* Better spacing for mobile */
+  .mobile-spacing {
+    @apply px-4 py-2;
+  }
+  
+  @media (max-width: 1023px) {
+    .mobile-spacing {
+      @apply px-6 py-4;
+    }
+    
+    /* Improve touch targets on mobile */
+    button, input, select, textarea {
+      min-height: 44px;
+    }
+    
+    /* Better text readability on mobile */
+    body {
+      -webkit-text-size-adjust: 100%;
+    }
+    
+    /* Fix iOS viewport units */
+    .min-h-svh {
+      min-height: 100vh;
+      min-height: 100svh;
+      min-height: -webkit-fill-available;
+    }
+    
+    .h-svh {
+      height: 100vh;
+      height: 100svh; 
+      height: -webkit-fill-available;
+    }
+  }
+  
+  /* iOS-specific fixes */
+  @media screen and (-webkit-min-device-pixel-ratio: 1) {
+    /* Fix iOS webkit rendering issues */
+    * {
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    /* Better input styling for iOS */
+    input[type="text"], 
+    input[type="email"], 
+    input[type="password"],
+    textarea {
+      -webkit-appearance: none;
+      border-radius: 0;
+    }
+    
+    /* Fix iOS button appearance */
+    button {
+      -webkit-appearance: none;
+      border-radius: 0;
+    }
+  }
+}
+

@@ -2,11 +2,80 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Enhanced viewport for better iOS support -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    
+    <!-- PWA and iOS app-like behavior -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Companion Intelligence" />
+    
+    <!-- Prevent iOS Safari from resizing text -->
+    <meta name="format-detection" content="telephone=no" />
+    
+    <!-- PWA theme colors -->
+    <meta name="theme-color" content="#2c2c54" />
+    <meta name="msapplication-navbutton-color" content="#2c2c54" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    
     <title>Companion Intelligence</title>
+    
+    <!-- iOS specific styles for safe areas and webkit -->
+    <style>
+      /* iOS safe area support */
+      :root {
+        --sat: env(safe-area-inset-top);
+        --sar: env(safe-area-inset-right);
+        --sab: env(safe-area-inset-bottom);
+        --sal: env(safe-area-inset-left);
+      }
+      
+      /* Prevent iOS bounce scrolling on body */
+      body {
+        position: fixed;
+        width: 100%;
+        height: 100vh;
+        overflow: hidden;
+      }
+      
+      #root {
+        width: 100%;
+        height: 100vh;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      
+      /* Fix iOS form zooming */
+      input, select, textarea {
+        font-size: 16px !important;
+      }
+      
+      /* Improve webkit touch scrolling */
+      * {
+        -webkit-tap-highlight-color: transparent;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    
+    <!-- Service Worker Registration for PWA -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then((registration) => {
+              console.log('SW registered: ', registration);
+            })
+            .catch((registrationError) => {
+              console.log('SW registration failed: ', registrationError);
+            });
+        });
+      }
+    </script>
   </body>
 </html>
