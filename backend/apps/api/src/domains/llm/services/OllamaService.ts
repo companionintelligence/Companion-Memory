@@ -18,8 +18,9 @@ import { MessageService } from '@ci/domains/conversations';
 import {
   ToolRegistry,
   GetUserPreferencesTool,
-  GetEntertainmentPreferencesTool,
+  GetEntertainmentPreferencesToool,
   GetStreamingAvailabilityTool,
+  BrowserOperatorTool,
   type ToolSchema,
 } from '../tools';
 import type { OllamaModel } from '../types';

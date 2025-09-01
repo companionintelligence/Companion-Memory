@@ -51,6 +51,7 @@
     "pg-boss": "^10.3.2",
     "pgvector": "^0.2.1",
     "pino": "^9.7.0",
+    "playwright": "^1.55.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "typeorm": "^0.3.24",
