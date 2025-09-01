@@ -1,0 +1,16 @@
+export type CaptureCategory = 
+  | 'documents' 
+  | 'meetings' 
+  | 'fridge' 
+  | 'drawers' 
+  | 'cabinets' 
+  | 'shelves';
+
+export interface CategoryConfig {
+  id: CaptureCategory;
+  label: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string }>;
+  captureInstructions: string;
+  suggestedPrompts: string[];
+}
