@@ -134,7 +134,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
     } satisfies TokenExchange;
   }
 
-  private mergeUrls(urls: (string | null)[]) {
+  protected mergeUrls(urls: (string | null)[]) {
     const result = new URL('http://placeholder');
     let validResult = false;
 
