@@ -4,9 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Command
 } from '@ci/shadcn';
-import { Search, FileText, User, Calendar, Folder, Clock } from '@ci/shadcn/icons';
+import { Search, FileText, User, Calendar, Folder, Clock, Star } from '@ci/shadcn/icons';
 
-import { useAuth } from '@/hooks';
+import { useAuth, useSavedSearches } from '@/hooks';
 
 interface SearchResult {
   text: string;
@@ -23,6 +23,7 @@ interface GlobalSearchProps {
 export function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) {
   const [{ authToken }] = useAuth();
   const navigate = useNavigate();
+  const { savedSearches } = useSavedSearches();
   
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -121,6 +122,14 @@ export function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) {
     setQuery(recentQuery);
   };
 
+  const handleSavedSearchSelect = (savedSearch: any) => {
+    // Navigate to search page with the saved search query
+    const searchUrl = `/search?q=${encodeURIComponent(savedSearch.query)}`;
+    navigate(searchUrl);
+    onOpenChange(false);
+    setQuery('');
+  };
+
   const getResultIcon = (type: string) => {
     switch (type.toLowerCase()) {
       case 'file':
@@ -190,6 +199,30 @@ export function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) {
               >
                 <Clock className="h-4 w-4" />
                 <span>{recentQuery}</span>
+              </Command.Item>
+            ))}
+          </Command.Group>
+        )}
+
+        {!query && savedSearches.length > 0 && (
+          <Command.Group heading="Saved Searches">
+            {savedSearches.slice(0, 5).map((savedSearch) => (
+              <Command.Item
+                key={savedSearch.id}
+                value={`${savedSearch.name} ${savedSearch.query}`}
+                onSelect={() => handleSavedSearchSelect(savedSearch)}
+              >
+                {savedSearch.is_smart_search ? (
+                  <Star className="h-4 w-4" />
+                ) : (
+                  <Search className="h-4 w-4" />
+                )}
+                <div className="flex flex-col flex-1 min-w-0">
+                  <span className="truncate">{savedSearch.name}</span>
+                  <span className="text-xs text-muted-foreground truncate">
+                    {savedSearch.query}
+                  </span>
+                </div>
               </Command.Item>
             ))}
           </Command.Group>

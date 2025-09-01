@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Input, Table } from '@ci/shadcn';
-import { AlertCircle, Search, Loader2 } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Input, Table, Badge, Sheet } from '@ci/shadcn';
+import { AlertCircle, Search, Loader2, Star, BookmarkPlus, Menu } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
-import { useAuth } from '@/hooks';
+import { useAuth, useSavedSearches } from '@/hooks';
 
 interface SearchResult {
   text: string;
@@ -19,6 +19,7 @@ export function SearchPage() {
   usePageTitle('Search - Companion Intelligence');
   const [{ authToken }] = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { savedSearches, createSavedSearch } = useSavedSearches();
 
   // Get initial query from URL params
   const initialQuery = searchParams.get('q') || '';
@@ -28,6 +29,9 @@ export function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(!!initialQuery);
+  const [showSavedSearches, setShowSavedSearches] = useState(false);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveName, setSaveName] = useState('');
 
   // Perform search when component mounts if there's an initial query
   useEffect(() => {
@@ -134,6 +138,29 @@ export function SearchPage() {
     setSearchQuery(value);
   };
 
+  const handleSavedSearchSelect = (savedSearch: any) => {
+    setSearchQuery(savedSearch.query);
+    updateSearchParams(savedSearch.query);
+    performSearch(savedSearch.query);
+    setShowSavedSearches(false);
+  };
+
+  const handleSaveSearch = async () => {
+    if (!saveName.trim() || !searchQuery.trim()) return;
+
+    try {
+      await createSavedSearch({
+        name: saveName,
+        query: searchQuery,
+        tags: [], // TODO: Add tag input
+      });
+      setSaveName('');
+      setShowSaveDialog(false);
+    } catch (error) {
+      console.error('Failed to save search:', error);
+    }
+  };
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -153,6 +180,14 @@ export function SearchPage() {
       <PageContent>
         {/* Search Input */}
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setShowSavedSearches(true)}
+            className="shrink-0"
+          >
+            <Menu className="h-4 w-4" />
+          </Button>
           <Input
             type="text"
             placeholder="Enter your search query..."
@@ -167,7 +202,45 @@ export function SearchPage() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             <span className="ml-2">Search</span>
           </Button>
+          {hasSearched && searchResults.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={() => setShowSaveDialog(true)}
+              disabled={loading}
+            >
+              <BookmarkPlus className="h-4 w-4 mr-2" />
+              Save
+            </Button>
+          )}
         </div>
+
+        {/* Quick Save Dialog */}
+        {showSaveDialog && (
+          <div className="bg-muted/50 border border-border rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">Save Search</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowSaveDialog(false)}
+              >
+                ×
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter a name for this search..."
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                className="flex-1"
+                onKeyPress={(e) => e.key === 'Enter' && handleSaveSearch()}
+              />
+              <Button onClick={handleSaveSearch} disabled={!saveName.trim()}>
+                Save
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Error Display */}
         {error && (
@@ -235,6 +308,63 @@ export function SearchPage() {
           </div>
         )}
       </PageContent>
+
+      {/* Saved Searches Sheet */}
+      <Sheet open={showSavedSearches} onOpenChange={setShowSavedSearches}>
+        <Sheet.Content side="left" className="w-80">
+          <Sheet.Header>
+            <Sheet.Title>Saved Searches</Sheet.Title>
+            <Sheet.Description>
+              Your saved search queries and smart searches
+            </Sheet.Description>
+          </Sheet.Header>
+          
+          <div className="mt-6 space-y-4">
+            {savedSearches.map((savedSearch) => (
+              <div
+                key={savedSearch.id}
+                className="p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors"
+                onClick={() => handleSavedSearchSelect(savedSearch)}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h4 className="text-sm font-medium">{savedSearch.name}</h4>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {savedSearch.query}
+                    </p>
+                    {savedSearch.description && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {savedSearch.description}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {savedSearch.is_smart_search && (
+                        <Badge variant="secondary" className="text-xs">
+                          <Star className="h-3 w-3 mr-1" />
+                          Smart
+                        </Badge>
+                      )}
+                      {savedSearch.tags.map((tag) => (
+                        <Badge key={tag.id} variant="outline" className="text-xs">
+                          {tag.label}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {savedSearches.length === 0 && (
+              <div className="text-center py-8 text-muted-foreground">
+                <Search className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p>No saved searches yet</p>
+                <p className="text-xs mt-1">Save searches to quickly access them later</p>
+              </div>
+            )}
+          </div>
+        </Sheet.Content>
+      </Sheet>
     </>
   );
 }
