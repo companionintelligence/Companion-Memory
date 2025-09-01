@@ -6,5 +6,4 @@ export type {
   TMDBResponse,
   TMDBWatchProvider,
   TMDBWatchProvidersResponse,
-  GetStreamingAvailabilityInput,
 } from './TMDBClient';

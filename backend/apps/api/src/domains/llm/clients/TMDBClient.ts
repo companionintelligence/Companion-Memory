@@ -47,7 +47,7 @@ export interface TMDBWatchProvidersResponse {
   };
 }
 
-export interface GetStreamingAvailabilityInput {
+interface TMDBFetchContentInput {
   genre?: string;
   contentType?: 'movie' | 'tv' | 'both';
   country?: string;
@@ -176,7 +176,7 @@ export class TMDBClient {
   /**
    * Fetch content based on input parameters
    */
-  async fetchContent(input: GetStreamingAvailabilityInput): Promise<TMDBResponse> {
+  async fetchContent(input: TMDBFetchContentInput): Promise<TMDBResponse> {
     // If genre is specified, use discover endpoint for better filtering
     if (input.genre) {
       return this.fetchByGenre(input);
@@ -190,7 +190,7 @@ export class TMDBClient {
   /**
    * Fetch content by genre using TMDB discover endpoint
    */
-  private async fetchByGenre(input: GetStreamingAvailabilityInput): Promise<TMDBResponse> {
+  private async fetchByGenre(input: TMDBFetchContentInput): Promise<TMDBResponse> {
     const contentType = input.contentType;
 
     // Handle mixed content type by fetching both and combining
@@ -217,7 +217,7 @@ export class TMDBClient {
    * Fetch single content type by genre
    */
   private async fetchSingleTypeByGenre(
-    input: GetStreamingAvailabilityInput,
+    input: TMDBFetchContentInput,
     mediaType: 'movie' | 'tv',
   ): Promise<TMDBResponse> {
     // Get genre ID from name
