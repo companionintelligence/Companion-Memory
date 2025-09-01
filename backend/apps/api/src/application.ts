@@ -48,7 +48,20 @@ import { SpeechModule } from './domains/speech';
       autoSchemaFile: true,
       playground: process.env.NODE_ENV !== 'production',
       introspection: true,
-      context: ({ req }: { req: any }) => ({ req }),
+      context: ({ req }: { req: any }) => {
+        return { req };
+      },
+      formatError: (error) => {
+        console.error('GraphQL Error:', error);
+        return {
+          message: error.message,
+          locations: error.locations,
+          path: error.path,
+          extensions: {
+            code: error.extensions?.code,
+          },
+        };
+      },
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),

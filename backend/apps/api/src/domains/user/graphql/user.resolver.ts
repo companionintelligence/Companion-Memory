@@ -16,9 +16,10 @@ export class UserResolver {
 
   @UseGuards(JwtAuthGuard)
   @Query(() => User, { name: 'me' })
-  async getCurrentUser(@Context('req') req: any): Promise<User> {
-    const context: RequestContext = req?.context;
-    const userId = context?.userId;
+  async getCurrentUser(@Context() context: { req: any }): Promise<User> {
+    const req = context.req;
+    const requestContext: RequestContext = req?.context || req?.user;
+    const userId = requestContext?.userId || req?.user?.id;
 
     if (!userId) {
       throw new NotFoundException('User not found');
