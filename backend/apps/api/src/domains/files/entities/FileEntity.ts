@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  ManyToMany,
   JoinColumn,
 } from 'typeorm';
 
@@ -35,6 +36,9 @@ export class FileEntity {
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
+
+  @ManyToMany('ThreadEntity', 'files')
+  threads?: object[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;

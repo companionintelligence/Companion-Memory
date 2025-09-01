@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { RequestContext } from '@ci/common/types';
+import { FileEntity } from '@ci/domains/files';
 
 import { MessageEntity } from '../entities/MessageEntity';
 import { ThreadEntity } from '../entities/ThreadEntity';
@@ -16,16 +17,28 @@ export class ThreadService {
     private readonly messageRepository: Repository<MessageEntity>,
     @InjectRepository(ThreadEntity)
     private readonly threadRepository: Repository<ThreadEntity>,
+    @InjectRepository(FileEntity)
+    private readonly fileRepository: Repository<FileEntity>,
   ) {}
 
   async create(context: RequestContext, data: CreateThreadDto): Promise<Thread> {
+    const { files: fileIds, ...threadData } = data;
+
     const instance = this.threadRepository.create({
-      ...data,
+      ...threadData,
       id: uuid7(),
       user: {
         id: context.userId,
       },
     });
+
+    if (fileIds && fileIds.length > 0) {
+      // Load the file entities to establish the relationship
+      const files = await this.fileRepository.find({
+        where: fileIds.map((file) => ({ id: file.id })),
+      });
+      instance.files = files;
+    }
 
     const entity = await this.threadRepository.save(instance);
 
@@ -50,6 +63,7 @@ export class ThreadService {
           id: context.userId,
         },
       },
+      relations: ['files'],
     });
 
     return entities.map((entity) => entity.toThread());
@@ -63,6 +77,7 @@ export class ThreadService {
           id: context.userId,
         },
       },
+      relations: ['files'],
     });
 
     if (result == null) {
@@ -73,18 +88,51 @@ export class ThreadService {
   }
 
   async update(context: RequestContext, id: string, data: UpdateThreadDto): Promise<boolean> {
-    const result = await this.threadRepository.update(
-      {
-        id,
-        user: {
-          id: context.userId,
-        },
-      },
-      data,
-    );
+    const { files: fileIds, ...updateData } = data;
 
-    if (result.affected === 0) {
-      throw new NotFoundException();
+    // First, update the basic thread properties
+    if (Object.keys(updateData).length > 0) {
+      const result = await this.threadRepository.update(
+        {
+          id,
+          user: {
+            id: context.userId,
+          },
+        },
+        updateData,
+      );
+
+      if (result.affected === 0) {
+        throw new NotFoundException();
+      }
+    }
+
+    // If files are being updated, handle the relationship
+    if (fileIds !== undefined) {
+      const thread = await this.threadRepository.findOne({
+        where: {
+          id,
+          user: {
+            id: context.userId,
+          },
+        },
+        relations: ['files'],
+      });
+
+      if (!thread) {
+        throw new NotFoundException();
+      }
+
+      if (fileIds.length > 0) {
+        const files = await this.fileRepository.find({
+          where: fileIds.map((file) => ({ id: file.id })),
+        });
+        thread.files = files;
+      } else {
+        thread.files = [];
+      }
+
+      await this.threadRepository.save(thread);
     }
 
     return true;
