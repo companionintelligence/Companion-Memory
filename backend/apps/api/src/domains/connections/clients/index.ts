@@ -1,1 +1,17 @@
+export { AndroidClient } from './AndroidClient';
+export { BaseApiClient } from './BaseApiClient';
+export { BaseClient } from './BaseClient';
+export { BaseOAuth2Client } from './BaseOAuth2Client';
+export { BasePlatformClient } from './BasePlatformClient';
 export { ClientFactory } from './ClientFactory';
+export { GoogleClient } from './GoogleClient';
+export { HomeAssistantClient } from './HomeAssistantClient';
+export { IOSClient } from './IOSClient';
+export { MacClient } from './MacClient';
+export { MicrosoftClient } from './MicrosoftClient';
+export { OMIClient } from './OMIClient';
+export { QuestClient } from './QuestClient';
+export { SipeedClient } from './SipeedClient';
+export { WindowsClient } from './WindowsClient';
+export { XRealClient } from './XRealClient';
+export * from './types';

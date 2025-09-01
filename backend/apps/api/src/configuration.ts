@@ -43,6 +43,33 @@ export const ConfigSchema = z.object({
       microsoft: z.object({
         id: z.string(),
       }),
+      ios: z.object({
+        id: z.string(),
+      }),
+      android: z.object({
+        id: z.string(),
+      }),
+      windows: z.object({
+        id: z.string(),
+      }),
+      mac: z.object({
+        id: z.string(),
+      }),
+      xreal: z.object({
+        id: z.string(),
+      }),
+      quest: z.object({
+        id: z.string(),
+      }),
+      omi: z.object({
+        id: z.string(),
+      }),
+      sipeed: z.object({
+        id: z.string(),
+      }),
+      homeassistant: z.object({
+        id: z.string(),
+      }),
     }),
     oauth: z.object({
       callbackUrl: z.string(),
