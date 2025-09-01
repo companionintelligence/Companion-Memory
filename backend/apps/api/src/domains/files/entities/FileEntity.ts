@@ -32,6 +32,21 @@ export class FileEntity {
   @Column({ type: 'bigint' })
   size!: number;
 
+  @Column({ type: 'text', nullable: true })
+  parsed_content?: string;
+
+  @Column({ type: 'text', default: 'pending' })
+  parsing_status!: 'pending' | 'processing' | 'completed' | 'failed';
+
+  @Column({ type: 'jsonb', nullable: true })
+  parsed_metadata?: Record<string, any>;
+
+  @Column({ type: 'text', nullable: true })
+  parsing_error?: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  parsed_at?: Date;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
@@ -49,6 +64,11 @@ export class FileEntity {
       key: this.key,
       contentType: this.content_type,
       size: this.size,
+      parsedContent: this.parsed_content,
+      parsingStatus: this.parsing_status,
+      parsedMetadata: this.parsed_metadata,
+      parsingError: this.parsing_error,
+      parsedAt: this.parsed_at,
     };
   }
 }
