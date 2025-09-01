@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Table, Dialog, Input, Label, Select } from '@ci/shadcn';
@@ -14,6 +14,7 @@ import {
   Glasses,
 } from '@ci/shadcn/icons';
 
+import { useDeviceService } from '@/api/useDeviceService';
 import { PageContent } from '@/components/layout';
 
 // Device type definitions for supported devices
@@ -42,6 +43,22 @@ export interface Device {
   readonly userAgent?: string;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+export interface CreateDeviceDto {
+  readonly name: string;
+  readonly type: DeviceType;
+  readonly ipAddress?: string;
+  readonly userAgent?: string;
+}
+
+export interface UpdateDeviceDto {
+  readonly name?: string;
+  readonly type?: DeviceType;
+  readonly status?: Device['status'];
+  readonly lastSeen?: Date;
+  readonly ipAddress?: string;
+  readonly userAgent?: string;
 }
 
 // Device type display names and icons
@@ -85,48 +102,19 @@ function getStatusColor(status: Device['status']): string {
   }
 }
 
-// Mock data for demonstration - in real app this would come from API
-const MOCK_DEVICES: Device[] = [
-  {
-    id: '1',
-    name: 'iPhone 15 Pro',
-    type: 'ios',
-    status: 'connected',
-    lastSeen: new Date(Date.now() - 1000 * 60 * 5), // 5 minutes ago
-    ipAddress: '192.168.1.100',
-    userAgent: 'CI-iOS-App/1.0',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7), // 1 week ago
-    updatedAt: new Date(Date.now() - 1000 * 60 * 5),
-  },
-  {
-    id: '2',
-    name: 'MacBook Pro',
-    type: 'mac-app',
-    status: 'connected',
-    lastSeen: new Date(Date.now() - 1000 * 60 * 15), // 15 minutes ago
-    ipAddress: '192.168.1.101',
-    userAgent: 'CI-Desktop-App/1.2.0',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30), // 30 days ago
-    updatedAt: new Date(Date.now() - 1000 * 60 * 15),
-  },
-  {
-    id: '3',
-    name: 'Quest 3 Headset',
-    type: 'quest3',
-    status: 'disconnected',
-    lastSeen: new Date(Date.now() - 1000 * 60 * 60 * 2), // 2 hours ago
-    ipAddress: '192.168.1.102',
-    userAgent: 'CI-VR-App/0.9.0',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 14), // 2 weeks ago
-    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 2),
-  },
-];
 
 export function DevicesPage() {
   usePageTitle('Devices - Companion Intelligence');
 
-  const [devices, setDevices] = useState<Device[]>(MOCK_DEVICES);
-  const [loading] = useState(false);
+  const {
+    devices,
+    loading,
+    error: apiError,
+    createDevice,
+    updateDevice,
+    deleteDevice,
+  } = useDeviceService();
+
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -154,7 +142,6 @@ export function DevicesPage() {
   useEffect(() => {
     if (successMessage) {
       const timer = setTimeout(() => setSuccessMessage(null), 5000);
-
       return () => clearTimeout(timer);
     }
   }, [successMessage]);
@@ -162,10 +149,17 @@ export function DevicesPage() {
   useEffect(() => {
     if (error) {
       const timer = setTimeout(() => setError(null), 5000);
-
       return () => clearTimeout(timer);
     }
   }, [error]);
+
+  // Handle API errors
+  useEffect(() => {
+    if (apiError) {
+      const errorMessage = apiError instanceof Error ? apiError.message : 'An unknown error occurred';
+      setError(errorMessage);
+    }
+  }, [apiError]);
 
   // Format last seen time
   const formatLastSeen = useCallback((date?: Date): string => {
@@ -198,7 +192,6 @@ export function DevicesPage() {
   const handleAddDevice = async () => {
     if (!addFormData.name.trim()) {
       setModalError('Device name is required');
-
       return;
     }
 
@@ -206,17 +199,11 @@ export function DevicesPage() {
     setModalError(null);
 
     try {
-      // In a real app, this would be an API call
-      const newDevice: Device = {
-        id: Math.random().toString(36).substr(2, 9),
+      await createDevice({
         name: addFormData.name.trim(),
         type: addFormData.type,
-        status: 'unauthorized',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      setDevices((prev) => [...prev, newDevice]);
+      });
+      
       setShowAddModal(false);
       setAddFormData({ name: '', type: 'ios' });
       setSuccessMessage('Device added successfully');
@@ -242,7 +229,6 @@ export function DevicesPage() {
   const handleUpdateDevice = async () => {
     if (!editFormData.name.trim() || !selectedDevice) {
       setModalError('Device name is required');
-
       return;
     }
 
@@ -250,19 +236,10 @@ export function DevicesPage() {
     setModalError(null);
 
     try {
-      // In a real app, this would be an API call
-      setDevices((prev) =>
-        prev.map((device) =>
-          device.id === selectedDevice.id
-            ? {
-                ...device,
-                name: editFormData.name.trim(),
-                type: editFormData.type,
-                updatedAt: new Date(),
-              }
-            : device,
-        ),
-      );
+      await updateDevice(selectedDevice.id, {
+        name: editFormData.name.trim(),
+        type: editFormData.type,
+      });
 
       setShowEditModal(false);
       setSelectedDevice(null);
@@ -285,10 +262,7 @@ export function DevicesPage() {
     setError(null);
 
     try {
-      // In a real app, this would be an API call
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate API call
-
-      setDevices((prev) => prev.filter((d) => d.id !== device.id));
+      await deleteDevice(device.id);
       setSuccessMessage('Device removed successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
