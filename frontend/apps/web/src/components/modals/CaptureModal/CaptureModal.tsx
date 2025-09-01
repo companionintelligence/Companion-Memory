@@ -122,10 +122,11 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
             <div className="flex flex-col gap-4 p-4 sm:border-r sm:min-w-[320px] sm:max-w-[480px] w-full">
               {files.map((file, index) => {
                 const fileType = getMediaType(file.contentType);
+                const animationStyle = { animationDelay: `${index * 100}ms` };
                 switch (fileType) {
                   case 'video':
                     return (
-                      <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100 animate-in zoom-in-95 duration-300 ease-out" style={{animationDelay: `${index * 100}ms`}}>
+                      <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100 animate-in zoom-in-95 duration-300 ease-out" style={animationStyle}>
                         <video controls className="w-full h-full object-cover">
                           <source src={file.url} type={file.contentType} />
                           Your browser does not support the video tag.
@@ -134,7 +135,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
                     );
                   case 'audio':
                     return (
-                      <div key={file.id} className="rounded-lg overflow-hidden bg-stone-100 p-4 flex items-center justify-center animate-in zoom-in-95 duration-300 ease-out" style={{animationDelay: `${index * 100}ms`}}>
+                      <div key={file.id} className="rounded-lg overflow-hidden bg-stone-100 p-4 flex items-center justify-center animate-in zoom-in-95 duration-300 ease-out" style={animationStyle}>
                         <audio controls className="w-full">
                           <source src={file.url} type={file.contentType} />
                           Your browser does not support the audio element.
@@ -143,10 +144,11 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
                     );
                   case 'image':
                     return (
-                      <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100 animate-in zoom-in-95 duration-300 ease-out" style={{animationDelay: `${index * 100}ms`}}>
+                      <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100 animate-in zoom-in-95 duration-300 ease-out" style={animationStyle}>
                         <img src={file.url} className="w-full h-full object-cover" />
                       </div>
                     );
+                }
                 }
               })}
             </div>
