@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { GraphQLModule } from '@nestjs/graphql';
+import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -40,6 +42,13 @@ import { SpeechModule } from './domains/speech';
       password: config.db.password,
       entities: [__dirname + '/domains/**/*Entity.{ts,js}'],
       logging: ['error', ...(config.environment['database.query.logging'] ? (['query'] as const) : [])],
+    }),
+    GraphQLModule.forRoot<ApolloDriverConfig>({
+      driver: ApolloDriver,
+      autoSchemaFile: true,
+      playground: process.env.NODE_ENV !== 'production',
+      introspection: true,
+      context: ({ req }: { req: any }) => ({ req }),
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),

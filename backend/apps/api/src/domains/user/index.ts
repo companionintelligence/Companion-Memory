@@ -4,10 +4,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserController } from './controllers/UserController';
 import { UserEntity } from './entities/UserEntity';
 import { UserService } from './services/UserService';
+import { UserGraphQLService } from './services/UserGraphQLService';
+import { UserResolver } from './graphql/user.resolver';
 
 @Module({
   imports: [TypeOrmModule.forFeature([UserEntity])],
-  providers: [UserService],
+  providers: [UserService, UserGraphQLService, UserResolver],
   controllers: [UserController],
   exports: [UserService],
 })
