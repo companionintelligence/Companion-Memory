@@ -6,11 +6,12 @@ import {
   type MouseEvent,
   forwardRef,
   useCallback,
+  useImperativeHandle,
+  useRef,
 } from 'react';
 
 import {
   Button,
-  Textarea,
   Form,
   Tooltip,
   cn,
@@ -19,6 +20,7 @@ import {
   formDataSchema as s,
 } from '@ci/shadcn';
 import { Send, Square, Mic, Plus } from '@ci/shadcn/icons';
+import { MarkdownEditor, type MarkdownEditorRef } from './MarkdownEditor';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -30,10 +32,10 @@ const EMPTY: FormData = {
   message: '',
 };
 
-const handleEnterSubmit = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+const handleEnterSubmit = (e: KeyboardEvent<HTMLDivElement>) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    e.currentTarget.form?.requestSubmit();
+    e.currentTarget.closest('form')?.requestSubmit();
   }
 };
 
@@ -63,11 +65,15 @@ function ChatInput(
 ) {
   const SendIcon = streaming ? Square : Send;
   const sendIconClassName = streaming ? '' : 'left-[-0.5px] top-[0.5px]';
+  const editorRef = useRef<MarkdownEditorRef>(null);
 
   const form = useForm<FormData>({
     resolver: formDataResolver(FormSchema),
     defaultValues: EMPTY,
   });
+
+  // Forward ref to the editor
+  useImperativeHandle(forwardedRef, () => editorRef.current as any, []);
 
   const handleAttach = useCallback(
     (e: MouseEvent<HTMLButtonElement>) => {
@@ -168,36 +174,19 @@ function ChatInput(
                 control={form.control}
                 name="message"
                 render={({ field }) => (
-                  <Textarea
-                    {...field}
-                    ref={forwardedRef}
+                  <MarkdownEditor
+                    ref={editorRef}
+                    value={field.value}
+                    onChange={field.onChange}
                     placeholder={placeholder}
                     disabled={loading || streaming || disabled}
+                    onKeyDown={handleEnterSubmit}
                     className="
                       !w-full
                       !flex-1
                       !min-h-0
-                      !bg-transparent
-                      !border-0
-                      !outline-none
-                      !ring-0
-                      !shadow-none
-                      !rounded-none
-                      !p-0
                       !ml-1
-
-                      focus:!ring-0
-                      focus-visible:!ring-0
-                      focus-visible:!border-transparent
-                      focus:!border-transparent
-
-                      disabled:!bg-transparent
-
-                      resize-none
-                      text-base
-                      leading-relaxed
                     "
-                    onKeyDown={handleEnterSubmit}
                   />
                 )}
               />
