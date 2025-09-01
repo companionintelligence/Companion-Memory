@@ -61,14 +61,14 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
       OLLAMA_HOST: http://host.docker.internal:11434
-      STABLE_DIFFUSION_HOST: http://stable-diffusion:7860
+      AI_IMAGE_GENERATION_HOST: http://ai-image-generation:7860
     networks:
       - web
     extra_hosts:
       - host.docker.internal:host-gateway
     profiles: [ "all", "staging" ]
     depends_on:
-      - stable-diffusion
+      - ai-image-generation
 
   staging-webserver:
     image: ci/nginx
@@ -94,26 +94,39 @@ services:
       - open-webui:/app/backend/data
     profiles: [ "all" ]
 
-  stable-diffusion:
-    image: node:18-alpine
-    container_name: stable-diffusion
+  ai-image-generation:
+    build:
+      context: ./docker/ai-image-generation
+      dockerfile: Dockerfile
+    image: ci/ai-image-generation
+    container_name: ai-image-generation
     restart: unless-stopped
     ports:
       - 7860:7860
-    working_dir: /app
+    environment:
+      - TORCH_DEVICE=cuda
+      - MODEL_CACHE_DIR=/app/models
+      - MAX_MODELS_IN_MEMORY=2
     volumes:
-      - ./docker/stable-diffusion:/app:ro
+      - ai-models:/app/models
+      - ai-outputs:/app/outputs
     networks:
       - web
     profiles: [ "all", "ai" ]
-    command: ["sh", "-c", "npm install --no-optional && node index.js"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   postgres-data:
   minio-data:
   open-webui:
-  stable-diffusion-models:
-  stable-diffusion-outputs:
+  ai-models:
+  ai-outputs:
 
 networks:
   web:

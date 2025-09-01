@@ -77,7 +77,7 @@ export const ConfigSchema = z.object({
     tts: z.object({
       host: z.string(),
     }),
-    stableDiffusion: z.object({
+    aiImageGeneration: z.object({
       host: z.string(),
     }),
   }),

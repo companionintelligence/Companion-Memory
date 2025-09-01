@@ -1,0 +1,73 @@
+# Multi-Model AI Image Generation Service
+
+A local AI image generation service that supports multiple state-of-the-art models:
+
+## Supported Models
+
+### FLUX.1 Models (Recommended)
+- **FLUX.1-schnell**: Fast generation (4 steps), excellent quality
+- **FLUX.1-dev**: Highest quality (20-50 steps), state-of-the-art results
+
+### Stable Diffusion Models
+- **SDXL**: High quality 1024x1024 native resolution
+- **SD 1.5**: Lightweight fallback model
+
+## API Endpoints
+
+### Generate Image
+```
+POST /sdapi/v1/txt2img
+```
+
+Request body:
+```json
+{
+  "prompt": "A beautiful sunset over mountains",
+  "model": "flux-schnell",
+  "width": 1024,
+  "height": 1024,
+  "steps": 4,
+  "cfg_scale": 7.0,
+  "seed": -1
+}
+```
+
+### Available Models
+```
+GET /models
+```
+
+### Health Check
+```
+GET /health
+GET /internal/ping
+```
+
+## Model Selection
+
+Choose the right model for your use case:
+
+- **flux-schnell**: Best for fast, high-quality generation (4 steps)
+- **flux-dev**: Best for highest quality (28 steps)
+- **sdxl**: Good balance of quality and speed (20 steps)
+- **sd15**: Lightweight fallback (20 steps)
+
+## Memory Management
+
+The service automatically manages model loading and memory usage:
+- Models are loaded on-demand
+- GPU memory is cleared between model switches
+- CPU offloading is used when available
+- Memory efficient attention is enabled
+
+## Hardware Requirements
+
+- **Minimum**: 8GB RAM, CPU-only (slow)
+- **Recommended**: 12GB VRAM GPU + 16GB RAM
+- **Optimal**: 24GB VRAM GPU + 32GB RAM
+
+## Environment Variables
+
+- `TORCH_DEVICE`: Force specific device (cuda, mps, cpu)
+- `MODEL_CACHE_DIR`: Directory to cache downloaded models
+- `MAX_MODELS_IN_MEMORY`: Maximum models to keep loaded (default: 2)

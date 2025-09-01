@@ -31,8 +31,8 @@
     "tts": {
       "host": "TTS_HOST"
     },
-    "stableDiffusion": {
-      "host": "STABLE_DIFFUSION_HOST"
+    "aiImageGeneration": {
+      "host": "AI_IMAGE_GENERATION_HOST"
     }
   },
   "features": {

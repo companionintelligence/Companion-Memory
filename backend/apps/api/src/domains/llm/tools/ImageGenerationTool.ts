@@ -18,6 +18,7 @@ const imageGenerationInputSchema = z.object({
   style: z.enum(['natural', 'vivid']).optional().default('natural'),
   size: z.enum(['1024x1024', '1792x1024', '1024x1792']).optional().default('1024x1024'),
   quality: z.enum(['standard', 'hd']).optional().default('standard'),
+  model: z.enum(['flux-schnell', 'flux-dev', 'sdxl', 'sd15']).optional().default('flux-schnell'),
   editImageUrl: z.string().optional(), // For future image editing functionality
   mask: z.string().optional(), // For future inpainting functionality
 });
@@ -43,6 +44,7 @@ interface StableDiffusionRequest {
   cfg_scale?: number;
   sampler_name?: string;
   seed?: number;
+  model?: string;
   restore_faces?: boolean;
   tiling?: boolean;
   do_not_save_samples?: boolean;
@@ -56,7 +58,7 @@ interface StableDiffusionResponse {
 }
 
 /**
- * Tool to generate images using local Stable Diffusion Web UI
+ * Tool to generate images using local AI models (FLUX.1, SDXL, SD 1.5)
  * Integrates with the existing file storage system to save generated images
  */
 @Injectable()
@@ -64,7 +66,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
   readonly schema = {
     name: 'generate_image',
     description:
-      'Generate images using AI based on text descriptions. Use this tool when users ask to create, generate, make, or draw images, pictures, artwork, or visual content. After calling this tool, you MUST display the generated image in your response using this exact markdown format: ![altText](imageUrl). The tool returns imageUrl and altText fields that you should use directly.',
+      'Generate images using local AI models (FLUX.1, SDXL, or SD 1.5) based on text descriptions. Use this tool when users ask to create, generate, make, or draw images, pictures, artwork, or visual content. FLUX.1 models provide the highest quality. After calling this tool, you MUST display the generated image in your response using this exact markdown format: ![altText](imageUrl). The tool returns imageUrl and altText fields that you should use directly.',
     category: 'ai',
     parameters: {
       type: 'object',
@@ -74,6 +76,12 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
           description: 'Detailed description of the image to generate. Be descriptive and specific.',
           minLength: 1,
           maxLength: 4000,
+        },
+        model: {
+          type: 'string',
+          enum: ['flux-schnell', 'flux-dev', 'sdxl', 'sd15'],
+          description: 'AI model to use. flux-schnell: fast high quality (4 steps), flux-dev: highest quality (28 steps), sdxl: good balance (20 steps), sd15: lightweight (20 steps)',
+          default: 'flux-schnell',
         },
         style: {
           type: 'string',
@@ -106,24 +114,24 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     },
     examples: [
       {
-        input: { prompt: 'A serene mountain landscape at sunset with a lake reflection' },
+        input: { prompt: 'A serene mountain landscape at sunset with a lake reflection', model: 'flux-schnell' },
         output: {
           imageUrl: 'https://storage.example.com/generated-image.png',
           fileId: 'uuid-123',
           prompt: 'A serene mountain landscape at sunset with a lake reflection',
           altText: 'A serene mountain landscape at sunset with a lake reflection',
         },
-        description: 'Generate a nature landscape image',
+        description: 'Generate a nature landscape with FLUX.1 schnell model',
       },
       {
-        input: { prompt: 'A futuristic city with flying cars', style: 'vivid', size: '1792x1024' },
+        input: { prompt: 'A futuristic city with flying cars', style: 'vivid', size: '1792x1024', model: 'flux-dev' },
         output: {
           imageUrl: 'https://storage.example.com/generated-city.png',
           fileId: 'uuid-456',
           prompt: 'A futuristic city with flying cars',
           altText: 'A futuristic city with flying cars',
         },
-        description: 'Generate a sci-fi cityscape with specific style and size',
+        description: 'Generate a high-quality sci-fi cityscape with FLUX.1 dev model',
       },
     ],
   };
@@ -149,26 +157,27 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     context: ToolExecutionContext,
     input: ImageGenerationInput,
   ): Promise<ImageGenerationOutput> {
-    this.logger.debug('Starting image generation with Stable Diffusion', {
+    this.logger.debug('Starting image generation with local AI models', {
       userId: context.userId,
       prompt: input.prompt.substring(0, 100),
       style: input.style,
       size: input.size,
       quality: input.quality,
+      model: input.model,
     });
 
-    // Validate Stable Diffusion service is available
-    const stableDiffusionHost = config.services.stableDiffusion.host;
-    if (!stableDiffusionHost) {
-      throw new Error('Stable Diffusion service is not properly configured. Please check your environment variables.');
+    // Validate AI image generation service is available
+    const aiServiceHost = config.services.aiImageGeneration.host;
+    if (!aiServiceHost) {
+      throw new Error('AI image generation service is not properly configured. Please check your environment variables.');
     }
 
     try {
-      // Check if Stable Diffusion API is available
-      await this.checkStableDiffusionHealth(stableDiffusionHost);
+      // Check if AI service is available
+      await this.checkAIServiceHealth(aiServiceHost);
 
-      // Generate image using Stable Diffusion
-      const imageBase64 = await this.callStableDiffusionAPI(input, stableDiffusionHost);
+      // Generate image using local AI models
+      const imageBase64 = await this.callAIImageAPI(input, aiServiceHost);
 
       // Store the generated image
       const file = await this.storeGeneratedImage(context, imageBase64, input.prompt);
@@ -176,10 +185,11 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       // Get signed URL using the public API
       const signedFile = await this.fileService.findOne(context, file.id);
 
-      this.logger.log('Image generated successfully with Stable Diffusion', {
+      this.logger.log('Image generated successfully with local AI', {
         userId: context.userId,
         fileId: file.id,
         prompt: input.prompt.substring(0, 100),
+        model: input.model,
       });
 
       return {
@@ -192,6 +202,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       this.logger.error('Image generation failed', {
         userId: context.userId,
         prompt: input.prompt.substring(0, 100),
+        model: input.model,
         error: error instanceof Error ? error.message : String(error),
       });
 
@@ -199,9 +210,9 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     }
   }
 
-  private async checkStableDiffusionHealth(host: string): Promise<void> {
+  private async checkAIServiceHealth(host: string): Promise<void> {
     try {
-      const response = await fetch(`${host}/internal/ping`, {
+      const response = await fetch(`${host}/health`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -210,33 +221,52 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       });
 
       if (!response.ok) {
-        throw new Error(`Stable Diffusion service health check failed: ${response.status}`);
+        throw new Error(`AI image generation service health check failed: ${response.status}`);
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'TimeoutError') {
-        throw new Error('Stable Diffusion service is not responding. Please ensure the service is running.');
+        throw new Error('AI image generation service is not responding. Please ensure the service is running.');
       }
-      throw new Error(`Cannot connect to Stable Diffusion service at ${host}. Please ensure it's running and accessible.`);
+      throw new Error(`Cannot connect to AI image generation service at ${host}. Please ensure it's running and accessible.`);
     }
   }
 
-  private async callStableDiffusionAPI(input: ImageGenerationInput, host: string): Promise<string> {
+  private async callAIImageAPI(input: ImageGenerationInput, host: string): Promise<string> {
     // Parse size
     const [width, height] = input.size.split('x').map(Number);
 
-    // Enhance prompt based on style
+    // Model-specific configurations
+    let steps = 20;
+    let cfgScale = 7.0;
+    
+    if (input.model === 'flux-schnell') {
+      steps = 4; // FLUX schnell is optimized for 4 steps
+      cfgScale = 1.0; // FLUX models use lower guidance
+    } else if (input.model === 'flux-dev') {
+      steps = 28; // FLUX dev works best with more steps
+      cfgScale = 3.5; // FLUX models use lower guidance
+    } else if (input.model === 'sdxl') {
+      steps = input.quality === 'hd' ? 30 : 20;
+      cfgScale = input.quality === 'hd' ? 8.0 : 7.0;
+    } else if (input.model === 'sd15') {
+      steps = input.quality === 'hd' ? 25 : 20;
+      cfgScale = input.quality === 'hd' ? 8.0 : 7.0;
+    }
+
+    // Enhance prompt based on style and model
     let enhancedPrompt = input.prompt;
-    let negativePrompt = 'low quality, blurry, distorted, deformed, ugly, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, ugly, blurry, bad anatomy, bad proportions, extra limbs, cloned face, skin spots, skin blemishes, age spot, glans';
+    let negativePrompt = '';
+    
+    // FLUX models don't typically use negative prompts
+    if (input.model !== 'flux-schnell' && input.model !== 'flux-dev') {
+      negativePrompt = 'low quality, blurry, distorted, deformed, ugly, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, ugly, blurry, bad anatomy, bad proportions, extra limbs, cloned face, skin spots, skin blemishes, age spot, glans';
+    }
 
     if (input.style === 'vivid') {
       enhancedPrompt = `${input.prompt}, hyperrealistic, highly detailed, vibrant colors, dramatic lighting, professional photography`;
     } else {
       enhancedPrompt = `${input.prompt}, natural lighting, photorealistic, clean, high quality`;
     }
-
-    // Set steps based on quality
-    const steps = input.quality === 'hd' ? 30 : 20;
-    const cfgScale = input.quality === 'hd' ? 8.0 : 7.0;
 
     const requestBody: StableDiffusionRequest = {
       prompt: enhancedPrompt,
@@ -245,6 +275,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       height,
       steps,
       cfg_scale: cfgScale,
+      model: input.model,
       sampler_name: 'DPM++ 2M Karras',
       seed: -1, // Random seed
       restore_faces: true,
@@ -253,8 +284,9 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       do_not_save_grid: true,
     };
 
-    this.logger.debug('Calling Stable Diffusion API', {
+    this.logger.debug('Calling AI Image Generation API', {
       host,
+      model: input.model,
       width,
       height,
       steps,
@@ -267,18 +299,18 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(120000), // 2 minute timeout for generation
+      signal: AbortSignal.timeout(300000), // 5 minute timeout for generation (FLUX can be slow)
     });
 
     if (!response.ok) {
       const errorData = await response.text();
-      throw new Error(`Stable Diffusion API error: ${response.status} ${response.statusText} - ${errorData}`);
+      throw new Error(`AI Image Generation API error: ${response.status} ${response.statusText} - ${errorData}`);
     }
 
     const result: StableDiffusionResponse = await response.json();
 
     if (!result.images || result.images.length === 0) {
-      throw new Error('No image generated by Stable Diffusion');
+      throw new Error('No image generated by AI service');
     }
 
     return result.images[0]; // Return base64 encoded image

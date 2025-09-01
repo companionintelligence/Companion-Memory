@@ -60,7 +60,7 @@
     "tts": {
       "host": "http://localhost:9002"
     },
-    "stableDiffusion": {
+    "aiImageGeneration": {
       "host": "http://localhost:7860"
     }
   },
