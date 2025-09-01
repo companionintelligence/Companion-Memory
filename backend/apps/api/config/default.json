@@ -29,6 +29,10 @@
     },
     "oauth": {
       "callbackUrl": "https://dev.companionintelligence.com/oauth/callback"
+    },
+    "broker": {
+      "baseUrl": "https://auth.companionintellience.io",
+      "callbackUrl": "https://auth.companionintellience.io/auth-broker/callback"
     }
   },
   "db": {
