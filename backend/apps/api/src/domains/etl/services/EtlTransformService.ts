@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import * as dlv from 'dlv';
+import dlv from 'dlv';
 
 import { LoggerService } from '@ci/common/services';
 
@@ -131,7 +131,7 @@ export class EtlTransformService {
   }
 
   private mapValue(data: unknown, sourcePath: string, targetPath: string, operation?: string): unknown {
-    const sourceValue = dlv(data, sourcePath);
+    const sourceValue = dlv(data as Record<string, unknown>, sourcePath);
     
     if (sourceValue === undefined) {
       return data;
@@ -153,7 +153,7 @@ export class EtlTransformService {
     operation?: string, 
     params?: Record<string, unknown>
   ): unknown {
-    const sourceValue = dlv(data, sourcePath);
+    const sourceValue = dlv(data as Record<string, unknown>, sourcePath);
     let transformedValue = sourceValue;
 
     switch (operation) {
@@ -186,7 +186,7 @@ export class EtlTransformService {
   }
 
   private filterValue(data: unknown, sourcePath: string, operation?: string, params?: Record<string, unknown>): unknown {
-    const sourceValue = dlv(data, sourcePath);
+    const sourceValue = dlv(data as Record<string, unknown>, sourcePath);
     
     if (!Array.isArray(sourceValue)) {
       return data;
@@ -215,7 +215,7 @@ export class EtlTransformService {
     operation?: string, 
     params?: Record<string, unknown>
   ): unknown {
-    const sourceValue = dlv(data, sourcePath);
+    const sourceValue = dlv(data as Record<string, unknown>, sourcePath);
     
     if (!Array.isArray(sourceValue)) {
       return data;
@@ -255,15 +255,15 @@ export class EtlTransformService {
     }
 
     const pathParts = path.split('.');
-    const result = Array.isArray(obj) ? [...obj] : { ...obj as object };
-    let current = result;
+    const result = Array.isArray(obj) ? [...obj] : { ...obj as Record<string, unknown> };
+    let current: Record<string, unknown> = result as Record<string, unknown>;
 
     for (let i = 0; i < pathParts.length - 1; i++) {
       const key = pathParts[i];
       if (!current[key] || typeof current[key] !== 'object') {
         current[key] = {};
       }
-      current = current[key];
+      current = current[key] as Record<string, unknown>;
     }
 
     current[pathParts[pathParts.length - 1]] = value;

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "facebook.me",
+    "name": "Get User Profile",
+    "provider": "facebook",
+    "endpoint": "/me",
+    "method": "GET",
+    "queryParams": {
+      "fields": "id,name,email,first_name,last_name,picture"
+    },
+    "rateLimit": {
+      "requests": 200,
+      "window": 3600
+    }
+  },
+  {
+    "id": "facebook.posts",
+    "name": "Get User Posts",
+    "provider": "facebook",
+    "endpoint": "/me/posts",
+    "method": "GET",
+    "queryParams": {
+      "fields": "id,message,created_time,updated_time,story,link,place,picture,full_picture,attachments,reactions,comments.limit(25),likes.limit(25)"
+    },
+    "rateLimit": {
+      "requests": 200,
+      "window": 3600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "after",
+      "limit": 25
+    }
+  },
+  {
+    "id": "facebook.photos",
+    "name": "Get User Photos",
+    "provider": "facebook",
+    "endpoint": "/me/photos",
+    "method": "GET",
+    "queryParams": {
+      "type": "uploaded",
+      "fields": "id,name,picture,source,created_time,updated_time,place,tags,likes.limit(25),comments.limit(25)"
+    },
+    "rateLimit": {
+      "requests": 200,
+      "window": 3600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "after",
+      "limit": 25
+    }
+  },
+  {
+    "id": "instagram.media",
+    "name": "Get Instagram Media",
+    "provider": "facebook",
+    "endpoint": "/me/media",
+    "method": "GET",
+    "queryParams": {
+      "fields": "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,username,like_count,comments_count"
+    },
+    "rateLimit": {
+      "requests": 200,
+      "window": 3600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "after",
+      "limit": 25
+    }
+  },
+  {
+    "id": "facebook.events",
+    "name": "Get User Events",
+    "provider": "facebook",
+    "endpoint": "/me/events",
+    "method": "GET",
+    "queryParams": {
+      "fields": "id,name,description,start_time,end_time,place,attending_count,maybe_count,declined_count,cover"
+    },
+    "rateLimit": {
+      "requests": 200,
+      "window": 3600
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "after",
+      "limit": 25
+    }
+  }
+]

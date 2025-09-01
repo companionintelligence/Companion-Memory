@@ -1,0 +1,72 @@
+[
+  {
+    "id": "dropbox.files.list",
+    "name": "List Files and Folders",
+    "provider": "dropbox",
+    "endpoint": "/files/list_folder",
+    "method": "POST",
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    },
+    "rateLimit": {
+      "requests": 300,
+      "window": 60
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "cursor",
+      "limit": 2000
+    }
+  },
+  {
+    "id": "dropbox.files.get_metadata",
+    "name": "Get File Metadata",
+    "provider": "dropbox",
+    "endpoint": "/files/get_metadata",
+    "method": "POST",
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    },
+    "rateLimit": {
+      "requests": 300,
+      "window": 60
+    }
+  },
+  {
+    "id": "dropbox.sharing.list_shared_links",
+    "name": "List Shared Links",
+    "provider": "dropbox",
+    "endpoint": "/sharing/list_shared_links",
+    "method": "POST",
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    },
+    "rateLimit": {
+      "requests": 300,
+      "window": 60
+    },
+    "pagination": {
+      "type": "cursor",
+      "param": "cursor",
+      "limit": 1000
+    }
+  },
+  {
+    "id": "dropbox.users.get_current_account",
+    "name": "Get Current Account Info",
+    "provider": "dropbox",
+    "endpoint": "/users/get_current_account",
+    "method": "POST",
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    },
+    "rateLimit": {
+      "requests": 300,
+      "window": 60
+    }
+  }
+]

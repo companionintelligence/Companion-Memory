@@ -1,5 +1,7 @@
-import { GoogleApiEndpoints } from './google-endpoints.json';
-import { MicrosoftApiEndpoints } from './microsoft-endpoints.json';
+import GoogleEndpoints from './google-endpoints.json';
+import MicrosoftEndpoints from './microsoft-endpoints.json';
+import DropboxEndpoints from './dropbox-endpoints.json';
+import MetaEndpoints from './meta-endpoints.json';
 import type { ApiEndpointConfig } from '../types';
 
 // Registry of all API endpoint configurations
@@ -8,8 +10,10 @@ export class ApiEndpointRegistry {
 
   static {
     // Load endpoint configurations from JSON files
-    this.loadEndpoints('google', GoogleApiEndpoints);
-    this.loadEndpoints('microsoft', MicrosoftApiEndpoints);
+    this.loadEndpoints('google', GoogleEndpoints as ApiEndpointConfig[]);
+    this.loadEndpoints('microsoft', MicrosoftEndpoints as ApiEndpointConfig[]);
+    this.loadEndpoints('dropbox', DropboxEndpoints as ApiEndpointConfig[]);
+    this.loadEndpoints('meta', MetaEndpoints as ApiEndpointConfig[]);
   }
 
   private static loadEndpoints(provider: string, endpoints: ApiEndpointConfig[]): void {
