@@ -62,14 +62,7 @@ describe('OllamaService - Vision Support', () => {
       } as any);
 
       const models = await service.getAvailableModels(mockContext);
-      const visionModels = models.filter(model => 
-        model.name.includes('vision') ||
-        model.name.includes('llava') ||
-        model.name.includes('minicpm') ||
-        model.name.includes('moondream') ||
-        model.name.includes('bakllava') ||
-        (model.name.includes('llama') && model.name.includes('vision'))
-      );
+      const visionModels = models.filter(model => service.isVisionModel(model.name));
 
       expect(visionModels.length).toBeGreaterThan(0);
       expect(visionModels.some(m => m.name.includes('llava'))).toBe(true);
