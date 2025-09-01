@@ -374,21 +374,6 @@ export class OllamaService {
   }
 
   /**
-   * Validate that the model supports vision when images are present
-   */
-  private async validateVisionModelForImages(
-    context: RequestContext, 
-    model: string, 
-    messages: OllamaMessage[]
-  ): Promise<void> {
-    if (this.hasImages(messages) && !this.isVisionModel(model)) {
-      throw new Error(
-        `Model '${model}' does not support image input. Please use a vision model like 'llava', 'minicpm-v', or 'moondream'.`
-      );
-    }
-  }
-
-  /**
    * Generate a demo vision response when in demo mode
    */
   private generateDemoVisionResponse(messages: OllamaMessage[]): ChatResponse {
