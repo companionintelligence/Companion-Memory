@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type FormEvent } from 'react';
 import { Camera } from '@ci/capture';
 import { Button, Dialog, Badge, Tabs } from '@ci/shadcn';
-import { Send, Lightbulb, Camera } from '@ci/shadcn/icons';
+import { Send, Lightbulb, CameraIcon } from '@ci/shadcn/icons';
 
 import type { File as CIFile } from '@/api/types.ts';
 import { Chat, type FormData } from '@/components/Chat';
@@ -116,8 +116,6 @@ export function EnhancedCaptureModal({
   );
 
   const handleSuggestedPromptClick = useCallback((prompt: string) => {
-    const formData = new FormData();
-    formData.append('message', prompt);
     handleSubmit({ message: prompt } as FormData);
   }, [handleSubmit]);
 
@@ -214,7 +212,7 @@ export function EnhancedCaptureModal({
                 }}
                 className="mt-2"
               >
-                <Camera className="w-4 h-4 mr-2" />
+                <CameraIcon className="w-4 h-4 mr-2" />
                 Capture Another
               </Button>
             </div>

@@ -2,7 +2,7 @@ import { Portal } from '@ci/common';
 import { Separator, Sidebar } from '@ci/shadcn';
 
 import { CaptureModalToggle } from '@/components/CaptureModalToggle';
-import { CaptureModal } from '@/components/modals/CaptureModal';
+import { EnhancedCaptureModal } from '@/components/modals/EnhancedCaptureModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useModalControls } from '@/hooks';
 
@@ -24,7 +24,7 @@ export function PrimaryNavigation() {
           <Portal id="actions" />
         </section>
       </header>
-      <CaptureModal open={isModalOpen} initialFiles={[]} onClose={closeModal} />
+      <EnhancedCaptureModal open={isModalOpen} initialFiles={[]} onClose={closeModal} />
     </>
   );
 }
