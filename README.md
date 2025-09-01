@@ -105,24 +105,25 @@ The CI Server supports configurable URLs to allow deployment to different enviro
 
 #### Environment Variables
 
-The following environment variables can be set in your `.env` file:
+The following environment variable can be set in your `.env` file:
 
 - `CI_SERVER_URL` - The base URL for your CI Server instance (default: `https://dev.companionintelligence.com`)
-- `CI_SERVER_OAUTH_CALLBACK_URL` - The OAuth callback URL for authentication (default: `https://dev.companionintelligence.com/oauth/callback`)
+
+The OAuth callback URL is automatically derived by appending `/oauth/callback` to the `CI_SERVER_URL`.
 
 #### Examples
 
 For the demo server:
 ```bash
 CI_SERVER_URL=https://alpha.companionintel.com
-CI_SERVER_OAUTH_CALLBACK_URL=https://alpha.companionintel.com/oauth/callback
 ```
+This will automatically configure the OAuth callback URL as `https://alpha.companionintel.com/oauth/callback`.
 
 For a custom deployment:
 ```bash
 CI_SERVER_URL=https://your-ci-server.example.com
-CI_SERVER_OAUTH_CALLBACK_URL=https://your-ci-server.example.com/oauth/callback
 ```
+This will automatically configure the OAuth callback URL as `https://your-ci-server.example.com/oauth/callback`.
 
 #### Development
 
