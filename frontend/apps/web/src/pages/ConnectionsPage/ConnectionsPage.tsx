@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
-import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select, Card } from '@ci/shadcn';
+import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X, Tool, Play } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
@@ -25,6 +25,12 @@ export interface Connection {
   readonly tokenExpiry: Date | null;
   readonly provider?: Provider;
   lastSyncedAt?: string;
+}
+
+export interface McpTool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
 }
 
 export function ConnectionsPage() {

@@ -1,4 +1,3 @@
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 
@@ -22,8 +21,6 @@ const mockToolRegistry = {
 
 describe('McpService', () => {
   let service: McpService;
-  let eventService: EventService;
-  let toolRegistry: ToolRegistry;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -50,8 +47,6 @@ describe('McpService', () => {
     }).compile();
 
     service = module.get<McpService>(McpService);
-    eventService = module.get<EventService>(EventService);
-    toolRegistry = module.get<ToolRegistry>(ToolRegistry);
   });
 
   afterEach(() => {
