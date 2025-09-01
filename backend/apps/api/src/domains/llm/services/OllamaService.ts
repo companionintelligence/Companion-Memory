@@ -148,29 +148,34 @@ export class OllamaService {
 
     // Handle demo vision mode
     if (selectedModel === 'demo-vision') {
-      const demoStream = this.generateDemoVisionResponseStream(messages);
-      const accumulatedMessages: OllamaMessage[] = [];
-      
-      // Consume the demo stream to build messages array
+      // Consume the demo stream once, cache chunks and build messages array
+      const cachedChunks: ChatResponse[] = [];
       const messageContent: string[] = [];
       for await (const chunk of this.generateDemoVisionResponseStream(messages)) {
+        cachedChunks.push(chunk);
         if (chunk.message.content) {
           messageContent.push(chunk.message.content);
         }
       }
-      
-      accumulatedMessages.push({
+
+      const accumulatedMessages: OllamaMessage[] = [{
         role: 'assistant',
         content: messageContent.join(''),
-      });
+      }];
 
-      const stream = this.generateDemoVisionResponseStream(messages);
-      Object.defineProperty(stream, 'messages', {
+      // Create a replayable async generator from cached chunks
+      async function* replayStream() {
+        for (const chunk of cachedChunks) {
+          yield chunk;
+        }
+      }
+
+      Object.defineProperty(replayStream, 'messages', {
         enumerable: true,
         get: () => accumulatedMessages,
       });
 
-      return stream as typeof stream & { messages: OllamaMessage[] };
+      return replayStream as typeof replayStream & { messages: OllamaMessage[] };
     }
 
     const inputMessages = messages.slice();
