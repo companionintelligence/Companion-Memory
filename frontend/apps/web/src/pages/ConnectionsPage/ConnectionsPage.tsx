@@ -2,7 +2,16 @@ import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select, Alert } from '@ci/shadcn';
-import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X, CheckCircle, Key, Database } from '@ci/shadcn/icons';
+import {
+  AlertCircle,
+  RefreshCw,
+  Settings,
+  Trash2,
+  Link2,
+  CheckCircle,
+  Key,
+  Database,
+} from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
@@ -255,18 +264,6 @@ export function ConnectionsPage() {
     },
     [authToken, fetchConnections],
   );
-
-  const truncateText = (text: string | undefined, maxLength: number = 50) => {
-    if (!text) {
-      return 'N/A';
-    }
-
-    if (text.length <= maxLength) {
-      return text;
-    }
-
-    return text.substring(0, maxLength) + '...';
-  };
 
   const connectionToggle = (connection: Connection) => {
     console.log('Toggling connection', connection);
@@ -566,19 +563,19 @@ export function ConnectionsPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Button 
-              variant="outline" 
-              size="icon" 
-              disabled={loading} 
+            <Button
+              variant="outline"
+              size="icon"
+              disabled={loading}
               onClick={() => fetchState()}
               title="Refresh connections and providers"
               className="shrink-0"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
-            <Button 
-              disabled={loading} 
-              onClick={connectionCreate} 
+            <Button
+              disabled={loading}
+              onClick={connectionCreate}
               title="Create a new data connection"
               className="shrink-0"
             >
@@ -692,14 +689,14 @@ export function ConnectionsPage() {
                       <Table.Cell>
                         <div className="flex items-center gap-2">
                           <RefreshCw className="h-3 w-3 text-muted-foreground" />
-                          <span className="capitalize">
-                            {connection.schedule || 'Manual'}
-                          </span>
+                          <span className="capitalize">{connection.schedule || 'Manual'}</span>
                         </div>
                       </Table.Cell>
                       <Table.Cell>
                         <div className="flex items-center justify-between max-w-[120px]">
-                          <span className={`text-sm font-medium ${connection.active ? 'text-green-700 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                          <span
+                            className={`text-sm font-medium ${connection.active ? 'text-green-700 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`}
+                          >
                             {connection.active ? 'Domain Tracking' : 'Disabled'}
                           </span>
                           <Toggle
@@ -782,8 +779,8 @@ export function ConnectionsPage() {
             <div className="flex items-center justify-between text-sm text-muted-foreground border-t pt-4 mt-6">
               <div className="flex items-center gap-4">
                 <span>Total Connections: {Connections.length}</span>
-                <span>Active: {Connections.filter(c => c.active).length}</span>
-                <span>Connected: {Connections.filter(c => c.accessToken).length}</span>
+                <span>Active: {Connections.filter((c) => c.active).length}</span>
+                <span>Connected: {Connections.filter((c) => c.accessToken).length}</span>
               </div>
               <div className="text-xs">
                 💡 Domain tracking monitors entire websites, page tracking focuses on specific URLs
@@ -799,9 +796,9 @@ export function ConnectionsPage() {
           <Dialog.Header>
             <Dialog.Title className="text-xl font-semibold">Create New Data Connection</Dialog.Title>
             <Dialog.Description className="text-base">
-              Connect to a data source to track domain-wide activity or specific pages. 
-              Domain tracking captures all activity across a website (e.g., all of www.youtube.com), 
-              while page tracking focuses on specific URLs (e.g., www.youtube.com/watch?v=abc123).
+              Connect to a data source to track domain-wide activity or specific pages. Domain tracking
+              captures all activity across a website (e.g., all of www.youtube.com), while page tracking
+              focuses on specific URLs (e.g., www.youtube.com/watch?v=abc123).
             </Dialog.Description>
           </Dialog.Header>
 
@@ -884,8 +881,8 @@ export function ConnectionsPage() {
           <Dialog.Header>
             <Dialog.Title className="text-xl font-semibold">Configure Data Connection</Dialog.Title>
             <Dialog.Description className="text-base">
-              Set up authentication and tracking preferences for this data source. 
-              You can configure whether to track the entire domain or specific pages.
+              Set up authentication and tracking preferences for this data source. You can configure whether
+              to track the entire domain or specific pages.
             </Dialog.Description>
           </Dialog.Header>
 
@@ -903,8 +900,8 @@ export function ConnectionsPage() {
                 <CheckCircle className="h-4 w-4" />
                 <Alert.Title>Connection Authenticated</Alert.Title>
                 <Alert.Description>
-                  This connection is successfully authenticated and ready to sync data. 
-                  You can reconnect if needed to refresh the authentication.
+                  This connection is successfully authenticated and ready to sync data. You can reconnect if
+                  needed to refresh the authentication.
                 </Alert.Description>
               </Alert>
             )}
@@ -963,7 +960,8 @@ export function ConnectionsPage() {
 
                 <div className="grid gap-2">
                   <Label htmlFor="edit-clientkey" className="text-sm">
-                    Application Client Key <span className="text-xs text-muted-foreground">(if required)</span>
+                    Application Client Key{' '}
+                    <span className="text-xs text-muted-foreground">(if required)</span>
                   </Label>
                   <Input
                     id="edit-clientkey"
