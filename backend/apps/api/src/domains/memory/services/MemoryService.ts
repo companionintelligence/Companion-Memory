@@ -1134,7 +1134,7 @@ export class MemoryService {
 
       if (includePreferences) {
         // Get preferences through person_tag relationship  
-        preferences = person.tags?.map(tag => tag.label) || [];
+        preferences = person.tags?.map(tag => tag.label).filter((label): label is string => label !== null) || [];
       }
 
       familyMembers.push({
