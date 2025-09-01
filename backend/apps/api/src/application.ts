@@ -27,6 +27,7 @@ import { MemoryModule } from '@ci/domains/memory';
 import { EmbeddingModule } from '@ci/domains/search';
 import { UserModule } from '@ci/domains/user';
 
+import { DevicesModule } from './domains/devices';
 import { SpeechModule } from './domains/speech';
 
 @Module({
@@ -45,6 +46,7 @@ import { SpeechModule } from './domains/speech';
     ScheduleModule.forRoot(),
     AuthModule,
     ConnectionsModule,
+    DevicesModule,
     EmbeddingModule,
     EventsModule,
     FilesModule,
