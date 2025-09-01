@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
-import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select, Card } from '@ci/shadcn';
+import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X, Download, Globe } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
@@ -570,6 +570,59 @@ export function ConnectionsPage() {
           </div>
         </div>
 
+        {/* Browser Extension Section */}
+        <Card className="p-6 bg-gradient-to-r from-blue-50 to-purple-50 border-blue-200">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-blue-900 mb-2">Browser Extension</h3>
+              <p className="text-blue-700 text-sm mb-3">
+                Connect your browser to sync your browsing activity, bookmarks, and enhance your AI assistant experience.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                  onClick={() => window.open('https://chrome.google.com/webstore', '_blank')}
+                >
+                  <Globe className="h-4 w-4 mr-2" />
+                  Chrome Store
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                  onClick={() => window.open('https://addons.mozilla.org', '_blank')}
+                >
+                  <Globe className="h-4 w-4 mr-2" />
+                  Firefox Add-ons
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                  onClick={() => window.open('https://microsoftedge.microsoft.com/addons', '_blank')}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Edge Add-ons
+                </Button>
+              </div>
+            </div>
+            <div className="text-sm text-blue-600">
+              {Connections.filter(conn => conn.provider?.name === 'Browser Extension').length > 0 ? (
+                <div className="flex items-center gap-2 bg-green-100 text-green-800 px-3 py-2 rounded-md">
+                  <Link2 className="h-4 w-4" />
+                  Extension Connected
+                </div>
+              ) : (
+                <div className="text-blue-600">
+                  Install the extension, then refresh this page to see your connection
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+
         {successMessage && (
           <div className="bg-green-50 text-green-800 rounded-md p-4 text-sm">{successMessage}</div>
         )}
@@ -598,6 +651,7 @@ export function ConnectionsPage() {
                   <Table.Head>Name</Table.Head>
                   <Table.Head>Provider</Table.Head>
                   <Table.Head>Status</Table.Head>
+                  <Table.Head>Last Updated</Table.Head>
                   <Table.Head>Schedule</Table.Head>
                   <Table.Head>Enabled</Table.Head>
                   <Table.Head>Actions</Table.Head>
@@ -616,16 +670,41 @@ export function ConnectionsPage() {
                       <Table.Cell className="text-sm">{connection.name}</Table.Cell>
                       <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
                       <Table.Cell className="text-sm">
-                        {connection.accessToken ? (
-                          <span className="flex items-center gap-1 text-green-600">
-                            <Link2 className="h-3 w-3" />
-                            Connected
+                        {connection.provider?.name === 'Browser Extension' ? (
+                          // Special status display for browser extension
+                          connection.accessToken ? (
+                            <span className="flex items-center gap-1 text-green-600">
+                              <Link2 className="h-3 w-3" />
+                              Active Session
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-amber-600">
+                              <X className="h-3 w-3" />
+                              Extension Installed
+                            </span>
+                          )
+                        ) : (
+                          // Standard status display for other providers
+                          connection.accessToken ? (
+                            <span className="flex items-center gap-1 text-green-600">
+                              <Link2 className="h-3 w-3" />
+                              Connected
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-muted-foreground">
+                              <X className="h-3 w-3" />
+                              Not connected
+                            </span>
+                          )
+                        )}
+                      </Table.Cell>
+                      <Table.Cell className="text-sm">
+                        {connection.lastSyncedAt ? (
+                          <span className="text-muted-foreground">
+                            {new Date(connection.lastSyncedAt).toLocaleDateString()} {new Date(connection.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         ) : (
-                          <span className="flex items-center gap-1 text-muted-foreground">
-                            <X className="h-3 w-3" />
-                            Not connected
-                          </span>
+                          <span className="text-muted-foreground">Never</span>
                         )}
                       </Table.Cell>
                       <Table.Cell className="text-sm">{truncateText(connection.schedule ?? '')}</Table.Cell>
