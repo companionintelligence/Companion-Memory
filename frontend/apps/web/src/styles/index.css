@@ -121,82 +121,49 @@
   }
 }
 
-/* PWA and Touch Support Enhancements */
+/* Essential PWA utilities that cannot be expressed in Tailwind */
 @layer utilities {
-  /* Touch-friendly tap targets */
-  .touch-target {
-    min-height: 44px;
-    min-width: 44px;
-  }
-  
-  /* Remove touch callouts and selection highlighting */
-  .no-touch-callout {
-    -webkit-touch-callout: none;
-    -webkit-tap-highlight-color: transparent;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-    user-select: none;
-  }
-  
-  /* Smooth scrolling for better mobile experience */
-  .smooth-scroll {
-    -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
-  }
-  
-  /* Safe area insets for devices with notches */
-  .safe-area-top {
+  /* Safe area insets for devices with notches - no Tailwind equivalent */
+  .safe-area-inset-top {
     padding-top: env(safe-area-inset-top);
   }
   
-  .safe-area-bottom {
+  .safe-area-inset-bottom {
     padding-bottom: env(safe-area-inset-bottom);
   }
   
-  .safe-area-left {
+  .safe-area-inset-left {
     padding-left: env(safe-area-inset-left);
   }
   
-  .safe-area-right {
+  .safe-area-inset-right {
     padding-right: env(safe-area-inset-right);
+  }
+  
+  /* WebKit specific properties for iOS Safari - no Tailwind equivalent */
+  .webkit-touch-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .webkit-touch-callout-none {
+    -webkit-touch-callout: none;
+  }
+  
+  .webkit-tap-highlight-transparent {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 
-/* Global PWA enhancements */
-html {
-  /* Prevent zoom on iOS when focusing inputs */
-  -webkit-text-size-adjust: 100%;
-  
-  /* Smooth scrolling */
-  scroll-behavior: smooth;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* Prevent 300ms click delay on mobile */
+/* Touch optimization for better mobile experience */
 button, input, select, textarea, a {
+  /* Eliminate 300ms click delay on mobile - no Tailwind equivalent */
   touch-action: manipulation;
 }
 
-/* Better focus visibility for keyboard navigation */
-button:focus-visible, 
-input:focus-visible, 
-select:focus-visible, 
-textarea:focus-visible, 
-a:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-/* Improve scrolling performance */
-* {
-  -webkit-overflow-scrolling: touch;
-}
-
-/* PWA splash screen support */
+/* PWA standalone mode specific styles */
 @media (display-mode: standalone) {
   body {
-    /* Hide address bar simulation on PWA */
+    /* Prevent dragging in PWA mode - WebKit specific, no Tailwind equivalent */
     -webkit-app-region: no-drag;
   }
 }

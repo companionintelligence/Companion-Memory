@@ -13,19 +13,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/[^/]+\/api\//,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 300, // 5 minutes
-              },
-            },
-          },
-        ],
+        // Focus on static asset caching only - no API caching without knowing the API structure
       },
       manifest: {
         name: 'Companion Intelligence',
