@@ -310,18 +310,24 @@ export class OllamaService {
         messages: inputMessages.concat(accumulatedMessages),
       });
     } catch (error) {
-      this.logger.error('Failed to chat with Ollama', {
-        model,
-        host: config.services.ollama.host,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      throw new Error(
-        `Ollama service unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.handleOllamaError(error, model);
     }
   }
 
+  /**
+   * Handles errors from Ollama API calls by logging and throwing a formatted error.
+   */
+  private handleOllamaError(error: unknown, model: string): never {
+    this.logger.error('Failed to chat with Ollama', {
+      model,
+      host: config.services.ollama.host,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    throw new Error(
+      `Ollama service unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   async validateModel(context: RequestContext, model: string | undefined): Promise<OllamaModel> {
     const resolvedModel = model ?? PROMPT_MODEL;
 
