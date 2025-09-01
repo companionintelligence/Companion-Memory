@@ -17,11 +17,11 @@ import { RequestContextMiddleware, RequestLoggerMiddleware } from '@ci/common/mi
 import { LoggerService } from '@ci/common/services';
 import config from '@ci/configuration';
 import { AuthModule } from '@ci/domains/auth';
-import { AuthBrokerModule } from '@ci/domains/auth-broker';
 import { ConnectionsModule } from '@ci/domains/connections';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
+import { InternalModule } from '@ci/domains/internal';
 import { JobsModule } from '@ci/domains/jobs';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
@@ -45,12 +45,12 @@ import { SpeechModule } from './domains/speech';
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
     AuthModule,
-    AuthBrokerModule,
     ConnectionsModule,
     EmbeddingModule,
     EventsModule,
     FilesModule,
     IntelligenceModule,
+    InternalModule,
     JobsModule,
     LLMModule,
     MemoryModule,

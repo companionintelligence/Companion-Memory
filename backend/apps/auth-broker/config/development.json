@@ -1,0 +1,14 @@
+{
+  "authBroker": {
+    "port": 3001,
+    "host": "0.0.0.0",
+    "baseUrl": "https://dev.companionintelligence.com"
+  },
+  "database": {
+    "host": "localhost",
+    "logging": true
+  },
+  "ciServer": {
+    "apiUrl": "http://localhost:3000"
+  }
+}

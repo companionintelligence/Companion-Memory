@@ -1,0 +1,23 @@
+{
+  "authBroker": {
+    "port": 3001,
+    "host": "0.0.0.0",
+    "baseUrl": "https://auth.companionintellience.io"
+  },
+  "database": {
+    "type": "postgres",
+    "host": "postgres",
+    "port": 5432,
+    "username": "companion_intel",
+    "password": "",
+    "name": "companion_intel",
+    "logging": false
+  },
+  "auth": {
+    "jwtSecret": ""
+  },
+  "ciServer": {
+    "apiUrl": "http://ci-api:3000",
+    "internalSecret": ""
+  }
+}

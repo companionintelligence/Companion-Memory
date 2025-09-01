@@ -52,6 +52,7 @@ export const ConfigSchema = z.object({
       callbackUrl: z.string(),
     }),
   }),
+  internalSecret: z.string(),
   db: z.object({
     type: z.literal('postgres'), // restrict to 'postgres' (or z.string() for other DBs)
     host: z.string(),

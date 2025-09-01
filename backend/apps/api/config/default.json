@@ -35,6 +35,7 @@
       "callbackUrl": "https://auth.companionintellience.io/auth-broker/callback"
     }
   },
+  "internalSecret": "CI_INTERNAL_SECRET",
   "db": {
     "type": "postgres",
     "host": "127.0.0.1",

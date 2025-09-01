@@ -1,0 +1,12 @@
+{
+  "database": {
+    "username": "POSTGRES_USERNAME",
+    "password": "POSTGRES_PASSWORD"
+  },
+  "auth": {
+    "jwtSecret": "AUTH_TOKEN_SECRET"
+  },
+  "ciServer": {
+    "internalSecret": "CI_INTERNAL_SECRET"
+  }
+}

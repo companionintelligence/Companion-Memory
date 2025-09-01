@@ -1,8 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { AuthModule } from '@ci/domains/auth';
-
 import { AuthBrokerController } from './controllers/AuthBrokerController';
 import { OAuthProviderEntity } from './entities/OAuthProviderEntity';
 import { BrokerTokenEntity } from './entities/BrokerTokenEntity';
@@ -12,7 +10,6 @@ import { OAuthProviderService } from './services/OAuthProviderService';
 @Module({
   imports: [
     TypeOrmModule.forFeature([OAuthProviderEntity, BrokerTokenEntity]),
-    AuthModule,
   ],
   providers: [AuthBrokerService, OAuthProviderService],
   controllers: [AuthBrokerController],

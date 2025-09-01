@@ -1,7 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, ManyToOne, JoinColumn, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
-import { UserEntity } from '@ci/domains/user';
-
 import { OAuthProviderEntity } from './OAuthProviderEntity';
 
 @Entity('broker_tokens')
@@ -41,10 +39,6 @@ export class BrokerTokenEntity {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt!: Date;
-
-  @ManyToOne(() => UserEntity)
-  @JoinColumn({ name: 'user_id' })
-  user!: UserEntity;
 
   @ManyToOne(() => OAuthProviderEntity)
   @JoinColumn({ name: 'provider_id' })

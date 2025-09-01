@@ -7,6 +7,7 @@ YELLOW=\033[0;33m
 RESET=\033[0m
 
 export API_REPO ?= ci/api
+export AUTH_BROKER_REPO ?= ci/auth-broker
 export WEBSERVER_REPO ?= ci/nginx
 export TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 
@@ -38,6 +39,10 @@ build: ## Build the application
 	@cd backend/apps/api && yarn clean && yarn build
 	@printf "\nAPI successfully compiled.\n"
 
+	@printf "\nCompiling Auth Broker...\n\n"
+	@cd backend/apps/auth-broker && yarn clean && yarn build
+	@printf "\nAuth Broker successfully compiled.\n"
+
 	@printf "\nCompiling web frontend...\n\n"
 	@cd frontend/apps/web && yarn clean && yarn build
 	@printf "\nWeb frontend successfully compiled.\n"
@@ -45,6 +50,10 @@ build: ## Build the application
 	@printf "\nBuilding API Docker image...\n\n"
 	@docker build -f backend/apps/api/Dockerfile -t $(API_REPO):latest .
 	@printf "\nAPI Docker image successfully built.\n"
+
+	@printf "\nBuilding Auth Broker Docker image...\n\n"
+	@docker build -f docker/auth-broker/Dockerfile -t $(AUTH_BROKER_REPO):latest .
+	@printf "\nAuth Broker Docker image successfully built.\n"
 
 	@printf "\nBuilding webserver Docker image...\n\n"
 	@docker build -f docker/webserver/Dockerfile -t $(WEBSERVER_REPO):latest .
@@ -70,6 +79,7 @@ dev: ## Boot the application
 
 	@SESSION="companion"; \
 	BACKEND_DIR="backend/apps/api"; \
+	AUTH_BROKER_DIR="backend/apps/auth-broker"; \
 	FRONTEND_DIR="frontend/apps/web"; \
 	\
 	if tmux has-session -t $$SESSION 2>/dev/null; then \
@@ -83,7 +93,10 @@ dev: ## Boot the application
 	tmux new-session -d -s $$SESSION -c $$BACKEND_DIR; \
 	tmux send-keys -t $$SESSION "yarn dev:pretty" C-m; \
 	\
-	tmux split-window -h -t $$SESSION -c $$FRONTEND_DIR; \
+	tmux split-window -h -t $$SESSION -c $$AUTH_BROKER_DIR; \
+	tmux send-keys -t $$SESSION "yarn dev:pretty" C-m; \
+	\
+	tmux split-window -v -t $$SESSION -c $$FRONTEND_DIR; \
 	tmux send-keys -t $$SESSION "yarn dev" C-m; \
 	\
 	tmux select-pane -t 0; \
@@ -186,6 +199,7 @@ local: ## Run the local dependencies from Docker images
 migrate: ## Run database migrations
 	@printf "🪿 Running database migrations...\n\n"
 	@cd backend/apps/api && yarn migrate
+	@cd backend/apps/auth-broker && yarn migrate
 	@printf "\nMigrations successfully run.\n"
 
 seed: ## Seed backend database
