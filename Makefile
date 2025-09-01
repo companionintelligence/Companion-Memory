@@ -97,18 +97,37 @@ index: ## Generate vector embeddings for indexable content
 init: ## Initialize repository after checkout
 	@printf "🏗️ Initializing repository...\n\n"
 
-	@NODEJS=$$(which node 2>/dev/null); \
+	@# Try to activate Node via NVM if available and create a temporary script
+	@if [ -z "$$(which node 2>/dev/null)" ] && [ -f "$$HOME/.nvm/nvm.sh" ]; then \
+		printf "$(YELLOW)•$(RESET) Node not found in PATH, attempting to load via NVM...\n"; \
+		echo '. "$$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1' > /tmp/nvm_setup.sh; \
+		. /tmp/nvm_setup.sh && printf "$(GREEN)✓$(RESET) NVM activated Node version $$(. /tmp/nvm_setup.sh && node -v)\n\n" || printf "$(RED)✗$(RESET) Failed to activate NVM\n\n"; \
+	fi
+
+	@# Check for Node.js availability (with NVM environment if activated)
+	@if [ -f /tmp/nvm_setup.sh ]; then \
+		NODEJS=$$(. /tmp/nvm_setup.sh && which node 2>/dev/null); \
+	else \
+		NODEJS=$$(which node 2>/dev/null); \
+	fi; \
 	if [ -z "$$NODEJS" ]; then \
 		printf "$(RED)✗$(RESET) You do not have 'node' installed or it is not in your path. Please install NodeJS v$(shell cat .nvmrc 2>/dev/null || echo '[unknown]') first.\n\n"; \
+		rm -f /tmp/nvm_setup.sh; \
 		exit 1; \
 	else \
 		printf "$(GREEN)✓$(RESET) NodeJS found at $$NODEJS\n\n"; \
 	fi
 
-	@required_version=$$(cat .nvmrc); \
-	current_version=$$(node -v | cut -c2-); \
+	@# Check Node.js version (with NVM environment if activated)
+	@if [ -f /tmp/nvm_setup.sh ]; then \
+		current_version=$$(. /tmp/nvm_setup.sh && node -v | cut -c2-); \
+	else \
+		current_version=$$(node -v | cut -c2-); \
+	fi; \
+	required_version=$$(cat .nvmrc); \
 	if [ "$$current_version" != "$$required_version" ]; then \
 		printf "$(RED)✗$(RESET) Node version mismatch. Expected $$required_version, but got $$current_version.\n\n"; \
+		rm -f /tmp/nvm_setup.sh; \
 		exit 1; \
 	else \
 		printf "$(GREEN)✓$(RESET) Node version matches ($$current_version)\n\n"; \
@@ -170,6 +189,7 @@ init: ## Initialize repository after checkout
 	@printf "\n"
 	@yarn prepare
 	@printf "\n"
+	@rm -f /tmp/nvm_setup.sh
 	@printf "\nRepository initialized.\n"
 
 install: ## Install project dependencies
