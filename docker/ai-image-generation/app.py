@@ -351,11 +351,13 @@ async def generate_image(request: ImageGenerationRequest) -> ImageGenerationResp
             del result
             cleanup_memory()
             
+            logger.info(f"Successfully generated image with {request.model}")
+            
         except Exception as model_error:
             logger.warning(f"Model generation failed: {model_error}, falling back to placeholder")
-            # Fall back to placeholder
+            # Fall back to placeholder - create a more informative placeholder
             image_base64 = create_placeholder_image(
-                f"[{request.model.upper()}] {request.prompt}", 
+                f"[{model_config['name']}] {request.prompt}", 
                 request.width, 
                 request.height
             )

@@ -104,7 +104,7 @@ services:
     ports:
       - 7860:7860
     environment:
-      - TORCH_DEVICE=cuda
+      - TORCH_DEVICE=auto  # Will auto-detect GPU/CPU
       - MODEL_CACHE_DIR=/app/models
       - MAX_MODELS_IN_MEMORY=2
     volumes:
@@ -113,13 +113,14 @@ services:
     networks:
       - web
     profiles: [ "all", "ai" ]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # GPU support is optional - comment out if no GPU available
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
 volumes:
   postgres-data:

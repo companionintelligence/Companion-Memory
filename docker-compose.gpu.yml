@@ -1,0 +1,21 @@
+# Docker Compose override for GPU-enabled AI image generation
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up ai-image-generation
+# 
+# Requirements:
+# - NVIDIA Docker runtime
+# - NVIDIA drivers installed
+# - At least 8GB VRAM recommended
+
+version: '3.8'
+
+services:
+  ai-image-generation:
+    environment:
+      - TORCH_DEVICE=cuda  # Force CUDA usage
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
