@@ -739,11 +739,7 @@ export function ConnectionsPage() {
                   </div>
                 ) : (
                   <div className="grid gap-4 animate-in slide-in-from-bottom-4 duration-500">
-                    {Connections.map((connection, index) => (
-                      <div
-                        key={connection.id}
-                        className="animate-in slide-in-from-bottom-4"
-                        style={{ animationDelay: `${index * 100}ms` }}
+                        style={{ '--animation-delay': `${index * 100}ms` } as React.CSSProperties}
                       >
                         <ConnectionCard connection={connection} />
                       </div>
