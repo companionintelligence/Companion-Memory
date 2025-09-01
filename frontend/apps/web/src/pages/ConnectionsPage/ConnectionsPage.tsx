@@ -40,10 +40,13 @@ export function ConnectionsPage() {
 
   const [Providers, setProviders] = useState<Provider[]>([]);
   const [Connections, setConnections] = useState<Connection[]>([]);
+  const [McpTools, setMcpTools] = useState<McpTool[]>([]);
 
   // const [changes, setChanges] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [mcpLoading, setMcpLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mcpError, setMcpError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Modal state
@@ -182,10 +185,71 @@ export function ConnectionsPage() {
     }
   }, [authToken]);
 
+  const fetchMcpTools = useCallback(async () => {
+    try {
+      setMcpLoading(true);
+      setMcpError(null);
+
+      if (!authToken) {
+        console.error('ConnectionsPage: No authentication token found');
+        throw new Error('Authentication token not found');
+      }
+
+      const response = await fetch('/api/mcp/tools', {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        // Handle different HTTP error codes
+        console.error(
+          `ConnectionsPage: MCP API request failed with status ${response.status}: ${response.statusText}`,
+        );
+        if (response.status === 401) {
+          throw new Error('Unauthorized: You do not have permission to access this resource');
+        } else if (response.status === 403) {
+          throw new Error('Forbidden: Access denied');
+        } else if (response.status === 404) {
+          throw new Error('MCP API endpoint not found');
+        } else if (response.status >= 500) {
+          throw new Error('Server error: Please try again later');
+        } else {
+          throw new Error(`Error fetching MCP tools: ${response.statusText}`);
+        }
+      }
+
+      const data = await response.json();
+
+      // Handle both array response and paginated response
+      let McpToolsData: McpTool[] = [];
+      if (Array.isArray(data)) {
+        McpToolsData = data;
+      } else if (data.data && Array.isArray(data.data)) {
+        McpToolsData = data.data;
+      } else {
+        console.error('ConnectionsPage: Invalid MCP response format', data);
+        throw new Error('Invalid response format: Expected an array of MCP tools');
+      }
+
+      setMcpTools(McpToolsData);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      console.error('ConnectionsPage: Error in fetchMcpTools():', errorMessage, err);
+      setMcpError(errorMessage);
+    } finally {
+      setMcpLoading(false);
+    }
+  }, [authToken]);
+
   const fetchState = useCallback(async () => {
-    await fetchConnections();
-    await fetchProviders();
-  }, [fetchConnections, fetchProviders]);
+    await Promise.all([
+      fetchConnections(),
+      fetchProviders(),
+      fetchMcpTools(),
+    ]);
+  }, [fetchConnections, fetchProviders, fetchMcpTools]);
 
   useEffect(() => {
     // Check for OAuth callback
@@ -546,6 +610,48 @@ export function ConnectionsPage() {
     }
   };
 
+  const handleExecuteMcpTool = async (toolName: string) => {
+    if (!confirm(`Are you sure you want to execute the MCP tool "${toolName}"?`)) {
+      return;
+    }
+
+    try {
+      if (!authToken) {
+        throw new Error('Authentication token not found');
+      }
+
+      const response = await fetch('/api/mcp/execute', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: toolName,
+          arguments: {},
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Error executing MCP tool: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Successfully executed MCP tool:', result);
+
+      if (result.success) {
+        setSuccessMessage(`MCP tool "${toolName}" executed successfully`);
+      } else {
+        setMcpError(`MCP tool execution failed: ${result.error}`);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      console.error('Error executing MCP tool:', errorMessage, err);
+      setMcpError(errorMessage);
+    }
+  };
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -567,11 +673,8 @@ export function ConnectionsPage() {
           <h1 className="text-2xl font-bold">Connections</h1>
 
           <div className="flex flex-row items-center gap-2">
-            <Button variant="outline" size="icon" disabled={loading} title="Refresh Providers">
+            <Button variant="outline" size="icon" disabled={loading} onClick={fetchState} title="Refresh All">
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            </Button>
-            <Button variant="outline" disabled={loading} onClick={connectionCreate} title="Create Connection">
-              Create
             </Button>
           </div>
         </div>
@@ -598,119 +701,204 @@ export function ConnectionsPage() {
           </div>
         ) : (
           <>
-            <Table>
-              <Table.Header>
-                <Table.Row>
-                  <Table.Head>Name</Table.Head>
-                  <Table.Head>Provider</Table.Head>
-                  <Table.Head>Status</Table.Head>
-                  <Table.Head>Schedule</Table.Head>
-                  <Table.Head>Enabled</Table.Head>
-                  <Table.Head>Actions</Table.Head>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {Providers.length === 0 ? (
+            {/* Connections Table */}
+            <Card>
+              <div className="p-6 pb-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">Data Connections</h2>
+                  <Button variant="outline" disabled={loading} onClick={connectionCreate} title="Create Connection">
+                    Create
+                  </Button>
+                </div>
+              </div>
+              <Table>
+                <Table.Header>
                   <Table.Row>
-                    <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
-                      No Providers found in the system
-                    </Table.Cell>
+                    <Table.Head>Name</Table.Head>
+                    <Table.Head>Provider</Table.Head>
+                    <Table.Head>Status</Table.Head>
+                    <Table.Head>Schedule</Table.Head>
+                    <Table.Head>Enabled</Table.Head>
+                    <Table.Head>Actions</Table.Head>
                   </Table.Row>
-                ) : (
-                  Connections.map((connection) => (
-                    <Table.Row key={connection.id}>
-                      <Table.Cell className="text-sm">{connection.name}</Table.Cell>
-                      <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
-                      <Table.Cell className="text-sm">
-                        {connection.accessToken ? (
-                          <span className="flex items-center gap-1 text-green-600">
-                            <Link2 className="h-3 w-3" />
-                            Connected
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-muted-foreground">
-                            <X className="h-3 w-3" />
-                            Not connected
-                          </span>
-                        )}
-                      </Table.Cell>
-                      <Table.Cell className="text-sm">{truncateText(connection.schedule ?? '')}</Table.Cell>
-                      <Table.Cell className="text-sm">
-                        <Toggle
-                          aria-label="Toggle italic"
-                          onClick={() => {
-                            connectionToggle(connection);
-                          }}
-                        >
-                          {connection.active ? 'enabled' : 'disabled'}
-                        </Toggle>
-                      </Table.Cell>
-                      <Table.Cell className="text-sm">
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => connectionEdit(connection)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Edit"
-                          >
-                            <Settings className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleConnect(connection)}
-                            disabled={
-                              deleteLoading === connection.id ||
-                              oauthInProgress ||
-                              !connection.clientid ||
-                              !connection.clientsecret
-                            }
-                            title={
-                              !connection.clientid || !connection.clientsecret
-                                ? 'Configure OAuth credentials first'
-                                : connection.accessToken
-                                  ? 'Reconnect'
-                                  : 'Connect'
-                            }
-                          >
-                            {connection.accessToken ? (
-                              <RefreshCw className="h-4 w-4" />
-                            ) : (
-                              <Link2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleDeleteConnection(connection.id)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Delete"
-                          >
-                            {deleteLoading === connection.id ? (
-                              <RefreshCw className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleSyncConnection(connection.id)}
-                            disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Sync Data"
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                        </div>
+                </Table.Header>
+                <Table.Body>
+                  {Providers.length === 0 ? (
+                    <Table.Row>
+                      <Table.Cell colSpan={6} className="text-center py-8 text-muted-foreground">
+                        No Providers found in the system
                       </Table.Cell>
                     </Table.Row>
-                  ))
-                )}
-              </Table.Body>
-            </Table>
+                  ) : (
+                    Connections.map((connection) => (
+                      <Table.Row key={connection.id}>
+                        <Table.Cell className="text-sm">{connection.name}</Table.Cell>
+                        <Table.Cell className="text-sm">{connection.provider?.name || 'N/A'}</Table.Cell>
+                        <Table.Cell className="text-sm">
+                          {connection.accessToken ? (
+                            <span className="flex items-center gap-1 text-green-600">
+                              <Link2 className="h-3 w-3" />
+                              Connected
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-muted-foreground">
+                              <X className="h-3 w-3" />
+                              Not connected
+                            </span>
+                          )}
+                        </Table.Cell>
+                        <Table.Cell className="text-sm">{truncateText(connection.schedule ?? '')}</Table.Cell>
+                        <Table.Cell className="text-sm">
+                          <Toggle
+                            aria-label="Toggle italic"
+                            onClick={() => {
+                              connectionToggle(connection);
+                            }}
+                          >
+                            {connection.active ? 'enabled' : 'disabled'}
+                          </Toggle>
+                        </Table.Cell>
+                        <Table.Cell className="text-sm">
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => connectionEdit(connection)}
+                              disabled={deleteLoading === connection.id || oauthInProgress}
+                              title="Edit"
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleConnect(connection)}
+                              disabled={
+                                deleteLoading === connection.id ||
+                                oauthInProgress ||
+                                !connection.clientid ||
+                                !connection.clientsecret
+                              }
+                              title={
+                                !connection.clientid || !connection.clientsecret
+                                  ? 'Configure OAuth credentials first'
+                                  : connection.accessToken
+                                    ? 'Reconnect'
+                                    : 'Connect'
+                              }
+                            >
+                              {connection.accessToken ? (
+                                <RefreshCw className="h-4 w-4" />
+                              ) : (
+                                <Link2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleDeleteConnection(connection.id)}
+                              disabled={deleteLoading === connection.id || oauthInProgress}
+                              title="Delete"
+                            >
+                              {deleteLoading === connection.id ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleSyncConnection(connection.id)}
+                              disabled={deleteLoading === connection.id || oauthInProgress}
+                              title="Sync Data"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))
+                  )}
+                </Table.Body>
+              </Table>
+              <div className="p-4">
+                <div className="text-xs text-muted-foreground">Total Connections: {Connections.length}</div>
+              </div>
+            </Card>
 
-            <div className="text-xs text-muted-foreground">Total Connections: {Connections.length}</div>
+            {/* MCP Tools Table */}
+            <Card className="mt-6">
+              <div className="p-6 pb-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">MCP Tools</h2>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    disabled={mcpLoading}
+                    onClick={fetchMcpTools}
+                    title="Refresh MCP Tools"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${mcpLoading ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
+                {mcpError && (
+                  <div className="mt-4 bg-destructive/10 text-destructive rounded-md p-3 flex items-start gap-3">
+                    <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                    <div className="text-sm">{mcpError}</div>
+                  </div>
+                )}
+              </div>
+              {mcpLoading ? (
+                <div className="text-center py-8">
+                  <RefreshCw className="h-6 w-6 animate-spin mx-auto" />
+                  <p className="text-sm text-muted-foreground mt-2">Loading MCP tools...</p>
+                </div>
+              ) : (
+                <Table>
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.Head>Tool Name</Table.Head>
+                      <Table.Head>Description</Table.Head>
+                      <Table.Head>Actions</Table.Head>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {McpTools.length === 0 ? (
+                      <Table.Row>
+                        <Table.Cell colSpan={3} className="text-center py-8 text-muted-foreground">
+                          <div className="flex flex-col items-center gap-2">
+                            <Tool className="h-8 w-8 text-muted-foreground/50" />
+                            <p>No MCP tools found</p>
+                            <p className="text-xs">MCP tools will appear here once configured</p>
+                          </div>
+                        </Table.Cell>
+                      </Table.Row>
+                    ) : (
+                      McpTools.map((tool, index) => (
+                        <Table.Row key={`${tool.name}-${index}`}>
+                          <Table.Cell className="text-sm font-medium">{tool.name}</Table.Cell>
+                          <Table.Cell className="text-sm">{truncateText(tool.description, 80)}</Table.Cell>
+                          <Table.Cell className="text-sm">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleExecuteMcpTool(tool.name)}
+                              title={`Execute ${tool.name}`}
+                            >
+                              <Play className="h-4 w-4" />
+                            </Button>
+                          </Table.Cell>
+                        </Table.Row>
+                      ))
+                    )}
+                  </Table.Body>
+                </Table>
+              )}
+              <div className="p-4">
+                <div className="text-xs text-muted-foreground">Total MCP Tools: {McpTools.length}</div>
+              </div>
+            </Card>
           </>
         )}
       </PageContent>
