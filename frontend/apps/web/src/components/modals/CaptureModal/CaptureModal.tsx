@@ -101,14 +101,14 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <Dialog.Content className="w-full h-full max-w-none max-h-none sm:w-[90vw] sm:h-[90vh] sm:max-w-[90vw] sm:max-h-[90vh] p-0 flex flex-col gap-0 inset-0 translate-x-0 translate-y-0 sm:inset-auto sm:top-[50%] sm:left-[50%] sm:translate-x-[-50%] sm:translate-y-[-50%] rounded-none sm:rounded-lg">
-        <Dialog.Header className="flex flex-row items-center gap-4 p-4 pb-3 border-b bg-stone-50 rounded-none sm:rounded-t-lg">
+      <Dialog.Content className="w-full h-full max-w-none max-h-none p-0 flex flex-col gap-0 inset-0 translate-x-0 translate-y-0 rounded-none animate-in slide-in-from-bottom-4 duration-300 ease-out">
+        <Dialog.Header className="flex flex-row items-center gap-4 p-4 pb-3 border-b bg-stone-50 rounded-none animate-in fade-in duration-200">
           <Dialog.Title>Upload Images and Videos</Dialog.Title>
           <Dialog.Description className="hidden">Capture audio or video and upload to CI</Dialog.Description>
         </Dialog.Header>
 
         {files.length === 0 && (
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 flex flex-col min-h-0 animate-in fade-in duration-500 ease-out">
             <Camera onFrameCaptured={handleMediaCaptured} onRecordingFinished={handleMediaCaptured}>
               <div className="flex-1 min-h-0">
                 <Camera.Feed />
@@ -117,15 +117,15 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
           </div>
         )}
         {files.length > 0 && (
-          <div className="flex flex-col sm:flex-row flex-1 max-h-100">
+          <div className="flex flex-col sm:flex-row flex-1 max-h-100 animate-in slide-in-from-bottom-4 duration-400 ease-out">
             {/* Left side: file preview or fallback */}
             <div className="flex flex-col gap-4 p-4 sm:border-r sm:min-w-[320px] sm:max-w-[480px] w-full">
-              {files.map((file) => {
+              {files.map((file, index) => {
                 const fileType = getMediaType(file.contentType);
                 switch (fileType) {
                   case 'video':
                     return (
-                      <div className="aspect-video rounded-lg overflow-hidden bg-stone-100">
+                      <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100 animate-in zoom-in-95 duration-300 ease-out" style={{animationDelay: `${index * 100}ms`}}>
                         <video controls className="w-full h-full object-cover">
                           <source src={file.url} type={file.contentType} />
                           Your browser does not support the video tag.
@@ -134,7 +134,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
                     );
                   case 'audio':
                     return (
-                      <div className="rounded-lg overflow-hidden bg-stone-100 p-4 flex items-center justify-center">
+                      <div key={file.id} className="rounded-lg overflow-hidden bg-stone-100 p-4 flex items-center justify-center animate-in zoom-in-95 duration-300 ease-out" style={{animationDelay: `${index * 100}ms`}}>
                         <audio controls className="w-full">
                           <source src={file.url} type={file.contentType} />
                           Your browser does not support the audio element.
@@ -143,7 +143,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
                     );
                   case 'image':
                     return (
-                      <div className="aspect-video rounded-lg overflow-hidden bg-stone-100">
+                      <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100 animate-in zoom-in-95 duration-300 ease-out" style={{animationDelay: `${index * 100}ms`}}>
                         <img src={file.url} className="w-full h-full object-cover" />
                       </div>
                     );
@@ -153,7 +153,7 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
 
             {/* Right side: Chat */}
             {files?.length > 0 && (
-              <div className="flex-1 min-w-0 max-h-100 overflow-y-auto">
+              <div className="flex-1 min-w-0 max-h-100 overflow-y-auto animate-in slide-in-from-right-4 duration-400 ease-out">
                 <Chat
                   loading={loading}
                   streaming={streaming}
@@ -162,8 +162,8 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
                   onStop={stopChatRequest}
                   placeholder="Ask about this content..."
                   emptyState={
-                    <div className="text-center text-gray-500 mt-8">
-                      <div className="w-16 h-16 mx-auto mb-4 bg-stone-100 rounded-full flex items-center justify-center">
+                    <div className="text-center text-gray-500 mt-8 animate-in fade-in duration-500 ease-out">
+                      <div className="w-16 h-16 mx-auto mb-4 bg-stone-100 rounded-full flex items-center justify-center animate-pulse">
                         <Send className="w-8 h-8 text-zinc-400 relative top-0.5 -left-0.5" />
                       </div>
                       <p className="text-sm">Start a conversation about this content</p>

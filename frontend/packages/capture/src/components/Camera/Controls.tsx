@@ -9,7 +9,7 @@ interface ControlsProps {
 function Controls({ children }: ControlsProps) {
   return (
     <Tooltip.Provider>
-      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex p-1 gap-1 rounded-lg bg-black/60 backdrop-blur-sm">
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex p-2 gap-3 rounded-full bg-black/80 backdrop-blur-md shadow-lg animate-in slide-in-from-bottom-4 duration-300 ease-out">
         {children}
       </div>
     </Tooltip.Provider>
@@ -32,12 +32,12 @@ function ControlsIcon({ icon, tooltip, className, onClick }: ControlsIconProps) 
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 p-0 cursor-pointer hover:bg-white/10 active:scale-80 transition-transform transition group"
+          className="h-12 w-12 p-0 cursor-pointer rounded-full bg-white/20 hover:bg-white/30 active:scale-90 transition-all duration-200 ease-out border border-white/30 backdrop-blur-sm"
           onClick={onClick}
         >
           <Icon
             className={cn(
-              'h-1 w-1 text-white hover:drop-shadow-[0_0_2px_rgba(255,255,255,0.5)] transition-transform',
+              'h-6 w-6 text-white drop-shadow-sm transition-all duration-200 ease-out',
               className,
             )}
           />
@@ -49,7 +49,7 @@ function ControlsIcon({ icon, tooltip, className, onClick }: ControlsIconProps) 
 }
 
 function ControlsDivider() {
-  return <div className="w-px self-stretch bg-white/20 mx-1" />;
+  return <div className="w-px self-stretch bg-white/40 mx-2 opacity-80" />;
 }
 
 type ControlsComponent = typeof Controls & {

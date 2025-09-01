@@ -71,7 +71,10 @@ function CameraFeed() {
   return (
     <div className="relative w-full h-full">
       <video
-        className={cn('w-full h-full object-contain block', isActive ? 'block' : 'hidden')}
+        className={cn(
+          'w-full h-full object-contain block transition-opacity duration-300 ease-in-out',
+          isActive ? 'opacity-100' : 'opacity-0',
+        )}
         ref={videoRef}
         autoPlay
         playsInline
@@ -84,7 +87,7 @@ function CameraFeed() {
 
           <Controls>
             <Controls.Icon
-              className={isRecording ? 'text-red-500' : 'text-white'}
+              className={cn('transition-colors duration-200', isRecording ? 'text-red-500' : 'text-white')}
               icon={RecordingIcon}
               tooltip={isRecording ? 'Stop recording' : 'Record video'}
               onClick={toggleRecording}
@@ -111,9 +114,10 @@ function CameraFeed() {
             <Controls.Icon
               icon={SwitchCamera}
               tooltip="Swap camera"
-              className={
-                facingMode === 'environment' ? '[transform:rotateY(180deg)]' : '[transform:rotateY(0deg)]'
-              }
+              className={cn(
+                'transition-transform duration-300 ease-in-out',
+                facingMode === 'environment' ? '[transform:rotateY(180deg)]' : '[transform:rotateY(0deg)]',
+              )}
               onClick={swapFacingMode}
             />
 
@@ -123,8 +127,12 @@ function CameraFeed() {
       )}
 
       {!isActive && (
-        <div style={{ textAlign: 'center', padding: '20px', border: '2px dashed #ccc', borderRadius: '8px' }}>
-          <p>Waiting for camera access...</p>
+        <div className="absolute inset-0 flex items-center justify-center bg-stone-100 animate-pulse">
+          <div className="text-center p-8 border-2 border-dashed border-stone-300 rounded-lg bg-white/50 backdrop-blur-sm">
+            <CameraIcon className="w-12 h-12 mx-auto mb-4 text-stone-400" />
+            <p className="text-stone-600 font-medium">Waiting for camera access...</p>
+            <p className="text-sm text-stone-500 mt-1">Please allow camera permissions</p>
+          </div>
         </div>
       )}
     </div>
@@ -135,12 +143,12 @@ function CameraInformation() {
   const [{ selectedMicrophone, selectedCamera }] = useInputDevices();
 
   return (
-    <div className="absolute flex flex-row items-center justify-center top-1 left-1 flex py-1 px-2 gap-1 rounded-lg bg-black/60 backdrop-blur-sm text-gray-100 text-xs select-none">
-      <VideoIcon className="w-4 h-4" />
-      <div>{selectedCamera?.name ?? 'No camera'}</div>
-      <Controls.Divider />
-      <Mic className="w-4 h-4" />
-      <div>{selectedMicrophone?.name ?? 'No mic'}</div>
+    <div className="absolute flex flex-row items-center justify-center top-4 left-4 flex py-2 px-3 gap-2 rounded-full bg-black/80 backdrop-blur-md text-gray-100 text-sm select-none border border-white/20 shadow-lg animate-in slide-in-from-top-4 duration-300 ease-out">
+      <VideoIcon className="w-4 h-4 text-green-400" />
+      <div className="font-medium">{selectedCamera?.name ?? 'No camera'}</div>
+      <div className="w-px h-4 bg-white/40 mx-1" />
+      <Mic className="w-4 h-4 text-blue-400" />
+      <div className="font-medium">{selectedMicrophone?.name ?? 'No mic'}</div>
     </div>
   );
 }
