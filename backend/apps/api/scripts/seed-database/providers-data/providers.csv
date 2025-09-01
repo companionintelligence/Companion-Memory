@@ -1,3 +1,12 @@
 id,name,token_host,token_path,authorize_path,api_base_url,scopes
 0198779b-182c-716e-9275-b81d99a47fdb,Google,https://oauth2.googleapis.com,/token,https://accounts.google.com/o/oauth2/v2/auth,https://www.googleapis.com,https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly
 0198779b-3c33-73da-84e5-82e0df145260,Microsoft,https://login.microsoftonline.com,/common/oauth2/v2.0/token,/common/oauth2/v2.0/authorize,https://graph.microsoft.com,https://graph.microsoft.com/User.Read
+0198779b-4a11-7b1e-9876-c12d34e56f78,iOS,,,,,
+0198779b-5b22-7c2f-9987-d23e45f67890,Android,,,,,
+0198779b-6c33-7d30-9098-e34f56789012,Windows,,,,,
+0198779b-7d44-7e41-9109-f45067890123,Mac,,,,,
+0198779b-8e55-7f52-9210-056178901234,XReal,,,,,
+0198779b-9f66-7063-9321-167289012345,Quest,,,,,
+0198779b-a077-7174-9432-278390123456,OMI,,,,,
+0198779b-b188-7285-9543-389401234567,Sipeed,,,,,
+0198779b-c299-7396-9654-490512345678,HomeAssistant,,,http://homeassistant.local:8123,
