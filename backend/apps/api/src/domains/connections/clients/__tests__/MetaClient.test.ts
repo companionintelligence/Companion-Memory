@@ -82,9 +82,9 @@ describe('MetaClient', () => {
       const result = await metaClient.sync(mockConnection);
 
       expect(result.success).toBe(true);
-      expect(result.data?.results).toHaveLength(14); // Updated count for new endpoints
+      expect(result.data?.results).toHaveLength(22); // Updated count for new endpoints
       expect(result.data?.errors).toHaveLength(0);
-      expect(result.message).toContain('14 APIs processed successfully');
+      expect(result.message).toContain('22 APIs processed successfully');
     });
 
     it('should handle API failures gracefully', async () => {
