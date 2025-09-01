@@ -22,6 +22,9 @@ const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
+// Demo components
+const ConnectionsDemo = lazy(() => import('@/demo/ConnectionsDemo').then(m => ({ default: m.ConnectionsDemo })));
+
 function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
@@ -45,6 +48,7 @@ function AppRoutes() {
       <Route element={<CenteredLayout />}>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+        <Route path="/demo/connections" element={<ConnectionsDemo />} />
       </Route>
 
       <Route element={<MainLayout />}>
