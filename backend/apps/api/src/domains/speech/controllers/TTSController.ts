@@ -1,4 +1,4 @@
-import { Controller, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
 
 import { Context } from '@ci/common/decorators';
@@ -18,6 +18,12 @@ export class TTSController {
       throw new UnauthorizedException();
     }
 
-    return this.proxyService.proxyRequest(req, res, `${config.services.stt.host}/tts`);
+    // Basic validation for TTS requests
+    const isJsonContent = req.headers['content-type']?.includes('application/json');
+    if (isJsonContent && (!req.body || typeof req.body.text !== 'string' || req.body.text.trim().length === 0)) {
+      throw new BadRequestException('Text is required for text-to-speech conversion');
+    }
+
+    return this.proxyService.proxyRequest(req, res, `${config.services.tts.host}/tts`);
   }
 }
