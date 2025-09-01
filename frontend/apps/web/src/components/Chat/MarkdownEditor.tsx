@@ -44,52 +44,76 @@ function MarkdownEditor(
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
-  useImperativeHandle(forwardedRef, () => ({
-    getValue: () => {
-      if (viewRef.current) {
-        return defaultMarkdownSerializer.serialize(viewRef.current.state.doc);
-      }
-      return '';
-    },
-    setValue: (newValue: string) => {
-      if (viewRef.current) {
-        const doc = defaultMarkdownParser.parse(newValue || '');
-        const tr = viewRef.current.state.tr.replaceWith(0, viewRef.current.state.doc.content.size, doc?.content || []);
-        viewRef.current.dispatch(tr);
-      }
-    },
-    focus: () => {
-      viewRef.current?.focus();
-    },
-    blur: () => {
-      viewRef.current?.dom.blur();
-    },
-  }), []);
+  useImperativeHandle(
+    forwardedRef,
+    () => ({
+      getValue: () => {
+        if (viewRef.current) {
+          return defaultMarkdownSerializer.serialize(viewRef.current.state.doc);
+        }
+
+        return '';
+      },
+      setValue: (newValue: string) => {
+        if (viewRef.current) {
+          const doc = defaultMarkdownParser.parse(newValue || '');
+          if (doc) {
+            const tr = viewRef.current.state.tr.replaceWith(
+              0,
+              viewRef.current.state.doc.content.size,
+              doc.content,
+            );
+            viewRef.current.dispatch(tr);
+          }
+        }
+      },
+      focus: () => {
+        viewRef.current?.focus();
+      },
+      blur: () => {
+        if (viewRef.current?.dom instanceof HTMLElement) {
+          viewRef.current.dom.blur();
+        }
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
-    if (!editorRef.current) return;
+    if (!editorRef.current) {
+      return;
+    }
 
-    const initialDoc = defaultMarkdownParser.parse(value || '');
+    const initialDoc =
+      defaultMarkdownParser.parse(value || '') || schema.node('doc', null, [schema.node('paragraph')]);
     const state = EditorState.create({
       doc: initialDoc,
       plugins: [
         keymap({
           ...baseKeymap,
-          'Enter': (_state, _dispatch) => {
-            // Let the parent handle Enter key
-            const event = new KeyboardEvent('keydown', { 
-              key: 'Enter', 
-              bubbles: true, 
-              cancelable: true 
-            });
-            editorRef.current?.dispatchEvent(event);
-            return true;
+          Enter: () => {
+            // Let the parent component handle Enter key for form submission
+            if (onKeyDown) {
+              const event = new KeyboardEvent('keydown', {
+                key: 'Enter',
+                bubbles: true,
+                cancelable: true,
+              });
+              setTimeout(() => {
+                if (editorRef.current) {
+                  onKeyDown(event as unknown as KeyboardEvent<HTMLDivElement>);
+                }
+              }, 0);
+            }
+
+            return false; // Don't handle it here, let parent handle
           },
           'Shift-Enter': (state, dispatch) => {
             // Insert a hard break for Shift+Enter
             if (dispatch) {
               dispatch(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()));
             }
+
             return true;
           },
         }),
@@ -101,7 +125,7 @@ function MarkdownEditor(
       dispatchTransaction: (tr) => {
         const newState = view.state.apply(tr);
         view.updateState(newState);
-        
+
         if (tr.docChanged) {
           const markdown = defaultMarkdownSerializer.serialize(newState.doc);
           onChange?.(markdown);
@@ -110,6 +134,7 @@ function MarkdownEditor(
       editable: () => !disabled,
       attributes: {
         class: cn(
+          'ProseMirror',
           'prose prose-sm max-w-none outline-none',
           'prose-p:my-0 prose-p:leading-relaxed',
           'prose-headings:my-0',
@@ -119,24 +144,14 @@ function MarkdownEditor(
           'prose-code:text-sm prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded',
           'prose-pre:my-0',
           disabled && 'opacity-50 cursor-not-allowed',
-          className
         ),
         'data-placeholder': placeholder,
-        style: `
-          min-height: 1.5rem;
-          ${(!value || value.trim() === '') ? `
-            &:before {
-              content: attr(data-placeholder);
-              color: rgb(156 163 175);
-              position: absolute;
-              pointer-events: none;
-            }
-          ` : ''}
-        `,
+        style: 'min-height: 1.5rem;',
       },
       handleDOMEvents: {
         keydown: (_view, event) => {
           onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+
           return false;
         },
       },
@@ -155,9 +170,15 @@ function MarkdownEditor(
     if (viewRef.current && value !== undefined) {
       const currentMarkdown = defaultMarkdownSerializer.serialize(viewRef.current.state.doc);
       if (currentMarkdown !== value) {
-        const doc = defaultMarkdownParser.parse(value);
-        const tr = viewRef.current.state.tr.replaceWith(0, viewRef.current.state.doc.content.size, doc?.content || []);
-        viewRef.current.dispatch(tr);
+        const doc = defaultMarkdownParser.parse(value || '');
+        if (doc) {
+          const tr = viewRef.current.state.tr.replaceWith(
+            0,
+            viewRef.current.state.doc.content.size,
+            doc.content,
+          );
+          viewRef.current.dispatch(tr);
+        }
       }
     }
   }, [value]);
@@ -169,7 +190,13 @@ function MarkdownEditor(
         'w-full flex-1 min-h-0',
         'text-base leading-relaxed',
         'focus-within:outline-none',
-        className
+        // Add placeholder styles
+        '[&_.ProseMirror]:min-h-[1.5rem]',
+        '[&_.ProseMirror:empty:before]:content-[attr(data-placeholder)]',
+        '[&_.ProseMirror:empty:before]:text-muted-foreground/60',
+        '[&_.ProseMirror:empty:before]:pointer-events-none',
+        '[&_.ProseMirror:empty:before]:absolute',
+        className,
       )}
     />
   );
