@@ -4,3 +4,4 @@ export * from './ToolRegistry';
 export * from './GetUserPreferencesTool';
 export * from './GetEntertainmentPreferencesTool';
 export * from './GetStreamingAvailabilityTool';
+export * from './CIServerSearchTool';

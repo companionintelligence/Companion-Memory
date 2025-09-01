@@ -76,6 +76,7 @@ export class ConnectionEntity {
       refreshToken: this.refreshToken ?? null,
       tokenExpiry: this.tokenExpiry ?? null,
       provider: this.provider?.toProvider(),
+      user: this.user?.toUser(),
     } satisfies Connection;
   }
 }

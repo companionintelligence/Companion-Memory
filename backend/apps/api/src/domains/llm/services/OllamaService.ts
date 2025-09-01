@@ -14,12 +14,16 @@ import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
 import { MessageService } from '@ci/domains/conversations';
+import { EmbeddingService } from '@ci/domains/search';
+import { UserService } from '@ci/domains/user';
+import { ConnectionService } from '@ci/domains/connections';
 
 import {
   ToolRegistry,
   GetUserPreferencesTool,
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
+  CIServerSearchTool,
   type ToolSchema,
 } from '../tools';
 import type { OllamaModel } from '../types';
@@ -46,6 +50,9 @@ export class OllamaService {
 
   constructor(
     private readonly messageService: MessageService,
+    private readonly embeddingService: EmbeddingService,
+    private readonly userService: UserService,
+    private readonly connectionService: ConnectionService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {
@@ -332,11 +339,17 @@ export class OllamaService {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
+    const ciServerSearchTool = new CIServerSearchTool(
+      this.embeddingService,
+      this.userService,
+      this.connectionService
+    );
     // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
     this.toolRegistry.register(getEntertainmentPreferencesTool);
     this.toolRegistry.register(getStreamingAvailabilityTool);
+    this.toolRegistry.register(ciServerSearchTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
 
     this.logger.debug('Initialized tools registry', {

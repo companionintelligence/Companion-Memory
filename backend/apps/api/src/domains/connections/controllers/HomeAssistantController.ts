@@ -3,6 +3,7 @@ import { Controller, Get, Post, Body, Param, Query, Logger, BadRequestException,
 import { ConnectionService } from '../services/ConnectionService';
 import { HomeAssistantAutomationService } from '../services/HomeAssistantAutomationService';
 import { HomeAssistantClient } from '../clients/HomeAssistantClient';
+import { OllamaService } from '../../llm/services/OllamaService';
 import type { 
   LightControlParams,
   NotificationParams,
@@ -17,6 +18,7 @@ export class HomeAssistantController {
     private readonly connectionService: ConnectionService,
     private readonly automationService: HomeAssistantAutomationService,
     private readonly haClient: HomeAssistantClient,
+    private readonly ollamaService: OllamaService,
   ) {}
 
   private async getConnection(connectionId: string) {
@@ -319,6 +321,153 @@ export class HomeAssistantController {
     return this.haClient.processConversation(connection, params);
   }
 
+  // Search Endpoints
+  @Post(':connectionId/search')
+  async searchCIServer(
+    @Param('connectionId') connectionId: string,
+    @Body() body: {
+      query: string;
+      category?: 'people' | 'places' | 'things' | 'events' | 'locations' | 'actions' | 'jobs' | 'all';
+      limit?: number;
+      responseType?: 'json' | 'tts' | 'notification';
+      ttsEntityId?: string;
+      notificationTarget?: string;
+    }
+  ) {
+    const connection = await this.getConnection(connectionId);
+    const context = { userId: connection.user?.id || 'system' };
+    
+    try {
+      // Execute search via LLM tool
+      const searchResults = await this.ollamaService.chat(
+        context,
+        [
+          {
+            role: 'user',
+            content: `Search for: ${body.query}${body.category ? ` in category: ${body.category}` : ''}`
+          }
+        ],
+        {
+          enableTools: true,
+          enableThinking: false,
+        }
+      );
+
+      const results = {
+        query: body.query,
+        category: body.category || 'all',
+        results: searchResults,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Handle different response types
+      switch (body.responseType) {
+        case 'tts':
+          if (body.ttsEntityId) {
+            const summary = this.formatSearchResultsForTTS(results);
+            await this.haClient.sendTTSAnnouncement(connection, summary, body.ttsEntityId);
+            return { ...results, ttsResponse: summary };
+          }
+          break;
+        case 'notification':
+          const summary = this.formatSearchResultsForNotification(results);
+          await this.haClient.sendNotification(connection, {
+            message: summary,
+            title: `Search Results for "${body.query}"`,
+            target: body.notificationTarget,
+          });
+          return { ...results, notificationSent: true };
+        default:
+          return results;
+      }
+
+      return results;
+    } catch (error) {
+      this.logger.error('CI Server search failed', {
+        connectionId,
+        query: body.query,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new BadRequestException('Search failed');
+    }
+  }
+
+  @Post(':connectionId/voice/search')
+  async processVoiceSearch(
+    @Param('connectionId') connectionId: string,
+    @Body() body: { 
+      command: string;
+      responseEntityId?: string; // Entity ID for TTS response
+      notificationTarget?: string; // Target for notifications
+    }
+  ) {
+    const connection = await this.getConnection(connectionId);
+    const context = { userId: connection.user?.id || 'system' };
+    
+    try {
+      // Parse voice command to extract search intent and parameters
+      const searchIntent = await this.parseVoiceSearchIntent(context, body.command);
+      
+      if (!searchIntent.isSearchCommand) {
+        return {
+          handled: false,
+          message: 'Command not recognized as a search request',
+          originalCommand: body.command,
+        };
+      }
+
+      // Execute the search
+      const searchResults = await this.ollamaService.chat(
+        context,
+        [
+          {
+            role: 'user',
+            content: `Search for: ${searchIntent.query}${searchIntent.category ? ` in category: ${searchIntent.category}` : ''}`
+          }
+        ],
+        {
+          enableTools: true,
+          enableThinking: false,
+        }
+      );
+
+      const results: any = {
+        originalCommand: body.command,
+        parsedIntent: searchIntent,
+        searchResults,
+        handled: true,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Provide voice response if requested
+      if (body.responseEntityId) {
+        const ttsResponse = this.formatSearchResultsForTTS(results);
+        await this.haClient.sendTTSAnnouncement(connection, ttsResponse, body.responseEntityId);
+        results.ttsResponse = ttsResponse;
+      }
+
+      // Send notification if requested
+      if (body.notificationTarget) {
+        const notificationSummary = this.formatSearchResultsForNotification(results);
+        await this.haClient.sendNotification(connection, {
+          message: notificationSummary,
+          title: `Search: "${searchIntent.query}"`,
+          target: body.notificationTarget,
+        });
+        results.notificationSent = true;
+      }
+
+      return results;
+    } catch (error) {
+      this.logger.error('Voice search processing failed', {
+        connectionId,
+        command: body.command,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new BadRequestException('Voice search processing failed');
+    }
+  }
+
   // Generic Service Call Endpoint
   @Post(':connectionId/service')
   async callService(
@@ -336,5 +485,111 @@ export class HomeAssistantController {
   ) {
     const connection = await this.getConnection(connectionId);
     return this.haClient.callService(connection, body);
+  }
+
+  // Helper Methods for Voice Search Processing
+  private async parseVoiceSearchIntent(
+    context: any,
+    command: string
+  ): Promise<{
+    isSearchCommand: boolean;
+    query?: string;
+    category?: 'people' | 'places' | 'things' | 'events' | 'locations' | 'actions' | 'jobs';
+    confidence?: number;
+  }> {
+    const lowerCommand = command.toLowerCase();
+    
+    // Keywords that indicate search intent
+    const searchKeywords = [
+      'find', 'search', 'look for', 'show me', 'where is', 'what is', 'who is',
+      'locate', 'get', 'list', 'display', 'tell me about'
+    ];
+    
+    const hasSearchKeyword = searchKeywords.some(keyword => 
+      lowerCommand.includes(keyword)
+    );
+    
+    if (!hasSearchKeyword) {
+      return { isSearchCommand: false };
+    }
+
+    // Category detection patterns
+    const categoryPatterns = {
+      people: /\b(person|people|user|family|member|who|someone)\b/i,
+      places: /\b(place|location|room|area|zone|where|house|building)\b/i,
+      things: /\b(device|light|camera|sensor|switch|thing|object|entity)\b/i,
+      events: /\b(event|automation|trigger|alert|notification|happened|occurred)\b/i,
+      actions: /\b(action|service|control|turn|activate|run|execute|do)\b/i,
+      jobs: /\b(job|task|process|queue|running|background|sync)\b/i,
+    };
+
+    let detectedCategory: any = undefined;
+    for (const [category, pattern] of Object.entries(categoryPatterns)) {
+      if (pattern.test(command)) {
+        detectedCategory = category;
+        break;
+      }
+    }
+
+    // Extract query by removing search keywords and common words
+    let query = command;
+    for (const keyword of searchKeywords) {
+      query = query.replace(new RegExp(keyword, 'gi'), '');
+    }
+    
+    // Clean up the query
+    query = query.replace(/\b(the|a|an|my|all|any)\b/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+    return {
+      isSearchCommand: true,
+      query: query || command,
+      category: detectedCategory,
+      confidence: hasSearchKeyword ? 0.8 : 0.4,
+    };
+  }
+
+  private formatSearchResultsForTTS(results: any): string {
+    try {
+      // Extract meaningful information from search results for TTS
+      const query = results.query || results.parsedIntent?.query;
+      const category = results.category || results.parsedIntent?.category || 'all';
+      
+      if (!results.searchResults?.message?.content) {
+        return `I searched for ${query} but didn't find any specific results.`;
+      }
+
+      const content = results.searchResults.message.content;
+      
+      // Truncate for TTS to avoid overly long announcements
+      const maxLength = 200;
+      const truncatedContent = content.length > maxLength 
+        ? content.substring(0, maxLength) + '...' 
+        : content;
+      
+      return `Search results for ${query}: ${truncatedContent}`;
+    } catch (error) {
+      return `I completed the search but had trouble formatting the results.`;
+    }
+  }
+
+  private formatSearchResultsForNotification(results: any): string {
+    try {
+      const query = results.query || results.parsedIntent?.query;
+      const content = results.searchResults?.message?.content;
+      
+      if (!content) {
+        return `Search completed for "${query}" but no specific results found.`;
+      }
+
+      // Format for notification (can be longer than TTS)
+      const maxLength = 500;
+      return content.length > maxLength 
+        ? content.substring(0, maxLength) + '...'
+        : content;
+    } catch (error) {
+      return 'Search completed but results could not be formatted.';
+    }
   }
 }

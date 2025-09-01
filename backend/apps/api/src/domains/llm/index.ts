@@ -3,12 +3,15 @@ import { Module } from '@nestjs/common';
 import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { EmbeddingModule } from '@ci/domains/search';
+import { UserModule } from '@ci/domains/user';
+import { ConnectionsModule } from '@ci/domains/connections';
 
 import { OllamaController } from './controllers/OllamaController';
 import { OllamaService } from './services/OllamaService';
 
 @Module({
-  imports: [ConversationModule, EventsModule, FilesModule],
+  imports: [ConversationModule, EventsModule, FilesModule, EmbeddingModule, UserModule, ConnectionsModule],
   providers: [OllamaService],
   controllers: [OllamaController],
   exports: [OllamaService],

@@ -273,12 +273,42 @@ export class HomeAssistantAutomationService {
     response: string;
     actionsExecuted: string[];
     confidence: number;
+    searchResults?: any; // Added for search integration
   }> {
     const actionsExecuted: string[] = [];
     let response = '';
     let confidence = 0;
+    let searchResults: any = undefined;
 
     try {
+      // Check if this is a search command first
+      const searchIntent = await this.parseVoiceSearchIntent(command);
+      
+      if (searchIntent.isSearchCommand && searchIntent.confidence > 0.6) {
+        // This is a search command - route to CI Server search
+        try {
+          // Note: We would need to integrate with the LLM service here
+          // For now, we'll provide a placeholder response
+          response = `I found information about "${searchIntent.query}"${searchIntent.category ? ` in ${searchIntent.category}` : ''}. You can get detailed results via the search API.`;
+          actionsExecuted.push('CI Server Search');
+          confidence = searchIntent.confidence;
+          
+          searchResults = {
+            query: searchIntent.query,
+            category: searchIntent.category,
+            handled: true
+          };
+          
+          return { response, actionsExecuted, confidence, searchResults };
+        } catch (searchError) {
+          this.logger.warn('Search command failed, falling back to HA conversation', { 
+            command, 
+            error: searchError 
+          });
+        }
+      }
+
+      // Continue with existing Home Assistant processing
       // First, try Home Assistant's built-in conversation
       const haResponse = await this.haClient.processConversation(connection, {
         text: command,
@@ -293,7 +323,12 @@ export class HomeAssistantAutomationService {
       // Fallback to custom command processing
       const lowerCommand = command.toLowerCase();
       
-      if (lowerCommand.includes('turn on') && lowerCommand.includes('light')) {
+      // Check for search commands in fallback
+      if (this.isSearchCommand(lowerCommand)) {
+        response = 'I can help you search, but the search service is currently unavailable. Please try the search API directly.';
+        confidence = 0.4;
+        actionsExecuted.push('Search Command (Fallback)');
+      } else if (lowerCommand.includes('turn on') && lowerCommand.includes('light')) {
         try {
           const result = await this.haClient.callService(connection, {
             domain: 'light',
@@ -339,9 +374,10 @@ export class HomeAssistantAutomationService {
       response,
       actionsExecuted,
       confidence,
+      hadSearchResults: !!searchResults,
     });
 
-    return { response, actionsExecuted, confidence };
+    return { response, actionsExecuted, confidence, searchResults };
   }
 
   // Comprehensive Status Dashboard
@@ -385,5 +421,78 @@ export class HomeAssistantAutomationService {
       alerts,
       quickActions,
     };
+  }
+
+  // Helper Methods for Search Integration
+  private async parseVoiceSearchIntent(
+    command: string
+  ): Promise<{
+    isSearchCommand: boolean;
+    query?: string;
+    category?: 'people' | 'places' | 'things' | 'events' | 'locations' | 'actions' | 'jobs';
+    confidence: number;
+  }> {
+    const lowerCommand = command.toLowerCase();
+    
+    // Keywords that indicate search intent
+    const searchKeywords = [
+      'find', 'search', 'look for', 'show me', 'where is', 'what is', 'who is',
+      'locate', 'get', 'list', 'display', 'tell me about'
+    ];
+    
+    const hasSearchKeyword = searchKeywords.some(keyword => 
+      lowerCommand.includes(keyword)
+    );
+    
+    if (!hasSearchKeyword) {
+      return { isSearchCommand: false, confidence: 0 };
+    }
+
+    // Category detection patterns
+    const categoryPatterns = {
+      people: /\b(person|people|user|family|member|who|someone)\b/i,
+      places: /\b(place|location|room|area|zone|where|house|building)\b/i,
+      things: /\b(device|light|camera|sensor|switch|thing|object|entity)\b/i,
+      events: /\b(event|automation|trigger|alert|notification|happened|occurred)\b/i,
+      actions: /\b(action|service|control|turn|activate|run|execute|do)\b/i,
+      jobs: /\b(job|task|process|queue|running|background|sync)\b/i,
+    };
+
+    let detectedCategory: any = undefined;
+    for (const [category, pattern] of Object.entries(categoryPatterns)) {
+      if (pattern.test(command)) {
+        detectedCategory = category;
+        break;
+      }
+    }
+
+    // Extract query by removing search keywords and common words
+    let query = command;
+    for (const keyword of searchKeywords) {
+      query = query.replace(new RegExp(keyword, 'gi'), '');
+    }
+    
+    // Clean up the query
+    query = query.replace(/\b(the|a|an|my|all|any)\b/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+    const confidence = hasSearchKeyword ? 0.8 : 0.4;
+
+    return {
+      isSearchCommand: true,
+      query: query || command,
+      category: detectedCategory,
+      confidence,
+    };
+  }
+
+  private isSearchCommand(command: string): boolean {
+    const searchKeywords = [
+      'find', 'search', 'look for', 'show me', 'where is', 'what is', 'who is',
+      'locate', 'get', 'list', 'display', 'tell me about'
+    ];
+    
+    return searchKeywords.some(keyword => command.includes(keyword));
   }
 }

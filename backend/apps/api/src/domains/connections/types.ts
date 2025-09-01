@@ -20,6 +20,7 @@ export interface Connection {
   readonly refreshToken: string | null;
   readonly tokenExpiry: Date | null;
   readonly provider?: Provider;
+  readonly user?: User;
 }
 
 export interface Provider {

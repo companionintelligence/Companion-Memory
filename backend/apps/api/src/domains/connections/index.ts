@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
+import { LLMModule } from '@ci/domains/llm';
 
 import { ClientFactory, HomeAssistantClient } from './clients';
 import { ConnectionsController } from './controllers/ConnectionsController';
@@ -15,7 +16,7 @@ import { ProviderService } from './services/ProviderService';
 import { HomeAssistantAutomationService } from './services/HomeAssistantAutomationService';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ApiLogEntity, ConnectionEntity, ProviderEntity]), EventsModule],
+  imports: [TypeOrmModule.forFeature([ApiLogEntity, ConnectionEntity, ProviderEntity]), EventsModule, LLMModule],
   providers: [
     ClientFactory, 
     HomeAssistantClient,
@@ -28,7 +29,7 @@ import { HomeAssistantAutomationService } from './services/HomeAssistantAutomati
     ProvidersController,
     HomeAssistantController,
   ],
-  exports: [],
+  exports: [ConnectionService],
 })
 export class ConnectionsModule {}
 
@@ -36,7 +37,7 @@ export class ConnectionsModule {}
 export { ConnectionEntity, ProviderEntity };
 
 // Services
-export {};
+export { ConnectionService };
 
 // Types
 export type {} from './types';
