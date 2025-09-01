@@ -1,3 +1,5 @@
+import config from '@ci/configuration';
+
 import type { Connection } from '../types';
 
 import { BaseOAuth2Client } from './BaseOAuth2Client';
@@ -28,7 +30,7 @@ export class HomeAssistantClient extends BaseOAuth2Client {
 
     const params = new URLSearchParams({
       client_id: connection.clientid,
-      redirect_uri: this.getCallbackUrl(),
+      redirect_uri: config.auth.oauth.callbackUrl,
       response_type: 'code',
       scope: resolvedScope,
       state: connection.id,
@@ -90,51 +92,5 @@ export class HomeAssistantClient extends BaseOAuth2Client {
         errors,
       },
     };
-  }
-
-  private mergeUrls(urls: (string | null)[]) {
-    const result = new URL('http://placeholder');
-    let validResult = false;
-
-    result.hostname = '';
-
-    for (const url of urls) {
-      if (url == null) {
-        continue;
-      }
-
-      let parsedUrl;
-      let overrideHost = false;
-
-      try {
-        parsedUrl = new URL(url);
-        overrideHost = true;
-      } catch {
-        parsedUrl = new URL(url, 'http://placeholder.com');
-      }
-
-      if (overrideHost) {
-        result.protocol = parsedUrl.protocol;
-        result.hostname = parsedUrl.hostname;
-        result.username = parsedUrl.username;
-        result.port = parsedUrl.port;
-
-        validResult = true;
-      }
-
-      result.pathname = parsedUrl.pathname;
-    }
-
-    if (!validResult) {
-      throw new Error('No URL contains a valid hostname');
-    }
-
-    return result.toString();
-  }
-
-  private getCallbackUrl(): string {
-    // Import config dynamically to avoid circular dependency issues
-    const config = require('@ci/configuration').default;
-    return config.auth.oauth.callbackUrl;
   }
 }
