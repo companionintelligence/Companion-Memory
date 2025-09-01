@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 
 import { EventsModule } from '@ci/domains/events';
+import { FilesModule } from '@ci/domains/files';
 
 import { JobsController } from './controllers/JobsController';
 
 @Module({
-  imports: [EventsModule],
+  imports: [EventsModule, FilesModule],
   providers: [],
   controllers: [JobsController],
   exports: [],

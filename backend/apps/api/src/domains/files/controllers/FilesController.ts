@@ -34,6 +34,22 @@ export class FilesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get(':id/parsed-content')
+  async getParsedContent(@Context() context: RequestContext, @Param('id') id: string) {
+    const file = await this.fileService.findOne(context, id);
+    
+    return {
+      id: file.id,
+      name: file.name,
+      parsingStatus: file.parsingStatus,
+      parsedContent: file.parsedContent,
+      parsedMetadata: file.parsedMetadata,
+      parsingError: file.parsingError,
+      parsedAt: file.parsedAt,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post(':id/presign')
   @HttpCode(200)
   async getPresignedLink(@Context() context: RequestContext, @Param('id') id: string) {
