@@ -88,7 +88,7 @@ async def speech_to_text(
 async def text_to_speech(request: TTSRequest):
     """Convert text to speech"""
     try:
-        audio_data = await tts_service.synthesize(
+        audio_generator = tts_service.synthesize(
             text=request.text,
             voice=request.voice,
             language=request.language,
@@ -96,7 +96,7 @@ async def text_to_speech(request: TTSRequest):
         )
         
         return StreamingResponse(
-            audio_data,
+            audio_generator,
             media_type=f"audio/{request.format}",
             headers={"Content-Disposition": "attachment; filename=speech.wav"}
         )
