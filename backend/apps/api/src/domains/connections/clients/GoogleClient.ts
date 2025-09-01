@@ -1,10 +1,18 @@
+import type { ContentService } from '@ci/domains/memory';
+
 import type { Connection } from '../types';
 
 import { BaseOAuth2Client } from './BaseOAuth2Client';
 import type { SyncResult, SyncResponse } from './types';
 
 export class GoogleClient extends BaseOAuth2Client {
-  async sync(connection: Connection): Promise<SyncResponse> {
+  async sync(
+    connection: Connection,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _contentService: ContentService,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _userId: string,
+  ): Promise<SyncResponse> {
     this.logger.log('Syncing Google data', { connectionId: connection.id });
 
     const syncResults: SyncResult[] = [];

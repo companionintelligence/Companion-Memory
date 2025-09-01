@@ -1,4 +1,5 @@
 import { LoggerService } from '@ci/common/services';
+import type { ContentService } from '@ci/domains/memory';
 
 import type { Connection } from '../types';
 
@@ -17,5 +18,9 @@ export abstract class BaseClient {
 
   abstract request<T>(connection: Connection, endpoint: string, options?: RequestInit): Promise<T>;
 
-  abstract sync(connection: Connection): Promise<SyncResponse>;
+  abstract sync(
+    connection: Connection,
+    contentService: ContentService,
+    userId: string,
+  ): Promise<SyncResponse>;
 }

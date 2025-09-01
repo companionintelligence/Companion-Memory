@@ -5,6 +5,7 @@ import { v7 as uuid7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/services/LoggerService';
 import type { RequestContext } from '@ci/common/types';
+import { ContentService } from '@ci/domains/memory';
 
 import { ClientFactory } from '../clients';
 import { ApiLogEntity } from '../entities/ApiLogEntity';
@@ -27,6 +28,7 @@ export class ConnectionService {
     @InjectRepository(ApiLogEntity)
     private readonly apiLogRepository: Repository<ApiLogEntity>,
     private readonly clientFactory: ClientFactory,
+    private readonly contentService: ContentService,
   ) {}
 
   async create(context: RequestContext, data: CreateConnectionDto): Promise<Connection> {
@@ -189,7 +191,7 @@ export class ConnectionService {
     try {
       const connection = await this.findOne(context, connectionId);
       const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
-      const syncResponse = await client.sync(connection);
+      const syncResponse = await client.sync(connection, this.contentService, context.userId!);
 
       if (persistData) {
         await this.apiLogRepository.save({
