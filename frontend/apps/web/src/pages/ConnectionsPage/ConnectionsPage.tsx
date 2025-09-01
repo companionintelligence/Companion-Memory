@@ -889,17 +889,6 @@ export function ConnectionsPage() {
             </Dialog.Description>
           </Dialog.Header>
 
-      {/* Edit Connection Modal */}
-      <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <Dialog.Content className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-          <Dialog.Header>
-            <Dialog.Title className="text-xl font-semibold">Configure Data Connection</Dialog.Title>
-            <Dialog.Description className="text-base">
-              Set up authentication and tracking preferences for this data source. 
-              You can configure whether to track the entire domain or specific pages.
-            </Dialog.Description>
-          </Dialog.Header>
-
           <div className="grid gap-6 py-6">
             {modalError && (
               <Alert variant="destructive">
