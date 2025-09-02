@@ -12,15 +12,30 @@ import { FileService } from '@ci/domains/files/services/FileService';
 import { BaseTool } from './BaseTool';
 import type { ToolExecutionContext } from './types';
 
+// Model-specific optimized sizes for best performance
+const MODEL_SIZES = {
+  'flux-schnell': ['1024x1024', '768x1344', '1344x768'],
+  'flux-dev': ['1024x1024', '768x1344', '1344x768'],
+  'sdxl': ['1024x1024', '768x1344', '1344x768', '1536x640', '640x1536'],
+  'sd15': ['512x512', '768x512', '512x768', '640x640'],
+} as const;
+
 // Input schema for the tool
 const imageGenerationInputSchema = z.object({
   prompt: z.string().min(1, 'Prompt is required').max(4000, 'Prompt too long'),
   style: z.enum(['natural', 'vivid']).optional().default('natural'),
-  size: z.enum(['1024x1024', '1792x1024', '1024x1792']).optional().default('1024x1024'),
+  size: z.string().optional().default('1024x1024'),
   quality: z.enum(['standard', 'hd']).optional().default('standard'),
   model: z.enum(['flux-schnell', 'flux-dev', 'sdxl', 'sd15']).optional().default('flux-schnell'),
   editImageUrl: z.string().optional(), // For future image editing functionality
   mask: z.string().optional(), // For future inpainting functionality
+}).refine((data) => {
+  // Validate size is appropriate for the selected model
+  const validSizes = MODEL_SIZES[data.model as keyof typeof MODEL_SIZES];
+  return validSizes.includes(data.size as any);
+}, {
+  message: "Invalid size for selected model. Check available sizes for your chosen model.",
+  path: ["size"],
 });
 
 type ImageGenerationInput = z.infer<typeof imageGenerationInputSchema>;
@@ -91,8 +106,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
         },
         size: {
           type: 'string',
-          enum: ['1024x1024', '1792x1024', '1024x1792'],
-          description: 'The size of the generated image',
+          description: 'The size of the generated image. Optimized sizes per model: FLUX (1024x1024, 768x1344, 1344x768), SDXL (1024x1024, 768x1344, 1344x768, 1536x640, 640x1536), SD1.5 (512x512, 768x512, 512x768, 640x640)',
           default: '1024x1024',
         },
         quality: {
@@ -124,14 +138,14 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
         description: 'Generate a nature landscape with FLUX.1 schnell model',
       },
       {
-        input: { prompt: 'A futuristic city with flying cars', style: 'vivid', size: '1792x1024', model: 'flux-dev' },
+        input: { prompt: 'A futuristic city with flying cars', style: 'vivid', size: '1344x768', model: 'flux-dev' },
         output: {
           imageUrl: 'https://storage.example.com/generated-city.png',
           fileId: 'uuid-456',
           prompt: 'A futuristic city with flying cars',
           altText: 'A futuristic city with flying cars',
         },
-        description: 'Generate a high-quality sci-fi cityscape with FLUX.1 dev model',
+        description: 'Generate a high-quality sci-fi cityscape with FLUX.1 dev model in widescreen format',
       },
     ],
   };
@@ -145,10 +159,25 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     super();
   }
 
+  /**
+   * Get available sizes for a specific model
+   */
+  getAvailableSizes(model: string): readonly string[] {
+    return MODEL_SIZES[model as keyof typeof MODEL_SIZES] || MODEL_SIZES['flux-schnell'];
+  }
+
   protected validateInput(input: unknown): ImageGenerationInput {
     try {
       return imageGenerationInputSchema.parse(input);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        const sizeError = error.errors.find(e => e.path.includes('size'));
+        if (sizeError && typeof input === 'object' && input !== null && 'model' in input) {
+          const model = (input as any).model || 'flux-schnell';
+          const availableSizes = this.getAvailableSizes(model);
+          throw new Error(`Invalid size for model '${model}'. Available sizes: ${availableSizes.join(', ')}`);
+        }
+      }
       throw new Error(`Invalid input: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

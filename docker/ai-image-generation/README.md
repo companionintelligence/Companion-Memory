@@ -1,20 +1,118 @@
 # Multi-Model AI Image Generation Service
 
-A local AI image generation service that supports multiple state-of-the-art models with multi-GPU compatibility.
+A containerized AI image generation service supporting FLUX.1, SDXL, and Stable Diffusion models with pre-downloaded model weights and custom model support.
 
-## Supported Models
+## Features
 
-### FLUX.1 Models (Recommended)
-- **FLUX.1-schnell**: Fast generation (4 steps), excellent quality
-- **FLUX.1-dev**: Highest quality (20-50 steps), state-of-the-art results
+- **Multiple Model Support**: FLUX.1-schnell, FLUX.1-dev, SDXL, SD 1.5
+- **Multi-Platform**: NVIDIA CUDA, AMD ROCm, Apple MPS, CPU fallback
+- **Pre-Downloaded Models**: Models are downloaded at build time for faster startup
+- **Custom Model Support**: Use your own HuggingFace model IDs
+- **Configurable Selection**: Choose which models to include in your build
+- **Optimized Performance**: Model-specific parameters and memory management
+
+## Quick Start
+
+### Default Build (FLUX.1-schnell + SDXL)
+
+```bash
+docker build -t my-ai-image-gen ./docker/ai-image-generation
+```
+
+### Custom Build with All Models
+
+```bash
+docker build \
+  --build-arg INCLUDE_FLUX_SCHNELL=true \
+  --build-arg INCLUDE_FLUX_DEV=true \
+  --build-arg INCLUDE_SDXL=true \
+  --build-arg INCLUDE_SD15=true \
+  -t my-ai-image-gen-full ./docker/ai-image-generation
+```
+
+### Custom Models Build
+
+```bash
+docker build \
+  --build-arg INCLUDE_SDXL=true \
+  --build-arg CUSTOM_SDXL_MODEL="your-username/your-custom-sdxl-model" \
+  --build-arg INCLUDE_FLUX_SCHNELL=false \
+  -t my-custom-ai-image-gen ./docker/ai-image-generation
+```
+
+## Configuration
+
+### Build Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `INCLUDE_FLUX_SCHNELL` | `true` | Include FLUX.1-schnell (fast, 4 steps) |
+| `INCLUDE_FLUX_DEV` | `false` | Include FLUX.1-dev (high quality, 28 steps) |
+| `INCLUDE_SDXL` | `true` | Include Stable Diffusion XL |
+| `INCLUDE_SD15` | `false` | Include Stable Diffusion 1.5 |
+| `CUSTOM_FLUX_SCHNELL_MODEL` | `""` | Custom FLUX.1-schnell model ID |
+| `CUSTOM_FLUX_DEV_MODEL` | `""` | Custom FLUX.1-dev model ID |
+| `CUSTOM_SDXL_MODEL` | `""` | Custom SDXL model ID |
+| `CUSTOM_SD15_MODEL` | `""` | Custom SD1.5 model ID |
+
+### Runtime Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TORCH_DEVICE` | `auto` | Force device: `auto`, `cuda`, `cpu`, `rocm` |
+| `MODEL_CACHE_DIR` | `/app/models` | Directory for model storage |
+| `MAX_MODELS_IN_MEMORY` | `2` | Maximum models to keep loaded |
+
+## Model Information
+
+### FLUX.1 Models
+- **FLUX.1-schnell**: Fast generation, 4 steps, optimized sizes: 1024x1024, 768x1344, 1344x768
+- **FLUX.1-dev**: High quality, 28 steps, requires HuggingFace token for download
 
 ### Stable Diffusion Models
-- **SDXL**: High quality 1024x1024 native resolution
-- **SD 1.5**: Lightweight fallback model
+- **SDXL**: Balanced quality/speed, 20 steps, optimized sizes: 1024x1024, 768x1344, 1344x768, 1536x640, 640x1536
+- **SD 1.5**: Lightweight, 20 steps, optimized sizes: 512x512, 768x512, 512x768, 640x640
+
+## Recommended Builds
+
+### Lightweight (CPU-friendly)
+```bash
+docker build \
+  --build-arg INCLUDE_FLUX_SCHNELL=false \
+  --build-arg INCLUDE_FLUX_DEV=false \
+  --build-arg INCLUDE_SDXL=true \
+  --build-arg INCLUDE_SD15=true \
+  -t ai-image-gen-lite ./docker/ai-image-generation
+```
+
+### High Quality (GPU recommended)
+```bash
+docker build \
+  --build-arg INCLUDE_FLUX_SCHNELL=true \
+  --build-arg INCLUDE_FLUX_DEV=true \
+  --build-arg INCLUDE_SDXL=false \
+  --build-arg INCLUDE_SD15=false \
+  -t ai-image-gen-flux ./docker/ai-image-generation
+```
+
+### Balanced
+```bash
+docker build \
+  --build-arg INCLUDE_FLUX_SCHNELL=true \
+  --build-arg INCLUDE_SDXL=true \
+  -t ai-image-gen-balanced ./docker/ai-image-generation
+```
+
+## Build Time Requirements
+
+- **FLUX.1-schnell**: ~12GB download
+- **FLUX.1-dev**: ~24GB download (requires HF token)
+- **SDXL**: ~7GB download  
+- **SD 1.5**: ~4GB download
+
+Plan for adequate disk space and build time (30-60 minutes depending on models selected).
 
 ## GPU Support
-
-The service supports multiple GPU types and automatically detects available hardware:
 
 ### NVIDIA GPUs (CUDA)
 ```bash
@@ -37,77 +135,33 @@ docker compose -f docker-compose.yml -f docker-compose.amd.yml up ai-image-gener
 TORCH_DEVICE=cpu docker compose up ai-image-generation
 ```
 
-## Timeout Configuration
-
-The service supports configurable timeouts for different models via backend configuration:
-
-- **flux-schnell**: 2 minutes (fast generation)
-- **flux-dev**: 10 minutes (high quality, more steps)
-- **sdxl/sd15**: 5 minutes (standard generation)
-- **future video**: 30 minutes (reserved for video generation)
-
 ## API Endpoints
 
-### Generate Image
-```
-POST /sdapi/v1/txt2img
-```
+- `POST /sdapi/v1/txt2img` - Generate images
+- `GET /models` - List available models
+- `GET /health` - Health check
+- `GET /` - API information
 
-Request body:
-```json
-{
-  "prompt": "A beautiful sunset over mountains",
-  "model": "flux-schnell",
-  "width": 1024,
-  "height": 1024,
-  "steps": 4,
-  "cfg_scale": 7.0,
-  "seed": -1
-}
-```
+## Usage Example
 
-### Available Models
-```
-GET /models
+```bash
+curl -X POST "http://localhost:7860/sdapi/v1/txt2img" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A beautiful sunset over mountains",
+    "model": "flux-schnell",
+    "width": 1024,
+    "height": 1024,
+    "steps": 4
+  }'
 ```
 
-### Health Check
-```
-GET /health
-GET /internal/ping
-```
+## Model-Specific Image Sizes
 
-## Model Selection
+Each model performs best with specific image dimensions:
 
-Choose the right model for your use case:
+- **FLUX.1**: 1024x1024, 768x1344, 1344x768
+- **SDXL**: 1024x1024, 768x1344, 1344x768, 1536x640, 640x1536
+- **SD 1.5**: 512x512, 768x512, 512x768, 640x640
 
-- **flux-schnell**: Best for fast, high-quality generation (4 steps, 2 min timeout)
-- **flux-dev**: Best for highest quality (28 steps, 10 min timeout)
-- **sdxl**: Good balance of quality and speed (20 steps, 5 min timeout)
-- **sd15**: Lightweight fallback (20 steps, 5 min timeout)
-
-## Model-Specific Prompting
-
-- **FLUX.1 models**: Natural language descriptions (Black Forest Labs style)
-- **Stable Diffusion models**: Tag-based prompting with negative prompts
-
-## Memory Management
-
-The service automatically manages model loading and memory usage:
-- Models are loaded on-demand
-- GPU memory is cleared between model switches
-- CPU offloading is used when available
-- Memory efficient attention is enabled
-
-## Hardware Requirements
-
-- **Minimum**: 8GB RAM, CPU-only (slow)
-- **Recommended**: 12GB VRAM GPU + 16GB RAM
-- **Optimal**: 24GB VRAM GPU + 32GB RAM
-
-## Environment Variables
-
-- `TORCH_DEVICE`: Force specific device (auto, cuda, rocm, cpu)
-- `ROCM_VISIBLE_DEVICES`: AMD GPU devices for ROCm (all)
-- `MODEL_CACHE_DIR`: Directory to cache downloaded models
-- `MAX_MODELS_IN_MEMORY`: Maximum models to keep loaded (default: 2)
+Using non-optimized dimensions will result in degraded quality and performance.

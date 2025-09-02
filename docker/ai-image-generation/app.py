@@ -70,43 +70,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Model configurations
+# Model configurations - support custom models via environment variables
 MODEL_CONFIGS = {
     "sdxl": {
         "name": "Stable Diffusion XL",
         "description": "High quality 1024x1024 images with good detail",
         "pipeline_class": StableDiffusionXLPipeline,
-        "model_id": "stabilityai/stable-diffusion-xl-base-1.0",
+        "model_id": os.environ.get("CUSTOM_SDXL_MODEL", "stabilityai/stable-diffusion-xl-base-1.0"),
+        "local_path": "/app/models/sdxl",
         "recommended_size": "1024x1024",
         "default_steps": 20,
-        "supports_negative_prompt": True
+        "supports_negative_prompt": True,
+        "enabled": os.environ.get("INCLUDE_SDXL", "true").lower() in ('true', '1', 'yes', 'on')
     },
     "flux-schnell": {
         "name": "FLUX.1 Schnell",
         "description": "Fast high-quality generation (4 steps)",
         "pipeline_class": FluxPipeline,
-        "model_id": "black-forest-labs/FLUX.1-schnell",
+        "model_id": os.environ.get("CUSTOM_FLUX_SCHNELL_MODEL", "black-forest-labs/FLUX.1-schnell"),
+        "local_path": "/app/models/flux-schnell",
         "recommended_size": "1024x1024",
         "default_steps": 4,
-        "supports_negative_prompt": False
+        "supports_negative_prompt": False,
+        "enabled": os.environ.get("INCLUDE_FLUX_SCHNELL", "true").lower() in ('true', '1', 'yes', 'on')
     },
     "flux-dev": {
         "name": "FLUX.1 Dev",
         "description": "Highest quality generation (20-50 steps)",
         "pipeline_class": FluxPipeline,
-        "model_id": "black-forest-labs/FLUX.1-dev",
+        "model_id": os.environ.get("CUSTOM_FLUX_DEV_MODEL", "black-forest-labs/FLUX.1-dev"),
+        "local_path": "/app/models/flux-dev",
         "recommended_size": "1024x1024",
         "default_steps": 28,
-        "supports_negative_prompt": False
+        "supports_negative_prompt": False,
+        "enabled": os.environ.get("INCLUDE_FLUX_DEV", "false").lower() in ('true', '1', 'yes', 'on')
     },
     "sd15": {
         "name": "Stable Diffusion 1.5",
         "description": "Lightweight fallback model",
         "pipeline_class": DiffusionPipeline,
-        "model_id": "runwayml/stable-diffusion-v1-5",
+        "model_id": os.environ.get("CUSTOM_SD15_MODEL", "runwayml/stable-diffusion-v1-5"),
+        "local_path": "/app/models/sd15",
         "recommended_size": "512x512",
         "default_steps": 20,
-        "supports_negative_prompt": True
+        "supports_negative_prompt": True,
+        "enabled": os.environ.get("INCLUDE_SD15", "false").lower() in ('true', '1', 'yes', 'on')
     }
 }
 
@@ -164,6 +172,12 @@ async def load_model(model_name: str) -> Any:
     if model_name not in MODEL_CONFIGS:
         raise ValueError(f"Unknown model: {model_name}")
     
+    config = MODEL_CONFIGS[model_name]
+    
+    # Check if model is enabled
+    if not config.get("enabled", True):
+        raise ValueError(f"Model {model_name} is not enabled in this container configuration")
+    
     # If model is already loaded, return it
     if model_name in pipelines:
         current_model = model_name
@@ -184,17 +198,37 @@ async def load_model(model_name: str) -> Any:
             for k in to_remove[:-1]:  # Keep one other model
                 del pipelines[k]
     
-    config = MODEL_CONFIGS[model_name]
     device = get_device()
     
     try:
+        # Try to load from local path first (pre-downloaded model)
+        model_path = config["local_path"]
+        load_from_local = False
+        
+        if os.path.exists(model_path) and os.path.isdir(model_path):
+            logger.info(f"Found pre-downloaded model at {model_path}")
+            load_from_local = True
+        else:
+            logger.info(f"Local model not found at {model_path}, will download from HuggingFace")
+        
         # Load pipeline
-        pipeline = config["pipeline_class"].from_pretrained(
-            config["model_id"],
-            torch_dtype=torch.float16 if device != "cpu" else torch.float32,
-            use_safetensors=True,
-            variant="fp16" if device != "cpu" else None
-        )
+        if load_from_local:
+            pipeline = config["pipeline_class"].from_pretrained(
+                model_path,
+                torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+                use_safetensors=True,
+                variant="fp16" if device != "cpu" else None,
+                local_files_only=True  # Only use local files
+            )
+        else:
+            # Fallback to downloading from HuggingFace
+            pipeline = config["pipeline_class"].from_pretrained(
+                config["model_id"],
+                torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+                use_safetensors=True,
+                variant="fp16" if device != "cpu" else None,
+                cache_dir="/app/models"
+            )
         
         # Move to device
         pipeline = pipeline.to(device)
@@ -210,7 +244,8 @@ async def load_model(model_name: str) -> Any:
         pipelines[model_name] = pipeline
         current_model = model_name
         
-        logger.info(f"Successfully loaded {model_name} on {device}")
+        source = "local cache" if load_from_local else "HuggingFace Hub"
+        logger.info(f"Successfully loaded {model_name} from {source} on {device}")
         return pipeline
         
     except Exception as e:
@@ -286,7 +321,7 @@ async def root():
         "message": "Multi-Model AI Image Generation API",
         "version": "2.0.0",
         "status": "ready",
-        "models": list(MODEL_CONFIGS.keys()),
+        "models": [k for k, v in MODEL_CONFIGS.items() if v.get("enabled", True)],
         "current_model": current_model,
         "device": get_device(),
         "capabilities": ["txt2img", "model_switching"],
@@ -305,7 +340,7 @@ async def health_check():
         "message": "Multi-Model AI Image Generation API is running",
         "current_model": current_model,
         "device": get_device(),
-        "available_models": list(MODEL_CONFIGS.keys())
+        "available_models": [k for k, v in MODEL_CONFIGS.items() if v.get("enabled", True)]
     }
 
 @app.get("/internal/ping")
@@ -318,12 +353,17 @@ async def list_models():
     """List available models"""
     models = []
     for model_id, config in MODEL_CONFIGS.items():
-        models.append(ModelInfo(
-            name=config["name"],
-            description=config["description"],
-            recommended_size=config["recommended_size"],
-            available=True  # For now, assume all are available
-        ))
+        if config.get("enabled", True):
+            # Check if model exists locally
+            local_path = config.get("local_path", "")
+            is_available = os.path.exists(local_path) and os.path.isdir(local_path)
+            
+            models.append(ModelInfo(
+                name=config["name"],
+                description=config["description"],
+                recommended_size=config["recommended_size"],
+                available=is_available
+            ))
     return {"models": models}
 
 @app.post("/sdapi/v1/txt2img")
@@ -440,14 +480,14 @@ async def get_current_model():
     """Get currently loaded model"""
     return {
         "current_model": current_model,
-        "available_models": list(MODEL_CONFIGS.keys()),
+        "available_models": [k for k, v in MODEL_CONFIGS.items() if v.get("enabled", True)],
         "device": get_device()
     }
 
 if __name__ == "__main__":
     logger.info("🎨 Starting Multi-Model AI Image Generation Service")
     logger.info(f"📱 Device: {get_device()}")
-    logger.info(f"🤖 Available models: {list(MODEL_CONFIGS.keys())}")
+    logger.info(f"🤖 Available models: {[k for k, v in MODEL_CONFIGS.items() if v.get('enabled', True)]}")
     logger.info("🚀 Starting server...")
     
     uvicorn.run(
