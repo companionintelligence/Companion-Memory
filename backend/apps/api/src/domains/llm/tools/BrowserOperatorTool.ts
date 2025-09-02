@@ -54,7 +54,8 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
         },
         selector: {
           type: 'string',
-          description: 'CSS selector for element operations (required for click, type, getText on specific elements)',
+          description:
+            'CSS selector for element operations (required for click, type, getText on specific elements)',
         },
         text: {
           type: 'string',
@@ -103,6 +104,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
   };
 
   private browser: Browser | null = null;
+
   private page: Page | null = null;
 
   protected validateInput(input: unknown): BrowserOperatorInput {
@@ -157,15 +159,13 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
 
     if (!this.page) {
       this.logger.debug('Creating new page');
-      this.page = await this.browser.newPage();
-      
-      // Set a reasonable viewport size
-      await this.page.setViewportSize({ width: 1280, height: 720 });
-      
-      // Set a user agent to avoid blocking
-      await this.page.setUserAgent(
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      );
+      const context = await this.browser.newContext({
+        userAgent:
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        viewport: { width: 1280, height: 720 },
+      });
+
+      this.page = await context.newPage();
     }
   }
 
@@ -176,7 +176,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
 
     this.logger.debug('Navigating to URL', { url });
     await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    
+
     return {
       success: true,
       url: this.page.url(),
@@ -209,7 +209,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
       this.logger.debug('Getting text from element', { selector });
       const element = await this.page.locator(selector);
       const text = await element.textContent();
-      
+
       return {
         success: true,
         text: text || '',
@@ -217,7 +217,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
     } else {
       this.logger.debug('Getting page text content');
       const text = await this.page.textContent('body');
-      
+
       return {
         success: true,
         text: text || '',
@@ -232,7 +232,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
 
     this.logger.debug('Clicking element', { selector });
     await this.page.locator(selector).click({ timeout: 10000 });
-    
+
     return {
       success: true,
     };
@@ -246,7 +246,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
     this.logger.debug('Typing text into element', { selector, textLength: text.length });
     const element = this.page.locator(selector);
     await element.fill(text, { timeout: 10000 });
-    
+
     return {
       success: true,
     };
@@ -254,8 +254,8 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
 
   private async waitFor(waitTime: number): Promise<BrowserOperatorOutput> {
     this.logger.debug('Waiting', { waitTime });
-    await new Promise(resolve => setTimeout(resolve, waitTime));
-    
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+
     return {
       success: true,
     };
@@ -269,7 +269,7 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
       await this.page.close();
       this.page = null;
     }
-    
+
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
@@ -283,8 +283,10 @@ export class BrowserOperatorTool extends BaseTool<BrowserOperatorInput, BrowserO
       if (sanitized.text && sanitized.text.length > 100) {
         sanitized.text = `${sanitized.text.substring(0, 100)}... (${sanitized.text.length} chars)`;
       }
+
       return sanitized;
     }
+
     return input;
   }
 }

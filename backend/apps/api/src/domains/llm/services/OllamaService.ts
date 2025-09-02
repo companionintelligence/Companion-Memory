@@ -18,7 +18,7 @@ import { MessageService } from '@ci/domains/conversations';
 import {
   ToolRegistry,
   GetUserPreferencesTool,
-  GetEntertainmentPreferencesToool,
+  GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
   BrowserOperatorTool,
   type ToolSchema,
@@ -333,11 +333,13 @@ export class OllamaService {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
+    const browserOperatorTool = new BrowserOperatorTool();
     // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
     this.toolRegistry.register(getEntertainmentPreferencesTool);
     this.toolRegistry.register(getStreamingAvailabilityTool);
+    this.toolRegistry.register(browserOperatorTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
 
     this.logger.debug('Initialized tools registry', {
