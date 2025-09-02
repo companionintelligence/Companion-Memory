@@ -61,7 +61,14 @@
       "host": "http://localhost:9002"
     },
     "aiImageGeneration": {
-      "host": "http://localhost:7860"
+      "host": "http://localhost:7860",
+      "timeouts": {
+        "default": 300000,
+        "fastModel": 120000,
+        "standardModel": 300000,
+        "highQualityModel": 600000,
+        "video": 1800000
+      }
     }
   },
   "features": {

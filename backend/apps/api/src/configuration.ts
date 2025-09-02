@@ -79,6 +79,13 @@ export const ConfigSchema = z.object({
     }),
     aiImageGeneration: z.object({
       host: z.string(),
+      timeouts: z.object({
+        default: z.number().optional().default(300000), // 5 minutes default
+        fastModel: z.number().optional().default(120000), // 2 minutes for flux-schnell
+        standardModel: z.number().optional().default(300000), // 5 minutes for sdxl, sd15
+        highQualityModel: z.number().optional().default(600000), // 10 minutes for flux-dev
+        video: z.number().optional().default(1800000), // 30 minutes for future video generation
+      }),
     }),
   }),
   features: z.object({

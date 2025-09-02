@@ -210,24 +210,26 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     }
   }
 
-  private async checkAIServiceHealth(host: string): Promise<void> {
-    try {
-      const response = await fetch(`${host}/health`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(5000), // 5 second timeout
-      });
+  private getTimeoutForModel(model: string): number {
+    // Get configured timeouts with fallbacks
+    const timeouts = config.services.aiImageGeneration.timeouts || {
+      default: 300000,
+      fastModel: 120000,
+      standardModel: 300000,
+      highQualityModel: 600000,
+      video: 1800000,
+    };
 
-      if (!response.ok) {
-        throw new Error(`AI image generation service health check failed: ${response.status}`);
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === 'TimeoutError') {
-        throw new Error('AI image generation service is not responding. Please ensure the service is running.');
-      }
-      throw new Error(`Cannot connect to AI image generation service at ${host}. Please ensure it's running and accessible.`);
+    // Model-specific timeout logic
+    switch (model) {
+      case 'flux-schnell':
+        return timeouts.fastModel || 120000; // 2 minutes - fast generation
+      case 'flux-dev':
+        return timeouts.highQualityModel || 600000; // 10 minutes - high quality, more steps
+      case 'sdxl':
+      case 'sd15':
+      default:
+        return timeouts.standardModel || 300000; // 5 minutes - standard generation
     }
   }
 
@@ -292,12 +294,16 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
       do_not_save_grid: true,
     };
 
+    // Get model-specific timeout
+    const timeout = this.getTimeoutForModel(input.model || 'sdxl');
+
     this.logger.debug('Calling AI Image Generation API', {
       host,
       model: input.model,
       width,
       height,
       steps,
+      timeout: `${timeout / 1000}s`,
       prompt: input.prompt.substring(0, 100),
     });
 
@@ -307,7 +313,7 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(300000), // 5 minute timeout for generation (FLUX can be slow)
+      signal: AbortSignal.timeout(timeout), // Configurable timeout based on model
     });
 
     if (!response.ok) {
@@ -322,6 +328,27 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     }
 
     return result.images[0]; // Return base64 encoded image
+  }
+
+  private async checkAIServiceHealth(host: string): Promise<void> {
+    try {
+      const response = await fetch(`${host}/health`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(5000), // 5 second timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`AI image generation service health check failed: ${response.status}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error('AI image generation service is not responding. Please ensure the service is running.');
+      }
+      throw new Error(`Cannot connect to AI image generation service at ${host}. Please ensure it's running and accessible.`);
+    }
   }
 
   private async storeGeneratedImage(

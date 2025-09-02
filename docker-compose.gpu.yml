@@ -2,8 +2,8 @@
 # Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up ai-image-generation
 # 
 # Requirements:
-# - NVIDIA Docker runtime
-# - NVIDIA drivers installed
+# - NVIDIA Docker runtime (for NVIDIA GPUs) OR ROCm support (for AMD GPUs)
+# - NVIDIA drivers installed (for NVIDIA) OR ROCm drivers (for AMD)
 # - At least 8GB VRAM recommended
 
 version: '3.8'
@@ -11,11 +11,18 @@ version: '3.8'
 services:
   ai-image-generation:
     environment:
-      - TORCH_DEVICE=cuda  # Force CUDA usage
+      - TORCH_DEVICE=auto  # Auto-detect GPU type (CUDA/ROCm)
+      - ROCM_VISIBLE_DEVICES=all  # For AMD GPUs
     deploy:
       resources:
         reservations:
           devices:
+            # Try to use any available GPU (NVIDIA or AMD)
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    # Alternative device mapping for AMD GPUs
+    # Uncomment the following section if using AMD GPUs with ROCm
+    # devices:
+    #   - /dev/kfd:/dev/kfd
+    #   - /dev/dri:/dev/dri

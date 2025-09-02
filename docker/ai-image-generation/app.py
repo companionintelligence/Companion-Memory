@@ -111,13 +111,45 @@ MODEL_CONFIGS = {
 }
 
 def get_device():
-    """Get the best available device"""
-    if torch.cuda.is_available():
-        return "cuda"
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        return "mps"
-    else:
+    """Get the best available device (NVIDIA CUDA, AMD ROCm, Apple MPS, or CPU)"""
+    # Check environment variable first
+    env_device = os.environ.get('TORCH_DEVICE', '').lower()
+    
+    if env_device == 'cpu':
+        logger.info("🖥️  Using CPU as specified by TORCH_DEVICE")
         return "cpu"
+    elif env_device == 'cuda':
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "Unknown GPU"
+            logger.info(f"🔥 Using CUDA GPU: {device_name}")
+            return "cuda"
+        else:
+            logger.warning("⚠️  CUDA requested but not available, falling back to CPU")
+            return "cpu"
+    elif env_device == 'rocm':
+        # ROCm uses CUDA API compatibility
+        if torch.cuda.is_available():
+            logger.info("🔥 Using AMD GPU with ROCm (CUDA API compatibility)")
+            return "cuda"
+        else:
+            logger.warning("⚠️  ROCm requested but not available, falling back to CPU")
+            return "cpu"
+    else:
+        # Auto-detect best available device
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "Unknown GPU"
+            # Check if this might be an AMD GPU with ROCm
+            if "amd" in device_name.lower() or "radeon" in device_name.lower():
+                logger.info(f"🔥 Using AMD GPU with ROCm: {device_name}")
+            else:
+                logger.info(f"🔥 Using NVIDIA GPU: {device_name}")
+            return "cuda"
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            logger.info("🍎 Using Apple Metal Performance Shaders (MPS)")
+            return "mps"
+        else:
+            logger.info("💻 Using CPU")
+            return "cpu"
 
 def cleanup_memory():
     """Clean up GPU/CPU memory"""

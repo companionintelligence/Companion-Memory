@@ -1,6 +1,6 @@
 # Multi-Model AI Image Generation Service
 
-A local AI image generation service that supports multiple state-of-the-art models:
+A local AI image generation service that supports multiple state-of-the-art models with multi-GPU compatibility.
 
 ## Supported Models
 
@@ -11,6 +11,40 @@ A local AI image generation service that supports multiple state-of-the-art mode
 ### Stable Diffusion Models
 - **SDXL**: High quality 1024x1024 native resolution
 - **SD 1.5**: Lightweight fallback model
+
+## GPU Support
+
+The service supports multiple GPU types and automatically detects available hardware:
+
+### NVIDIA GPUs (CUDA)
+```bash
+# Auto-detection (recommended)
+docker compose up ai-image-generation
+
+# Force NVIDIA GPU usage
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up ai-image-generation
+```
+
+### AMD GPUs (ROCm)
+```bash
+# AMD GPU with ROCm support
+docker compose -f docker-compose.yml -f docker-compose.amd.yml up ai-image-generation
+```
+
+### CPU Fallback
+```bash
+# CPU-only mode
+TORCH_DEVICE=cpu docker compose up ai-image-generation
+```
+
+## Timeout Configuration
+
+The service supports configurable timeouts for different models via backend configuration:
+
+- **flux-schnell**: 2 minutes (fast generation)
+- **flux-dev**: 10 minutes (high quality, more steps)
+- **sdxl/sd15**: 5 minutes (standard generation)
+- **future video**: 30 minutes (reserved for video generation)
 
 ## API Endpoints
 
@@ -47,10 +81,15 @@ GET /internal/ping
 
 Choose the right model for your use case:
 
-- **flux-schnell**: Best for fast, high-quality generation (4 steps)
-- **flux-dev**: Best for highest quality (28 steps)
-- **sdxl**: Good balance of quality and speed (20 steps)
-- **sd15**: Lightweight fallback (20 steps)
+- **flux-schnell**: Best for fast, high-quality generation (4 steps, 2 min timeout)
+- **flux-dev**: Best for highest quality (28 steps, 10 min timeout)
+- **sdxl**: Good balance of quality and speed (20 steps, 5 min timeout)
+- **sd15**: Lightweight fallback (20 steps, 5 min timeout)
+
+## Model-Specific Prompting
+
+- **FLUX.1 models**: Natural language descriptions (Black Forest Labs style)
+- **Stable Diffusion models**: Tag-based prompting with negative prompts
 
 ## Memory Management
 
@@ -68,6 +107,7 @@ The service automatically manages model loading and memory usage:
 
 ## Environment Variables
 
-- `TORCH_DEVICE`: Force specific device (cuda, mps, cpu)
+- `TORCH_DEVICE`: Force specific device (auto, cuda, rocm, cpu)
+- `ROCM_VISIBLE_DEVICES`: AMD GPU devices for ROCm (all)
 - `MODEL_CACHE_DIR`: Directory to cache downloaded models
 - `MAX_MODELS_IN_MEMORY`: Maximum models to keep loaded (default: 2)

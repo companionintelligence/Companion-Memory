@@ -1,0 +1,24 @@
+# Docker Compose override for AMD GPU-enabled AI image generation
+# Usage: docker compose -f docker-compose.yml -f docker-compose.amd.yml up ai-image-generation
+# 
+# Requirements:
+# - ROCm drivers and runtime installed
+# - AMD GPU with ROCm support
+# - At least 8GB VRAM recommended
+
+version: '3.8'
+
+services:
+  ai-image-generation:
+    environment:
+      - TORCH_DEVICE=rocm  # Force ROCm usage
+      - ROCM_VISIBLE_DEVICES=all
+      - HSA_OVERRIDE_GFX_VERSION=10.3.0  # Adjust for your GPU
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    security_opt:
+      - seccomp:unconfined
+    group_add:
+      - video
+      - render

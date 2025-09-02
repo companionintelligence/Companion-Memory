@@ -17,9 +17,18 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org && \
     pip install --no-cache-dir -r requirements.txt --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
 
-# Try to install AI dependencies but don't fail if they can't be installed
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --trusted-host download.pytorch.org --trusted-host files.pythonhosted.org || echo "PyTorch installation failed, will use CPU fallback" && \
-    pip install --no-cache-dir transformers accelerate diffusers --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org || echo "Diffusers installation failed, will use CPU fallback"
+# Install PyTorch for multiple compute platforms (CPU by default, can be overridden at runtime)
+# Install CPU version first as the base
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --trusted-host download.pytorch.org --trusted-host files.pythonhosted.org || echo "PyTorch CPU installation failed"
+
+# Try to install CUDA version (will be used if NVIDIA GPU detected at runtime)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --trusted-host download.pytorch.org --trusted-host files.pythonhosted.org || echo "PyTorch CUDA installation failed, using CPU fallback"
+
+# Try to install ROCm version (will be used if AMD GPU detected at runtime)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0 --trusted-host download.pytorch.org --trusted-host files.pythonhosted.org || echo "PyTorch ROCm installation failed, using CPU fallback"
+
+# Install AI dependencies
+RUN pip install --no-cache-dir transformers accelerate diffusers --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org || echo "Diffusers installation failed, will use CPU fallback"
 
 # Copy application code
 COPY . .
