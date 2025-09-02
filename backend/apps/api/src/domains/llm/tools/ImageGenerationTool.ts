@@ -257,15 +257,23 @@ export class ImageGenerationTool extends BaseTool<ImageGenerationInput, ImageGen
     let enhancedPrompt = input.prompt;
     let negativePrompt = '';
     
-    // FLUX models don't typically use negative prompts
-    if (input.model !== 'flux-schnell' && input.model !== 'flux-dev') {
-      negativePrompt = 'low quality, blurry, distorted, deformed, ugly, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, ugly, blurry, bad anatomy, bad proportions, extra limbs, cloned face, skin spots, skin blemishes, age spot, glans';
-    }
-
-    if (input.style === 'vivid') {
-      enhancedPrompt = `${input.prompt}, hyperrealistic, highly detailed, vibrant colors, dramatic lighting, professional photography`;
+    // FLUX models use natural language descriptions (BFL style)
+    if (input.model === 'flux-schnell' || input.model === 'flux-dev') {
+      // FLUX models prefer natural language descriptions without comma-separated tags
+      if (input.style === 'vivid') {
+        enhancedPrompt = `A hyperrealistic and highly detailed ${input.prompt} with vibrant colors and dramatic lighting, captured as if by professional photography`;
+      } else {
+        enhancedPrompt = `A high-quality photograph of ${input.prompt} with natural lighting and clean composition`;
+      }
     } else {
-      enhancedPrompt = `${input.prompt}, natural lighting, photorealistic, clean, high quality`;
+      // Stable Diffusion models (SDXL, SD1.5) use tag-based prompting with negative prompts
+      negativePrompt = 'low quality, blurry, distorted, deformed, ugly, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, ugly, blurry, bad anatomy, bad proportions, extra limbs, cloned face, skin spots, skin blemishes, age spot, glans';
+      
+      if (input.style === 'vivid') {
+        enhancedPrompt = `${input.prompt}, hyperrealistic, highly detailed, vibrant colors, dramatic lighting, professional photography`;
+      } else {
+        enhancedPrompt = `${input.prompt}, natural lighting, photorealistic, clean, high quality`;
+      }
     }
 
     const requestBody: StableDiffusionRequest = {
