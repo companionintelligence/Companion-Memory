@@ -33,10 +33,9 @@ export class MobileFilesController {
       success: true,
       data: fileList.map(file => ({
         id: file.id,
-        filename: file.filename,
+        filename: file.name,
         size: file.size,
-        mimeType: file.mimeType,
-        createdAt: file.createdAt,
+        mimeType: file.contentType,
       })),
       meta: {
         total: files.length,
@@ -53,11 +52,9 @@ export class MobileFilesController {
       success: true,
       data: {
         id: file.id,
-        filename: file.filename,
+        filename: file.name,
         size: file.size,
-        mimeType: file.mimeType,
-        createdAt: file.createdAt,
-        updatedAt: file.updatedAt,
+        mimeType: file.contentType,
       },
     };
   }
@@ -93,10 +90,9 @@ export class MobileFilesController {
       success: true,
       data: {
         id: uploadedFile.id,
-        filename: uploadedFile.filename,
+        filename: uploadedFile.name,
         size: uploadedFile.size,
-        mimeType: uploadedFile.mimeType,
-        createdAt: uploadedFile.createdAt,
+        mimeType: uploadedFile.contentType,
       },
       message: 'File uploaded successfully',
     };

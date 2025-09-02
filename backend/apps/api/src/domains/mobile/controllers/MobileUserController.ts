@@ -37,14 +37,16 @@ export class MobileUserController {
 
     const user = await this.userService.findOne(userId);
 
+    if (user == null) {
+      throw new NotFoundException('User not found');
+    }
+
     return {
       success: true,
       data: {
         id: user.id,
         name: user.name,
         email: user.email,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
       },
     };
   }
@@ -63,14 +65,16 @@ export class MobileUserController {
     try {
       const updatedUser = await this.userService.update(userId, input);
 
+      if (updatedUser == null) {
+        throw new NotFoundException('User not found');
+      }
+
       return {
         success: true,
         data: {
           id: updatedUser.id,
           name: updatedUser.name,
           email: updatedUser.email,
-          createdAt: updatedUser.createdAt,
-          updatedAt: updatedUser.updatedAt,
         },
         message: 'Profile updated successfully',
       };

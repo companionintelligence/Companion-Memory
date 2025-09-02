@@ -69,8 +69,6 @@ export class MobileAuthController {
           id: user.id,
           name: user.name,
           email: user.email,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
         },
       },
       meta: {
@@ -104,6 +102,10 @@ export class MobileAuthController {
     const userId = payload.sub;
     const user = await this.userService.findOne(userId);
 
+    if (user == null) {
+      throw new UnauthorizedException('User not found');
+    }
+
     const sessionMeta = {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
@@ -125,8 +127,6 @@ export class MobileAuthController {
           id: user.id,
           name: user.name,
           email: user.email,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
         },
       },
       meta: {
@@ -159,6 +159,10 @@ export class MobileAuthController {
     }
 
     const user = await this.userService.findOne(userId);
+
+    if (user == null) {
+      throw new UnauthorizedException('Invalid token');
+    }
 
     return {
       success: true,
