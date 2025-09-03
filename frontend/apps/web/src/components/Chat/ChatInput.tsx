@@ -8,7 +8,6 @@ import {
   useCallback,
 } from 'react';
 
-import { VoiceInput } from '@ci/capture';
 import {
   Button,
   Textarea,
@@ -19,7 +18,7 @@ import {
   formDataResolver,
   formDataSchema as s,
 } from '@ci/shadcn';
-import { Send, Square, Plus, Volume2 } from '@ci/shadcn/icons';
+import { Send, Square, Plus } from '@ci/shadcn/icons';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -43,9 +42,9 @@ interface Props {
   loading?: boolean;
   streaming?: boolean;
   placeholder?: string;
-  lastAssistantMessage?: string;
+
   onAttach?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
-  //onRecord?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
+
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
 }
@@ -56,9 +55,9 @@ function ChatInput(
     loading = false,
     streaming = false,
     placeholder,
-    lastAssistantMessage,
+
     onAttach,
-    //onRecord,
+
     onSubmit,
     onStop,
   }: Props,
@@ -101,14 +100,6 @@ function ChatInput(
       }
     },
     [form, onSubmit],
-  );
-
-  // Handle voice transcription
-  const handleVoiceTranscription = useCallback(
-    (text: string) => {
-      form.setValue('message', text);
-    },
-    [form],
   );
 
   return (
@@ -206,174 +197,11 @@ function ChatInput(
                 )}
               />
 
-              <Tooltip>
-                <Tooltip.Content side="bottom">Voice input</Tooltip.Content>
-                <Tooltip.Trigger asChild>
-                  <div className="flex items-center">
-                    <VoiceInput
-                      onTranscription={handleVoiceTranscription}
-                      disabled={loading || disabled}
-                      className="p-0"
-                      voiceServiceUrl="/stt/transcribe"
-                    />
-                  </div>
-                </Tooltip.Trigger>
-              </Tooltip>
+              {/* Voice input removed - keeping backend endpoints only */}
 
-              <Tooltip>
-                <Tooltip.Content side="bottom">Speak message</Tooltip.Content>
-                <Tooltip.Trigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={loading || streaming || disabled || !form.watch('message')?.trim()}
-                    className="h-8 w-8 p-0"
-                    onClick={async () => {
-                      const messageText = form.watch('message') || '';
-                      if (!messageText.trim()) {
-                        return;
-                      }
+              {/* TTS button removed - keeping backend endpoints only */}
 
-                      try {
-                        const response = await fetch('/tts/v1/chat/completions', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            model: 'higgs-audio-v2-generation-3B-base',
-                            messages: [
-                              {
-                                role: 'user',
-                                content: messageText.trim(),
-                              },
-                            ],
-                            max_tokens: 2048,
-                          }),
-                        });
-
-                        if (response.ok) {
-                          const result = await response.json();
-
-                          // Extract audio data from Higgs Audio vLLM response
-                          if (result.choices && result.choices.length > 0) {
-                            const choice = result.choices[0];
-                            if (choice.message && choice.message.audio && choice.message.audio.data) {
-                              const audioData = choice.message.audio.data;
-
-                              // Convert base64 to audio blob
-                              const binaryString = atob(audioData);
-                              const bytes = new Uint8Array(binaryString.length);
-                              for (let i = 0; i < binaryString.length; i++) {
-                                bytes[i] = binaryString.charCodeAt(i);
-                              }
-
-                              console.log('Audio data length:', bytes.length);
-
-                              // Use MP3 format for better browser compatibility
-                              const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
-                              const audioUrl = URL.createObjectURL(audioBlob);
-
-                              // Create and play audio using HTML5 Audio element
-                              const audio = new Audio(audioUrl);
-
-                              audio.onended = () => {
-                                URL.revokeObjectURL(audioUrl);
-                              };
-
-                              audio.onerror = (e) => {
-                                console.error('Audio playback error:', e);
-                                URL.revokeObjectURL(audioUrl);
-                              };
-
-                              await audio.play();
-                              console.log('Audio playback started');
-                            }
-                          }
-                        }
-                      } catch (error) {
-                        console.error('TTS error:', error);
-                      }
-                    }}
-                  >
-                    <Volume2 className="h-4 w-4" />
-                  </Button>
-                </Tooltip.Trigger>
-              </Tooltip>
-
-              {lastAssistantMessage && (
-                <Tooltip>
-                  <Tooltip.Content side="bottom">Speak assistant response</Tooltip.Content>
-                  <Tooltip.Trigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={loading || disabled}
-                      className="h-8 w-8 p-0"
-                      onClick={async () => {
-                        try {
-                          const response = await fetch('/tts/v1/chat/completions', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              model: 'higgs-audio-v2-generation-3B-base',
-                              messages: [
-                                {
-                                  role: 'user',
-                                  content: lastAssistantMessage,
-                                },
-                              ],
-                              max_tokens: 2048,
-                            }),
-                          });
-
-                          if (response.ok) {
-                            const result = await response.json();
-
-                            // Extract audio data from Higgs Audio vLLM response
-                            if (result.choices && result.choices.length > 0) {
-                              const choice = result.choices[0];
-                              if (choice.message && choice.message.audio && choice.message.audio.data) {
-                                const audioData = choice.message.audio.data;
-
-                                // Convert base64 to audio blob
-                                const binaryString = atob(audioData);
-                                const bytes = new Uint8Array(binaryString.length);
-                                for (let i = 0; i < binaryString.length; i++) {
-                                  bytes[i] = binaryString.charCodeAt(i);
-                                }
-
-                                console.log('Audio data length:', bytes.length);
-
-                                // Use MP3 format for better browser compatibility
-                                const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
-                                const audioUrl = URL.createObjectURL(audioBlob);
-                                const audio = new Audio(audioUrl);
-
-                                audio.onended = () => {
-                                  URL.revokeObjectURL(audioUrl);
-                                };
-
-                                audio.onerror = (e) => {
-                                  console.error('Audio playback error:', e);
-                                  URL.revokeObjectURL(audioUrl);
-                                };
-
-                                await audio.play();
-                                console.log('Audio playback started');
-                              }
-                            }
-                          }
-                        } catch (error) {
-                          console.error('TTS error:', error);
-                        }
-                      }}
-                    >
-                      <Volume2 className="h-4 w-4" />
-                    </Button>
-                  </Tooltip.Trigger>
-                </Tooltip>
-              )}
+              {/* TTS button for assistant response removed - keeping backend endpoints only */}
 
               <Tooltip>
                 <Tooltip.Content side="bottom">{streaming ? 'Stop' : 'Send'}</Tooltip.Content>

@@ -86,31 +86,6 @@ export function Chat({
   // the clone / swap flow.
   const lastChannelRef = useRef<number | null>(null);
 
-  // Track the current assistant message content as it streams in
-  const [currentAssistantMessage, setCurrentAssistantMessage] = useState<string>('');
-
-  // Get the last assistant message for TTS functionality
-  const lastAssistantMessage = useMemo(() => {
-    // If we have a current streaming message, use that
-    if (currentAssistantMessage) {
-      return currentAssistantMessage;
-    }
-
-    // Otherwise fall back to the last assistant message in the messages array
-    if (!messages || messages.length === 0) {
-      return undefined;
-    }
-
-    // Find the last assistant message (role === 'assistant')
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') {
-        return messages[i].content;
-      }
-    }
-
-    return undefined;
-  }, [messages, currentAssistantMessage]);
-
   const [accumulatedMessages, setAccumulatedMessages] = useState<ReactNode[]>([
     <Fragment key={uuid7()}>
       <ThinkBlock renderEmptyContent={true} defaultExpanded={true} streamingRef={thinkStreamingRef} />
@@ -189,8 +164,7 @@ export function Chat({
 
         if (chunk.channel === Channel.TEXT) {
           targetRef = textStreamingRef;
-          // Update the current assistant message as text streams in
-          setCurrentAssistantMessage((prev) => prev + payload);
+          // TTS functionality removed - keeping backend endpoints only
         } else if (chunk.channel === Channel.THINK) {
           targetRef = thinkStreamingRef;
         }
@@ -221,8 +195,7 @@ export function Chat({
         try {
           const block = <UserMessage key={uuid7()} content={data.message} />;
 
-          // Reset the current assistant message when starting a new turn
-          setCurrentAssistantMessage('');
+          // TTS functionality removed - keeping backend endpoints only
 
           flushStream(block);
           maybeAutoScroll(true);
@@ -324,7 +297,6 @@ export function Chat({
           loading={loading}
           streaming={streaming}
           onSubmit={handleSubmit}
-          lastAssistantMessage={lastAssistantMessage}
           {...chatInputProps}
         />
       </div>
