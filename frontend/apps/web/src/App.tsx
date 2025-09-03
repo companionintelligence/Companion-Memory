@@ -3,7 +3,7 @@ import { type ReactNode, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { AuthProvider, ModelProvider, ThemeProvider } from '@/hooks';
+import { AuthProvider, DeviceLayoutProvider, ModelProvider, ThemeProvider } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import FeedPage from '@/pages/FeedPage';
 import LoginPage from '@/pages/LoginPage';
@@ -12,7 +12,6 @@ import SplashPage from '@/pages/SplashPage';
 
 const ActionsPage = lazy(() => import('@/pages/ActionsPage'));
 const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'));
-const CapturePage = lazy(() => import('@/pages/CapturePage'));
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const ConnectionsPage = lazy(() => import('@/pages/ConnectionsPage'));
 const FilesGalleryPage = lazy(() => import('@/pages/FilesGalleryPage'));
@@ -27,9 +26,11 @@ function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
       <ThemeProvider defaultTheme="system" storageKey="ci-ui-theme">
-        <AuthProvider args={[]}>
-          <ModelProvider args={[]}>{children}</ModelProvider>
-        </AuthProvider>
+        <DeviceLayoutProvider args={[]}>
+          <AuthProvider args={[]}>
+            <ModelProvider args={[]}>{children}</ModelProvider>
+          </AuthProvider>
+        </DeviceLayoutProvider>
       </ThemeProvider>
     </Router>
   );
@@ -107,15 +108,6 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <FilesGalleryPage />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/capture"
-          element={
-            <ProtectedRoute>
-              <CapturePage />
             </ProtectedRoute>
           }
         />

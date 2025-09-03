@@ -1,13 +1,13 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { ContentEntity } from '@ci/domains/memory/entities/ContentEntity';
 import { UserModule } from '@ci/domains/user';
 
 import { ContentController } from './controllers/ContentController';
 import { EventController } from './controllers/EventController';
 import { MemoryController } from './controllers/MemoryController';
 import { ContactEntity } from './entities/ContactEntity';
+import { ContentEntity } from './entities/ContentEntity';
 import { EventEntity } from './entities/EventEntity';
 import { LocationEntity } from './entities/LocationEntity';
 import { PersonEntity } from './entities/PersonEntity';

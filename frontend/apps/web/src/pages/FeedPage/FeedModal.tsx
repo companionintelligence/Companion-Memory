@@ -1,12 +1,12 @@
 import { type ReactNode, useCallback } from 'react';
 
-import { Button, Dialog } from '@ci/shadcn';
+import { Button, Dialog, cn } from '@ci/shadcn';
 import { Send } from '@ci/shadcn/icons';
 
 import { useThreadService } from '@/api';
 import { Chat } from '@/components/Chat';
 import { Tag } from '@/components/Tag';
-import { useChatRequester } from '@/hooks';
+import { useChatRequester, useDeviceLayout } from '@/hooks';
 
 interface Props {
   open?: boolean;
@@ -23,6 +23,8 @@ export function FeedModal({ open = false, title, description, tags, imageUrl, th
     return null;
   }
 
+  const { isMobile } = useDeviceLayout();
+
   const [{ thread }] = useThreadService(threadId ?? null);
 
   const [{ stream, streaming: chatRequestStreaming }, { submit: submitChatRequest, stop: stopChatRequest }] =
@@ -38,8 +40,13 @@ export function FeedModal({ open = false, title, description, tags, imageUrl, th
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <Dialog.Content className="sm:max-w-[70vw] h-[70vh] p-0 flex flex-col gap-0">
-        <Dialog.Header className="flex flex-row items-center gap-4 p-4 pb-3 border-b bg-stone-50 rounded-t-2xl">
+      <Dialog.Content className="h-[calc(100%-2rem)] md:max-w-[70vw] md:h-[70vh] p-0 flex flex-col gap-0">
+        <Dialog.Header
+          className={cn(
+            'flex items-center border-b bg-stone-50 rounded-t-2xl',
+            isMobile ? 'gap-2 p-3' : 'flex-row gap-4 p-4 pb-3',
+          )}
+        >
           <Dialog.Title>{title}</Dialog.Title>
           <Dialog.Description className="hidden">
             Interact with an action suggested by your AI agent
@@ -55,30 +62,32 @@ export function FeedModal({ open = false, title, description, tags, imageUrl, th
         </Dialog.Header>
 
         <div className="flex flex-1 min-h-0">
-          <div className="flex flex-col gap-4 p-4 border-r flex-1/2">
-            {imageUrl && (
-              <div className="aspect-video rounded-lg overflow-hidden bg-stone-100">
-                <img src={imageUrl} alt={title} className="w-full h-full object-cover" />
-              </div>
-            )}
+          {!isMobile && (
+            <div className="flex flex-col gap-4 p-4 border-r flex-1/2">
+              {imageUrl && (
+                <div className="aspect-video rounded-lg overflow-hidden bg-stone-100">
+                  <img src={imageUrl} alt={title} className="w-full h-full object-cover" />
+                </div>
+              )}
 
-            <div className="flex-1">{description}</div>
+              <div className="flex-1">{description}</div>
 
-            <div className="bg-stone-50 rounded-lg p-4">
-              <h3 className="text-sm font-semibold mb-2">Quick Actions</h3>
-              <div className="space-y-2">
-                <Button variant="outline" size="sm" className="w-full justify-start">
-                  Save to favorites
-                </Button>
-                <Button variant="outline" size="sm" className="w-full justify-start">
-                  Share with family
-                </Button>
-                <Button variant="outline" size="sm" className="w-full justify-start">
-                  Add to calendar
-                </Button>
+              <div className="bg-stone-50 rounded-lg p-4">
+                <h3 className="text-sm font-semibold mb-2">Quick Actions</h3>
+                <div className="space-y-2">
+                  <Button variant="outline" size="sm" className="w-full justify-start">
+                    Save to favorites
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-full justify-start">
+                    Share with family
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-full justify-start">
+                    Add to calendar
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           <Chat
             placeholder="Ask about this content..."

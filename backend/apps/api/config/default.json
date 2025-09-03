@@ -50,8 +50,16 @@
       "secretAccessKey": "S3_SECRET_ACCESS_KEY"
     }
   },
-  "ollama": {
-    "host": "http://localhost:11434"
+  "services": {
+    "ollama": {
+      "host": "http://localhost:11434"
+    },
+    "stt": {
+      "host": "http://localhost:9001"
+    },
+    "tts": {
+      "host": "http://localhost:9002"
+    }
   },
   "features": {
     "scheduled.answer.inferencing": true,

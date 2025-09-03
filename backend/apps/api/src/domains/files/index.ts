@@ -11,7 +11,7 @@ import { FileService } from './services/FileService';
   imports: [TypeOrmModule.forFeature([FileEntity]), EventsModule],
   providers: [FileService],
   controllers: [FilesController],
-  exports: [],
+  exports: [FileService],
 })
 export class FilesModule {}
 

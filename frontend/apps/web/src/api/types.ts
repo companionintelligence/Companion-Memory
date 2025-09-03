@@ -24,3 +24,11 @@ export interface Thread {
   description: string | null;
   messages?: Message[];
 }
+
+export interface File {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  url?: string;
+}

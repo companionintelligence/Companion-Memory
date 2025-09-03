@@ -1518,6 +1518,7 @@ __metadata:
     "@types/react": "npm:^19.1.5"
     "@types/react-dom": "npm:^19.1.5"
     "@types/react-router-dom": "npm:^5.3.3"
+    "@types/uuid": "npm:^10.0.0"
     "@vitejs/plugin-react": "npm:^4.4.1"
     "@vitejs/plugin-react-swc": "npm:^3.9.0"
     "@vitest/browser": "npm:^3.2.3"
@@ -6764,6 +6765,13 @@ __metadata:
   version: 1.0.3
   resolution: "@types/treeify@npm:1.0.3"
   checksum: 10c0/758902638ff83a790c13359729d77aeb80aae50f7039670037e3a0ba2bcc7b09dd49173ab21a96946d83af1682fcd70e448e49151ecd46e190f8925077142d4a
+  languageName: node
+  linkType: hard
+
+"@types/uuid@npm:^10.0.0":
+  version: 10.0.0
+  resolution: "@types/uuid@npm:10.0.0"
+  checksum: 10c0/9a1404bf287164481cb9b97f6bb638f78f955be57c40c6513b7655160beb29df6f84c915aaf4089a1559c216557dc4d2f79b48d978742d3ae10b937420ddac60
   languageName: node
   linkType: hard
 

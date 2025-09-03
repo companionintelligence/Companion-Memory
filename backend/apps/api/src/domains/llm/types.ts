@@ -3,6 +3,7 @@ export interface PromptInput {
   model?: string;
   threadId?: string;
   enableTools?: boolean;
+  enableThinking?: boolean;
 }
 
 export interface OllamaModel {

@@ -19,11 +19,12 @@ import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { RequestContext } from '@ci/common/types';
-import { createContentSchema } from '@ci/domains/memory/controllers/ContentController';
-import { ContentService } from '@ci/domains/memory/services/ContentService';
 
+import { ContentService } from '../services/ContentService';
 import { EventService } from '../services/EventService';
 import { CreateEventDto, UpdateEventDto, Content, Event } from '../types';
+
+import { createContentSchema } from './ContentController';
 
 const createEventSchemaRoot = z.object({
   name: z.string().optional(),

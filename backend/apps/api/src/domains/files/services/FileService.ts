@@ -109,6 +109,17 @@ export class FileService implements OnModuleInit {
     return this.signFile(result);
   }
 
+  async findByThread(context: RequestContext, threadId: string): Promise<File[]> {
+    const result = await this.fileRepository
+      .createQueryBuilder('files')
+      .innerJoin('thread_file', 'thread_file', 'thread_file.file_id = files.id')
+      .where('thread_file.thread_id = :threadId', { threadId })
+      .andWhere('files.user_id = :userId', { userId: context.userId })
+      .getMany();
+
+    return this.signFiles(result);
+  }
+
   async upload(context: RequestContext, file: Express.Multer.File): Promise<File> {
     const entity = this.fileRepository.create({
       id: uuidv7(),
@@ -138,6 +149,21 @@ export class FileService implements OnModuleInit {
     });
 
     return entity.toFile();
+  }
+
+  async getFileContent(context: RequestContext, key: string): Promise<Uint8Array> {
+    const response = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: config.staticfiles.bucket,
+        Key: key,
+      }),
+    );
+
+    if (response.Body) {
+      return response.Body.transformToByteArray();
+    }
+
+    throw new Error(`S3 object body was empty for key: ${key}`);
   }
 
   async generatePresignedLink(context: RequestContext, id: string): Promise<string> {

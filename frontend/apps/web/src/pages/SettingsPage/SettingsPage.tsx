@@ -316,8 +316,9 @@ export function SettingsPage() {
                   </Select.Trigger>
                   <Select.Content>
                     <Select.Item value="gemma3:1b">Gemma 3 1B (Fast)</Select.Item>
+                    <Select.Item value="gemma3:27b">Gemma 3 27B (Advanced, Supports Images)</Select.Item>
                     <Select.Item value="qwen3:8b">Qwen 3 8B (Recommended)</Select.Item>
-                    <Select.Item value="qwen3:27b">Qwen 3 27B (Advanced)</Select.Item>
+                    <Select.Item value="qwen3:32b">Qwen 3 32B (Advanced)</Select.Item>
                     <Select.Item value="claude-3">Claude 3 (External)</Select.Item>
                   </Select.Content>
                 </Select>

@@ -27,6 +27,8 @@ import { MemoryModule } from '@ci/domains/memory';
 import { EmbeddingModule } from '@ci/domains/search';
 import { UserModule } from '@ci/domains/user';
 
+import { SpeechModule } from './domains/speech';
+
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -50,6 +52,7 @@ import { UserModule } from '@ci/domains/user';
     JobsModule,
     LLMModule,
     MemoryModule,
+    SpeechModule,
     UserModule,
   ],
   controllers: [],

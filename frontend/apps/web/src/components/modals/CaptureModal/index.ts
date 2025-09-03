@@ -1,0 +1,1 @@
+export { CaptureModal } from './CaptureModal';

@@ -39,7 +39,7 @@ export class OllamaService {
   private readonly logger = new LoggerService(OllamaService.name);
 
   private readonly ollama = new Ollama({
-    host: config.ollama.host,
+    host: config.services.ollama.host,
   });
 
   private readonly toolRegistry = new ToolRegistry();

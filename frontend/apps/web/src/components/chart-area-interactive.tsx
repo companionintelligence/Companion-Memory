@@ -4,7 +4,7 @@ import { Card, Select, ToggleGroup } from '@ci/shadcn';
 import { Area, AreaChart, CartesianGrid, XAxis } from 'recharts';
 
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import { useIsMobile } from '@/hooks/use-mobile';
+import { useDeviceLayout } from '@/hooks';
 
 export const description = 'An interactive area chart';
 
@@ -117,7 +117,7 @@ const chartConfig = {
 } satisfies ChartConfig;
 
 export function ChartAreaInteractive() {
-  const isMobile = useIsMobile();
+  const { isMobile } = useDeviceLayout();
   const [timeRange, setTimeRange] = useState('90d');
 
   useEffect(() => {

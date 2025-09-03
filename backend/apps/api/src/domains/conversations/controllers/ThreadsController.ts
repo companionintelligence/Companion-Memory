@@ -1,10 +1,22 @@
-import { Controller, Delete, Get, HttpCode, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Body,
+  Query,
+  UseGuards,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import type { RequestContext } from '@ci/common/types';
+import { CreateThreadDto } from '@ci/domains/conversations/types';
 
 import { MessageService } from '../services/MessageService';
 import { ThreadService } from '../services/ThreadService';
@@ -14,12 +26,39 @@ export const includeMessagesSchema = z
   .optional()
   .transform((v) => v !== 'false');
 
+const createThreadSchema = z.object({
+  name: z.string().optional(),
+  model: z.string(),
+  description: z.string().optional(),
+  files: z
+    .array(
+      z.object({
+        id: z.string(),
+      }),
+    )
+    .optional(),
+  userId: z.string().optional(),
+});
+
 @Controller('threads')
 export class ThreadsController {
   constructor(
     private readonly messageService: MessageService,
     private readonly threadService: ThreadService,
   ) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Post()
+  async post(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(createThreadSchema)) input: CreateThreadDto,
+  ) {
+    if (!context.userId) {
+      throw new UnauthorizedException('User must be authenticated to create a thread');
+    }
+
+    return this.threadService.create(context, input);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get()

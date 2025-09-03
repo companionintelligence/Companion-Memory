@@ -45,6 +45,7 @@
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
     "@types/react-router-dom": "^5.3.3",
+    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.4.1",
     "@vitejs/plugin-react-swc": "^3.9.0",
     "@vitest/browser": "^3.2.3",

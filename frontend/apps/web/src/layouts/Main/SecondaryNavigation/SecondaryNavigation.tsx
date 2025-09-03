@@ -3,7 +3,6 @@ import {
   BookImage,
   Brain,
   Cable,
-  Camera,
   ChartPie,
   Inbox,
   Lightbulb,
@@ -57,11 +56,6 @@ const CONTENT = [
     name: 'Content',
     url: '/files',
     icon: BookImage,
-  },
-  {
-    name: 'Capture',
-    url: '/capture',
-    icon: Camera,
   },
 ];
 

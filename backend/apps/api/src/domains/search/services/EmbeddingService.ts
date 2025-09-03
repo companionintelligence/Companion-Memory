@@ -34,7 +34,7 @@ interface Entity {
 @Injectable()
 export class EmbeddingService {
   private readonly ollama = new Ollama({
-    host: config.ollama.host,
+    host: config.services.ollama.host,
   });
 
   constructor(

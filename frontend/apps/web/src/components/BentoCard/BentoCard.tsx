@@ -11,6 +11,7 @@ interface Props {
   tags?: string[];
   imageUrl?: string;
   className?: string;
+  mobile?: boolean;
   onClick?: MouseEventHandler;
   onLike?: MouseEventHandler;
   onDislike?: MouseEventHandler;
@@ -23,6 +24,7 @@ export function BentoCard({
   description,
   imageUrl,
   className,
+  mobile = false,
   onClick,
   onLike,
   onDislike,
@@ -58,6 +60,61 @@ export function BentoCard({
     },
     [onExpand],
   );
+
+  if (mobile) {
+    return (
+      <div
+        className={cn(
+          'h-full w-full flex flex-col border rounded-lg cursor-pointer select-none p-4 gap-6',
+          className,
+        )}
+        onClick={handleClick}
+      >
+        <h1 className="text-2xl font-semibold text-center m-0">{title}</h1>
+
+        {imageUrl && (
+          <img
+            className="w-full overflow-hidden will-change-transform rounded-xl shadow-lg mb-1"
+            src={imageUrl}
+          />
+        )}
+
+        {(tags?.length ?? 0) > 0 && (
+          <div>
+            <div className="flex flex-wrap gap-1 justify-center">
+              {tags.map((tag) => (
+                <Tag key={tag} text={tag} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex-1 overflow-hidden">
+          <div>{description}</div>
+        </div>
+
+        <div className="flex gap-4 justify-between">
+          <div className="flex flex-row gap-3 content-between">
+            <Button className="bg-stone-50 cursor-pointer w-12 h-12" variant="outline" onClick={handleLike}>
+              <ThumbsUp className="w-12 h-12" />
+            </Button>
+
+            <Button
+              className="bg-stone-50 cursor-pointer w-12 h-12"
+              variant="outline"
+              onClick={handleDislike}
+            >
+              <ThumbsDown className="w-12 h-12" />
+            </Button>
+          </div>
+
+          <Button className="bg-stone-50 cursor-pointer w-12 h-12" variant="outline" onClick={handleExpand}>
+            <MessagesSquare className="w-12 h-12" />
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (imageUrl == null) {
     return (

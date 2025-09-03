@@ -46,6 +46,7 @@ export class FileEntity {
     return {
       id: this.id,
       name: this.original_name,
+      key: this.key,
       contentType: this.content_type,
       size: this.size,
     };

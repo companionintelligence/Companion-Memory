@@ -4,7 +4,7 @@
 
 ## PRIVATE AND CONFIDENTIAL
 
-# CI Server
+# CI Server - Front + Back End API + Web Monorepo
 
 This repository serves as the web interface to the Companion Intelligence server.
 

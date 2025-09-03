@@ -12,17 +12,32 @@ interface CarouselProps {
   className?: string;
   containerClassName?: string;
   slideClassName?: string;
+  mobile?: boolean;
 }
 
-export function Carousel({ children, className, containerClassName, slideClassName }: CarouselProps) {
-  const [emblaRef, emblaApi] = useEmblaCarousel({
-    align: 'start',
-    containScroll: 'trimSnaps',
-    dragFree: true,
-    // We could expose this as a property, for now we're
-    // explicitly setting it to the default value.
-    loop: false,
-  });
+export function Carousel({
+  children,
+  className,
+  containerClassName,
+  slideClassName,
+  mobile = false,
+}: CarouselProps) {
+  const [emblaRef, emblaApi] = useEmblaCarousel(
+    !mobile
+      ? {
+          align: 'start',
+          containScroll: 'trimSnaps',
+          dragFree: true,
+          // We could expose this as a property, for now we're
+          // explicitly setting it to the default value.
+          loop: false,
+        }
+      : {
+          align: 'start',
+          dragFree: false,
+          skipSnaps: false,
+        },
+  );
 
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(false);
@@ -58,6 +73,20 @@ export function Carousel({ children, className, containerClassName, slideClassNa
       emblaApi.off('reInit', onUpdate);
     };
   }, [emblaApi]);
+
+  if (mobile) {
+    return (
+      <div ref={emblaRef} className={cn(className, 'overflow-hidden')}>
+        <div className={cn(containerClassName, 'flex will-change-transform')}>
+          {Children.map(children, (child, index) => (
+            <div key={index} className={cn('min-w-0 flex-none basis-full', slideClassName)}>
+              {child}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

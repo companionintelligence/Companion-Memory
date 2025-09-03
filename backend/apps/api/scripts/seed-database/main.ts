@@ -6,6 +6,7 @@ import { DataSource } from 'typeorm';
 import config from '@ci/configuration';
 import { ConnectionEntity, ProviderEntity } from '@ci/domains/connections';
 import { MessageEntity, ThreadEntity } from '@ci/domains/conversations';
+import { FileEntity } from '@ci/domains/files';
 import { ActionEntity, AnswerEntity, QuestionEntity } from '@ci/domains/intelligence';
 import {
   ContactEntity,
@@ -50,6 +51,8 @@ const logger = new Logger(path.basename(__filename));
       // Conversation
       MessageEntity,
       ThreadEntity,
+      // Files
+      FileEntity,
       // Memory
       ContactEntity,
       ContentEntity,

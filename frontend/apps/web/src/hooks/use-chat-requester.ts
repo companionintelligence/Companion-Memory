@@ -8,6 +8,8 @@ import { useModel } from './use-model';
 type Opts = {
   threadId: string | null;
   onNewThread?: (threadId: string) => void;
+  enableTools?: boolean;
+  enableThinking?: boolean;
 };
 
 type ReturnType = [
@@ -23,7 +25,12 @@ type ReturnType = [
   },
 ];
 
-export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
+export function useChatRequester({
+  threadId,
+  onNewThread,
+  enableTools = true,
+  enableThinking = true,
+}: Opts): ReturnType {
   const [{ authToken }] = useAuth();
   const [{ selectedModel }] = useModel();
 
@@ -64,8 +71,8 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
             prompt: data.message.trim(),
             model: selectedModel,
             threadId: threadId,
-            enableTools: true,
-            enableThinking: true,
+            enableTools: enableTools,
+            enableThinking: enableThinking,
           }),
           signal: controller.signal,
         });
@@ -111,7 +118,7 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
 
       return success;
     },
-    [authToken, selectedModel, threadId, onNewThread],
+    [authToken, selectedModel, threadId, onNewThread, enableTools, enableThinking],
   );
 
   const stop = useCallback(() => {

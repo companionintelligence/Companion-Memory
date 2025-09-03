@@ -4,8 +4,8 @@ import { DeleteResult, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import type { RequestContext } from '@ci/common/types';
-import { ContentEntity } from '@ci/domains/memory';
 
+import { ContentEntity } from '../entities/ContentEntity';
 import { CreateContentDto, UpdateContentDto, Content } from '../types';
 
 @Injectable()
