@@ -1,6 +1,7 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Inject, forwardRef } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/services';
+import { ToolRegistry } from '@ci/domains/llm/tools';
 
 import { McpHostService } from '../services/McpHostService';
 import type { McpHealthStatus, McpSession } from '../types/mcp-config';
@@ -9,7 +10,11 @@ import type { McpHealthStatus, McpSession } from '../types/mcp-config';
 export class McpHealthController {
   private readonly logger = new LoggerService(McpHealthController.name);
 
-  constructor(private readonly mcpHostService: McpHostService) {}
+  constructor(
+    private readonly mcpHostService: McpHostService,
+    @Inject(forwardRef(() => ToolRegistry))
+    private readonly toolRegistry: ToolRegistry,
+  ) {}
 
   /**
    * Get health status for all MCP servers
@@ -134,5 +139,29 @@ export class McpHealthController {
       );
       throw error;
     }
+  }
+
+  /**
+   * DEBUG: Get all tools registered in the ToolRegistry
+   */
+  @Get('debug/tools')
+  getRegisteredTools() {
+    this.logger.debug('Fetching all registered tools from ToolRegistry');
+
+    const registeredTools = this.toolRegistry.getRegisteredToolNames();
+    const availableTools = this.toolRegistry.getAvailableTools();
+
+    this.logger.debug(`Found ${registeredTools.length} registered tools`, {
+      toolNames: registeredTools,
+      toolCount: registeredTools.length,
+    });
+
+    return {
+      registeredToolNames: registeredTools,
+      availableTools: availableTools,
+      totalCount: registeredTools.length,
+      mcpToolCount: registeredTools.filter((name) => name.includes(':')).length,
+      nativeToolCount: registeredTools.filter((name) => !name.includes(':')).length,
+    };
   }
 }

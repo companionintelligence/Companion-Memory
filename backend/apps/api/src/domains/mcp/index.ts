@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 
 import { EventsModule } from '@ci/domains/events';
 import { LLMModule } from '@ci/domains/llm';
@@ -8,7 +8,7 @@ import { McpHealthController } from './controllers/McpHealthController';
 import { McpHostService } from './services/McpHostService';
 
 @Module({
-  imports: [EventsModule, LLMModule],
+  imports: [EventsModule, forwardRef(() => LLMModule)],
   providers: [McpHostService],
   controllers: [McpController, McpHealthController],
   exports: [McpHostService],

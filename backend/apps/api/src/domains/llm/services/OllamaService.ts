@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import {
   type ChatResponse,
@@ -22,8 +22,6 @@ import {
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
   type ToolSchema,
-  BaseTool,
-  type ToolExecutionContext,
 } from '../tools';
 import type { OllamaModel } from '../types';
 
@@ -37,30 +35,6 @@ interface PromptOptions {
   enableThinking?: boolean;
 }
 
-/**
- * Wrapper class to adapt MCP tools for OllamaService
- */
-class OllamaMcpToolWrapper extends BaseTool {
-  readonly schema: ToolSchema;
-
-  constructor(
-    schema: ToolSchema,
-    private readonly mcpHostService: McpHostService,
-  ) {
-    super();
-    this.schema = schema;
-  }
-
-  protected async executeInternal(context: ToolExecutionContext, input: unknown): Promise<unknown> {
-    const result = await this.mcpHostService.executeServerTool(this.schema.name, input);
-    if (!result.success) {
-      throw new Error(result.error || 'MCP tool execution failed');
-    }
-
-    return result.content;
-  }
-}
-
 @Injectable()
 export class OllamaService {
   private readonly logger = new LoggerService(OllamaService.name);
@@ -69,13 +43,13 @@ export class OllamaService {
     host: config.services.ollama.host,
   });
 
-  private readonly toolRegistry = new ToolRegistry();
-
   constructor(
     private readonly messageService: MessageService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    @Inject(forwardRef(() => McpHostService))
     private readonly mcpHostService: McpHostService,
+    private readonly toolRegistry: ToolRegistry,
   ) {
     this.initializeTools();
   }
@@ -366,7 +340,7 @@ export class OllamaService {
     this.toolRegistry.register(getEntertainmentPreferencesTool);
     this.toolRegistry.register(getStreamingAvailabilityTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
-    await this.initializeMcpTools();
+
     this.logger.debug('Initialized tools registry', {
       toolCount: this.toolRegistry.getRegisteredToolNames().length,
       tools: this.toolRegistry.getRegisteredToolNames(),
@@ -426,30 +400,6 @@ export class OllamaService {
           content: JSON.stringify(result),
         }) satisfies OllamaMessage,
     );
-  }
-
-  /**
-   * Initialize MCP tools from the MCP host service
-   */
-  private async initializeMcpTools(): Promise<void> {
-    try {
-      const mcpTools = await this.mcpHostService.getAvailableTools();
-
-      for (const tool of mcpTools) {
-        // Create and register the tool wrapper
-        const mcpToolWrapper = new OllamaMcpToolWrapper(tool, this.mcpHostService);
-        this.toolRegistry.register(mcpToolWrapper);
-      }
-
-      this.logger.log(`Registered ${mcpTools.length} MCP tools`, {
-        mcpToolNames: mcpTools.map((t) => t.name),
-      });
-    } catch (error) {
-      this.logger.error(
-        'Failed to initialize MCP tools',
-        error instanceof Error ? error : new Error(String(error)),
-      );
-    }
   }
 
   /**

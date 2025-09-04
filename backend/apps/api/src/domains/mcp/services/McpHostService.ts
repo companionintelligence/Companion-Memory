@@ -3,7 +3,7 @@ import * as path from 'path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/services';
 import { ToolRegistry, type ToolSchema, BaseTool, type ToolExecutionContext } from '@ci/domains/llm/tools';
@@ -58,7 +58,10 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
 
   private readonly DEFAULT_MAX_FAILURES = 3; // Max consecutive failures before restart
 
-  constructor(private readonly toolRegistry: ToolRegistry) {}
+  constructor(
+    @Inject(forwardRef(() => ToolRegistry))
+    private readonly toolRegistry: ToolRegistry,
+  ) {}
 
   async onModuleInit() {
     await this.loadConfiguration();
@@ -74,12 +77,40 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
    */
   private async loadConfiguration(): Promise<void> {
     try {
-      // In production, this would be a proper config service
-      const configPath = path.resolve(__dirname, '../../../config/mcp-servers.json');
-      const configContent = await fs.readFile(configPath, 'utf-8');
+      // Try multiple possible config paths for robustness
+      const possiblePaths = [
+        path.resolve(process.cwd(), 'backend/apps/api/config/mcp-servers.json'), // From project root
+        path.resolve(__dirname, '../../../../config/mcp-servers.json'), // Relative to compiled JS
+        path.resolve(__dirname, '../../../config/mcp-servers.json'), // Alternative relative path
+        path.resolve(process.cwd(), 'config/mcp-servers.json'), // Direct from CWD
+      ];
+
+      let configContent: string | null = null;
+      let usedPath: string | null = null;
+
+      for (const configPath of possiblePaths) {
+        try {
+          configContent = await fs.readFile(configPath, 'utf-8');
+          usedPath = configPath;
+          break;
+        } catch (error) {
+          // Continue to next path
+          this.logger.debug(`Config not found at ${configPath}`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      if (!configContent || !usedPath) {
+        throw new Error(
+          `MCP configuration file not found in any of the expected locations: ${possiblePaths.join(', ')}`,
+        );
+      }
+
       this.serversConfig = JSON.parse(configContent) as McpServersConfig;
       this.logger.log('Loaded MCP servers configuration', {
         serverCount: Object.keys(this.serversConfig?.servers || {}).length,
+        configPath: usedPath,
       });
     } catch (error) {
       this.logger.error(

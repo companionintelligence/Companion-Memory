@@ -4,7 +4,7 @@
       "name": "File System Access",
       "command": "npx",
       "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
-      "enabled": false,
+      "enabled": true,
       "description": "Provides file system operations for the assistant",
       "timeout": 30000,
       "healthCheck": {
