@@ -4,12 +4,13 @@ import { EventsModule } from '@ci/domains/events';
 import { LLMModule } from '@ci/domains/llm';
 
 import { McpController } from './controllers/McpController';
+import { McpHealthController } from './controllers/McpHealthController';
 import { McpHostService } from './services/McpHostService';
 
 @Module({
   imports: [EventsModule, LLMModule],
   providers: [McpHostService],
-  controllers: [McpController],
+  controllers: [McpController, McpHealthController],
   exports: [McpHostService],
 })
 export class McpModule {}
@@ -18,4 +19,10 @@ export class McpModule {}
 export { McpHostService };
 
 // Types
-export type { McpServerConfig, McpServersConfig, McpSession, McpToolResult } from './types/mcp-config';
+export type {
+  McpServerConfig,
+  McpServersConfig,
+  McpSession,
+  McpToolResult,
+  McpHealthStatus,
+} from './types/mcp-config';

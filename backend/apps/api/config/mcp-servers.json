@@ -1,34 +1,55 @@
 {
-    "servers": {
-      "filesystem": {
-        "name": "File System Access",
-        "command": "npx",
-        "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
-        "enabled": false,
-        "description": "Provides file system operations for the assistant",
-        "timeout": 30000
+  "servers": {
+    "filesystem": {
+      "name": "File System Access",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
+      "enabled": false,
+      "description": "Provides file system operations for the assistant",
+      "timeout": 30000,
+      "healthCheck": {
+        "enabled": true,
+        "intervalMs": 30000,
+        "timeoutMs": 5000,
+        "retryCount": 3,
+        "restartOnFailure": true
+      }
+    },
+    "postgres": {
+      "name": "Database Access",
+      "command": "npx", 
+      "args": ["@modelcontextprotocol/server-postgres"],
+      "env": {
+        "POSTGRES_URL": "${DATABASE_URL}"
       },
-      "postgres": {
-        "name": "Database Access",
-        "command": "npx", 
-        "args": ["@modelcontextprotocol/server-postgres"],
-        "env": {
-          "POSTGRES_URL": "${DATABASE_URL}"
-        },
-        "enabled": false,
-        "description": "Query the application database",
-        "timeout": 30000
+      "enabled": false,
+      "description": "Query the application database",
+      "timeout": 30000,
+      "healthCheck": {
+        "enabled": true,
+        "intervalMs": 45000,
+        "timeoutMs": 10000,
+        "retryCount": 2,
+        "restartOnFailure": true
+      }
+    },
+    "brave-search": {
+      "name": "Brave Search",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
       },
-      "brave-search": {
-        "name": "Brave Search",
-        "command": "npx",
-        "args": ["@modelcontextprotocol/server-brave-search"],
-        "env": {
-          "BRAVE_API_KEY": "${BRAVE_API_KEY}"
-        },
-        "enabled": false,
-        "description": "Search the web using Brave Search API",
-        "timeout": 30000
+      "enabled": false,
+      "description": "Search the web using Brave Search API",
+      "timeout": 30000,
+      "healthCheck": {
+        "enabled": true,
+        "intervalMs": 60000,
+        "timeoutMs": 8000,
+        "retryCount": 3,
+        "restartOnFailure": false
       }
     }
   }
+}

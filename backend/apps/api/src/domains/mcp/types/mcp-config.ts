@@ -9,6 +9,14 @@ export interface McpServerConfig {
   enabled?: boolean;
   timeout?: number;
   description?: string;
+  // Health monitoring settings
+  healthCheck?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    timeoutMs?: number;
+    retryCount?: number;
+    restartOnFailure?: boolean;
+  };
 }
 
 export interface McpServersConfig {
@@ -24,6 +32,10 @@ export interface McpSession {
   lastError?: string;
   startedAt?: Date;
   tools?: string[];
+  // Health monitoring data
+  lastHealthCheck?: Date;
+  healthCheckFailures?: number;
+  isRestarting?: boolean;
 }
 
 export interface McpToolResult {
@@ -31,4 +43,14 @@ export interface McpToolResult {
   content?: unknown;
   error?: string;
   executionTimeMs?: number;
+}
+
+export interface McpHealthStatus {
+  serverName: string;
+  status: 'healthy' | 'unhealthy' | 'unknown';
+  lastCheck: Date;
+  consecutiveFailures: number;
+  uptime: number; // milliseconds
+  responseTime?: number; // milliseconds
+  error?: string;
 }

@@ -8,7 +8,13 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { LoggerService } from '@ci/common/services';
 import { ToolRegistry, type ToolSchema, BaseTool, type ToolExecutionContext } from '@ci/domains/llm/tools';
 
-import type { McpServerConfig, McpServersConfig, McpSession, McpToolResult } from '../types/mcp-config';
+import type {
+  McpServerConfig,
+  McpServersConfig,
+  McpSession,
+  McpToolResult,
+  McpHealthStatus,
+} from '../types/mcp-config';
 
 /**
  * Wrapper class to adapt MCP tools to our BaseTool interface
@@ -42,6 +48,15 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
   private readonly activeSessions = new Map<string, McpSession>();
 
   private serversConfig: McpServersConfig | null = null;
+
+  // Health monitoring
+  private readonly healthCheckIntervals = new Map<string, NodeJS.Timeout>();
+
+  private readonly DEFAULT_HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
+
+  private readonly DEFAULT_HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
+
+  private readonly DEFAULT_MAX_FAILURES = 3; // Max consecutive failures before restart
 
   constructor(private readonly toolRegistry: ToolRegistry) {}
 
@@ -156,6 +171,9 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
       // Discover tools and register them
       await this.discoverAndRegisterTools(serverName, client);
 
+      // Start health monitoring if enabled
+      this.startHealthMonitoring(serverName);
+
       this.logger.log(`Started MCP server: ${serverName}`, {
         sessionId: session.id,
         serverName,
@@ -184,6 +202,9 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
         await session.client.close();
       }
 
+      // Stop health monitoring
+      this.stopHealthMonitoring(serverName);
+
       this.unregisterServerTools(serverName);
       this.activeSessions.delete(serverName);
 
@@ -206,6 +227,13 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
       ),
     );
     await Promise.all(promises);
+
+    // Ensure all health monitoring is stopped
+    this.healthCheckIntervals.forEach((interval, serverName) => {
+      clearInterval(interval);
+      this.logger.debug(`Cleared health monitoring interval for ${serverName}`);
+    });
+    this.healthCheckIntervals.clear();
   }
 
   /**
@@ -369,5 +397,206 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
     }
 
     return resolved;
+  }
+
+  // ===================================================================
+  // HEALTH MONITORING METHODS
+  // ===================================================================
+
+  /**
+   * Start health monitoring for a server
+   */
+  private startHealthMonitoring(serverName: string): void {
+    const config = this.getServerConfig(serverName);
+    if (!config?.healthCheck?.enabled) {
+      return;
+    }
+
+    const interval = config.healthCheck.intervalMs || this.DEFAULT_HEALTH_CHECK_INTERVAL;
+
+    const healthCheckInterval = setInterval(async () => {
+      await this.performHealthCheck(serverName);
+    }, interval);
+
+    this.healthCheckIntervals.set(serverName, healthCheckInterval);
+
+    this.logger.debug(`Started health monitoring for ${serverName}`, {
+      serverName,
+      intervalMs: interval,
+    });
+  }
+
+  /**
+   * Stop health monitoring for a server
+   */
+  private stopHealthMonitoring(serverName: string): void {
+    const interval = this.healthCheckIntervals.get(serverName);
+    if (interval) {
+      clearInterval(interval);
+      this.healthCheckIntervals.delete(serverName);
+
+      this.logger.debug(`Stopped health monitoring for ${serverName}`, {
+        serverName,
+      });
+    }
+  }
+
+  /**
+   * Perform health check on a server
+   */
+  private async performHealthCheck(serverName: string): Promise<McpHealthStatus> {
+    const session = this.activeSessions.get(serverName);
+    const config = this.getServerConfig(serverName);
+
+    if (!session) {
+      return {
+        serverName,
+        status: 'unknown',
+        lastCheck: new Date(),
+        consecutiveFailures: 0,
+        uptime: 0,
+        error: 'Session not found',
+      };
+    }
+
+    const startTime = Date.now();
+    const timeout = config?.healthCheck?.timeoutMs || this.DEFAULT_HEALTH_CHECK_TIMEOUT;
+
+    try {
+      // Perform health check by listing tools (lightweight operation)
+      const healthCheckPromise = session.client?.listTools();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Health check timeout')), timeout);
+      });
+
+      await Promise.race([healthCheckPromise, timeoutPromise]);
+
+      const responseTime = Date.now() - startTime;
+      const uptime = session.startedAt ? Date.now() - session.startedAt.getTime() : 0;
+
+      // Reset failure count on success
+      session.healthCheckFailures = 0;
+      session.lastHealthCheck = new Date();
+
+      const healthStatus: McpHealthStatus = {
+        serverName,
+        status: 'healthy',
+        lastCheck: new Date(),
+        consecutiveFailures: 0,
+        uptime,
+        responseTime,
+      };
+
+      this.logger.debug(`Health check passed for ${serverName}`, {
+        serverName,
+        responseTime,
+        uptime,
+      });
+
+      return healthStatus;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const failures = (session.healthCheckFailures || 0) + 1;
+      const uptime = session.startedAt ? Date.now() - session.startedAt.getTime() : 0;
+
+      session.healthCheckFailures = failures;
+      session.lastHealthCheck = new Date();
+      session.lastError = errorMessage;
+
+      const healthStatus: McpHealthStatus = {
+        serverName,
+        status: 'unhealthy',
+        lastCheck: new Date(),
+        consecutiveFailures: failures,
+        uptime,
+        error: errorMessage,
+      };
+
+      this.logger.warn(`Health check failed for ${serverName}`, {
+        serverName,
+        consecutiveFailures: failures,
+        error: errorMessage,
+      });
+
+      // Check if we should restart the server
+      const maxFailures = config?.healthCheck?.retryCount || this.DEFAULT_MAX_FAILURES;
+      const shouldRestart = config?.healthCheck?.restartOnFailure && failures >= maxFailures;
+
+      if (shouldRestart && !session.isRestarting) {
+        this.logger.error(`Server ${serverName} exceeded maximum failures, restarting...`, {
+          serverName,
+          maxFailures,
+          consecutiveFailures: failures,
+        });
+
+        // Use setImmediate to avoid blocking the health check
+        setImmediate(() => this.restartServer(serverName));
+      }
+
+      return healthStatus;
+    }
+  }
+
+  /**
+   * Restart a failed server
+   */
+  private async restartServer(serverName: string): Promise<void> {
+    const session = this.activeSessions.get(serverName);
+    if (!session || session.isRestarting) {
+      return;
+    }
+
+    session.isRestarting = true;
+
+    try {
+      this.logger.log(`Restarting server ${serverName}`, { serverName });
+
+      // Stop the server
+      await this.stopServer(serverName);
+
+      // Small delay before restart
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Start the server again
+      await this.startServer(serverName);
+
+      this.logger.log(`Server ${serverName} restarted successfully`, { serverName });
+    } catch (error) {
+      this.logger.error(`Failed to restart server ${serverName}`, {
+        serverName,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      // Clear the restarting flag whether successful or not
+      const currentSession = this.activeSessions.get(serverName);
+      if (currentSession) {
+        currentSession.isRestarting = false;
+      }
+    }
+  }
+
+  /**
+   * Get health status for all servers
+   */
+  async getHealthStatus(): Promise<McpHealthStatus[]> {
+    const healthStatuses: McpHealthStatus[] = [];
+
+    for (const serverName of this.activeSessions.keys()) {
+      const status = await this.performHealthCheck(serverName);
+      healthStatuses.push(status);
+    }
+
+    return healthStatuses;
+  }
+
+  /**
+   * Get health status for a specific server
+   */
+  async getServerHealthStatus(serverName: string): Promise<McpHealthStatus | null> {
+    if (!this.activeSessions.has(serverName)) {
+      return null;
+    }
+
+    return await this.performHealthCheck(serverName);
   }
 }
