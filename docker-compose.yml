@@ -66,7 +66,7 @@ services:
       - tts-service-cache:/root/.cache
     environment:
       - PYTHONPATH=/app
-      - VOICE_MODEL=${VOICE_MODEL:-vllm-higgs}
+      - VOICE_MODEL=${VOICE_MODEL:-piper}
     networks:
       - web
     restart: unless-stopped
@@ -103,33 +103,6 @@ services:
       - web
     extra_hosts:
       - host.docker.internal:host-gateway
-    profiles: [ "all", "staging" ]
-
-  higgs-audio-vllm:
-    image: bosonai/higgs-audio-vllm:latest
-    container_name: higgs-audio-vllm
-    ports:
-      - 8000:8000
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: >
-      --served-model-name "higgs-audio-v2-generation-3B-base"
-      --model "bosonai/higgs-audio-v2-generation-3B-base"
-      --audio-tokenizer-type "bosonai/higgs-audio-v2-tokenizer"
-      --limit-mm-per-prompt audio=50
-      --max-model-len 8192
-      --port 8000
-      --gpu-memory-utilization 0.8
-      --disable-mm-preprocessor-cache
-    networks:
-      - web
     profiles: [ "all", "staging" ]
 
   staging-webserver:

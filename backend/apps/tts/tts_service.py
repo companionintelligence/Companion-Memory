@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting TTS service...")
     
     # Initialize models based on environment variable
-    VOICE_MODEL = os.getenv("VOICE_MODEL", "higgs-vllm").lower()
+    VOICE_MODEL = os.getenv("VOICE_MODEL", "piper").lower()
     logger.info(f"TTS Engine configured: {VOICE_MODEL}")
 
     # Initialize Piper model if needed
@@ -109,6 +109,7 @@ async def call_stt_diarization(audio_bytes: bytes, sample_rate: int = 16000) -> 
         
         # Make request to STT service
         async with httpx.AsyncClient() as client:
+            response = await client.post(
                 "http://stt-service:9001/transcribe",
                 json={
                     "audio_data": audio_base64,

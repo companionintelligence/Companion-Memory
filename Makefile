@@ -54,7 +54,7 @@ build: ## Build the application
 
 infra: ## Boot the local infrastructure
 	@printf "🐳 Starting Docker dependencies (including voice services)...\n\n"
-	@printf "VOICE_MODEL: $${VOICE_MODEL:-higgs-vllm}\n\n"
+	@printf "VOICE_MODEL: $${VOICE_MODEL:-piper}\n\n"
 	@docker compose --profile infra up -d
 	@printf "\nDocker dependencies successfully started.\n"
 
@@ -67,7 +67,7 @@ dev: ## Boot the application
 	@which tmux >/dev/null || { printf "\n$(RED)✗$(RESET) You do not have tmux installed. Please install it first.\n\n"; exit 1; };
 
 	@printf "🎤 Starting voice services (STT & TTS)...\n"
-	@printf "VOICE_MODEL: $${VOICE_MODEL:-higgs-vllm}\n\n"
+	@printf "VOICE_MODEL: $${VOICE_MODEL:-piper}\n\n"
 
 	$(MAKE) infra
 	$(MAKE) local
@@ -153,7 +153,7 @@ init: ## Initialize repository after checkout
 		exit 1; \
 	fi
 
-	@VOICE_MODEL=$${VOICE_MODEL:-higgs-vllm}; \
+	@VOICE_MODEL=$${VOICE_MODEL:-piper}; \
 	if [ "$$VOICE_MODEL" != "higgs" ] && [ "$$VOICE_MODEL" != "piper" ] && [ "$$VOICE_MODEL" != "higgs-vllm" ]; then \
 		printf "$(RED)✗$(RESET) Invalid VOICE_MODEL: $$VOICE_MODEL. Must be 'higgs', 'piper', or 'higgs-vllm'\n\n"; \
 		exit 1; \
@@ -191,7 +191,7 @@ install: ## Install project dependencies
 
 local: ## Run the local dependencies from Docker images
 	@printf "⌨️ Starting the local services (including voice services)...\n\n"
-	@printf "VOICE_MODEL: $${VOICE_MODEL:-higgs-vllm}\n\n"
+	@printf "VOICE_MODEL: $${VOICE_MODEL:-piper}\n\n"
 	@docker compose --profile staging down
 	@docker compose --profile local up -d
 	@printf "\nLocal services successfully started.\n"
@@ -208,7 +208,7 @@ seed: ## Seed backend database
 
 staging: ## Run the staging server from Docker images
 	@printf "🎭 Starting the staging services...\n\n"
-	@printf "VOICE_MODEL: $${VOICE_MODEL:-higgs-vllm}\n\n"
+	@printf "VOICE_MODEL: $${VOICE_MODEL:-piper}\n\n"
 	@docker compose --profile local down
 	@docker compose --profile staging up -d
 	@printf "\nStaging services successfully started.\n"
@@ -228,31 +228,3 @@ useradd: ## Add a user to the PostgreSQL database
 userpw: ## Change a user's password
 	@printf "🔑 Changing user password...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
-
-# Container Management Commands
-stop-all: ## Stop all running containers
-	@printf "🛑 Stopping all containers...\n\n"
-	@docker compose --profile local down
-	@docker compose --profile staging down
-	@docker compose --profile infra down
-	@printf "\nAll containers stopped.\n"
-
-remove-all: ## Remove all containers (force delete)
-	@printf "🗑️ Removing all containers...\n\n"
-	@docker rm -f $(docker ps -aq) 2>/dev/null || true
-	@printf "\nAll containers removed.\n"
-
-rebuild-all: ## Rebuild all containers without cache
-	@printf "🔨 Rebuilding all containers without cache...\n\n"
-	@docker compose --profile local down
-	@docker compose --profile staging down
-	@docker compose --profile infra down
-	@docker compose build --no-cache
-	@printf "\nAll containers rebuilt.\n"
-
-rebuild-voice: ## Rebuild voice service containers without cache
-	@printf "🔨 Rebuilding voice service containers without cache...\n\n"
-	@docker compose --profile local down
-	@docker compose build --no-cache stt-service tts-service
-	@printf "\nVoice service containers rebuilt.\n"
-

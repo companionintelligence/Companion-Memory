@@ -164,7 +164,6 @@ export function Chat({
 
         if (chunk.channel === Channel.TEXT) {
           targetRef = textStreamingRef;
-          // TTS functionality removed - keeping backend endpoints only
         } else if (chunk.channel === Channel.THINK) {
           targetRef = thinkStreamingRef;
         }
