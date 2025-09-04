@@ -1,0 +1,34 @@
+{
+    "servers": {
+      "filesystem": {
+        "name": "File System Access",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
+        "enabled": false,
+        "description": "Provides file system operations for the assistant",
+        "timeout": 30000
+      },
+      "postgres": {
+        "name": "Database Access",
+        "command": "npx", 
+        "args": ["@modelcontextprotocol/server-postgres"],
+        "env": {
+          "POSTGRES_URL": "${DATABASE_URL}"
+        },
+        "enabled": false,
+        "description": "Query the application database",
+        "timeout": 30000
+      },
+      "brave-search": {
+        "name": "Brave Search",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-brave-search"],
+        "env": {
+          "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+        },
+        "enabled": false,
+        "description": "Search the web using Brave Search API",
+        "timeout": 30000
+      }
+    }
+  }

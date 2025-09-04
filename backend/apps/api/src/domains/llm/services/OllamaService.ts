@@ -14,6 +14,7 @@ import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
 import { MessageService } from '@ci/domains/conversations';
+import { McpHostService } from '@ci/domains/mcp';
 
 import {
   ToolRegistry,
@@ -21,6 +22,8 @@ import {
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
   type ToolSchema,
+  BaseTool,
+  type ToolExecutionContext,
 } from '../tools';
 import type { OllamaModel } from '../types';
 
@@ -32,6 +35,30 @@ interface PromptOptions {
   signal?: AbortSignal;
   enableTools?: boolean;
   enableThinking?: boolean;
+}
+
+/**
+ * Wrapper class to adapt MCP tools for OllamaService
+ */
+class OllamaMcpToolWrapper extends BaseTool {
+  readonly schema: ToolSchema;
+
+  constructor(
+    schema: ToolSchema,
+    private readonly mcpHostService: McpHostService,
+  ) {
+    super();
+    this.schema = schema;
+  }
+
+  protected async executeInternal(context: ToolExecutionContext, input: unknown): Promise<unknown> {
+    const result = await this.mcpHostService.executeServerTool(this.schema.name, input);
+    if (!result.success) {
+      throw new Error(result.error || 'MCP tool execution failed');
+    }
+
+    return result.content;
+  }
 }
 
 @Injectable()
@@ -48,6 +75,7 @@ export class OllamaService {
     private readonly messageService: MessageService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly mcpHostService: McpHostService,
   ) {
     this.initializeTools();
   }
@@ -328,7 +356,7 @@ export class OllamaService {
   /**
    * Initialize tools registry with available tools
    */
-  private initializeTools(): void {
+  private async initializeTools(): Promise<void> {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
@@ -338,7 +366,7 @@ export class OllamaService {
     this.toolRegistry.register(getEntertainmentPreferencesTool);
     this.toolRegistry.register(getStreamingAvailabilityTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
-
+    await this.initializeMcpTools();
     this.logger.debug('Initialized tools registry', {
       toolCount: this.toolRegistry.getRegisteredToolNames().length,
       tools: this.toolRegistry.getRegisteredToolNames(),
@@ -398,6 +426,30 @@ export class OllamaService {
           content: JSON.stringify(result),
         }) satisfies OllamaMessage,
     );
+  }
+
+  /**
+   * Initialize MCP tools from the MCP host service
+   */
+  private async initializeMcpTools(): Promise<void> {
+    try {
+      const mcpTools = await this.mcpHostService.getAvailableTools();
+
+      for (const tool of mcpTools) {
+        // Create and register the tool wrapper
+        const mcpToolWrapper = new OllamaMcpToolWrapper(tool, this.mcpHostService);
+        this.toolRegistry.register(mcpToolWrapper);
+      }
+
+      this.logger.log(`Registered ${mcpTools.length} MCP tools`, {
+        mcpToolNames: mcpTools.map((t) => t.name),
+      });
+    } catch (error) {
+      this.logger.error(
+        'Failed to initialize MCP tools',
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
   }
 
   /**
