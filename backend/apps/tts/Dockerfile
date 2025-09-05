@@ -15,8 +15,6 @@ WORKDIR /app
 # Copy all requirements files
 COPY requirements.base.txt .
 COPY requirements.piper.txt .
-COPY requirements.higgs.txt .
-COPY requirements.higgs-vllm.txt .
 
 # Copy application code
 COPY tts_service.py .

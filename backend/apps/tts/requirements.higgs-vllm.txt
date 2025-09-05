@@ -1,5 +1,0 @@
--r requirements.base.txt
-
-# Higgs vLLM implementation - minimal dependencies
-# The actual Higgs model runs in the higgs-audio-vllm container
-# This service only needs to proxy requests and handle responses
