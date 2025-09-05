@@ -220,13 +220,33 @@ def generate_piper_audio(text: str, speed: float = 1.0) -> bytes:
     try:
         logger.info(f"Generating Piper audio for text: {text[:100]}...")
         
-        # Generate audio using Piper
-        audio_data = piper_model.synthesize(text)
+        # Generate audio using Piper (returns a generator of AudioChunk objects)
+        audio_generator = piper_model.synthesize(text)
+        
+        # Collect all audio chunks and concatenate them
+        import numpy as np
+        audio_chunks = []
+        sample_rate = None
+        
+        for chunk in audio_generator:
+            audio_chunks.append(chunk.audio_float_array)
+            if sample_rate is None:
+                sample_rate = chunk.sample_rate
+        
+        if not audio_chunks:
+            raise Exception("No audio data generated")
+        
+        # Concatenate all audio data
+        audio_data = np.concatenate(audio_chunks)
+        
+        # Ensure audio data is in the correct format for soundfile (mono channel)
+        if audio_data.ndim == 1:
+            audio_data = audio_data.reshape(-1, 1)
         
         # Convert to WAV format
         wav_bytes = io.BytesIO()
         import soundfile as sf
-        sf.write(wav_bytes, audio_data, piper_model.config.sample_rate, format='WAV')
+        sf.write(wav_bytes, audio_data, sample_rate, format='WAV')
         wav_bytes.seek(0)
         
         audio_bytes = wav_bytes.read()
