@@ -3,7 +3,7 @@
     "filesystem": {
       "name": "File System Access",
       "command": "npx",
-      "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
       "enabled": true,
       "description": "Provides file system operations for the assistant",
       "timeout": 30000,
@@ -15,40 +15,20 @@
         "restartOnFailure": true
       }
     },
-    "postgres": {
-      "name": "Database Access",
-      "command": "npx", 
-      "args": ["@modelcontextprotocol/server-postgres"],
-      "env": {
-        "POSTGRES_URL": "${DATABASE_URL}"
-      },
-      "enabled": false,
-      "description": "Query the application database",
-      "timeout": 30000,
+    "web-search": {
+      "name": "Web Search Engine",
+      "command": "node",
+      "args": ["dist/index.js"],
+      "workingDirectory": "/Users/max/Code/CompInt/web-search-mcp",
+      "enabled": true,
+      "description": "Multi-engine web search with Google/DuckDuckGo fallback and content extraction",
+      "timeout": 60000,
       "healthCheck": {
         "enabled": true,
-        "intervalMs": 45000,
-        "timeoutMs": 10000,
+        "intervalMs": 120000,
+        "timeoutMs": 20000,
         "retryCount": 2,
         "restartOnFailure": true
-      }
-    },
-    "brave-search": {
-      "name": "Brave Search",
-      "command": "npx",
-      "args": ["@modelcontextprotocol/server-brave-search"],
-      "env": {
-        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
-      },
-      "enabled": false,
-      "description": "Search the web using Brave Search API",
-      "timeout": 30000,
-      "healthCheck": {
-        "enabled": true,
-        "intervalMs": 60000,
-        "timeoutMs": 8000,
-        "retryCount": 3,
-        "restartOnFailure": false
       }
     }
   }

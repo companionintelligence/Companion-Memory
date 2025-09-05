@@ -169,6 +169,14 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
       const resolvedEnv = this.resolveEnvironmentVariables(config.env || {});
 
       // Create transport using SDK
+      this.logger.debug(`Creating transport for ${serverName}`, {
+        command: config.command,
+        args: config.args,
+        workingDirectory: config.workingDirectory,
+        serverName,
+      });
+
+      // Create a more robust transport with better error handling
       const transport = new StdioClientTransport({
         command: config.command,
         args: config.args || [],
@@ -181,6 +189,48 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
         ...(config.workingDirectory && { cwd: config.workingDirectory }),
       });
 
+      // Capture stderr to debug server startup issues
+      let stderrOutput = '';
+
+      // Type guard for transport with internal properties
+      const transportWithInternal = transport as unknown as {
+        _transport?: {
+          stderr?: NodeJS.ReadableStream;
+          on?: (event: string, listener: (...args: unknown[]) => void) => void;
+        };
+      };
+
+      if (transportWithInternal._transport?.stderr) {
+        transportWithInternal._transport.stderr.on('data', (data: Buffer) => {
+          const output = data.toString();
+          stderrOutput += output;
+          this.logger.debug(`Server ${serverName} stderr:`, { output });
+        });
+      }
+
+      // Add close handler to capture why the server is closing
+      if (transportWithInternal._transport?.on) {
+        transportWithInternal._transport.on('close', (...args: unknown[]) => {
+          const [code, signal] = args as [number, string];
+          this.logger.error(`Server ${serverName} process closed`, {
+            code,
+            signal,
+            stderr: stderrOutput || 'No stderr output',
+            serverName,
+          });
+        });
+
+        transportWithInternal._transport.on('error', (...args: unknown[]) => {
+          const [error] = args as [Error];
+          this.logger.error(`Server ${serverName} process error`, {
+            error: error.message,
+            stack: error.stack,
+            stderr: stderrOutput || 'No stderr output',
+            serverName,
+          });
+        });
+      }
+
       // Create client using SDK
       const client = new Client(
         {
@@ -192,8 +242,18 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
         },
       );
 
-      // Connect to the server
-      await client.connect(transport);
+      this.logger.debug(`Attempting to connect to ${serverName}`, { serverName });
+
+      // Connect to the server with timeout
+      const connectTimeout = config.timeout || 30000;
+      const connectPromise = client.connect(transport);
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`Connection timeout after ${connectTimeout}ms`)), connectTimeout);
+      });
+
+      await Promise.race([connectPromise, timeoutPromise]);
+
+      this.logger.debug(`Successfully connected to ${serverName}`, { serverName });
 
       // Update session
       session.client = client;
