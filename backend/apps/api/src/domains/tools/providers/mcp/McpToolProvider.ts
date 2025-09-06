@@ -2,7 +2,6 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/services';
@@ -11,6 +10,7 @@ import type { BaseTool } from '../../core/BaseTool';
 import type { ToolSchema } from '../../core/types';
 import type { ToolProvider, ProviderHealthStatus } from '../ToolProvider';
 
+import { McpClientManager } from './McpClientManager';
 import { McpToolWrapper } from './McpToolWrapper';
 import type { McpServerConfig, McpServersConfig, McpSession, McpToolResult, McpHealthStatus } from './types';
 
@@ -37,6 +37,8 @@ export class McpToolProvider implements ToolProvider {
   private readonly DEFAULT_HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
 
   private readonly DEFAULT_MAX_FAILURES = 3; // Max consecutive failures before restart
+
+  constructor(private readonly clientManager: McpClientManager) {}
 
   async initialize(): Promise<void> {
     await this.loadConfiguration();
@@ -78,7 +80,12 @@ export class McpToolProvider implements ToolProvider {
   private async loadConfiguration(): Promise<void> {
     try {
       // Try multiple possible config paths for robustness
-      const possiblePaths = [path.resolve(process.cwd(), 'config/mcp-servers.json')];
+      const possiblePaths = [
+        path.resolve(process.cwd(), 'backend/apps/api/config/mcp-servers.json'),
+        path.resolve(__dirname, '../../../../config/mcp-servers.json'),
+        path.resolve(__dirname, '../../../config/mcp-servers.json'),
+        path.resolve(process.cwd(), 'config/mcp-servers.json'),
+      ];
 
       let configContent: string | null = null;
       let usedPath: string | null = null;
@@ -159,52 +166,8 @@ export class McpToolProvider implements ToolProvider {
     this.activeSessions.set(serverName, session);
 
     try {
-      // Resolve environment variables
-      const resolvedEnv = this.resolveEnvironmentVariables(config.env || {});
-
-      // Create transport using SDK
-      this.logger.debug(`Creating transport for ${serverName}`, {
-        command: config.command,
-        args: config.args,
-        workingDirectory: config.workingDirectory,
-        serverName,
-      });
-
-      const transport = new StdioClientTransport({
-        command: config.command,
-        args: config.args || [],
-        env: {
-          ...(Object.fromEntries(
-            Object.entries(process.env).filter(([, value]) => value !== undefined),
-          ) as Record<string, string>),
-          ...resolvedEnv,
-        },
-        ...(config.workingDirectory && { cwd: config.workingDirectory }),
-      });
-
-      // Create client using SDK
-      const client = new Client(
-        {
-          name: 'ci-server',
-          version: '1.0.0',
-        },
-        {
-          capabilities: {},
-        },
-      );
-
-      this.logger.debug(`Attempting to connect to ${serverName}`, { serverName });
-
-      // Connect to the server with timeout
-      const connectTimeout = config.timeout || 30000;
-      const connectPromise = client.connect(transport);
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error(`Connection timeout after ${connectTimeout}ms`)), connectTimeout);
-      });
-
-      await Promise.race([connectPromise, timeoutPromise]);
-
-      this.logger.debug(`Successfully connected to ${serverName}`, { serverName });
+      // Use the client manager to create and connect
+      const client = await this.clientManager.createClient(serverName, config);
 
       // Update session
       session.client = client;
@@ -241,7 +204,7 @@ export class McpToolProvider implements ToolProvider {
 
     try {
       if (session.client) {
-        await session.client.close();
+        await this.clientManager.closeClient(session.client, serverName);
       }
 
       // Stop health monitoring
@@ -366,23 +329,6 @@ export class McpToolProvider implements ToolProvider {
   private getServerConfig(serverName: string): McpServerConfig | null {
     return this.serversConfig?.servers[serverName] || null;
   }
-
-  /**
-   * Resolve environment variables in config values
-   */
-  private resolveEnvironmentVariables(env: Record<string, string>): Record<string, string> {
-    const resolved: Record<string, string> = {};
-
-    for (const [key, value] of Object.entries(env)) {
-      // Simple variable substitution: ${VAR_NAME}
-      const resolvedValue = value.replace(/\$\{([^}]+)\}/g, (_, varName) => {
-        return process.env[varName] || '';
-      });
-      resolved[key] = resolvedValue;
-    }
-
-    return resolved;
-  }
   // ===================================================================
   // HEALTH MONITORING METHODS
   // ===================================================================
@@ -447,13 +393,14 @@ export class McpToolProvider implements ToolProvider {
     const timeout = config?.healthCheck?.timeoutMs || this.DEFAULT_HEALTH_CHECK_TIMEOUT;
 
     try {
-      // Perform health check by listing tools (lightweight operation)
-      const healthCheckPromise = session.client?.listTools();
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Health check timeout')), timeout);
-      });
+      // Use the client manager to test the connection
+      const isHealthy = session.client
+        ? await this.clientManager.testConnection(session.client, timeout)
+        : false;
 
-      await Promise.race([healthCheckPromise, timeoutPromise]);
+      if (!isHealthy) {
+        throw new Error('Health check failed');
+      }
 
       const responseTime = Date.now() - startTime;
       const uptime = session.startedAt ? Date.now() - session.startedAt.getTime() : 0;
@@ -462,7 +409,7 @@ export class McpToolProvider implements ToolProvider {
       session.healthCheckFailures = 0;
       session.lastHealthCheck = new Date();
 
-      const healthStatus: McpHealthStatus = {
+      return {
         serverName,
         status: 'healthy',
         lastCheck: new Date(),
@@ -470,14 +417,6 @@ export class McpToolProvider implements ToolProvider {
         uptime,
         responseTime,
       };
-
-      this.logger.debug(`Health check passed for ${serverName}`, {
-        serverName,
-        responseTime,
-        uptime,
-      });
-
-      return healthStatus;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const failures = (session.healthCheckFailures || 0) + 1;
@@ -486,15 +425,6 @@ export class McpToolProvider implements ToolProvider {
       session.healthCheckFailures = failures;
       session.lastHealthCheck = new Date();
       session.lastError = errorMessage;
-
-      const healthStatus: McpHealthStatus = {
-        serverName,
-        status: 'unhealthy',
-        lastCheck: new Date(),
-        consecutiveFailures: failures,
-        uptime,
-        error: errorMessage,
-      };
 
       this.logger.warn(`Health check failed for ${serverName}`, {
         serverName,
@@ -517,7 +447,14 @@ export class McpToolProvider implements ToolProvider {
         setImmediate(() => this.restartServer(serverName));
       }
 
-      return healthStatus;
+      return {
+        serverName,
+        status: 'unhealthy',
+        lastCheck: new Date(),
+        consecutiveFailures: failures,
+        uptime,
+        error: errorMessage,
+      };
     }
   }
 

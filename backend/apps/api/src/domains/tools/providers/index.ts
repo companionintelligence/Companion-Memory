@@ -5,5 +5,6 @@ export * from './native/GetEntertainmentPreferencesTool';
 export * from './native/GetFamilyMembersTool';
 export * from './native/GetStreamingAvailabilityTool';
 export * from './mcp/McpToolProvider';
+export * from './mcp/McpClientManager';
 export * from './mcp/McpToolWrapper';
 export * from './mcp/types';

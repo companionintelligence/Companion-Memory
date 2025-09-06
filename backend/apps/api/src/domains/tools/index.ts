@@ -5,6 +5,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 
 import { ToolsController } from './controllers/ToolsController';
+import { McpClientManager } from './providers/mcp/McpClientManager';
 import { McpToolProvider } from './providers/mcp/McpToolProvider';
 import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from './providers/native/GetFamilyMembersTool';
@@ -26,6 +27,7 @@ const nativeToolInstances = [
   imports: [EventsModule, ConversationModule, FilesModule],
   providers: [
     ToolRegistry,
+    McpClientManager,
     McpToolProvider,
     // Native tools
     ...nativeToolInstances,
