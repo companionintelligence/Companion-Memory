@@ -27,7 +27,7 @@ export interface McpSession {
   id: string;
   serverName: string;
   status: 'connecting' | 'connected' | 'disconnected' | 'error';
-  client?: Client; // Properly typed with SDK import
+  client?: Client;
   processId?: number;
   lastError?: string;
   startedAt?: Date;

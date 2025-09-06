@@ -3,49 +3,29 @@ import * as path from 'path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Injectable, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/services';
-import { ToolRegistry, type ToolSchema, BaseTool, type ToolExecutionContext } from '@ci/domains/llm/tools';
 
-import type {
-  McpServerConfig,
-  McpServersConfig,
-  McpSession,
-  McpToolResult,
-  McpHealthStatus,
-} from '../types/mcp-config';
+import type { BaseTool } from '../../core/BaseTool';
+import type { ToolSchema } from '../../core/types';
+import type { ToolProvider, ProviderHealthStatus } from '../ToolProvider';
+
+import { McpToolWrapper } from './McpToolWrapper';
+import type { McpServerConfig, McpServersConfig, McpSession, McpToolResult, McpHealthStatus } from './types';
 
 /**
- * Wrapper class to adapt MCP tools to our BaseTool interface
+ * Provider for MCP (Model Context Protocol) tools from external servers
  */
-class McpToolWrapper extends BaseTool {
-  readonly schema: ToolSchema;
-
-  constructor(
-    schema: ToolSchema,
-    private readonly mcpService: McpHostService,
-    private readonly toolName: string,
-  ) {
-    super();
-    this.schema = schema;
-  }
-
-  protected async executeInternal(context: ToolExecutionContext, input: unknown): Promise<unknown> {
-    const result = await this.mcpService.executeServerTool(this.toolName, input);
-    if (!result.success) {
-      throw new Error(result.error || 'MCP tool execution failed');
-    }
-
-    return result.content;
-  }
-}
-
 @Injectable()
-export class McpHostService implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new LoggerService(McpHostService.name);
+export class McpToolProvider implements ToolProvider {
+  readonly name = 'mcp';
+
+  private readonly logger = new LoggerService(McpToolProvider.name);
 
   private readonly activeSessions = new Map<string, McpSession>();
+
+  private readonly tools = new Map<string, BaseTool>();
 
   private serversConfig: McpServersConfig | null = null;
 
@@ -58,18 +38,38 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
 
   private readonly DEFAULT_MAX_FAILURES = 3; // Max consecutive failures before restart
 
-  constructor(
-    @Inject(forwardRef(() => ToolRegistry))
-    private readonly toolRegistry: ToolRegistry,
-  ) {}
-
-  async onModuleInit() {
+  async initialize(): Promise<void> {
     await this.loadConfiguration();
     await this.initializeEnabledServers();
   }
 
-  async onModuleDestroy() {
+  async shutdown(): Promise<void> {
     await this.disconnectAllServers();
+  }
+
+  async getAvailableTools(): Promise<ToolSchema[]> {
+    return Array.from(this.tools.values()).map((tool) => tool.schema);
+  }
+
+  getTool(name: string): BaseTool | undefined {
+    return this.tools.get(name);
+  }
+
+  canHandle(toolName: string): boolean {
+    return this.tools.has(toolName);
+  }
+
+  async getHealthStatus(): Promise<ProviderHealthStatus> {
+    const healthStatuses = await this.getServersHealthStatus();
+    const unhealthyServers = healthStatuses.filter((h) => h.status === 'unhealthy');
+
+    return {
+      name: this.name,
+      status: unhealthyServers.length === 0 ? 'healthy' : 'unhealthy',
+      toolCount: this.tools.size,
+      lastCheck: new Date(),
+      error: unhealthyServers.length > 0 ? `${unhealthyServers.length} unhealthy servers` : undefined,
+    };
   }
 
   /**
@@ -78,12 +78,7 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
   private async loadConfiguration(): Promise<void> {
     try {
       // Try multiple possible config paths for robustness
-      const possiblePaths = [
-        path.resolve(process.cwd(), 'backend/apps/api/config/mcp-servers.json'), // From project root
-        path.resolve(__dirname, '../../../../config/mcp-servers.json'), // Relative to compiled JS
-        path.resolve(__dirname, '../../../config/mcp-servers.json'), // Alternative relative path
-        path.resolve(process.cwd(), 'config/mcp-servers.json'), // Direct from CWD
-      ];
+      const possiblePaths = [path.resolve(process.cwd(), 'config/mcp-servers.json')];
 
       let configContent: string | null = null;
       let usedPath: string | null = null;
@@ -94,7 +89,6 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
           usedPath = configPath;
           break;
         } catch (error) {
-          // Continue to next path
           this.logger.debug(`Config not found at ${configPath}`, {
             error: error instanceof Error ? error.message : String(error),
           });
@@ -176,7 +170,6 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
         serverName,
       });
 
-      // Create a more robust transport with better error handling
       const transport = new StdioClientTransport({
         command: config.command,
         args: config.args || [],
@@ -188,48 +181,6 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
         },
         ...(config.workingDirectory && { cwd: config.workingDirectory }),
       });
-
-      // Capture stderr to debug server startup issues
-      let stderrOutput = '';
-
-      // Type guard for transport with internal properties
-      const transportWithInternal = transport as unknown as {
-        _transport?: {
-          stderr?: NodeJS.ReadableStream;
-          on?: (event: string, listener: (...args: unknown[]) => void) => void;
-        };
-      };
-
-      if (transportWithInternal._transport?.stderr) {
-        transportWithInternal._transport.stderr.on('data', (data: Buffer) => {
-          const output = data.toString();
-          stderrOutput += output;
-          this.logger.debug(`Server ${serverName} stderr:`, { output });
-        });
-      }
-
-      // Add close handler to capture why the server is closing
-      if (transportWithInternal._transport?.on) {
-        transportWithInternal._transport.on('close', (...args: unknown[]) => {
-          const [code, signal] = args as [number, string];
-          this.logger.error(`Server ${serverName} process closed`, {
-            code,
-            signal,
-            stderr: stderrOutput || 'No stderr output',
-            serverName,
-          });
-        });
-
-        transportWithInternal._transport.on('error', (...args: unknown[]) => {
-          const [error] = args as [Error];
-          this.logger.error(`Server ${serverName} process error`, {
-            error: error.message,
-            stack: error.stack,
-            stderr: stderrOutput || 'No stderr output',
-            serverName,
-          });
-        });
-      }
 
       // Create client using SDK
       const client = new Client(
@@ -328,70 +279,9 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Get available servers
-   */
-  getAvailableServers(): McpServerConfig[] {
-    if (!this.serversConfig?.servers) {
-      return [];
-    }
-
-    return Object.entries(this.serversConfig.servers).map(([name, config]) => ({
-      ...config,
-      name,
-    }));
-  }
-
-  /**
-   * Get active sessions
-   */
-  getActiveSessions(): McpSession[] {
-    return Array.from(this.activeSessions.values());
-  }
-
-  /**
-   * Get all available tools from active MCP servers
-   */
-  async getAvailableTools(): Promise<ToolSchema[]> {
-    const allTools: ToolSchema[] = [];
-
-    for (const [serverName, session] of this.activeSessions) {
-      if (session.status !== 'connected' || !session.client) {
-        continue;
-      }
-
-      try {
-        const { tools } = await session.client.listTools();
-
-        const prefixedTools = tools.map((tool) => ({
-          name: `${serverName}:${tool.name}`,
-          description: `[${serverName}] ${tool.description || ''}`,
-          parameters: (tool.inputSchema as ToolSchema['parameters']) || { type: 'object' },
-          category: 'mcp',
-          examples: [],
-        }));
-
-        allTools.push(...prefixedTools);
-      } catch (error) {
-        this.logger.error(`Failed to list tools from ${serverName}`, error as Error);
-      }
-    }
-
-    return allTools;
-  }
-
-  /**
    * Execute a tool on an MCP server
    */
-  async executeServerTool(toolName: string, args: unknown): Promise<McpToolResult> {
-    const [serverName, actualToolName] = toolName.split(':', 2);
-
-    if (!actualToolName) {
-      return {
-        success: false,
-        error: 'Invalid tool name format. Expected "server:tool"',
-      };
-    }
-
+  async executeServerTool(serverName: string, toolName: string, args: unknown): Promise<McpToolResult> {
     const session = this.activeSessions.get(serverName);
     if (!session || session.status !== 'connected' || !session.client) {
       return {
@@ -404,7 +294,7 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const { content } = await session.client.callTool({
-        name: actualToolName,
+        name: toolName,
         arguments: (args as Record<string, unknown>) || {},
       });
 
@@ -423,31 +313,29 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Discover tools from a server and register them in the tool registry
+   * Discover tools from a server and register them in the local tools map
    */
   private async discoverAndRegisterTools(serverName: string, client: Client): Promise<void> {
     try {
       const { tools } = await client.listTools();
 
       for (const tool of tools) {
-        const prefixedName = `${serverName}:${tool.name}`;
-
         // Create a tool schema for the registry
         const toolSchema: ToolSchema = {
-          name: prefixedName,
+          name: tool.name, // Use original tool name, not prefixed
           description: `[${serverName}] ${tool.description || ''}`,
           parameters: (tool.inputSchema as ToolSchema['parameters']) || { type: 'object' },
           category: 'mcp',
         };
 
         // Create and register the tool wrapper
-        const toolWrapper = new McpToolWrapper(toolSchema, this, prefixedName);
-        this.toolRegistry.register(toolWrapper);
+        const toolWrapper = new McpToolWrapper(toolSchema, this, serverName, tool.name);
+        this.tools.set(tool.name, toolWrapper);
       }
 
       this.logger.log(`Registered ${tools.length} tools from ${serverName}`, {
         serverName,
-        toolNames: tools.map((t) => `${serverName}:${t.name}`),
+        toolNames: tools.map((t) => t.name),
       });
     } catch (error) {
       this.logger.error(
@@ -461,9 +349,15 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
    * Unregister tools from a server
    */
   private unregisterServerTools(serverName: string): void {
-    // Note: This would require extending ToolRegistry to support unregistration
-    // For now, we'll log and continue
-    this.logger.log(`Unregistering tools from ${serverName}`, { serverName });
+    // Find tools that belong to this server and remove them
+    const session = this.activeSessions.get(serverName);
+    if (session?.tools) {
+      for (const toolName of session.tools) {
+        this.tools.delete(toolName);
+      }
+    }
+
+    this.logger.log(`Unregistered tools from ${serverName}`, { serverName });
   }
 
   /**
@@ -489,7 +383,6 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
 
     return resolved;
   }
-
   // ===================================================================
   // HEALTH MONITORING METHODS
   // ===================================================================
@@ -669,7 +562,7 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
   /**
    * Get health status for all servers
    */
-  async getHealthStatus(): Promise<McpHealthStatus[]> {
+  async getServersHealthStatus(): Promise<McpHealthStatus[]> {
     const healthStatuses: McpHealthStatus[] = [];
 
     for (const serverName of this.activeSessions.keys()) {
@@ -681,13 +574,23 @@ export class McpHostService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Get health status for a specific server
+   * Get active sessions
    */
-  async getServerHealthStatus(serverName: string): Promise<McpHealthStatus | null> {
-    if (!this.activeSessions.has(serverName)) {
-      return null;
+  getActiveSessions(): McpSession[] {
+    return Array.from(this.activeSessions.values());
+  }
+
+  /**
+   * Get available servers
+   */
+  getAvailableServers(): McpServerConfig[] {
+    if (!this.serversConfig?.servers) {
+      return [];
     }
 
-    return await this.performHealthCheck(serverName);
+    return Object.entries(this.serversConfig.servers).map(([name, config]) => ({
+      ...config,
+      name,
+    }));
   }
 }

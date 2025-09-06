@@ -1,24 +1,20 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 
 import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
-import { McpModule } from '@ci/domains/mcp';
+import { ToolsModule } from '@ci/domains/tools';
 
 import { OllamaController } from './controllers/OllamaController';
 import { OllamaService } from './services/OllamaService';
-import { ToolRegistry } from './tools/ToolRegistry';
 
 @Module({
-  imports: [ConversationModule, EventsModule, FilesModule, forwardRef(() => McpModule)],
-  providers: [OllamaService, ToolRegistry],
+  imports: [ConversationModule, EventsModule, FilesModule, ToolsModule],
+  providers: [OllamaService],
   controllers: [OllamaController],
-  exports: [OllamaService, ToolRegistry],
+  exports: [OllamaService],
 })
 export class LLMModule {}
-
-// Entities
-export {};
 
 // Services
 export { OllamaService };

@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw
+.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw mcp mcp-web-search mcp-check mcp-clean
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -214,3 +214,122 @@ useradd: ## Add a user to the PostgreSQL database
 userpw: ## Change a user's password
 	@printf "🔑 Changing user password...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
+
+####################
+# MCP SERVER SETUP #
+####################
+
+MCP_BASE_DIR = ../
+MCP_WEB_SEARCH_DIR = $(MCP_BASE_DIR)web-search-mcp
+MCP_WEB_SEARCH_REPO = https://github.com/mrkrsl/web-search-mcp.git
+
+mcp: mcp-web-search ## Install all MCP servers
+	@printf "🔧 All MCP servers installed successfully!\n\n"
+	@printf "$(GREEN)✓$(RESET) Use 'make mcp-check' to verify installation\n"
+	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load new servers: 'make dev'\n\n"
+
+mcp-web-search: ## Install web search MCP server
+	@printf "🔍 Installing Web Search MCP server...\n\n"
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(YELLOW)•$(RESET) Web search server directory already exists, updating...\n"; \
+		cd $(MCP_WEB_SEARCH_DIR) && git pull; \
+	else \
+		printf "$(GREEN)✓$(RESET) Cloning web search server...\n"; \
+		cd $(MCP_BASE_DIR) && git clone $(MCP_WEB_SEARCH_REPO); \
+	fi
+	
+	@printf "$(GREEN)✓$(RESET) Installing dependencies...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && npm install
+	
+	@printf "$(GREEN)✓$(RESET) Installing Playwright browsers...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && npx playwright install
+	
+	@printf "$(GREEN)✓$(RESET) Building server...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && npm run build
+	
+	@printf "$(GREEN)✓$(RESET) Testing server startup...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && timeout 5s node dist/index.js || true
+	
+	@printf "\n$(GREEN)✓$(RESET) Web Search MCP server installed successfully!\n"
+	@printf "$(GREEN)✓$(RESET) Server location: $(MCP_WEB_SEARCH_DIR)\n"
+	@printf "$(GREEN)✓$(RESET) Config: backend/apps/api/config/mcp-servers.json\n\n"
+
+mcp-check: ## Check MCP server installation and status
+	@printf "🔍 Checking MCP server installation...\n\n"
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(GREEN)✓$(RESET) Web Search MCP server directory exists\n"; \
+		if [ -f "$(MCP_WEB_SEARCH_DIR)/dist/index.js" ]; then \
+			printf "$(GREEN)✓$(RESET) Web Search server is built\n"; \
+		else \
+			printf "$(RED)✗$(RESET) Web Search server is not built - run 'make mcp-web-search'\n"; \
+		fi; \
+	else \
+		printf "$(RED)✗$(RESET) Web Search MCP server not installed - run 'make mcp-web-search'\n"; \
+	fi
+	
+	@printf "\n🏃 Checking if CI-Server is running...\n"
+	@if curl -s http://localhost:3030/mcp/debug/tools > /dev/null 2>&1; then \
+		printf "$(GREEN)✓$(RESET) CI-Server is running\n"; \
+		printf "$(GREEN)✓$(RESET) Checking registered tools...\n"; \
+		TOOL_COUNT=$$(curl -s http://localhost:3030/mcp/debug/tools | grep -o '"totalCount":[0-9]*' | cut -d: -f2); \
+		MCP_COUNT=$$(curl -s http://localhost:3030/mcp/debug/tools | grep -o '"mcpToolCount":[0-9]*' | cut -d: -f2); \
+		printf "$(GREEN)✓$(RESET) Total tools registered: $$TOOL_COUNT\n"; \
+		printf "$(GREEN)✓$(RESET) MCP tools registered: $$MCP_COUNT\n"; \
+		if [ "$$MCP_COUNT" -gt 0 ]; then \
+			printf "$(GREEN)✓$(RESET) MCP integration is working!\n"; \
+		else \
+			printf "$(YELLOW)•$(RESET) No MCP tools found - check server configuration\n"; \
+		fi; \
+	else \
+		printf "$(YELLOW)•$(RESET) CI-Server is not running - start with 'make dev'\n"; \
+	fi
+	
+	@printf "\n📋 MCP Server Configuration:\n"
+	@if [ -f "backend/apps/api/config/mcp-servers.json" ]; then \
+		printf "$(GREEN)✓$(RESET) Configuration file exists\n"; \
+		ENABLED_COUNT=$$(grep -o '"enabled": *true' backend/apps/api/config/mcp-servers.json | wc -l | tr -d ' '); \
+		printf "$(GREEN)✓$(RESET) Enabled servers: $$ENABLED_COUNT\n"; \
+	else \
+		printf "$(RED)✗$(RESET) Configuration file missing\n"; \
+	fi
+	
+	@printf "\n$(GREEN)✓$(RESET) MCP check complete!\n\n"
+
+mcp-clean: ## Remove all MCP servers
+	@printf "🧹 Cleaning MCP servers...\n\n"
+	@printf "$(YELLOW)⚠$(RESET)  This will delete all MCP server installations!\n"
+	@printf "Are you sure? [y/N] " && read ans && [ $$ans = y ] || exit 1
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(RED)✗$(RESET) Removing web search server...\n"; \
+		rm -rf $(MCP_WEB_SEARCH_DIR); \
+		printf "$(GREEN)✓$(RESET) Web search server removed\n"; \
+	fi
+	
+	@printf "\n$(GREEN)✓$(RESET) MCP servers cleaned!\n"
+	@printf "$(GREEN)✓$(RESET) Run 'make mcp' to reinstall\n\n"
+
+mcp-update: ## Update all MCP servers
+	@printf "🔄 Updating MCP servers...\n\n"
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(GREEN)✓$(RESET) Updating web search server...\n"; \
+		cd $(MCP_WEB_SEARCH_DIR) && git pull && npm install && npm run build; \
+		printf "$(GREEN)✓$(RESET) Web search server updated\n"; \
+	else \
+		printf "$(YELLOW)•$(RESET) Web search server not installed, installing...\n"; \
+		$(MAKE) mcp-web-search; \
+	fi
+	
+	@printf "\n$(GREEN)✓$(RESET) MCP servers updated!\n"
+	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load updates: 'make dev'\n\n"
+
+mcp-logs: ## Show MCP server logs from CI-Server
+	@printf "📊 Showing MCP server logs...\n\n"
+	@if [ -f "backend/apps/api/logs/app.log" ]; then \
+		tail -f backend/apps/api/logs/app.log | grep -i "mcp\|McpHostService"; \
+	else \
+		printf "$(YELLOW)•$(RESET) No log file found. Start CI-Server with 'make dev' first.\n"; \
+	fi
