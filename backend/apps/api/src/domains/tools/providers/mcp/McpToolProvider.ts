@@ -283,22 +283,25 @@ export class McpToolProvider implements ToolProvider {
       const { tools } = await client.listTools();
 
       for (const tool of tools) {
+        // Create prefixed tool name: "filesystem:read_file", "web-search:search"
+        const prefixedToolName = `${serverName}:${tool.name}`;
+
         // Create a tool schema for the registry
         const toolSchema: ToolSchema = {
-          name: tool.name, // Use original tool name, not prefixed
+          name: prefixedToolName, // Use prefixed name for uniqueness
           description: `[${serverName}] ${tool.description || ''}`,
           parameters: (tool.inputSchema as ToolSchema['parameters']) || { type: 'object' },
           category: 'mcp',
         };
 
-        // Create and register the tool wrapper
+        // Create and register the tool wrapper with prefixed name
         const toolWrapper = new McpToolWrapper(toolSchema, this, serverName, tool.name);
-        this.tools.set(tool.name, toolWrapper);
+        this.tools.set(prefixedToolName, toolWrapper);
       }
 
       this.logger.log(`Registered ${tools.length} tools from ${serverName}`, {
         serverName,
-        toolNames: tools.map((t) => t.name),
+        toolNames: tools.map((t) => `${serverName}:${t.name}`),
       });
     } catch (error) {
       this.logger.error(
@@ -312,15 +315,25 @@ export class McpToolProvider implements ToolProvider {
    * Unregister tools from a server
    */
   private unregisterServerTools(serverName: string): void {
-    // Find tools that belong to this server and remove them
-    const session = this.activeSessions.get(serverName);
-    if (session?.tools) {
-      for (const toolName of session.tools) {
-        this.tools.delete(toolName);
+    // Find tools that belong to this server by prefix and remove them
+    const toolsToRemove: string[] = [];
+    const serverPrefix = `${serverName}:`;
+
+    for (const [toolName] of this.tools) {
+      if (toolName.startsWith(serverPrefix)) {
+        toolsToRemove.push(toolName);
       }
     }
 
-    this.logger.log(`Unregistered tools from ${serverName}`, { serverName });
+    // Remove the tools
+    for (const toolName of toolsToRemove) {
+      this.tools.delete(toolName);
+    }
+
+    this.logger.log(`Unregistered ${toolsToRemove.length} tools from ${serverName}`, {
+      serverName,
+      removedTools: toolsToRemove,
+    });
   }
 
   /**
