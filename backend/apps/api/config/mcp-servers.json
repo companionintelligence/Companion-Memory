@@ -3,7 +3,12 @@
     "filesystem": {
       "name": "File System Access",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/tmp",
+        "/path/to/allowed/directory"
+      ],
       "enabled": true,
       "description": "Provides file system operations for the assistant",
       "timeout": 30000,
@@ -18,8 +23,10 @@
     "web-search": {
       "name": "Web Search Engine",
       "command": "node",
-      "args": ["dist/index.js"],
-      "workingDirectory": "/Users/max/Code/CompInt/web-search-mcp",
+      "args": [
+        "dist/index.js"
+      ],
+      "workingDirectory": "/path/to/web-search-mcp",
       "enabled": true,
       "description": "Multi-engine web search with Google/DuckDuckGo fallback and content extraction",
       "timeout": 60000,

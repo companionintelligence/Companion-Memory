@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw mcp mcp-web-search mcp-check mcp-clean
+.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw mcp mcp-web-search mcp-check mcp-clean mcp-enable mcp-disable mcp-config mcp-update mcp-logs
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -29,6 +29,11 @@ export BANNER
 # Sourced from: https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 help: ## List make commands with their descriptions
 	@printf "$$BANNER\n\n"
+	@printf "\033[33mEnvironment Variables:\033[0m\n"
+	@printf "  MCP_BASE_DIR        Base directory for MCP servers (default: ../)\n"
+	@printf "  MCP_WEB_SEARCH_DIR  Directory for web search MCP server (default: ../web-search-mcp)\n"
+	@printf "  See ENVIRONMENT_CONFIG.md for more details\n\n"
+	@printf "\033[33mCommands:\033[0m\n"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the application
@@ -219,14 +224,27 @@ userpw: ## Change a user's password
 # MCP SERVER SETUP #
 ####################
 
-MCP_BASE_DIR = ../
-MCP_WEB_SEARCH_DIR = $(MCP_BASE_DIR)web-search-mcp
-MCP_WEB_SEARCH_REPO = https://github.com/mrkrsl/web-search-mcp.git
+# MCP Server Configuration
+# You can override these by setting environment variables:
+# export MCP_BASE_DIR=/custom/path
+# export MCP_WEB_SEARCH_DIR=/custom/path/web-search-mcp
+MCP_BASE_DIR ?= ../
+MCP_WEB_SEARCH_DIR ?= $(MCP_BASE_DIR)web-search-mcp
+MCP_WEB_SEARCH_REPO ?= https://github.com/mrkrsl/web-search-mcp.git
 
-mcp: mcp-web-search ## Install all MCP servers
-	@printf "🔧 All MCP servers installed successfully!\n\n"
+mcp: validate-env mcp-init mcp-web-search mcp-register mcp-enable ## Install all MCP servers and configure them automatically
+	@printf "🔧 All MCP servers installed and configured successfully!\n\n"
 	@printf "$(GREEN)✓$(RESET) Use 'make mcp-check' to verify installation\n"
 	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load new servers: 'make dev'\n\n"
+
+validate-env: ## Validate environment configuration for MCP servers
+	@printf "🔍 Validating environment...\n\n"
+	@node scripts/validate-env.mjs
+
+mcp-init: ## Initialize MCP configuration (create config file if needed)
+	@printf "🏗️ Initializing MCP configuration...\n\n"
+	@node scripts/mcp-config.mjs init
+	@printf "\n$(GREEN)✓$(RESET) MCP configuration initialized!\n\n"
 
 mcp-web-search: ## Install web search MCP server
 	@printf "🔍 Installing Web Search MCP server...\n\n"
@@ -251,13 +269,20 @@ mcp-web-search: ## Install web search MCP server
 	@printf "$(GREEN)✓$(RESET) Testing server startup...\n"
 	@cd $(MCP_WEB_SEARCH_DIR) && timeout 5s node dist/index.js || true
 	
-	@printf "\n$(GREEN)✓$(RESET) Web Search MCP server installed successfully!\n"
-	@printf "$(GREEN)✓$(RESET) Server location: $(MCP_WEB_SEARCH_DIR)\n"
-	@printf "$(GREEN)✓$(RESET) Config: backend/apps/api/config/mcp-servers.json\n\n"
+	@printf "\n$(GREEN)✓$(RESET) Web Search MCP server installed successfully!\n\n"
+
+mcp-register: ## Register all installed MCP servers in configuration
+	@printf "📝 Registering MCP servers in configuration...\n\n"
+	@node scripts/mcp-config.mjs register web-search
+	@printf "\n$(GREEN)✓$(RESET) MCP servers registered successfully!\n\n"
 
 mcp-check: ## Check MCP server installation and status
 	@printf "🔍 Checking MCP server installation...\n\n"
 	
+	@printf "📋 Configuration Status:\n"
+	@node scripts/mcp-config.mjs status
+	
+	@printf "\n🔧 Installation Status:\n"
 	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
 		printf "$(GREEN)✓$(RESET) Web Search MCP server directory exists\n"; \
 		if [ -f "$(MCP_WEB_SEARCH_DIR)/dist/index.js" ]; then \
@@ -269,30 +294,15 @@ mcp-check: ## Check MCP server installation and status
 		printf "$(RED)✗$(RESET) Web Search MCP server not installed - run 'make mcp-web-search'\n"; \
 	fi
 	
-	@printf "\n🏃 Checking if CI-Server is running...\n"
-	@if curl -s http://localhost:3030/mcp/debug/tools > /dev/null 2>&1; then \
+	@printf "\n🏃 Runtime Status:\n"
+	@if curl -s http://localhost:3030/tools/health > /dev/null 2>&1; then \
 		printf "$(GREEN)✓$(RESET) CI-Server is running\n"; \
 		printf "$(GREEN)✓$(RESET) Checking registered tools...\n"; \
-		TOOL_COUNT=$$(curl -s http://localhost:3030/mcp/debug/tools | grep -o '"totalCount":[0-9]*' | cut -d: -f2); \
-		MCP_COUNT=$$(curl -s http://localhost:3030/mcp/debug/tools | grep -o '"mcpToolCount":[0-9]*' | cut -d: -f2); \
+		TOOL_COUNT=$$(curl -s http://localhost:3030/tools/ | jq length 2>/dev/null || echo "0"); \
 		printf "$(GREEN)✓$(RESET) Total tools registered: $$TOOL_COUNT\n"; \
-		printf "$(GREEN)✓$(RESET) MCP tools registered: $$MCP_COUNT\n"; \
-		if [ "$$MCP_COUNT" -gt 0 ]; then \
-			printf "$(GREEN)✓$(RESET) MCP integration is working!\n"; \
-		else \
-			printf "$(YELLOW)•$(RESET) No MCP tools found - check server configuration\n"; \
-		fi; \
+		curl -s http://localhost:3030/tools/health | jq . 2>/dev/null || printf "$(YELLOW)•$(RESET) Health check data not available\n"; \
 	else \
 		printf "$(YELLOW)•$(RESET) CI-Server is not running - start with 'make dev'\n"; \
-	fi
-	
-	@printf "\n📋 MCP Server Configuration:\n"
-	@if [ -f "backend/apps/api/config/mcp-servers.json" ]; then \
-		printf "$(GREEN)✓$(RESET) Configuration file exists\n"; \
-		ENABLED_COUNT=$$(grep -o '"enabled": *true' backend/apps/api/config/mcp-servers.json | wc -l | tr -d ' '); \
-		printf "$(GREEN)✓$(RESET) Enabled servers: $$ENABLED_COUNT\n"; \
-	else \
-		printf "$(RED)✗$(RESET) Configuration file missing\n"; \
 	fi
 	
 	@printf "\n$(GREEN)✓$(RESET) MCP check complete!\n\n"
@@ -325,6 +335,35 @@ mcp-update: ## Update all MCP servers
 	
 	@printf "\n$(GREEN)✓$(RESET) MCP servers updated!\n"
 	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load updates: 'make dev'\n\n"
+
+mcp-enable: ## Enable all installed MCP servers in configuration
+	@printf "⚙️  Enabling MCP servers in configuration...\n\n"
+	@node scripts/mcp-config.mjs enable
+	@printf "\n$(GREEN)✓$(RESET) MCP servers enabled in configuration!\n\n"
+
+mcp-disable: ## Disable all MCP servers in configuration
+	@printf "⚙️  Disabling MCP servers in configuration...\n\n"
+	
+	@CONFIG_FILE="backend/apps/api/config/mcp-servers.json"; \
+	BACKUP_FILE="backend/apps/api/config/mcp-servers.json.backup"; \
+	\
+	if [ ! -f "$$CONFIG_FILE" ]; then \
+		printf "$(RED)✗$(RESET) Configuration file not found: $$CONFIG_FILE\n"; \
+		exit 1; \
+	fi; \
+	\
+	printf "$(GREEN)✓$(RESET) Creating backup: $$BACKUP_FILE\n"; \
+	cp "$$CONFIG_FILE" "$$BACKUP_FILE"; \
+	\
+	printf "$(YELLOW)•$(RESET) Disabling all MCP servers...\n"; \
+	sed -i.tmp 's/"enabled":[[:space:]]*true/"enabled": false/g' "$$CONFIG_FILE" && rm "$$CONFIG_FILE.tmp"; \
+	\
+	printf "$(GREEN)✓$(RESET) All MCP servers disabled!\n"; \
+	printf "$(GREEN)✓$(RESET) Backup saved as: $$BACKUP_FILE\n"; \
+	printf "$(GREEN)✓$(RESET) Use 'make mcp-enable' to re-enable\n\n"
+
+mcp-config: ## Show current MCP server configuration
+	@node scripts/mcp-config.mjs status
 
 mcp-logs: ## Show MCP server logs from CI-Server
 	@printf "📊 Showing MCP server logs...\n\n"
