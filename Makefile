@@ -257,6 +257,16 @@ mcp-web-search: ## Install web search MCP server
 		cd $(MCP_BASE_DIR) && git clone $(MCP_WEB_SEARCH_REPO); \
 	fi
 	
+	@printf "$(GREEN)✓$(RESET) Setting up Node.js version...\n"
+	@if [ ! -f "$(MCP_WEB_SEARCH_DIR)/.tool-versions" ]; then \
+		echo "nodejs 22.15.1" > $(MCP_WEB_SEARCH_DIR)/.tool-versions; \
+		printf "$(GREEN)✓$(RESET) Created .tool-versions file\n"; \
+	fi
+	@cd $(MCP_WEB_SEARCH_DIR) && \
+		if command -v asdf >/dev/null 2>&1; then \
+			asdf install nodejs || printf "$(YELLOW)⚠$(RESET) asdf install failed, continuing with system Node.js\n"; \
+		fi
+	
 	@printf "$(GREEN)✓$(RESET) Installing dependencies...\n"
 	@cd $(MCP_WEB_SEARCH_DIR) && npm install
 	
@@ -326,7 +336,14 @@ mcp-update: ## Update all MCP servers
 	
 	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
 		printf "$(GREEN)✓$(RESET) Updating web search server...\n"; \
-		cd $(MCP_WEB_SEARCH_DIR) && git pull && npm install && npm run build; \
+		cd $(MCP_WEB_SEARCH_DIR) && git pull; \
+		if [ ! -f "$(MCP_WEB_SEARCH_DIR)/.tool-versions" ]; then \
+			echo "nodejs 22.15.1" > $(MCP_WEB_SEARCH_DIR)/.tool-versions; \
+		fi; \
+		if command -v asdf >/dev/null 2>&1; then \
+			cd $(MCP_WEB_SEARCH_DIR) && asdf install nodejs || printf "$(YELLOW)⚠$(RESET) asdf install failed, continuing\n"; \
+		fi; \
+		cd $(MCP_WEB_SEARCH_DIR) && npm install && npm run build; \
 		printf "$(GREEN)✓$(RESET) Web search server updated\n"; \
 	else \
 		printf "$(YELLOW)•$(RESET) Web search server not installed, installing...\n"; \
