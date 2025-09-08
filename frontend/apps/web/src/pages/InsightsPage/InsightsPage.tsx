@@ -1,8 +1,19 @@
 import { useState, useEffect } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Table } from '@ci/shadcn';
-import { AlertCircle, RefreshCw } from '@ci/shadcn/icons';
+import { Breadcrumb, Button, Table, Card, ToggleGroup, Badge } from '@ci/shadcn';
+import {
+  AlertCircle,
+  RefreshCw,
+  Grid3X3,
+  List,
+  Edit,
+  Tag,
+  ThumbsUp,
+  ThumbsDown,
+  ChevronDown,
+  ChevronUp,
+} from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
@@ -26,6 +37,8 @@ export function InsightsPage() {
   const [answers, setAnswers] = useState<Answer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
+  const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
   const fetchAnswers = async () => {
     try {
@@ -99,16 +112,86 @@ export function InsightsPage() {
     };
   }, []);
 
-  const truncateText = (text: string | undefined, maxLength: number = 50) => {
+  const toggleTextExpansion = (textId: string) => {
+    setExpandedTexts((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(textId)) {
+        newSet.delete(textId);
+      } else {
+        newSet.add(textId);
+      }
+
+      return newSet;
+    });
+  };
+
+  const isTextExpanded = (textId: string) => expandedTexts.has(textId);
+
+  const formatTextWithLineBreaks = (text: string | undefined) => {
     if (!text) {
       return 'N/A';
     }
 
-    if (text.length <= maxLength) {
-      return text;
+    return text.split('\n').map((line, index) => (
+      <span key={index}>
+        {line}
+        {index < text.split('\n').length - 1 && <br />}
+      </span>
+    ));
+  };
+
+  const isManuallyAnswered = (answer: Answer) => {
+    // If there's a user ID, it was manually answered
+    return answer.user?.id !== undefined;
+  };
+
+  const isLLMAnswered = (answer: Answer) => {
+    // If there's no user ID but there's an answer, it was LLM answered
+    return !answer.user?.id && answer.answer;
+  };
+
+  const ExpandableText = ({
+    text,
+    textId,
+    maxLength = 150,
+  }: {
+    text: string | undefined;
+    textId: string;
+    maxLength?: number;
+  }) => {
+    if (!text) {
+      return <span className="text-muted-foreground">N/A</span>;
     }
 
-    return text.substring(0, maxLength) + '...';
+    const isExpanded = isTextExpanded(textId);
+    const shouldTruncate = text.length > maxLength;
+    const displayText = shouldTruncate && !isExpanded ? text.substring(0, maxLength) + '...' : text;
+
+    return (
+      <div className="space-y-2">
+        <div className="text-sm leading-relaxed">{formatTextWithLineBreaks(displayText)}</div>
+        {shouldTruncate && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => toggleTextExpansion(textId)}
+            className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+          >
+            {isExpanded ? (
+              <>
+                <ChevronUp className="h-3 w-3 mr-1" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-3 w-3 mr-1" />
+                Show more
+              </>
+            )}
+          </Button>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -130,15 +213,29 @@ export function InsightsPage() {
       <PageContent>
         <div className="flex flex-row items-center justify-between">
           <h1 className="text-2xl font-bold">Insights</h1>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={fetchAnswers}
-            disabled={loading}
-            title="Refresh answers"
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              type="single"
+              value={viewMode}
+              onValueChange={(value) => value && setViewMode(value as 'card' | 'table')}
+            >
+              <ToggleGroup.Item value="card" aria-label="Card view">
+                <Grid3X3 className="h-4 w-4" />
+              </ToggleGroup.Item>
+              <ToggleGroup.Item value="table" aria-label="Table view">
+                <List className="h-4 w-4" />
+              </ToggleGroup.Item>
+            </ToggleGroup>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={fetchAnswers}
+              disabled={loading}
+              title="Refresh answers"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
         </div>
 
         {loading ? (
@@ -159,35 +256,170 @@ export function InsightsPage() {
           </div>
         ) : (
           <>
-            <Table>
-              <Table.Header>
-                <Table.Row>
-                  <Table.Head>ID</Table.Head>
-                  <Table.Head>Question</Table.Head>
-                  <Table.Head>Answer</Table.Head>
-                  <Table.Head>RAG Answer</Table.Head>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {answers.length === 0 ? (
+            {answers.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">No answers found in the system</div>
+            ) : viewMode === 'card' ? (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {answers.map((answer) => (
+                  <Card key={answer.id} className="p-4">
+                    <Card.Header className="pb-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            {isManuallyAnswered(answer) ? (
+                              <Badge variant="secondary" className="text-xs">
+                                Manual
+                              </Badge>
+                            ) : isLLMAnswered(answer) ? (
+                              <Badge variant="outline" className="text-xs">
+                                AI Generated
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <h3 className="font-semibold text-sm leading-tight">
+                            <ExpandableText
+                              text={answer.question?.text}
+                              textId={`question-${answer.id}`}
+                              maxLength={100}
+                            />
+                          </h3>
+                        </div>
+                      </div>
+                    </Card.Header>
+                    <Card.Content className="space-y-3">
+                      <div>
+                        <h4 className="text-xs font-medium text-muted-foreground mb-1">Answer</h4>
+                        <ExpandableText text={answer.answer} textId={`answer-${answer.id}`} maxLength={120} />
+                      </div>
+                      {answer.ragAnswer && (
+                        <div>
+                          <h4 className="text-xs font-medium text-muted-foreground mb-1">RAG Answer</h4>
+                          <ExpandableText
+                            text={answer.ragAnswer}
+                            textId={`rag-${answer.id}`}
+                            maxLength={120}
+                          />
+                        </div>
+                      )}
+                    </Card.Content>
+                    <Card.Footer className="pt-3">
+                      <div className="flex items-center justify-between w-full">
+                        <div className="flex items-center gap-1">
+                          {isManuallyAnswered(answer) ? (
+                            <>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <Edit className="h-3 w-3 mr-1" />
+                                Edit
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <Tag className="h-3 w-3 mr-1" />
+                                Tag
+                              </Button>
+                            </>
+                          ) : isLLMAnswered(answer) ? (
+                            <>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <ThumbsUp className="h-3 w-3 mr-1" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <ThumbsDown className="h-3 w-3 mr-1" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <Edit className="h-3 w-3 mr-1" />
+                                Edit
+                              </Button>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    </Card.Footer>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Table>
+                <Table.Header>
                   <Table.Row>
-                    <Table.Cell colSpan={7} className="text-center py-8 text-muted-foreground">
-                      No answers found in the system
-                    </Table.Cell>
+                    <Table.Head>Question</Table.Head>
+                    <Table.Head>Answer</Table.Head>
+                    <Table.Head>RAG Answer</Table.Head>
+                    <Table.Head>Actions</Table.Head>
                   </Table.Row>
-                ) : (
-                  answers.map((answer) => (
+                </Table.Header>
+                <Table.Body>
+                  {answers.map((answer) => (
                     <Table.Row key={answer.id}>
-                      <Table.Cell className="font-mono text-xs">{answer.id}</Table.Cell>
-                      <Table.Cell className="text-sm">{answer.question?.text}</Table.Cell>
-                      <Table.Cell className="text-sm">{truncateText(answer.answer)}</Table.Cell>
-                      <Table.Cell className="text-sm">{truncateText(answer.ragAnswer)}</Table.Cell>
+                      <Table.Cell className="max-w-md">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            {isManuallyAnswered(answer) ? (
+                              <Badge variant="secondary" className="text-xs">
+                                Manual
+                              </Badge>
+                            ) : isLLMAnswered(answer) ? (
+                              <Badge variant="outline" className="text-xs">
+                                AI Generated
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <ExpandableText
+                            text={answer.question?.text}
+                            textId={`table-question-${answer.id}`}
+                            maxLength={80}
+                          />
+                        </div>
+                      </Table.Cell>
+                      <Table.Cell className="max-w-md">
+                        <ExpandableText
+                          text={answer.answer}
+                          textId={`table-answer-${answer.id}`}
+                          maxLength={100}
+                        />
+                      </Table.Cell>
+                      <Table.Cell className="max-w-md">
+                        <ExpandableText
+                          text={answer.ragAnswer}
+                          textId={`table-rag-${answer.id}`}
+                          maxLength={100}
+                        />
+                      </Table.Cell>
+                      <Table.Cell>
+                        <div className="flex items-center gap-1">
+                          {isManuallyAnswered(answer) ? (
+                            <>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <Edit className="h-3 w-3 mr-1" />
+                                Edit
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <Tag className="h-3 w-3 mr-1" />
+                                Tag
+                              </Button>
+                            </>
+                          ) : isLLMAnswered(answer) ? (
+                            <>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <ThumbsUp className="h-3 w-3 mr-1" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <ThumbsDown className="h-3 w-3 mr-1" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-8 px-2">
+                                <Edit className="h-3 w-3 mr-1" />
+                                Edit
+                              </Button>
+                            </>
+                          ) : null}
+                        </div>
+                      </Table.Cell>
                     </Table.Row>
-                  ))
-                )}
-              </Table.Body>
-            </Table>
-            <div className="text-xs text-muted-foreground text-right">Total insights: {answers.length}</div>
+                  ))}
+                </Table.Body>
+              </Table>
+            )}
+            <div className="text-xs text-muted-foreground text-right mt-4">
+              Total insights: {answers.length}
+            </div>
           </>
         )}
       </PageContent>
