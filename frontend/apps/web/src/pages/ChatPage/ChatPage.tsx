@@ -2,7 +2,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useStat
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card } from '@ci/shadcn';
-import { RefreshCw, MessageSquare, X } from '@ci/shadcn/icons';
+import { RefreshCw, Send, X } from '@ci/shadcn/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useThreadService } from '@/api';
@@ -139,16 +139,12 @@ export default function ChatPage() {
     );
   } else if (resolvedThreadId.current == null) {
     emptyState = (
-      <div className="text-center max-w-md mx-auto mb-6 lg:mb-8">
-        <div className="w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gradient-to-br from-primary/10 to-primary/20 flex items-center justify-center mx-auto mb-4 lg:mb-6 shadow-lg border border-primary/20">
-          <MessageSquare className="h-8 w-8 lg:h-10 lg:w-10 text-primary" />
+      <div className="flex flex-col items-center text-gray-500">
+        <div className="w-16 h-16 mx-auto bg-stone-100 rounded-full flex items-center justify-center mb-4">
+          <Send className="w-8 h-8 text-zinc-400 relative top-0.5 -left-0.5" />
         </div>
-        <h2 className="text-xl lg:text-2xl font-semibold mb-3 bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
-          Welcome to Chat
-        </h2>
-        <p className="text-muted-foreground mb-4 lg:mb-6 leading-relaxed text-sm lg:text-base">
-          Choose a thread from the sidebar or create a new one to start chatting with AI
-        </p>
+        <p className="text-sm mb-1">Start a conversation with your Companion</p>
+        <p className="text-xs text-gray-400">Ask questions, get recommendations, or explore ideas</p>
       </div>
     );
   }
