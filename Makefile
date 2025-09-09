@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw
+.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw mcp mcp-web-search mcp-check mcp-clean mcp-enable mcp-disable mcp-config mcp-update mcp-logs
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -29,6 +29,11 @@ export BANNER
 # Sourced from: https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 help: ## List make commands with their descriptions
 	@printf "$$BANNER\n\n"
+	@printf "\033[33mEnvironment Variables:\033[0m\n"
+	@printf "  MCP_BASE_DIR        Base directory for MCP servers (default: ../)\n"
+	@printf "  MCP_WEB_SEARCH_DIR  Directory for web search MCP server (default: ../web-search-mcp)\n"
+	@printf "  See ENVIRONMENT_CONFIG.md for more details\n\n"
+	@printf "\033[33mCommands:\033[0m\n"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the application
@@ -214,3 +219,173 @@ useradd: ## Add a user to the PostgreSQL database
 userpw: ## Change a user's password
 	@printf "🔑 Changing user password...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
+
+####################
+# MCP SERVER SETUP #
+####################
+
+# MCP Server Configuration
+# You can override these by setting environment variables:
+# export MCP_BASE_DIR=/custom/path
+# export MCP_WEB_SEARCH_DIR=/custom/path/web-search-mcp
+MCP_BASE_DIR ?= ../
+MCP_WEB_SEARCH_DIR ?= $(MCP_BASE_DIR)web-search-mcp
+MCP_WEB_SEARCH_REPO ?= https://github.com/mrkrsl/web-search-mcp.git
+
+mcp: validate-env mcp-init mcp-web-search mcp-register mcp-enable ## Install all MCP servers and configure them automatically
+	@printf "🔧 All MCP servers installed and configured successfully!\n\n"
+	@printf "$(GREEN)✓$(RESET) Use 'make mcp-check' to verify installation\n"
+	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load new servers: 'make dev'\n\n"
+
+validate-env: ## Validate environment configuration for MCP servers
+	@printf "🔍 Validating environment...\n\n"
+	@node scripts/validate-env.mjs
+
+mcp-init: ## Initialize MCP configuration (create config file if needed)
+	@printf "🏗️ Initializing MCP configuration...\n\n"
+	@node scripts/mcp-config.mjs init
+	@printf "\n$(GREEN)✓$(RESET) MCP configuration initialized!\n\n"
+
+mcp-web-search: ## Install web search MCP server
+	@printf "🔍 Installing Web Search MCP server...\n\n"
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(YELLOW)•$(RESET) Web search server directory already exists, updating...\n"; \
+		cd $(MCP_WEB_SEARCH_DIR) && git pull; \
+	else \
+		printf "$(GREEN)✓$(RESET) Cloning web search server...\n"; \
+		cd $(MCP_BASE_DIR) && git clone $(MCP_WEB_SEARCH_REPO); \
+	fi
+	
+	@printf "$(GREEN)✓$(RESET) Setting up Node.js version...\n"
+	@if [ ! -f "$(MCP_WEB_SEARCH_DIR)/.tool-versions" ]; then \
+		echo "nodejs 22.15.1" > $(MCP_WEB_SEARCH_DIR)/.tool-versions; \
+		printf "$(GREEN)✓$(RESET) Created .tool-versions file\n"; \
+	fi
+	@cd $(MCP_WEB_SEARCH_DIR) && \
+		if command -v asdf >/dev/null 2>&1; then \
+			asdf install nodejs || printf "$(YELLOW)⚠$(RESET) asdf install failed, continuing with system Node.js\n"; \
+		fi
+	
+	@printf "$(GREEN)✓$(RESET) Installing dependencies...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && npm install
+	
+	@printf "$(GREEN)✓$(RESET) Installing Playwright browsers...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && npx playwright install
+	
+	@printf "$(GREEN)✓$(RESET) Building server...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && npm run build
+	
+	@printf "$(GREEN)✓$(RESET) Testing server startup...\n"
+	@cd $(MCP_WEB_SEARCH_DIR) && timeout 5s node dist/index.js || true
+	
+	@printf "\n$(GREEN)✓$(RESET) Web Search MCP server installed successfully!\n\n"
+
+mcp-register: ## Register all installed MCP servers in configuration
+	@printf "📝 Registering MCP servers in configuration...\n\n"
+	@node scripts/mcp-config.mjs register web-search
+	@printf "\n$(GREEN)✓$(RESET) MCP servers registered successfully!\n\n"
+
+mcp-check: ## Check MCP server installation and status
+	@printf "🔍 Checking MCP server installation...\n\n"
+	
+	@printf "📋 Configuration Status:\n"
+	@node scripts/mcp-config.mjs status
+	
+	@printf "\n🔧 Installation Status:\n"
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(GREEN)✓$(RESET) Web Search MCP server directory exists\n"; \
+		if [ -f "$(MCP_WEB_SEARCH_DIR)/dist/index.js" ]; then \
+			printf "$(GREEN)✓$(RESET) Web Search server is built\n"; \
+		else \
+			printf "$(RED)✗$(RESET) Web Search server is not built - run 'make mcp-web-search'\n"; \
+		fi; \
+	else \
+		printf "$(RED)✗$(RESET) Web Search MCP server not installed - run 'make mcp-web-search'\n"; \
+	fi
+	
+	@printf "\n🏃 Runtime Status:\n"
+	@if curl -s http://localhost:3030/tools/health > /dev/null 2>&1; then \
+		printf "$(GREEN)✓$(RESET) CI-Server is running\n"; \
+		printf "$(GREEN)✓$(RESET) Checking registered tools...\n"; \
+		TOOL_COUNT=$$(curl -s http://localhost:3030/tools/ | jq length 2>/dev/null || echo "0"); \
+		printf "$(GREEN)✓$(RESET) Total tools registered: $$TOOL_COUNT\n"; \
+		curl -s http://localhost:3030/tools/health | jq . 2>/dev/null || printf "$(YELLOW)•$(RESET) Health check data not available\n"; \
+	else \
+		printf "$(YELLOW)•$(RESET) CI-Server is not running - start with 'make dev'\n"; \
+	fi
+	
+	@printf "\n$(GREEN)✓$(RESET) MCP check complete!\n\n"
+
+mcp-clean: ## Remove all MCP servers
+	@printf "🧹 Cleaning MCP servers...\n\n"
+	@printf "$(YELLOW)⚠$(RESET)  This will delete all MCP server installations!\n"
+	@printf "Are you sure? [y/N] " && read ans && [ $$ans = y ] || exit 1
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(RED)✗$(RESET) Removing web search server...\n"; \
+		rm -rf $(MCP_WEB_SEARCH_DIR); \
+		printf "$(GREEN)✓$(RESET) Web search server removed\n"; \
+	fi
+	
+	@printf "\n$(GREEN)✓$(RESET) MCP servers cleaned!\n"
+	@printf "$(GREEN)✓$(RESET) Run 'make mcp' to reinstall\n\n"
+
+mcp-update: ## Update all MCP servers
+	@printf "🔄 Updating MCP servers...\n\n"
+	
+	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
+		printf "$(GREEN)✓$(RESET) Updating web search server...\n"; \
+		cd $(MCP_WEB_SEARCH_DIR) && git pull; \
+		if [ ! -f "$(MCP_WEB_SEARCH_DIR)/.tool-versions" ]; then \
+			echo "nodejs 22.15.1" > $(MCP_WEB_SEARCH_DIR)/.tool-versions; \
+		fi; \
+		if command -v asdf >/dev/null 2>&1; then \
+			cd $(MCP_WEB_SEARCH_DIR) && asdf install nodejs || printf "$(YELLOW)⚠$(RESET) asdf install failed, continuing\n"; \
+		fi; \
+		cd $(MCP_WEB_SEARCH_DIR) && npm install && npm run build; \
+		printf "$(GREEN)✓$(RESET) Web search server updated\n"; \
+	else \
+		printf "$(YELLOW)•$(RESET) Web search server not installed, installing...\n"; \
+		$(MAKE) mcp-web-search; \
+	fi
+	
+	@printf "\n$(GREEN)✓$(RESET) MCP servers updated!\n"
+	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load updates: 'make dev'\n\n"
+
+mcp-enable: ## Enable all installed MCP servers in configuration
+	@printf "⚙️  Enabling MCP servers in configuration...\n\n"
+	@node scripts/mcp-config.mjs enable
+	@printf "\n$(GREEN)✓$(RESET) MCP servers enabled in configuration!\n\n"
+
+mcp-disable: ## Disable all MCP servers in configuration
+	@printf "⚙️  Disabling MCP servers in configuration...\n\n"
+	
+	@CONFIG_FILE="backend/apps/api/config/mcp-servers.json"; \
+	BACKUP_FILE="backend/apps/api/config/mcp-servers.json.backup"; \
+	\
+	if [ ! -f "$$CONFIG_FILE" ]; then \
+		printf "$(RED)✗$(RESET) Configuration file not found: $$CONFIG_FILE\n"; \
+		exit 1; \
+	fi; \
+	\
+	printf "$(GREEN)✓$(RESET) Creating backup: $$BACKUP_FILE\n"; \
+	cp "$$CONFIG_FILE" "$$BACKUP_FILE"; \
+	\
+	printf "$(YELLOW)•$(RESET) Disabling all MCP servers...\n"; \
+	sed -i.tmp 's/"enabled":[[:space:]]*true/"enabled": false/g' "$$CONFIG_FILE" && rm "$$CONFIG_FILE.tmp"; \
+	\
+	printf "$(GREEN)✓$(RESET) All MCP servers disabled!\n"; \
+	printf "$(GREEN)✓$(RESET) Backup saved as: $$BACKUP_FILE\n"; \
+	printf "$(GREEN)✓$(RESET) Use 'make mcp-enable' to re-enable\n\n"
+
+mcp-config: ## Show current MCP server configuration
+	@node scripts/mcp-config.mjs status
+
+mcp-logs: ## Show MCP server logs from CI-Server
+	@printf "📊 Showing MCP server logs...\n\n"
+	@if [ -f "backend/apps/api/logs/app.log" ]; then \
+		tail -f backend/apps/api/logs/app.log | grep -i "mcp\|McpHostService"; \
+	else \
+		printf "$(YELLOW)•$(RESET) No log file found. Start CI-Server with 'make dev' first.\n"; \
+	fi
