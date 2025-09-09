@@ -339,16 +339,25 @@ export function InsightsPage() {
                 ))}
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-auto">
+                {/* Fixed Header */}
+                <div className="sticky top-0 z-50 bg-background border-b shadow-sm">
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-full table-fixed">
+                      <Table.Header>
+                        <Table.Row>
+                          <Table.Head className="w-1/4 min-w-[200px] bg-background">Question</Table.Head>
+                          <Table.Head className="w-1/4 min-w-[200px] bg-background">Answer</Table.Head>
+                          <Table.Head className="w-1/4 min-w-[200px] bg-background">RAG Answer</Table.Head>
+                          <Table.Head className="w-1/4 min-w-[150px] bg-background">Actions</Table.Head>
+                        </Table.Row>
+                      </Table.Header>
+                    </Table>
+                  </div>
+                </div>
+
+                {/* Scrollable Body */}
                 <Table className="min-w-full table-fixed">
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.Head className="w-1/4 min-w-[200px]">Question</Table.Head>
-                      <Table.Head className="w-1/4 min-w-[200px]">Answer</Table.Head>
-                      <Table.Head className="w-1/4 min-w-[200px]">RAG Answer</Table.Head>
-                      <Table.Head className="w-1/4 min-w-[150px]">Actions</Table.Head>
-                    </Table.Row>
-                  </Table.Header>
                   <Table.Body>
                     {answers.map((answer) => (
                       <Table.Row key={answer.id}>
