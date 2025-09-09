@@ -18,7 +18,7 @@ import {
   formDataResolver,
   formDataSchema as s,
 } from '@ci/shadcn';
-import { Send, Square, Mic, Plus } from '@ci/shadcn/icons';
+import { Send, Square, Mic } from '@ci/shadcn/icons';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -42,23 +42,13 @@ interface Props {
   loading?: boolean;
   streaming?: boolean;
   placeholder?: string;
-  onAttach?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onRecord?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
 }
 
 function ChatInput(
-  {
-    disabled = false,
-    loading = false,
-    streaming = false,
-    placeholder,
-    onAttach,
-    onRecord,
-    onSubmit,
-    onStop,
-  }: Props,
+  { disabled = false, loading = false, streaming = false, placeholder, onRecord, onSubmit, onStop }: Props,
   forwardedRef: ForwardedRef<HTMLTextAreaElement>,
 ) {
   const SendIcon = streaming ? Square : Send;
@@ -68,13 +58,6 @@ function ChatInput(
     resolver: formDataResolver(FormSchema),
     defaultValues: EMPTY,
   });
-
-  const handleAttach = useCallback(
-    (e: MouseEvent<HTMLButtonElement>) => {
-      onAttach?.(e);
-    },
-    [onAttach],
-  );
 
   const handleRecord = useCallback(
     (e: MouseEvent<HTMLButtonElement>) => {
@@ -111,23 +94,7 @@ function ChatInput(
     <Tooltip.Provider>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
-          <div className="w-full flex items-center gap-2">
-            <Tooltip>
-              <Tooltip.Content side="bottom">Attach content</Tooltip.Content>
-              <Tooltip.Trigger asChild>
-                <Button
-                  type="button"
-                  disabled={loading || streaming || disabled}
-                  size="sm"
-                  variant="ghost"
-                  className="cursor-pointer h-8 w-8 p-0 -mr-1 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-                  onClick={handleAttach}
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </Tooltip.Trigger>
-            </Tooltip>
-
+          <div className="w-full flex items-center">
             <div
               className="
                 w-full

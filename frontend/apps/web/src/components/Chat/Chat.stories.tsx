@@ -16,7 +16,6 @@ const meta: Meta<Props> = {
     layout: 'fullscreen',
   },
   args: {
-    onAttach: fn(),
     onRecord: fn(),
     onStop: fn(),
     onSubmit: fn(() => Promise.resolve(true)),
