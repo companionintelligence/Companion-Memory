@@ -31,7 +31,7 @@ export function ChatMessage({ role, content }: Props) {
           case 'text':
             return <AssistantMessage content={segment.content} />;
           case 'think':
-            return <ThinkBlock content={segment.content} defaultExpanded={true} />;
+            return <ThinkBlock content={segment.content} defaultExpanded={false} />;
           case 'tool':
             return <ToolBlock toolName={segment.toolName} />;
           default:
