@@ -11,6 +11,8 @@ import {
   useState,
 } from 'react';
 
+import { useDeviceLayout } from '@ci/common';
+import { cn } from '@ci/shadcn';
 import * as smd from 'streaming-markdown';
 import { type Parser as StreamingParser } from 'streaming-markdown';
 import { v7 as uuid7 } from 'uuid';
@@ -121,6 +123,10 @@ export function Chat({
       <AssistantMessage renderEmptyContent={true} streamingRef={setTextStreamingRef} />
     </Fragment>,
   ]);
+
+  const { isMobile } = useDeviceLayout();
+  const contentPadding = useMemo(() => (isMobile ? 'p-2' : 'p-4'), [isMobile]);
+  const threadPadding = useMemo(() => (isMobile ? 'pb-4 gap-2' : 'pb-4 gap-4'), [isMobile]);
 
   const flushStream = useCallback((node?: ReactNode) => {
     // We need to cut off the flow of streaming text to the current stream blocks.
@@ -309,21 +315,22 @@ export function Chat({
         <div
           ref={setScrollRef}
           onScroll={onScroll}
-          className="
-            flex flex-col gap-4 flex-1 min-h-0 overflow-y-scroll p-4 pb-8
-            [mask-image:linear-gradient(to_top,transparent,hsl(0_0%_100%)_2rem)]
-            [mask-repeat:no-repeat] [mask-size:100%_100%]
-            [-webkit-mask-image:linear-gradient(to_top,transparent,hsl(0_0%_100%)_2rem)]
-            [-webkit-mask-repeat:no-repeat] [-webkit-mask-size:100%_100%]
-          "
+          className={cn(
+            'flex flex-col gap-4 flex-1 min-h-0 overflow-y-scroll',
+            contentPadding,
+            threadPadding,
+            '[mask-image:linear-gradient(to_top,transparent,hsl(0_0%_100%)_1rem)]',
+            '[mask-repeat:no-repeat] [mask-size:100%_100%]',
+            '[-webkit-mask-image:linear-gradient(to_top,transparent,hsl(0_0%_100%)_1rem)]',
+            '[-webkit-mask-repeat:no-repeat] [-webkit-mask-size:100%_100%]',
+          )}
         >
           {renderedMessages}
-
           {accumulatedMessages}
         </div>
       )}
 
-      <div className="p-4 pt-4 pl-1 w-full relative">
+      <div className={cn('w-full relative', contentPadding)}>
         {(loading || streaming) && <ChatLoader />}
 
         <ChatInput
