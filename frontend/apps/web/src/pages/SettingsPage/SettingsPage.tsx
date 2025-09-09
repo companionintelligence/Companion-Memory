@@ -17,6 +17,7 @@ import {
 } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
+import { ModelSelector } from '@/components/ModelSelector';
 import { ThemePicker } from '@/components/ThemePicker';
 
 interface SettingsState {
@@ -161,140 +162,6 @@ export function SettingsPage() {
 
         {/* Settings Grid */}
         <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-2">
-          {/* Data Storage Settings */}
-          <Card>
-            <Card.Header>
-              <Card.Title className="flex items-center gap-2">
-                <Database className="h-5 w-5" />
-                Data Storage Settings
-              </Card.Title>
-              <Card.Description>Configure how your data is stored, backed up, and managed</Card.Description>
-            </Card.Header>
-            <Card.Content className="space-y-4">
-              <div className="grid gap-2">
-                <Label htmlFor="retention">Data Retention (days)</Label>
-                <Select
-                  value={settings.dataRetentionDays}
-                  onValueChange={(value) => updateSetting('dataRetentionDays', value)}
-                >
-                  <Select.Trigger id="retention">
-                    <Select.Value />
-                  </Select.Trigger>
-                  <Select.Content>
-                    <Select.Item value="30">30 days</Select.Item>
-                    <Select.Item value="90">90 days</Select.Item>
-                    <Select.Item value="365">1 year</Select.Item>
-                    <Select.Item value="unlimited">Unlimited</Select.Item>
-                  </Select.Content>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="backup">Backup Frequency</Label>
-                <Select
-                  value={settings.backupFrequency}
-                  onValueChange={(value) => updateSetting('backupFrequency', value)}
-                >
-                  <Select.Trigger id="backup">
-                    <Select.Value />
-                  </Select.Trigger>
-                  <Select.Content>
-                    <Select.Item value="hourly">Hourly</Select.Item>
-                    <Select.Item value="daily">Daily</Select.Item>
-                    <Select.Item value="weekly">Weekly</Select.Item>
-                    <Select.Item value="monthly">Monthly</Select.Item>
-                  </Select.Content>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="cache">Cache Size (MB)</Label>
-                <Input
-                  id="cache"
-                  type="number"
-                  value={settings.cacheSize}
-                  onChange={(e) => updateSetting('cacheSize', e.target.value)}
-                  placeholder="2048"
-                />
-              </div>
-            </Card.Content>
-          </Card>
-
-          {/* API Keys & Tokens */}
-          <Card>
-            <Card.Header>
-              <Card.Title className="flex items-center gap-2">
-                <Key className="h-5 w-5" />
-                API Keys & Tokens
-              </Card.Title>
-              <Card.Description>Manage your personal access tokens and API credentials</Card.Description>
-            </Card.Header>
-            <Card.Content className="space-y-4">
-              <div className="grid gap-2">
-                <Label htmlFor="openai">OpenAI API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="openai"
-                    type={showKeys.openaiKey ? 'text' : 'password'}
-                    value={settings.openaiKey}
-                    onChange={(e) => updateSetting('openaiKey', e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('openaiKey')}>
-                    {showKeys.openaiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span className="text-sm text-muted-foreground">Connected</span>
-                  <Badge variant="secondary">Valid</Badge>
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="github">GitHub Personal Access Token</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="github"
-                    type={showKeys.githubToken ? 'text' : 'password'}
-                    value={settings.githubToken}
-                    onChange={(e) => updateSetting('githubToken', e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('githubToken')}>
-                    {showKeys.githubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span className="text-sm text-muted-foreground">Connected</span>
-                  <Badge variant="secondary">Valid</Badge>
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="slack">Slack Bot Token</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="slack"
-                    type={showKeys.slackToken ? 'text' : 'password'}
-                    value={settings.slackToken}
-                    onChange={(e) => updateSetting('slackToken', e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('slackToken')}>
-                    {showKeys.slackToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 text-yellow-500" />
-                  <span className="text-sm text-muted-foreground">Needs refresh</span>
-                  <Badge variant="outline">Expired</Badge>
-                </div>
-              </div>
-            </Card.Content>
-          </Card>
-
           {/* LLM Behavior Configuration */}
           <Card>
             <Card.Header>
@@ -307,21 +174,7 @@ export function SettingsPage() {
             <Card.Content className="space-y-4">
               <div className="grid gap-2">
                 <Label htmlFor="model">Model Selection</Label>
-                <Select
-                  value={settings.modelSelection}
-                  onValueChange={(value) => updateSetting('modelSelection', value)}
-                >
-                  <Select.Trigger id="model">
-                    <Select.Value />
-                  </Select.Trigger>
-                  <Select.Content>
-                    <Select.Item value="gemma3:1b">Gemma 3 1B (Fast)</Select.Item>
-                    <Select.Item value="gemma3:27b">Gemma 3 27B (Advanced, Supports Images)</Select.Item>
-                    <Select.Item value="qwen3:8b">Qwen 3 8B (Recommended)</Select.Item>
-                    <Select.Item value="qwen3:32b">Qwen 3 32B (Advanced)</Select.Item>
-                    <Select.Item value="claude-3">Claude 3 (External)</Select.Item>
-                  </Select.Content>
-                </Select>
+                <ModelSelector />
               </div>
 
               <div className="grid gap-2">
@@ -455,6 +308,139 @@ export function SettingsPage() {
                   onChange={(e) => updateSetting('backgroundTaskFreq', e.target.value)}
                   placeholder="30"
                 />
+              </div>
+            </Card.Content>
+          </Card>
+          {/* Data Storage Settings */}
+          <Card>
+            <Card.Header>
+              <Card.Title className="flex items-center gap-2">
+                <Database className="h-5 w-5" />
+                Data Storage Settings
+              </Card.Title>
+              <Card.Description>Configure how your data is stored, backed up, and managed</Card.Description>
+            </Card.Header>
+            <Card.Content className="space-y-4">
+              <div className="grid gap-2">
+                <Label htmlFor="retention">Data Retention (days)</Label>
+                <Select
+                  value={settings.dataRetentionDays}
+                  onValueChange={(value) => updateSetting('dataRetentionDays', value)}
+                >
+                  <Select.Trigger id="retention">
+                    <Select.Value />
+                  </Select.Trigger>
+                  <Select.Content>
+                    <Select.Item value="30">30 days</Select.Item>
+                    <Select.Item value="90">90 days</Select.Item>
+                    <Select.Item value="365">1 year</Select.Item>
+                    <Select.Item value="unlimited">Unlimited</Select.Item>
+                  </Select.Content>
+                </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="backup">Backup Frequency</Label>
+                <Select
+                  value={settings.backupFrequency}
+                  onValueChange={(value) => updateSetting('backupFrequency', value)}
+                >
+                  <Select.Trigger id="backup">
+                    <Select.Value />
+                  </Select.Trigger>
+                  <Select.Content>
+                    <Select.Item value="hourly">Hourly</Select.Item>
+                    <Select.Item value="daily">Daily</Select.Item>
+                    <Select.Item value="weekly">Weekly</Select.Item>
+                    <Select.Item value="monthly">Monthly</Select.Item>
+                  </Select.Content>
+                </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="cache">Cache Size (MB)</Label>
+                <Input
+                  id="cache"
+                  type="number"
+                  value={settings.cacheSize}
+                  onChange={(e) => updateSetting('cacheSize', e.target.value)}
+                  placeholder="2048"
+                />
+              </div>
+            </Card.Content>
+          </Card>
+
+          {/* API Keys & Tokens */}
+          <Card>
+            <Card.Header>
+              <Card.Title className="flex items-center gap-2">
+                <Key className="h-5 w-5" />
+                API Keys & Tokens
+              </Card.Title>
+              <Card.Description>Manage your personal access tokens and API credentials</Card.Description>
+            </Card.Header>
+            <Card.Content className="space-y-4">
+              <div className="grid gap-2">
+                <Label htmlFor="openai">OpenAI API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="openai"
+                    type={showKeys.openaiKey ? 'text' : 'password'}
+                    value={settings.openaiKey}
+                    onChange={(e) => updateSetting('openaiKey', e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('openaiKey')}>
+                    {showKeys.openaiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm text-muted-foreground">Connected</span>
+                  <Badge variant="secondary">Valid</Badge>
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="github">GitHub Personal Access Token</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="github"
+                    type={showKeys.githubToken ? 'text' : 'password'}
+                    value={settings.githubToken}
+                    onChange={(e) => updateSetting('githubToken', e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('githubToken')}>
+                    {showKeys.githubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm text-muted-foreground">Connected</span>
+                  <Badge variant="secondary">Valid</Badge>
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="slack">Slack Bot Token</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="slack"
+                    type={showKeys.slackToken ? 'text' : 'password'}
+                    value={settings.slackToken}
+                    onChange={(e) => updateSetting('slackToken', e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="outline" size="icon" onClick={() => toggleKeyVisibility('slackToken')}>
+                    {showKeys.slackToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-yellow-500" />
+                  <span className="text-sm text-muted-foreground">Needs refresh</span>
+                  <Badge variant="outline">Expired</Badge>
+                </div>
               </div>
             </Card.Content>
           </Card>
