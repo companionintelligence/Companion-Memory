@@ -14,14 +14,8 @@ import { LoggerService } from '@ci/common/services';
 import type { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
 import { MessageService } from '@ci/domains/conversations';
+import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
 
-import {
-  ToolRegistry,
-  GetUserPreferencesTool,
-  GetEntertainmentPreferencesTool,
-  GetStreamingAvailabilityTool,
-  type ToolSchema,
-} from '../tools';
 import type { OllamaModel } from '../types';
 
 const PROMPT_MODEL = 'gemma3:1b';
@@ -42,15 +36,12 @@ export class OllamaService {
     host: config.services.ollama.host,
   });
 
-  private readonly toolRegistry = new ToolRegistry();
-
   constructor(
     private readonly messageService: MessageService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
-  ) {
-    this.initializeTools();
-  }
+    private readonly toolRegistry: ToolRegistry,
+  ) {}
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
@@ -328,23 +319,6 @@ export class OllamaService {
   /**
    * Initialize tools registry with available tools
    */
-  private initializeTools(): void {
-    const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
-    const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
-    const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
-    // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
-
-    this.toolRegistry.register(getUserPreferencesTool);
-    this.toolRegistry.register(getEntertainmentPreferencesTool);
-    this.toolRegistry.register(getStreamingAvailabilityTool);
-    // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
-
-    this.logger.debug('Initialized tools registry', {
-      toolCount: this.toolRegistry.getRegisteredToolNames().length,
-      tools: this.toolRegistry.getRegisteredToolNames(),
-    });
-  }
-
   private async handleToolCalls(context: RequestContext, toolCalls: ToolCall[]): Promise<OllamaMessage[]> {
     if (toolCalls.length === 0) {
       this.logger.debug('No tool calls to evaluate, skipping handling', {
