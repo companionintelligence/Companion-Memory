@@ -213,9 +213,24 @@ export function InsightsPage() {
       </Portal.Slot>
 
       <PageContent>
-        <div className="flex flex-row items-center justify-between">
-          <h1 className="text-2xl font-bold">Insights</h1>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          {/* Mobile: Title and refresh button in same row */}
+          <div className="flex items-center justify-between lg:justify-start">
+            <h1 className="text-2xl font-bold">Insights</h1>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={fetchAnswers}
+              disabled={loading}
+              title="Refresh answers"
+              className="lg:hidden"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+
+          {/* Desktop: Toggle and refresh button */}
+          <div className="hidden lg:flex items-center gap-2">
             <ToggleGroup
               type="single"
               value={viewMode}
@@ -260,110 +275,18 @@ export function InsightsPage() {
           <>
             {answers.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">No answers found in the system</div>
-            ) : viewMode === 'card' ? (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {answers.map((answer) => (
-                  <Card key={answer.id} className="p-4">
-                    <Card.Header className="pb-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            {isManuallyAnswered(answer) ? (
-                              <Badge variant="secondary" className="text-xs">
-                                Manual
-                              </Badge>
-                            ) : isLLMAnswered(answer) ? (
-                              <Badge variant="outline" className="text-xs">
-                                AI Generated
-                              </Badge>
-                            ) : null}
-                          </div>
-                          <h3 className="font-semibold text-sm leading-tight">
-                            <ExpandableText
-                              text={answer.question?.text}
-                              textId={`question-${answer.id}`}
-                              maxLength={100}
-                            />
-                          </h3>
-                        </div>
-                      </div>
-                    </Card.Header>
-                    <Card.Content className="space-y-3">
-                      <div>
-                        <h4 className="text-xs font-medium text-muted-foreground mb-1">Answer</h4>
-                        <ExpandableText text={answer.answer} textId={`answer-${answer.id}`} maxLength={120} />
-                      </div>
-                      {answer.ragAnswer && (
-                        <div>
-                          <h4 className="text-xs font-medium text-muted-foreground mb-1">RAG Answer</h4>
-                          <ExpandableText
-                            text={answer.ragAnswer}
-                            textId={`rag-${answer.id}`}
-                            maxLength={120}
-                          />
-                        </div>
-                      )}
-                    </Card.Content>
-                    <Card.Footer className="pt-3">
-                      <div className="flex items-center justify-between w-full">
-                        <div className="flex items-center gap-1">
-                          {isManuallyAnswered(answer) ? (
-                            <>
-                              <Button variant="ghost" size="sm" className="h-8 px-2">
-                                <Edit className="h-3 w-3 mr-1" />
-                                Edit
-                              </Button>
-                              <Button variant="ghost" size="sm" className="h-8 px-2">
-                                <Tag className="h-3 w-3 mr-1" />
-                                Tag
-                              </Button>
-                            </>
-                          ) : isLLMAnswered(answer) ? (
-                            <>
-                              <Button variant="ghost" size="sm" className="h-8 px-2">
-                                <ThumbsUp className="h-3 w-3 mr-1" />
-                              </Button>
-                              <Button variant="ghost" size="sm" className="h-8 px-2">
-                                <ThumbsDown className="h-3 w-3 mr-1" />
-                              </Button>
-                              <Button variant="ghost" size="sm" className="h-8 px-2">
-                                <Edit className="h-3 w-3 mr-1" />
-                                Edit
-                              </Button>
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
-                    </Card.Footer>
-                  </Card>
-                ))}
-              </div>
             ) : (
-              <div className="relative overflow-auto">
-                {/* Fixed Header */}
-                <div className="sticky top-0 z-50 bg-background border-b shadow-sm">
-                  <div className="overflow-x-auto">
-                    <Table className="min-w-full table-fixed">
-                      <Table.Header>
-                        <Table.Row>
-                          <Table.Head className="w-1/4 min-w-[200px] bg-background">Question</Table.Head>
-                          <Table.Head className="w-1/4 min-w-[200px] bg-background">Answer</Table.Head>
-                          <Table.Head className="w-1/4 min-w-[200px] bg-background">RAG Answer</Table.Head>
-                          <Table.Head className="w-1/4 min-w-[150px] bg-background">Actions</Table.Head>
-                        </Table.Row>
-                      </Table.Header>
-                    </Table>
-                  </div>
-                </div>
-
-                {/* Scrollable Body */}
-                <Table className="min-w-full table-fixed">
-                  <Table.Body>
-                    {answers.map((answer) => (
-                      <Table.Row key={answer.id}>
-                        <Table.Cell className="break-words align-top">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
+              <>
+                {/* Card View - Always shown on mobile, toggleable on desktop */}
+                <div
+                  className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-3 ${viewMode === 'table' ? 'lg:hidden' : ''}`}
+                >
+                  {answers.map((answer) => (
+                    <Card key={answer.id} className="p-4">
+                      <Card.Header className="pb-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
                               {isManuallyAnswered(answer) ? (
                                 <Badge variant="secondary" className="text-xs">
                                   Manual
@@ -374,29 +297,39 @@ export function InsightsPage() {
                                 </Badge>
                               ) : null}
                             </div>
-                            <ExpandableText
-                              text={answer.question?.text}
-                              textId={`table-question-${answer.id}`}
-                              maxLength={80}
-                            />
+                            <h3 className="font-semibold text-sm leading-tight">
+                              <ExpandableText
+                                text={answer.question?.text}
+                                textId={`question-${answer.id}`}
+                                maxLength={100}
+                              />
+                            </h3>
                           </div>
-                        </Table.Cell>
-                        <Table.Cell className="break-words align-top">
+                        </div>
+                      </Card.Header>
+                      <Card.Content className="space-y-3">
+                        <div>
+                          <h4 className="text-xs font-medium text-muted-foreground mb-1">Answer</h4>
                           <ExpandableText
                             text={answer.answer}
-                            textId={`table-answer-${answer.id}`}
-                            maxLength={100}
+                            textId={`answer-${answer.id}`}
+                            maxLength={120}
                           />
-                        </Table.Cell>
-                        <Table.Cell className="break-words align-top">
-                          <ExpandableText
-                            text={answer.ragAnswer}
-                            textId={`table-rag-${answer.id}`}
-                            maxLength={100}
-                          />
-                        </Table.Cell>
-                        <Table.Cell className="break-words align-top">
-                          <div className="flex items-center gap-1 flex-wrap">
+                        </div>
+                        {answer.ragAnswer && (
+                          <div>
+                            <h4 className="text-xs font-medium text-muted-foreground mb-1">RAG Answer</h4>
+                            <ExpandableText
+                              text={answer.ragAnswer}
+                              textId={`rag-${answer.id}`}
+                              maxLength={120}
+                            />
+                          </div>
+                        )}
+                      </Card.Content>
+                      <Card.Footer className="pt-3">
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center gap-1">
                             {isManuallyAnswered(answer) ? (
                               <>
                                 <Button variant="ghost" size="sm" className="h-8 px-2">
@@ -423,12 +356,108 @@ export function InsightsPage() {
                               </>
                             ) : null}
                           </div>
-                        </Table.Cell>
-                      </Table.Row>
-                    ))}
-                  </Table.Body>
-                </Table>
-              </div>
+                        </div>
+                      </Card.Footer>
+                    </Card>
+                  ))}
+                </div>
+
+                {/* Table View - Only shown on desktop when table mode is selected */}
+                {viewMode === 'table' && (
+                  <div className="hidden lg:block relative overflow-auto">
+                    {/* Fixed Header */}
+                    <div className="sticky top-0 z-50 bg-background border-b shadow-sm">
+                      <div className="overflow-x-auto">
+                        <Table className="min-w-full table-fixed">
+                          <Table.Header>
+                            <Table.Row>
+                              <Table.Head className="w-1/4 min-w-[200px] bg-background">Question</Table.Head>
+                              <Table.Head className="w-1/4 min-w-[200px] bg-background">Answer</Table.Head>
+                              <Table.Head className="w-1/4 min-w-[200px] bg-background">
+                                RAG Answer
+                              </Table.Head>
+                              <Table.Head className="w-1/4 min-w-[150px] bg-background">Actions</Table.Head>
+                            </Table.Row>
+                          </Table.Header>
+                        </Table>
+                      </div>
+                    </div>
+
+                    {/* Scrollable Body */}
+                    <Table className="min-w-full table-fixed">
+                      <Table.Body>
+                        {answers.map((answer) => (
+                          <Table.Row key={answer.id}>
+                            <Table.Cell className="break-words align-top">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  {isManuallyAnswered(answer) ? (
+                                    <Badge variant="secondary" className="text-xs">
+                                      Manual
+                                    </Badge>
+                                  ) : isLLMAnswered(answer) ? (
+                                    <Badge variant="outline" className="text-xs">
+                                      AI Generated
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                                <ExpandableText
+                                  text={answer.question?.text}
+                                  textId={`table-question-${answer.id}`}
+                                  maxLength={80}
+                                />
+                              </div>
+                            </Table.Cell>
+                            <Table.Cell className="break-words align-top">
+                              <ExpandableText
+                                text={answer.answer}
+                                textId={`table-answer-${answer.id}`}
+                                maxLength={100}
+                              />
+                            </Table.Cell>
+                            <Table.Cell className="break-words align-top">
+                              <ExpandableText
+                                text={answer.ragAnswer}
+                                textId={`table-rag-${answer.id}`}
+                                maxLength={100}
+                              />
+                            </Table.Cell>
+                            <Table.Cell className="break-words align-top">
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {isManuallyAnswered(answer) ? (
+                                  <>
+                                    <Button variant="ghost" size="sm" className="h-8 px-2">
+                                      <Edit className="h-3 w-3 mr-1" />
+                                      Edit
+                                    </Button>
+                                    <Button variant="ghost" size="sm" className="h-8 px-2">
+                                      <Tag className="h-3 w-3 mr-1" />
+                                      Tag
+                                    </Button>
+                                  </>
+                                ) : isLLMAnswered(answer) ? (
+                                  <>
+                                    <Button variant="ghost" size="sm" className="h-8 px-2">
+                                      <ThumbsUp className="h-3 w-3 mr-1" />
+                                    </Button>
+                                    <Button variant="ghost" size="sm" className="h-8 px-2">
+                                      <ThumbsDown className="h-3 w-3 mr-1" />
+                                    </Button>
+                                    <Button variant="ghost" size="sm" className="h-8 px-2">
+                                      <Edit className="h-3 w-3 mr-1" />
+                                      Edit
+                                    </Button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </Table.Cell>
+                          </Table.Row>
+                        ))}
+                      </Table.Body>
+                    </Table>
+                  </div>
+                )}
+              </>
             )}
             <div className="text-xs text-muted-foreground text-right mt-4">
               Total insights: {answers.length}
