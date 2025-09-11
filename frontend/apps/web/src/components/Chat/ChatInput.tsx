@@ -18,7 +18,7 @@ import {
   formDataResolver,
   formDataSchema as s,
 } from '@ci/shadcn';
-import { Send, Square, Mic } from '@ci/shadcn/icons';
+import { Send, Square, Speech } from '@ci/shadcn/icons';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -180,7 +180,7 @@ function ChatInput(
                     className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
                     onClick={handleRecord}
                   >
-                    <Mic className="h-4 w-4" />
+                    <Speech className="h-4 w-4" />
                   </Button>
                 </Tooltip.Trigger>
               </Tooltip>
