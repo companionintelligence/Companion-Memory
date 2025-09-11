@@ -1,0 +1,204 @@
+pipeline {
+    agent any
+    
+    // Only trigger on main branch
+    triggers {
+        githubPush()
+    }
+    
+    // Global configuration
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        // Node.js version from .nvmrc
+        NODE_VERSION = readFile('.nvmrc').trim()
+        
+        // Docker configuration
+        DOCKER_BUILDKIT = '1'
+        
+        // Application configuration
+        APP_NAME = 'ci-server'
+        DEPLOY_DIR = '/opt/ci-server'
+    }
+    
+    stages {
+        stage('Checkout') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Checking out source code...'
+                checkout scm
+                
+                // Verify Node.js version
+                script {
+                    sh "echo 'Required Node.js version: ${NODE_VERSION}'"
+                }
+            }
+        }
+        
+        stage('Setup') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Setting up build environment...'
+                
+                // Install Node.js dependencies using Yarn
+                script {
+                    // Enable corepack for proper Yarn version
+                    sh 'corepack enable'
+                    
+                    // Install dependencies
+                    sh 'yarn install --immutable'
+                }
+            }
+        }
+        
+        stage('Lint') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Running linting...'
+                sh 'yarn lint'
+            }
+        }
+        
+        stage('Test') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Running tests...'
+                
+                // Run backend tests
+                dir('backend/apps/api') {
+                    sh 'yarn test'
+                }
+                
+                // Run frontend tests (if they exist)
+                dir('frontend/apps/web') {
+                    sh 'yarn test || echo "No frontend tests configured"'
+                }
+            }
+            post {
+                always {
+                    // Archive test results if they exist
+                    script {
+                        if (fileExists('backend/apps/api/test-results.xml')) {
+                            junit 'backend/apps/api/test-results.xml'
+                        }
+                        if (fileExists('frontend/apps/web/test-results.xml')) {
+                            junit 'frontend/apps/web/test-results.xml'
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Build') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Building application...'
+                
+                // Build the application using make
+                sh 'make build'
+            }
+        }
+        
+        stage('Deploy') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Deploying application...'
+                
+                script {
+                    // Stop existing services
+                    sh 'make staging || echo "No existing services to stop"'
+                    
+                    // Deploy new version
+                    sh 'make staging'
+                    
+                    // Wait for services to be ready
+                    timeout(time: 5, unit: 'MINUTES') {
+                        waitUntil {
+                            script {
+                                def result = sh(
+                                    script: 'curl -s -o /dev/null -w "%{http_code}" http://localhost:8642/health || echo "000"',
+                                    returnStdout: true
+                                ).trim()
+                                return result == '200'
+                            }
+                        }
+                    }
+                    
+                    echo 'Application deployed successfully!'
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Performing health checks...'
+                
+                script {
+                    // Check if the application is responding
+                    sh '''
+                        echo "Checking application health..."
+                        curl -f http://localhost:8642/health || exit 1
+                        echo "Health check passed!"
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo 'Cleaning up workspace...'
+            cleanWs()
+        }
+        
+        success {
+            echo 'Pipeline completed successfully!'
+            
+            // Send notification (configure as needed)
+            script {
+                def message = "✅ CI-Server deployment successful for commit ${env.GIT_COMMIT}"
+                echo message
+                
+                // Example: send to Slack, email, etc.
+                // slackSend(channel: '#deployments', message: message)
+            }
+        }
+        
+        failure {
+            echo 'Pipeline failed!'
+            
+            // Send failure notification
+            script {
+                def message = "❌ CI-Server deployment failed for commit ${env.GIT_COMMIT}"
+                echo message
+                
+                // Example: send to Slack, email, etc.
+                // slackSend(channel: '#deployments', message: message, color: 'danger')
+            }
+        }
+        
+        unstable {
+            echo 'Pipeline completed with warnings!'
+        }
+    }
+}

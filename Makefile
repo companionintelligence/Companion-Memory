@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw
+.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw jenkins-setup
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -214,3 +214,19 @@ useradd: ## Add a user to the PostgreSQL database
 userpw: ## Change a user's password
 	@printf "🔑 Changing user password...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
+
+jenkins-setup: ## Install and configure Jenkins for local CI/CD deployment
+	@printf "🔧 Setting up Jenkins for local deployment...\n\n"
+	@if [ ! -f "jenkins/install-jenkins.sh" ]; then \
+		printf "$(RED)✗$(RESET) Jenkins setup scripts not found. Please ensure you're in the project root.\n\n"; \
+		exit 1; \
+	fi
+	@printf "Installing Jenkins...\n"
+	@./jenkins/install-jenkins.sh
+	@printf "\nConfiguring Jenkins...\n"
+	@./jenkins/setup-jenkins.sh
+	@printf "\nJenkins setup completed! Next steps:\n"
+	@printf "1. Access Jenkins at: http://localhost:8080\n"
+	@printf "2. Configure your Git repository in the ci-server-deploy job\n"
+	@printf "3. Set up Cloudflared for secure remote access: ./cloudflared/install-cloudflared.sh\n"
+	@printf "4. Configure Cloudflare Zero Trust and DNS\n"

@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-tunnel
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro
+      - ./tunnel-credentials:/etc/cloudflared/credentials:ro
+    networks:
+      - cloudflared-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - cloudflared-setup
+
+  # One-time setup container for tunnel creation
+  cloudflared-setup:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-setup
+    command: >
+      sh -c "
+        echo 'Cloudflared Docker Setup';
+        echo 'Please follow these steps:';
+        echo '1. Run: docker exec -it cloudflared-setup cloudflared tunnel login';
+        echo '2. Create tunnel: docker exec -it cloudflared-setup cloudflared tunnel create ci-server-tunnel';
+        echo '3. Copy the tunnel credentials to ./tunnel-credentials/';
+        echo '4. Update the config.yml with your tunnel ID and domain';
+        echo '5. Set TUNNEL_TOKEN environment variable';
+        echo '6. Restart the cloudflared service';
+        echo 'Setup complete! Container will exit now.';
+        exit 0;
+      "
+    profiles:
+      - setup
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:rw
+      - ./tunnel-credentials:/etc/cloudflared/credentials:rw
+
+networks:
+  cloudflared-network:
+    driver: bridge
+
+# To use this setup:
+# 1. Copy config-template.yml to config.yml and edit it
+# 2. Run setup: docker-compose --profile setup run cloudflared-setup
+# 3. Follow the setup instructions
+# 4. Start the tunnel: docker-compose up -d cloudflared

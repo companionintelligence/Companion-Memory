@@ -1,0 +1,50 @@
+# Cloudflared Tunnel Configuration Template
+# Copy this file to config.yml and update with your values
+
+# Replace with your actual tunnel ID
+tunnel: YOUR_TUNNEL_ID_HERE
+
+# Replace with your tunnel credentials file path
+credentials-file: /etc/cloudflared/credentials/YOUR_TUNNEL_ID_HERE.json
+
+# Ingress rules - route traffic to local services
+ingress:
+  # Jenkins access
+  - hostname: jenkins.yourdomain.com
+    service: http://host.docker.internal:8080
+    originRequest:
+      httpHostHeader: localhost:8080
+  
+  # CI-Server staging application
+  - hostname: app.yourdomain.com
+    service: http://host.docker.internal:8642
+    originRequest:
+      httpHostHeader: localhost:8642
+  
+  # CI-Server development (optional)
+  - hostname: dev.yourdomain.com
+    service: http://host.docker.internal:80
+    originRequest:
+      httpHostHeader: dev.companionintelligence.com
+  
+  # Additional services can be added here
+  # - hostname: api.yourdomain.com
+  #   service: http://host.docker.internal:3030
+  
+  # Catch-all rule (required - must be last)
+  - service: http_status:404
+
+# Logging configuration
+loglevel: info
+
+# Optional: Metrics endpoint
+# metrics: localhost:8081
+
+# Optional: Additional origins
+# originRequest:
+#   connectTimeout: 30s
+#   tlsTimeout: 30s
+#   tcpKeepAlive: 30s
+#   noHappyEyeballs: false
+#   keepAliveTimeout: 90s
+#   keepAliveConnections: 100

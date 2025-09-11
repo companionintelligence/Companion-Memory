@@ -23,5 +23,14 @@ node_modules
 .aider*
 .env
 
+# Cloudflared tunnel credentials and certificates
+.cloudflared/
+cloudflared/tunnel-credentials/
+cloudflared/config.yml
+cloudflared/*.json
+
+# Jenkins credentials and temporary files
+jenkins/jenkins-cli.jar
+jenkins/*.log
 
 .specstory/ 

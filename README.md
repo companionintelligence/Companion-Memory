@@ -246,3 +246,108 @@ docker compose restart <service-name>    # Restart specific service
 Right now, the LLM has limited access to tools. There are two tools developed, one for getting user preferences and one for getting family members. The LLM itself has discression over when and how to use the tools, but it seems to have a strong preference for the family member tool which is now disabled. 
 
 Tools are defined in `backend/apps/api/src/domains/llm/tools`.
+
+## Optional: Jenkins Local Deployment with Cloudflared
+
+For teams that prefer Jenkins-based CI/CD with secure remote access, this repository includes optional Jenkins deployment setup with Cloudflared tunnel integration.
+
+### Quick Setup
+
+Install and configure Jenkins with Cloudflared in one command:
+
+```bash
+make jenkins-setup
+```
+
+### Manual Setup
+
+#### 1. Install Jenkins
+
+For Ubuntu/Debian systems (22.04 and 24.04 supported):
+
+```bash
+./jenkins/install-jenkins.sh
+```
+
+This will:
+- Install OpenJDK 21
+- Add Jenkins repository and GPG key
+- Install and start Jenkins
+- Display initial admin password
+
+#### 2. Configure Jenkins
+
+```bash
+./jenkins/setup-jenkins.sh
+```
+
+This configures:
+- Required Jenkins plugins
+- Node.js build tools
+- CI/CD pipeline for automatic deployment on `main` branch updates
+
+#### 3. Install Cloudflared
+
+For secure remote access without opening firewall ports:
+
+**Native Installation (Ubuntu/Debian):**
+```bash
+./cloudflared/install-cloudflared.sh
+```
+
+**Docker Installation:**
+```bash
+docker-compose -f cloudflared/docker-compose.cloudflared.yml up -d
+```
+
+#### 4. Setup Cloudflared Tunnel
+
+```bash
+./cloudflared/setup-tunnel.sh
+```
+
+This will:
+- Authenticate with Cloudflare
+- Create a secure tunnel
+- Configure DNS routing
+- Set up systemd service
+
+#### 5. Configure Cloudflare Zero Trust
+
+Follow the comprehensive guide: [docs/zero-trust-setup.md](docs/zero-trust-setup.md)
+
+### Access Your Services
+
+After setup, access your services securely:
+
+- **Jenkins**: `https://jenkins.yourdomain.com`
+- **CI-Server App**: `https://app.yourdomain.com`
+- **Development**: `https://dev.yourdomain.com`
+
+### Features
+
+- **Secure Access**: No open ports, encrypted tunnels
+- **Zero Trust**: Cloudflare authentication and policies
+- **Auto-Deployment**: Automatic builds and deployment on `main` branch updates
+- **Multi-Platform**: Supports Ubuntu 22.04 and 24.04
+- **Docker Support**: Both native and containerized Cloudflared options
+
+### Requirements
+
+- Ubuntu 22.04 or 24.04
+- Cloudflare account with domain
+- Docker and Docker Compose
+- Git repository access
+
+### Documentation
+
+- [Jenkins Setup Guide](jenkins/README.md)
+- [Cloudflared Setup Guide](cloudflared/README.md)
+- [Zero Trust Configuration](docs/zero-trust-setup.md)
+
+### References
+
+- [Jenkins Debian Installation](https://www.jenkins.io/doc/book/installing/linux/#debian-stable)
+- [Cloudflare Downloads](https://pkg.cloudflare.com/index.html)
+- [Cloudflared GitHub](https://github.com/cloudflare/cloudflared)
+- [Zero Trust Dashboard](https://one.dash.cloudflare.com/)
