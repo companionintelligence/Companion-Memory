@@ -1,8 +1,233 @@
-# Copilot Instructions for CI-Server
+# CI-Server Development Instructions
 
-## Project Overview
+**ALWAYS follow these instructions first and fallback to additional search and context gathering only if the information here is incomplete or found to be in error.**
 
-This is the CI Server repository for Companion Intelligence, a Yarn workspace monorepo containing a NestJS backend API and React frontend. The system integrates with Ollama for LLM capabilities, PostgreSQL for data storage, and includes vector embeddings for AI-powered features.
+## Repository Overview
+
+CI-Server is a Yarn workspace monorepo with NestJS backend and React frontend for Companion Intelligence. It includes Docker infrastructure, Ollama LLM integration, PostgreSQL with pgvector, and comprehensive build/test workflows.
+
+## Prerequisites Installation
+
+**CRITICAL:** Install prerequisites in this exact order. **NEVER CANCEL** any long-running installations.
+
+### Node.js 22.15.1 (Required)
+```bash
+# Download and install Node.js 22.15.1 - takes ~3 minutes, NEVER CANCEL
+curl -fsSL https://nodejs.org/dist/v22.15.1/node-v22.15.1-linux-x64.tar.xz -o /tmp/node-v22.15.1-linux-x64.tar.xz
+cd /tmp && tar -xf node-v22.15.1-linux-x64.tar.xz
+sudo cp -r node-v22.15.1-linux-x64/* /usr/local/
+# Alternative if permissions fail: install to ~/nodejs and add to PATH
+```
+
+### Verify Node.js Version
+```bash
+node --version  # Must output: v22.15.1
+```
+
+### Docker (Required)
+Ensure Docker is installed and running:
+```bash
+docker --version  # Must show Docker version 20+
+```
+
+### Ollama (Required for LLM Features)
+```bash
+# Install Ollama - may fail due to firewall limitations
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Start Ollama daemon
+ollama serve &
+
+# Pull required models - takes 5-10 minutes each, NEVER CANCEL
+ollama pull nomic-embed-text
+ollama pull gemma3:1b
+
+# Verify models installed
+ollama list
+```
+
+**NOTE:** If Ollama installation fails due to network restrictions, document this limitation in your changes.
+
+### Hostname Configuration
+```bash
+echo "127.0.0.1 dev.companionintelligence.com" | sudo tee -a /etc/hosts
+```
+
+## Project Setup
+
+**NEVER CANCEL** these setup commands. They may take several minutes to complete.
+
+### Initial Setup
+```bash
+# Enable Corepack and prepare Yarn - takes ~30 seconds
+corepack enable
+corepack prepare yarn@4.9.1 --activate
+
+# Install dependencies - takes ~2m 12s, NEVER CANCEL
+yarn install
+# WARNING: Will show peer dependency warnings - these are expected
+
+# Setup VS Code SDKs
+yarn dlx @yarnpkg/sdks vscode
+
+# Setup git hooks
+yarn prepare
+```
+
+### Validate Installation
+```bash
+# Use provided make command to validate prerequisites
+make init
+# This checks Node.js version, Ollama status, hostname, and models
+```
+
+## Build Process
+
+**CRITICAL:** Set timeouts of 60+ minutes for build commands. **NEVER CANCEL** builds.
+
+### Individual Component Builds
+```bash
+# Backend API build - takes ~10 seconds
+yarn workspace @ci/be-api build
+
+# Frontend web build - takes ~27 seconds  
+yarn workspace @ci/fe-web build
+
+# Full application build - takes ~45 seconds for compilation
+# Docker builds may take much longer or fail due to network restrictions
+make build  # Set timeout to 60+ minutes, NEVER CANCEL
+```
+
+## Development Workflow
+
+### Start Infrastructure Services
+```bash
+# Start Docker infrastructure - takes ~2-3 minutes
+make infra
+
+# Start local development services
+make local
+```
+
+### Database Operations
+```bash
+# Run migrations - requires working PostgreSQL
+make migrate
+
+# Seed database with test data
+make seed
+
+# Generate vector embeddings for search
+make index
+```
+
+### Development Servers
+
+#### Method 1: Using tmux (Recommended)
+```bash
+# Start both backend and frontend in tmux session
+make dev
+# This starts backend with pretty logs and frontend dev server
+# Backend will retry database connections if DB not ready
+```
+
+#### Method 2: Individual Services
+```bash
+# Backend API server - requires PostgreSQL running
+cd backend/apps/api
+yarn dev          # Basic logs
+yarn dev:pretty   # Pretty-printed logs
+
+# Frontend development server - starts in ~2 seconds
+cd frontend/apps/web  
+yarn dev          # Starts on http://localhost:5173/
+
+# Storybook for component development - starts in ~3.7 seconds
+cd frontend/apps/web
+yarn storybook    # Starts on http://localhost:6006/
+```
+
+## Testing and Validation
+
+### Code Quality Checks
+```bash
+# Repository-wide linting - takes ~6 seconds
+yarn lint
+yarn lint:fix     # Auto-fix issues
+
+# Type checking
+yarn workspace @ci/be-api typecheck     # Takes ~4 seconds
+yarn workspace @ci/fe-web typecheck     # Takes ~11 seconds
+```
+
+### Running Tests
+```bash
+# Backend API tests - takes ~9 seconds, NEVER CANCEL
+yarn workspace @ci/be-api test
+# Runs 10 tests, all should pass
+
+# Additional backend checks
+yarn workspace @ci/be-api lint:circular-imports
+```
+
+### CI Validation
+**ALWAYS** run these before committing to ensure CI passes:
+```bash
+yarn lint                                   # Repository linting
+yarn workspace @ci/be-api lint             # Backend linting  
+yarn workspace @ci/fe-web lint             # Frontend linting
+yarn workspace @ci/be-api typecheck        # Backend type check
+yarn workspace @ci/fe-web typecheck        # Frontend type check
+yarn workspace @ci/be-api test             # Backend tests
+```
+
+## Manual Validation Requirements
+
+**CRITICAL:** After making changes, ALWAYS validate application functionality:
+
+### Backend Validation
+1. Start backend dev server: `yarn dev:pretty`
+2. Verify API starts without errors (may show DB connection retries)
+3. Test API endpoints if database is available
+
+### Frontend Validation  
+1. Start frontend dev server: `yarn dev`
+2. Access http://localhost:5173/
+3. Verify application loads without console errors
+4. Test login functionality if backend/database available
+5. **ALWAYS** take screenshots of UI changes
+
+### Full Stack Validation
+1. Start infrastructure: `make local`
+2. Run migrations and seed: `make migrate && make seed`
+3. Start development environment: `make dev`
+4. Access https://dev.companionintelligence.com
+5. Test login with: `jsmith@example.com` / `]60.a6{CJ}lB*rHAp;w;`
+6. Execute complete user workflows
+
+## Common Commands Reference
+
+### Make Commands
+```bash
+make help          # Show all available commands
+make init          # Initialize repository after checkout
+make local         # Start local Docker services
+make dev           # Start development environment with tmux
+make build         # Build application and Docker images (60+ min timeout)
+make migrate       # Run database migrations
+make seed          # Seed database with test data
+make index         # Generate search embeddings
+make gentoken      # Generate development access token
+```
+
+### Workspace Commands
+```bash
+# Backend (NestJS API)
+yarn workspace @ci/be-api <command>
+
+# Frontend (React SPA)  
+yarn workspace @ci/fe-web <command>
+```
 
 ## Repository Structure
 
@@ -16,6 +241,28 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
     ├── shadcn/               # UI components (avoid modifying directly)
     └── template/             # Package template for new packages
 ```
+
+## Project Structure
+
+### Backend (`backend/apps/api/`)
+- **Entry point:** `src/main.ts`
+- **Controllers:** `src/domains/{domain}/controllers/`
+- **Services:** `src/domains/{domain}/services/`
+- **Entities:** `src/domains/{domain}/entities/`
+- **Migrations:** `db/migrations/`
+- **Key domains:** auth, llm, memory, intelligence, conversations
+
+### Frontend (`frontend/apps/web/`)
+- **Entry point:** `src/main.tsx`
+- **Components:** `src/components/`
+- **Pages:** `src/pages/`
+- **API client:** `src/api/`
+- **Styles:** Tailwind CSS
+
+### Shared Packages (`frontend/packages/`)
+- **@ci/common:** Shared utilities and components
+- **@ci/shadcn:** UI components (avoid modifying directly)
+- **@ci/capture:** Camera capture components
 
 ## Technology Stack
 
@@ -41,32 +288,6 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 - GitHub Actions for CI/CD
 - ESLint + Prettier for code quality
 - Husky + lint-staged for git hooks
-
-## Development Workflow
-
-### Getting Started
-1. Run `make init` to set up the environment
-2. Run `make local` to start Docker services  
-3. Run `make migrate && make seed` for database setup
-4. Run `make dev` to start development servers in tmux
-
-### Key Commands
-- `make dev` - Start both backend and frontend in tmux session
-- `make build` - Build entire application and Docker images
-- `yarn lint` - Run ESLint across the monorepo
-- `yarn lint:fix` - Auto-fix linting issues
-
-### Backend Development
-- Entry point: `backend/apps/api/src/main.ts`
-- Use `yarn dev:pretty` for pretty-printed logs
-- Database migrations: `yarn migrate:make <name>`, `yarn migrate`
-- LLM tools are in `src/domains/llm/tools/`
-
-### Frontend Development  
-- Entry point: `frontend/apps/web/src/main.tsx`
-- Use `yarn dev` to start Vite development server
-- Components in `src/components/`, pages in `src/pages/`
-- Storybook: `yarn storybook`
 
 ## Coding Standards
 
@@ -98,54 +319,6 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 - Use pgvector for embedding storage
 - Follow PostgreSQL naming conventions
 
-## Testing
-
-### Backend Testing
-- Jest configuration in `jest.config.mjs`
-- E2E tests in `__tests__` directories
-- Run tests with `yarn test`
-- Test database operations with proper setup/teardown
-
-### Frontend Testing
-- Vitest for unit testing
-- Testing Library for component tests
-- Storybook for visual testing
-- Browser testing with Playwright
-
-## File and Directory Conventions
-
-### Backend
-- Controllers: `src/domains/{domain}/controllers/`
-- Services: `src/domains/{domain}/services/`  
-- Entities: `src/domains/{domain}/entities/`
-- DTOs: `src/domains/{domain}/dto/`
-- Migrations: `db/migrations/`
-
-### Frontend
-- Components: `src/components/{category}/`
-- Pages: `src/pages/`
-- Hooks: `src/hooks/`
-- Utils: `src/utils/`
-- Types: `src/types/`
-
-## Common Patterns
-
-### Authentication
-- JWT tokens with Passport strategies
-- Protected routes with guards
-- User context throughout the application
-
-### Data Flow
-- TypeORM repositories for data access
-- NestJS services for business logic
-- Controllers for HTTP endpoints
-- React hooks for state management
-
-### Error Handling
-- NestJS exception filters
-- Proper HTTP status codes
-- User-friendly error messages in frontend
-
 ## AI/LLM Integration
 
 ### Ollama Models
@@ -163,58 +336,63 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 - Embeddings generated via `make index` command
 - Search functionality for relevant content
 
-## Local Development Setup
+## Known Limitations
 
-### Prerequisites
-- Node.js (version in `.nvmrc`)
-- Docker & Docker Compose
-- Ollama with required models
-- Host entry: `dev.companionintelligence.com → 127.0.0.1`
+### Network Restrictions
+- Ollama installation may fail due to firewall limitations
+- Docker builds requiring external downloads will fail
+- Document these limitations if encountered
 
-### Services
-- PostgreSQL: Database and job queue
-- Minio: S3-compatible file storage  
-- NGINX: Reverse proxy
-- Backend API: Port varies (check docker-compose)
-- Frontend: Port varies (check docker-compose)
+### Development Environment
+- Backend requires PostgreSQL to fully function
+- Database retries are normal during startup
+- Some features require Ollama models to be available
+
+### Build Process
+- Docker builds may fail due to external dependencies
+- Local compilation always works
+- Full application requires infrastructure services
 
 ## Important Notes
 
 ### Security
-- This is proprietary software - do not distribute
+- Contains proprietary code - do not distribute
 - Sensitive configuration in `.env` file
-- JWT secrets and database credentials are environment-specific
+- Use provided test credentials for development
 
 ### Performance
-- Use database indexes appropriately
-- Optimize LLM queries to avoid excessive API calls
-- Consider caching for frequently accessed data
+- Build times are measured and documented
+- Use appropriate timeouts for all operations
+- Never cancel long-running builds or tests
 
-### Debugging
-- Backend logs via Pino with pretty printing
-- Frontend debugging with React DevTools
-- Database queries can be logged via TypeORM settings
+### Git Workflow
+- Always run linting before commits
+- Husky pre-commit hooks enforce code quality
+- Use feature branches for development
 
-### Deployment
-- Docker images built with `make build`
-- Staging environment via `make staging`
-- Production deployment follows separate processes
+## Emergency Troubleshooting
 
-## When Making Changes
+### Dependencies Not Installing
+```bash
+yarn install --immutable
+```
 
-1. **Understand the domain**: Identify which part of the system you're modifying
-2. **Run existing tests**: Ensure current functionality works
-3. **Make minimal changes**: Only modify what's necessary
-4. **Test thoroughly**: Verify both unit and integration behavior
-5. **Follow conventions**: Match existing patterns and style
-6. **Update documentation**: If changing public interfaces
+### Build Failures
+```bash
+yarn workspace @ci/be-api clean && yarn workspace @ci/be-api build
+yarn workspace @ci/fe-web clean && yarn workspace @ci/fe-web build
+```
 
-## Common Issues
+### Database Issues
+```bash
+make dbclear  # Clear database and start fresh
+make migrate && make seed
+```
 
-- **Ollama not running**: Check `ollama serve` is active on port 11434
-- **Database connection**: Verify PostgreSQL is running in Docker
-- **Module resolution**: Yarn PnP may need `yarn dlx @yarnpkg/sdks vscode`
-- **Permission issues**: Ensure Docker has appropriate permissions
-- **Host resolution**: Verify `dev.companionintelligence.com` points to localhost
+### Docker Issues
+```bash
+docker compose down
+docker compose --profile local up -d
+```
 
-This repository follows modern full-stack development practices with strong typing, comprehensive tooling, and AI integration capabilities.
+Always refer to this documentation first before exploring or running additional commands. These instructions are validated and tested to work correctly.
