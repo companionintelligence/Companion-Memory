@@ -26,6 +26,7 @@ import { ChatLoader } from './ChatLoader';
 import { ChatMessage } from './ChatMessage';
 import { useConditionalAutoscroll } from './useConditionalAutoscroll';
 import { Channel, type Decoded, createStreamProcessor } from './utils';
+import { VoiceMode } from './VoiceMode';
 
 type ChatInputProps = ComponentProps<typeof ChatInput>;
 
@@ -39,6 +40,10 @@ interface Props extends ChatInputProps {
   messages?: Message[];
   readable?: ReadableStream<Uint8Array>;
   emptyState?: ReactNode;
+  onVoiceModeToggle?: () => void;
+  isVoiceModeActive?: boolean;
+  companionResponse?: string;
+  onResponseFinished?: (text: string) => void;
 }
 
 const textDecoder = new TextDecoder();
@@ -52,6 +57,10 @@ export function Chat({
   streaming,
   emptyState,
   onSubmit,
+  onVoiceModeToggle,
+  isVoiceModeActive = false,
+  companionResponse,
+  onResponseFinished,
   ...chatInputProps
 }: Props) {
   const autoFocusRef = useRef<HTMLTextAreaElement | null>(null);
@@ -84,6 +93,9 @@ export function Chat({
   // the LLM endpoint.
   const textStreamingRef = useRef<HTMLDivElement | null>(null);
   const textParserRef = useRef<StreamingParser | null>(null);
+
+  // Track the accumulated text content for TTS
+  const accumulatedTextRef = useRef<string>('');
 
   const setTextStreamingRef = useCallback((el: HTMLDivElement | null) => {
     textStreamingRef.current = el;
@@ -221,6 +233,12 @@ export function Chat({
         }
 
         smd.parser_write(parser, payload);
+
+        // Accumulate text content for TTS (only for TEXT channel, not THINK)
+        if (chunk.channel === Channel.TEXT) {
+          accumulatedTextRef.current += payload;
+        }
+
         maybeAutoScroll();
       }
 
@@ -239,6 +257,9 @@ export function Chat({
 
           flushStream(block);
           maybeAutoScroll(true);
+
+          // Reset accumulated text for new response
+          accumulatedTextRef.current = '';
         } catch (err) {
           console.error('Error inserting user block', err);
         }
@@ -249,11 +270,32 @@ export function Chat({
     [onSubmit, flushStream],
   );
 
+  // Function to submit voice messages through the proper chat flow
+  const submitVoiceMessage = useCallback(
+    async (message: string) => {
+      const formData: FormData = { message };
+
+      return await handleSubmit(formData);
+    },
+    [handleSubmit],
+  );
+
   const handleFinished = useCallback(() => {
     const lastChannel = lastChannelRef.current;
 
     if (lastChannel != null) {
       flushStream();
+    }
+
+    // Trigger TTS for voice mode when response is finished
+    if (isVoiceModeActive && accumulatedTextRef.current.trim()) {
+      console.log(
+        '🎤 handleFinished: Triggering TTS with text:',
+        accumulatedTextRef.current.substring(0, 100) + '...',
+      );
+      onResponseFinished?.(accumulatedTextRef.current);
+      // Reset accumulated text for next response
+      accumulatedTextRef.current = '';
     }
 
     const input = autoFocusRef.current;
@@ -263,7 +305,7 @@ export function Chat({
         input.focus();
       });
     }
-  }, [flushStream, autoFocus]);
+  }, [flushStream, autoFocus, isVoiceModeActive, onResponseFinished]);
 
   useEffect(() => {
     if (!readable) {
@@ -333,11 +375,20 @@ export function Chat({
       <div className={cn('w-full relative', contentPadding)}>
         {(loading || streaming) && <ChatLoader />}
 
+        <VoiceMode
+          isActive={isVoiceModeActive}
+          onToggle={onVoiceModeToggle || (() => {})}
+          onSubmitMessage={submitVoiceMessage}
+          companionResponse={companionResponse}
+        />
+
         <ChatInput
           ref={autoFocusRef}
           loading={loading}
           streaming={streaming}
           onSubmit={handleSubmit}
+          onVoiceModeToggle={onVoiceModeToggle}
+          isVoiceModeActive={isVoiceModeActive}
           {...chatInputProps}
         />
       </div>

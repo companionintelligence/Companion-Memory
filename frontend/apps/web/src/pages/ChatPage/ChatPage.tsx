@@ -7,6 +7,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { useThreadService } from '@/api';
 import { Chat, type FormData } from '@/components/Chat';
+import { parseChatContent } from '@/components/Chat/parser';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useChatRequester, useCounter, useModel } from '@/hooks';
 
@@ -24,6 +25,8 @@ export default function ChatPage() {
 
   const { id: initialThreadId } = useParams<{ id?: string }>();
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
+  const [isVoiceModeActive, setIsVoiceModeActive] = useState(false);
+  const [companionResponse, setCompanionResponse] = useState<string>('');
   const [{ selectedModel }] = useModel();
 
   const [
@@ -103,6 +106,41 @@ export default function ChatPage() {
       return submitChatRequest(data);
     },
     [submitChatRequest],
+  );
+
+  const handleVoiceModeToggle = useCallback(() => {
+    setIsVoiceModeActive((prev) => !prev);
+  }, []);
+
+  // Extract only text content from chat response (excluding thinking blocks)
+  const extractTextContent = useCallback((content: string): string => {
+    const segments = parseChatContent(content);
+    const textSegments = segments
+      .filter((segment) => segment.type === 'text')
+      .map((segment) => segment.content)
+      .join(' ')
+      .trim();
+
+    return textSegments;
+  }, []);
+
+  // Handle response finished for TTS
+  const handleResponseFinished = useCallback(
+    (text: string) => {
+      if (isVoiceModeActive && text.trim()) {
+        console.log('🎤 ChatPage: Received text for TTS:', text.substring(0, 100) + '...');
+        // Extract only text content (excluding thinking blocks) for TTS
+        const textContent = extractTextContent(text);
+        if (textContent) {
+          console.log(
+            '🎤 ChatPage: Setting companion response for TTS:',
+            textContent.substring(0, 100) + '...',
+          );
+          setCompanionResponse(textContent);
+        }
+      }
+    },
+    [isVoiceModeActive, extractTextContent],
   );
 
   const loading = threadsLoading || threadLoading || chatRequestLoading;
@@ -201,6 +239,10 @@ export default function ChatPage() {
         onSubmit={handleSubmit}
         onStop={stopChatRequest}
         autoFocus={true}
+        onVoiceModeToggle={handleVoiceModeToggle}
+        isVoiceModeActive={isVoiceModeActive}
+        companionResponse={companionResponse}
+        onResponseFinished={handleResponseFinished}
       />
     </>
   );
