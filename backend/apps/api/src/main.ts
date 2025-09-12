@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import * as express from 'express';
 
 import { App } from '@ci/application';
 import { LoggerService } from '@ci/common/services';
@@ -9,10 +10,14 @@ import config from '@ci/configuration';
     logger: new LoggerService('application'),
   });
 
-  const express = app.getHttpAdapter().getInstance();
+  const expressInstance = app.getHttpAdapter().getInstance();
 
-  express.set('trust proxy', true);
-  express.disable('x-powered-by');
+  expressInstance.set('trust proxy', true);
+  expressInstance.disable('x-powered-by');
+
+  // Increase the body size limit for Express
+  expressInstance.use(express.json({ limit: '50mb' }));
+  expressInstance.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   app.enableShutdownHooks();
 
