@@ -80,12 +80,7 @@ export class McpToolProvider implements ToolProvider {
   private async loadConfiguration(): Promise<void> {
     try {
       // Try multiple possible config paths for robustness
-      const possiblePaths = [
-        path.resolve(process.cwd(), 'backend/apps/api/config/mcp-servers.json'),
-        path.resolve(__dirname, '../../../../config/mcp-servers.json'),
-        path.resolve(__dirname, '../../../config/mcp-servers.json'),
-        path.resolve(process.cwd(), 'config/mcp-servers.json'),
-      ];
+      const possiblePaths = [path.resolve(process.cwd(), 'config/mcp-servers.json')];
 
       let configContent: string | null = null;
       let usedPath: string | null = null;
