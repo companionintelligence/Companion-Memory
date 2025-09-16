@@ -4,7 +4,6 @@ import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 
-import { ToolsController } from './controllers/ToolsController';
 import { McpClientManager } from './providers/mcp/McpClientManager';
 import { McpToolProvider } from './providers/mcp/McpToolProvider';
 import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
@@ -40,7 +39,6 @@ const nativeToolInstances = [
     // Registration service to wire everything together
     ToolsRegistrationService,
   ],
-  controllers: [ToolsController],
   exports: [ToolRegistry],
 })
 export class ToolsModule {}
