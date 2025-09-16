@@ -40,7 +40,7 @@ interface GetUserPreferencesOutput {
 @Injectable()
 export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, GetUserPreferencesOutput> {
   readonly schema = {
-    name: 'get_user_preferences',
+    name: 'getUserPreferences',
     description:
       'Get user food preferences, dietary restrictions, allergies, and eating habits. Use this tool when planning meals, cooking, or discussing food choices.',
     category: 'database',

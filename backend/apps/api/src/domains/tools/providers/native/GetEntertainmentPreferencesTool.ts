@@ -52,7 +52,7 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
   GetEntertainmentPreferencesOutput
 > {
   readonly schema = {
-    name: 'get_entertainment_preferences',
+    name: 'getEntertainmentPreferences',
     description:
       'Get user entertainment preferences including movie genres, TV show types, streaming preferences, and viewing habits. Use this tool when recommending movies, TV shows, or planning entertainment.',
     category: 'database',
