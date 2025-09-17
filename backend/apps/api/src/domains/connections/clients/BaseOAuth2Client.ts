@@ -90,6 +90,13 @@ export abstract class BaseOAuth2Client extends BaseClient {
       grant_type: 'authorization_code',
     });
 
+    this.logger.debug('Token exchange request', {
+      endpoint: tokenEndpoint,
+      clientId: connection.clientid,
+      redirectUri: config.auth.oauth.callbackUrl,
+      codeLength: code.length,
+    });
+
     const tokenResponse = await fetch(tokenEndpoint, {
       method: 'POST',
       headers: {
@@ -103,18 +110,25 @@ export abstract class BaseOAuth2Client extends BaseClient {
       let errorDetails;
 
       try {
-        errorDetails = tokenResponse.json();
+        errorDetails = await tokenResponse.json();
       } catch {
-        errorDetails = tokenResponse.text();
+        try {
+          errorDetails = await tokenResponse.text();
+        } catch {
+          errorDetails = 'Unable to parse error response';
+        }
       }
 
       this.logger.error('Token exchange failed', {
         status: tokenResponse.status,
+        statusText: tokenResponse.statusText,
         error: errorDetails,
         endpoint: tokenEndpoint,
+        clientId: connection.clientid,
+        redirectUri: config.auth.oauth.callbackUrl,
       });
 
-      throw new Error('Token exchange failed');
+      throw new Error(`Token exchange failed: ${tokenResponse.status} ${tokenResponse.statusText}`);
     }
 
     let tokenData: TokenResponse;

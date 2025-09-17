@@ -107,6 +107,12 @@ export class ConnectionsController {
   ) {
     const { state, code } = body;
 
+    this.logger.debug('OAuth callback received', {
+      connectionId: state,
+      codeLength: code.length,
+      userId: context.userId,
+    });
+
     try {
       const result = await this.connectionService.callback(context, state, code);
 
