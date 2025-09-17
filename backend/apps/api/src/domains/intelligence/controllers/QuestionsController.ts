@@ -37,7 +37,7 @@ export class QuestionsController {
     return this.questionService.findOne(context, id);
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  // @Cron(CronExpression.EVERY_MINUTE)
   async cronProcessQuestions() {
     if (!config.features['scheduled.answer.inferencing']) {
       return;
