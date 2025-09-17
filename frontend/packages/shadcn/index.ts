@@ -37,6 +37,7 @@ export * from './src/components/coalescers/sidebar';
 export * from './src/components/coalescers/skeleton';
 export * from './src/components/coalescers/slider';
 export * from './src/components/coalescers/sonner';
+export * from './src/components/coalescers/spinner';
 export * from './src/components/coalescers/switch';
 export * from './src/components/coalescers/table';
 export * from './src/components/coalescers/tabs';

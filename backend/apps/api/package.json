@@ -18,6 +18,7 @@
     "migrate:down": "yarn dbmate down",
     "migrate:make": "yarn dbmate new",
     "db:clear": "yarn dbmate --execute-file ./db/postgres/scripts/drop_all_pg_data.sql",
+    "db:destroy": "yarn dbmate --execute-file ./db/postgres/scripts/drop_all_pg_tables.sql",
     "test": "DOTENV_CONFIG_PATH=../../../.env jest"
   },
   "packageManager": "yarn@4.9.1",

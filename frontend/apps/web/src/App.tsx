@@ -6,7 +6,13 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { RedirectKnownUser } from '@/components/RedirectKnownUser';
-import { AuthProvider, ModelProvider, ThemeProvider, usePreventOverscroll } from '@/hooks';
+import {
+  AuthProvider,
+  CaptureModalProvider,
+  ModelProvider,
+  ThemeProvider,
+  usePreventOverscroll,
+} from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import FeedPage from '@/pages/FeedPage';
 import LoginPage from '@/pages/LoginPage';
@@ -31,7 +37,9 @@ function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider defaultTheme="system" storageKey="ci-ui-theme">
         <DeviceLayoutProvider args={[]}>
           <AuthProvider args={[]}>
-            <ModelProvider args={[]}>{children}</ModelProvider>
+            <ModelProvider args={[]}>
+              <CaptureModalProvider args={[]}>{children}</CaptureModalProvider>
+            </ModelProvider>
           </AuthProvider>
         </DeviceLayoutProvider>
       </ThemeProvider>
@@ -61,7 +69,7 @@ function AppRoutes() {
       <Route element={<MainLayout />}>
         {/* Intelligence */}
         <Route
-          path="/feed"
+          path="/feed/:id?"
           element={
             <ProtectedRoute>
               <FeedPage />

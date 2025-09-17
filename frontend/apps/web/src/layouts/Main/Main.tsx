@@ -14,9 +14,10 @@ export function Main() {
   if (isMobile) {
     return (
       <div className="flex flex-col h-lvh">
-        <main className="flex-1 min-w-0 overflow-hidden min-h-0">
+        <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
           <Suspense fallback={<LoadingPage />}>
             <Outlet />
+            <Portal id="content-modal" className="absolute inset-0 empty:hidden" />
           </Suspense>
         </main>
         <MobileNavigation />
@@ -39,8 +40,9 @@ export function Main() {
               <div className="flex flex-row flex-1 min-h-0">
                 <Portal id="tertiary-navigation" className="h-full" />
 
-                <main className="flex-1 min-w-0">
+                <main className="flex-1 min-w-0 relative">
                   <Outlet />
+                  <Portal id="content-modal" className="absolute inset-0 empty:hidden" />
                 </main>
               </div>
             </div>

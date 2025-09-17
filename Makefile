@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dev index infra init install local migrate seed staging gentoken useradd userpw
+.PHONY: help build dbclear dbdestroy dev index infra init install local migrate seed staging gentoken useradd userpw
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -58,9 +58,14 @@ infra: ## Boot the local infrastructure
 	@printf "\nDocker dependencies successfully started.\n"
 
 dbclear: ## Clear the PostgreSQL database and start from scratch
-	@printf "🧨 Clearing PostgreSQL database...\n\n"
+	@printf "🧻 Clearing PostgreSQL data...\n\n"
 	@cd backend/apps/api && yarn db:clear
-	@printf "\nDatabase successfully cleared.\n"
+	@printf "\nData successfully cleared.\n"
+
+dbdestroy: ## Clear the PostgreSQL database and start from scratch
+	@printf "🧨 Destroying PostgreSQL database...\n\n"
+	@cd backend/apps/api && yarn db:destroy
+	@printf "\nDatabase successfully destroyed. 💥\n"
 
 dev: ## Boot the application
 	@which tmux >/dev/null || { printf "\n$(RED)✗$(RESET) You do not have tmux installed. Please install it first.\n\n"; exit 1; };
@@ -191,7 +196,7 @@ migrate: ## Run database migrations
 seed: ## Seed backend database
 	@printf "🌱 Seeding database...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
-	@printf "\nDatabase successfully seeded.\n"
+	@printf "\nDatabase successfully seeded. 🌳\n"
 
 staging: ## Run the staging server from Docker images
 	@printf "🎭 Starting the staging services...\n\n"

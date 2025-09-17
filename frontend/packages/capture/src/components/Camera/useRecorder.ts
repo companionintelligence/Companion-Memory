@@ -11,6 +11,7 @@ interface Props {
 type ReturnType = [
   {
     isRecording: boolean;
+    lastCapture: File | null;
   },
   {
     captureFrame: () => void;
@@ -22,8 +23,26 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
   const [{ isActive, videoRef, mediaStreamRef }] = useStream();
 
   const [isRecording, setIsRecording] = useState(false);
+  const [lastCapture, setLastCapture] = useState<File | null>(null);
+
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  const handleFrameCaptured = useCallback(
+    (file: File) => {
+      onFrameCaptured?.(file);
+      setLastCapture(file);
+    },
+    [onFrameCaptured],
+  );
+
+  const handleRecordingFinished = useCallback(
+    (file: File) => {
+      onRecordingFinished?.(file);
+      setLastCapture(file);
+    },
+    [onFrameCaptured],
+  );
 
   const toggleRecording = useCallback(() => {
     if (!mediaStreamRef.current) {
@@ -48,7 +67,7 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
         const timestamp = Date.now().toString(36).toUpperCase();
         const file = new File([blob], `VID_${timestamp}.webm`, { type: 'video/webm' });
 
-        onRecordingFinished?.(file);
+        handleRecordingFinished?.(file);
         recorderRef.current = null;
       });
 
@@ -59,7 +78,7 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
       recorderRef.current?.stop();
       setIsRecording(false);
     }
-  }, [isRecording, mediaStreamRef, onRecordingFinished]);
+  }, [isRecording, mediaStreamRef, handleRecordingFinished]);
 
   const captureFrame = useCallback(() => {
     if (!videoRef.current || !isActive) {
@@ -88,13 +107,14 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
       const timestamp = Date.now().toString(36).toUpperCase();
       const file = new File([blob], `IMG_${timestamp}.png`, { type: 'image/png' });
 
-      onFrameCaptured?.(file);
+      handleFrameCaptured?.(file);
     });
-  }, [isActive, videoRef, onFrameCaptured]);
+  }, [isActive, videoRef, handleFrameCaptured]);
 
   return [
     {
       isRecording,
+      lastCapture,
     },
     {
       captureFrame,

@@ -1,2 +1,18 @@
 id,title,text,image_url,thread_id,user_id,tags
-d042d1f3-aad9-48ea-83de-65a924f50a36,Make family dinner tonight,"Because you haven't made a home-cooked meal yet this week, I am recommending you plan something together with the family.",https://i.guim.co.uk/img/media/d48d1be39e3d0739ef55b0046d83ef19b81fb460/0_263_6720_4032/master/6720.jpg?width=1900&dpr=1&s=none&crop=none,f47ac10b-58cc-4372-a567-0e02b2c3d479,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Culinary', 'Family']"
+01993a46-5475-4d58-b2c7-78809e7e75ee,Make family dinner tonight,"Because you haven't made a home-cooked meal yet this week, I am recommending you plan something together with the family.",https://i.guim.co.uk/img/media/d48d1be39e3d0739ef55b0046d83ef19b81fb460/0_263_6720_4032/master/6720.jpg?width=1900&dpr=1&s=none&crop=none,01993a4b-6bbf-4bf0-8bc8-59ecb3b768ad,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Culinary', 'Family']"
+01993a46-5475-42f2-8a63-4f3e9eafe02b,Watch a movie together,Why don’t you invite your family to watch a movie together tonight? It’s a simple way for you to relax and enjoy some quality time with them.,https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=400&h=300&fit=crop&crop=center,01993a4b-6bc0-48c7-be52-42b9cd6200b9,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Entertainment', 'Movies', 'Family Time']"
+01993a46-5475-48e2-8401-c204e89d5890,Take a break this weekend,The weekend is a perfect opportunity to step away from routine and recharge in a different environment. Taking time outside the usual surroundings can bring a refreshing change of pace and perspective.,https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=300&fit=crop&crop=center,01993a4b-6bc1-4c30-8cdc-520c35c5090c,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Weekend', 'Activities', 'Family']"
+01993a46-5475-4b54-951b-c66207825b24,Shop for this week’s groceries,A grocery trip this weekend will help ensure everything needed for the week ahead is stocked and ready. Restocking supplies now can make the coming days smoother and less stressful.,https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&h=300&fit=crop&crop=center,01993a4b-6bc1-435b-9a36-b119d2a4f9a1,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Shopping','Groceries','Planning']"
+01993a46-5475-416f-9e84-fd4950eb49da,Anniversary gift ideas,"Your anniversary is coming up! Here are some thoughtful gift ideas based on your preferences:
+
+* Weekend getaway to that mountain cabin you mentioned
+* A photo album of your favorite memories
+* Cooking class for two at the local culinary school
+* Personalized jewelry with your anniversary date",https://images.unsplash.com/photo-1518895949257-7621c3c786d7?w=400&h=300&fit=crop&crop=center,01993a4b-6bc1-44ab-976b-9367130f1555,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Anniversary', 'Gift Ideas', 'Planning']"
+01993a46-5476-4d6f-8f69-00d7f52adea4,Weather update,"Today's weather forecast for your area:
+
+* **Current:** 72°F, Sunny
+* **Tonight:** 65°F, Clear
+* **Tomorrow:** 75°F, Partly Cloudy
+
+Perfect weather for outdoor activities this weekend!",https://images.unsplash.com/photo-1592210454359-9043f067919b?w=400&h=300&fit=crop&crop=center,01993a4b-6bc2-4f40-b6b1-00c733f20846,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"['Weather', 'Forecast', 'Planning']"

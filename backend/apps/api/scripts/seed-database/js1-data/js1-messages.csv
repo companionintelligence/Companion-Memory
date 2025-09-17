@@ -1,2 +1,7 @@
 id,model,text,mimetype,canceled,user_id,thread_id,role
-0198e4bf-71dd-7039-8ef3-f0bceb762041,qwen3:8b,"Would you like me to help you plan a meal you can eat and a movie you can watch together?",text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,f47ac10b-58cc-4372-a567-0e02b2c3d479,assistant
+01993a4d-cc3c-4c25-ad81-078ddc6e29fe,qwen3:8b,Would you like me to help you plan a meal you will all enjoy?,text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,01993a4b-6bbf-4bf0-8bc8-59ecb3b768ad,assistant
+01993a4d-cc3c-4acf-8b45-c6de38526d6a,qwen3:8b,Would you like me to help you find something to watch together?,text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,01993a4b-6bc0-48c7-be52-42b9cd6200b9,assistant
+01993a4d-cc3d-4a62-891c-193b90112082,qwen3:8b,Would you like me to help you find an activity this weekend? Perhaps something out of the ordinary?,text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,01993a4b-6bc1-4c30-8cdc-520c35c5090c,assistant
+01993a4d-cc3d-429c-a7c5-c2edff908d32,qwen3:8b,Let's figure out some meals for this week and then draw up a grocery list together.,text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,01993a4b-6bc1-435b-9a36-b119d2a4f9a1,assistant
+01993a4d-cc3d-4eea-9eaf-51678f1bc2dc,qwen3:8b,Would you like me to help you plan any of these options?,text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,01993a4b-6bc1-44ab-976b-9367130f1555,assistant
+01993a4d-cc3e-41fa-b9bf-3ab498719a30,qwen3:8b,Would you like me to help you find something to do together that's compatible with the weather?,text/markdown,false,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,01993a4b-6bc2-4f40-b6b1-00c733f20846,assistant

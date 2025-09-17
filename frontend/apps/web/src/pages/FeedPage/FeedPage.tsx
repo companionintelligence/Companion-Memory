@@ -1,142 +1,120 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, type ComponentProps } from 'react';
 
-import { Portal, useDeviceLayout } from '@ci/common';
+import { ErrorPage, LoadingPage, Portal, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Breadcrumb } from '@ci/shadcn';
+import { useNavigate, useParams } from 'react-router-dom';
 
-import { type Action, useActionListService } from '@/api';
+import { useActionListService } from '@/api';
 import { PageContent } from '@/components/layout';
+import { Markdown } from '@/components/Markdown';
 import { useModalControls } from '@/hooks';
 
 import { BentoCard } from '../../components/BentoCard';
 import { Carousel } from '../../components/Carousel';
 
-import { actionInsightData, feedData } from './data';
+import { actionInsightData } from './data';
 import { FeedModal } from './FeedModal';
-import type { FeedItem } from './types';
+
+type CarouselProps = Partial<ComponentProps<typeof Carousel>>;
 
 export function FeedPage() {
+  usePageTitle('Feed - Companion Intelligence');
+
   const { isMobile } = useDeviceLayout();
+  const navigate = useNavigate();
 
+  const { id: actionId } = useParams<{ id?: string }>();
   const [{ data: actions, loading, error }] = useActionListService();
-  const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls();
 
-  const [selectedAction, setSelectedAction] = useState<Action | null>(null);
-  const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null);
+  const selectedActionIndex = useMemo(
+    () => actions.findIndex((item) => item.id === actionId),
+    [actions, actionId],
+  );
+
+  const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls({
+    open: selectedActionIndex >= 0,
+  });
+
+  useEffect(() => {
+    if (selectedActionIndex >= 0) {
+      openModal();
+    } else {
+      closeModal();
+    }
+  }, [selectedActionIndex, openModal]);
 
   const handleCardClick = useCallback(
     (id: string) => {
-      const action = actions.find((item) => item.id === id);
-      const item = [...feedData, ...actionInsightData].find((item) => item.id === id);
-
-      if (action) {
-        setSelectedAction(action);
-        setSelectedItem(null);
-        openModal();
-      } else if (item) {
-        setSelectedAction(null);
-        setSelectedItem(item);
-        openModal();
-      }
+      navigate(`/feed/${id}`, { replace: true });
+      openModal();
     },
-    [actions],
+    [navigate, openModal],
   );
 
   const handleModalClose = useCallback(() => {
+    navigate('/feed', { replace: true });
     closeModal();
-    setSelectedAction(null);
-    setSelectedItem(null);
-  }, []);
+  }, [navigate, closeModal]);
 
-  const carouselProps = useMemo(() => {
-    if (isMobile) {
-      return {
-        className: 'h-full -mx-2',
-        containerClassName: 'h-full',
-        slideClassName: 'h-full px-2',
-      };
-    }
+  if (loading) {
+    return (
+      <PageContent>
+        <LoadingPage />
+      </PageContent>
+    );
+  }
 
-    return {
-      className: '-mx-6',
-      containerClassName: 'px-6 pb-6 pt-1',
-      slideClassName: 'flex-none min-w-[550px] basis-[550px] mr-6',
-    };
-  }, [isMobile]);
+  if (error) {
+    return (
+      <PageContent>
+        <ErrorPage error={error} />
+      </PageContent>
+    );
+  }
 
-  const featuredContent = useMemo(() => {
-    if (isMobile) {
-      return (
-        <Carousel {...carouselProps} mobile={isMobile}>
+  if (isMobile) {
+    const carouselProps = {
+      className: 'h-full -mx-2',
+      containerClassName: 'h-full',
+      slideClassName: 'h-full px-2',
+      initialIndex: selectedActionIndex,
+    } satisfies CarouselProps;
+
+    return (
+      <PageContent>
+        <Carousel {...carouselProps}>
           {!loading &&
             !error &&
             actions.map((action) => (
               <BentoCard
                 key={action.id}
                 title={action.title}
-                description={action.text}
+                description={
+                  <div className="prose dark:prose-invert">
+                    <Markdown>{action.text}</Markdown>
+                  </div>
+                }
                 tags={action.tags}
                 imageUrl={action.imageUrl}
-                mobile
                 onClick={() => handleCardClick(action.id)}
               />
             ))}
 
-          {feedData.map((item) => (
-            <BentoCard
-              key={item.id}
-              title={item.title}
-              description={item.description}
-              tags={item.tags}
-              imageUrl={item.imageUrl}
-              mobile
-              onClick={() => handleCardClick(item.id)}
-            />
-          ))}
-
           {actionInsightData.map((item) => (
-            <BentoCard
-              key={item.id}
-              title={item.title}
-              description={item.description}
-              tags={item.tags}
-              mobile
-              onClick={() => handleCardClick(item.id)}
-            />
+            <BentoCard key={item.id} title={item.title} description={item.description} tags={item.tags} />
           ))}
         </Carousel>
-      );
-    }
 
-    return (
-      <Carousel {...carouselProps} mobile={isMobile}>
-        {!loading &&
-          !error &&
-          actions.map((action) => (
-            <BentoCard
-              key={action.id}
-              title={action.title}
-              description={action.text}
-              tags={action.tags}
-              imageUrl={action.imageUrl}
-              onClick={() => handleCardClick(action.id)}
-              className="hover:shadow-lg transition-shadow duration-200"
-            />
-          ))}
-
-        {feedData.map((item) => (
-          <BentoCard
-            key={item.id}
-            title={item.title}
-            description={item.description}
-            tags={item.tags}
-            imageUrl={item.imageUrl}
-            onClick={() => handleCardClick(item.id)}
-            className="hover:shadow-lg transition-shadow duration-200"
-          />
-        ))}
-      </Carousel>
+        {isModalOpen && <FeedModal onClose={handleModalClose} />}
+      </PageContent>
     );
-  }, [isMobile, carouselProps, handleCardClick]);
+  }
+
+  const carouselProps = {
+    className: '-mx-6',
+    containerClassName: 'px-6 pb-6 pt-1',
+    slideClassName: 'flex-none min-w-[550px] basis-[550px] mr-6',
+  } satisfies CarouselProps;
 
   return (
     <>
@@ -155,37 +133,44 @@ export function FeedPage() {
       </Portal.Slot>
 
       <PageContent>
-        {!isMobile && <h2 className="text-2xl font-bold text-gray-900">Featured Content</h2>}
+        <h2 className="text-2xl font-bold text-gray-900">Actions</h2>
 
-        {featuredContent}
-
-        {!isMobile && <h2 className="text-2xl font-bold text-gray-900">Actions & Insights</h2>}
-
-        {!isMobile && (
-          <Carousel {...carouselProps} mobile={isMobile}>
-            {actionInsightData.map((item) => (
+        <Carousel {...carouselProps} initialIndex={selectedActionIndex}>
+          {!loading &&
+            !error &&
+            actions.map((action) => (
               <BentoCard
-                key={item.id}
-                title={item.title}
-                description={item.description}
-                tags={item.tags}
-                onClick={() => handleCardClick(item.id)}
+                key={action.id}
+                title={action.title}
+                description={
+                  <div className="prose dark:prose-invert">
+                    <Markdown>{action.text}</Markdown>
+                  </div>
+                }
+                tags={action.tags}
+                imageUrl={action.imageUrl}
+                onClick={() => handleCardClick(action.id)}
                 className="hover:shadow-lg transition-shadow duration-200"
               />
             ))}
-          </Carousel>
-        )}
+        </Carousel>
+
+        <h2 className="text-2xl font-bold text-gray-900">Insights</h2>
+
+        <Carousel {...carouselProps}>
+          {actionInsightData.map((item) => (
+            <BentoCard
+              key={item.id}
+              title={item.title}
+              description={item.description}
+              tags={item.tags}
+              className="hover:shadow-lg transition-shadow duration-200"
+            />
+          ))}
+        </Carousel>
       </PageContent>
 
-      <FeedModal
-        open={isModalOpen}
-        threadId={selectedAction?.threadId}
-        title={(selectedAction ?? selectedItem)?.title}
-        description={selectedAction?.text ?? selectedItem?.description}
-        tags={(selectedAction ?? selectedItem)?.tags}
-        imageUrl={(selectedAction ?? selectedItem)?.imageUrl}
-        onClose={handleModalClose}
-      />
+      {isModalOpen && <FeedModal onClose={handleModalClose} />}
     </>
   );
 }

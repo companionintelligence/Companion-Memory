@@ -1,5 +1,6 @@
 import { type MouseEvent, type MouseEventHandler, type ReactNode, useCallback } from 'react';
 
+import { useDeviceLayout } from '@ci/common';
 import { Button, cn } from '@ci/shadcn';
 import { MessagesSquare, ThumbsDown, ThumbsUp } from '@ci/shadcn/icons';
 
@@ -11,7 +12,6 @@ interface Props {
   tags?: string[];
   imageUrl?: string;
   className?: string;
-  mobile?: boolean;
   onClick?: MouseEventHandler;
   onLike?: MouseEventHandler;
   onDislike?: MouseEventHandler;
@@ -24,12 +24,13 @@ export function BentoCard({
   description,
   imageUrl,
   className,
-  mobile = false,
   onClick,
   onLike,
   onDislike,
   onExpand,
 }: Props) {
+  const { isMobile } = useDeviceLayout();
+
   const handleClick = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       onClick?.(e);
@@ -61,35 +62,41 @@ export function BentoCard({
     [onExpand],
   );
 
-  if (mobile) {
+  if (isMobile) {
     return (
       <div
         className={cn(
-          'h-full w-full flex flex-col border rounded-lg cursor-pointer select-none p-4 gap-6',
+          'h-full w-full flex flex-col border rounded-lg cursor-pointer select-none p-4 gap-4',
           className,
+          'relative',
         )}
         onClick={handleClick}
       >
-        <h1 className="text-2xl font-semibold text-center m-0">{title}</h1>
-
         {imageUrl && (
-          <img
-            className="w-full overflow-hidden will-change-transform rounded-xl shadow-lg mb-1"
-            src={imageUrl}
-          />
-        )}
-
-        {(tags?.length ?? 0) > 0 && (
-          <div>
-            <div className="flex flex-wrap gap-1 justify-center">
-              {tags.map((tag) => (
-                <Tag key={tag} text={tag} />
-              ))}
-            </div>
+          <div
+            className="relative top-0 left-0 right-0 min-h-42 bg-cover bg-center rounded-t-lg -mx-4 -mt-4 text-4xl font-bold text-center text-white p-4"
+            style={{
+              backgroundImage: `
+              linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0)),
+              url(${imageUrl})
+            `,
+            }}
+          >
+            {title}
           </div>
         )}
 
-        <div className="flex-1 overflow-hidden">
+        {!imageUrl && <div className="text-4xl font-bold text-center">{title}</div>}
+
+        {(tags?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-1 justify-center">
+            {tags.map((tag) => (
+              <Tag key={tag} text={tag} />
+            ))}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto">
           <div>{description}</div>
         </div>
 

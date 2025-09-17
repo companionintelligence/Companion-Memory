@@ -1,5 +1,6 @@
-import { type ReactNode, Children, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, Children, useCallback, useEffect, useRef, useState } from 'react';
 
+import { useDeviceLayout } from '@ci/common';
 import { Button, cn } from '@ci/shadcn';
 import { ChevronLeft, ChevronRight } from '@ci/shadcn/icons';
 import useEmblaCarousel, { type UseEmblaCarouselType } from 'embla-carousel-react';
@@ -12,7 +13,7 @@ interface CarouselProps {
   className?: string;
   containerClassName?: string;
   slideClassName?: string;
-  mobile?: boolean;
+  initialIndex?: number;
 }
 
 export function Carousel({
@@ -20,24 +21,24 @@ export function Carousel({
   className,
   containerClassName,
   slideClassName,
-  mobile = false,
+  initialIndex = 0,
 }: CarouselProps) {
-  const [emblaRef, emblaApi] = useEmblaCarousel(
-    !mobile
-      ? {
-          align: 'start',
-          containScroll: 'trimSnaps',
-          dragFree: true,
-          // We could expose this as a property, for now we're
-          // explicitly setting it to the default value.
-          loop: false,
-        }
-      : {
-          align: 'start',
-          dragFree: false,
-          skipSnaps: false,
-        },
-  );
+  const { isMobile } = useDeviceLayout();
+
+  const hasAutoScrolled = useRef<boolean>(false);
+
+  const [emblaRef, emblaApi] = useEmblaCarousel({
+    align: 'start',
+    containScroll: 'trimSnaps',
+    dragFree: true,
+    // We could expose this as a property, for now we're
+    // explicitly setting it to the default value.
+    loop: false,
+    ...(isMobile && {
+      dragFree: false,
+      skipSnaps: false,
+    }),
+  });
 
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(false);
@@ -74,7 +75,25 @@ export function Carousel({
     };
   }, [emblaApi]);
 
-  if (mobile) {
+  // Jump to selected item on mount.
+  useEffect(() => {
+    if (!emblaApi) {
+      return;
+    }
+
+    if (hasAutoScrolled.current) {
+      return;
+    }
+
+    if (initialIndex < 0) {
+      return;
+    }
+
+    emblaApi.scrollTo(initialIndex, true);
+    hasAutoScrolled.current = true;
+  }, [emblaApi, initialIndex]);
+
+  if (isMobile) {
     return (
       <div ref={emblaRef} className={cn(className, 'overflow-hidden')}>
         <div className={cn(containerClassName, 'flex will-change-transform')}>

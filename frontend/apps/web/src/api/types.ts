@@ -7,6 +7,14 @@ export interface Action {
   tags: string[];
 }
 
+export interface File {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  url?: string;
+}
+
 export interface Message {
   id: string;
   model: string;
@@ -23,12 +31,4 @@ export interface Thread {
   model: string;
   description: string | null;
   messages?: Message[];
-}
-
-export interface File {
-  id: string;
-  name: string;
-  contentType: string;
-  size: number;
-  url?: string;
 }

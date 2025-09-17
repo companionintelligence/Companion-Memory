@@ -1,6 +1,8 @@
 import { createHookContext } from '@ci/common';
 import { type RefObject, useCallback, useRef, useState } from 'react';
 
+import { useFacingMode } from './useFacingMode';
+
 type ReturnType = [
   {
     isActive: boolean;
@@ -16,6 +18,8 @@ type ReturnType = [
 ];
 
 function useStream(): ReturnType {
+  const [{ facingMode }] = useFacingMode();
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
@@ -55,15 +59,12 @@ function useStream(): ReturnType {
     console.log('Attempting to get user media (camera access)...');
 
     try {
-      // const stream: MediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
-
       const stream: MediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
-          height: { ideal: 720 },
+          height: { ideal: 960 },
           frameRate: { ideal: 30, max: 60 },
-          facingMode: 'environment', // or 'user' for front camera
-          aspectRatio: 1.7777777778, // 16:9
+          facingMode,
         },
         audio: {
           echoCancellation: true,
@@ -121,7 +122,7 @@ function useStream(): ReturnType {
 
       stopCamera();
     }
-  }, [isActive, stopCamera, setIsActive]);
+  }, [facingMode, isActive, stopCamera, setIsActive]);
 
   return [
     {

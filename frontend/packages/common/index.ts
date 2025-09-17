@@ -1,3 +1,4 @@
+export { ErrorPage } from './src/components/error-page';
 export { LoadingPage } from './src/components/loading-page';
 export { Portal } from './src/components/portal';
 export { DeviceLayoutProvider, useDeviceLayout, usePageTitle } from './src/hooks';

@@ -148,7 +148,7 @@ export class FileService implements OnModuleInit {
       fileId: result.id,
     });
 
-    return entity.toFile();
+    return this.signFile(entity);
   }
 
   async getFileContent(context: RequestContext, key: string): Promise<Uint8Array> {

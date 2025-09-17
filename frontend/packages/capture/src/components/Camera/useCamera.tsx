@@ -11,6 +11,7 @@ type ReturnType = [
     cameras: Device[];
     selectedMicrophone: Device | null;
     selectedCamera: Device | null;
+    lastCapture: File | null;
   },
   {
     startCamera: () => void;
@@ -21,7 +22,7 @@ type ReturnType = [
 
 export function useCamera(): ReturnType {
   const [{ isActive, error }, { startCamera, stopCamera }] = useStream();
-  const [, { captureFrame }] = useRecorder();
+  const [{ lastCapture }, { captureFrame }] = useRecorder();
   const [{ microphones, cameras, selectedMicrophone, selectedCamera }] = useInputDevices();
 
   return [
@@ -32,6 +33,7 @@ export function useCamera(): ReturnType {
       cameras,
       selectedMicrophone,
       selectedCamera,
+      lastCapture,
     },
     {
       startCamera,

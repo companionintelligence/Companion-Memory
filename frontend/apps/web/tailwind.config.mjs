@@ -3,6 +3,10 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      transitionProperty: {
+        radius: 'border-radius',
+      },
+
       fontSize: {
         xxs: '0.625rem',
         tiny: '0.5rem',
