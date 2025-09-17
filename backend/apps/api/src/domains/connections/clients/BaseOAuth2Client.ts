@@ -95,6 +95,8 @@ export abstract class BaseOAuth2Client extends BaseClient {
       clientId: connection.clientid,
       redirectUri: config.auth.oauth.callbackUrl,
       codeLength: code.length,
+      hasClientSecret: !!connection.clientsecret,
+      clientSecretLength: connection.clientsecret?.length || 0,
     });
 
     const tokenResponse = await fetch(tokenEndpoint, {

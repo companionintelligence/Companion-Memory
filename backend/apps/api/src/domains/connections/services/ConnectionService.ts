@@ -172,6 +172,15 @@ export class ConnectionService {
 
   async callback(context: RequestContext, connectionId: string, code: string): Promise<Connection> {
     const connection = await this.findOne(context, connectionId);
+    
+    this.logger.debug('Processing OAuth callback', {
+      connectionId,
+      providerId: connection.provider?.id,
+      hasClientId: !!connection.clientid,
+      hasClientSecret: !!connection.clientsecret,
+      clientSecretLength: connection.clientsecret?.length || 0,
+    });
+    
     const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
     const tokenExchange = await client.exchangeAuthorizationCode(connection, code);
 

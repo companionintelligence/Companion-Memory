@@ -4,6 +4,23 @@ import { BaseOAuth2Client } from './BaseOAuth2Client';
 import type { SyncResult, SyncResponse } from './types';
 
 export class GoogleClient extends BaseOAuth2Client {
+  async getAuthorizationUrl(connection: Connection): Promise<string> {
+    // Google requires additional parameters for OAuth
+    const baseUrl = await super.getAuthorizationUrl(connection);
+    const url = new URL(baseUrl);
+    
+    // Add Google-specific parameters
+    url.searchParams.set('access_type', 'offline');
+    url.searchParams.set('prompt', 'consent');
+    
+    this.logger.debug('Generated Google authorization URL', {
+      connectionId: connection.id,
+      scopes: connection.provider?.scopes,
+      redirectUri: url.searchParams.get('redirect_uri'),
+    });
+    
+    return url.toString();
+  }
   async sync(connection: Connection): Promise<SyncResponse> {
     this.logger.log('Syncing Google data', { connectionId: connection.id });
 
