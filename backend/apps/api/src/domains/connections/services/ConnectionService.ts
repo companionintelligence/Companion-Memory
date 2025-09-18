@@ -117,12 +117,19 @@ export class ConnectionService {
   }
 
   async delete(context: RequestContext, id: string): Promise<boolean> {
-    const result = await this.connectionRepository.delete({
-      id,
-      user: {
-        id: context.userId,
-      },
-    });
+    // First, verify the connection exists and belongs to the user
+    const connection = await this.findOne(context, id);
+    if (!connection) {
+      throw new NotFoundException();
+    }
+
+    // Delete the connection - the database constraints will automatically set
+    // connection_id to NULL in all related tables, preserving the data
+    const result = await this.connectionRepository
+      .createQueryBuilder()
+      .delete()
+      .where('id = :id AND user_id = :userId', { id, userId: context.userId })
+      .execute();
 
     if (result.affected === 0) {
       throw new NotFoundException();
