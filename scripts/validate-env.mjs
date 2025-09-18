@@ -15,26 +15,24 @@ function validateEnvironment() {
   const errors = [];
   const warnings = [];
 
-  // Check MCP environment variables
-  const mcpBaseDir = process.env.MCP_BASE_DIR || '../';
-  const mcpWebSearchDir = process.env.MCP_WEB_SEARCH_DIR || path.join(mcpBaseDir, 'web-search-mcp');
+  // Check MCP servers directory
+  const mcpServersDir = process.env.MCP_SERVERS_DIR || 'mcp-servers';
+  const resolvedMcpServersDir = path.resolve(mcpServersDir);
 
-  console.log(`📂 MCP Base Directory: ${path.resolve(mcpBaseDir)}`);
-  console.log(`📂 Web Search Directory: ${path.resolve(mcpWebSearchDir)}`);
+  console.log(`📂 MCP Servers Directory: ${resolvedMcpServersDir}`);
 
-  // Check if base directory exists or can be created
-  const resolvedBaseDir = path.resolve(mcpBaseDir);
+  // Check if MCP servers directory exists or can be created
   try {
-    if (!fs.existsSync(resolvedBaseDir)) {
-      const parentDir = path.dirname(resolvedBaseDir);
+    if (!fs.existsSync(resolvedMcpServersDir)) {
+      const parentDir = path.dirname(resolvedMcpServersDir);
       if (!fs.existsSync(parentDir)) {
-        errors.push(`MCP base directory parent does not exist: ${parentDir}`);
+        errors.push(`MCP servers directory parent does not exist: ${parentDir}`);
       } else {
-        warnings.push(`MCP base directory will be created: ${resolvedBaseDir}`);
+        warnings.push(`MCP servers directory will be created: ${resolvedMcpServersDir}`);
       }
     }
   } catch (error) {
-    errors.push(`Cannot access MCP base directory: ${error.message}`);
+    errors.push(`Cannot access MCP servers directory: ${error.message}`);
   }
 
   // Check for Node.js and npm

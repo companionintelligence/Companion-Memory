@@ -25,17 +25,12 @@ const SERVER_TEMPLATES = {
   filesystem: {
     name: 'File System Access',
     command: 'npx',
-    args: [
-      '-y',
-      '@modelcontextprotocol/server-filesystem',
-      '/tmp',
-      // Additional paths will be added dynamically
-    ],
+    args: ['--yes', '@modelcontextprotocol/server-filesystem', '/tmp'],
     enabled: false,
     description: 'Provides file system operations for the assistant',
     timeout: 30000,
     healthCheck: {
-      enabled: false,
+      enabled: true,
       intervalMs: 30000,
       timeoutMs: 5000,
       retryCount: 3,
@@ -56,6 +51,10 @@ const SERVER_TEMPLATES = {
       timeoutMs: 20000,
       retryCount: 2,
       restartOnFailure: true,
+    },
+    env: {
+      NODE_PATH: '${PROJECT_ROOT}/node_modules:${PROJECT_ROOT}/.yarn/cache',
+      PLAYWRIGHT_BROWSERS_PATH: '${PROJECT_ROOT}/mcp-servers/web-search/playwright-browsers',
     },
   },
 };
@@ -158,35 +157,77 @@ function registerServer(serverName, serverConfig) {
   console.log(`   Status: ${serverConfig.enabled ? 'enabled' : 'disabled'}`);
 }
 
-function autoDetectWebSearchPath() {
-  // Look for web search server in common locations relative to current directory
+function autoDetectFilesystemPath() {
+  // Look for filesystem server in the mcp-servers directory
   const possiblePaths = [
-    '../web-search-mcp',
-    '../../web-search-mcp',
-    './web-search-mcp',
-    path.join(process.cwd(), '../web-search-mcp'),
-    path.join(process.cwd(), '../../web-search-mcp'),
-    // Check in parent directories up to 3 levels
-    path.join(process.cwd(), '../../../web-search-mcp'),
+    path.join(process.cwd(), 'mcp-servers/filesystem'),
+    path.join(process.cwd(), '../mcp-servers/filesystem'),
+    '/app/mcp-servers/filesystem',
   ];
 
   for (const searchPath of possiblePaths) {
-    const absolutePath = path.resolve(searchPath);
-    const indexPath = path.join(absolutePath, 'dist/index.js');
+    const indexPath = path.join(searchPath, 'index.js');
+    const distIndexPath = path.join(searchPath, 'dist/index.js');
+
+    if (fs.existsSync(indexPath) || fs.existsSync(distIndexPath)) {
+      console.log(`✓ Found filesystem server at: ${searchPath}`);
+
+      return searchPath;
+    }
+  }
+
+  console.log('✗ Filesystem server not found in expected locations:');
+  possiblePaths.forEach((searchPath) => {
+    console.log(`   ${searchPath}`);
+  });
+
+  return null;
+}
+
+function autoDetectWebSearchPath() {
+  // Look for web search server in the mcp-servers directory
+  const possiblePaths = [
+    path.join(process.cwd(), 'mcp-servers/web-search'),
+    path.join(process.cwd(), '../mcp-servers/web-search'),
+    '/app/mcp-servers/web-search',
+  ];
+
+  for (const searchPath of possiblePaths) {
+    const indexPath = path.join(searchPath, 'dist/index.js');
 
     if (fs.existsSync(indexPath)) {
-      console.log(`✓ Found web search server at: ${absolutePath}`);
+      console.log(`✓ Found web search server at: ${searchPath}`);
 
-      return absolutePath;
+      return searchPath;
     }
   }
 
   console.log('✗ Web search server not found in expected locations:');
   possiblePaths.forEach((searchPath) => {
-    console.log(`   ${path.resolve(searchPath)}`);
+    console.log(`   ${searchPath}`);
   });
 
   return null;
+}
+
+function registerFilesystemServer() {
+  console.log('📁 Looking for filesystem server...');
+
+  const serverPath = autoDetectFilesystemPath();
+  if (!serverPath) {
+    console.log('✗ Cannot register filesystem server - not found');
+    console.log(`   Run 'make mcp' to install it first`);
+
+    return false;
+  }
+
+  const serverConfig = { ...SERVER_TEMPLATES['filesystem'] };
+  // Use the path with environment variable resolution
+  serverConfig.workingDirectory = '${PROJECT_ROOT}/mcp-servers/filesystem';
+
+  registerServer('filesystem', serverConfig);
+
+  return true;
 }
 
 function registerWebSearchServer() {
@@ -195,13 +236,18 @@ function registerWebSearchServer() {
   const serverPath = autoDetectWebSearchPath();
   if (!serverPath) {
     console.log('✗ Cannot register web search server - not found');
-    console.log(`   Run 'make mcp-web-search' to install it first`);
+    console.log(`   Run 'make mcp' to install it first`);
 
     return false;
   }
 
   const serverConfig = { ...SERVER_TEMPLATES['web-search'] };
-  serverConfig.workingDirectory = serverPath;
+  // Use the path with environment variable resolution
+  serverConfig.workingDirectory = '${PROJECT_ROOT}/mcp-servers/web-search';
+  // Set environment variable for Playwright
+  serverConfig.env = {
+    PLAYWRIGHT_BROWSERS_PATH: '${PROJECT_ROOT}/mcp-servers/web-search/playwright-browsers',
+  };
 
   registerServer('web-search', serverConfig);
 
@@ -396,11 +442,14 @@ function main() {
       const serverName = args[1];
       if (serverName === 'web-search') {
         registerWebSearchServer();
+      } else if (serverName === 'filesystem') {
+        registerFilesystemServer();
       } else if (serverName) {
         console.log(`✗ Unknown server: ${serverName}`);
-        console.log(`   Available servers: web-search`);
+        console.log(`   Available servers: web-search, filesystem`);
       } else {
         console.log('📝 Registering all available servers...');
+        registerFilesystemServer();
         registerWebSearchServer();
       }
 

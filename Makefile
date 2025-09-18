@@ -30,13 +30,13 @@ export BANNER
 help: ## List make commands with their descriptions
 	@printf "$$BANNER\n\n"
 	@printf "\033[33mEnvironment Variables:\033[0m\n"
-	@printf "  MCP_BASE_DIR        Base directory for MCP servers (default: ../)\n"
-	@printf "  MCP_WEB_SEARCH_DIR  Directory for web search MCP server (default: ../web-search-mcp)\n"
+	@printf "  MCP_SERVERS_DIR     Directory for MCP servers (default: mcp-servers)\n"
+	@printf "  MCP_SERVERS         List of servers to install (name repo_url)\n"
 	@printf "  See ENVIRONMENT_CONFIG.md for more details\n\n"
 	@printf "\033[33mCommands:\033[0m\n"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build the application
+build: mcp ## Build the application
 	@printf "🧱 Building the application...\n\n"
 
 	@printf "Compiling API...\n\n"
@@ -225,65 +225,53 @@ userpw: ## Change a user's password
 ####################
 
 # MCP Server Configuration
-# You can override these by setting environment variables:
-# export MCP_BASE_DIR=/custom/path
-# export MCP_WEB_SEARCH_DIR=/custom/path/web-search-mcp
-MCP_BASE_DIR ?= ../
-MCP_WEB_SEARCH_DIR ?= $(MCP_BASE_DIR)web-search-mcp
-MCP_WEB_SEARCH_REPO ?= https://github.com/mrkrsl/web-search-mcp.git
+MCP_SERVERS_DIR ?= mcp-servers
 
-mcp: validate-env mcp-init mcp-web-search mcp-register mcp-enable ## Install all MCP servers and configure them automatically
+# List of MCP servers to install
+MCP_SERVERS = web-search filesystem
+
+mcp: mcp-init mcp-install-servers mcp-register mcp-enable ## Install all MCP servers and configure them automatically
 	@printf "🔧 All MCP servers installed and configured successfully!\n\n"
 	@printf "$(GREEN)✓$(RESET) Use 'make mcp-check' to verify installation\n"
 	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load new servers: 'make dev'\n\n"
 
-validate-env: ## Validate environment configuration for MCP servers
-	@printf "🔍 Validating environment...\n\n"
-	@node scripts/validate-env.mjs
-
 mcp-init: ## Initialize MCP configuration (create config file if needed)
 	@printf "🏗️ Initializing MCP configuration...\n\n"
+	@mkdir -p $(MCP_SERVERS_DIR)
 	@node scripts/mcp-config.mjs init
 	@printf "\n$(GREEN)✓$(RESET) MCP configuration initialized!\n\n"
 
-mcp-web-search: ## Install web search MCP server
-	@printf "🔍 Installing Web Search MCP server...\n\n"
-	
-	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
-		printf "$(YELLOW)•$(RESET) Web search server directory already exists, updating...\n"; \
-		cd $(MCP_WEB_SEARCH_DIR) && git pull; \
+mcp-install-servers: ## Install all MCP servers
+	@printf "📦 Installing MCP servers...\n\n"
+	@for server in $(MCP_SERVERS); do \
+		if ! $(MAKE) -s mcp-install-server SERVER_NAME="$$server"; then \
+			printf "$(RED)✗$(RESET) Failed to install $$server server\n"; \
+			exit 1; \
+		fi; \
+	done
+	@printf "\n$(GREEN)✓$(RESET) All MCP servers installed!\n\n"
+
+mcp-install-server: ## Install a single MCP server
+	@if [ -z "$(SERVER_NAME)" ]; then \
+		printf "$(RED)✗$(RESET) SERVER_NAME not specified\n"; \
+		exit 1; \
+	fi
+	@printf "📦 Installing $(SERVER_NAME) MCP server...\n"
+	@mkdir -p $(MCP_SERVERS_DIR)/$(SERVER_NAME)
+	@if [ -f "$(MCP_SERVERS_DIR)/$(SERVER_NAME)/Makefile" ]; then \
+		$(MAKE) -C "$(MCP_SERVERS_DIR)/$(SERVER_NAME)" install; \
+		printf "$(GREEN)✓$(RESET) $(SERVER_NAME) server installed successfully!\n"; \
 	else \
-		printf "$(GREEN)✓$(RESET) Cloning web search server...\n"; \
-		cd $(MCP_BASE_DIR) && git clone $(MCP_WEB_SEARCH_REPO); \
+		printf "$(RED)✗$(RESET) No Makefile found for $(SERVER_NAME) at $(MCP_SERVERS_DIR)/$(SERVER_NAME)/Makefile\n"; \
+		printf "$(YELLOW)⚠$(RESET) Make sure the server directory structure is correct\n"; \
+		exit 1; \
 	fi
-	
-	@printf "$(GREEN)✓$(RESET) Setting up Node.js version...\n"
-	@if [ ! -f "$(MCP_WEB_SEARCH_DIR)/.tool-versions" ]; then \
-		echo "nodejs 22.15.1" > $(MCP_WEB_SEARCH_DIR)/.tool-versions; \
-		printf "$(GREEN)✓$(RESET) Created .tool-versions file\n"; \
-	fi
-	@cd $(MCP_WEB_SEARCH_DIR) && \
-		if command -v asdf >/dev/null 2>&1; then \
-			asdf install nodejs || printf "$(YELLOW)⚠$(RESET) asdf install failed, continuing with system Node.js\n"; \
-		fi
-	
-	@printf "$(GREEN)✓$(RESET) Installing dependencies...\n"
-	@cd $(MCP_WEB_SEARCH_DIR) && npm install
-	
-	@printf "$(GREEN)✓$(RESET) Installing Playwright browsers...\n"
-	@cd $(MCP_WEB_SEARCH_DIR) && npx playwright install
-	
-	@printf "$(GREEN)✓$(RESET) Building server...\n"
-	@cd $(MCP_WEB_SEARCH_DIR) && npm run build
-	
-	@printf "$(GREEN)✓$(RESET) Testing server startup...\n"
-	@cd $(MCP_WEB_SEARCH_DIR) && timeout 5s node dist/index.js || true
-	
-	@printf "\n$(GREEN)✓$(RESET) Web Search MCP server installed successfully!\n\n"
 
 mcp-register: ## Register all installed MCP servers in configuration
 	@printf "📝 Registering MCP servers in configuration...\n\n"
-	@node scripts/mcp-config.mjs register web-search
+	@for server in $(MCP_SERVERS); do \
+		node scripts/mcp-config.mjs register "$$server"; \
+	done
 	@printf "\n$(GREEN)✓$(RESET) MCP servers registered successfully!\n\n"
 
 mcp-check: ## Check MCP server installation and status
@@ -293,16 +281,14 @@ mcp-check: ## Check MCP server installation and status
 	@node scripts/mcp-config.mjs status
 	
 	@printf "\n🔧 Installation Status:\n"
-	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
-		printf "$(GREEN)✓$(RESET) Web Search MCP server directory exists\n"; \
-		if [ -f "$(MCP_WEB_SEARCH_DIR)/dist/index.js" ]; then \
-			printf "$(GREEN)✓$(RESET) Web Search server is built\n"; \
+	@for server in $(MCP_SERVERS); do \
+		if [ -d "$(MCP_SERVERS_DIR)/$$server" ]; then \
+			printf "$(GREEN)✓$(RESET) $$server MCP server directory exists\n"; \
+			$(MAKE) -C "$(MCP_SERVERS_DIR)/$$server" -s status 2>/dev/null || printf "$(YELLOW)⚠$(RESET) Status check failed for $$server\n"; \
 		else \
-			printf "$(RED)✗$(RESET) Web Search server is not built - run 'make mcp-web-search'\n"; \
+			printf "$(RED)✗$(RESET) $$server MCP server not installed - run 'make mcp'\n"; \
 		fi; \
-	else \
-		printf "$(RED)✗$(RESET) Web Search MCP server not installed - run 'make mcp-web-search'\n"; \
-	fi
+	done
 	
 	@printf "\n🏃 Runtime Status:\n"
 	@if curl -s http://localhost:3030/tools/health > /dev/null 2>&1; then \
@@ -322,10 +308,10 @@ mcp-clean: ## Remove all MCP servers
 	@printf "$(YELLOW)⚠$(RESET)  This will delete all MCP server installations!\n"
 	@printf "Are you sure? [y/N] " && read ans && [ $$ans = y ] || exit 1
 	
-	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
-		printf "$(RED)✗$(RESET) Removing web search server...\n"; \
-		rm -rf $(MCP_WEB_SEARCH_DIR); \
-		printf "$(GREEN)✓$(RESET) Web search server removed\n"; \
+	@if [ -d "$(MCP_SERVERS_DIR)" ]; then \
+		printf "$(RED)✗$(RESET) Removing MCP servers directory...\n"; \
+		rm -rf $(MCP_SERVERS_DIR); \
+		printf "$(GREEN)✓$(RESET) MCP servers directory removed\n"; \
 	fi
 	
 	@printf "\n$(GREEN)✓$(RESET) MCP servers cleaned!\n"
@@ -334,21 +320,20 @@ mcp-clean: ## Remove all MCP servers
 mcp-update: ## Update all MCP servers
 	@printf "🔄 Updating MCP servers...\n\n"
 	
-	@if [ -d "$(MCP_WEB_SEARCH_DIR)" ]; then \
-		printf "$(GREEN)✓$(RESET) Updating web search server...\n"; \
-		cd $(MCP_WEB_SEARCH_DIR) && git pull; \
-		if [ ! -f "$(MCP_WEB_SEARCH_DIR)/.tool-versions" ]; then \
-			echo "nodejs 22.15.1" > $(MCP_WEB_SEARCH_DIR)/.tool-versions; \
+	@for server in $(MCP_SERVERS); do \
+		if [ -d "$(MCP_SERVERS_DIR)/$$server" ]; then \
+			printf "$(GREEN)✓$(RESET) Updating $$server server...\n"; \
+			if [ -f "$(MCP_SERVERS_DIR)/$$server/Makefile" ]; then \
+				$(MAKE) -C "$(MCP_SERVERS_DIR)/$$server" install; \
+			else \
+				printf "$(YELLOW)⚠$(RESET) No Makefile found for $$server\n"; \
+			fi; \
+			printf "$(GREEN)✓$(RESET) $$server server updated\n"; \
+		else \
+			printf "$(YELLOW)•$(RESET) $$server server not installed, installing...\n"; \
+			$(MAKE) mcp-install-server SERVER_NAME="$$server"; \
 		fi; \
-		if command -v asdf >/dev/null 2>&1; then \
-			cd $(MCP_WEB_SEARCH_DIR) && asdf install nodejs || printf "$(YELLOW)⚠$(RESET) asdf install failed, continuing\n"; \
-		fi; \
-		cd $(MCP_WEB_SEARCH_DIR) && npm install && npm run build; \
-		printf "$(GREEN)✓$(RESET) Web search server updated\n"; \
-	else \
-		printf "$(YELLOW)•$(RESET) Web search server not installed, installing...\n"; \
-		$(MAKE) mcp-web-search; \
-	fi
+	done
 	
 	@printf "\n$(GREEN)✓$(RESET) MCP servers updated!\n"
 	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load updates: 'make dev'\n\n"
