@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Table, Toggle, Dialog, Input, Label, Select } from '@ci/shadcn';
-import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X } from '@ci/shadcn/icons';
+import { AlertCircle, RefreshCw, Settings, Trash2, Link2, X, HardDriveDownload } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
@@ -646,7 +646,7 @@ export function ConnectionsPage() {
                             variant="ghost"
                             onClick={() => connectionEdit(connection)}
                             disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Edit"
+                            title="Configure"
                           >
                             <Settings className="h-4 w-4" />
                           </Button>
@@ -664,8 +664,8 @@ export function ConnectionsPage() {
                               !connection.clientid || !connection.clientsecret
                                 ? 'Configure OAuth credentials first'
                                 : connection.accessToken
-                                  ? 'Reconnect'
-                                  : 'Connect'
+                                  ? 'Re-Authorize Connection'
+                                  : 'Authorize Connection'
                             }
                           >
                             {connection.accessToken ? (
@@ -679,7 +679,7 @@ export function ConnectionsPage() {
                             variant="ghost"
                             onClick={() => handleDeleteConnection(connection.id)}
                             disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Delete"
+                            title="Delete Connection"
                           >
                             {deleteLoading === connection.id ? (
                               <RefreshCw className="h-4 w-4 animate-spin" />
@@ -692,9 +692,9 @@ export function ConnectionsPage() {
                             variant="ghost"
                             onClick={() => handleSyncConnection(connection.id)}
                             disabled={deleteLoading === connection.id || oauthInProgress}
-                            title="Sync Data"
+                            title="Sync Now"
                           >
-                            <RefreshCw className="h-4 w-4" />
+                            <HardDriveDownload className="h-4 w-4" />
                           </Button>
                         </div>
                       </Table.Cell>
