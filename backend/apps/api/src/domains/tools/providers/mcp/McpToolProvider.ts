@@ -151,6 +151,30 @@ export class McpToolProvider implements ToolProvider {
       return;
     }
 
+    // Validate working directory exists
+    if (config.workingDirectory) {
+      // Resolve environment variables in the path
+      let resolvedWorkingDirectory = config.workingDirectory;
+      resolvedWorkingDirectory = resolvedWorkingDirectory.replace(/\$\{([^}]+)\}/g, (_, varName) => {
+        if (varName === 'PROJECT_ROOT') {
+          // Go up from backend/apps/api to the project root
+          return path.resolve(process.cwd(), '../../..');
+        }
+
+        return process.env[varName] || '';
+      });
+
+      try {
+        await fs.access(resolvedWorkingDirectory);
+      } catch {
+        this.logger.error(`Working directory does not exist: ${resolvedWorkingDirectory}`, {
+          serverName,
+          workingDirectory: resolvedWorkingDirectory,
+        });
+        throw new Error(`Working directory does not exist: ${resolvedWorkingDirectory}`);
+      }
+    }
+
     const session: McpSession = {
       id: `${serverName}-${Date.now()}`,
       serverName,

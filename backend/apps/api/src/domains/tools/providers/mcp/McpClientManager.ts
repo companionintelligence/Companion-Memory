@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Injectable } from '@nestjs/common';
@@ -18,10 +20,16 @@ export class McpClientManager {
    * Create and connect to an MCP server
    */
   async createClient(serverName: string, config: McpServerConfig): Promise<Client> {
+    // Resolve environment variables in working directory path
+    let resolvedWorkingDirectory = config.workingDirectory;
+    if (resolvedWorkingDirectory) {
+      resolvedWorkingDirectory = this.resolveEnvironmentVariablesInPath(resolvedWorkingDirectory);
+    }
+
     this.logger.debug(`Creating MCP client for ${serverName}`, {
       command: config.command,
       args: config.args,
-      workingDirectory: config.workingDirectory,
+      workingDirectory: resolvedWorkingDirectory,
       serverName,
     });
 
@@ -38,7 +46,7 @@ export class McpClientManager {
         ) as Record<string, string>),
         ...resolvedEnv,
       },
-      ...(config.workingDirectory && { cwd: config.workingDirectory }),
+      ...(resolvedWorkingDirectory && { cwd: resolvedWorkingDirectory }),
     });
 
     // Set up error handling for the transport
@@ -162,6 +170,26 @@ export class McpClientManager {
   }
 
   /**
+   * Resolve environment variables in a path string
+   */
+  private resolveEnvironmentVariablesInPath(pathStr: string): string {
+    // Resolve ${PROJECT_ROOT} to the project root directory
+    // Go up from backend/apps/api to the project root
+    const projectRoot = path.resolve(process.cwd(), '../../..');
+
+    // Simple variable substitution: ${VAR_NAME}
+    const resolvedPath = pathStr.replace(/\$\{([^}]+)\}/g, (_, varName) => {
+      if (varName === 'PROJECT_ROOT') {
+        return projectRoot;
+      }
+
+      return process.env[varName] || '';
+    });
+
+    return resolvedPath;
+  }
+
+  /**
    * Resolve environment variables in config values
    */
   private resolveEnvironmentVariables(env: Record<string, string>): Record<string, string> {
@@ -170,6 +198,11 @@ export class McpClientManager {
     for (const [key, value] of Object.entries(env)) {
       // Simple variable substitution: ${VAR_NAME}
       const resolvedValue = value.replace(/\$\{([^}]+)\}/g, (_, varName) => {
+        if (varName === 'PROJECT_ROOT') {
+          // Go up from backend/apps/api to the project root
+          return path.resolve(process.cwd(), '../../..');
+        }
+
         return process.env[varName] || '';
       });
       resolved[key] = resolvedValue;
