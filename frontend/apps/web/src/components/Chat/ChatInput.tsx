@@ -18,7 +18,7 @@ import {
   formDataResolver,
   formDataSchema as s,
 } from '@ci/shadcn';
-import { Send, Square, Mic } from '@ci/shadcn/icons';
+import { Send, Square, Speech } from '@ci/shadcn/icons';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -42,13 +42,23 @@ interface Props {
   loading?: boolean;
   streaming?: boolean;
   placeholder?: string;
-  onRecord?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
+  onVoiceModeToggle?: () => void;
+  isVoiceModeActive?: boolean;
 }
 
 function ChatInput(
-  { disabled = false, loading = false, streaming = false, placeholder, onRecord, onSubmit, onStop }: Props,
+  {
+    disabled = false,
+    loading = false,
+    streaming = false,
+    placeholder,
+    onSubmit,
+    onStop,
+    onVoiceModeToggle,
+    isVoiceModeActive = false,
+  }: Props,
   forwardedRef: ForwardedRef<HTMLTextAreaElement>,
 ) {
   const SendIcon = streaming ? Square : Send;
@@ -58,13 +68,6 @@ function ChatInput(
     resolver: formDataResolver(FormSchema),
     defaultValues: EMPTY,
   });
-
-  const handleRecord = useCallback(
-    (e: MouseEvent<HTMLButtonElement>) => {
-      onRecord?.(e);
-    },
-    [onRecord],
-  );
 
   const handleStop = useCallback(
     (e: MouseEvent<HTMLButtonElement>) => {
@@ -88,6 +91,14 @@ function ChatInput(
       }
     },
     [form, onSubmit],
+  );
+
+  const handleVoiceModeToggle = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      onVoiceModeToggle?.();
+    },
+    [onVoiceModeToggle],
   );
 
   return (
@@ -170,17 +181,22 @@ function ChatInput(
               />
 
               <Tooltip>
-                <Tooltip.Content side="bottom">Dictate</Tooltip.Content>
+                <Tooltip.Content side="bottom">
+                  {isVoiceModeActive ? 'Exit Voice Mode' : 'Voice Mode'}
+                </Tooltip.Content>
                 <Tooltip.Trigger asChild>
                   <Button
                     type="button"
                     disabled={loading || streaming || disabled}
                     size="sm"
-                    variant="ghost"
-                    className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-                    onClick={handleRecord}
+                    variant={isVoiceModeActive ? 'default' : 'ghost'}
+                    className={cn(
+                      'cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform',
+                      isVoiceModeActive && 'bg-blue-500 hover:bg-blue-600 text-white',
+                    )}
+                    onClick={handleVoiceModeToggle}
                   >
-                    <Mic className="h-4 w-4" />
+                    <Speech className="h-4 w-4" />
                   </Button>
                 </Tooltip.Trigger>
               </Tooltip>

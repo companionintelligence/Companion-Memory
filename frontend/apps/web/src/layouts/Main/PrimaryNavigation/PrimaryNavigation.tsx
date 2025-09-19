@@ -19,9 +19,12 @@ export function PrimaryNavigation() {
         </section>
 
         <section className="flex flex-row items-center gap-2">
-          <CaptureModalToggle openModal={openModal} />
-          <ThemeToggle />
-          <Portal id="actions" />
+          <Portal id="actions" className="flex flex-row items-center" />
+
+          <div className="flex flex-row items-center">
+            <CaptureModalToggle openModal={openModal} />
+            <ThemeToggle />
+          </div>
         </section>
       </header>
       <CaptureModal open={isModalOpen} initialFiles={[]} onClose={closeModal} />

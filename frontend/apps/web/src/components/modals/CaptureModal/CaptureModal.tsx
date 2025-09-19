@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { Camera } from '@ci/capture';
 import { fetchJson, useDeviceLayout } from '@ci/common';
-import { Dialog, cn, Button } from '@ci/shadcn';
-import { Send, X } from '@ci/shadcn/icons';
+import { Dialog, cn, Button, Popover } from '@ci/shadcn';
+import { Send, Settings, X } from '@ci/shadcn/icons';
 
 import { useUploadFile } from '@/api';
 import type { File as FileData, Thread } from '@/api/types';
 import { Chat, type FormData } from '@/components/Chat';
 import { InlineModal } from '@/components/InlineModal';
+import { ModelSelector } from '@/components/ModelSelector';
 import { useAuth, useChatRequester, useModel } from '@/hooks';
 import { getMediaType } from '@/lib/utils';
 
@@ -32,8 +33,6 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
   const [{ stream, loading, streaming }, { submit: submitChatRequest, stop: stopChatRequest }] =
     useChatRequester({
       threadId,
-      enableTools: false,
-      enableThinking: false,
     });
 
   const handleOpenChange = useCallback(
@@ -140,10 +139,23 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
 
     return (
       <InlineModal open={open} onClose={onClose}>
-        <div className="flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary gap-2 p-2 pt-[max(1rem,env(safe-area-inset-top))]">
-          <div className="flex-1" />
-          <div className="text-xl font-bold text-transparent">{files[0].name}</div>
-          <div className="flex-1 text-right">
+        <div className="flex flex-row items-center border-b bg-stone-50 dark:bg-secondary gap-2 p-2 pt-[max(1rem,env(safe-area-inset-top))]">
+          <div className="flex items-center flex-1">
+            <Popover>
+              <Popover.Trigger>
+                <Button className="flex-1" variant="ghost" size="icon">
+                  <Settings />
+                </Button>
+              </Popover.Trigger>
+              <Popover.Content className="p-2 relative left-2 w-auto">
+                <ModelSelector withToggles />
+              </Popover.Content>
+            </Popover>
+          </div>
+
+          <div className="flex items-center justify-center font-bold">{fileData?.name}</div>
+
+          <div className="flex items-center justify-end flex-1">
             <Button variant="ghost" size="icon" onClick={onClose}>
               <X />
             </Button>
@@ -170,10 +182,19 @@ export function CaptureModal({ open = false, initialFiles = [], onClose }: Props
           'w-[90vw] h-[90vh] sm:max-w-[90vw] sm:max-h-[80vh] p-0 flex flex-col gap-0',
           files.length > 0 && 'max-[900px]:h-[80vh]',
         )}
+        showCloseButton={false}
       >
-        <Dialog.Header className="flex flex-row items-center gap-4 p-4 pb-3 border-b bg-stone-50 rounded-t-2xl">
-          <Dialog.Title>Upload Images and Videos</Dialog.Title>
+        <Dialog.Header className="flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary rounded-t-lg gap-2 p-2 pl-4">
+          <Dialog.Title className="flex-1">Upload Images and Videos</Dialog.Title>
           <Dialog.Description className="hidden">Capture audio or video and upload to CI</Dialog.Description>
+
+          <ModelSelector withToggles />
+
+          <div className="flex items-center justify-end">
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X />
+            </Button>
+          </div>
         </Dialog.Header>
 
         {files.length === 0 && (
