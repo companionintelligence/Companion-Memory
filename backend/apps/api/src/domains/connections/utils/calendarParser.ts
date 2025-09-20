@@ -1,52 +1,33 @@
-import { v7 as uuidv7 } from 'uuid';
+import { v7 as uuid7 } from 'uuid';
 
-import type { CreateEventDto } from '@ci/domains/memory/types';
+import type { CalendarEventData } from '../services/ApiLogPostProcessorService';
+
+// Type definitions for calendar API responses
+interface GoogleCalendarDateTime {
+  dateTime?: string;
+  date?: string;
+  timeZone?: string;
+}
 
 interface GoogleCalendarEvent {
-  kind?: string;
-  etag?: string;
   id: string;
-  status?: string;
-  htmlLink?: string;
-  created?: string;
-  updated?: string;
   summary?: string;
   description?: string;
-  start?: {
-    dateTime?: string;
-    date?: string;
-  };
-  end?: {
-    dateTime?: string;
-    date?: string;
-  };
-  location?: string;
-  attendees?: Array<{
-    email: string;
-    displayName?: string;
-  }>;
-  creator?: {
-    email: string;
-    displayName?: string;
-    self?: boolean;
-  };
-  organizer?: {
-    email: string;
-    displayName?: string;
-    self?: boolean;
-  };
-  recurrence?: string[];
-  transparency?: string;
-  iCalUID?: string;
-  sequence?: number;
-  reminders?: {
-    useDefault?: boolean;
-  };
-  eventType?: string;
+  start: GoogleCalendarDateTime;
+  end: GoogleCalendarDateTime;
+  htmlLink?: string;
+  [key: string]: unknown;
 }
 
 interface GoogleCalendarResponse {
   items?: GoogleCalendarEvent[];
+  nextPageToken?: string;
+  [key: string]: unknown;
+}
+
+interface MicrosoftCalendarDateTime {
+  dateTime: string;
+  timeZone?: string;
 }
 
 interface MicrosoftCalendarEvent {
@@ -55,63 +36,85 @@ interface MicrosoftCalendarEvent {
   body?: {
     content?: string;
   };
-  start?: {
-    dateTime: string;
-    timeZone: string;
-  };
-  end?: {
-    dateTime: string;
-    timeZone: string;
-  };
+  start: MicrosoftCalendarDateTime;
+  end: MicrosoftCalendarDateTime;
   webLink?: string;
-  location?: {
-    displayName?: string;
-  };
-  attendees?: Array<{
-    emailAddress: {
-      address: string;
-      name?: string;
-    };
-  }>;
-  organizer?: {
-    emailAddress: {
-      address: string;
-      name?: string;
-    };
-  };
+  [key: string]: unknown;
 }
 
 interface MicrosoftCalendarResponse {
   value?: MicrosoftCalendarEvent[];
+  '@odata.nextLink'?: string;
+  [key: string]: unknown;
 }
 
+interface GenericCalendarEvent {
+  id: string;
+  title?: string;
+  name?: string;
+  summary?: string;
+  description?: string;
+  details?: string;
+  start?: unknown;
+  startTime?: unknown;
+  start_date?: unknown;
+  end?: unknown;
+  endTime?: unknown;
+  end_date?: unknown;
+  url?: string;
+  link?: string;
+  [key: string]: unknown;
+}
+
+interface GenericCalendarResponse {
+  events?: GenericCalendarEvent[];
+  [key: string]: unknown;
+}
+
+type CalendarApiResponse = GoogleCalendarResponse | MicrosoftCalendarResponse | GenericCalendarResponse;
+
+/**
+ * Parses calendar data from various API responses and converts them to standardized event objects
+ */
 export function parseCalendarDataToEvents(
-  calendarData: unknown,
+  data: unknown,
   connectionId: string,
   userId: string,
-): CreateEventDto[] {
-  const events: CreateEventDto[] = [];
+): CalendarEventData[] {
+  const events: CalendarEventData[] = [];
 
-  // Handle Google Calendar data
-  if (isGoogleCalendarResponse(calendarData)) {
-    const googleEvents = calendarData.items || [];
+  if (!data || typeof data !== 'object') {
+    return events;
+  }
 
-    for (const event of googleEvents) {
-      const parsedEvent = parseGoogleCalendarEvent(event, connectionId, userId);
-      if (parsedEvent) {
-        events.push(parsedEvent);
+  const dataObj = data as CalendarApiResponse;
+
+  // Handle Google Calendar format
+  if ('items' in dataObj && dataObj.items && Array.isArray(dataObj.items)) {
+    for (const item of dataObj.items) {
+      const event = parseGoogleCalendarEvent(item, connectionId, userId);
+      if (event) {
+        events.push(event);
       }
     }
   }
 
-  // Handle Microsoft Calendar data
-  else if (isMicrosoftCalendarResponse(calendarData)) {
-    const microsoftEvents = calendarData.value || [];
+  // Handle Microsoft Calendar format
+  if ('value' in dataObj && dataObj.value && Array.isArray(dataObj.value)) {
+    for (const item of dataObj.value) {
+      const event = parseMicrosoftCalendarEvent(item, connectionId, userId);
+      if (event) {
+        events.push(event);
+      }
+    }
+  }
 
-    for (const event of microsoftEvents) {
-      const parsedEvent = parseMicrosoftCalendarEvent(event, connectionId, userId);
-      if (parsedEvent) {
-        events.push(parsedEvent);
+  // Handle generic calendar format
+  if ('events' in dataObj && dataObj.events && Array.isArray(dataObj.events)) {
+    for (const item of dataObj.events) {
+      const event = parseGenericCalendarEvent(item, connectionId, userId);
+      if (event) {
+        events.push(event);
       }
     }
   }
@@ -119,161 +122,186 @@ export function parseCalendarDataToEvents(
   return events;
 }
 
-function isGoogleCalendarResponse(data: unknown): data is GoogleCalendarResponse {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    'items' in data &&
-    Array.isArray((data as Record<string, unknown>).items)
-  );
-}
-
-function isMicrosoftCalendarResponse(data: unknown): data is MicrosoftCalendarResponse {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    'value' in data &&
-    Array.isArray((data as Record<string, unknown>).value)
-  );
-}
-
+/**
+ * Parses a Google Calendar event
+ */
 function parseGoogleCalendarEvent(
-  event: GoogleCalendarEvent,
+  item: GoogleCalendarEvent,
   connectionId: string,
   userId: string,
-): CreateEventDto | null {
+): CalendarEventData | null {
   try {
-    console.log('Parsing Google Calendar event:', {
-      eventId: event.id,
-      summary: event.summary,
-      connectionId,
-      userId,
-    });
-
-    // Parse start time
-    let startTime: Date | null = null;
-    if (event.start?.dateTime) {
-      startTime = new Date(event.start.dateTime);
-    } else if (event.start?.date) {
-      startTime = new Date(event.start.date);
+    if (!item.id || !item.summary) {
+      return null;
     }
 
-    // Parse end time
-    let endTime: Date | null = null;
-    if (event.end?.dateTime) {
-      endTime = new Date(event.end.dateTime);
-    } else if (event.end?.date) {
-      endTime = new Date(event.end.date);
-    }
-
-    // Parse created and updated times
-    let createdAt: Date | null = null;
-    if (event.created) {
-      createdAt = new Date(event.created);
-    }
-
-    let updatedAt: Date | null = null;
-    if (event.updated) {
-      updatedAt = new Date(event.updated);
-    }
-
-    // Build source data with the entire event blob
-    const sourceData: Record<string, unknown> = {
-      ...event, // Include the entire event object
-      parsed_at: new Date().toISOString(),
-    };
-
-    const parsedEvent = {
-      id: uuidv7(),
-      name: event.summary || 'Untitled Event',
-      type: 'Calendar Event',
-      description: event.description || undefined,
-      start_time: startTime || undefined,
-      end_time: endTime || undefined,
-      external_id: event.id,
-      source_url: event.htmlLink || undefined,
-      source_data: sourceData,
-      connection_id: connectionId,
-      user_id: userId,
-      user: {
-        id: userId,
-      },
-      created_at: createdAt || undefined,
-      updated_at: updatedAt || undefined,
-    };
-
-    console.log('Parsed event data:', {
-      id: parsedEvent.id,
-      name: parsedEvent.name,
-      type: parsedEvent.type,
-      external_id: parsedEvent.external_id,
-      connection_id: parsedEvent.connection_id,
-      user_id: parsedEvent.user_id,
-      start_time: parsedEvent.start_time,
-      end_time: parsedEvent.end_time,
-    });
-
-    return parsedEvent;
-  } catch (error) {
-    console.error('Error parsing Google Calendar event:', error);
-
-    return null;
-  }
-}
-
-function parseMicrosoftCalendarEvent(
-  event: MicrosoftCalendarEvent,
-  connectionId: string,
-  userId: string,
-): CreateEventDto | null {
-  try {
-    // Parse start time
-    let startTime: Date | null = null;
-    if (event.start?.dateTime) {
-      startTime = new Date(event.start.dateTime);
-    }
-
-    // Parse end time
-    let endTime: Date | null = null;
-    if (event.end?.dateTime) {
-      endTime = new Date(event.end.dateTime);
-    }
-
-    // Build source data with additional information
-    const sourceData: Record<string, unknown> = {
-      microsoft_event_id: event.id,
-      location: event.location?.displayName,
-      attendees: event.attendees?.map((attendee) => ({
-        email: attendee.emailAddress.address,
-        name: attendee.emailAddress.name,
-      })),
-      organizer: event.organizer
-        ? {
-            email: event.organizer.emailAddress.address,
-            name: event.organizer.emailAddress.name,
-          }
-        : null,
-    };
+    const startTime = parseGoogleDateTime(item.start);
+    const endTime = parseGoogleDateTime(item.end);
 
     return {
-      id: uuidv7(),
-      name: event.subject || 'Untitled Event',
-      type: 'calendar_event',
-      description: event.body?.content || undefined,
+      id: uuid7(),
+      name: item.summary || 'Untitled Event',
+      type: 'Calendar Event',
+      description: item.description || undefined,
       start_time: startTime || undefined,
       end_time: endTime || undefined,
-      external_id: event.id,
-      source_url: event.webLink || undefined,
-      source_data: sourceData,
-      connection_id: connectionId,
+      external_id: item.id,
+      source_url: item.htmlLink || undefined,
+      source_data: item,
       user_id: userId,
-      user: {
-        id: userId,
-      },
+      connection_id: connectionId,
     };
   } catch (error) {
-    console.error('Error parsing Microsoft Calendar event:', error);
+    console.error('Failed to parse Google Calendar event:', error);
 
     return null;
   }
+}
+
+/**
+ * Parses a Microsoft Calendar event
+ */
+function parseMicrosoftCalendarEvent(
+  item: MicrosoftCalendarEvent,
+  connectionId: string,
+  userId: string,
+): CalendarEventData | null {
+  try {
+    if (!item.id || !item.subject) {
+      return null;
+    }
+
+    const startTime = parseMicrosoftDateTime(item.start);
+    const endTime = parseMicrosoftDateTime(item.end);
+
+    return {
+      id: uuid7(),
+      name: item.subject || 'Untitled Event',
+      type: 'Calendar Event',
+      description: item.body?.content || undefined,
+      start_time: startTime || undefined,
+      end_time: endTime || undefined,
+      external_id: item.id,
+      source_url: item.webLink || undefined,
+      source_data: item,
+      user_id: userId,
+      connection_id: connectionId,
+    };
+  } catch (error) {
+    console.error('Failed to parse Microsoft Calendar event:', error);
+
+    return null;
+  }
+}
+
+/**
+ * Parses a generic calendar event
+ */
+function parseGenericCalendarEvent(
+  item: GenericCalendarEvent,
+  connectionId: string,
+  userId: string,
+): CalendarEventData | null {
+  try {
+    if (!item.id || (!item.title && !item.name && !item.summary)) {
+      return null;
+    }
+
+    const startTime = parseGenericDateTime(item.start || item.startTime || item.start_date);
+    const endTime = parseGenericDateTime(item.end || item.endTime || item.end_date);
+
+    return {
+      id: uuid7(),
+      name: item.title || item.name || item.summary || 'Untitled Event',
+      type: 'Calendar Event',
+      description: item.description || item.details || undefined,
+      start_time: startTime || undefined,
+      end_time: endTime || undefined,
+      external_id: item.id,
+      source_url: item.url || item.link || undefined,
+      source_data: item,
+      user_id: userId,
+      connection_id: connectionId,
+    };
+  } catch (error) {
+    console.error('Failed to parse generic calendar event:', error);
+
+    return null;
+  }
+}
+
+/**
+ * Parses Google Calendar date/time format
+ */
+function parseGoogleDateTime(dateTime: GoogleCalendarDateTime): Date | null {
+  if (!dateTime) {
+    return null;
+  }
+
+  try {
+    // Google Calendar can have either dateTime (for specific times) or date (for all-day events)
+    if (dateTime.dateTime) {
+      return new Date(dateTime.dateTime);
+    } else if (dateTime.date) {
+      return new Date(dateTime.date);
+    }
+  } catch (error) {
+    console.error('Failed to parse Google Calendar date/time:', error);
+  }
+
+  return null;
+}
+
+/**
+ * Parses Microsoft Calendar date/time format
+ */
+function parseMicrosoftDateTime(dateTime: MicrosoftCalendarDateTime): Date | null {
+  if (!dateTime) {
+    return null;
+  }
+
+  try {
+    // Microsoft Calendar uses dateTime property
+    if (dateTime.dateTime) {
+      return new Date(dateTime.dateTime);
+    }
+  } catch (error) {
+    console.error('Failed to parse Microsoft Calendar date/time:', error);
+  }
+
+  return null;
+}
+
+/**
+ * Parses generic date/time format
+ */
+function parseGenericDateTime(dateTime: unknown): Date | null {
+  if (!dateTime) {
+    return null;
+  }
+
+  try {
+    // Try to parse as ISO string first
+    if (typeof dateTime === 'string') {
+      return new Date(dateTime);
+    }
+
+    // Try to parse as object with dateTime property
+    if (typeof dateTime === 'object' && dateTime !== null && 'dateTime' in dateTime) {
+      const dateTimeObj = dateTime as { dateTime: string };
+
+      return new Date(dateTimeObj.dateTime);
+    }
+
+    // Try to parse as object with date property
+    if (typeof dateTime === 'object' && dateTime !== null && 'date' in dateTime) {
+      const dateObj = dateTime as { date: string };
+
+      return new Date(dateObj.date);
+    }
+  } catch (error) {
+    console.error('Failed to parse generic date/time:', error);
+  }
+
+  return null;
 }

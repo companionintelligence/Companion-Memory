@@ -1,11 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
+import { DataIngestionService } from '@ci/common/services/DataIngestionService';
 import { LoggerService } from '@ci/common/services/LoggerService';
 import type { RequestContext } from '@ci/common/types';
-import type { CreateEventDto } from '@ci/domains/memory/types';
 
 import { ClientFactory } from '../clients';
 import { ApiLogEntity } from '../entities/ApiLogEntity';
@@ -16,10 +17,9 @@ import type {
   UpdateConnectionDto,
   UpdateConnectionCredentialsDto,
 } from '../types';
-import { parseCalendarDataToEvents } from '../utils/calendarParser';
 
 @Injectable()
-export class ConnectionService {
+export class ConnectionService implements OnModuleInit {
   private logger = new LoggerService(ConnectionService.name);
 
   constructor(
@@ -29,7 +29,18 @@ export class ConnectionService {
     @InjectRepository(ApiLogEntity)
     private readonly apiLogRepository: Repository<ApiLogEntity>,
     private readonly clientFactory: ClientFactory,
+    private readonly dataIngestionService: DataIngestionService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
+
+  async onModuleInit() {
+    this.logger.log('Initializing ConnectionService event listeners');
+
+    // Listen for next page sync events
+    this.eventEmitter.on('connection.sync-with-token', this.handleNextPageSyncWithToken.bind(this));
+
+    this.logger.log('ConnectionService event listeners initialized');
+  }
 
   async create(context: RequestContext, data: CreateConnectionDto): Promise<Connection> {
     const { providerId, ...rest } = data;
@@ -200,100 +211,19 @@ export class ConnectionService {
       const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
       const syncResponse = await client.sync(connection);
 
-      // Process calendar data and save to events table
-      if (syncResponse.data?.results) {
-        console.log('🔄 Processing sync results:', {
-          resultCount: syncResponse.data.results.length,
-          connectionId,
-          results: syncResponse.data.results.map((r) => ({ api: r.api, hasData: !!r.data })),
-        });
-
-        for (const result of syncResponse.data.results) {
-          // Check if this is calendar data
-          if (this.isCalendarApi(result.api)) {
-            console.log('📅 Processing calendar data for events table:', {
-              api: result.api,
-              connectionId,
-              hasData: !!result.data,
-            });
-
-            this.logger.log('Processing calendar data for events table', {
-              api: result.api,
-              connectionId,
-            });
-
-            try {
-              // Parse calendar data to events
-              this.logger.log('Parsing calendar data', {
-                connectionId,
-                userId: context.userId,
-                hasData: !!result.data,
-              });
-
-              const events = parseCalendarDataToEvents(result.data, connectionId!, context.userId!);
-
-              this.logger.log('Parsed events', {
-                eventCount: events.length,
-                connectionId,
-                sampleEvent: events[0]
-                  ? {
-                      id: events[0].id,
-                      name: events[0].name,
-                      connection_id: events[0].connection_id,
-                      user_id: events[0].user_id,
-                    }
-                  : null,
-              });
-
-              if (events.length > 0) {
-                // Save events to database using direct repository access
-                console.log('💾 Saving events to database:', {
-                  eventCount: events.length,
-                  connectionId,
-                });
-                await this.saveEventsToDatabase(events);
-                console.log('✅ SUCCESS: All calendar events saved to database:', {
-                  eventCount: events.length,
-                  connectionId,
-                });
-                this.logger.log('Successfully saved calendar events to database', {
-                  eventCount: events.length,
-                  connectionId,
-                });
-              } else {
-                console.log('⚠️ No events to save:', {
-                  connectionId,
-                  reason: 'No events parsed from calendar data',
-                });
-              }
-            } catch (eventError) {
-              this.logger.error('Failed to process calendar events', {
-                connectionId,
-                error: eventError instanceof Error ? eventError.message : 'Unknown error',
-              });
-            }
-          } else if (this.isGmailApi(result.api)) {
-            // Keep Gmail data console logging as requested
-            this.logger.log('Gmail data (console only)', {
-              api: result.api,
-              connectionId,
-              data: result.data,
-            });
-            console.log('Gmail data:', result.data);
-          }
-        }
-      }
-
+      // Use the new data ingestion service for processing sync data
       if (persistData) {
-        await this.apiLogRepository.save({
-          id: uuid7(),
-          content: JSON.stringify(syncResponse),
-          connection: {
-            id: connectionId,
-          },
-          user: {
-            id: context.userId,
-          },
+        this.logger.log('Calling data ingestion service', {
+          connectionId,
+          userId: context.userId,
+          requestId: context.requestId,
+          syncSuccess: syncResponse.success,
+        });
+        await this.processSyncDataWithIngestionService(context, connectionId, syncResponse);
+      } else {
+        this.logger.log('Skipping data ingestion (persistData=false)', {
+          connectionId,
+          userId: context.userId,
         });
       }
 
@@ -316,82 +246,174 @@ export class ConnectionService {
     }
   }
 
-  private isCalendarApi(apiName: string): boolean {
-    return apiName.toLowerCase().includes('calendar');
-  }
-
-  private isGmailApi(apiName: string): boolean {
-    return apiName.toLowerCase().includes('gmail') || apiName.toLowerCase().includes('mail');
-  }
-
-  private async saveEventsToDatabase(events: CreateEventDto[]): Promise<void> {
-    // Use raw SQL to insert events directly to avoid circular dependency
-    for (const event of events) {
-      this.logger.log('Saving event to database', {
-        eventId: event.id,
-        eventName: event.name,
-        connectionId: event.connection_id,
-        userId: event.user_id,
-        externalId: event.external_id,
+  /**
+   * Processes sync data using the new DataIngestionService abstraction
+   * This provides maximum visibility and error handling
+   */
+  private async processSyncDataWithIngestionService(
+    context: RequestContext,
+    connectionId: string,
+    syncResponse: {
+      success: boolean;
+      message: string;
+      data?: {
+        results: Array<{
+          api: string;
+          data: unknown;
+          error?: string;
+        }>;
+        errors: string[];
+      };
+    },
+  ): Promise<void> {
+    try {
+      this.logger.log('Processing sync data with ingestion service', {
+        connectionId,
+        userId: context.userId,
+        requestId: context.requestId,
+        syncSuccess: syncResponse.success,
+        resultCount: syncResponse.data?.results?.length || 0,
       });
 
-      try {
-        console.log('Attempting to insert event into database:', {
-          eventId: event.id,
-          eventName: event.name,
-          connectionId: event.connection_id,
-          externalId: event.external_id,
-          userId: event.user_id,
-        });
+      const ingestionResult = await this.dataIngestionService.ingestSyncData({
+        connectionId,
+        userId: context.userId!,
+        syncResponse,
+        requestContext: context,
+      });
 
-        const result = await this.dataSource.query(
-          `INSERT INTO events (
-            id, name, type, description, start_time, end_time, 
-            external_id, source_url, source_data, user_id, connection_id, 
-            created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
-          [
-            event.id,
-            event.name,
-            event.type,
-            event.description,
-            event.start_time,
-            event.end_time,
-            event.external_id,
-            event.source_url,
-            JSON.stringify(event.source_data),
-            event.user_id,
-            event.connection_id,
-          ],
-        );
+      this.logger.log('Data ingestion service completed', {
+        connectionId,
+        userId: context.userId,
+        requestId: context.requestId,
+        success: ingestionResult.success,
+        apiLogsCreated: ingestionResult.details.apiLogsCreated,
+        errorCount: ingestionResult.details.errors.length,
+      });
 
-        console.log('✅ SUCCESS: Event inserted/updated in database:', {
-          eventId: event.id,
-          eventName: event.name,
-          connectionId: event.connection_id,
-          externalId: event.external_id,
-          result: result,
+      // Log any errors for visibility
+      if (ingestionResult.details.errors.length > 0) {
+        this.logger.warn('Data ingestion completed with errors', {
+          connectionId,
+          userId: context.userId,
+          requestId: context.requestId,
+          errors: ingestionResult.details.errors,
         });
-
-        this.logger.log('Successfully saved event to database', {
-          eventId: event.id,
-          connectionId: event.connection_id,
-        });
-      } catch (error) {
-        console.error('❌ ERROR: Failed to save event to database:', {
-          eventId: event.id,
-          connectionId: event.connection_id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-          fullError: error,
-        });
-
-        this.logger.error('Failed to save event to database', {
-          eventId: event.id,
-          connectionId: event.connection_id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        throw error;
       }
+    } catch (error) {
+      this.logger.error('Failed to process sync data with ingestion service', {
+        connectionId,
+        userId: context.userId,
+        requestId: context.requestId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      // Don't throw here - we want the sync to continue even if ingestion fails
+      // The error is logged for visibility
+    }
+  }
+
+  /**
+   * Public method to sync with a pagination token
+   * Used by CalendarPaginationService for next page syncs
+   */
+  async syncWithToken(
+    context: RequestContext,
+    connectionId: string,
+    nextPageToken: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data?: {
+      results: Array<{
+        api: string;
+        data: unknown;
+        error?: string;
+      }>;
+      errors: string[];
+    };
+  }> {
+    this.logger.log('Syncing with pagination token', {
+      connectionId,
+      userId: context.userId,
+      nextPageToken,
+      requestId: context.requestId,
+    });
+
+    try {
+      // Get the connection
+      const connection = await this.findOne(context, connectionId);
+      const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+
+      // Call the client's sync method with the pagination token
+      const syncResponse = await client.sync(connection, nextPageToken);
+
+      this.logger.log('Pagination sync completed', {
+        connectionId,
+        userId: context.userId,
+        nextPageToken,
+        requestId: context.requestId,
+        syncSuccess: syncResponse.success,
+        resultCount: syncResponse.data?.results?.length || 0,
+      });
+
+      // Process the sync response with the data ingestion service
+      await this.processSyncDataWithIngestionService(context, connectionId, syncResponse);
+
+      return syncResponse;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error during pagination sync';
+
+      this.logger.error('Failed to sync with pagination token', {
+        connectionId,
+        userId: context.userId,
+        nextPageToken,
+        requestId: context.requestId,
+        error: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      throw error;
+    }
+  }
+
+  /**
+   * Handles next page sync with pagination token
+   */
+  private async handleNextPageSyncWithToken(event: {
+    connectionId: string;
+    userId: string;
+    nextPageToken: string;
+    requestId: string;
+    timestamp: Date;
+  }): Promise<void> {
+    this.logger.log('Handling next page sync with token', {
+      connectionId: event.connectionId,
+      userId: event.userId,
+      nextPageToken: event.nextPageToken,
+      requestId: event.requestId,
+    });
+
+    try {
+      const context: RequestContext = {
+        userId: event.userId,
+        requestId: event.requestId,
+      };
+
+      // Use the public syncWithToken method
+      await this.syncWithToken(context, event.connectionId, event.nextPageToken);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error during next page sync';
+
+      this.logger.error('Failed to handle next page sync with token', {
+        connectionId: event.connectionId,
+        userId: event.userId,
+        nextPageToken: event.nextPageToken,
+        requestId: event.requestId,
+        error: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
   }
 }
