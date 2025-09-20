@@ -1,4 +1,4 @@
-.PHONY: help build dbclear dbdestroy dev index infra init install local migrate seed staging gentoken useradd userpw
+.PHONY: help build dbclear dbdestroy deploy dev index infra init install local migrate seed staging gentoken useradd userpw
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -67,10 +67,34 @@ dbdestroy: ## Clear the PostgreSQL database and start from scratch
 	@cd backend/apps/api && yarn db:destroy
 	@printf "\nDatabase successfully destroyed. 💥\n"
 
+deploy: ## Deploy the application (staging)
+	$(MAKE) init
+	@printf "\n"
+	$(MAKE) infra
+	@printf "\n"
+	$(MAKE) migrate
+	@printf "\n"
+	$(MAKE) seed
+	@printf "\n"
+	$(MAKE) index
+	@printf "\n"
+	$(MAKE) build
+	@printf "\n"
+	$(MAKE) staging
+
 dev: ## Boot the application
 	@which tmux >/dev/null || { printf "\n$(RED)✗$(RESET) You do not have tmux installed. Please install it first.\n\n"; exit 1; };
 
+	$(MAKE) init
+	@printf "\n"
 	$(MAKE) infra
+	@printf "\n"
+	$(MAKE) migrate
+	@printf "\n"
+	$(MAKE) seed
+	@printf "\n"
+	$(MAKE) index
+	@printf "\n"
 	$(MAKE) local
 
 	@SESSION="companion"; \

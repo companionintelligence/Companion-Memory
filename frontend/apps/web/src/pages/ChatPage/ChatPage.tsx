@@ -1,12 +1,13 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
-import { Portal, usePageTitle } from '@ci/common';
+import { Portal, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card } from '@ci/shadcn';
 import { RefreshCw, Send, X } from '@ci/shadcn/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useThreadService } from '@/api';
 import { Chat, type FormData } from '@/components/Chat';
+import { parseChatContent } from '@/components/Chat/parser';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useChatRequester, useCounter, useModel } from '@/hooks';
 
@@ -17,6 +18,8 @@ import { useThreadListService } from './useThreadListService';
 export default function ChatPage() {
   usePageTitle('Chat - Companion Intelligence');
 
+  const { isMobile } = useDeviceLayout();
+
   const resolvedThreadId = useRef<string | null>(null);
   const hasSetInitialMessages = useRef(false);
 
@@ -24,6 +27,8 @@ export default function ChatPage() {
 
   const { id: initialThreadId } = useParams<{ id?: string }>();
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
+  const [isVoiceModeActive, setIsVoiceModeActive] = useState(false);
+  const [companionResponse, setCompanionResponse] = useState<string>('');
   const [{ selectedModel }] = useModel();
 
   const [
@@ -105,6 +110,41 @@ export default function ChatPage() {
     [submitChatRequest],
   );
 
+  const handleVoiceModeToggle = useCallback(() => {
+    setIsVoiceModeActive((prev) => !prev);
+  }, []);
+
+  // Extract only text content from chat response (excluding thinking blocks)
+  const extractTextContent = useCallback((content: string): string => {
+    const segments = parseChatContent(content);
+    const textSegments = segments
+      .filter((segment) => segment.type === 'text')
+      .map((segment) => segment.content)
+      .join(' ')
+      .trim();
+
+    return textSegments;
+  }, []);
+
+  // Handle response finished for TTS
+  const handleResponseFinished = useCallback(
+    (text: string) => {
+      if (isVoiceModeActive && text.trim()) {
+        console.log('🎤 ChatPage: Received text for TTS:', text.substring(0, 100) + '...');
+        // Extract only text content (excluding thinking blocks) for TTS
+        const textContent = extractTextContent(text);
+        if (textContent) {
+          console.log(
+            '🎤 ChatPage: Setting companion response for TTS:',
+            textContent.substring(0, 100) + '...',
+          );
+          setCompanionResponse(textContent);
+        }
+      }
+    },
+    [isVoiceModeActive, extractTextContent],
+  );
+
   const loading = threadsLoading || threadLoading || chatRequestLoading;
   const isSubmitDisabled = selectedModel == null;
   const inputPlaceholder =
@@ -174,7 +214,7 @@ export default function ChatPage() {
       </Portal.Slot>
 
       <Portal.Slot id="actions">
-        <ModelSelector />
+        <ModelSelector withToggles />
       </Portal.Slot>
 
       <Portal.Slot id="tertiary-navigation">
@@ -190,7 +230,12 @@ export default function ChatPage() {
       </Portal.Slot>
 
       <div className="flex flex-col h-full">
-        <div className="pt-[env(safe-area-inset-top)] bg-secondary border-b" />
+        {isMobile && (
+          <div className="flex flex-row items-center justify-end border-b bg-stone-50 dark:bg-secondary gap-2 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+            <ModelSelector withToggles />
+          </div>
+        )}
+
         <Chat
           key={initialThreadId ?? `new-thread-${newThreadCount}`}
           loading={loading}
@@ -203,6 +248,10 @@ export default function ChatPage() {
           onSubmit={handleSubmit}
           onStop={stopChatRequest}
           autoFocus={true}
+          onVoiceModeToggle={handleVoiceModeToggle}
+          isVoiceModeActive={isVoiceModeActive}
+          companionResponse={companionResponse}
+          onResponseFinished={handleResponseFinished}
         />
       </div>
     </>

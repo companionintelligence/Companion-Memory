@@ -13,7 +13,6 @@ const meta: Meta<Props> = {
     layout: 'centered',
   },
   args: {
-    onRecord: fn(),
     onStop: fn(),
     onSubmit: fn(),
   },

@@ -18,14 +18,14 @@ WORKDIR /app
 COPY .yarnrc.yml ./
 COPY package.json ./
 COPY yarn.lock ./
-
 COPY backend/apps/api/package.json ./backend/apps/api/package.json
 COPY backend/apps/api/.yarnrc.yml ./backend/apps/api/.yarnrc.yml
+
+RUN yarn workspaces focus --production @ci/be-api
+
 COPY backend/apps/api/dist ./backend/apps/api/dist
 COPY backend/apps/api/config ./backend/apps/api/config
 COPY backend/apps/api/db ./backend/apps/api/db
-
-RUN yarn workspaces focus --production @ci/be-api
 
 WORKDIR /app/backend/apps/api
 

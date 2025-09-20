@@ -1,14 +1,15 @@
 import { useCallback, useMemo, type ReactNode } from 'react';
 
 import { ErrorPage, LoadingPage, useDeviceLayout } from '@ci/common';
-import { Button, Dialog, cn } from '@ci/shadcn';
-import { X } from '@ci/shadcn/icons';
+import { Button, Dialog, Popover, cn } from '@ci/shadcn';
+import { Settings, X } from '@ci/shadcn/icons';
 import { useParams } from 'react-router-dom';
 
 import { useActionService, useThreadService } from '@/api';
 import { Chat } from '@/components/Chat';
 import { InlineModal } from '@/components/InlineModal';
 import { Markdown } from '@/components/Markdown';
+import { ModelSelector } from '@/components/ModelSelector';
 import { Tag } from '@/components/Tag';
 import { useChatRequester } from '@/hooks';
 
@@ -65,12 +66,23 @@ export function FeedModal({ onClose }: Props) {
   if (isMobile) {
     return (
       <InlineModal open onClose={onClose}>
-        <div className="flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary gap-2 p-2 pt-[max(1rem,env(safe-area-inset-top))]">
-          <div className="flex-1" />
-          <div className={cn('text-xl font-bold', renderTitle ? '' : 'text-transparent')}>
-            {action?.title}
+        <div className="flex items-center justify-between border-b bg-stone-50 dark:bg-secondary gap-2 p-2 pt-[max(1rem,env(safe-area-inset-top))]">
+          <div className="flex-1">
+            <Popover>
+              <Popover.Trigger>
+                <Button className="flex-1" variant="ghost" size="icon">
+                  <Settings />
+                </Button>
+              </Popover.Trigger>
+              <Popover.Content className="p-2 relative left-2 w-auto">
+                <ModelSelector withToggles />
+              </Popover.Content>
+            </Popover>
           </div>
-          <div className="flex-1 text-right">
+
+          <div className="font-bold">{action?.title}</div>
+
+          <div className="flex flex-1 justify-end">
             <Button variant="ghost" size="icon" onClick={onClose}>
               <X />
             </Button>
@@ -93,10 +105,13 @@ export function FeedModal({ onClose }: Props) {
 
   return (
     <Dialog open onOpenChange={handleOpenChange}>
-      <Dialog.Content className="h-[calc(100%-2rem)] md:max-w-[70vw] md:h-[70vh] p-0 flex flex-col gap-0">
+      <Dialog.Content
+        className="h-[calc(100%-2rem)] md:max-w-[70vw] md:h-[70vh] p-0 flex flex-col gap-0"
+        showCloseButton={false}
+      >
         <Dialog.Header
           className={cn(
-            'flex items-center border-b bg-stone-50 dark:bg-secondary rounded-t-2xl flex-row gap-4 p-4 pb-3',
+            'flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary rounded-t-lg gap-2 p-2 pl-4',
           )}
         >
           <Dialog.Title>{action?.title}</Dialog.Title>
@@ -104,11 +119,21 @@ export function FeedModal({ onClose }: Props) {
             Interact with an action suggested by your AI agent
           </Dialog.Description>
 
-          {(action?.tags.length ?? 0) > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {action?.tags.map((tag) => <Tag key={tag} text={tag} />)}
-            </div>
-          )}
+          <div className="flex items-center justify-between flex-1">
+            {(action?.tags.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {action?.tags.map((tag) => <Tag key={tag} text={tag} />)}
+              </div>
+            )}
+          </div>
+
+          <ModelSelector withToggles />
+
+          <div className="flex items-center justify-end">
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X />
+            </Button>
+          </div>
         </Dialog.Header>
 
         <div className="flex flex-1 min-h-0">

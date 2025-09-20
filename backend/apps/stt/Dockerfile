@@ -25,4 +25,4 @@ RUN mkdir -p /app/models
 EXPOSE 9001
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "stt_service.py"]
+CMD ["gunicorn", "stt_service:app", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:9001", "--max-requests", "1000", "--max-requests-jitter", "100", "--timeout", "300", "--keep-alive", "30", "--limit-request-line", "8190", "--limit-request-fields", "100", "--worker-connections", "1000", "--max-requests-jitter", "100"]

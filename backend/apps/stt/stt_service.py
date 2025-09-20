@@ -5,8 +5,9 @@ Simple speech-to-text transcription using Whisper
 """
 
 import base64
-import io
 import logging
+import tempfile
+import os
 from typing import Optional
 
 import torch
@@ -16,7 +17,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-import soundfile as sf
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -96,22 +96,25 @@ async def transcribe_audio(request: TranscribeRequest):
         # Decode base64 audio
         audio_bytes = base64.b64decode(request.audio)
         
-        # Convert bytes to numpy array for processing
-        # Try to read as audio file first
+        # Convert audio bytes to numpy array for Whisper
+        # Whisper expects a file path, so we'll write to a temporary file
+        logger.info(f"Processing audio data: {len(audio_bytes)} bytes")
+        
+        # Write audio bytes to a temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+            temp_file.write(audio_bytes)
+            temp_file_path = temp_file.name
+        
         try:
-            audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes))
-            # Convert to mono if stereo
-            if len(audio_data.shape) > 1:
-                audio_data = np.mean(audio_data, axis=1)
-            # Normalize to [-1, 1] range
-            audio_data = audio_data.astype(np.float32)
-        except Exception:
-            # Fallback: assume raw audio data
-            audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            # Load audio using Whisper's built-in audio loading
+            audio_data = whisper.load_audio(temp_file_path)
+        finally:
+            # Clean up the temporary file
+            os.unlink(temp_file_path)
         
         # Transcribe with Whisper
         result = model.transcribe(
-            audio_data, 
+            audio_data,  # Pass numpy array to Whisper
             language=request.language,  # None means auto-detect
             fp16=False,  # Use fp32 for better compatibility
             word_timestamps=True  # Enable word-level timestamps
