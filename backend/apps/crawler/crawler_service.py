@@ -122,13 +122,47 @@ async def crawl_single_page(url: str, request: CrawlRequest) -> CrawlResponse:
             
             if result.success:
                 logger.info(f"Successfully crawled: {url}")
+                # Extract links properly
+                links_list = None
+                if hasattr(result, 'links') and result.links:
+                    if isinstance(result.links, dict):
+                        # If links is a dict, extract all links from internal/external
+                        all_links = []
+                        if 'internal' in result.links:
+                            all_links.extend([link.get('href', '') for link in result.links['internal'] if isinstance(link, dict)])
+                        if 'external' in result.links:
+                            all_links.extend([link.get('href', '') for link in result.links['external'] if isinstance(link, dict)])
+                        links_list = all_links if all_links else None
+                    elif isinstance(result.links, list):
+                        links_list = result.links
+                
+                # Extract media properly
+                media_list = None
+                if hasattr(result, 'media') and result.media:
+                    if isinstance(result.media, dict):
+                        # If media is a dict, extract all media items
+                        all_media = []
+                        for media_type in ['images', 'videos', 'audios']:
+                            if media_type in result.media and isinstance(result.media[media_type], list):
+                                for item in result.media[media_type]:
+                                    if isinstance(item, dict):
+                                        all_media.append({
+                                            'type': media_type[:-1],  # Remove 's' from end
+                                            'url': item.get('src', item.get('url', '')),
+                                            'alt': item.get('alt', ''),
+                                            'title': item.get('title', '')
+                                        })
+                        media_list = all_media if all_media else None
+                    elif isinstance(result.media, list):
+                        media_list = result.media
+                
                 return CrawlResponse(
                     success=True,
-                    url=url,
+                    url=str(url),  # Convert HttpUrl to string
                     markdown=result.markdown,
                     html=result.html,
-                    links=result.links if hasattr(result, 'links') else None,
-                    media=result.media if hasattr(result, 'media') else None,
+                    links=links_list,
+                    media=media_list,
                     metadata={
                         "title": getattr(result, 'title', None),
                         "description": getattr(result, 'description', None),
@@ -141,7 +175,7 @@ async def crawl_single_page(url: str, request: CrawlRequest) -> CrawlResponse:
                 logger.error(f"Failed to crawl: {url}")
                 return CrawlResponse(
                     success=False,
-                    url=url,
+                    url=str(url),  # Convert HttpUrl to string
                     error="Crawl failed - no content extracted",
                     pages_crawled=0
                 )
@@ -150,7 +184,7 @@ async def crawl_single_page(url: str, request: CrawlRequest) -> CrawlResponse:
         logger.error(f"Error crawling {url}: {str(e)}")
         return CrawlResponse(
             success=False,
-            url=url,
+            url=str(url),  # Convert HttpUrl to string
             error=f"Crawl error: {str(e)}",
             pages_crawled=0
         )
@@ -196,13 +230,47 @@ async def crawl_multiple_pages(url: str, request: CrawlRequest) -> CrawlResponse
             
             if result.success:
                 logger.info(f"Successfully deep crawled: {url}")
+                # Extract links properly
+                links_list = None
+                if hasattr(result, 'links') and result.links:
+                    if isinstance(result.links, dict):
+                        # If links is a dict, extract all links from internal/external
+                        all_links = []
+                        if 'internal' in result.links:
+                            all_links.extend([link.get('href', '') for link in result.links['internal'] if isinstance(link, dict)])
+                        if 'external' in result.links:
+                            all_links.extend([link.get('href', '') for link in result.links['external'] if isinstance(link, dict)])
+                        links_list = all_links if all_links else None
+                    elif isinstance(result.links, list):
+                        links_list = result.links
+                
+                # Extract media properly
+                media_list = None
+                if hasattr(result, 'media') and result.media:
+                    if isinstance(result.media, dict):
+                        # If media is a dict, extract all media items
+                        all_media = []
+                        for media_type in ['images', 'videos', 'audios']:
+                            if media_type in result.media and isinstance(result.media[media_type], list):
+                                for item in result.media[media_type]:
+                                    if isinstance(item, dict):
+                                        all_media.append({
+                                            'type': media_type[:-1],  # Remove 's' from end
+                                            'url': item.get('src', item.get('url', '')),
+                                            'alt': item.get('alt', ''),
+                                            'title': item.get('title', '')
+                                        })
+                        media_list = all_media if all_media else None
+                    elif isinstance(result.media, list):
+                        media_list = result.media
+                
                 return CrawlResponse(
                     success=True,
-                    url=url,
+                    url=str(url),  # Convert HttpUrl to string
                     markdown=result.markdown,
                     html=result.html,
-                    links=result.links if hasattr(result, 'links') else None,
-                    media=result.media if hasattr(result, 'media') else None,
+                    links=links_list,
+                    media=media_list,
                     metadata={
                         "title": getattr(result, 'title', None),
                         "description": getattr(result, 'description', None),
@@ -216,7 +284,7 @@ async def crawl_multiple_pages(url: str, request: CrawlRequest) -> CrawlResponse
                 logger.error(f"Failed to deep crawl: {url}")
                 return CrawlResponse(
                     success=False,
-                    url=url,
+                    url=str(url),  # Convert HttpUrl to string
                     error="Deep crawl failed - no content extracted",
                     pages_crawled=0
                 )
@@ -225,7 +293,7 @@ async def crawl_multiple_pages(url: str, request: CrawlRequest) -> CrawlResponse
         logger.error(f"Error deep crawling {url}: {str(e)}")
         return CrawlResponse(
             success=False,
-            url=url,
+            url=str(url),  # Convert HttpUrl to string
             error=f"Deep crawl error: {str(e)}",
             pages_crawled=0
         )
@@ -298,12 +366,26 @@ async def crawl_simple(url: HttpUrl, extract_query: Optional[str] = None):
             result = await crawler.arun(**crawl_params)
             
             if result.success:
+                # Extract links properly
+                links_list = None
+                if hasattr(result, 'links') and result.links:
+                    if isinstance(result.links, dict):
+                        # If links is a dict, extract all links from internal/external
+                        all_links = []
+                        if 'internal' in result.links:
+                            all_links.extend([link.get('href', '') for link in result.links['internal'] if isinstance(link, dict)])
+                        if 'external' in result.links:
+                            all_links.extend([link.get('href', '') for link in result.links['external'] if isinstance(link, dict)])
+                        links_list = all_links if all_links else None
+                    elif isinstance(result.links, list):
+                        links_list = result.links
+                
                 return CrawlResponse(
                     success=True,
                     url=str(url),
                     markdown=result.markdown,
                     html=result.html,
-                    links=result.links if hasattr(result, 'links') else None,
+                    links=links_list,
                     metadata={
                         "title": getattr(result, 'title', None),
                         "description": getattr(result, 'description', None),
