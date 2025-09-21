@@ -133,7 +133,7 @@ export function Chat({
 
   const [accumulatedMessages, setAccumulatedMessages] = useState<ReactNode[]>([
     <Fragment key={uuid7()}>
-      <ThinkBlock renderEmptyContent={true} defaultExpanded={true} streamingRef={setThinkStreamingRef} />
+      <ThinkBlock renderEmptyContent={true} defaultExpanded={false} streamingRef={setThinkStreamingRef} />
       <AssistantMessage renderEmptyContent={true} streamingRef={setTextStreamingRef} />
     </Fragment>,
   ]);
@@ -158,7 +158,7 @@ export function Chat({
     // When we hit the next render cycle, the refs will be set and the stream can resume.
     const newStreamNodes = (
       <Fragment key={uuid7()}>
-        <ThinkBlock renderEmptyContent={true} defaultExpanded={true} streamingRef={setThinkStreamingRef} />
+        <ThinkBlock renderEmptyContent={true} defaultExpanded={false} streamingRef={setThinkStreamingRef} />
         <AssistantMessage renderEmptyContent={true} streamingRef={setTextStreamingRef} />
       </Fragment>
     );
