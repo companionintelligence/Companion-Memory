@@ -28,13 +28,13 @@
       }
     },
     "oauth": {
-      "callbackUrl": "https://dev.companionintelligence.com/oauth/callback"
+      "callbackUrl": "https://alpha.companionintel.com/oauth/callback"
     }
   },
   "db": {
     "type": "postgres",
     "host": "127.0.0.1",
-    "port": 5432,
+    "port": 5434,
     "database": "companion_intel",
     "username": "POSTGRES_USERNAME",
     "password": "POSTGRES_PASSWORD"

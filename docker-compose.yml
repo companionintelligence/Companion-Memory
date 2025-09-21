@@ -7,7 +7,7 @@ services:
     pull_policy: build
     container_name: postgres
     ports:
-      - 5432:5432
+      - 5434:5432 # changed to avoid conflict
     environment:
       POSTGRES_USER: ${POSTGRES_USERNAME}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -120,13 +120,16 @@ services:
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET}
       AUTH_REFRESH_TOKEN_SECRET: ${AUTH_REFRESH_TOKEN_SECRET}
       AUTH_SESSION_PEPPER: ${AUTH_SESSION_PEPPER}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
       POSTGRES_USERNAME: ${POSTGRES_USERNAME}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_URL: http://minio:9000
       OLLAMA_HOST: http://host.docker.internal:11434
-      STT_HOST: ${STT_HOST}
-      TTS_HOST: ${TTS_HOST}
+      STT_HOST: http://stt-service:9001
+      TTS_HOST: http://tts-service:9002
       CRAWLER_HOST: ${CRAWLER_HOST}
     networks:
       - web
@@ -149,6 +152,18 @@ services:
       - ci-api
     restart: unless-stopped
     profiles: [ "all", "staging" ]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: always
+    ports:
+      - 3000:8080
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - open-web-ui:/app/backend/data
+    profiles: [ "all" ]
 
 volumes:
   postgres-data:
