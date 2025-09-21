@@ -90,7 +90,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['alpha.companionintel.com'],
+    allowedHosts: ['alpha.companionintel.com', 'dev.companionintelligence.com'],
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],
     },
