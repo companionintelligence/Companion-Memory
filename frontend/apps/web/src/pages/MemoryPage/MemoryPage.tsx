@@ -1148,20 +1148,20 @@ export function MemoryPage() {
 
           {/* Filters and View Toggle - Right Aligned */}
           {!loading && !error && (
-            <div className="flex items-center gap-4 relative z-[9999] -mr-2">
+            <div className="flex items-center gap-4 relative z-[100] -mr-2">
               {/* Location Count */}
               <div className="text-sm text-muted-foreground">
                 {memoriesWithLocation.length} location{memoriesWithLocation.length !== 1 ? 's' : ''}
               </div>
 
               {/* Type Filter */}
-              <div className="flex items-center gap-2 relative z-[9999]">
+              <div className="flex items-center gap-2 relative z-[100]">
                 <Filter className="h-4 w-4 text-muted-foreground" />
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
                   <Select.Trigger className="w-32 h-8 text-xs">
                     <Select.Value placeholder="Type" />
                   </Select.Trigger>
-                  <Select.Content className="z-[9999]">
+                  <Select.Content className="z-[100]">
                     <Select.Item value="all">All Types</Select.Item>
                     <Select.Item value="event">Events</Select.Item>
                     <Select.Item value="content">Content</Select.Item>
@@ -1172,12 +1172,12 @@ export function MemoryPage() {
               </div>
 
               {/* Connection Filter */}
-              <div className="relative z-[9999]">
+              <div className="relative z-[100]">
                 <Select value={connectionFilter} onValueChange={setConnectionFilter}>
                   <Select.Trigger className="w-40 h-8 text-xs">
                     <Select.Value placeholder="Connection" />
                   </Select.Trigger>
-                  <Select.Content className="z-[9999]">
+                  <Select.Content className="z-[100]">
                     <Select.Item value="all">All Connections</Select.Item>
                     <Select.Item value="google">Google</Select.Item>
                     <Select.Item value="microsoft">Microsoft</Select.Item>
