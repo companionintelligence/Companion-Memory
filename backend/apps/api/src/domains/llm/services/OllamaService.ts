@@ -20,6 +20,7 @@ import {
   GetUserPreferencesTool,
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
+  WebCrawlerTool,
   type ToolSchema,
 } from '../tools';
 import type { OllamaModel } from '../types';
@@ -332,11 +333,13 @@ export class OllamaService {
     const getUserPreferencesTool = new GetUserPreferencesTool(this.dataSource);
     const getEntertainmentPreferencesTool = new GetEntertainmentPreferencesTool(this.dataSource);
     const getStreamingAvailabilityTool = new GetStreamingAvailabilityTool();
+    const webCrawlerTool = new WebCrawlerTool();
     // const getFamilyMembersTool = new GetFamilyMembersTool(this.dataSource); // Disabled for demo
 
     this.toolRegistry.register(getUserPreferencesTool);
     this.toolRegistry.register(getEntertainmentPreferencesTool);
     this.toolRegistry.register(getStreamingAvailabilityTool);
+    this.toolRegistry.register(webCrawlerTool);
     // this.toolRegistry.register(getFamilyMembersTool); // Disabled for demo
 
     this.logger.debug('Initialized tools registry', {

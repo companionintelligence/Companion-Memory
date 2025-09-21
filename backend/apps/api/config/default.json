@@ -59,6 +59,9 @@
     },
     "tts": {
       "host": "http://localhost:9002"
+    },
+    "crawler": {
+      "host": "http://localhost:9003"
     }
   },
   "features": {

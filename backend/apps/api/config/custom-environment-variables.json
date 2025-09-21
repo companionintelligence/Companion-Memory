@@ -30,6 +30,9 @@
     },
     "tts": {
       "host": "TTS_HOST"
+    },
+    "crawler": {
+      "host": "CRAWLER_HOST"
     }
   },
   "features": {

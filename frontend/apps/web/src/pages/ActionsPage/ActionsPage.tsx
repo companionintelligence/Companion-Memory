@@ -1,6 +1,6 @@
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Card, Switch } from '@ci/shadcn';
-import { Bot, Clapperboard, Play, Utensils } from '@ci/shadcn/icons';
+import { Bot, Clapperboard, Play, Utensils, Globe } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
 
@@ -62,6 +62,23 @@ const AVAILABLE_TOOLS: ToolCard[] = [
       'Real-time streaming data',
       'Content discovery assistance',
       'Platform comparison',
+    ],
+    canToggle: true,
+    systemStatus: 'active',
+  },
+  {
+    id: 'web-crawler',
+    name: 'Web Crawler',
+    description:
+      'Crawl websites and extract content, links, and media. Perform research tasks and gather information from web pages.',
+    category: 'Research',
+    icon: <Globe className="h-6 w-6" />,
+    capabilities: [
+      'Single-page and deep crawling',
+      'Markdown content extraction',
+      'Link and media discovery',
+      'LLM-based content analysis',
+      'Research and data gathering',
     ],
     canToggle: true,
     systemStatus: 'active',

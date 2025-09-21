@@ -73,6 +73,27 @@ services:
     restart: unless-stopped
     profiles: [ "all", "infra" ]
 
+  crawler-service:
+    build:
+      context: ./backend/apps/crawler
+      dockerfile: Dockerfile
+    image: ci/crawler-service
+    pull_policy: build
+    container_name: crawler-service
+    ports:
+      - 9003:9003
+    volumes:
+      - crawler-service-data:/app/data
+      - crawler-service-cache:/app/cache
+    environment:
+      - PYTHONPATH=/app
+      - CRAWL4AI_CACHE_DIR=/app/cache
+      - CRAWL4AI_DATA_DIR=/app/data
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "infra" ]
+
   webserver:
     image: nginx:stable
     container_name: webserver
@@ -106,6 +127,7 @@ services:
       OLLAMA_HOST: http://host.docker.internal:11434
       STT_HOST: ${STT_HOST}
       TTS_HOST: ${TTS_HOST}
+      CRAWLER_HOST: ${CRAWLER_HOST}
     networks:
       - web
     extra_hosts:
@@ -135,6 +157,8 @@ volumes:
   stt-service-cache:
   tts-service-models:
   tts-service-cache:
+  crawler-service-data:
+  crawler-service-cache:
 
 networks:
   web:

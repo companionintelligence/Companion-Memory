@@ -10,6 +10,7 @@ const DEFAULT_PREFERENCES: ToolPreferences = {
   'food-preferences': true,
   'entertainment-preferences': true,
   'streaming-availability': true,
+  'web-crawler': true,
   'family-members': false, // Disabled by default (matches backend)
 };
 
