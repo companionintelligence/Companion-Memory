@@ -17,5 +17,5 @@ export abstract class BaseClient {
 
   abstract request<T>(connection: Connection, endpoint: string, options?: RequestInit): Promise<T>;
 
-  abstract sync(connection: Connection): Promise<SyncResponse>;
+  abstract sync(connection: Connection, nextPageToken?: string): Promise<SyncResponse>;
 }

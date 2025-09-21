@@ -4,8 +4,11 @@ import { BaseOAuth2Client } from './BaseOAuth2Client';
 import type { SyncResult, SyncResponse } from './types';
 
 export class MicrosoftClient extends BaseOAuth2Client {
-  async sync(connection: Connection): Promise<SyncResponse> {
-    this.logger.log('Syncing Microsoft data', { connectionId: connection.id });
+  async sync(connection: Connection, nextPageToken?: string): Promise<SyncResponse> {
+    this.logger.log('Syncing Microsoft data', {
+      connectionId: connection.id,
+      nextPageToken: nextPageToken || 'none',
+    });
 
     const syncResults: SyncResult[] = [];
     const errors: string[] = [];
@@ -23,7 +26,12 @@ export class MicrosoftClient extends BaseOAuth2Client {
 
     // Microsoft Graph - Calendar
     try {
-      const calendarData = await this.request(connection, '/v1.0/me/calendar/events?$top=10');
+      let calendarEndpoint = '/v1.0/me/calendar/events?$top=10';
+      if (nextPageToken) {
+        calendarEndpoint += `&$skiptoken=${nextPageToken}`;
+      }
+
+      const calendarData = await this.request(connection, calendarEndpoint);
 
       syncResults.push({ api: 'Microsoft Graph - Calendar', data: calendarData });
     } catch (error) {

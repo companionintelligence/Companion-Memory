@@ -132,7 +132,7 @@ export class ConnectionsController {
   @Post(':id/sync')
   @HttpCode(200)
   async sync(@Context() context: RequestContext, @Param('id') id: string) {
-    return this.connectionService.sync(context, id, false);
+    return this.connectionService.sync(context, id, true);
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
