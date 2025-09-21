@@ -27,7 +27,6 @@ const InsightsPage = lazy(() => import('@/pages/InsightsPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage'));
 const MemoryPage = lazy(() => import('@/pages/MemoryPage'));
 const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
-const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 const SystemPage = lazy(() => import('@/pages/SystemPage'));
 
@@ -73,15 +72,6 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <FeedPage />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/search"
-          element={
-            <ProtectedRoute>
-              <SearchPage />
             </ProtectedRoute>
           }
         />

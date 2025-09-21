@@ -8,7 +8,6 @@ import {
   Lightbulb,
   ListTodo,
   MessagesSquare,
-  Search,
   Settings2,
   Zap,
 } from '@ci/shadcn/icons';
@@ -23,11 +22,6 @@ const INTELLIGENCE = [
     name: 'Feed',
     url: '/feed',
     icon: Inbox,
-  },
-  {
-    name: 'Search',
-    url: '/search',
-    icon: Search,
   },
   {
     name: 'Memory',
@@ -99,7 +93,7 @@ export function SecondaryNavigation() {
           <NavSection title="Content" items={CONTENT} />
         </Sidebar.Content>
         <Sidebar.Footer>
-          <NavSection items={SYSTEM} />
+          <NavSection items={SYSTEM} centerIconsWhenCollapsed={true} />
           <NavUser />
         </Sidebar.Footer>
       </Sidebar>

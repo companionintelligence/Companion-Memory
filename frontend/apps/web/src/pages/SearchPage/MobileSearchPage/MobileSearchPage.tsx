@@ -25,7 +25,7 @@ function Actions() {
     <div className="flex flex-col flex-1 justify-end">
       <div className="grid grid-cols-2 gap-4 p-3">
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
-          <Link to="/memory">
+          <Link to="/chat">
             <MessagesSquare className="h-4 w-4" />
             Chats
           </Link>
