@@ -18,10 +18,17 @@ import uvicorn
 try:
     from crawl4ai import AsyncWebCrawler, CrawlResult
     from crawl4ai.extraction_strategy import LLMExtractionStrategy
+    # Try to import LLMConfig, but handle if it doesn't exist
+    try:
+        from crawl4ai.extraction_strategy import LLMConfig
+    except ImportError:
+        # Fallback for older versions
+        LLMConfig = None
 except ImportError:
     AsyncWebCrawler = None
     CrawlResult = None
     LLMExtractionStrategy = None
+    LLMConfig = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -91,19 +98,29 @@ async def crawl_single_page(url: str, request: CrawlRequest) -> CrawlResponse:
     try:
         logger.info(f"Starting crawl for URL: {url}")
         
-        # Prepare crawl parameters
+        # Prepare crawl parameters with optimized defaults for content extraction
         crawl_params = {
             "url": str(url),
-            "wait_for": request.wait_for,
-            "delay_between_requests": request.delay_between_requests,
-            "extract_links": request.extract_links,
-            "extract_media": request.extract_media,
-            "word_count_threshold": request.word_count_threshold,
+            "wait_for": request.wait_for or "article, main, .content, .post",
+            "delay_between_requests": request.delay_between_requests or 1.0,
+            "extract_links": request.extract_links if request.extract_links is not None else True,
+            "extract_media": request.extract_media if request.extract_media is not None else True,
+            "word_count_threshold": request.word_count_threshold or 50,  # Higher threshold for better content
+            "exclude_social_media_links": True,  # Filter out social media links
+            "exclude_mailto_links": True,  # Filter out email links
+            "exclude_external_links": False,  # Keep external links for context
+            "remove_overlay": True,  # Remove overlay elements
+            "bypass_cache": True,  # Get fresh content
+            "css_selector": "article, main, .content, .post, .entry, .article-body, .story-body, .post-content, [data-module='ArticleBody'], .ArticleBody, .RichTextStoryBody",  # Focus on main content
+            "exclude_links": "nav, footer, .sidebar, .advertisement, .ads, .social, .share, .comments, .related, .navigation, .menu, .header, .footer",  # Exclude navigation and ads
+            "exclude_text": "advertisement, sponsored, promoted, cookie, privacy policy, terms of service, newsletter, subscribe, follow us, social media",  # Exclude common ad/nav text
         }
         
-        # Add user agent if provided
+        # Add user agent if provided, otherwise use a default browser-like user agent
         if request.user_agent:
             crawl_params["user_agent"] = request.user_agent
+        else:
+            crawl_params["user_agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
         # Add headers if provided
         if request.headers:
@@ -111,11 +128,31 @@ async def crawl_single_page(url: str, request: CrawlRequest) -> CrawlResponse:
         
         # Add extraction strategy if provided
         if request.extraction_strategy == "llm" and request.extraction_query:
-            crawl_params["extraction_strategy"] = LLMExtractionStrategy(
-                provider="ollama/llama2",
-                api_token="your-api-token",
-                instruction=request.extraction_query
-            )
+            try:
+                if LLMConfig is not None:
+                    # Use new LLMConfig format
+                    crawl_params["extraction_strategy"] = LLMExtractionStrategy(
+                        llm_config=LLMConfig(
+                            provider="ollama",
+                            model="gemma3:1b",  # Use the same model as the main API
+                            api_base_url="http://host.docker.internal:11434",  # Connect to host Ollama
+                            api_key="ollama"  # Default Ollama API key
+                        ),
+                        instruction=request.extraction_query
+                    )
+                else:
+                    # Fallback to older format if LLMConfig is not available
+                    crawl_params["extraction_strategy"] = LLMExtractionStrategy(
+                        provider="ollama",
+                        model="gemma3:1b",
+                        api_base_url="http://host.docker.internal:11434",
+                        api_key="ollama",
+                        instruction=request.extraction_query
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to create LLM extraction strategy: {e}")
+                # Skip LLM extraction if there's an error
+                pass
         
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(**crawl_params)
@@ -197,21 +234,28 @@ async def crawl_multiple_pages(url: str, request: CrawlRequest) -> CrawlResponse
     try:
         logger.info(f"Starting deep crawl for URL: {url}, max_pages: {request.max_pages}")
         
-        # Prepare crawl parameters for deep crawl
+        # Prepare crawl parameters for deep crawl with optimized defaults
         crawl_params = {
             "url": str(url),
-            "wait_for": request.wait_for,
-            "delay_between_requests": request.delay_between_requests,
-            "extract_links": request.extract_links,
-            "extract_media": request.extract_media,
-            "word_count_threshold": request.word_count_threshold,
+            "wait_for": request.wait_for or "article, main, .content, .post",
+            "delay_between_requests": request.delay_between_requests or 1.0,
+            "extract_links": request.extract_links if request.extract_links is not None else True,
+            "extract_media": request.extract_media if request.extract_media is not None else True,
+            "word_count_threshold": request.word_count_threshold or 50,  # Higher threshold for better content
             "max_pages": request.max_pages,
-            "crawl_strategy": request.crawl_strategy,
+            "crawl_strategy": request.crawl_strategy or "bfs",
+            "exclude_social_media_links": True,  # Filter out social media links
+            "exclude_mailto_links": True,  # Filter out email links
+            "css_selector": "article, main, .content, .post, .entry, .article-body, .story-body, .post-content, [data-module='ArticleBody'], .ArticleBody, .RichTextStoryBody",  # Focus on main content
+            "exclude_links": "nav, footer, .sidebar, .advertisement, .ads, .social, .share, .comments, .related, .navigation, .menu, .header, .footer",  # Exclude navigation and ads
+            "exclude_text": "advertisement, sponsored, promoted, cookie, privacy policy, terms of service, newsletter, subscribe, follow us, social media",  # Exclude common ad/nav text
         }
         
-        # Add user agent if provided
+        # Add user agent if provided, otherwise use a default browser-like user agent
         if request.user_agent:
             crawl_params["user_agent"] = request.user_agent
+        else:
+            crawl_params["user_agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
         # Add headers if provided
         if request.headers:
@@ -219,11 +263,31 @@ async def crawl_multiple_pages(url: str, request: CrawlRequest) -> CrawlResponse
         
         # Add extraction strategy if provided
         if request.extraction_strategy == "llm" and request.extraction_query:
-            crawl_params["extraction_strategy"] = LLMExtractionStrategy(
-                provider="ollama/llama2",
-                api_token="your-api-token",
-                instruction=request.extraction_query
-            )
+            try:
+                if LLMConfig is not None:
+                    # Use new LLMConfig format
+                    crawl_params["extraction_strategy"] = LLMExtractionStrategy(
+                        llm_config=LLMConfig(
+                            provider="ollama",
+                            model="gemma3:1b",  # Use the same model as the main API
+                            api_base_url="http://host.docker.internal:11434",  # Connect to host Ollama
+                            api_key="ollama"  # Default Ollama API key
+                        ),
+                        instruction=request.extraction_query
+                    )
+                else:
+                    # Fallback to older format if LLMConfig is not available
+                    crawl_params["extraction_strategy"] = LLMExtractionStrategy(
+                        provider="ollama",
+                        model="gemma3:1b",
+                        api_base_url="http://host.docker.internal:11434",
+                        api_key="ollama",
+                        instruction=request.extraction_query
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to create LLM extraction strategy: {e}")
+                # Skip LLM extraction if there's an error
+                pass
         
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(**crawl_params)
@@ -351,16 +415,45 @@ async def crawl_simple(url: HttpUrl, extract_query: Optional[str] = None):
         crawl_params = {
             "url": str(url),
             "extract_links": True,
-            "word_count_threshold": 10,
+            "extract_media": True,
+            "word_count_threshold": 50,  # Higher threshold to filter out short content
+            "exclude_external_links": False,
+            "exclude_social_media_links": True,  # Filter out social media links
+            "exclude_mailto_links": True,  # Filter out email links
+            "css_selector": "article, main, .content, .post, .entry, .article-body, .story-body, .post-content",  # Focus on main content areas
+            "exclude_links": "nav, footer, .sidebar, .advertisement, .ads, .social, .share, .comments, .related",  # Exclude navigation and ads
+            "exclude_text": "advertisement, sponsored, promoted, cookie, privacy policy, terms of service",  # Exclude common ad/nav text
+            "wait_for": "article, main, .content, .post",  # Wait for main content to load
+            "delay_between_requests": 1.0,  # Be respectful to servers
         }
         
         # Add LLM extraction if query provided
         if extract_query:
-            crawl_params["extraction_strategy"] = LLMExtractionStrategy(
-                provider="ollama/llama2",
-                api_token="your-api-token",
-                instruction=extract_query
-            )
+            try:
+                if LLMConfig is not None:
+                    # Use new LLMConfig format
+                    crawl_params["extraction_strategy"] = LLMExtractionStrategy(
+                        llm_config=LLMConfig(
+                            provider="ollama",
+                            model="gemma3:1b",  # Use the same model as the main API
+                            api_base_url="http://host.docker.internal:11434",  # Connect to host Ollama
+                            api_key="ollama"  # Default Ollama API key
+                        ),
+                        instruction=extract_query
+                    )
+                else:
+                    # Fallback to older format if LLMConfig is not available
+                    crawl_params["extraction_strategy"] = LLMExtractionStrategy(
+                        provider="ollama",
+                        model="gemma3:1b",
+                        api_base_url="http://host.docker.internal:11434",
+                        api_key="ollama",
+                        instruction=extract_query
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to create LLM extraction strategy: {e}")
+                # Skip LLM extraction if there's an error
+                pass
         
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(**crawl_params)
