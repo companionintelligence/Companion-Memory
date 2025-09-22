@@ -8,7 +8,7 @@ declare global {
     google: typeof google;
   }
 }
-import { Breadcrumb, Tabs, Card, Select } from '@ci/shadcn';
+import { Breadcrumb, Tabs, Card, Select, Button } from '@ci/shadcn';
 import {
   Clock,
   Coffee,
@@ -30,12 +30,14 @@ import {
   AlertCircle,
   Filter,
   Route,
+  Plus,
 } from '@ci/shadcn/icons';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
+import { AddMemoryModal } from '@/components/modals/AddMemoryModal';
 import { useAuth } from '@/hooks';
 
 // Add custom styles for Leaflet
@@ -61,6 +63,15 @@ interface MemoryItem {
   metadata?: Record<string, unknown>;
   connectionId?: string;
   connectionName?: string;
+}
+
+// File metadata for gallery
+interface FileMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  size: string;
+  url?: string;
 }
 
 // Helper function to get icon for memory type/category
@@ -123,6 +134,13 @@ export function MemoryPage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [connectionFilter, setConnectionFilter] = useState<string>('all');
   const [showTimeline, setShowTimeline] = useState<boolean>(false);
+
+  // Gallery states
+  const [galleryFiles, setGalleryFiles] = useState<FileMeta[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+
+  // Add Memory Modal states
+  const [isAddMemoryModalOpen, setIsAddMemoryModalOpen] = useState(false);
 
   // Demo data focused on Los Angeles city only
   const demoMemories: MemoryItem[] = [
@@ -798,10 +816,44 @@ export function MemoryPage() {
     }
   };
 
+  // Fetch files for gallery
+  const fetchGalleryFiles = async () => {
+    setGalleryLoading(true);
+    try {
+      const res = await fetch('/api/files', {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to fetch file list');
+      }
+
+      const metaList: FileMeta[] = (await res.json()).map((file: FileMeta) => ({
+        ...file,
+        url: `/static${file.url}`,
+      }));
+
+      setGalleryFiles(metaList);
+    } catch (err) {
+      console.error('Error fetching gallery files:', err);
+    } finally {
+      setGalleryLoading(false);
+    }
+  };
+
   // Initial load
   useEffect(() => {
     fetchMemories();
   }, [authToken]);
+
+  // Load gallery files when gallery tab is active
+  useEffect(() => {
+    if (activeTab === 'gallery') {
+      fetchGalleryFiles();
+    }
+  }, [activeTab, authToken]);
 
   // Handle search
   const handleSearch = () => {
@@ -811,6 +863,25 @@ export function MemoryPage() {
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       handleSearch();
+    }
+  };
+
+  // Handle add memory button click
+  const handleAddMemory = () => {
+    setIsAddMemoryModalOpen(true);
+  };
+
+  // Handle add memory modal close
+  const handleAddMemoryModalClose = () => {
+    setIsAddMemoryModalOpen(false);
+  };
+
+  // Handle memory added callback
+  const handleMemoryAdded = () => {
+    // Refresh memories and gallery files
+    fetchMemories();
+    if (activeTab === 'gallery') {
+      fetchGalleryFiles();
     }
   };
 
@@ -1112,6 +1183,18 @@ export function MemoryPage() {
         </Breadcrumb>
       </Portal.Slot>
 
+      <Portal.Slot id="actions">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleAddMemory}
+          className="h-8 w-8 p-0"
+          title="Add Memory"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+      </Portal.Slot>
+
       <PageContent>
         {/* Search Bar and Filters */}
         <div className="flex items-center w-full -mx-2">
@@ -1193,12 +1276,15 @@ export function MemoryPage() {
                 onValueChange={setActiveTab}
                 value={activeTab}
               >
-                <Tabs.List className="grid grid-cols-2 w-32">
+                <Tabs.List className="grid grid-cols-3 w-48">
                   <Tabs.Trigger value="map" className="text-xs">
                     Map
                   </Tabs.Trigger>
                   <Tabs.Trigger value="list" className="text-xs">
                     List
+                  </Tabs.Trigger>
+                  <Tabs.Trigger value="gallery" className="text-xs">
+                    Gallery
                   </Tabs.Trigger>
                 </Tabs.List>
               </Tabs>
@@ -1428,9 +1514,88 @@ export function MemoryPage() {
                 </div>
               </>
             )}
+
+            {activeTab === 'gallery' && (
+              <>
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-medium">Content Gallery</h3>
+                  </div>
+
+                  {/* Gallery Content */}
+                  {galleryLoading ? (
+                    <div className="flex justify-center items-center py-12">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                      {galleryFiles.map((file) => {
+                        if (file.contentType.startsWith('image/')) {
+                          return (
+                            <div
+                              key={file.id}
+                              className="flex flex-col items-center border rounded-lg p-2 bg-gray-50 shadow hover:shadow-md transition-shadow"
+                            >
+                              <img
+                                src={file.url}
+                                alt={file.name}
+                                className="w-full h-48 object-cover rounded mb-2"
+                                loading="lazy"
+                              />
+                              <div className="text-xs font-medium text-center">{file.name}</div>
+                              <div className="text-[10px] text-gray-400">
+                                {(Number(file.size) / 1024).toFixed(1)} KB
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        if (file.contentType.startsWith('video/')) {
+                          return (
+                            <div
+                              key={file.id}
+                              className="flex flex-col items-center border rounded-lg p-2 bg-gray-50 shadow hover:shadow-md transition-shadow"
+                            >
+                              <video
+                                src={file.url}
+                                controls
+                                className="w-full h-48 object-cover rounded mb-2 bg-black"
+                                preload="metadata"
+                              />
+                              <div className="text-xs font-medium text-center">{file.name}</div>
+                              <div className="text-[10px] text-gray-400">
+                                {(Number(file.size) / 1024 / 1024).toFixed(1)} MB
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return null;
+                      })}
+                    </div>
+                  )}
+
+                  {!galleryLoading && galleryFiles.length === 0 && (
+                    <div className="text-center py-12">
+                      <p className="text-muted-foreground">No content uploaded yet.</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Use the + button to add new content.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </>
         )}
       </PageContent>
+
+      {/* Add Memory Modal */}
+      <AddMemoryModal
+        open={isAddMemoryModalOpen}
+        onClose={handleAddMemoryModalClose}
+        onMemoryAdded={handleMemoryAdded}
+      />
     </>
   );
 }
