@@ -19,13 +19,13 @@ export function ThemeToggle() {
   const getIcon = () => {
     switch (themeState.mode) {
       case 'light':
-        return <Sun className="h-4 w-4" />;
+        return <Sun className="h-5 w-5" />;
       case 'dark':
-        return <Moon className="h-4 w-4" />;
+        return <Moon className="h-5 w-5" />;
       case 'system':
-        return <Monitor className="h-4 w-4" />;
+        return <Monitor className="h-5 w-5" />;
       default:
-        return <Sun className="h-4 w-4" />;
+        return <Sun className="h-5 w-5" />;
     }
   };
 

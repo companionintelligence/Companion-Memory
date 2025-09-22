@@ -74,7 +74,7 @@ interface FileMeta {
 
 // Helper function to get icon for memory type/category
 function getMemoryIcon(memory: MemoryItem): React.ReactNode {
-  const iconClass = 'h-5 w-5';
+  const iconClass = 'h-6 w-6';
 
   // First check by type
   switch (memory.type) {
@@ -1167,7 +1167,7 @@ export function MemoryPage() {
             <div className="flex">
               <div className="relative flex-grow">
                 <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <Search className="h-5 w-5 text-muted-foreground" />
                 </div>
                 <input
                   type="search"
@@ -1184,7 +1184,7 @@ export function MemoryPage() {
                 onClick={handleSearch}
                 disabled={loading}
               >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
                 <span className="ml-2">Search</span>
               </button>
             </div>
@@ -1203,7 +1203,7 @@ export function MemoryPage() {
 
               {/* Type Filter */}
               <div className="flex items-center gap-2 relative z-[100]">
-                <Filter className="h-4 w-4 text-muted-foreground" />
+                <Filter className="h-5 w-5 text-muted-foreground" />
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
                   <Select.Trigger className="w-32 h-8 text-xs">
                     <Select.Value placeholder="Type" />
@@ -1260,7 +1260,7 @@ export function MemoryPage() {
         {error && (
           <Card className="bg-destructive/10 text-destructive">
             <Card.Content className="flex items-start gap-3 p-4">
-              <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="h-6 w-6 mt-0.5 flex-shrink-0" />
               <div>
                 <h3 className="font-medium">Error loading memories</h3>
                 <p className="text-sm">{error}</p>
@@ -1272,7 +1272,7 @@ export function MemoryPage() {
         {/* Loading State */}
         {loading && (
           <div className="flex justify-center items-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
           </div>
         )}
 
@@ -1301,7 +1301,7 @@ export function MemoryPage() {
                           <div className="flex justify-between items-start">
                             <h4 className="font-medium truncate">{memory.title}</h4>
                             <div className="flex items-center text-muted-foreground text-sm">
-                              <Clock className="h-3 w-3 mr-1" />
+                              <Clock className="h-4 w-4 mr-1" />
                               {new Date(memory.timestamp).toLocaleTimeString([], {
                                 hour: '2-digit',
                                 minute: '2-digit',
@@ -1420,7 +1420,7 @@ export function MemoryPage() {
                             : 'bg-background text-foreground border-input hover:bg-accent'
                         }`}
                       >
-                        <Route className="h-3 w-3" />
+                        <Route className="h-4 w-4" />
                         Timeline
                       </button>
                     </div>
@@ -1482,7 +1482,7 @@ export function MemoryPage() {
                   {/* Gallery Content */}
                   {galleryLoading ? (
                     <div className="flex justify-center items-center py-12">
-                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                      <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -1500,7 +1500,7 @@ export function MemoryPage() {
                                 loading="lazy"
                               />
                               <div className="text-xs font-medium text-center">{file.name}</div>
-                              <div className="text-[10px] text-gray-400">
+                              <div className="text-xs text-gray-400">
                                 {(Number(file.size) / 1024).toFixed(1)} KB
                               </div>
                             </div>
@@ -1520,7 +1520,7 @@ export function MemoryPage() {
                                 preload="metadata"
                               />
                               <div className="text-xs font-medium text-center">{file.name}</div>
-                              <div className="text-[10px] text-gray-400">
+                              <div className="text-xs text-gray-400">
                                 {(Number(file.size) / 1024 / 1024).toFixed(1)} MB
                               </div>
                             </div>

@@ -33,7 +33,7 @@ export function PrimaryNavigation() {
               className="h-8 w-8 p-0"
               title="Add Memory"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-5 w-5" />
             </Button>
             <CaptureModalToggle openModal={openModal} />
             <ThemeToggle />

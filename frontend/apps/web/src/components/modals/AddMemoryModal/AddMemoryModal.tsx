@@ -108,15 +108,15 @@ export function AddMemoryModal({ open = false, onClose, onMemoryAdded }: Props) 
   const getTypeIcon = (type: MemoryType) => {
     switch (type) {
       case 'person':
-        return <User className="h-4 w-4" />;
+        return <User className="h-5 w-5" />;
       case 'place':
-        return <MapPin className="h-4 w-4" />;
+        return <MapPin className="h-5 w-5" />;
       case 'thing':
-        return <Package className="h-4 w-4" />;
+        return <Package className="h-5 w-5" />;
       case 'event':
-        return <Calendar className="h-4 w-4" />;
+        return <Calendar className="h-5 w-5" />;
       case 'content':
-        return <FileText className="h-4 w-4" />;
+        return <FileText className="h-5 w-5" />;
     }
   };
 

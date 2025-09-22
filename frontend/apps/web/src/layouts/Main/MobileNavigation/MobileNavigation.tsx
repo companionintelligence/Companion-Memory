@@ -59,7 +59,7 @@ export function NavButton({ to, icon: Icon, label, onClick }: NavButtonProps) {
       className="flex flex-1 flex-col gap-0.5 justify-center items-center p-4 select-none"
       onClick={onClick}
     >
-      <Icon className="h-6 w-6" strokeWidth={1} />
+      <Icon className="h-8 w-8" strokeWidth={1} />
       <span className="text-xxs">{label}</span>
     </Link>
   );

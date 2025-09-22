@@ -79,42 +79,42 @@ function Navigation() {
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           {/* TODO: The profile page doesn't exist, we will eventually create one. */}
           <Link to="/system">
-            <User className="h-4 w-4" />
+            <User className="h-5 w-5" />
             Profile
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/actions">
-            <Zap className="h-4 w-4" />
+            <Zap className="h-5 w-5" />
             Actions
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/analytics">
-            <ChartPie className="h-4 w-4" />
+            <ChartPie className="h-5 w-5" />
             Analytics
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/jobs">
-            <ListTodo className="h-4 w-4" />
+            <ListTodo className="h-5 w-5" />
             Jobs
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/connections">
-            <Cable className="h-4 w-4" />
+            <Cable className="h-5 w-5" />
             Connections
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/settings">
-            <Settings2 className="h-4 w-4" />
+            <Settings2 className="h-5 w-5" />
             Settings
           </Link>
         </Button>
@@ -130,7 +130,7 @@ function Logout() {
     <div className="flex justify-center">
       <Button variant="destructive" className="justify-center p-6" onClick={logout} asChild>
         <Link to="/">
-          <LogOut className="h-4 w-4" />
+          <LogOut className="h-5 w-5" />
           Logout
         </Link>
       </Button>

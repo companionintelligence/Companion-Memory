@@ -26,28 +26,28 @@ function Actions() {
       <div className="grid grid-cols-2 gap-4 p-3">
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/chat">
-            <MessagesSquare className="h-4 w-4" />
+            <MessagesSquare className="h-5 w-5" />
             Chats
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/files">
-            <BookImage className="h-4 w-4" />
+            <BookImage className="h-5 w-5" />
             Content
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/memory">
-            <Brain className="h-4 w-4" />
+            <Brain className="h-5 w-5" />
             Memory
           </Link>
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/insights">
-            <Lightbulb className="h-4 w-4" />
+            <Lightbulb className="h-5 w-5" />
             Insights
           </Link>
         </Button>

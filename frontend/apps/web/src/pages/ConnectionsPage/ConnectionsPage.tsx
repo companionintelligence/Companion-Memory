@@ -562,7 +562,7 @@ export function ConnectionsPage() {
 
           <div className="flex flex-row items-center gap-2">
             <Button variant="outline" size="icon" disabled={loading} title="Refresh Providers">
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
             <Button variant="outline" disabled={loading} onClick={connectionCreate} title="Create Connection">
               Create
@@ -576,12 +576,12 @@ export function ConnectionsPage() {
 
         {loading || oauthInProgress ? (
           <div className="text-center py-8">
-            <RefreshCw className="h-8 w-8 animate-spin mx-auto" />
+            <RefreshCw className="h-10 w-10 animate-spin mx-auto" />
             <p>{oauthInProgress ? 'Redirecting to authentication...' : 'Loading...'}</p>
           </div>
         ) : error ? (
           <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+            <AlertCircle className="h-6 w-6 mt-0.5 flex-shrink-0" />
             <div>
               <h3 className="font-medium">Error loading</h3>
               <p className="text-sm">{error}</p>
@@ -618,12 +618,12 @@ export function ConnectionsPage() {
                       <Table.Cell className="text-sm">
                         {connection.accessToken ? (
                           <span className="flex items-center gap-1 text-green-600">
-                            <Link2 className="h-3 w-3" />
+                            <Link2 className="h-5 w-5" />
                             Connected
                           </span>
                         ) : (
                           <span className="flex items-center gap-1 text-muted-foreground">
-                            <X className="h-3 w-3" />
+                            <X className="h-4 w-4" />
                             Not connected
                           </span>
                         )}
@@ -648,7 +648,7 @@ export function ConnectionsPage() {
                             disabled={deleteLoading === connection.id || oauthInProgress}
                             title="Configure"
                           >
-                            <Settings className="h-4 w-4" />
+                            <Settings className="h-5 w-5" />
                           </Button>
                           <Button
                             size="sm"
@@ -669,9 +669,9 @@ export function ConnectionsPage() {
                             }
                           >
                             {connection.accessToken ? (
-                              <RefreshCw className="h-4 w-4" />
+                              <RefreshCw className="h-5 w-5" />
                             ) : (
-                              <Link2 className="h-4 w-4" />
+                              <Link2 className="h-5 w-5" />
                             )}
                           </Button>
                           <Button
@@ -682,9 +682,9 @@ export function ConnectionsPage() {
                             title="Delete Connection"
                           >
                             {deleteLoading === connection.id ? (
-                              <RefreshCw className="h-4 w-4 animate-spin" />
+                              <RefreshCw className="h-5 w-5 animate-spin" />
                             ) : (
-                              <Trash2 className="h-4 w-4" />
+                              <Trash2 className="h-5 w-5" />
                             )}
                           </Button>
                           <Button
@@ -694,7 +694,7 @@ export function ConnectionsPage() {
                             disabled={deleteLoading === connection.id || oauthInProgress}
                             title="Sync Now"
                           >
-                            <HardDriveDownload className="h-4 w-4" />
+                            <HardDriveDownload className="h-5 w-5" />
                           </Button>
                         </div>
                       </Table.Cell>
@@ -764,7 +764,7 @@ export function ConnectionsPage() {
             >
               {modalLoading ? (
                 <>
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  <RefreshCw className="h-5 w-5 animate-spin mr-2" />
                   Creating...
                 </>
               ) : (
@@ -790,7 +790,7 @@ export function ConnectionsPage() {
 
             {selectedConnection?.accessToken && (
               <div className="bg-green-50 text-green-800 rounded-md p-3 text-sm flex items-center gap-2">
-                <Link2 className="h-4 w-4" />
+                <Link2 className="h-5 w-5" />
                 This connection is authenticated. You can reconnect if needed.
               </div>
             )}
@@ -875,7 +875,7 @@ export function ConnectionsPage() {
             <Button onClick={handleEditSubmit} disabled={modalLoading || !editFormData.name}>
               {modalLoading ? (
                 <>
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  <RefreshCw className="h-5 w-5 animate-spin mr-2" />
                   Saving...
                 </>
               ) : (

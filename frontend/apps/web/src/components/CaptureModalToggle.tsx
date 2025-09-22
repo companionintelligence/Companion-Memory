@@ -8,7 +8,7 @@ interface Props {
 export function CaptureModalToggle({ openModal }: Props) {
   return (
     <Button variant="ghost" size="icon" onClick={openModal} title="Open Capture Modal">
-      <Camera className="h-4 w-4" />
+      <Camera className="h-5 w-5" />
     </Button>
   );
 }

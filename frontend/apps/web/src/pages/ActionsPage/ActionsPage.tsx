@@ -24,7 +24,7 @@ const AVAILABLE_TOOLS: ToolCard[] = [
     description:
       'Get user food preferences, dietary restrictions, allergies, and eating habits for meal planning and cooking recommendations.',
     category: 'Lifestyle',
-    icon: <Utensils className="h-6 w-6" />,
+    icon: <Utensils className="h-8 w-8" />,
     capabilities: [
       'Dietary restrictions and allergies',
       'Food preferences and dislikes',
@@ -40,7 +40,7 @@ const AVAILABLE_TOOLS: ToolCard[] = [
     description:
       'Access movie genres, TV show types, streaming preferences, and viewing habits for personalized entertainment recommendations.',
     category: 'Entertainment',
-    icon: <Clapperboard className="h-6 w-6" />,
+    icon: <Clapperboard className="h-8 w-8" />,
     capabilities: [
       'Movie and TV genre preferences',
       'Streaming service preferences',
@@ -56,7 +56,7 @@ const AVAILABLE_TOOLS: ToolCard[] = [
     description:
       'Check what movies and TV shows are currently available across different streaming platforms.',
     category: 'Entertainment',
-    icon: <Play className="h-6 w-6" />,
+    icon: <Play className="h-8 w-8" />,
     capabilities: [
       'Multi-platform availability check',
       'Real-time streaming data',
@@ -72,7 +72,7 @@ const AVAILABLE_TOOLS: ToolCard[] = [
     description:
       'Crawl websites and extract content, links, and media. Perform research tasks and gather information from web pages.',
     category: 'Research',
-    icon: <Globe className="h-6 w-6" />,
+    icon: <Globe className="h-8 w-8" />,
     capabilities: [
       'Single-page and deep crawling',
       'Markdown content extraction',
@@ -89,7 +89,7 @@ const AVAILABLE_TOOLS: ToolCard[] = [
     description:
       'Access information about family members and relationships for personalized interactions and planning.',
     category: 'Personal',
-    icon: <Bot className="h-6 w-6" />,
+    icon: <Bot className="h-8 w-8" />,
     capabilities: [
       'Family member profiles',
       'Relationship context',

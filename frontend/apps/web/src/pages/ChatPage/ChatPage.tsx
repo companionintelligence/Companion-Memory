@@ -158,7 +158,7 @@ export default function ChatPage() {
         <Card.Content className="p-6">
           <div className="flex items-start gap-4">
             <div className="w-10 h-10 rounded-full bg-destructive/20 flex items-center justify-center flex-shrink-0">
-              <X className="h-5 w-5 text-destructive" />
+              <X className="h-6 w-6 text-destructive" />
             </div>
             <div className="flex-1">
               <h3 className="font-semibold text-destructive mb-2">Error loading threads</h3>
@@ -169,7 +169,7 @@ export default function ChatPage() {
                 onClick={refetchThreads}
                 className="border-destructive/20 text-destructive hover:bg-destructive/10"
               >
-                <RefreshCw className="h-4 w-4 mr-2" />
+                <RefreshCw className="h-5 w-5 mr-2" />
                 Try Again
               </Button>
             </div>
@@ -181,7 +181,7 @@ export default function ChatPage() {
     emptyState = (
       <div className="flex flex-col items-center text-gray-500">
         <div className="w-16 h-16 mx-auto bg-stone-100 rounded-full flex items-center justify-center mb-4">
-          <Send className="w-8 h-8 text-zinc-400 relative top-0.5 -left-0.5" />
+          <Send className="w-10 h-10 text-zinc-400 relative top-0.5 -left-0.5" />
         </div>
         <p className="text-sm mb-1">Start a conversation with your Companion</p>
         <p className="text-xs text-gray-400">Ask questions, get recommendations, or explore ideas</p>

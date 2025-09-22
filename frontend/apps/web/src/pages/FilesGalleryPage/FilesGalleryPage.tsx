@@ -148,9 +148,7 @@ export function FilesGalleryPage() {
                       loading="lazy"
                     />
                     <div className="text-xs font-medium">{file.name}</div>
-                    <div className="text-[10px] text-gray-400">
-                      {(Number(file.size) / 1024).toFixed(1)} KB
-                    </div>
+                    <div className="text-xs text-gray-400">{(Number(file.size) / 1024).toFixed(1)} KB</div>
                   </div>
                 );
               }
@@ -168,7 +166,7 @@ export function FilesGalleryPage() {
                       preload="metadata"
                     />
                     <div className="text-xs font-medium">{file.name}</div>
-                    <div className="text-[10px] text-gray-400">
+                    <div className="text-xs text-gray-400">
                       {(Number(file.size) / 1024 / 1024).toFixed(1)} MB
                     </div>
                   </div>

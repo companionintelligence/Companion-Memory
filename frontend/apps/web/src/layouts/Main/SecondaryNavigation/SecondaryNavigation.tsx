@@ -80,7 +80,7 @@ export function SecondaryNavigation() {
           </div>
         </Sidebar.Header>
         <Sidebar.Content className="gap-0">
-          <NavSection title="Intelligence" items={INTELLIGENCE} />
+          <NavSection items={INTELLIGENCE} />
         </Sidebar.Content>
         <Sidebar.Footer>
           <NavSection items={SYSTEM} centerIconsWhenCollapsed={true} />
