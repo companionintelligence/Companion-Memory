@@ -1317,8 +1317,6 @@ export function MemoryPage() {
           <>
             {activeTab === 'list' && (
               <>
-                <h3 className="text-lg font-medium mb-4 mt-2">Memory Timeline</h3>
-
                 {filteredMemories.length === 0 ? (
                   <div className="text-center py-8">
                     <p className="text-muted-foreground">
@@ -1450,7 +1448,6 @@ export function MemoryPage() {
                   {/* Locations List - Left Column */}
                   <div className="lg:col-span-1 flex flex-col overflow-hidden pl-4 pr-2 ">
                     <div className="flex justify-between items-center mb-4 flex-shrink-0">
-                      <h3 className="text-lg font-medium">Locations</h3>
                       <button
                         onClick={() => setShowTimeline(!showTimeline)}
                         className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border transition-colors ${
@@ -1518,10 +1515,6 @@ export function MemoryPage() {
             {activeTab === 'gallery' && (
               <>
                 <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-medium">Content Gallery</h3>
-                  </div>
-
                   {/* Gallery Content */}
                   {galleryLoading ? (
                     <div className="flex justify-center items-center py-12">
