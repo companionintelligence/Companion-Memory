@@ -26,13 +26,7 @@ export function PrimaryNavigation() {
           <Portal id="actions" className="flex flex-row items-center" />
 
           <div className="flex flex-row items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={openAddMemoryModal}
-              className="h-8 w-8 p-0"
-              title="Add Memory"
-            >
+            <Button variant="ghost" size="icon" onClick={openAddMemoryModal} title="Add Memory">
               <Plus className="h-5 w-5" />
             </Button>
             <CaptureModalToggle openModal={openModal} />

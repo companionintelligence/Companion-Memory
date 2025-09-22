@@ -169,7 +169,7 @@ export function InsightsPage() {
 
     return (
       <div className="space-y-2">
-        <div className="text-sm leading-relaxed break-words whitespace-pre-wrap">
+        <div className="text-base leading-relaxed break-words whitespace-pre-wrap">
           {formatTextWithLineBreaks(displayText)}
         </div>
         {shouldTruncate && (
@@ -177,7 +177,7 @@ export function InsightsPage() {
             variant="ghost"
             size="sm"
             onClick={() => toggleTextExpansion(textId)}
-            className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+            className="h-auto p-0 text-sm text-muted-foreground hover:text-foreground"
           >
             {isExpanded ? (
               <>
@@ -225,7 +225,7 @@ export function InsightsPage() {
               title="Refresh answers"
               className="lg:hidden"
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
 
@@ -237,10 +237,10 @@ export function InsightsPage() {
               onValueChange={(value) => value && setViewMode(value as 'card' | 'table')}
             >
               <ToggleGroup.Item value="card" aria-label="Card view">
-                <Grid3X3 className="h-4 w-4" />
+                <Grid3X3 className="h-5 w-5" />
               </ToggleGroup.Item>
               <ToggleGroup.Item value="table" aria-label="Table view">
-                <List className="h-4 w-4" />
+                <List className="h-5 w-5" />
               </ToggleGroup.Item>
             </ToggleGroup>
             <Button
@@ -250,7 +250,7 @@ export function InsightsPage() {
               disabled={loading}
               title="Refresh answers"
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </div>
@@ -262,10 +262,10 @@ export function InsightsPage() {
           </div>
         ) : error ? (
           <div className="bg-destructive/10 text-destructive rounded-md p-4 flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+            <AlertCircle className="h-6 w-6 mt-0.5 flex-shrink-0" />
             <div>
               <h3 className="font-medium">Error loading answers</h3>
-              <p className="text-sm">{error}</p>
+              <p className="text-base">{error}</p>
               <Button variant="outline" size="sm" className="mt-2" onClick={fetchAnswers}>
                 Try Again
               </Button>
@@ -288,16 +288,16 @@ export function InsightsPage() {
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-2">
                               {isManuallyAnswered(answer) ? (
-                                <Badge variant="secondary" className="text-xs">
+                                <Badge variant="secondary" className="text-sm">
                                   Manual
                                 </Badge>
                               ) : isLLMAnswered(answer) ? (
-                                <Badge variant="outline" className="text-xs">
+                                <Badge variant="outline" className="text-sm">
                                   AI Generated
                                 </Badge>
                               ) : null}
                             </div>
-                            <h3 className="font-semibold text-sm leading-tight">
+                            <h3 className="font-semibold text-base leading-tight">
                               <ExpandableText
                                 text={answer.question?.text}
                                 textId={`question-${answer.id}`}
@@ -309,7 +309,7 @@ export function InsightsPage() {
                       </Card.Header>
                       <Card.Content className="space-y-3">
                         <div>
-                          <h4 className="text-xs font-medium text-muted-foreground mb-1">Answer</h4>
+                          <h4 className="text-sm font-medium text-muted-foreground mb-1">Answer</h4>
                           <ExpandableText
                             text={answer.answer}
                             textId={`answer-${answer.id}`}
@@ -318,7 +318,7 @@ export function InsightsPage() {
                         </div>
                         {answer.ragAnswer && (
                           <div>
-                            <h4 className="text-xs font-medium text-muted-foreground mb-1">RAG Answer</h4>
+                            <h4 className="text-sm font-medium text-muted-foreground mb-1">RAG Answer</h4>
                             <ExpandableText
                               text={answer.ragAnswer}
                               textId={`rag-${answer.id}`}
@@ -392,11 +392,11 @@ export function InsightsPage() {
                               <div className="space-y-1">
                                 <div className="flex items-center gap-2">
                                   {isManuallyAnswered(answer) ? (
-                                    <Badge variant="secondary" className="text-xs">
+                                    <Badge variant="secondary" className="text-sm">
                                       Manual
                                     </Badge>
                                   ) : isLLMAnswered(answer) ? (
-                                    <Badge variant="outline" className="text-xs">
+                                    <Badge variant="outline" className="text-sm">
                                       AI Generated
                                     </Badge>
                                   ) : null}
@@ -459,7 +459,7 @@ export function InsightsPage() {
                 )}
               </>
             )}
-            <div className="text-xs text-muted-foreground text-right mt-4">
+            <div className="text-sm text-muted-foreground text-right mt-4">
               Total insights: {answers.length}
             </div>
           </>

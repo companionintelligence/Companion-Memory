@@ -1167,11 +1167,11 @@ export function MemoryPage() {
             <div className="flex">
               <div className="relative flex-grow">
                 <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                  <Search className="h-5 w-5 text-muted-foreground" />
+                  <Search className="h-6 w-6 text-muted-foreground" />
                 </div>
                 <input
                   type="search"
-                  className="block w-full p-2 pl-10 text-sm border rounded-l-lg bg-background border-input"
+                  className="block w-full p-2 pl-10 text-base border rounded-l-lg bg-background border-input"
                   placeholder="Search memories..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -1180,11 +1180,11 @@ export function MemoryPage() {
                 />
               </div>
               <button
-                className="inline-flex items-center justify-center px-4 py-2 mr-4 text-sm font-medium bg-primary text-primary-foreground rounded-r-lg border border-primary hover:bg-primary/90 disabled:opacity-50"
+                className="inline-flex items-center justify-center px-4 py-2 mr-4 text-base font-medium bg-primary text-primary-foreground rounded-r-lg border border-primary hover:bg-primary/90 disabled:opacity-50"
                 onClick={handleSearch}
                 disabled={loading}
               >
-                {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
+                {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : <Search className="h-6 w-6" />}
                 <span className="ml-2">Search</span>
               </button>
             </div>
@@ -1197,15 +1197,15 @@ export function MemoryPage() {
           {!loading && !error && (
             <div className="flex items-center gap-4 relative z-[100] -mr-2">
               {/* Location Count */}
-              <div className="text-sm text-muted-foreground">
+              <div className="text-base text-muted-foreground">
                 {memoriesWithLocation.length} location{memoriesWithLocation.length !== 1 ? 's' : ''}
               </div>
 
               {/* Type Filter */}
               <div className="flex items-center gap-2 relative z-[100]">
-                <Filter className="h-5 w-5 text-muted-foreground" />
+                <Filter className="h-6 w-6 text-muted-foreground" />
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
-                  <Select.Trigger className="w-32 h-8 text-xs">
+                  <Select.Trigger className="w-32 h-8 text-sm">
                     <Select.Value placeholder="Type" />
                   </Select.Trigger>
                   <Select.Content className="z-[100]">
@@ -1221,7 +1221,7 @@ export function MemoryPage() {
               {/* Connection Filter */}
               <div className="relative z-[100]">
                 <Select value={connectionFilter} onValueChange={setConnectionFilter}>
-                  <Select.Trigger className="w-40 h-8 text-xs">
+                  <Select.Trigger className="w-40 h-8 text-sm">
                     <Select.Value placeholder="Connection" />
                   </Select.Trigger>
                   <Select.Content className="z-[100]">
@@ -1241,13 +1241,13 @@ export function MemoryPage() {
                 value={activeTab}
               >
                 <Tabs.List className="grid grid-cols-3 w-48">
-                  <Tabs.Trigger value="map" className="text-xs">
+                  <Tabs.Trigger value="map" className="text-sm">
                     Map
                   </Tabs.Trigger>
-                  <Tabs.Trigger value="list" className="text-xs">
+                  <Tabs.Trigger value="list" className="text-sm">
                     List
                   </Tabs.Trigger>
-                  <Tabs.Trigger value="gallery" className="text-xs">
+                  <Tabs.Trigger value="gallery" className="text-sm">
                     Gallery
                   </Tabs.Trigger>
                 </Tabs.List>
@@ -1263,7 +1263,7 @@ export function MemoryPage() {
               <AlertCircle className="h-6 w-6 mt-0.5 flex-shrink-0" />
               <div>
                 <h3 className="font-medium">Error loading memories</h3>
-                <p className="text-sm">{error}</p>
+                <p className="text-base">{error}</p>
               </div>
             </Card.Content>
           </Card>
@@ -1300,19 +1300,19 @@ export function MemoryPage() {
                         <div className="flex-grow min-w-0">
                           <div className="flex justify-between items-start">
                             <h4 className="font-medium truncate">{memory.title}</h4>
-                            <div className="flex items-center text-muted-foreground text-sm">
-                              <Clock className="h-4 w-4 mr-1" />
+                            <div className="flex items-center text-muted-foreground text-base">
+                              <Clock className="h-5 w-5 mr-1" />
                               {new Date(memory.timestamp).toLocaleTimeString([], {
                                 hour: '2-digit',
                                 minute: '2-digit',
                               })}
                             </div>
                           </div>
-                          <p className="text-muted-foreground text-sm mt-1">
+                          <p className="text-muted-foreground text-base mt-1">
                             {memory.description || 'No description'}
                           </p>
                           <div className="mt-2">
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary/10">
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-sm font-medium bg-primary/10">
                               {memory.category}
                             </span>
                           </div>
@@ -1414,13 +1414,13 @@ export function MemoryPage() {
                     <div className="flex justify-between items-center mb-4 flex-shrink-0">
                       <button
                         onClick={() => setShowTimeline(!showTimeline)}
-                        className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                        className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md border transition-colors ${
                           showTimeline
                             ? 'bg-primary text-primary-foreground border-primary'
                             : 'bg-background text-foreground border-input hover:bg-accent'
                         }`}
                       >
-                        <Route className="h-4 w-4" />
+                        <Route className="h-5 w-5" />
                         Timeline
                       </button>
                     </div>
@@ -1445,15 +1445,15 @@ export function MemoryPage() {
                               {getMemoryIcon(memory)}
                             </div>
                             <div className="flex-grow min-w-0">
-                              <h4 className="font-medium text-sm truncate">{memory.title}</h4>
-                              <p className="text-xs text-muted-foreground truncate">
+                              <h4 className="font-medium text-base truncate">{memory.title}</h4>
+                              <p className="text-sm text-muted-foreground truncate">
                                 {memory.location?.name || 'Unknown location'}
                               </p>
                               <div className="flex items-center gap-2 mt-1">
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-primary/10">
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-sm font-medium bg-primary/10">
                                   {memory.category}
                                 </span>
-                                <span className="text-xs text-muted-foreground">
+                                <span className="text-sm text-muted-foreground">
                                   {new Date(memory.timestamp).toLocaleDateString()}
                                 </span>
                               </div>
@@ -1499,8 +1499,8 @@ export function MemoryPage() {
                                 className="w-full h-48 object-cover rounded mb-2"
                                 loading="lazy"
                               />
-                              <div className="text-xs font-medium text-center">{file.name}</div>
-                              <div className="text-xs text-gray-400">
+                              <div className="text-sm font-medium text-center">{file.name}</div>
+                              <div className="text-sm text-gray-400">
                                 {(Number(file.size) / 1024).toFixed(1)} KB
                               </div>
                             </div>
@@ -1519,8 +1519,8 @@ export function MemoryPage() {
                                 className="w-full h-48 object-cover rounded mb-2 bg-black"
                                 preload="metadata"
                               />
-                              <div className="text-xs font-medium text-center">{file.name}</div>
-                              <div className="text-xs text-gray-400">
+                              <div className="text-sm font-medium text-center">{file.name}</div>
+                              <div className="text-sm text-gray-400">
                                 {(Number(file.size) / 1024 / 1024).toFixed(1)} MB
                               </div>
                             </div>
@@ -1535,7 +1535,7 @@ export function MemoryPage() {
                   {!galleryLoading && galleryFiles.length === 0 && (
                     <div className="text-center py-12">
                       <p className="text-muted-foreground">No content uploaded yet.</p>
-                      <p className="text-sm text-muted-foreground mt-1">
+                      <p className="text-base text-muted-foreground mt-1">
                         Use the + button to add new content.
                       </p>
                     </div>

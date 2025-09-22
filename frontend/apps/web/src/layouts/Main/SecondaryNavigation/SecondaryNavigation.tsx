@@ -74,12 +74,12 @@ export function SecondaryNavigation() {
     <>
       <Sidebar collapsible="icon">
         <Sidebar.Header>
-          <div className="flex flex-row items-center gap-2">
-            <img src={logo} alt="Logo" className="w-8 h-auto" />
-            {open && <div>Companion Intelligence</div>}
+          <div className="flex flex-row items-center gap-3">
+            <img src={logo} alt="Logo" className="w-12 h-auto" />
+            {open && <div className="text-lg">Companion Intelligence</div>}
           </div>
         </Sidebar.Header>
-        <Sidebar.Content className="gap-0">
+        <Sidebar.Content className="gap-4 mt-4">
           <NavSection items={INTELLIGENCE} />
         </Sidebar.Content>
         <Sidebar.Footer>

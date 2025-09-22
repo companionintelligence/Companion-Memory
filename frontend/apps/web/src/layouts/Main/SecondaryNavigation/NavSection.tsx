@@ -24,7 +24,7 @@ export function NavSection({
   return (
     <Sidebar.Group className={cn('py-2', !visibleWhenCollapsed && 'group-data-[collapsible=icon]:hidden')}>
       {title && <Sidebar.GroupLabel>{title}</Sidebar.GroupLabel>}
-      <Sidebar.Menu>
+      <Sidebar.Menu className="space-y-2">
         {items.map((item) => (
           <Sidebar.MenuItem key={item.name}>
             <Sidebar.MenuButton

@@ -40,11 +40,11 @@ export function NavUser() {
                 <Avatar.Image src={currentUser.avatar} alt={currentUser.name} />
                 <Avatar.Fallback className="rounded-lg">{initials}</Avatar.Fallback>
               </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight">
+              <div className="grid flex-1 text-left text-base leading-tight">
                 <span className="truncate font-medium">{currentUser.name}</span>
-                <span className="truncate text-xs">{currentUser.email}</span>
+                <span className="truncate text-sm">{currentUser.email}</span>
               </div>
-              <ChevronsUpDown className="ml-auto size-4" />
+              <ChevronsUpDown className="ml-auto size-6" />
             </Sidebar.MenuButton>
           </DropdownMenu.Trigger>
           <DropdownMenu.Content
@@ -54,14 +54,14 @@ export function NavUser() {
             sideOffset={4}
           >
             <DropdownMenu.Label className="p-0 font-normal">
-              <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+              <div className="flex items-center gap-2 px-1 py-1.5 text-left text-base">
                 <Avatar className="h-8 w-8 rounded-lg">
                   <Avatar.Image src={currentUser.avatar} alt={currentUser.name} />
                   <Avatar.Fallback className="rounded-lg">{initials}</Avatar.Fallback>
                 </Avatar>
-                <div className="grid flex-1 text-left text-sm leading-tight">
+                <div className="grid flex-1 text-left text-base leading-tight">
                   <span className="truncate font-medium">{currentUser.name}</span>
-                  <span className="truncate text-xs">{currentUser.email}</span>
+                  <span className="truncate text-sm">{currentUser.email}</span>
                 </div>
               </div>
             </DropdownMenu.Label>
