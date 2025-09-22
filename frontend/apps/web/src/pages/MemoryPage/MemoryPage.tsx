@@ -8,7 +8,7 @@ declare global {
     google: typeof google;
   }
 }
-import { Breadcrumb, Tabs, Card, Select, Button } from '@ci/shadcn';
+import { Breadcrumb, Tabs, Card, Select } from '@ci/shadcn';
 import {
   Clock,
   Coffee,
@@ -30,14 +30,12 @@ import {
   AlertCircle,
   Filter,
   Route,
-  Plus,
 } from '@ci/shadcn/icons';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
-import { AddMemoryModal } from '@/components/modals/AddMemoryModal';
 import { useAuth } from '@/hooks';
 
 // Add custom styles for Leaflet
@@ -138,9 +136,6 @@ export function MemoryPage() {
   // Gallery states
   const [galleryFiles, setGalleryFiles] = useState<FileMeta[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
-
-  // Add Memory Modal states
-  const [isAddMemoryModalOpen, setIsAddMemoryModalOpen] = useState(false);
 
   // Demo data focused on Los Angeles city only
   const demoMemories: MemoryItem[] = [
@@ -866,25 +861,6 @@ export function MemoryPage() {
     }
   };
 
-  // Handle add memory button click
-  const handleAddMemory = () => {
-    setIsAddMemoryModalOpen(true);
-  };
-
-  // Handle add memory modal close
-  const handleAddMemoryModalClose = () => {
-    setIsAddMemoryModalOpen(false);
-  };
-
-  // Handle memory added callback
-  const handleMemoryAdded = () => {
-    // Refresh memories and gallery files
-    fetchMemories();
-    if (activeTab === 'gallery') {
-      fetchGalleryFiles();
-    }
-  };
-
   // Apply filters to memories
   const filteredMemories = memories.filter((memory) => {
     // Type filter
@@ -1181,18 +1157,6 @@ export function MemoryPage() {
             </Breadcrumb.Item>
           </Breadcrumb.List>
         </Breadcrumb>
-      </Portal.Slot>
-
-      <Portal.Slot id="actions">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleAddMemory}
-          className="h-8 w-8 p-0"
-          title="Add Memory"
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
       </Portal.Slot>
 
       <PageContent>
@@ -1582,13 +1546,6 @@ export function MemoryPage() {
           </>
         )}
       </PageContent>
-
-      {/* Add Memory Modal */}
-      <AddMemoryModal
-        open={isAddMemoryModalOpen}
-        onClose={handleAddMemoryModalClose}
-        onMemoryAdded={handleMemoryAdded}
-      />
     </>
   );
 }

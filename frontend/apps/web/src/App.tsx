@@ -7,6 +7,7 @@ import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { RedirectKnownUser } from '@/components/RedirectKnownUser';
 import {
+  AddMemoryModalProvider,
   AuthProvider,
   CaptureModalProvider,
   ModelProvider,
@@ -36,7 +37,9 @@ function Providers({ children }: { children: ReactNode }) {
         <DeviceLayoutProvider args={[]}>
           <AuthProvider args={[]}>
             <ModelProvider args={[]}>
-              <CaptureModalProvider args={[]}>{children}</CaptureModalProvider>
+              <CaptureModalProvider args={[]}>
+                <AddMemoryModalProvider args={[]}>{children}</AddMemoryModalProvider>
+              </CaptureModalProvider>
             </ModelProvider>
           </AuthProvider>
         </DeviceLayoutProvider>

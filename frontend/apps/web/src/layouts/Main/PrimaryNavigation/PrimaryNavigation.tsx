@@ -1,13 +1,17 @@
 import { Portal } from '@ci/common';
-import { Separator, Sidebar } from '@ci/shadcn';
+import { Button, Separator, Sidebar } from '@ci/shadcn';
+import { Plus } from '@ci/shadcn/icons';
 
 import { CaptureModalToggle } from '@/components/CaptureModalToggle';
+import { AddMemoryModal } from '@/components/modals/AddMemoryModal';
 import { CaptureModal } from '@/components/modals/CaptureModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { useModalControls } from '@/hooks';
+import { useModalControls, useAddMemoryModal } from '@/hooks';
 
 export function PrimaryNavigation() {
   const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls();
+  const [{ isOpen: isAddMemoryModalOpen }, { open: openAddMemoryModal, close: closeAddMemoryModal }] =
+    useAddMemoryModal();
 
   return (
     <>
@@ -21,13 +25,23 @@ export function PrimaryNavigation() {
         <section className="flex flex-row items-center gap-2">
           <Portal id="actions" className="flex flex-row items-center" />
 
-          <div className="flex flex-row items-center">
+          <div className="flex flex-row items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={openAddMemoryModal}
+              className="h-8 w-8 p-0"
+              title="Add Memory"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
             <CaptureModalToggle openModal={openModal} />
             <ThemeToggle />
           </div>
         </section>
       </header>
       <CaptureModal open={isModalOpen} initialFiles={[]} onClose={closeModal} />
+      <AddMemoryModal open={isAddMemoryModalOpen} onClose={closeAddMemoryModal} />
     </>
   );
 }

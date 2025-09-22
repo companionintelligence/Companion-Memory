@@ -1,4 +1,5 @@
 export { AuthProvider, useAuth } from './use-auth';
+export { AddMemoryModalProvider, useAddMemoryModal } from './use-add-memory-modal';
 export { CaptureModalProvider, useCaptureModal } from './use-capture-modal';
 export { useChatRequester } from './use-chat-requester';
 export { useCounter } from './use-counter';
