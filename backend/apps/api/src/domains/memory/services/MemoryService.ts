@@ -328,6 +328,24 @@ export class MemoryService {
 
     // Generate a meaningful title from available data
     let title = event.name;
+    let content: (ContentEntity | null)[] | null = null;
+
+    if (
+      event.source_data &&
+      typeof event.source_data === 'object' &&
+      event.source_data.related_objects &&
+      Array.isArray(event.source_data.related_objects)
+    ) {
+      const relatedContent = event.source_data.related_objects?.filter((obj: string) =>
+        obj.startsWith('content_'),
+      );
+      content = await Promise.all(
+        relatedContent.map(async (content: string) =>
+          this.contentRepo.findOne({ where: { id: content.replace('content_', '') } }),
+        ),
+      );
+    }
+
     if (!title && event.type) {
       // Generate title based on type and location
       if (location) {
@@ -413,6 +431,7 @@ export class MemoryService {
               (event.source_data as any).related_objects
             : undefined,
       },
+      content: content,
     };
 
     this.logger.debug('Created memory from event', {
@@ -879,11 +898,11 @@ export class MemoryService {
               if (personMemory) {
                 memories.push(personMemory);
               }
-            } else if (objRef.startsWith('content_')) {
-              const contentMemory = await this.createSyntheticContentMemory(objRef, event, i);
-              if (contentMemory) {
-                memories.push(contentMemory);
-              }
+              // } else if (objRef.startsWith('content_')) {
+              //   const contentMemory = await this.createSyntheticContentMemory(objRef, event, i);
+              //   if (contentMemory) {
+              //     memories.push(contentMemory);
+              //   }
             } else if (objRef.startsWith('thing_')) {
               const thingMemory = await this.createSyntheticThingMemory(objRef, event, i);
               if (thingMemory) {

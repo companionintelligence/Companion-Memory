@@ -1,3 +1,5 @@
+import type { ContentEntity } from '@ci/domains/memory/entities/ContentEntity';
+
 export interface Memory {
   id: string;
   type: 'event' | 'content' | 'thing' | 'person' | 'contact';
@@ -18,6 +20,7 @@ export interface Memory {
     thingRef?: string;
     [key: string]: unknown;
   };
+  content?: (ContentEntity | null)[] | null;
 }
 
 export interface MemoryLocation {
