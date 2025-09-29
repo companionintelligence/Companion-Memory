@@ -1,3 +1,3 @@
-import { MemoryPage } from './MemoryPage';
+import MemoryPage from './MemoryPage';
 
 export default MemoryPage;

@@ -128,6 +128,20 @@ services:
     restart: unless-stopped
     profiles: [ "all", "staging" ]
 
+  iframely:
+    image: jolt/iframely:latest
+    container_name: iframely
+    ports:
+      - 8061:8061
+    networks:
+      - web
+    restart: unless-stopped
+    profiles: [ "all", "infra" ]
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
 volumes:
   postgres-data:
   minio-data:

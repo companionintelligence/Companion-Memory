@@ -4,8 +4,8 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { z } from 'zod';
 
-import { BaseTool } from './BaseTool';
-import type { ToolExecutionContext } from './types';
+import { BaseTool } from '../../core/BaseTool';
+import type { ToolExecutionContext } from '../../core/types';
 
 // Input schema for the tool
 const getEntertainmentPreferencesInputSchema = z.object({

@@ -4,8 +4,8 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { z } from 'zod';
 
-import { BaseTool } from './BaseTool';
-import type { ToolExecutionContext } from './types';
+import { BaseTool } from '../../core/BaseTool';
+import type { ToolExecutionContext } from '../../core/types';
 
 // Input schema
 const getFamilyMembersInputSchema = z.object({
@@ -99,7 +99,7 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
     // For demo: skip user ID constraints - just get all people
     const peopleQuery = `
       SELECT id, type, first_name as "firstName", last_name as "lastName", user_id as "userId"
-      FROM people
+      FROM people 
       ORDER BY first_name, last_name
     `;
 

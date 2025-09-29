@@ -1,0 +1,44 @@
+{
+  "servers": {
+    "filesystem": {
+      "name": "File System Access",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@modelcontextprotocol/server-filesystem",
+        "/tmp"
+      ],
+      "enabled": true,
+      "description": "Provides file system operations for the assistant",
+      "timeout": 30000,
+      "healthCheck": {
+        "enabled": true,
+        "intervalMs": 30000,
+        "timeoutMs": 5000,
+        "retryCount": 3,
+        "restartOnFailure": true
+      }
+    },
+    "web-search": {
+      "name": "Web Search Engine",
+      "command": "node",
+      "args": [
+        "dist/index.js"
+      ],
+      "enabled": true,
+      "description": "Multi-engine web search with content extraction",
+      "timeout": 60000,
+      "healthCheck": {
+        "enabled": false,
+        "intervalMs": 120000,
+        "timeoutMs": 20000,
+        "retryCount": 2,
+        "restartOnFailure": true
+      },
+      "workingDirectory": "${PROJECT_ROOT}/mcp-servers/web-search",
+      "env": {
+        "PLAYWRIGHT_BROWSERS_PATH": "${PROJECT_ROOT}/mcp-servers/web-search/playwright-browsers"
+      }
+    }
+  }
+}

@@ -49,4 +49,22 @@
 /* Map container */
 .leaflet-container {
   font-family: inherit;
+  z-index: 1 !important;
+}
+
+/* Ensure all Leaflet elements have lower z-index */
+.leaflet-map-pane,
+.leaflet-tile-pane,
+.leaflet-objects-pane,
+.leaflet-shadow-pane,
+.leaflet-overlay-pane,
+.leaflet-marker-pane,
+.leaflet-tooltip-pane,
+.leaflet-popup-pane {
+  z-index: 1 !important;
+}
+
+/* Leaflet controls should also have lower z-index */
+.leaflet-control-container {
+  z-index: 1 !important;
 }
