@@ -18,84 +18,71 @@ import L from 'leaflet';
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
-// Types based on your backend
-interface MemoryEvent {
+// Types matching the backend Memory type
+interface Memory {
   id: string;
-  type: string | null;
+  type: 'event' | 'content' | 'thing' | 'person' | 'contact';
+  title: string;
+  description: string | null;
+  timestamp: string; // Will be converted from Date
+  category: string;
+  location?: MemoryLocation;
+  tags: string[];
+  userId: string;
+  metadata?: {
+    eventId?: string;
+    eventType?: string;
+    eventName?: string;
+    synthetic?: boolean;
+    personRef?: string;
+    contentRef?: string;
+    thingRef?: string;
+    [key: string]: unknown;
+  };
+}
+
+interface MemoryLocation {
+  id: string;
   name: string | null;
+  lat: number;
+  lng: number;
+  address?: string;
+  placeId?: string;
+}
+
+interface MemoryResponse {
+  data: Memory[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+// Types for individual endpoints (if needed as fallback)
+interface Event {
+  id: string;
+  name: string | null;
+  type: string | null;
   description: string | null;
   start_time: string | null;
   end_time: string | null;
   external_id: string | null;
   source_url: string | null;
-  source_data: Record<string, unknown> | null;
-  location?: {
-    id: string;
-    name: string | null;
-    lat: number;
-    lng: number;
-    address?: string;
-  };
+  source_data: object | null;
+  user_id?: string;
+  connection_id?: string;
 }
 
-interface MemoryContent {
+interface Content {
   id: string;
-  type: string | null;
+  type: string;
   title: string | null;
   text: string | null;
   url: string | null;
   mimetype: string | null;
   external_id: string | null;
   source_url: string | null;
-  event?: {
-    id: string;
-  };
-}
-
-interface MemoryContact {
-  id: string;
-  type: string | null;
-  avatar_url: string | null;
-  // Add other fields based on ContactEntity
-}
-
-interface MemoryPerson {
-  id: string;
-  type: string | null;
-  first_name: string | null;
-  last_name: string | null;
-  // Add other fields based on PersonEntity
-}
-
-interface MemoryPlace {
-  id: string;
-  type: string | null;
-  name: string | null;
-  // Add other fields based on PlaceEntity
-}
-
-interface MemoryLocation {
-  id: string;
-  identifier: string | null;
-  datetime: string | null;
-  // Add other fields based on LocationEntity
-}
-
-// Unified memory item for display
-interface MemoryItem {
-  id: string;
-  type: 'event' | 'content' | 'person' | 'place';
-  title: string;
-  description: string | null;
-  timestamp: string | null;
-  location?: {
-    lat: number;
-    lng: number;
-    name: string | null;
-    address?: string;
-  };
-  sourceUrl?: string | null;
-  externalId?: string | null;
+  user_id: string | null;
+  event_id: string | null;
 }
 
 export default function MemoryPageReal() {
@@ -103,87 +90,13 @@ export default function MemoryPageReal() {
   const [{ authToken }] = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('list');
+  const [totalMemories, setTotalMemories] = useState(0);
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
-
-  // Convert backend data to unified memory items
-  const convertToMemoryItems = (
-    events: MemoryEvent[],
-    content: MemoryContent[],
-    contacts: MemoryContact[],
-    people: MemoryPerson[],
-    places: MemoryPlace[],
-    locations: MemoryLocation[],
-  ): MemoryItem[] => {
-    const items: MemoryItem[] = [];
-
-    // Convert events
-    events.forEach((event) => {
-      items.push({
-        id: event.id,
-        type: 'event',
-        title: event.name || 'Untitled Event',
-        description: event.description,
-        timestamp: event.start_time,
-        sourceUrl: event.source_url,
-        externalId: event.external_id,
-        location: event.location
-          ? {
-              lat: event.location.lat,
-              lng: event.location.lng,
-              name: event.location.name,
-              address: event.location.address,
-            }
-          : undefined,
-      });
-    });
-
-    // Convert content
-    content.forEach((item) => {
-      items.push({
-        id: item.id,
-        type: 'content',
-        title: item.title || 'Untitled Content',
-        description: item.text,
-        timestamp: null,
-        sourceUrl: item.source_url,
-        externalId: item.external_id,
-      });
-    });
-
-    // Convert people
-    people.forEach((person) => {
-      const fullName = [person.first_name, person.last_name].filter(Boolean).join(' ');
-      items.push({
-        id: person.id,
-        type: 'person',
-        title: fullName || 'Unknown Person',
-        description: [person.email, person.phone].filter(Boolean).join(' • '),
-        timestamp: null,
-        sourceUrl: person.source_url,
-        externalId: person.external_id,
-      });
-    });
-
-    // Convert places
-    places.forEach((place) => {
-      items.push({
-        id: place.id,
-        type: 'place',
-        title: place.name || 'Unknown Place',
-        description: null,
-        timestamp: null,
-        sourceUrl: null,
-        externalId: null,
-      });
-    });
-
-    return items;
-  };
 
   // Fetch memories from API
   const fetchMemories = async (query?: string) => {
@@ -196,103 +109,54 @@ export default function MemoryPageReal() {
       if (query) {
         params.append('query', query);
       }
+      params.append('limit', '50');
 
-      // Try different possible API endpoints
-      // First, let's try to fetch from a general memory endpoint
-      try {
-        const memoryRes = await fetch(`/api/memory?${params}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-
-        if (memoryRes.ok) {
-          const memoryData = await memoryRes.json();
-          console.log('Memory API response:', memoryData);
-          
-          // Handle the response based on its structure
-          if (Array.isArray(memoryData)) {
-            // If it's an array, convert directly
-            setMemories(memoryData);
-          } else if (memoryData.events || memoryData.content || memoryData.contacts) {
-            // If it's an object with different types
-            const items = convertToMemoryItems(
-              memoryData.events || [],
-              memoryData.content || [],
-              memoryData.contacts || [],
-              memoryData.people || [],
-              memoryData.places || [],
-              memoryData.locations || [],
-            );
-            setMemories(items);
-          } else {
-            // Empty or unexpected format
-            setMemories([]);
-          }
-          return;
-        }
-      } catch (e) {
-        console.log('General memory endpoint not available, trying individual endpoints...');
-      }
-
-      // If general endpoint fails, try individual endpoints with different naming conventions
-      const endpoints = [
-        { name: 'events', path: '/api/events' },
-        { name: 'content', path: '/api/content' },
-        { name: 'contacts', path: '/api/contacts' },
-        { name: 'people', path: '/api/people' },
-        { name: 'places', path: '/api/places' },
-        { name: 'locations', path: '/api/locations' },
-      ];
-
-      const results: Record<string, any> = {};
-      const errors: string[] = [];
-
-      for (const endpoint of endpoints) {
-        try {
-          const res = await fetch(`${endpoint.path}?${params}`, {
-            headers: { Authorization: `Bearer ${authToken}` },
-          });
-          
-          if (res.ok) {
-            results[endpoint.name] = await res.json();
-            console.log(`${endpoint.name} data:`, results[endpoint.name]);
-          } else {
-            const text = await res.text();
-            console.log(`${endpoint.name} endpoint not available: ${res.status} - ${text}`);
-          }
-        } catch (e) {
-          console.log(`Error fetching ${endpoint.name}:`, e);
-        }
-      }
-
-      // If we got any data, convert it
-      if (Object.keys(results).length > 0) {
-        const items = convertToMemoryItems(
-          results.events || [],
-          results.content || [],
-          results.contacts || [],
-          results.people || [],
-          results.places || [],
-          results.locations || [],
-        );
-        setMemories(items);
-      } else {
-        // No endpoints worked
-        throw new Error('Unable to fetch memory data. Please check the API endpoints.');
-      }
-
-      // Sort by timestamp (newest first)
-      items.sort((a, b) => {
-        if (!a.timestamp && !b.timestamp) return 0;
-        if (!a.timestamp) return 1;
-        if (!b.timestamp) return -1;
-        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      // Fetch from the memory endpoint
+      const memoryRes = await fetch(`/api/memory?${params}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
       });
 
-      setMemories(items);
+      if (!memoryRes.ok) {
+        const errorText = await memoryRes.text();
+        console.error('Memory API error:', memoryRes.status, errorText);
+        
+        // If it's a 401, the user might not be authenticated
+        if (memoryRes.status === 401) {
+          throw new Error('You need to be logged in to view memories');
+        }
+        
+        throw new Error(`Failed to fetch memories: ${memoryRes.status} ${errorText}`);
+      }
+
+      const memoryData: MemoryResponse = await memoryRes.json();
+      console.log('Memory API response:', memoryData);
+
+      // The backend returns a MemoryResponse object
+      if (memoryData && memoryData.data) {
+        setMemories(memoryData.data);
+        setTotalMemories(memoryData.total);
+      } else {
+        setMemories([]);
+        setTotalMemories(0);
+      }
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       console.error('Error fetching memories:', errorMessage, err);
       setError(errorMessage);
+      
+      // Try to fetch debug info if main endpoint fails
+      try {
+        const debugRes = await fetch('/api/memory/debug/direct', {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (debugRes.ok) {
+          const debugData = await debugRes.json();
+          console.log('Debug data:', debugData);
+        }
+      } catch (debugErr) {
+        console.error('Could not fetch debug data:', debugErr);
+      }
     } finally {
       setLoading(false);
     }
@@ -317,7 +181,7 @@ export default function MemoryPageReal() {
   };
 
   // Get icon for memory type
-  const getMemoryIcon = (type: MemoryItem['type']) => {
+  const getMemoryIcon = (type: Memory['type']) => {
     const iconClass = 'h-5 w-5';
     switch (type) {
       case 'event':
@@ -326,8 +190,10 @@ export default function MemoryPageReal() {
         return <FileText className={iconClass} />;
       case 'person':
         return <User className={iconClass} />;
-      case 'place':
-        return <MapPin className={iconClass} />;
+      case 'contact':
+        return <User className={iconClass} />;
+      case 'thing':
+        return <FileText className={iconClass} />;
       default:
         return <Clock className={iconClass} />;
     }
@@ -479,9 +345,17 @@ export default function MemoryPageReal() {
                 {memories.length === 0 ? (
                   <div className="text-center py-8">
                     <p className="text-muted-foreground">No memories found.</p>
+                    {totalMemories > 0 && (
+                      <p className="text-sm text-muted-foreground mt-2">
+                        Total memories in database: {totalMemories}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      Showing {memories.length} of {totalMemories} memories
+                    </p>
                     {memories.map((memory) => (
                       <Card key={memory.id}>
                         <Card.Content className="p-4">
@@ -502,22 +376,28 @@ export default function MemoryPageReal() {
                                 <p className="text-sm text-muted-foreground mt-1">{memory.description}</p>
                               )}
                               <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                                <span className="capitalize">{memory.type}</span>
+                                <span className="capitalize">{memory.category || memory.type}</span>
                                 {memory.location && (
                                   <span className="flex items-center gap-1">
                                     <MapPin className="h-3 w-3" />
                                     {memory.location.name || 'Location'}
                                   </span>
                                 )}
-                                {memory.sourceUrl && (
+                                {memory.metadata?.sourceUrl && (
                                   <a
-                                    href={memory.sourceUrl}
+                                    href={memory.metadata.sourceUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="hover:underline"
                                   >
                                     Source
                                   </a>
+                                )}
+                                {memory.metadata?.synthetic && (
+                                  <span className="italic">Synthetic</span>
+                                )}
+                                {memory.tags.length > 0 && (
+                                  <span>Tags: {memory.tags.join(', ')}</span>
                                 )}
                               </div>
                             </div>
