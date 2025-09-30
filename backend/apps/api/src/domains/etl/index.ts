@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ConnectionsModule } from '@ci/domains/connections';
 import { EventsModule } from '@ci/domains/events';
-import { EventEntity } from '@ci/domains/memory';
+import { MemoryModule } from '@ci/domains/memory';
 
 import { GoogleController } from './controllers/google_controller';
 import { ApiLogEntity } from './entities/ApiLogEntity';
@@ -12,9 +12,10 @@ import { EventProcessorService } from './services/EventProcessorService';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ApiLogEntity, EventEntity]),
+    TypeOrmModule.forFeature([ApiLogEntity]),
     ConnectionsModule,
     EventsModule,
+    MemoryModule,
   ],
   providers: [ApiLogService, EventProcessorService],
   controllers: [GoogleController],

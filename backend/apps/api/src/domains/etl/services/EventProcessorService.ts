@@ -3,8 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
-import { EventEntity } from '@ci/domains/memory';
 import { EventService } from '@ci/domains/events';
+import { EventEntity } from '@ci/domains/memory/entities/EventEntity';
 
 import { ApiLogEntity } from '../entities/ApiLogEntity';
 import { ApiLogService } from './ApiLogService';
