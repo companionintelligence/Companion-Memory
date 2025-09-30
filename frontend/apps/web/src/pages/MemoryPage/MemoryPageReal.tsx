@@ -212,9 +212,28 @@ export default function MemoryPageReal() {
         }),
       ]);
 
-      // Check for errors
-      if (!eventsRes.ok || !contentRes.ok || !peopleRes.ok || !placesRes.ok) {
-        throw new Error('Failed to fetch memory data');
+      // Check for errors and log details
+      const errors = [];
+      if (!eventsRes.ok) {
+        const text = await eventsRes.text();
+        errors.push(`Events: ${eventsRes.status} - ${text}`);
+      }
+      if (!contentRes.ok) {
+        const text = await contentRes.text();
+        errors.push(`Content: ${contentRes.status} - ${text}`);
+      }
+      if (!peopleRes.ok) {
+        const text = await peopleRes.text();
+        errors.push(`People: ${peopleRes.status} - ${text}`);
+      }
+      if (!placesRes.ok) {
+        const text = await placesRes.text();
+        errors.push(`Places: ${placesRes.status} - ${text}`);
+      }
+
+      if (errors.length > 0) {
+        console.error('API Errors:', errors);
+        throw new Error(`Failed to fetch memory data: ${errors.join(', ')}`);
       }
 
       // Parse responses
@@ -224,6 +243,14 @@ export default function MemoryPageReal() {
         peopleRes.json(),
         placesRes.json(),
       ]);
+
+      // Log the responses for debugging
+      console.log('Memory API responses:', {
+        events: Array.isArray(events) ? events.length : events,
+        content: Array.isArray(content) ? content.length : content,
+        people: Array.isArray(people) ? people.length : people,
+        places: Array.isArray(places) ? places.length : places,
+      });
 
       // Convert to unified format
       const items = convertToMemoryItems(events, content, people, places);
@@ -248,7 +275,9 @@ export default function MemoryPageReal() {
 
   // Initial load
   useEffect(() => {
-    fetchMemories();
+    if (authToken) {
+      fetchMemories();
+    }
   }, [authToken]);
 
   // Handle search
@@ -394,6 +423,10 @@ export default function MemoryPageReal() {
                 <div>
                   <h3 className="font-medium">Error loading memories</h3>
                   <p className="text-sm">{error}</p>
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs">Debug Info</summary>
+                    <pre className="text-xs mt-1 overflow-auto">{error}</pre>
+                  </details>
                 </div>
               </Card.Content>
             </Card>
