@@ -52,26 +52,33 @@ interface MemoryContent {
   };
 }
 
+interface MemoryContact {
+  id: string;
+  type: string | null;
+  avatar_url: string | null;
+  // Add other fields based on ContactEntity
+}
+
 interface MemoryPerson {
   id: string;
   type: string | null;
   first_name: string | null;
   last_name: string | null;
-  email: string | null;
-  phone: string | null;
-  external_id: string | null;
-  source_url: string | null;
+  // Add other fields based on PersonEntity
 }
 
 interface MemoryPlace {
   id: string;
   type: string | null;
   name: string | null;
-  address: string | null;
-  lat: number | null;
-  lng: number | null;
-  external_id: string | null;
-  source_url: string | null;
+  // Add other fields based on PlaceEntity
+}
+
+interface MemoryLocation {
+  id: string;
+  identifier: string | null;
+  datetime: string | null;
+  // Add other fields based on LocationEntity
 }
 
 // Unified memory item for display
@@ -107,8 +114,10 @@ export default function MemoryPageReal() {
   const convertToMemoryItems = (
     events: MemoryEvent[],
     content: MemoryContent[],
+    contacts: MemoryContact[],
     people: MemoryPerson[],
     places: MemoryPlace[],
+    locations: MemoryLocation[],
   ): MemoryItem[] => {
     const items: MemoryItem[] = [];
 
@@ -162,23 +171,15 @@ export default function MemoryPageReal() {
 
     // Convert places
     places.forEach((place) => {
-      if (place.lat && place.lng) {
-        items.push({
-          id: place.id,
-          type: 'place',
-          title: place.name || 'Unknown Place',
-          description: place.address,
-          timestamp: null,
-          sourceUrl: place.source_url,
-          externalId: place.external_id,
-          location: {
-            lat: place.lat,
-            lng: place.lng,
-            name: place.name,
-            address: place.address || undefined,
-          },
-        });
-      }
+      items.push({
+        id: place.id,
+        type: 'place',
+        title: place.name || 'Unknown Place',
+        description: null,
+        timestamp: null,
+        sourceUrl: null,
+        externalId: null,
+      });
     });
 
     return items;
@@ -196,64 +197,88 @@ export default function MemoryPageReal() {
         params.append('query', query);
       }
 
-      // Fetch all memory types in parallel
-      const [eventsRes, contentRes, peopleRes, placesRes] = await Promise.all([
-        fetch(`/api/memory/events?${params}`, {
+      // Try different possible API endpoints
+      // First, let's try to fetch from a general memory endpoint
+      try {
+        const memoryRes = await fetch(`/api/memory?${params}`, {
           headers: { Authorization: `Bearer ${authToken}` },
-        }),
-        fetch(`/api/memory/content?${params}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        }),
-        fetch(`/api/memory/people?${params}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        }),
-        fetch(`/api/memory/places?${params}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        }),
-      ]);
+        });
 
-      // Check for errors and log details
-      const errors = [];
-      if (!eventsRes.ok) {
-        const text = await eventsRes.text();
-        errors.push(`Events: ${eventsRes.status} - ${text}`);
-      }
-      if (!contentRes.ok) {
-        const text = await contentRes.text();
-        errors.push(`Content: ${contentRes.status} - ${text}`);
-      }
-      if (!peopleRes.ok) {
-        const text = await peopleRes.text();
-        errors.push(`People: ${peopleRes.status} - ${text}`);
-      }
-      if (!placesRes.ok) {
-        const text = await placesRes.text();
-        errors.push(`Places: ${placesRes.status} - ${text}`);
-      }
-
-      if (errors.length > 0) {
-        console.error('API Errors:', errors);
-        throw new Error(`Failed to fetch memory data: ${errors.join(', ')}`);
+        if (memoryRes.ok) {
+          const memoryData = await memoryRes.json();
+          console.log('Memory API response:', memoryData);
+          
+          // Handle the response based on its structure
+          if (Array.isArray(memoryData)) {
+            // If it's an array, convert directly
+            setMemories(memoryData);
+          } else if (memoryData.events || memoryData.content || memoryData.contacts) {
+            // If it's an object with different types
+            const items = convertToMemoryItems(
+              memoryData.events || [],
+              memoryData.content || [],
+              memoryData.contacts || [],
+              memoryData.people || [],
+              memoryData.places || [],
+              memoryData.locations || [],
+            );
+            setMemories(items);
+          } else {
+            // Empty or unexpected format
+            setMemories([]);
+          }
+          return;
+        }
+      } catch (e) {
+        console.log('General memory endpoint not available, trying individual endpoints...');
       }
 
-      // Parse responses
-      const [events, content, people, places] = await Promise.all([
-        eventsRes.json(),
-        contentRes.json(),
-        peopleRes.json(),
-        placesRes.json(),
-      ]);
+      // If general endpoint fails, try individual endpoints with different naming conventions
+      const endpoints = [
+        { name: 'events', path: '/api/events' },
+        { name: 'content', path: '/api/content' },
+        { name: 'contacts', path: '/api/contacts' },
+        { name: 'people', path: '/api/people' },
+        { name: 'places', path: '/api/places' },
+        { name: 'locations', path: '/api/locations' },
+      ];
 
-      // Log the responses for debugging
-      console.log('Memory API responses:', {
-        events: Array.isArray(events) ? events.length : events,
-        content: Array.isArray(content) ? content.length : content,
-        people: Array.isArray(people) ? people.length : people,
-        places: Array.isArray(places) ? places.length : places,
-      });
+      const results: Record<string, any> = {};
+      const errors: string[] = [];
 
-      // Convert to unified format
-      const items = convertToMemoryItems(events, content, people, places);
+      for (const endpoint of endpoints) {
+        try {
+          const res = await fetch(`${endpoint.path}?${params}`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          
+          if (res.ok) {
+            results[endpoint.name] = await res.json();
+            console.log(`${endpoint.name} data:`, results[endpoint.name]);
+          } else {
+            const text = await res.text();
+            console.log(`${endpoint.name} endpoint not available: ${res.status} - ${text}`);
+          }
+        } catch (e) {
+          console.log(`Error fetching ${endpoint.name}:`, e);
+        }
+      }
+
+      // If we got any data, convert it
+      if (Object.keys(results).length > 0) {
+        const items = convertToMemoryItems(
+          results.events || [],
+          results.content || [],
+          results.contacts || [],
+          results.people || [],
+          results.places || [],
+          results.locations || [],
+        );
+        setMemories(items);
+      } else {
+        // No endpoints worked
+        throw new Error('Unable to fetch memory data. Please check the API endpoints.');
+      }
 
       // Sort by timestamp (newest first)
       items.sort((a, b) => {
@@ -426,6 +451,9 @@ export default function MemoryPageReal() {
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs">Debug Info</summary>
                     <pre className="text-xs mt-1 overflow-auto">{error}</pre>
+                    <p className="text-xs mt-2">
+                      Check the browser console for more details about available endpoints.
+                    </p>
                   </details>
                 </div>
               </Card.Content>
