@@ -77,6 +77,11 @@ interface MicrosoftCalendarResponse {
 }
 
 // Gmail types
+interface GmailMessageStub {
+  id: string;
+  threadId?: string;
+}
+
 interface GmailMessage {
   id: string;
   threadId?: string;
@@ -94,8 +99,18 @@ interface GmailMessage {
   [key: string]: unknown;
 }
 
-interface GmailResponse {
+interface GmailListResponse {
+  messages?: GmailMessageStub[];
+  nextPageToken?: string;
+  [key: string]: unknown;
+}
+
+interface GmailBatchResponse {
   messages?: GmailMessage[];
+  [key: string]: unknown;
+}
+
+interface GmailHistoryResponse {
   history?: Array<{
     id: string;
     messages?: GmailMessage[];
@@ -104,6 +119,8 @@ interface GmailResponse {
   nextPageToken?: string;
   [key: string]: unknown;
 }
+
+type GmailResponse = GmailListResponse | GmailBatchResponse | GmailHistoryResponse;
 
 // Microsoft email types
 interface MicrosoftEmail {
@@ -274,10 +291,15 @@ export function parseEmailData(
   // Handle Gmail format
   if ('messages' in dataObj && dataObj.messages && Array.isArray(dataObj.messages)) {
     for (const message of dataObj.messages) {
-      const email = parseGmailMessage(message, connectionId, userId);
-      if (email) {
-        emails.push(email);
+      // Check if this is a full message or just a stub
+      if ('payload' in message || 'snippet' in message) {
+        // Full message with content
+        const email = parseGmailMessage(message as GmailMessage, connectionId, userId);
+        if (email) {
+          emails.push(email);
+        }
       }
+      // Skip message stubs (just id and threadId)
     }
   }
 

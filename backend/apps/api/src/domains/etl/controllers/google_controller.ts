@@ -373,6 +373,18 @@ export class GoogleController {
     return { api: 'Google Calendar', syncState: newSyncState };
   }
 
+  /**
+   * Sync Gmail messages with proper pagination and full message fetching.
+   * 
+   * Gmail API returns only message IDs and thread IDs from the list endpoint.
+   * We need to fetch each message individually to get the full content including:
+   * - Headers (from, to, subject, date)
+   * - Body content
+   * - Attachments info
+   * 
+   * @see https://developers.google.com/gmail/api/reference/rest/v1/users.messages/list
+   * @see https://developers.google.com/gmail/api/reference/rest/v1/users.messages/get
+   */
   private async syncGmailWithPagination(
     connection: { id: string; syncState: Record<string, unknown> | null },
     userId: string,
@@ -404,27 +416,62 @@ export class GoogleController {
           `/gmail/v1/users/me/history?startHistoryId=${gmailSyncState.lastHistoryId}`,
         )) as Record<string, unknown>;
 
-        const history = (response.history as unknown[]) || [];
-        totalMessages = history.length;
-
+        const history = (response.history as Array<{
+          id: string;
+          messages?: Array<{ id: string; threadId?: string }>;
+          messagesAdded?: Array<{ message: { id: string; threadId?: string } }>;
+        }>) || [];
+        
         // Get the latest historyId from the response for the next sync
         const latestHistoryId = response.historyId as string;
 
-        // Save this page of incremental data only if there are new messages
-        if (history.length > 0) {
-          await this.apiLogService.create({
-            content: { history },
-            userId,
-            connectionId: connection.id,
-            scope: 'Gmail',
-          });
+        // Collect all message IDs from history
+        const messageIds = new Set<string>();
+        for (const historyItem of history) {
+          if (historyItem.messagesAdded) {
+            for (const added of historyItem.messagesAdded) {
+              messageIds.add(added.message.id);
+            }
+          }
+        }
 
-          this.logger.log('Saved incremental Gmail data', {
-            connectionId: connection.id,
-            historyCount: history.length,
-            lastHistoryId: gmailSyncState.lastHistoryId,
-            latestHistoryId: latestHistoryId,
-          });
+        totalMessages = messageIds.size;
+
+        // Fetch full details for new messages
+        if (messageIds.size > 0) {
+          const fullMessages: unknown[] = [];
+          
+          for (const messageId of messageIds) {
+            try {
+              const fullMessage = await this.connectionService.makePaginatedRequest(
+                connection.id,
+                `/gmail/v1/users/me/messages/${messageId}?format=full`,
+              );
+              fullMessages.push(fullMessage);
+            } catch (error) {
+              this.logger.warn('Failed to fetch Gmail message from history', {
+                connectionId: connection.id,
+                messageId,
+                error: error instanceof Error ? error.message : 'Unknown error',
+              });
+            }
+          }
+
+          if (fullMessages.length > 0) {
+            await this.apiLogService.create({
+              content: { messages: fullMessages },
+              userId,
+              connectionId: connection.id,
+              scope: 'Gmail',
+            });
+
+            this.logger.log('Saved incremental Gmail data', {
+              connectionId: connection.id,
+              messageCount: fullMessages.length,
+              lastHistoryId: gmailSyncState.lastHistoryId,
+              latestHistoryId: latestHistoryId,
+            });
+          }
         } else {
           this.logger.log('No new Gmail messages found in incremental sync', {
             connectionId: connection.id,
@@ -467,8 +514,9 @@ export class GoogleController {
 
     const labels = gmailSyncState?.trackedLabels || ['INBOX'];
     let nextPageToken: string | undefined;
+    const allMessageIds: string[] = [];
 
-    // Get all message IDs first
+    // Step 1: Get all message IDs first
     do {
       let endpoint = `/gmail/v1/users/me/messages?maxResults=500&labelIds=${labels.join(',')}`;
       if (nextPageToken) {
@@ -479,30 +527,69 @@ export class GoogleController {
         string,
         unknown
       >;
-      const messages = (response.messages as unknown[]) || [];
+      const messages = (response.messages as Array<{ id: string; threadId?: string }>) || [];
+
+      // Collect message IDs for batch fetching
+      allMessageIds.push(...messages.map(m => m.id));
 
       totalMessages += messages.length;
       pageCount++;
       nextPageToken = response.nextPageToken as string | undefined;
 
-      // Save each page as a separate API log entry
-      if (messages.length > 0) {
+      this.logger.log('Collected Gmail message IDs', {
+        connectionId: connection.id,
+        page: pageCount,
+        messageCount: messages.length,
+        totalMessages,
+        hasNextPage: !!nextPageToken,
+      });
+    } while (nextPageToken);
+
+    // Step 2: Fetch full message details in batches
+    const BATCH_SIZE = 50; // Gmail allows up to 50 messages per batch request
+    let processedMessages = 0;
+
+    for (let i = 0; i < allMessageIds.length; i += BATCH_SIZE) {
+      const batchIds = allMessageIds.slice(i, i + BATCH_SIZE);
+      const fullMessages: unknown[] = [];
+
+      // Fetch each message in the batch
+      for (const messageId of batchIds) {
+        try {
+          const fullMessage = await this.connectionService.makePaginatedRequest(
+            connection.id,
+            `/gmail/v1/users/me/messages/${messageId}?format=full`,
+          );
+          fullMessages.push(fullMessage);
+        } catch (error) {
+          this.logger.warn('Failed to fetch Gmail message', {
+            connectionId: connection.id,
+            messageId,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      }
+
+      processedMessages += fullMessages.length;
+
+      // Save the batch of full messages
+      if (fullMessages.length > 0) {
         await this.apiLogService.create({
-          content: { messages, nextPageToken: response.nextPageToken },
+          content: { messages: fullMessages },
           userId,
           connectionId: connection.id,
           scope: 'Gmail',
         });
 
-        this.logger.log('Saved Gmail page', {
+        this.logger.log('Saved Gmail message batch', {
           connectionId: connection.id,
-          page: pageCount,
-          messageCount: messages.length,
-          totalMessages,
-          hasNextPage: !!nextPageToken,
+          batchNumber: Math.floor(i / BATCH_SIZE) + 1,
+          messagesInBatch: fullMessages.length,
+          processedMessages,
+          totalMessages: allMessageIds.length,
         });
       }
-    } while (nextPageToken);
+    }
 
     // Get current historyId from profile for future incremental syncs
     const profile = (await this.connectionService.makePaginatedRequest(
