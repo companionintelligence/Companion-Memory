@@ -122,12 +122,11 @@ export class EventProcessorService {
   private async createEventFromParsed(parsedEvent: ParsedEvent, apiLog: ApiLog): Promise<void> {
     try {
       // Check if event already exists by external_id and connection_id
-      const existingEvent = await this.eventRepository.findOne({
-        where: {
-          external_id: parsedEvent.external_id,
-          connection_id: parsedEvent.connection_id,
-        },
-      });
+      const existingEvent = await this.eventRepository
+        .createQueryBuilder('event')
+        .where('event.external_id = :externalId', { externalId: parsedEvent.external_id })
+        .andWhere('event.connection_id = :connectionId', { connectionId: parsedEvent.connection_id })
+        .getOne();
 
       if (existingEvent) {
         this.logger.debug('Event already exists, skipping', {
