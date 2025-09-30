@@ -35,6 +35,16 @@ export class MemoryService {
   async findAll(context: RequestContext, params: MemorySearchParams): Promise<MemoryResponse> {
     this.logger.debug('Finding memories', { userId: context.userId, params });
 
+    if (!context.userId) {
+      this.logger.warn('No userId provided in context');
+      return {
+        data: [],
+        total: 0,
+        limit: params.limit || 50,
+        offset: params.offset || 0,
+      };
+    }
+
     const limit = params.limit || 50;
     const offset = params.offset || 0;
 
@@ -119,6 +129,7 @@ export class MemoryService {
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.tags', 'tags')
       .leftJoinAndSelect('event.user', 'user')
+      .where('event.user.id = :userId', { userId: context.userId })
       .limit(params.limit || 100)
       .offset(params.offset || 0);
 
@@ -162,9 +173,8 @@ export class MemoryService {
       .createQueryBuilder('content')
       .leftJoinAndSelect('content.tags', 'tags')
       .leftJoinAndSelect('content.user', 'user')
-      .leftJoinAndSelect('content.event', 'event');
-    // TEMPORARILY DISABLED: User filtering
-    // .where('content.user_id = :userId', { userId: context.userId });
+      .leftJoinAndSelect('content.event', 'event')
+      .where('content.user.id = :userId', { userId: context.userId });
 
     if (params.query) {
       query.andWhere('(content.title ILIKE :query OR content.text ILIKE :query)', {
@@ -188,9 +198,8 @@ export class MemoryService {
     const query = this.personRepo
       .createQueryBuilder('person')
       .leftJoinAndSelect('person.tags', 'tags')
-      .leftJoinAndSelect('person.user', 'user');
-    // TEMPORARILY DISABLED: User filtering
-    // .where('person.user_id = :userId', { userId: context.userId });
+      .leftJoinAndSelect('person.user', 'user')
+      .where('person.user.id = :userId', { userId: context.userId });
 
     if (params.query) {
       query.andWhere('(person.first_name ILIKE :query OR person.last_name ILIKE :query)', {
@@ -209,9 +218,8 @@ export class MemoryService {
       .createQueryBuilder('thing')
       .leftJoinAndSelect('thing.tags', 'tags')
       .leftJoinAndSelect('thing.user', 'user')
-      .leftJoinAndSelect('thing.event', 'event');
-    // TEMPORARILY DISABLED: User filtering
-    // .where('thing.user_id = :userId', { userId: context.userId });
+      .leftJoinAndSelect('thing.event', 'event')
+      .where('thing.user.id = :userId', { userId: context.userId });
 
     if (params.query) {
       query.andWhere('(thing.name ILIKE :query OR thing.description ILIKE :query)', {

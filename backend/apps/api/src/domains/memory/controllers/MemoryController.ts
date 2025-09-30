@@ -85,6 +85,7 @@ export class MemoryController {
       this.logger.debug('Memory findAll response', {
         dataLength: result.data.length,
         total: result.total,
+        userId: context.userId,
       });
 
       return result;
@@ -92,6 +93,17 @@ export class MemoryController {
       this.logger.error('Error in memory findAll', { error, userId: context.userId });
       throw error;
     }
+  }
+
+  @Get('debug/current-user')
+  async debugCurrentUser(@Context() context: RequestContext) {
+    this.logger.debug('Debug current user endpoint called');
+
+    return {
+      currentUserId: context.userId,
+      hasUserId: !!context.userId,
+      timestamp: new Date().toISOString(),
+    };
   }
 
   @Get(':id')
