@@ -30,6 +30,9 @@ export class ApiLogEntity {
   @Column({ type: 'jsonb', nullable: true })
   location?: { type: 'Point'; coordinates: [number, number] };
 
+  @Column({ type: 'boolean', default: false })
+  processed?: boolean;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;
 
@@ -50,6 +53,7 @@ export class ApiLogEntity {
       content: this.content,
       embedding: this.embedding ? JSON.parse(this.embedding) : undefined,
       location: this.location,
+      processed: this.processed,
       user: this.user?.toUser(),
       connection: this.connection?.toConnection(),
       created_at: this.created_at,

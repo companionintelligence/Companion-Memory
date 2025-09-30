@@ -15,6 +15,7 @@ export interface ApiLog {
   readonly content?: unknown;
   readonly embedding?: number[]; // Vector embedding for semantic search
   readonly location?: GeoPoint; // Geospatial location data
+  readonly processed?: boolean; // Whether this log has been processed into events
   readonly user?: User;
   readonly connection?: Connection;
   readonly created_at: Date;

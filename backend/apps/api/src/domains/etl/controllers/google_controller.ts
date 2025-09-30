@@ -7,6 +7,7 @@ import { ConnectionService } from '@ci/domains/connections';
 import { SyncStateHelper } from '@ci/domains/connections/types/sync-state';
 
 import { ApiLogService } from '../services/ApiLogService';
+import { EventProcessorService } from '../services/EventProcessorService';
 
 @Controller('google')
 export class GoogleController {
@@ -15,6 +16,7 @@ export class GoogleController {
   constructor(
     private readonly apiLogService: ApiLogService,
     private readonly connectionService: ConnectionService,
+    private readonly eventProcessorService: EventProcessorService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE) // Every minute
@@ -167,6 +169,21 @@ export class GoogleController {
         success: errors.length === 0,
         message: `Sync completed. ${syncResults.length} APIs processed successfully. ${errors.length} errors occurred.`,
       });
+
+      // Process the API logs to create structured events
+      if (errors.length === 0) {
+        try {
+          this.logger.log('Processing API logs to create structured events', {
+            connectionId: payload.connectionId,
+          });
+          await this.eventProcessorService.processConnectionLogs(payload.connectionId);
+        } catch (error) {
+          this.logger.error('Failed to process API logs into events', {
+            connectionId: payload.connectionId,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      }
     } catch (error) {
       this.logger.error('Error during Google data sync', error as Error);
     }
