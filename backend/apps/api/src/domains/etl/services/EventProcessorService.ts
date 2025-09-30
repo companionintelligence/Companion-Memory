@@ -3,8 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
-import { EventService } from '@ci/domains/events';
+import type { RequestContext } from '@ci/common/types';
 import { EventEntity } from '@ci/domains/memory/entities/EventEntity';
+import { EventService } from '@ci/domains/memory/services/EventService';
 
 import { ApiLogEntity } from '../entities/ApiLogEntity';
 import { ApiLogService } from './ApiLogService';
@@ -138,40 +139,46 @@ export class EventProcessorService {
 
       // Create the event based on type
       if (parsedEvent.type === 'calendar_event') {
-        await this.eventService.create({
-          name: parsedEvent.name,
-          type: 'calendar_event',
-          description: parsedEvent.description,
-          start_time: parsedEvent.start_time,
-          end_time: parsedEvent.end_time,
-          external_id: parsedEvent.external_id,
-          source_url: parsedEvent.source_url,
-          source_data: {
-            ...parsedEvent.source_data as Record<string, unknown>,
-            attendees: parsedEvent.attendees,
-            api_log_id: apiLog.id,
-          },
-          user_id: parsedEvent.user_id,
-          connection_id: parsedEvent.connection_id,
-        });
+        await this.eventService.create(
+          { requestId: 'etl-processor' }, // RequestContext
+          {
+            name: parsedEvent.name,
+            type: 'calendar_event',
+            description: parsedEvent.description,
+            start_time: parsedEvent.start_time,
+            end_time: parsedEvent.end_time,
+            external_id: parsedEvent.external_id,
+            source_url: parsedEvent.source_url,
+            source_data: {
+              ...parsedEvent.source_data as Record<string, unknown>,
+              attendees: parsedEvent.attendees,
+              api_log_id: apiLog.id,
+            },
+            user_id: parsedEvent.user_id,
+            connection_id: parsedEvent.connection_id,
+          }
+        );
       } else if (parsedEvent.type === 'email') {
-        await this.eventService.create({
-          name: parsedEvent.name,
-          type: 'email',
-          description: parsedEvent.description,
-          start_time: parsedEvent.received_at,
-          external_id: parsedEvent.external_id,
-          source_url: parsedEvent.source_url,
-          source_data: {
-            ...parsedEvent.source_data as Record<string, unknown>,
-            from: parsedEvent.from,
-            to: parsedEvent.to,
-            sent_at: parsedEvent.sent_at,
-            api_log_id: apiLog.id,
-          },
-          user_id: parsedEvent.user_id,
-          connection_id: parsedEvent.connection_id,
-        });
+        await this.eventService.create(
+          { requestId: 'etl-processor' }, // RequestContext
+          {
+            name: parsedEvent.name,
+            type: 'email',
+            description: parsedEvent.description,
+            start_time: parsedEvent.received_at,
+            external_id: parsedEvent.external_id,
+            source_url: parsedEvent.source_url,
+            source_data: {
+              ...parsedEvent.source_data as Record<string, unknown>,
+              from: parsedEvent.from,
+              to: parsedEvent.to,
+              sent_at: parsedEvent.sent_at,
+              api_log_id: apiLog.id,
+            },
+            user_id: parsedEvent.user_id,
+            connection_id: parsedEvent.connection_id,
+          }
+        );
       }
 
       this.logger.log('Created event from parsed data', {
