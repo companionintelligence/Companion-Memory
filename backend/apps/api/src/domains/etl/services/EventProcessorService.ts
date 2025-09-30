@@ -142,6 +142,7 @@ export class EventProcessorService {
         await this.eventService.create(
           { requestId: 'etl-processor' }, // RequestContext
           {
+            id: parsedEvent.id,
             name: parsedEvent.name,
             type: 'calendar_event',
             description: parsedEvent.description,
@@ -162,6 +163,7 @@ export class EventProcessorService {
         await this.eventService.create(
           { requestId: 'etl-processor' }, // RequestContext
           {
+            id: parsedEvent.id,
             name: parsedEvent.name,
             type: 'email',
             description: parsedEvent.description,
