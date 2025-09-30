@@ -1,3 +1,3 @@
-import MemoryPage from './MemoryPage';
+import MemoryPageReal from './MemoryPageReal';
 
-export default MemoryPage;
+export default MemoryPageReal;
