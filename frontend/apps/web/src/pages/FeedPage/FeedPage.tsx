@@ -7,7 +7,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useActionListService } from '@/api';
 import { PageContent } from '@/components/layout';
 import { Markdown } from '@/components/Markdown';
-import { useModalControls } from '@/hooks';
+import { useAuth, useModalControls } from '@/hooks';
 
 import { BentoCard } from '../../components/BentoCard';
 import { Carousel } from '../../components/Carousel';
@@ -19,6 +19,7 @@ type CarouselProps = Partial<ComponentProps<typeof Carousel>>;
 
 export function FeedPage() {
   usePageTitle('Feed - Companion Intelligence');
+  const [{ user }] = useAuth();
 
   const { isMobile } = useDeviceLayout();
   const navigate = useNavigate();
@@ -34,6 +35,12 @@ export function FeedPage() {
   const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls({
     open: selectedActionIndex >= 0,
   });
+
+  useEffect(() => {
+    if (!user?.onboarded) {
+      navigate('/onboarding');
+    }
+  }, []);
 
   useEffect(() => {
     if (selectedActionIndex >= 0) {
