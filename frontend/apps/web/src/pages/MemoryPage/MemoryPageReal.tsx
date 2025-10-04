@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Tabs, Card, Button, Input } from '@ci/shadcn';
+import { Breadcrumb, Card, Button, Input } from '@ci/shadcn';
 import {
   Clock,
   Search,
@@ -275,7 +275,6 @@ export default function MemoryPageReal() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState('list');
   const [totalMemories, setTotalMemories] = useState(0);
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -410,10 +409,11 @@ export default function MemoryPageReal() {
   // Get memories with location for map
   const memoriesWithLocation = memories.filter((memory) => memory.location);
 
-  // Initialize map when map tab is active
+  // Initialize map when component mounts or memories change
   useEffect(() => {
     const initializeMap = async () => {
-      if (activeTab !== 'map' || !mapContainerRef.current) {
+      if (!mapContainerRef.current) {
+        console.log('Map container ref not ready');
         return;
       }
 
@@ -560,10 +560,30 @@ export default function MemoryPageReal() {
       L.control.zoom({ position: 'bottomright' }).addTo(map);
       
       console.log('Map initialization complete');
+      
+      // Force map to invalidate size after a short delay to ensure proper rendering
+      setTimeout(() => {
+        if (mapRef.current) {
+          console.log('Invalidating map size');
+          mapRef.current.invalidateSize();
+        }
+      }, 100);
     };
 
-    initializeMap();
-  }, [activeTab, memoriesWithLocation]);
+    // Only initialize map if we have memories
+    if (memories.length > 0) {
+      initializeMap();
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (mapRef.current) {
+        console.log('Cleaning up map on unmount');
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, [memoriesWithLocation]);
 
   return (
     <>
@@ -637,96 +657,92 @@ export default function MemoryPageReal() {
             </div>
           )}
 
-          {/* Content Tabs */}
+          {/* Map - Always at top, 300px tall */}
           {!loading && !error && (
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <Tabs.List>
-                <Tabs.Trigger value="list">List</Tabs.Trigger>
-                <Tabs.Trigger value="map">Map ({memoriesWithLocation.length})</Tabs.Trigger>
-              </Tabs.List>
+            <>
+              <div className="h-[300px] rounded-lg overflow-hidden border">
+                <div ref={mapContainerRef} className="h-full w-full" />
+              </div>
+              {memoriesWithLocation.length > 0 && (
+                <p className="text-sm text-muted-foreground text-center -mt-4">
+                  Showing {memoriesWithLocation.length} locations (including demo San Francisco events)
+                </p>
+              )}
+            </>
+          )}
 
-              <Tabs.Content value="list" className="mt-6">
-                {memories.length === 0 ? (
-                  <div className="text-center py-8">
-                    <p className="text-muted-foreground">No memories found.</p>
-                    {totalMemories > 0 && (
-                      <p className="text-sm text-muted-foreground mt-2">
-                        Total memories in database: {totalMemories}
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <p className="text-sm text-muted-foreground">
-                      Showing {memories.length} memories (including 10 demo San Francisco events)
+          {/* Memory List */}
+          {!loading && !error && (
+            <>
+              {memories.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground">No memories found.</p>
+                  {totalMemories > 0 && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Total memories in database: {totalMemories}
                     </p>
-                    {memories.map((memory) => (
-                      <Card key={memory.id}>
-                        <Card.Content className="p-4">
-                          <div className="flex items-start gap-3">
-                            <div className="flex-shrink-0 p-2 bg-primary/10 rounded-full">
-                              {getMemoryIcon(memory.type)}
-                            </div>
-                            <div className="flex-grow min-w-0">
-                              <div className="flex justify-between items-start">
-                                <h4 className="font-medium">{memory.title}</h4>
-                                {memory.timestamp && (
-                                  <time className="text-sm text-muted-foreground">
-                                    {new Date(memory.timestamp).toLocaleDateString()}
-                                  </time>
-                                )}
-                              </div>
-                              {memory.description && (
-                                <p className="text-sm text-muted-foreground mt-1">{memory.description}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Showing {memories.length} memories (including 10 demo San Francisco events)
+                  </p>
+                  {memories.map((memory) => (
+                    <Card key={memory.id}>
+                      <Card.Content className="p-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex-shrink-0 p-2 bg-primary/10 rounded-full">
+                            {getMemoryIcon(memory.type)}
+                          </div>
+                          <div className="flex-grow min-w-0">
+                            <div className="flex justify-between items-start">
+                              <h4 className="font-medium">{memory.title}</h4>
+                              {memory.timestamp && (
+                                <time className="text-sm text-muted-foreground">
+                                  {new Date(memory.timestamp).toLocaleDateString()}
+                                </time>
                               )}
-                              <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                                <span className="capitalize">{memory.category || memory.type}</span>
-                                {memory.location && (
-                                  <span className="flex items-center gap-1">
-                                    <MapPin className="h-3 w-3" />
-                                    {memory.location.name || 'Location'}
-                                  </span>
-                                )}
-                                {memory.metadata?.sourceUrl && (
-                                  <a
-                                    href={memory.metadata.sourceUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="hover:underline"
-                                  >
-                                    Source
-                                  </a>
-                                )}
-                                {memory.metadata?.synthetic && (
-                                  <span className="italic">Synthetic</span>
-                                )}
-                                {memory.tags.length > 0 && (
-                                  <span>Tags: {memory.tags.join(', ')}</span>
-                                )}
-                                {memory.id.startsWith('fake-') && (
-                                  <span className="text-blue-600 font-medium">Demo Event</span>
-                                )}
-                              </div>
+                            </div>
+                            {memory.description && (
+                              <p className="text-sm text-muted-foreground mt-1">{memory.description}</p>
+                            )}
+                            <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                              <span className="capitalize">{memory.category || memory.type}</span>
+                              {memory.location && (
+                                <span className="flex items-center gap-1">
+                                  <MapPin className="h-3 w-3" />
+                                  {memory.location.name || 'Location'}
+                                </span>
+                              )}
+                              {memory.metadata?.sourceUrl && (
+                                <a
+                                  href={memory.metadata.sourceUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:underline"
+                                >
+                                  Source
+                                </a>
+                              )}
+                              {memory.metadata?.synthetic && (
+                                <span className="italic">Synthetic</span>
+                              )}
+                              {memory.tags.length > 0 && (
+                                <span>Tags: {memory.tags.join(', ')}</span>
+                              )}
+                              {memory.id.startsWith('fake-') && (
+                                <span className="text-blue-600 font-medium">Demo Event</span>
+                              )}
                             </div>
                           </div>
-                        </Card.Content>
-                      </Card>
-                    ))}
-                  </div>
-                )}
-              </Tabs.Content>
-
-              <Tabs.Content value="map" className="mt-6">
-                <div className="h-[600px] rounded-lg overflow-hidden border">
-                  <div ref={mapContainerRef} className="h-full w-full" />
+                        </div>
+                      </Card.Content>
+                    </Card>
+                  ))}
                 </div>
-                {memoriesWithLocation.length > 0 && (
-                  <p className="text-sm text-muted-foreground text-center mt-4">
-                    Showing {memoriesWithLocation.length} locations (including demo San Francisco events)
-                  </p>
-                )}
-              </Tabs.Content>
-            </Tabs>
+              )}
+            </>
           )}
         </div>
       </PageContent>
