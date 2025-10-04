@@ -283,6 +283,9 @@ export default function MemoryPageReal() {
       setLoading(true);
       setError(null);
 
+      // Always start with fake SF events
+      const fakeEvents = generateFakeSFEvents();
+
       // Build query params
       const params = new URLSearchParams();
       if (query) {
@@ -301,32 +304,46 @@ export default function MemoryPageReal() {
         
         // If it's a 401, the user might not be authenticated
         if (memoryRes.status === 401) {
-          throw new Error('You need to be logged in to view memories');
+          console.log('Not authenticated, using only fake events');
+          setMemories(fakeEvents);
+          setTotalMemories(fakeEvents.length);
+          setLoading(false);
+          return;
         }
         
-        throw new Error(`Failed to fetch memories: ${memoryRes.status} ${errorText}`);
+        // For other errors, still use fake events
+        console.log('API error, using only fake events');
+        setMemories(fakeEvents);
+        setTotalMemories(fakeEvents.length);
+        setLoading(false);
+        return;
       }
 
       const memoryData: MemoryResponse = await memoryRes.json();
       console.log('Memory API response:', memoryData);
 
-      // The backend returns a MemoryResponse object
+      // Combine fake events with real memories
+      let combinedMemories: Memory[] = [...fakeEvents];
+      
       if (memoryData && memoryData.data && memoryData.data.length > 0) {
-        setMemories(memoryData.data);
-        setTotalMemories(memoryData.total);
+        // Add real memories to the fake ones
+        combinedMemories = [...fakeEvents, ...memoryData.data];
+        console.log(`Combined ${fakeEvents.length} fake events with ${memoryData.data.length} real memories`);
       } else {
-        // If no data from API, use fake SF events
-        console.log('No memories from API, using fake San Francisco events');
-        const fakeEvents = generateFakeSFEvents();
-        setMemories(fakeEvents);
-        setTotalMemories(fakeEvents.length);
+        console.log('No real memories from API, using only fake San Francisco events');
       }
+
+      // Sort by timestamp (most recent first)
+      combinedMemories.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      setMemories(combinedMemories);
+      setTotalMemories(combinedMemories.length);
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       console.error('Error fetching memories:', errorMessage, err);
       
-      // On error, also use fake data
+      // On error, use fake data
       console.log('Error fetching memories, using fake San Francisco events');
       const fakeEvents = generateFakeSFEvents();
       setMemories(fakeEvents);
@@ -406,7 +423,7 @@ export default function MemoryPageReal() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (L.Icon.Default.prototype as any)._getIconUrl;
     L.Icon.Default.mergeOptions({
-      iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
+      icon RetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
       iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
       shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
     });
@@ -620,7 +637,7 @@ export default function MemoryPageReal() {
                 ) : (
                   <div className="space-y-4">
                     <p className="text-sm text-muted-foreground">
-                      Showing {memories.length} of {totalMemories} memories
+                      Showing {memories.length} memories (including 10 demo San Francisco events)
                     </p>
                     {memories.map((memory) => (
                       <Card key={memory.id}>
@@ -665,6 +682,9 @@ export default function MemoryPageReal() {
                                 {memory.tags.length > 0 && (
                                   <span>Tags: {memory.tags.join(', ')}</span>
                                 )}
+                                {memory.id.startsWith('fake-') && (
+                                  <span className="text-blue-600 font-medium">Demo Event</span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -679,9 +699,9 @@ export default function MemoryPageReal() {
                 <div className="h-[600px] rounded-lg overflow-hidden border">
                   <div ref={mapContainerRef} className="h-full w-full" />
                 </div>
-                {memoriesWithLocation.length === 0 && (
+                {memoriesWithLocation.length > 0 && (
                   <p className="text-sm text-muted-foreground text-center mt-4">
-                    Showing San Francisco map with sample events from today.
+                    Showing {memoriesWithLocation.length} locations (including demo San Francisco events)
                   </p>
                 )}
               </Tabs.Content>
