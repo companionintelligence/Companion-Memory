@@ -11,6 +11,15 @@ import {
   Loader2,
   AlertCircle,
   X,
+  Coffee,
+  Briefcase,
+  Utensils,
+  TreePine,
+  Users,
+  ShoppingBag,
+  Palette,
+  Wine,
+  Camera,
 } from '@ci/shadcn/icons';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -40,6 +49,7 @@ interface Memory {
     personRef?: string;
     contentRef?: string;
     thingRef?: string;
+    imageUrl?: string;
     [key: string]: unknown;
   };
 }
@@ -88,7 +98,7 @@ interface Content {
   event_id: string | null;
 }
 
-// Generate fake San Francisco events for today
+// Generate fake San Francisco events for today with Unsplash images
 function generateFakeSFEvents(): Memory[] {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -110,6 +120,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['coffee', 'morning'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-2',
@@ -127,6 +140,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['work', 'meeting'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-3',
@@ -144,6 +160,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['food', 'lunch'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-4',
@@ -161,6 +180,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['walking', 'outdoor'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1449034446853-66c86144b0ad?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-5',
@@ -178,6 +200,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['coffee', 'social'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1511632765486-a01980e01a18?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-6',
@@ -195,6 +220,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['shopping', 'retail'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-7',
@@ -212,6 +240,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['art', 'museum'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1499781350541-7783f6c6a0c8?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-8',
@@ -229,6 +260,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['food', 'dinner'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-9',
@@ -246,6 +280,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['drinks', 'social'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=400&h=300&fit=crop',
+      },
     },
     {
       id: 'fake-10',
@@ -263,6 +300,9 @@ function generateFakeSFEvents(): Memory[] {
       },
       tags: ['walking', 'scenic'],
       userId: 'demo-user',
+      metadata: {
+        imageUrl: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=300&fit=crop',
+      },
     },
   ];
 }
@@ -350,7 +390,7 @@ export default function MemoryPageReal() {
       const fakeEvents = generateFakeSFEvents();
       setMemories(fakeEvents);
       setTotalMemories(fakeEvents.length);
-      setError(null); // Don't show error since we have fake data
+      setError(null); //Don't show error since we have fake data
       
       // Try to fetch debug info if main endpoint fails
       try {
@@ -387,20 +427,39 @@ export default function MemoryPageReal() {
     }
   };
 
-  // Get icon for memory type
-  const getMemoryIcon = (type: Memory['type']) => {
-    const iconClass = 'h-5 w-5';
-    switch (type) {
+  // Get icon for memory type/category with more variety
+  const getMemoryIcon = (memory: Memory) => {
+    const iconClass = 'h-4 w-4';
+    const category = memory.category.toLowerCase();
+
+    // Check category first for more specific icons
+    if (category.includes('coffee')) {
+      return <Coffee className={iconClass} />;
+    } else if (category.includes('work') || category.includes('meeting')) {
+      return <Briefcase className={iconClass} />;
+    } else if (category.includes('food') || category.includes('lunch') || category.includes('dinner')) {
+      return <Utensils className={iconClass} />;
+    } else if (category.includes('recreation') || category.includes('walk') || category.includes('outdoor')) {
+      return <TreePine className={iconClass} />;
+    } else if (category.includes('social')) {
+      return <Users className={iconClass} />;
+    } else if (category.includes('shopping')) {
+      return <ShoppingBag className={iconClass} />;
+    } else if (category.includes('art') || category.includes('museum')) {
+      return <Palette className={iconClass} />;
+    } else if (category.includes('entertainment') || category.includes('drinks')) {
+      return <Wine className={iconClass} />;
+    }
+
+    // Fall back to type-based icons
+    switch (memory.type) {
       case 'event':
         return <Calendar className={iconClass} />;
       case 'content':
         return <FileText className={iconClass} />;
       case 'person':
-        return <User className={iconClass} />;
       case 'contact':
         return <User className={iconClass} />;
-      case 'thing':
-        return <FileText className={iconClass} />;
       default:
         return <Clock className={iconClass} />;
     }
@@ -459,17 +518,6 @@ export default function MemoryPageReal() {
       if (memoriesWithLocation.length > 0) {
         console.log('Adding', memoriesWithLocation.length, 'markers to map');
         
-        // Create custom icon for markers
-        const customIcon = L.divIcon({
-          className: 'custom-map-marker',
-          html: `<div class="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center shadow-md">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-              </div>`,
-          iconSize: [32, 32],
-          iconAnchor: [16, 32],
-          popupAnchor: [0, -32],
-        });
-
         const bounds = L.latLngBounds([]);
         const markers: L.Marker[] = [];
 
@@ -481,12 +529,30 @@ export default function MemoryPageReal() {
         sortedMemories.forEach((memory, index) => {
           if (memory.location) {
             console.log(`Adding marker ${index + 1} at`, memory.location.lat, memory.location.lng, memory.title);
+            
+            // Create custom icon with image if available
+            const imageUrl = memory.metadata?.imageUrl;
+            const customIcon = L.divIcon({
+              className: 'custom-map-marker',
+              html: imageUrl 
+                ? `<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-white shadow-lg">
+                    <img src="${imageUrl}" alt="${memory.title}" class="w-full h-full object-cover" />
+                  </div>`
+                : `<div class="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center shadow-md">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                  </div>`,
+              iconSize: imageUrl ? [40, 40] : [32, 32],
+              iconAnchor: imageUrl ? [20, 40] : [16, 32],
+              popupAnchor: [0, imageUrl ? -40 : -32],
+            });
+
             const marker = L.marker([memory.location.lat, memory.location.lng], { icon: customIcon })
               .addTo(map)
               .bindPopup(
                 `
               <div class="p-3">
-                <div class="font-bold text-lg mb-1">${memory.title}</div>
+                ${imageUrl ? `<img src="${imageUrl}" alt="${memory.title}" class="w-full h-32 object-cover rounded-lg mb-2 -mt-3 -mx-3" />` : ''}
+                <div class="font-bold text-base mb-1">${memory.title}</div>
                 <div class="text-sm mb-2 text-gray-600">${memory.description || 'No description'}</div>
                 <div class="text-xs text-gray-500">${new Date(memory.timestamp).toLocaleString()}</div>
                 <div class="mt-2 flex items-center gap-2">
@@ -663,13 +729,13 @@ export default function MemoryPageReal() {
               </div>
               {memoriesWithLocation.length > 0 && (
                 <p className="text-sm text-muted-foreground text-center -mt-4">
-                  Showing {memoriesWithLocation.length} locations (including demo San Francisco events)
+                  Showing {memoriesWithLocation.length} locations
                 </p>
               )}
             </>
           )}
 
-          {/* Memory List */}
+          {/* Memory Grid - Compact cards in grid layout */}
           {!loading && !error && (
             <>
               {memories.length === 0 ? (
@@ -682,62 +748,63 @@ export default function MemoryPageReal() {
                   )}
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Showing {memories.length} memories (including 10 demo San Francisco events)
+                    Showing {memories.length} memories
                   </p>
-                  {memories.map((memory) => (
-                    <Card key={memory.id}>
-                      <Card.Content className="p-4">
-                        <div className="flex items-start gap-3">
-                          <div className="flex-shrink-0 p-2 bg-primary/10 rounded-full">
-                            {getMemoryIcon(memory.type)}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {memories.map((memory) => (
+                      <Card key={memory.id} className="overflow-hidden hover:shadow-lg transition-shadow">
+                        {memory.metadata?.imageUrl && (
+                          <div className="h-32 overflow-hidden">
+                            <img 
+                              src={memory.metadata.imageUrl} 
+                              alt={memory.title}
+                              className="w-full h-full object-cover"
+                            />
                           </div>
-                          <div className="flex-grow min-w-0">
-                            <div className="flex justify-between items-start">
-                              <h4 className="font-medium">{memory.title}</h4>
-                              {memory.timestamp && (
-                                <time className="text-sm text-muted-foreground">
-                                  {new Date(memory.timestamp).toLocaleDateString()}
-                                </time>
-                              )}
+                        )}
+                        <Card.Content className="p-3">
+                          <div className="flex items-start gap-2">
+                            <div className="flex-shrink-0 p-1.5 bg-primary/10 rounded-full">
+                              {getMemoryIcon(memory)}
                             </div>
-                            {memory.description && (
-                              <p className="text-sm text-muted-foreground mt-1">{memory.description}</p>
-                            )}
-                            <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                              <span className="capitalize">{memory.category || memory.type}</span>
-                              {memory.location && (
-                                <span className="flex items-center gap-1">
-                                  <MapPin className="h-3 w-3" />
-                                  {memory.location.name || 'Location'}
+                            <div className="flex-grow min-w-0">
+                              <div className="flex justify-between items-start gap-2">
+                                <h4 className="font-medium text-sm leading-tight">{memory.title}</h4>
+                                {memory.timestamp && (
+                                  <time className="text-xs text-muted-foreground whitespace-nowrap">
+                                    {new Date(memory.timestamp).toLocaleTimeString([], { 
+                                      hour: '2-digit', 
+                                      minute: '2-digit' 
+                                    })}
+                                  </time>
+                                )}
+                              </div>
+                              {memory.description && (
+                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                  {memory.description}
+                                </p>
+                              )}
+                              <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
+                                  {memory.category}
                                 </span>
-                              )}
-                              {memory.metadata?.sourceUrl && (
-                                <a
-                                  href={memory.metadata.sourceUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="hover:underline"
-                                >
-                                  Source
-                                </a>
-                              )}
-                              {memory.metadata?.synthetic && (
-                                <span className="italic">Synthetic</span>
-                              )}
-                              {memory.tags.length > 0 && (
-                                <span>Tags: {memory.tags.join(', ')}</span>
-                              )}
-                              {memory.id.startsWith('fake-') && (
-                                <span className="text-blue-600 font-medium">Demo Event</span>
-                              )}
+                                {memory.location && (
+                                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                    <MapPin className="h-3 w-3" />
+                                    <span className="truncate max-w-[120px]">
+                                      {memory.location.name || 'Location'}
+                                    </span>
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </Card.Content>
-                    </Card>
-                  ))}
+                        </Card.Content>
+                      </Card>
+                    ))}
+                  </div>
                 </div>
               )}
             </>

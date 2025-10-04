@@ -24,6 +24,7 @@
 
 .custom-map-marker:hover {
   transform: scale(1.15);
+  z-index: 1000 !important;
 }
 
 .custom-map-marker > div {
@@ -33,6 +34,15 @@
 
 .custom-map-marker:hover > div {
   box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+/* Image markers */
+.custom-map-marker img {
+  transition: transform 0.2s ease-out;
+}
+
+.custom-map-marker:hover img {
+  transform: scale(1.05);
 }
 
 /* Zoom controls */
@@ -67,4 +77,14 @@
 /* Leaflet controls should also have lower z-index */
 .leaflet-control-container {
   z-index: 1 !important;
+}
+
+/* Timeline number markers */
+.timeline-number-marker {
+  transition: transform 0.2s ease-out;
+}
+
+.timeline-number-marker:hover {
+  transform: scale(1.2);
+  z-index: 999 !important;
 }
