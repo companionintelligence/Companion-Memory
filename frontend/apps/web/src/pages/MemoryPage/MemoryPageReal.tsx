@@ -570,10 +570,8 @@ export default function MemoryPageReal() {
       }, 100);
     };
 
-    // Only initialize map if we have memories
-    if (memories.length > 0) {
-      initializeMap();
-    }
+    // Always initialize map when container is ready
+    initializeMap();
 
     // Cleanup on unmount
     return () => {
