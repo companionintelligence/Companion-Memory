@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+
 import { Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Card, Button, Input } from '@ci/shadcn';
 import {
@@ -19,7 +20,6 @@ import {
   ShoppingBag,
   Palette,
   Wine,
-  Camera,
 } from '@ci/shadcn/icons';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -70,39 +70,11 @@ interface MemoryResponse {
   offset: number;
 }
 
-// Types for individual endpoints (if needed as fallback)
-interface Event {
-  id: string;
-  name: string | null;
-  type: string | null;
-  description: string | null;
-  start_time: string | null;
-  end_time: string | null;
-  external_id: string | null;
-  source_url: string | null;
-  source_data: object | null;
-  user_id?: string;
-  connection_id?: string;
-}
-
-interface Content {
-  id: string;
-  type: string;
-  title: string | null;
-  text: string | null;
-  url: string | null;
-  mimetype: string | null;
-  external_id: string | null;
-  source_url: string | null;
-  user_id: string | null;
-  event_id: string | null;
-}
-
 // Generate fake San Francisco events for today with Unsplash images
 function generateFakeSFEvents(): Memory[] {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
+
   return [
     {
       id: 'fake-1',
@@ -333,6 +305,7 @@ export default function MemoryPageReal() {
       if (query) {
         params.append('query', query);
       }
+
       params.append('limit', '50');
 
       // Fetch from the memory endpoint
@@ -343,21 +316,23 @@ export default function MemoryPageReal() {
       if (!memoryRes.ok) {
         const errorText = await memoryRes.text();
         console.error('Memory API error:', memoryRes.status, errorText);
-        
+
         // If it's a 401, the user might not be authenticated
         if (memoryRes.status === 401) {
           console.log('Not authenticated, using only fake events');
           setMemories(fakeEvents);
           setTotalMemories(fakeEvents.length);
           setLoading(false);
+
           return;
         }
-        
+
         // For other errors, still use fake events
         console.log('API error, using only fake events');
         setMemories(fakeEvents);
         setTotalMemories(fakeEvents.length);
         setLoading(false);
+
         return;
       }
 
@@ -366,7 +341,7 @@ export default function MemoryPageReal() {
 
       // Combine fake events with real memories
       let combinedMemories: Memory[] = [...fakeEvents];
-      
+
       if (memoryData && memoryData.data && memoryData.data.length > 0) {
         // Add real memories to the fake ones
         combinedMemories = [...fakeEvents, ...memoryData.data];
@@ -380,18 +355,17 @@ export default function MemoryPageReal() {
 
       setMemories(combinedMemories);
       setTotalMemories(combinedMemories.length);
-
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       console.error('Error fetching memories:', errorMessage, err);
-      
+
       // On error, use fake data
       console.log('Error fetching memories, using fake San Francisco events');
       const fakeEvents = generateFakeSFEvents();
       setMemories(fakeEvents);
       setTotalMemories(fakeEvents.length);
       setError(null); //Don't show error since we have fake data
-      
+
       // Try to fetch debug info if main endpoint fails
       try {
         const debugRes = await fetch('/api/memory/debug/direct', {
@@ -473,6 +447,7 @@ export default function MemoryPageReal() {
     const initializeMap = async () => {
       if (!mapContainerRef.current) {
         console.log('Map container ref not ready');
+
         return;
       }
 
@@ -502,7 +477,7 @@ export default function MemoryPageReal() {
       // Initialize map centered on San Francisco (or first memory location if available)
       const centerLat = memoriesWithLocation.length > 0 ? memoriesWithLocation[0].location!.lat : defaultLat;
       const centerLng = memoriesWithLocation.length > 0 ? memoriesWithLocation[0].location!.lng : defaultLng;
-      
+
       console.log('Creating map centered at', centerLat, centerLng);
       const map = L.map(mapContainerRef.current).setView([centerLat, centerLng], defaultZoom);
       mapRef.current = map;
@@ -517,7 +492,7 @@ export default function MemoryPageReal() {
       // Add markers if we have memories with location
       if (memoriesWithLocation.length > 0) {
         console.log('Adding', memoriesWithLocation.length, 'markers to map');
-        
+
         const bounds = L.latLngBounds([]);
         const markers: L.Marker[] = [];
 
@@ -528,13 +503,18 @@ export default function MemoryPageReal() {
 
         sortedMemories.forEach((memory, index) => {
           if (memory.location) {
-            console.log(`Adding marker ${index + 1} at`, memory.location.lat, memory.location.lng, memory.title);
-            
+            console.log(
+              `Adding marker ${index + 1} at`,
+              memory.location.lat,
+              memory.location.lng,
+              memory.title,
+            );
+
             // Create custom icon with image if available
             const imageUrl = memory.metadata?.imageUrl;
             const customIcon = L.divIcon({
               className: 'custom-map-marker',
-              html: imageUrl 
+              html: imageUrl
                 ? `<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-white shadow-lg">
                     <img src="${imageUrl}" alt="${memory.title}" class="w-full h-full object-cover" />
                   </div>`
@@ -580,7 +560,7 @@ export default function MemoryPageReal() {
         // Draw contrail line between all points
         if (markers.length > 1) {
           console.log('Drawing contrail line between', markers.length, 'points');
-          
+
           // Add numbered markers for timeline
           markers.forEach((marker, index) => {
             const numberIcon = L.divIcon({
@@ -609,7 +589,7 @@ export default function MemoryPageReal() {
             opacity: 0.8,
             smoothFactor: 1,
           }).addTo(map);
-          
+
           console.log('Contrail line added with', waypoints.length, 'waypoints');
         }
 
@@ -624,9 +604,9 @@ export default function MemoryPageReal() {
 
       // Add zoom control
       L.control.zoom({ position: 'bottomright' }).addTo(map);
-      
+
       console.log('Map initialization complete');
-      
+
       // Force map to invalidate size after a short delay to ensure proper rendering
       setTimeout(() => {
         if (mapRef.current) {
@@ -749,16 +729,14 @@ export default function MemoryPageReal() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {memories.length} memories
-                  </p>
+                  <p className="text-sm text-muted-foreground">Showing {memories.length} memories</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     {memories.map((memory) => (
                       <Card key={memory.id} className="overflow-hidden hover:shadow-lg transition-shadow">
                         {memory.metadata?.imageUrl && (
                           <div className="h-32 overflow-hidden">
-                            <img 
-                              src={memory.metadata.imageUrl} 
+                            <img
+                              src={memory.metadata.imageUrl}
                               alt={memory.title}
                               className="w-full h-full object-cover"
                             />
@@ -774,9 +752,9 @@ export default function MemoryPageReal() {
                                 <h4 className="font-medium text-sm leading-tight">{memory.title}</h4>
                                 {memory.timestamp && (
                                   <time className="text-xs text-muted-foreground whitespace-nowrap">
-                                    {new Date(memory.timestamp).toLocaleTimeString([], { 
-                                      hour: '2-digit', 
-                                      minute: '2-digit' 
+                                    {new Date(memory.timestamp).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
                                     })}
                                   </time>
                                 )}

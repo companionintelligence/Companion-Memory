@@ -85,6 +85,7 @@ export class MemoryController {
       this.logger.debug('Memory findAll response', {
         dataLength: result.data.length,
         total: result.total,
+        userId: context.userId,
       });
 
       return result;
