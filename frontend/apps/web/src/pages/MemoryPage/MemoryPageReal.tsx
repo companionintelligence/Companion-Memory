@@ -18,6 +18,9 @@ import L from 'leaflet';
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
+// Add custom styles for Leaflet
+import './memory-map.css';
+
 // Types matching the backend Memory type
 interface Memory {
   id: string;
@@ -409,139 +412,157 @@ export default function MemoryPageReal() {
 
   // Initialize map when map tab is active
   useEffect(() => {
-    if (activeTab !== 'map' || !mapContainerRef.current) {
-      return;
-    }
+    const initializeMap = async () => {
+      if (activeTab !== 'map' || !mapContainerRef.current) {
+        return;
+      }
 
-    // Clean up existing map
-    if (mapRef.current) {
-      mapRef.current.remove();
-      mapRef.current = null;
-    }
+      console.log('Initializing map with', memoriesWithLocation.length, 'locations');
 
-    // Fix Leaflet icon paths
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (L.Icon.Default.prototype as any)._getIconUrl;
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
-      iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
-      shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
-    });
-
-    // Default to San Francisco coordinates
-    const defaultLat = 37.7749;
-    const defaultLng = -122.4194;
-    const defaultZoom = 13;
-
-    // Initialize map centered on San Francisco (or first memory location if available)
-    const centerLat = memoriesWithLocation.length > 0 ? memoriesWithLocation[0].location!.lat : defaultLat;
-    const centerLng = memoriesWithLocation.length > 0 ? memoriesWithLocation[0].location!.lng : defaultLng;
-    
-    const map = L.map(mapContainerRef.current).setView([centerLat, centerLng], defaultZoom);
-    mapRef.current = map;
-
-    // Use satellite imagery
-    L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      {
-        attribution: '',
-        maxZoom: 20,
-      },
-    ).addTo(map);
-
-    // Add markers if we have memories with location
-    if (memoriesWithLocation.length > 0) {
-      // Create custom icon for markers
-      const customIcon = L.divIcon({
-        className: 'custom-map-marker',
-        html: `<div class="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center shadow-md">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-            </div>`,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-        popupAnchor: [0, -32],
+      // Fix Leaflet icon paths
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
+        iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
       });
 
-      const bounds = L.latLngBounds([]);
-      const markers: L.Marker[] = [];
+      // Clean up existing map
+      if (mapRef.current) {
+        console.log('Removing existing map');
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
 
-      // Sort memories by timestamp for timeline
-      const sortedMemories = [...memoriesWithLocation].sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-      );
+      // Default to San Francisco coordinates
+      const defaultLat = 37.7749;
+      const defaultLng = -122.4194;
+      const defaultZoom = 13;
 
-      sortedMemories.forEach((memory, index) => {
-        if (memory.location) {
-          const marker = L.marker([memory.location.lat, memory.location.lng], { icon: customIcon })
-            .addTo(map)
-            .bindPopup(
-              `
-            <div class="p-3">
-              <div class="font-bold text-lg mb-1">${memory.title}</div>
-              <div class="text-sm mb-2 text-gray-600">${memory.description || 'No description'}</div>
-              <div class="text-xs text-gray-500">${new Date(memory.timestamp).toLocaleString()}</div>
-              <div class="mt-2 flex items-center gap-2">
-                <span class="text-xs inline-block px-2 py-1 rounded-full bg-blue-100 text-blue-800">
-                  ${memory.category}
-                </span>
-                <span class="text-xs text-gray-500">#${index + 1}</span>
-              </div>
-            </div>
-          `,
-              {
-                className: 'custom-popup',
-                maxWidth: 300,
-                minWidth: 200,
-                closeButton: true,
-                autoClose: false,
-              },
-            );
+      // Initialize map centered on San Francisco (or first memory location if available)
+      const centerLat = memoriesWithLocation.length > 0 ? memoriesWithLocation[0].location!.lat : defaultLat;
+      const centerLng = memoriesWithLocation.length > 0 ? memoriesWithLocation[0].location!.lng : defaultLng;
+      
+      console.log('Creating map centered at', centerLat, centerLng);
+      const map = L.map(mapContainerRef.current).setView([centerLat, centerLng], defaultZoom);
+      mapRef.current = map;
 
-          markers.push(marker);
-          bounds.extend([memory.location.lat, memory.location.lng]);
-        }
-      });
+      // Use OpenStreetMap tiles (open source)
+      console.log('Adding tile layer');
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
+      }).addTo(map);
 
-      // Draw contrail line between all points
-      if (markers.length > 1) {
-        // Add numbered markers for timeline
-        markers.forEach((marker, index) => {
-          const numberIcon = L.divIcon({
-            className: 'timeline-number-marker',
-            html: `<div class="w-6 h-6 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs font-bold shadow-md">
-                  ${index + 1}
-                </div>`,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12],
-          });
-
-          L.marker(marker.getLatLng(), { icon: numberIcon })
-            .addTo(map)
-            .bindTooltip(`Step ${index + 1}: ${sortedMemories[index].title}`, {
-              permanent: false,
-              direction: 'top',
-              offset: [0, -10],
-            });
+      // Add markers if we have memories with location
+      if (memoriesWithLocation.length > 0) {
+        console.log('Adding', memoriesWithLocation.length, 'markers to map');
+        
+        // Create custom icon for markers
+        const customIcon = L.divIcon({
+          className: 'custom-map-marker',
+          html: `<div class="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center shadow-md">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              </div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 32],
+          popupAnchor: [0, -32],
         });
 
-        // Create contrail line connecting all points
-        const waypoints = markers.map((marker) => marker.getLatLng());
-        L.polyline(waypoints, {
-          color: '#3b82f6',
-          weight: 4,
-          opacity: 0.8,
-          smoothFactor: 1,
-        }).addTo(map);
+        const bounds = L.latLngBounds([]);
+        const markers: L.Marker[] = [];
+
+        // Sort memories by timestamp for timeline
+        const sortedMemories = [...memoriesWithLocation].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        );
+
+        sortedMemories.forEach((memory, index) => {
+          if (memory.location) {
+            console.log(`Adding marker ${index + 1} at`, memory.location.lat, memory.location.lng, memory.title);
+            const marker = L.marker([memory.location.lat, memory.location.lng], { icon: customIcon })
+              .addTo(map)
+              .bindPopup(
+                `
+              <div class="p-3">
+                <div class="font-bold text-lg mb-1">${memory.title}</div>
+                <div class="text-sm mb-2 text-gray-600">${memory.description || 'No description'}</div>
+                <div class="text-xs text-gray-500">${new Date(memory.timestamp).toLocaleString()}</div>
+                <div class="mt-2 flex items-center gap-2">
+                  <span class="text-xs inline-block px-2 py-1 rounded-full bg-blue-100 text-blue-800">
+                    ${memory.category}
+                  </span>
+                  <span class="text-xs text-gray-500">#${index + 1}</span>
+                </div>
+              </div>
+            `,
+                {
+                  className: 'custom-popup',
+                  maxWidth: 300,
+                  minWidth: 200,
+                  closeButton: true,
+                  autoClose: false,
+                },
+              );
+
+            markers.push(marker);
+            bounds.extend([memory.location.lat, memory.location.lng]);
+          }
+        });
+
+        // Draw contrail line between all points
+        if (markers.length > 1) {
+          console.log('Drawing contrail line between', markers.length, 'points');
+          
+          // Add numbered markers for timeline
+          markers.forEach((marker, index) => {
+            const numberIcon = L.divIcon({
+              className: 'timeline-number-marker',
+              html: `<div class="w-6 h-6 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs font-bold shadow-md">
+                    ${index + 1}
+                  </div>`,
+              iconSize: [24, 24],
+              iconAnchor: [12, 12],
+            });
+
+            L.marker(marker.getLatLng(), { icon: numberIcon })
+              .addTo(map)
+              .bindTooltip(`Step ${index + 1}: ${sortedMemories[index].title}`, {
+                permanent: false,
+                direction: 'top',
+                offset: [0, -10],
+              });
+          });
+
+          // Create contrail line connecting all points
+          const waypoints = markers.map((marker) => marker.getLatLng());
+          L.polyline(waypoints, {
+            color: '#3b82f6',
+            weight: 4,
+            opacity: 0.8,
+            smoothFactor: 1,
+          }).addTo(map);
+          
+          console.log('Contrail line added with', waypoints.length, 'waypoints');
+        }
+
+        // Fit bounds if we have markers
+        if (bounds.isValid()) {
+          console.log('Fitting map to bounds');
+          map.fitBounds(bounds, { padding: [50, 50] });
+        }
+      } else {
+        console.log('No memories with location data');
       }
 
-      // Fit bounds if we have markers
-      if (bounds.isValid()) {
-        map.fitBounds(bounds, { padding: [50, 50] });
-      }
-    }
+      // Add zoom control
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
+      
+      console.log('Map initialization complete');
+    };
 
-    // Add zoom control
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    initializeMap();
   }, [activeTab, memoriesWithLocation]);
 
   return (
