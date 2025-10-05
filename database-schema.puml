@@ -1,0 +1,477 @@
+@startuml CI-Server Database Schema
+!theme plain
+title CI-Server PostgreSQL Database Schema
+
+' Define entity colors by domain
+!define USER_COLOR #E3F2FD
+!define MEMORY_COLOR #F3E5F5
+!define INTELLIGENCE_COLOR #E8F5E8
+!define CONVERSATION_COLOR #FFF3E0
+!define CONNECTION_COLOR #FFEBEE
+!define SEARCH_COLOR #F1F8E9
+!define FILES_COLOR #E0F2F1
+!define ETL_COLOR #FFF8E1
+
+' User Domain Entities
+entity "users" as users <<USER_COLOR>> {
+  * id : VARCHAR(PK)
+  --
+  * name : VARCHAR
+  * email : VARCHAR(unique)
+  * password : VARCHAR
+  * onboarded : BOOLEAN
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "signup_code" as signup_code <<USER_COLOR>> {
+  * id : VARCHAR(PK)
+  --
+  * signup_code : VARCHAR(unique)
+  * used : BOOLEAN
+  * created_at : TIMESTAMPTZ
+}
+
+entity "sessions" as sessions <<USER_COLOR>> {
+  * id : UUID(PK)
+  --
+  * token : TEXT
+  * ip : TEXT
+  * user_agent : TEXT
+  * expires_at : TIMESTAMPTZ
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+' Search Domain Entities
+entity "tags" as tags <<SEARCH_COLOR>> {
+  * id : UUID(PK)
+  --
+  label : TEXT
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "embeddings" as embeddings <<SEARCH_COLOR>> {
+  * id : VARCHAR(PK)
+  --
+  * model : VARCHAR
+  * raw_input : VARCHAR
+  * raw_input_hash : VARCHAR
+  * entity_type : VARCHAR
+  * data_path : VARCHAR
+  * entity_id : VARCHAR
+  * embedding_vector : TEXT
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+' Connection Domain Entities
+entity "providers" as providers <<CONNECTION_COLOR>> {
+  * id : UUID(PK)
+  --
+  name : TEXT
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "connections" as connections <<CONNECTION_COLOR>> {
+  * id : UUID(PK)
+  --
+  name : TEXT
+  * active : BOOLEAN
+  schedule : TEXT
+  access_token : TEXT
+  refresh_token : TEXT
+  token_expiry : TIMESTAMPTZ
+  sync_state : JSONB
+  user_id : UUID(FK)
+  provider_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+' Files Domain Entities
+entity "files" as files <<FILES_COLOR>> {
+  * id : UUID(PK)
+  --
+  * bucket : TEXT
+  * key : UUID
+  * original_name : TEXT
+  * content_type : TEXT
+  * size : BIGINT
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+' Conversation Domain Entities
+entity "threads" as threads <<CONVERSATION_COLOR>> {
+  * id : UUID(PK)
+  --
+  name : TEXT
+  model : TEXT
+  description : TEXT
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+  deleted_at : TIMESTAMPTZ
+}
+
+entity "messages" as messages <<CONVERSATION_COLOR>> {
+  * id : UUID(PK)
+  --
+  model : TEXT
+  role : TEXT
+  text : TEXT
+  mimetype : TEXT
+  tool_calls : JSONB
+  * prompt : BOOLEAN
+  * canceled : BOOLEAN
+  user_id : UUID(FK)
+  thread_id : UUID(FK)
+  prompt_message_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+  deleted_at : TIMESTAMPTZ
+}
+
+' Intelligence Domain Entities
+entity "questions" as questions <<INTELLIGENCE_COLOR>> {
+  * id : VARCHAR(PK)
+  --
+  * category : VARCHAR
+  * text : VARCHAR
+  * example_answer_1 : VARCHAR
+  * example_answer_2 : VARCHAR
+  * example_answer_3 : VARCHAR
+  * subcategory : VARCHAR
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "answers" as answers <<INTELLIGENCE_COLOR>> {
+  * id : VARCHAR(PK)
+  --
+  * rag_answer_1 : VARCHAR
+  * rag_answer_2 : VARCHAR
+  * rag_answer_3 : VARCHAR
+  * give_answer_1 : VARCHAR
+  * give_answer_2 : VARCHAR
+  * give_answer_3 : VARCHAR
+  user_id : UUID(FK)
+  question_id : VARCHAR(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "actions" as actions <<INTELLIGENCE_COLOR>> {
+  * id : UUID(PK)
+  --
+  title : TEXT
+  text : TEXT
+  image_url : TEXT
+  thread_id : TEXT(FK)
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+' Memory Domain Entities
+entity "events" as events <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  type : TEXT
+  name : TEXT
+  description : TEXT
+  start_time : TIMESTAMPTZ
+  end_time : TIMESTAMPTZ
+  external_id : TEXT
+  source_url : TEXT
+  source_data : JSONB
+  user_id : UUID(FK)
+  connection_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "people" as people <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  type : TEXT
+  first_name : TEXT
+  last_name : TEXT
+  gender : TEXT
+  address : TEXT
+  street_address : TEXT
+  street_address_2 : TEXT
+  city : TEXT
+  region : TEXT
+  country : TEXT
+  postal_code : TEXT
+  avatar_url : TEXT
+  external_id : TEXT
+  source_url : TEXT
+  source_data : JSONB
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "contacts" as contacts <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  type : TEXT
+  avatar_url : TEXT
+  handle : TEXT
+  identifier : TEXT
+  external_id : TEXT
+  source_url : TEXT
+  source_data : JSONB
+  user_id : UUID(FK)
+  person_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "places" as places <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  type : TEXT
+  name : TEXT
+  geo_format : TEXT
+  geolocation : JSONB
+  location_boundary : JSONB
+  estimated : BOOLEAN
+  tracked : BOOLEAN
+  uploaded : BOOLEAN
+  parent_id : UUID(FK)
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "locations" as locations <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  identifier : TEXT
+  datetime : TIMESTAMPTZ
+  geo_format : TEXT
+  geolocation : JSONB
+  estimated : BOOLEAN
+  tracked : BOOLEAN
+  uploaded : BOOLEAN
+  place_id : UUID(FK)
+  user_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "content" as content <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  * type : TEXT
+  title : TEXT
+  text : TEXT
+  url : TEXT
+  mimetype : TEXT
+  external_id : TEXT
+  source_url : TEXT
+  source_data : JSONB
+  user_id : UUID(FK)
+  event_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "things" as things <<MEMORY_COLOR>> {
+  * id : UUID(PK)
+  --
+  type : TEXT
+  name : TEXT
+  description : TEXT
+  external_id : TEXT
+  source_url : TEXT
+  source_data : JSONB
+  user_id : UUID(FK)
+  event_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+' ETL Domain Entities
+entity "api_logs" as api_logs <<ETL_COLOR>> {
+  * id : UUID(PK)
+  --
+  user_id : UUID(FK)
+  connection_id : UUID(FK)
+  scope : TEXT
+  content : JSONB
+  last_processed : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+}
+
+' Many-to-Many Join Tables
+entity "person_tag" as person_tag {
+  * id : BIGINT(PK)
+  --
+  * person_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "contact_tag" as contact_tag {
+  * id : BIGINT(PK)
+  --
+  * contact_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "event_tag" as event_tag {
+  * id : BIGINT(PK)
+  --
+  * event_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "content_tag" as content_tag {
+  * id : BIGINT(PK)
+  --
+  * content_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "thing_tag" as thing_tag {
+  * id : BIGINT(PK)
+  --
+  * thing_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "place_tag" as place_tag {
+  * id : BIGINT(PK)
+  --
+  * place_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "location_tag" as location_tag {
+  * id : BIGINT(PK)
+  --
+  * location_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "action_tag" as action_tag {
+  * id : BIGINT(PK)
+  --
+  * action_id : UUID(FK)
+  * tag_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "thread_file" as thread_file {
+  * id : BIGINT(PK)
+  --
+  * thread_id : UUID(FK)
+  * file_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+entity "event_person" as event_person {
+  * id : BIGINT(PK)
+  --
+  * event_id : UUID(FK)
+  * person_id : UUID(FK)
+  * created_at : TIMESTAMPTZ
+}
+
+' Relationships
+' User relationships
+users ||--o{ sessions : user_id
+users ||--o{ tags : user_id
+users ||--o{ embeddings : user_id
+users ||--o{ connections : user_id
+users ||--o{ files : user_id
+users ||--o{ threads : user_id
+users ||--o{ messages : user_id
+users ||--o{ questions : user_id
+users ||--o{ answers : user_id
+users ||--o{ actions : user_id
+users ||--o{ events : user_id
+users ||--o{ people : user_id
+users ||--o{ contacts : user_id
+users ||--o{ places : user_id
+users ||--o{ locations : user_id
+users ||--o{ content : user_id
+users ||--o{ things : user_id
+users ||--o{ api_logs : user_id
+
+' Provider and Connection relationships
+providers ||--o{ connections : provider_id
+connections ||--o{ events : connection_id
+connections ||--o{ api_logs : connection_id
+
+' Thread and Message relationships
+threads ||--o{ messages : thread_id
+messages ||--o{ messages : prompt_message_id
+threads ||--|| actions : thread_id
+
+' Question and Answer relationships
+questions ||--o{ answers : question_id
+
+' Memory domain relationships
+people ||--o{ contacts : person_id
+places ||--o{ locations : place_id
+places ||--o{ places : parent_id
+events ||--o{ content : event_id
+events ||--o{ things : event_id
+
+' Many-to-Many relationships through join tables
+people ||--o{ person_tag : person_id
+tags ||--o{ person_tag : tag_id
+
+contacts ||--o{ contact_tag : contact_id
+tags ||--o{ contact_tag : tag_id
+
+events ||--o{ event_tag : event_id
+tags ||--o{ event_tag : tag_id
+
+content ||--o{ content_tag : content_id
+tags ||--o{ content_tag : tag_id
+
+things ||--o{ thing_tag : thing_id
+tags ||--o{ thing_tag : tag_id
+
+places ||--o{ place_tag : place_id
+tags ||--o{ place_tag : tag_id
+
+locations ||--o{ location_tag : location_id
+tags ||--o{ location_tag : tag_id
+
+actions ||--o{ action_tag : action_id
+tags ||--o{ action_tag : tag_id
+
+threads ||--o{ thread_file : thread_id
+files ||--o{ thread_file : file_id
+
+events ||--o{ event_person : event_id
+people ||--o{ event_person : person_id
+
+note top of users : Core user management and authentication
+note top of people : Personal contacts and family members
+note top of events : Calendar events and activities
+note top of content : Documents, articles, media content
+note top of threads : Conversation threads with AI
+note top of tags : Tagging system for content organization
+note top of embeddings : Vector embeddings for AI search
+
+@enduml
