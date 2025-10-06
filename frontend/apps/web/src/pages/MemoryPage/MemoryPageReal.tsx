@@ -27,6 +27,8 @@ import L from 'leaflet';
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
+import { generateRichContent, type Content } from './generateRichContent';
+
 // Add custom styles for Leaflet
 import './memory-map.css';
 
@@ -52,6 +54,7 @@ interface Memory {
     imageUrl?: string;
     [key: string]: unknown;
   };
+  content?: Content[];
 }
 
 interface MemoryLocation {
@@ -776,6 +779,7 @@ export default function MemoryPageReal() {
                                     </span>
                                   </span>
                                 )}
+                                {memory.content?.map((c) => generateRichContent(c))}
                               </div>
                             </div>
                           </div>
