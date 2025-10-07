@@ -199,7 +199,11 @@ export function ConnectionsPage() {
   };
 
   const handleDeleteConnection = async (connectionId: string) => {
-    if (!confirm('Are you sure you want to delete this connection?')) {
+    if (
+      !confirm(
+        'Are you sure you want to delete this connection? Data from this connection will not be deleted.',
+      )
+    ) {
       return;
     }
 
@@ -211,10 +215,14 @@ export function ConnectionsPage() {
       }
 
       const response = await fetch(`/api/connections/${connectionId}`, {
-        method: 'DELETE',
+        method: 'PATCH',
         headers: {
           Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          active: false,
+        }),
       });
 
       if (!response.ok) {

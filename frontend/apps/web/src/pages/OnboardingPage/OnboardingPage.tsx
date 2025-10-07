@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { usePageTitle } from '@ci/common';
 import { Button, cn } from '@ci/shadcn';
@@ -6,18 +6,48 @@ import { Button, cn } from '@ci/shadcn';
 import logo from '@/assets/logo.png';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
-import focusAreasImage from './focus-areas.png';
+import { ActivityPreferences } from './ActivityPreferences';
+import focusAreasImage from './assets/focus-areas.jpg';
+import peopleImage from './assets/people.jpg';
 import { FocusAreas } from './FocusAreas';
+import { FoodPreferences } from './FoodPreferences';
 import { Intro } from './Intro';
-import peopleImage from './people.png';
+import { MoviePreferences } from './MoviePreferences';
 import { SocialConnections } from './SocialConnections';
+import { Submit } from './Submit';
 
 export function OnboardingPage() {
   usePageTitle('Onboarding - Companion Intelligence');
 
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
   const [step, setStep] = useState(0);
 
-  const steps = [<Intro />, <FocusAreas />, <SocialConnections />];
+  const steps = useMemo(
+    () => [
+      <Intro />,
+      <FocusAreas />,
+      <SocialConnections />,
+      <FoodPreferences />,
+      <MoviePreferences />,
+      <ActivityPreferences />,
+      <Submit />,
+    ],
+    [],
+  );
+
+  const handleNextStep = useCallback(() => {
+    setStep((current) => current + 1);
+
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTo({
+          top: 0,
+          behavior: 'instant',
+        });
+      }
+    });
+  }, []);
 
   const images = [
     null,
@@ -33,6 +63,10 @@ export function OnboardingPage() {
         backgroundImage: `url(${peopleImage})`,
       }}
     />,
+    null,
+    null,
+    null,
+    null,
   ];
 
   return (
@@ -43,33 +77,31 @@ export function OnboardingPage() {
         </div>
       </div>
 
-      <div className="flex flex-col items-center justify-between flex-1/4 gap-4">
-        <div className="flex self-start flex-1 p-4 pt-[max(1rem,env(safe-area-inset-top))]">
+      <div className="flex flex-col items-center flex-1/4 gap-4 h-full">
+        <div className="self-start px-4 pt-[max(1rem,env(safe-area-inset-top))]">
           <img src={logo} className="w-8 h-8" />
         </div>
 
-        <div className="space-y-12 md:max-w-xl mx-4 md:mx-8">
-          <div>{steps[step % steps.length]}</div>
-
-          <div className="text-center">
-            <Button className="w-64" onClick={() => setStep((current) => current + 1)}>
-              Next
-            </Button>
-          </div>
+        <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 md:max-w-xl mx-4 md:mx-8">
+          <div className="flex flex-col justify-center min-h-full">{steps[step % steps.length]}</div>
         </div>
 
-        <div className="flex items-end justify-center flex-1 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="flex items-center justify-center">
-            {Array.from({ length: steps.length }).map((_, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'h-2 w-2 m-2 rounded-full transition-all duration-500',
-                  i === step % steps.length ? 'bg-slate-800 scale-115' : 'bg-slate-300',
-                )}
-              />
-            ))}
-          </div>
+        {step < steps.length - 1 && (
+          <Button className="px-24" onClick={handleNextStep}>
+            Next
+          </Button>
+        )}
+
+        <div className="flex justify-center items-center px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          {Array.from({ length: steps.length }).map((_, i) => (
+            <div
+              key={i}
+              className={cn(
+                'h-2 w-2 m-2 rounded-full transition-all duration-500',
+                i === step % steps.length ? 'bg-slate-800 scale-115' : 'bg-slate-300',
+              )}
+            />
+          ))}
         </div>
       </div>
 

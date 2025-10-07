@@ -85,4 +85,10 @@ export class UserService {
 
     return !!result;
   }
+
+  async onboard(id: string): Promise<void> {
+    await this.userRepository.update(id, {
+      onboarded: true,
+    });
+  }
 }

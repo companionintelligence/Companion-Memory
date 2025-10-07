@@ -260,6 +260,10 @@ gentoken: ## Generates a stable access token for use during development
 	@printf "🔑 Generating stable access token...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/generate-stable-access-token.ts
 
+signup: ## Generates a stable access token for use during development
+	@printf "👋 Generating signup codes...\n\n"
+	@cd backend/apps/api && yarn run exec -- scripts/generate-signup-codes.ts
+
 useradd: ## Add a user to the PostgreSQL database
 	@printf "👤 Adding user...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/add-user.ts
@@ -324,10 +328,10 @@ mcp-register: ## Register all installed MCP servers in configuration
 
 mcp-check: ## Check MCP server installation and status
 	@printf "🔍 Checking MCP server installation...\n\n"
-	
+
 	@printf "📋 Configuration Status:\n"
 	@node scripts/mcp-config.mjs status
-	
+
 	@printf "\n🔧 Installation Status:\n"
 	@for server in $(MCP_SERVERS); do \
 		if [ -d "$(MCP_SERVERS_DIR)/$$server" ]; then \
@@ -337,7 +341,7 @@ mcp-check: ## Check MCP server installation and status
 			printf "$(RED)✗$(RESET) $$server MCP server not installed - run 'make mcp'\n"; \
 		fi; \
 	done
-	
+
 	@printf "\n🏃 Runtime Status:\n"
 	@if curl -s http://localhost:3030/tools/health > /dev/null 2>&1; then \
 		printf "$(GREEN)✓$(RESET) CI-Server is running\n"; \
@@ -348,14 +352,14 @@ mcp-check: ## Check MCP server installation and status
 	else \
 		printf "$(YELLOW)•$(RESET) CI-Server is not running - start with 'make dev'\n"; \
 	fi
-	
+
 	@printf "\n$(GREEN)✓$(RESET) MCP check complete!\n\n"
 
 mcp-clean: ## Remove all MCP servers
 	@printf "🧹 Cleaning MCP servers...\n\n"
 	@printf "$(YELLOW)⚠$(RESET)  This will clean all MCP server builds but preserve Makefiles!\n"
 	@printf "Are you sure? [y/N] " && read ans && [ $$ans = y ] || exit 1
-	
+
 	@for server in $(MCP_SERVERS); do \
 		if [ -d "$(MCP_SERVERS_DIR)/$$server" ] && [ -f "$(MCP_SERVERS_DIR)/$$server/Makefile" ]; then \
 			printf "$(GREEN)✓$(RESET) Cleaning $$server server...\n"; \
@@ -364,13 +368,13 @@ mcp-clean: ## Remove all MCP servers
 			printf "$(YELLOW)⚠$(RESET) $$server server directory or Makefile not found\n"; \
 		fi; \
 	done
-	
+
 	@printf "\n$(GREEN)✓$(RESET) MCP servers cleaned (Makefiles preserved)!\n"
 	@printf "$(GREEN)✓$(RESET) Run 'make mcp' to reinstall\n\n"
 
 mcp-update: ## Update all MCP servers
 	@printf "🔄 Updating MCP servers...\n\n"
-	
+
 	@for server in $(MCP_SERVERS); do \
 		if [ -d "$(MCP_SERVERS_DIR)/$$server" ]; then \
 			printf "$(GREEN)✓$(RESET) Updating $$server server...\n"; \
@@ -385,7 +389,7 @@ mcp-update: ## Update all MCP servers
 			$(MAKE) mcp-install-server SERVER_NAME="$$server"; \
 		fi; \
 	done
-	
+
 	@printf "\n$(GREEN)✓$(RESET) MCP servers updated!\n"
 	@printf "$(GREEN)✓$(RESET) Restart CI-Server to load updates: 'make dev'\n\n"
 
@@ -396,7 +400,7 @@ mcp-enable: ## Enable all installed MCP servers in configuration
 
 mcp-disable: ## Disable all MCP servers in configuration
 	@printf "⚙️  Disabling MCP servers in configuration...\n\n"
-	
+
 	@CONFIG_FILE="backend/apps/api/config/mcp-servers.json"; \
 	BACKUP_FILE="backend/apps/api/config/mcp-servers.json.backup"; \
 	\

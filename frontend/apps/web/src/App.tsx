@@ -54,7 +54,14 @@ function Providers({ children }: { children: ReactNode }) {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<SplashPage />} />
+      <Route
+        path="/"
+        element={
+          <RedirectKnownUser>
+            <SplashPage />
+          </RedirectKnownUser>
+        }
+      />
 
       <Route
         path="/onboarding"
@@ -74,6 +81,7 @@ function AppRoutes() {
             </RedirectKnownUser>
           }
         />
+
         <Route
           path="/signup"
           element={

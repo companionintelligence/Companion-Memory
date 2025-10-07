@@ -25,12 +25,12 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { JobsModule } from '@ci/domains/jobs';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
+import { OnboardingModule } from '@ci/domains/onboarding';
 import { PromoteModule } from '@ci/domains/promote';
 import { EmbeddingModule } from '@ci/domains/search';
+import { SpeechModule } from '@ci/domains/speech';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
-
-import { SpeechModule } from './domains/speech';
 
 @Module({
   imports: [
@@ -55,6 +55,7 @@ import { SpeechModule } from './domains/speech';
     IntelligenceModule,
     JobsModule,
     LLMModule,
+    OnboardingModule,
     ToolsModule,
     MemoryModule,
     PromoteModule,

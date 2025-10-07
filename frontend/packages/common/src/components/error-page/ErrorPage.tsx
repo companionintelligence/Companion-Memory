@@ -10,8 +10,8 @@ export function ErrorPage({ error, children }: Props) {
   const errorMessage = (tryError != null ? tryError.message : null) ?? 'Unknown error!';
 
   return (
-    <div className="flex items-center justify-center absolute inset-0 z-10">
-      <div>{errorMessage}</div>
+    <div className="flex flex-col items-center justify-center absolute inset-0 z-10 gap-4">
+      <div className="text-baseline">{errorMessage}</div>
       {children && <div>{children}</div>}
     </div>
   );

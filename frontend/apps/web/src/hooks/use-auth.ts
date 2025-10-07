@@ -111,7 +111,7 @@ function useAuth(): ReturnValue {
         setUser(data.user);
         setInitialLoading(false);
 
-        navigate('/feed');
+        navigate('/');
       } catch (err: unknown) {
         setUser(null);
         setLoginError(err);

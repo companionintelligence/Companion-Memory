@@ -58,6 +58,7 @@ export class ConnectionService {
         user: {
           id: context.userId,
         },
+        active: true,
       },
       relations: ['provider'],
     });
@@ -114,12 +115,17 @@ export class ConnectionService {
   }
 
   async delete(context: RequestContext, id: string): Promise<boolean> {
-    const result = await this.connectionRepository.delete({
-      id,
-      user: {
-        id: context.userId,
+    const result = await this.connectionRepository.update(
+      {
+        id,
+        user: {
+          id: context.userId,
+        },
       },
-    });
+      {
+        active: false,
+      },
+    );
 
     if (result.affected === 0) {
       throw new NotFoundException();

@@ -15,7 +15,11 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   }
 
   if (user) {
-    return <Navigate to="/feed" />;
+    if (user.onboarded) {
+      return <Navigate to="/feed" />;
+    }
+
+    return <Navigate to="/onboarding" />;
   }
 
   return children;

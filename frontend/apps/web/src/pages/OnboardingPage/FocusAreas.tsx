@@ -28,7 +28,7 @@ function SelectOption({
 export function FocusAreas() {
   return (
     <>
-      <div className="text-center text-2xl mb-10">Your focus areas</div>
+      <div className="text-center text-2xl mb-4 md:mb-10">Your focus areas</div>
       <div className="grid grid-cols-[max-content_1fr] items-center gap-x-3">
         <SelectOption
           primaryText="Personal fitness and health"

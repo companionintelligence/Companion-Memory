@@ -95,7 +95,7 @@ export function Intro() {
       pause: 150,
     },
     {
-      text: 'Your companion will learn and grow with you as you interact.',
+      text: 'Your companion will learn more as you interact.',
     },
   ];
 
