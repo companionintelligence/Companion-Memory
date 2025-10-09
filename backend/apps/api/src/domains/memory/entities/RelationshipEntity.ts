@@ -42,6 +42,9 @@ export class RelationshipEntity {
   @Column({ type: 'date', nullable: true })
   end_date!: Date | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  owner_user_id!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;
 

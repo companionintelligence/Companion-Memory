@@ -36,6 +36,9 @@ export class GraphNodeEntity {
   @Column({ type: 'uuid', nullable: true })
   linked_id!: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  owner_user_id!: string | null;
+
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
 
