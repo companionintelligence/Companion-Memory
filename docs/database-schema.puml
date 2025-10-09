@@ -1,6 +1,10 @@
 @startuml CI-Server Database Schema
 !theme plain
 title CI-Server PostgreSQL Database Schema
+note as GeneratedNote
+Generated from current codebase analysis
+Last updated: October 9, 2024
+end note
 
 ' Define entity colors by domain
 !define USER_COLOR #E3F2FD
@@ -48,7 +52,7 @@ entity "sessions" as sessions <<USER_COLOR>> {
 entity "tags" as tags <<SEARCH_COLOR>> {
   * id : UUID(PK)
   --
-  label : TEXT
+  label : TEXT(normalized)
   user_id : UUID(FK)
   * created_at : TIMESTAMPTZ
 }
@@ -82,8 +86,8 @@ entity "connections" as connections <<CONNECTION_COLOR>> {
   name : TEXT
   * active : BOOLEAN
   schedule : TEXT
-  access_token : TEXT
-  refresh_token : TEXT
+  access_token : TEXT(encrypted)
+  refresh_token : TEXT(encrypted)
   token_expiry : TIMESTAMPTZ
   sync_state : JSONB
   user_id : UUID(FK)
@@ -314,6 +318,7 @@ entity "api_logs" as api_logs <<ETL_COLOR>> {
   --
   note: TimescaleDB hypertable
   note: Partitioned by created_at, user_id
+  note: Composite PK: (id, created_at, user_id)
 }
 
 ' Many-to-Many Join Tables
@@ -397,8 +402,8 @@ entity "event_person" as event_person {
   * created_at : TIMESTAMPTZ
 }
 
-' Relationships
-' User relationships
+' Primary Relationships
+' User relationships (central hub)
 users ||--o{ sessions : user_id
 users ||--o{ tags : user_id
 users ||--o{ embeddings : user_id
@@ -469,14 +474,14 @@ files ||--o{ thread_file : file_id
 events ||--o{ event_person : event_id
 people ||--o{ event_person : person_id
 
-note top of users : Core user management and authentication
-note top of people : Personal contacts and family members
-note top of events : Calendar events and activities
-note top of content : Documents, articles, media content
-note top of threads : Conversation threads with AI
-note top of tags : Tagging system for content organization
-note top of embeddings : Vector embeddings for AI search
-note top of api_logs : TimescaleDB hypertable for time-series data
+note top of users : Core user management and authentication with onboarding
+note top of people : Personal contacts and family members with demographics
+note top of events : Calendar events and activities with time ranges
+note top of content : Documents, articles, media content with MIME types
+note top of threads : Conversation threads with AI models and file attachments
+note top of tags : Universal tagging system with case normalization
+note top of embeddings : Vector embeddings for AI-powered semantic search
+note top of api_logs : TimescaleDB hypertable for high-volume time-series logging
 
 note as pgboss_note
 PGBoss Job Queue Schema
@@ -485,6 +490,20 @@ Separate "pgboss" schema contains:
 - Job queue tables (auto-managed)
 - Background processing system
 - Scheduling and retry logic
+- Operational isolation from main schema
+end note
+
+note as architecture_note
+Key Architectural Features
+====
+• User-centric design with complete data isolation
+• Domain-driven organization (8 functional domains)
+• Universal tagging system across all content entities
+• External data integration with OAuth2 and provenance
+• Vector search integration for AI-powered discovery
+• TimescaleDB optimization for time-series data
+• Comprehensive audit trails and soft delete support
+• Background job processing with PGBoss
 end note
 
 @enduml

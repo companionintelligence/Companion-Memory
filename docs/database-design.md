@@ -1,39 +1,42 @@
 # Database Design
 
-This document provides detailed technical specifications for the CI-Server PostgreSQL database design, including entity definitions, data types, constraints, and UML diagrams.
+This document provides detailed technical specifications for the CI-Server PostgreSQL database design, including entity definitions, data types, constraints, and implementation details.
+
+*Last updated: Generated from current codebase analysis on October 9, 2024*
 
 ## Entity Specifications
 
 ### Data Types and Constraints
 
 #### Primary Keys
-- **UUID**: Most entities use UUID primary keys for distributed scalability
-- **VARCHAR**: Questions and answers use string IDs
-- **BIGINT**: Join tables use auto-incrementing BIGINT IDs
+- **UUID**: Most entities use UUID primary keys for distributed scalability and collision resistance
+- **VARCHAR**: Questions and answers use string IDs for flexible identification
+- **BIGINT**: Join tables use auto-incrementing BIGINT IDs for performance
 
 #### Common Columns
 Most entities include:
-- `created_at` (TIMESTAMPTZ): Record creation timestamp
-- `updated_at` (TIMESTAMPTZ): Last modification timestamp
-- `user_id` (UUID): Owner reference to users table
+- `created_at` (TIMESTAMPTZ): Record creation timestamp with timezone awareness
+- `updated_at` (TIMESTAMPTZ): Last modification timestamp for change tracking
+- `user_id` (UUID): Owner reference to users table for data isolation
 
 #### Special Data Types
-- **JSONB**: Used for flexible data storage (source_data, geolocation, tool_calls)
-- **TIMESTAMPTZ**: Timezone-aware timestamps
-- **TEXT**: Variable-length text fields
-- **BOOLEAN**: True/false flags
-- **BIGINT**: Large integer values (file sizes)
+- **JSONB**: Used for flexible data storage (source_data, geolocation, tool_calls, sync_state)
+- **TIMESTAMPTZ**: Timezone-aware timestamps for global application support
+- **TEXT**: Variable-length text fields with unlimited size
+- **BOOLEAN**: True/false flags for status and configuration
+- **BIGINT**: Large integer values (file sizes, counters)
 
 #### TimescaleDB Integration
 The `api_logs` table is implemented as a TimescaleDB hypertable:
 - Partitioned by `created_at` timestamp for time-series optimization
-- Hash partitioned by `user_id` for parallel processing
-- Optimized indexes for time-based and user-based queries
+- Hash partitioned by `user_id` for parallel processing and user isolation
+- Composite primary key: (id, created_at, user_id) for optimal partitioning
+- Specialized indexes for time-based queries and JSONB content search
 
 #### Soft Deletes
-Some entities support soft deletion:
-- `threads.deleted_at`
-- `messages.deleted_at`
+Some entities support soft deletion for data preservation:
+- `threads.deleted_at` - Conversation thread soft deletion
+- `messages.deleted_at` - Message soft deletion with cascade considerations
 
 ## Detailed Entity Definitions
 
@@ -46,10 +49,14 @@ CREATE TABLE users (
     name VARCHAR NOT NULL,
     email VARCHAR UNIQUE NOT NULL,
     password VARCHAR NOT NULL,
-    onboarded BOOLEAN NOT NULL,
+    onboarded BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_onboarded ON users(onboarded);
 ```
 
 #### signup_code
@@ -57,9 +64,13 @@ CREATE TABLE users (
 CREATE TABLE signup_code (
     id VARCHAR PRIMARY KEY,
     signup_code VARCHAR UNIQUE NOT NULL,
-    used BOOLEAN NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_signup_code_code ON signup_code(signup_code);
+CREATE INDEX idx_signup_code_used ON signup_code(used);
 ```
 
 #### sessions
@@ -70,10 +81,15 @@ CREATE TABLE sessions (
     ip TEXT NOT NULL,
     user_agent TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
-    user_id UUID REFERENCES users(id),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX idx_sessions_token ON sessions(token);
 ```
 
 ### Memory Domain
@@ -97,10 +113,16 @@ CREATE TABLE people (
     external_id TEXT,
     source_url TEXT,
     source_data JSONB,
-    user_id UUID REFERENCES users(id),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_people_user_id ON people(user_id);
+CREATE INDEX idx_people_external_id ON people(external_id);
+CREATE INDEX idx_people_type ON people(type);
+CREATE INDEX idx_people_name ON people(first_name, last_name);
 ```
 
 #### events
@@ -115,11 +137,42 @@ CREATE TABLE events (
     external_id TEXT,
     source_url TEXT,
     source_data JSONB,
-    user_id UUID REFERENCES users(id),
-    connection_id UUID REFERENCES connections(id),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    connection_id UUID REFERENCES connections(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_events_user_id ON events(user_id);
+CREATE INDEX idx_events_connection_id ON events(connection_id);
+CREATE INDEX idx_events_start_time ON events(start_time);
+CREATE INDEX idx_events_external_id ON events(external_id);
+CREATE INDEX idx_events_type ON events(type);
+```
+
+#### places
+```sql
+CREATE TABLE places (
+    id UUID PRIMARY KEY,
+    type TEXT,
+    name TEXT,
+    geo_format TEXT,
+    geolocation JSONB,
+    location_boundary JSONB,
+    estimated BOOLEAN,
+    tracked BOOLEAN,
+    uploaded BOOLEAN,
+    parent_id UUID REFERENCES places(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_places_user_id ON places(user_id);
+CREATE INDEX idx_places_parent_id ON places(parent_id);
+CREATE GIN INDEX idx_places_geolocation ON places USING GIN (geolocation);
 ```
 
 ### Intelligence Domain
@@ -134,10 +187,15 @@ CREATE TABLE questions (
     example_answer_2 VARCHAR NOT NULL,
     example_answer_3 VARCHAR NOT NULL,
     subcategory VARCHAR NOT NULL,
-    user_id UUID REFERENCES users(id),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_questions_user_id ON questions(user_id);
+CREATE INDEX idx_questions_category ON questions(category);
+CREATE INDEX idx_questions_subcategory ON questions(subcategory);
 ```
 
 #### actions
@@ -147,11 +205,15 @@ CREATE TABLE actions (
     title TEXT,
     text TEXT,
     image_url TEXT,
-    thread_id TEXT REFERENCES threads(id),
-    user_id UUID REFERENCES users(id),
+    thread_id TEXT REFERENCES threads(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_actions_user_id ON actions(user_id);
+CREATE INDEX idx_actions_thread_id ON actions(thread_id);
 ```
 
 ### Conversations Domain
@@ -163,11 +225,16 @@ CREATE TABLE threads (
     name TEXT,
     model TEXT,
     description TEXT,
-    user_id UUID REFERENCES users(id),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
+
+-- Indexes
+CREATE INDEX idx_threads_user_id ON threads(user_id);
+CREATE INDEX idx_threads_deleted_at ON threads(deleted_at);
+CREATE INDEX idx_threads_model ON threads(model);
 ```
 
 #### messages
@@ -180,83 +247,81 @@ CREATE TABLE messages (
     mimetype TEXT,
     tool_calls JSONB,
     prompt BOOLEAN NOT NULL,
-    canceled BOOLEAN NOT NULL,
-    user_id UUID REFERENCES users(id),
-    thread_id UUID REFERENCES threads(id),
-    prompt_message_id UUID REFERENCES messages(id),
+    canceled BOOLEAN NOT NULL DEFAULT FALSE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    thread_id UUID REFERENCES threads(id) ON DELETE CASCADE,
+    prompt_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
+
+-- Indexes
+CREATE INDEX idx_messages_user_id ON messages(user_id);
+CREATE INDEX idx_messages_thread_id ON messages(thread_id);
+CREATE INDEX idx_messages_prompt_message_id ON messages(prompt_message_id);
+CREATE INDEX idx_messages_role ON messages(role);
+CREATE INDEX idx_messages_deleted_at ON messages(deleted_at);
+CREATE GIN INDEX idx_messages_tool_calls ON messages USING GIN (tool_calls);
 ```
 
-### ETL Domain
+### Connections Domain
 
-#### api_logs (TimescaleDB Hypertable)
+#### providers
 ```sql
-CREATE TABLE api_logs (
-    id UUID DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id),
-    connection_id UUID REFERENCES connections(id),
-    scope TEXT,
-    content JSONB,
-    last_processed TIMESTAMPTZ,
+CREATE TABLE providers (
+    id UUID PRIMARY KEY,
+    name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id, created_at, user_id)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Convert to TimescaleDB hypertable
-SELECT create_hypertable('api_logs', 'created_at', 'user_id', 4);
+-- Indexes
+CREATE INDEX idx_providers_name ON providers(name);
 ```
 
-## Join Tables
-
-All many-to-many relationships use dedicated join tables with:
-- Auto-incrementing BIGINT primary key
-- Foreign keys to both related entities
-- `created_at` timestamp for audit trails
-- Composite uniqueness constraints (implied)
-
-### Tagging Join Tables
+#### connections
 ```sql
--- Example: person_tag table
-CREATE TABLE person_tag (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    person_id UUID REFERENCES people(id) NOT NULL,
-    tag_id UUID REFERENCES tags(id) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE connections (
+    id UUID PRIMARY KEY,
+    name TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    schedule TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expiry TIMESTAMPTZ,
+    sync_state JSONB,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    provider_id UUID REFERENCES providers(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_connections_user_id ON connections(user_id);
+CREATE INDEX idx_connections_provider_id ON connections(provider_id);
+CREATE INDEX idx_connections_active ON connections(active);
+CREATE INDEX idx_connections_token_expiry ON connections(token_expiry);
 ```
 
-Similar patterns for: `contact_tag`, `event_tag`, `content_tag`, `thing_tag`, `place_tag`, `location_tag`, `action_tag`
+### Search Domain
 
-### Other Join Tables
+#### tags
 ```sql
--- Thread files relationship
-CREATE TABLE thread_file (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    thread_id UUID REFERENCES threads(id) NOT NULL,
-    file_id UUID REFERENCES files(id) NOT NULL,
+CREATE TABLE tags (
+    id UUID PRIMARY KEY,
+    label TEXT,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Event people relationship
-CREATE TABLE event_person (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    event_id UUID REFERENCES events(id) NOT NULL,
-    person_id UUID REFERENCES people(id) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- Indexes
+CREATE INDEX idx_tags_user_id ON tags(user_id);
+CREATE INDEX idx_tags_label ON tags(label);
+CREATE UNIQUE INDEX idx_tags_user_label ON tags(user_id, label);
 ```
 
-## Vector Search Integration
-
-The `embeddings` table stores vector representations of content for AI-powered similarity search:
-- Links to any entity via `entity_type` and `entity_id`
-- Stores the embedding model used
-- Raw input and hash for deduplication
-- Vector data stored as comma-separated text
-
+#### embeddings
 ```sql
 CREATE TABLE embeddings (
     id VARCHAR PRIMARY KEY,
@@ -267,37 +332,181 @@ CREATE TABLE embeddings (
     data_path VARCHAR NOT NULL,
     entity_id VARCHAR NOT NULL,
     embedding_vector TEXT NOT NULL,
-    user_id UUID REFERENCES users(id),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Indexes
+CREATE INDEX idx_embeddings_user_id ON embeddings(user_id);
+CREATE INDEX idx_embeddings_entity ON embeddings(entity_type, entity_id);
+CREATE INDEX idx_embeddings_hash ON embeddings(raw_input_hash);
+CREATE INDEX idx_embeddings_model ON embeddings(model);
 ```
+
+### Files Domain
+
+#### files
+```sql
+CREATE TABLE files (
+    id UUID PRIMARY KEY,
+    bucket TEXT NOT NULL,
+    key UUID NOT NULL,
+    original_name TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_files_user_id ON files(user_id);
+CREATE INDEX idx_files_content_type ON files(content_type);
+CREATE INDEX idx_files_bucket_key ON files(bucket, key);
+```
+
+### ETL Domain
+
+#### api_logs (TimescaleDB Hypertable)
+```sql
+CREATE TABLE api_logs (
+    id UUID DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    connection_id UUID REFERENCES connections(id) ON DELETE SET NULL,
+    scope TEXT,
+    content JSONB,
+    last_processed TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id, created_at, user_id)
+);
+
+-- Convert to TimescaleDB hypertable
+SELECT create_hypertable('api_logs', 'created_at', 'user_id', 4);
+
+-- Specialized indexes for hypertable
+CREATE INDEX idx_api_logs_user_id ON api_logs(user_id, created_at DESC);
+CREATE INDEX idx_api_logs_connection_id ON api_logs(connection_id, created_at DESC);
+CREATE INDEX idx_api_logs_scope ON api_logs(scope);
+CREATE INDEX idx_api_logs_last_processed ON api_logs(last_processed);
+CREATE GIN INDEX idx_api_logs_content ON api_logs USING GIN (content);
+```
+
+## Join Tables for Many-to-Many Relationships
+
+All many-to-many relationships use dedicated join tables with:
+- Auto-incrementing BIGINT primary key for performance
+- Foreign keys to both related entities with CASCADE constraints
+- `created_at` timestamp for audit trails
+- Composite unique constraints to prevent duplicates
+
+### Tagging Join Tables
+
+#### person_tag
+```sql
+CREATE TABLE person_tag (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    person_id UUID REFERENCES people(id) ON DELETE CASCADE NOT NULL,
+    tag_id UUID REFERENCES tags(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(person_id, tag_id)
+);
+
+CREATE INDEX idx_person_tag_person_id ON person_tag(person_id);
+CREATE INDEX idx_person_tag_tag_id ON person_tag(tag_id);
+```
+
+Similar patterns for: `contact_tag`, `event_tag`, `content_tag`, `thing_tag`, `place_tag`, `location_tag`, `action_tag`
+
+### Other Join Tables
+
+#### thread_file
+```sql
+CREATE TABLE thread_file (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    thread_id UUID REFERENCES threads(id) ON DELETE CASCADE NOT NULL,
+    file_id UUID REFERENCES files(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(thread_id, file_id)
+);
+
+CREATE INDEX idx_thread_file_thread_id ON thread_file(thread_id);
+CREATE INDEX idx_thread_file_file_id ON thread_file(file_id);
+```
+
+#### event_person
+```sql
+CREATE TABLE event_person (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id UUID REFERENCES events(id) ON DELETE CASCADE NOT NULL,
+    person_id UUID REFERENCES people(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(event_id, person_id)
+);
+
+CREATE INDEX idx_event_person_event_id ON event_person(event_id);
+CREATE INDEX idx_event_person_person_id ON event_person(person_id);
+```
+
+## Vector Search Integration
+
+The `embeddings` table enables AI-powered semantic search:
+- Links to any entity via `entity_type` and `entity_id` flexible pattern
+- Stores the embedding model used for version compatibility
+- Raw input and hash for deduplication and consistency checks
+- Vector data stored as comma-separated text (compatible with pgvector when needed)
+- Supports multiple embedding models simultaneously
 
 ## External Integration Design
 
 ### OAuth2 Support
-Connections table supports OAuth2 authentication:
-- `access_token`, `refresh_token`, `token_expiry`
-- `sync_state` for tracking synchronization status
+Modern OAuth2 implementation in connections table:
+- `access_token`, `refresh_token` for secure API access
+- `token_expiry` for automatic refresh scheduling
+- `sync_state` JSONB for flexible synchronization status tracking
+- Removed legacy OAuth2 columns for cleaner implementation
 
 ### Data Provenance
-Many entities track external sources:
-- `external_id`: ID in external system
-- `source_url`: URL of original data
-- `source_data`: Raw JSON data from external APIs
+Comprehensive tracking of external data sources:
+- `external_id`: Identifier in external system for synchronization
+- `source_url`: Original URL or reference for data verification
+- `source_data`: Raw JSON data from external APIs preserved for audit and reprocessing
 
-## Index Strategy
+## Performance Optimization
 
-The schema leverages several indexing approaches:
-- Primary key indexes on all entities
-- Foreign key indexes for relationships
-- The `@Indexable` decorator indicates entities included in vector search
-- Unique constraints on critical fields (user email, signup codes)
-- Specialized TimescaleDB indexes for time-series queries
+### Index Strategy
+The schema leverages multiple indexing approaches:
+- B-tree indexes for equality and range queries on common columns
+- GIN indexes for JSONB columns supporting complex queries
+- Composite indexes for multi-column query patterns
+- Partial indexes on soft-deleted entities
+- TimescaleDB time-space partitioning for time-series data
+
+### Query Optimization
+- Foreign key indexes for efficient JOIN operations
+- User-scoped indexes for multi-tenant query patterns
+- Time-based indexes for chronological data access
+- Full-text search capabilities via PostgreSQL built-in features
 
 ## Schema Evolution Support
 
 The design supports schema evolution through:
-- JSONB columns for flexible data (source_data, geolocation, tool_calls)
-- External ID tracking for data synchronization
-- Nullable foreign keys for optional relationships
-- Migration-based schema changes
+- JSONB columns for flexible data evolution (source_data, geolocation, tool_calls, sync_state)
+- External ID tracking for data synchronization during schema changes
+- Nullable foreign keys for optional relationships and gradual migration
+- Migration-based schema changes with rollback support
+- Versioned embedding models for AI feature evolution
+
+## Security and Compliance
+
+### Data Isolation
+- All entities scoped to user_id preventing cross-user data access
+- CASCADE deletion for user data cleanup
+- Foreign key constraints ensuring referential integrity
+
+### Audit Capabilities
+- Complete timestamp tracking for all entity modifications
+- Soft delete preservation for conversation data
+- Join table creation timestamps for relationship audit trails
+- API log retention for compliance and debugging
+
+This design provides a robust, scalable foundation for a personal AI assistant with comprehensive memory management, intelligent search, and external data integration capabilities.

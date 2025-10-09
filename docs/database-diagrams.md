@@ -1,6 +1,12 @@
-# CI-Server Database Schema - Mermaid ER Diagram
+# CI-Server Database Schema - Visual Diagrams
 
-This is a Mermaid Entity Relationship Diagram showing the core relationships in the CI-Server database.
+This document contains visual representations of the CI-Server PostgreSQL database schema using multiple diagram formats.
+
+*Last updated: Generated from current codebase analysis on October 9, 2024*
+
+## Mermaid Entity Relationship Diagram
+
+The following Mermaid diagram shows the complete database schema with all 21 entities and their relationships:
 
 ```mermaid
 erDiagram
@@ -355,8 +361,8 @@ erDiagram
         timestamptz created_at
     }
 
-    %% Relationships
-    %% User relationships
+    %% Primary Relationships
+    %% User relationships (central hub)
     users ||--o{ sessions : "has"
     users ||--o{ tags : "owns"
     users ||--o{ embeddings : "owns"
@@ -396,7 +402,7 @@ erDiagram
     events ||--o{ content : "contains"
     events ||--o{ things : "involves"
 
-    %% Many-to-Many relationships
+    %% Many-to-Many relationships via join tables
     people ||--o{ person_tag : ""
     tags ||--o{ person_tag : ""
     
@@ -428,25 +434,58 @@ erDiagram
     people ||--o{ event_person : ""
 ```
 
-## Domain Color Legend
+## Domain Organization Overview
 
-- **User Domain**: Core user management and authentication
-- **Memory Domain**: Personal information storage (people, places, events, content)
-- **Intelligence Domain**: AI-powered Q&A and actions
-- **Conversations Domain**: Chat and messaging with AI
-- **Connections Domain**: External service integrations
-- **Search Domain**: Tagging and vector search
-- **Files Domain**: File storage and management
-- **ETL Domain**: Data processing and API logging
+The database is organized into 8 main functional domains:
+
+### Core Domains
+- **User Domain**: Authentication, sessions, and user management
+- **Memory Domain**: Personal information storage (people, places, events, content, things)
+- **Intelligence Domain**: AI-powered Q&A system and action tracking
+- **Conversations Domain**: Chat threads and AI interactions
+
+### Supporting Domains  
+- **Connections Domain**: External service integrations with OAuth2
+- **Search Domain**: Tagging system and vector embeddings
+- **Files Domain**: File storage and attachment management
+- **ETL Domain**: API logging and data processing monitoring
 
 ## Special Schema Features
 
 ### TimescaleDB Hypertables
 - `api_logs` is implemented as a TimescaleDB hypertable for time-series optimization
-- Partitioned by `created_at` (time) and `user_id` (space) for efficient querying
-- Includes specialized indexes for time-based queries and JSONB content
+- Partitioned by `created_at` (time) and `user_id` (space) for efficient querying  
+- Includes specialized indexes for time-based queries and JSONB content search
+- Composite primary key: (id, created_at, user_id) for optimal partitioning
 
 ### PGBoss Job Queue Schema
 - Dedicated `pgboss` schema contains job queue tables
-- Auto-managed by the PGBoss library
-- Handles background job processing and scheduling
+- Auto-managed by the PGBoss library for background processing
+- Handles job scheduling, retries, and parallel execution
+- Separate from main application schema for operational isolation
+
+### Vector Search Integration
+- `embeddings` table supports AI-powered semantic search across any entity type
+- Flexible entity linking via `entity_type` and `entity_id` pattern
+- Support for multiple embedding models with versioning
+- Raw input hash for deduplication and consistency validation
+
+### Universal Tagging System
+- Standardized many-to-many tagging across all major content entities
+- Eight dedicated `*_tag` join tables for different entity types
+- Case-insensitive tag labels with automatic normalization
+- Enables cross-domain content discovery and organization
+
+### External Data Integration
+- Comprehensive data provenance tracking (`external_id`, `source_url`, `source_data`)
+- Modern OAuth2 implementation with automatic token refresh
+- API logging optimized for high-volume time-series data
+- Sync state tracking for external service synchronization
+
+### Audit and Compliance
+- Complete timestamp tracking (created_at/updated_at) on all entities
+- Soft delete support for conversations (deleted_at columns)
+- Join tables include creation timestamps for complete audit trails
+- User-scoped data isolation for privacy and security
+
+This schema provides a robust foundation for a personal AI assistant with comprehensive memory management, intelligent search, external data integration, and scalable background processing capabilities.
