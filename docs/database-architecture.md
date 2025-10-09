@@ -1,10 +1,10 @@
-# CI-Server Database Schema Documentation
+# Database Architecture
 
-This document provides a comprehensive overview of the CI-Server PostgreSQL database schema, including all entities, relationships, and domain organization.
+This document provides a high-level architectural overview of the CI-Server PostgreSQL database schema, including domain organization and key relationships.
 
 ## Overview
 
-The CI-Server database is organized into 7 main domains with 21 primary entities and several many-to-many join tables. The system supports user management, memory storage (people, places, events, content), intelligent Q&A, conversations with AI, file management, external data connections, and background job processing.
+The CI-Server database is organized into 8 main domains with 21 primary entities and several many-to-many join tables. The system supports user management, memory storage (people, places, events, content), intelligent Q&A, conversations with AI, file management, external data connections, and background job processing.
 
 ## Domain Organization
 
@@ -75,9 +75,47 @@ Background job processing using PGBoss.
 **Schema:**
 - `pgboss` - Dedicated schema for job queue tables (auto-managed by PGBoss)
 
-## Key Relationships
+## Key Architectural Patterns
 
-### Core User Relationships
+### 1. User-Centric Design
+- Every entity (except join tables) belongs to a user via `user_id` foreign key
+- Supports multi-tenant data isolation
+
+### 2. Domain-Driven Design
+- Clear separation of concerns across 8 domains
+- Each domain has focused responsibilities
+
+### 3. Flexible Tagging System
+- Most content entities can be tagged for organization
+- Many-to-many relationships via dedicated join tables
+
+### 4. External Integration Support
+- OAuth2 support in connections (cleaned up legacy columns)
+- Data provenance tracking (external_id, source_url, source_data)
+- API logging for ETL processes with TimescaleDB optimization
+
+### 5. Vector Search Ready
+- Embeddings table supports AI-powered semantic search
+- Links to any entity via entity_type/entity_id pattern
+
+### 6. Audit Trail Support
+- created_at/updated_at on all entities
+- Soft deletes on conversations (deleted_at)
+- Join tables track creation timestamps
+
+### 7. Background Job Processing
+- Dedicated PGBoss schema for job queues
+- Auto-managed by the PGBoss library
+- Supports scheduling, retries, and parallel processing
+
+### 8. Time-Series Data Management
+- TimescaleDB hypertables for high-volume logging
+- Optimized partitioning strategy for api_logs
+- Efficient indexing for time-based queries
+
+## Core Relationships
+
+### User Relationships
 - Each entity (except join tables) is owned by a `users` record via `user_id` foreign key
 - Users can have multiple sessions, connections, threads, questions, etc.
 
@@ -107,72 +145,26 @@ Many entities support tagging via many-to-many relationships:
 - `person_tag`, `contact_tag`, `event_tag`, `content_tag`
 - `thing_tag`, `place_tag`, `location_tag`, `action_tag`
 
-## Data Types and Constraints
+## Technology Stack Integration
 
-### Primary Keys
-- **UUID**: Most entities use UUID primary keys for distributed scalability
-- **VARCHAR**: Questions and answers use string IDs
-- **BIGINT**: Join tables use auto-incrementing BIGINT IDs
-
-### Common Columns
-Most entities include:
-- `created_at` (TIMESTAMPTZ): Record creation timestamp
-- `updated_at` (TIMESTAMPTZ): Last modification timestamp
-- `user_id` (UUID): Owner reference to users table
-
-### Special Data Types
-- **JSONB**: Used for flexible data storage (source_data, geolocation, tool_calls)
+- **TypeORM**: All entities use decorators for ORM mapping
+- **PostgreSQL**: Native JSONB support for flexible data
+- **TimescaleDB**: Time-series optimization for api_logs table
+- **pgvector**: Vector extension for embeddings
+- **PGBoss**: Background job processing with dedicated schema
+- **UUID**: Distributed-friendly primary keys
 - **TIMESTAMPTZ**: Timezone-aware timestamps
-- **TEXT**: Variable-length text fields
-- **BOOLEAN**: True/false flags
-- **BIGINT**: Large integer values (file sizes)
 
-### TimescaleDB Integration
-The `api_logs` table is implemented as a TimescaleDB hypertable:
-- Partitioned by `created_at` timestamp for time-series optimization
-- Hash partitioned by `user_id` for parallel processing
-- Optimized indexes for time-based and user-based queries
+## Data Flow Overview
 
-### Soft Deletes
-Some entities support soft deletion:
-- `threads.deleted_at`
-- `messages.deleted_at`
+```
+External APIs → connections → events/content/people
+                    ↓
+User creates questions → answers (RAG + manual)
+                    ↓
+User chats → threads → messages → actions
+                    ↓
+All content can be tagged and embedded for search
+```
 
-## Vector Search Integration
-
-The `embeddings` table stores vector representations of content for AI-powered similarity search:
-- Links to any entity via `entity_type` and `entity_id`
-- Stores the embedding model used
-- Raw input and hash for deduplication
-- Vector data stored as comma-separated text
-
-## External Integration
-
-### OAuth2 Support
-Connections table supports OAuth2 authentication:
-- `access_token`, `refresh_token`, `token_expiry`
-- `sync_state` for tracking synchronization status
-
-### Data Provenance
-Many entities track external sources:
-- `external_id`: ID in external system
-- `source_url`: URL of original data
-- `source_data`: Raw JSON data from external APIs
-
-## Index Strategy
-
-The schema leverages several indexing approaches:
-- Primary key indexes on all entities
-- Foreign key indexes for relationships
-- The `@Indexable` decorator indicates entities included in vector search
-- Unique constraints on critical fields (user email, signup codes)
-
-## Join Table Patterns
-
-All many-to-many relationships use dedicated join tables with:
-- Auto-incrementing BIGINT primary key
-- Foreign keys to both related entities
-- `created_at` timestamp for audit trails
-- Composite uniqueness constraints (implied)
-
-This design ensures referential integrity while supporting flexible many-to-many relationships across the domain model.
+This architecture provides a robust foundation for a personal AI assistant system with comprehensive memory management, intelligent search, and external data integration capabilities.
