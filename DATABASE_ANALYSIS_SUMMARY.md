@@ -11,7 +11,7 @@ This document summarizes the complete database schema analysis for the CI-Server
 
 ## Analysis Summary
 
-### Total Entities Discovered: 21 Main Entities + 10 Join Tables
+### Total Entities Discovered: 21 Main Entities + 10 Join Tables + 1 Dedicated Schema
 
 #### Main Entities by Domain:
 
@@ -50,7 +50,10 @@ This document summarizes the complete database schema analysis for the CI-Server
 - `files` - File metadata
 
 **ETL Domain (1 entity):**
-- `api_logs` - API call logs
+- `api_logs` - API call logs (TimescaleDB hypertable)
+
+**Job Queue Domain (1 schema):**
+- `pgboss` - Background job processing schema
 
 #### Join Tables (10 tables):
 
@@ -77,9 +80,9 @@ This document summarizes the complete database schema analysis for the CI-Server
 - Many-to-many relationships via dedicated join tables
 
 ### 4. External Integration Support
-- OAuth2 support in connections
+- OAuth2 support in connections (cleaned up legacy columns)
 - Data provenance tracking (external_id, source_url, source_data)
-- API logging for ETL processes
+- API logging for ETL processes with TimescaleDB optimization
 
 ### 5. Vector Search Ready
 - Embeddings table supports AI-powered semantic search
@@ -89,6 +92,16 @@ This document summarizes the complete database schema analysis for the CI-Server
 - created_at/updated_at on all entities
 - Soft deletes on conversations (deleted_at)
 - Join tables track creation timestamps
+
+### 7. Background Job Processing
+- Dedicated PGBoss schema for job queues
+- Auto-managed by the PGBoss library
+- Supports scheduling, retries, and parallel processing
+
+### 8. Time-Series Data Management
+- TimescaleDB hypertables for high-volume logging
+- Optimized partitioning strategy for api_logs
+- Efficient indexing for time-based queries
 
 ## Data Flow Overview
 
@@ -106,7 +119,9 @@ All content can be tagged and embedded for search
 
 - **TypeORM**: All entities use decorators for ORM mapping
 - **PostgreSQL**: Native JSONB support for flexible data
+- **TimescaleDB**: Time-series optimization for api_logs table
 - **pgvector**: Vector extension for embeddings
+- **PGBoss**: Background job processing with dedicated schema
 - **UUID**: Distributed-friendly primary keys
 - **TIMESTAMPTZ**: Timezone-aware timestamps
 

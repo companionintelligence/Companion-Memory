@@ -39,6 +39,10 @@ FILES DOMAIN
 
 ETL DOMAIN
 └── api_logs (id, user_id→users, connection_id→connections, scope, content, last_processed, created_at)
+    [TimescaleDB hypertable partitioned by created_at and user_id]
+
+JOB QUEUE DOMAIN
+└── pgboss schema (auto-managed job queue tables)
 ```
 
 ## Many-to-Many Relationships (Join Tables)
