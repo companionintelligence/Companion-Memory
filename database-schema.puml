@@ -311,6 +311,9 @@ entity "api_logs" as api_logs <<ETL_COLOR>> {
   content : JSONB
   last_processed : TIMESTAMPTZ
   * created_at : TIMESTAMPTZ
+  --
+  note: TimescaleDB hypertable
+  note: Partitioned by created_at, user_id
 }
 
 ' Many-to-Many Join Tables
@@ -473,5 +476,15 @@ note top of content : Documents, articles, media content
 note top of threads : Conversation threads with AI
 note top of tags : Tagging system for content organization
 note top of embeddings : Vector embeddings for AI search
+note top of api_logs : TimescaleDB hypertable for time-series data
+
+note as pgboss_note
+PGBoss Job Queue Schema
+====
+Separate "pgboss" schema contains:
+- Job queue tables (auto-managed)
+- Background processing system
+- Scheduling and retry logic
+end note
 
 @enduml

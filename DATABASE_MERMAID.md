@@ -438,3 +438,15 @@ erDiagram
 - **Search Domain**: Tagging and vector search
 - **Files Domain**: File storage and management
 - **ETL Domain**: Data processing and API logging
+
+## Special Schema Features
+
+### TimescaleDB Hypertables
+- `api_logs` is implemented as a TimescaleDB hypertable for time-series optimization
+- Partitioned by `created_at` (time) and `user_id` (space) for efficient querying
+- Includes specialized indexes for time-based queries and JSONB content
+
+### PGBoss Job Queue Schema
+- Dedicated `pgboss` schema contains job queue tables
+- Auto-managed by the PGBoss library
+- Handles background job processing and scheduling

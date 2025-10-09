@@ -4,7 +4,7 @@ This document provides a comprehensive overview of the CI-Server PostgreSQL data
 
 ## Overview
 
-The CI-Server database is organized into 6 main domains with 21 primary entities and several many-to-many join tables. The system supports user management, memory storage (people, places, events, content), intelligent Q&A, conversations with AI, file management, and external data connections.
+The CI-Server database is organized into 7 main domains with 21 primary entities and several many-to-many join tables. The system supports user management, memory storage (people, places, events, content), intelligent Q&A, conversations with AI, file management, external data connections, and background job processing.
 
 ## Domain Organization
 
@@ -67,7 +67,13 @@ File storage and management.
 Data processing and API logging.
 
 **Entities:**
-- `api_logs` - Logs of external API calls and data processing
+- `api_logs` - Logs of external API calls and data processing (TimescaleDB hypertable with time-series partitioning)
+
+### 9. Job Queue Domain
+Background job processing using PGBoss.
+
+**Schema:**
+- `pgboss` - Dedicated schema for job queue tables (auto-managed by PGBoss)
 
 ## Key Relationships
 
@@ -120,6 +126,12 @@ Most entities include:
 - **TEXT**: Variable-length text fields
 - **BOOLEAN**: True/false flags
 - **BIGINT**: Large integer values (file sizes)
+
+### TimescaleDB Integration
+The `api_logs` table is implemented as a TimescaleDB hypertable:
+- Partitioned by `created_at` timestamp for time-series optimization
+- Hash partitioned by `user_id` for parallel processing
+- Optimized indexes for time-based and user-based queries
 
 ### Soft Deletes
 Some entities support soft deletion:
