@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ContentController } from './controllers/ContentController';
 import { EventController } from './controllers/EventController';
+import { GraphController } from './controllers/GraphController';
 import { MemoryController } from './controllers/MemoryController';
 import { ContactEntity } from './entities/ContactEntity';
 import { ContentEntity } from './entities/ContentEntity';
@@ -18,6 +19,7 @@ import { ContentService } from './services/ContentService';
 import { EventService } from './services/EventService';
 import { GraphUtilityService } from './services/GraphUtilityService';
 import { MemoryService } from './services/MemoryService';
+import { UserContextService } from './services/UserContextService';
 
 @Module({
   imports: [
@@ -34,9 +36,9 @@ import { MemoryService } from './services/MemoryService';
       FactEntity,
     ]),
   ],
-  providers: [MemoryService, ContentService, EventService, GraphUtilityService],
-  controllers: [MemoryController, ContentController, EventController],
-  exports: [MemoryService, ContentService, EventService, GraphUtilityService],
+  providers: [MemoryService, ContentService, EventService, GraphUtilityService, UserContextService],
+  controllers: [MemoryController, ContentController, EventController, GraphController],
+  exports: [MemoryService, ContentService, EventService, GraphUtilityService, UserContextService],
 })
 export class MemoryModule {}
 
@@ -54,7 +56,8 @@ export {
 };
 
 // Services
-export { MemoryService, ContentService, EventService, GraphUtilityService };
+export { MemoryService, ContentService, EventService, GraphUtilityService, UserContextService };
 
 // Types
 export type { Memory, MemoryLocation, MemoryResponse, MemorySearchParams } from './types';
+export type { UserContext } from './services/UserContextService';

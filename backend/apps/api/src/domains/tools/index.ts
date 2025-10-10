@@ -9,7 +9,9 @@ import { McpClientManager } from './providers/mcp/McpClientManager';
 import { McpToolProvider } from './providers/mcp/McpToolProvider';
 import { ForgetKnowledgeTool } from './providers/native/ForgetKnowledgeTool';
 import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
+import { GetFamilyMembersTool } from './providers/native/GetFamilyMembersTool';
 import { GetStreamingAvailabilityTool } from './providers/native/GetStreamingAvailabilityTool';
+import { GetUserPreferencesTool } from './providers/native/GetUserPreferencesTool';
 import { NativeToolProvider } from './providers/native/NativeToolProvider';
 import { ReadKnowledgeTool } from './providers/native/ReadKnowledgeTool';
 import { WriteKnowledgeTool } from './providers/native/WriteKnowledgeTool';
@@ -21,6 +23,8 @@ const nativeToolInstances = [
   ReadKnowledgeTool,
   WriteKnowledgeTool,
   ForgetKnowledgeTool,
+  GetUserPreferencesTool,
+  GetFamilyMembersTool,
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
 ];

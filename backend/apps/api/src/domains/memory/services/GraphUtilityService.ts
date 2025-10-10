@@ -703,4 +703,389 @@ export class GraphUtilityService {
 
     return saved.map((fact) => fact.fact_id);
   }
+
+  /**
+   * ========================================================================
+   * HIGH-LEVEL GRAPH ABSTRACTIONS
+   * ========================================================================
+   * These methods provide semantic, business-focused APIs that hide the
+   * complexity of entity/relationship management. Use these for frontend
+   * integrations and common graph operations.
+   */
+
+  /**
+   * Helper to determine if a relationship type is typically bidirectional
+   */
+  private isFamilyRelationship(type: string): boolean {
+    return ['SPOUSE', 'SIBLING_OF', 'FRIEND', 'COLLEAGUE'].includes(type);
+  }
+
+  /**
+   * Add a person to the user's graph with optional relationships
+   *
+   * @example
+   * const { personEntity } = await graphUtility.addPerson(userId, {
+   *   name: "Jane Smith",
+   *   age: 40,
+   *   occupation: "Designer"
+   * }, [{
+   *   toPersonEntityId: userEntityId,
+   *   type: "SPOUSE",
+   *   bidirectional: true
+   * }]);
+   */
+  async addPerson(
+    ownerUserId: string,
+    person: {
+      name: string;
+      firstName?: string;
+      lastName?: string;
+      age?: number;
+      bio?: string;
+      occupation?: string;
+      familyRole?: string;
+      email?: string;
+      phone?: string;
+      properties?: Record<string, unknown>;
+    },
+    relationships?: Array<{
+      toPersonEntityId: string;
+      type: 'SPOUSE' | 'PARENT_OF' | 'CHILD_OF' | 'SIBLING_OF' | 'FRIEND' | 'COLLEAGUE' | 'KNOWS';
+      strength?: number;
+      bidirectional?: boolean;
+      properties?: Record<string, unknown>;
+    }>,
+  ): Promise<{ personEntity: GraphNodeEntity; relationshipsCreated: number }> {
+    // 1. Create Person entity
+    const { node: personEntity } = await this.createOrUpdateNode(ownerUserId, {
+      entityType: 'Person',
+      name: person.name,
+      description: person.bio ?? `${person.name}${person.occupation ? `, ${person.occupation}` : ''}`,
+      properties: {
+        first_name: person.firstName,
+        last_name: person.lastName,
+        age: person.age,
+        occupation: person.occupation,
+        family_role: person.familyRole,
+        email: person.email,
+        phone: person.phone,
+        ...(person.properties ?? {}),
+      },
+    });
+
+    // 2. Create relationships
+    let relationshipsCreated = 0;
+    if (relationships && relationships.length > 0) {
+      for (const rel of relationships) {
+        await this.createOrUpdateRelationship(ownerUserId, {
+          fromEntityId: personEntity.entity_id,
+          toEntityId: rel.toPersonEntityId,
+          relationshipType: rel.type,
+          strength: rel.strength ?? 1.0,
+          isBidirectional: rel.bidirectional ?? this.isFamilyRelationship(rel.type),
+          properties: rel.properties ?? {},
+        });
+        relationshipsCreated++;
+      }
+    }
+
+    return { personEntity, relationshipsCreated };
+  }
+
+  /**
+   * Add a preference for a person (creates concept entity if it doesn't exist)
+   *
+   * @example
+   * await graphUtility.addPreference(userId, personEntityId, {
+   *   name: "Italian Cuisine",
+   *   type: "cuisine",
+   *   strength: 0.9
+   * });
+   */
+  async addPreference(
+    ownerUserId: string,
+    personEntityId: string,
+    preference: {
+      name: string;
+      type:
+        | 'food'
+        | 'cuisine'
+        | 'activity'
+        | 'movie_genre'
+        | 'tv_genre'
+        | 'music_genre'
+        | 'book_genre'
+        | 'beverage'
+        | 'sport'
+        | 'hobby';
+      isDislike?: boolean;
+      strength?: number;
+      properties?: Record<string, unknown>;
+    },
+  ): Promise<{ conceptEntity: GraphNodeEntity; relationship: RelationshipEntity }> {
+    // 1. Find or create the concept entity
+    const existingConcepts = await this.queryNodes(
+      ownerUserId,
+      {
+        entityType: 'Concept',
+        nameContains: preference.name,
+      },
+      { limit: 1 },
+    );
+
+    let conceptEntity: GraphNodeEntity;
+    if (
+      existingConcepts.length > 0 &&
+      existingConcepts[0].name?.toLowerCase() === preference.name.toLowerCase()
+    ) {
+      conceptEntity = existingConcepts[0];
+    } else {
+      const { node } = await this.createOrUpdateNode(ownerUserId, {
+        entityType: 'Concept',
+        name: preference.name,
+        description: `${preference.type}: ${preference.name}`,
+        properties: {
+          type: preference.type,
+          ...(preference.properties ?? {}),
+        },
+      });
+      conceptEntity = node;
+    }
+
+    // 2. Create PREFERS or DISLIKES relationship
+    const { relationship } = await this.createOrUpdateRelationship(ownerUserId, {
+      fromEntityId: personEntityId,
+      toEntityId: conceptEntity.entity_id,
+      relationshipType: preference.isDislike ? 'DISLIKES' : 'PREFERS',
+      strength: preference.strength ?? (preference.isDislike ? 0.7 : 0.8),
+      properties: {
+        context: preference.isDislike ? 'user dislike' : 'user preference',
+      },
+    });
+
+    return { conceptEntity, relationship };
+  }
+
+  /**
+   * Add a location to the graph
+   *
+   * @example
+   * const location = await graphUtility.addLocation(userId, {
+   *   name: "New York City",
+   *   type: "city",
+   *   coordinates: { lat: 40.7128, lng: -74.0060 }
+   * });
+   */
+  async addLocation(
+    ownerUserId: string,
+    location: {
+      name: string;
+      type: 'city' | 'country' | 'venue' | 'address' | 'region';
+      coordinates?: { lat: number; lng: number };
+      address?: string;
+      properties?: Record<string, unknown>;
+    },
+  ): Promise<GraphNodeEntity> {
+    const { node } = await this.createOrUpdateNode(ownerUserId, {
+      entityType: 'Location',
+      name: location.name,
+      description: `${location.type}: ${location.name}`,
+      properties: {
+        type: location.type,
+        coordinates: location.coordinates,
+        address: location.address,
+        ...(location.properties ?? {}),
+      },
+    });
+
+    return node;
+  }
+
+  /**
+   * Record that a person visited a location
+   *
+   * @example
+   * await graphUtility.addVisit(userId, personEntityId, locationEntityId, {
+   *   date: new Date('2024-01-15'),
+   *   notes: "Great vacation spot"
+   * });
+   */
+  async addVisit(
+    ownerUserId: string,
+    personEntityId: string,
+    locationEntityId: string,
+    visitDetails?: {
+      date?: Date;
+      duration?: string;
+      notes?: string;
+      properties?: Record<string, unknown>;
+    },
+  ): Promise<RelationshipEntity> {
+    const { relationship } = await this.createOrUpdateRelationship(ownerUserId, {
+      fromEntityId: personEntityId,
+      toEntityId: locationEntityId,
+      relationshipType: 'VISITED',
+      properties: {
+        date: visitDetails?.date,
+        duration: visitDetails?.duration,
+        notes: visitDetails?.notes,
+        ...(visitDetails?.properties ?? {}),
+      },
+    });
+
+    return relationship;
+  }
+
+  /**
+   * Connect two people with a social relationship
+   *
+   * @example
+   * await graphUtility.addSocialConnection(
+   *   userId,
+   *   personAId,
+   *   personBId,
+   *   "WORKS_WITH",
+   *   { context: "Same team at Acme Corp" }
+   * );
+   */
+  async addSocialConnection(
+    ownerUserId: string,
+    fromPersonId: string,
+    toPersonId: string,
+    connectionType: 'KNOWS' | 'FRIEND' | 'WORKS_WITH' | 'COLLEAGUE' | 'MENTORED' | 'TAUGHT' | 'LEARNED_FROM',
+    details?: {
+      since?: Date;
+      context?: string;
+      strength?: number;
+      properties?: Record<string, unknown>;
+    },
+  ): Promise<RelationshipEntity> {
+    const { relationship } = await this.createOrUpdateRelationship(ownerUserId, {
+      fromEntityId: fromPersonId,
+      toEntityId: toPersonId,
+      relationshipType: connectionType,
+      strength: details?.strength ?? 0.7,
+      properties: {
+        since: details?.since,
+        context: details?.context,
+        ...(details?.properties ?? {}),
+      },
+      isBidirectional: connectionType === 'FRIEND' || connectionType === 'COLLEAGUE',
+    });
+
+    return relationship;
+  }
+
+  /**
+   * Batch add family members with relationships
+   * Convenience method for onboarding flows
+   *
+   * @example
+   * const result = await graphUtility.addFamilyMembers(userId, userEntityId, [
+   *   { name: "Jane Smith", relationship: "SPOUSE", age: 40 },
+   *   { name: "Tommy", relationship: "PARENT_OF", age: 8 }
+   * ]);
+   */
+  async addFamilyMembers(
+    ownerUserId: string,
+    userEntityId: string,
+    familyMembers: Array<{
+      name: string;
+      relationship: 'SPOUSE' | 'PARENT_OF' | 'CHILD_OF' | 'SIBLING_OF';
+      age?: number;
+      firstName?: string;
+      lastName?: string;
+      properties?: Record<string, unknown>;
+    }>,
+  ): Promise<{ created: number; entities: GraphNodeEntity[] }> {
+    const entities: GraphNodeEntity[] = [];
+
+    for (const member of familyMembers) {
+      const { personEntity } = await this.addPerson(
+        ownerUserId,
+        {
+          name: member.name,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          age: member.age,
+          familyRole: this.getFamilyRoleFromRelationship(member.relationship),
+          properties: member.properties,
+        },
+        [
+          {
+            toPersonEntityId: userEntityId,
+            type: member.relationship,
+            bidirectional: true,
+          },
+        ],
+      );
+      entities.push(personEntity);
+    }
+
+    return { created: entities.length, entities };
+  }
+
+  /**
+   * Helper to infer family role from relationship type
+   */
+  private getFamilyRoleFromRelationship(relationship: string): string {
+    const roleMap: Record<string, string> = {
+      SPOUSE: 'spouse',
+      PARENT_OF: 'child',
+      CHILD_OF: 'parent',
+      SIBLING_OF: 'sibling',
+    };
+
+    return roleMap[relationship] || 'family_member';
+  }
+
+  /**
+   * Batch add preferences for a person
+   * Useful for onboarding or bulk imports
+   *
+   * @example
+   * await graphUtility.addPreferences(userId, personEntityId, [
+   *   { name: "Italian Cuisine", type: "cuisine", strength: 0.9 },
+   *   { name: "Horror", type: "movie_genre", isDislike: true }
+   * ]);
+   */
+  async addPreferences(
+    ownerUserId: string,
+    personEntityId: string,
+    preferences: Array<{
+      name: string;
+      type: string;
+      isDislike?: boolean;
+      strength?: number;
+      properties?: Record<string, unknown>;
+    }>,
+  ): Promise<{
+    created: number;
+    results: Array<{ conceptEntity: GraphNodeEntity; relationship: RelationshipEntity }>;
+  }> {
+    const results: Array<{ conceptEntity: GraphNodeEntity; relationship: RelationshipEntity }> = [];
+
+    for (const pref of preferences) {
+      const result = await this.addPreference(ownerUserId, personEntityId, {
+        name: pref.name,
+        type: pref.type as
+          | 'food'
+          | 'cuisine'
+          | 'activity'
+          | 'movie_genre'
+          | 'tv_genre'
+          | 'music_genre'
+          | 'book_genre'
+          | 'beverage'
+          | 'sport'
+          | 'hobby',
+        isDislike: pref.isDislike,
+        strength: pref.strength,
+        properties: pref.properties,
+      });
+      results.push(result);
+    }
+
+    return { created: results.length, results };
+  }
 }

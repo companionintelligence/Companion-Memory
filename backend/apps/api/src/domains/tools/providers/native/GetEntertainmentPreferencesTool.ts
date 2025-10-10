@@ -448,18 +448,23 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
   }
 
   private buildMediaTypeFilter(mediaType: string): string {
-    if (mediaType === 'all') {
-      return '';
-    }
-
-    const typeMap: Record<string, string[]> = {
+    // Define entertainment-specific types
+    const entertainmentTypes: Record<string, string[]> = {
       movies: ['movie_genre', 'film_style'],
       tv: ['tv_genre', 'tv_style'],
       music: ['music_genre', 'music_style'],
       books: ['book_genre', 'literary_genre'],
     };
 
-    const types = typeMap[mediaType] || [];
+    let types: string[];
+
+    if (mediaType === 'all') {
+      // When 'all', include all entertainment types but exclude food/beverage/activity
+      types = Object.values(entertainmentTypes).flat();
+    } else {
+      types = entertainmentTypes[mediaType] || [];
+    }
+
     if (types.length === 0) {
       return '';
     }
