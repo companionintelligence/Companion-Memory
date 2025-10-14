@@ -45,7 +45,7 @@ export class UserService {
       properties.last_name = restName.join(' ');
     }
 
-    await this.graphUtilityService.createGraphNode({
+    await this.graphUtilityService.createOrUpdateNode(savedUser.id, {
       entityId,
       entityType: 'Person',
       name: nameForEntity,

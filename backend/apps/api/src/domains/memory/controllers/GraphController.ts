@@ -4,7 +4,10 @@ import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext } from '@ci/common/types';
 
-import { GraphUtilityService } from '../services/GraphUtilityService';
+import { LocationGraphService } from '../services/graph/LocationGraphService';
+import { PersonGraphService } from '../services/graph/PersonGraphService';
+import { PreferenceService } from '../services/graph/PreferenceService';
+import { RelationshipService } from '../services/graph/RelationshipService';
 import { UserContextService } from '../services/UserContextService';
 
 /**
@@ -15,7 +18,10 @@ import { UserContextService } from '../services/UserContextService';
 @UseGuards(JwtAuthGuard)
 export class GraphController {
   constructor(
-    private readonly graphUtility: GraphUtilityService,
+    private readonly personService: PersonGraphService,
+    private readonly preferenceService: PreferenceService,
+    private readonly locationService: LocationGraphService,
+    private readonly relationshipService: RelationshipService,
     private readonly userContext: UserContextService,
   ) {}
 
@@ -57,7 +63,7 @@ export class GraphController {
     const userId = this.ensureUserId(ctx);
     const { relationships, ...personData } = body;
 
-    const result = await this.graphUtility.addPerson(userId, personData, relationships);
+    const result = await this.personService.addPerson(userId, personData, relationships);
 
     return {
       success: true,
@@ -91,7 +97,7 @@ export class GraphController {
     },
   ) {
     const userId = this.ensureUserId(ctx);
-    const result = await this.graphUtility.addFamilyMembers(userId, body.userEntityId, body.familyMembers);
+    const result = await this.personService.addFamilyMembers(userId, body.userEntityId, body.familyMembers);
 
     return {
       success: true,
@@ -105,7 +111,7 @@ export class GraphController {
   }
 
   /**
-   * Add a preference for a person
+   * Add a single preference
    * POST /graph/preference
    */
   @Post('preference')
@@ -123,23 +129,29 @@ export class GraphController {
         | 'tv_genre'
         | 'music_genre'
         | 'book_genre'
-        | 'beverage';
+        | 'beverage'
+        | 'sport'
+        | 'hobby';
       isDislike?: boolean;
       strength?: number;
       properties?: Record<string, unknown>;
     },
   ) {
     const userId = this.ensureUserId(ctx);
-    const { personEntityId, ...preference } = body;
-
-    const result = await this.graphUtility.addPreference(userId, personEntityId, preference);
+    const result = await this.preferenceService.addPreference(userId, body.personEntityId, {
+      name: body.name,
+      type: body.type,
+      isDislike: body.isDislike,
+      strength: body.strength,
+      properties: body.properties,
+    });
 
     return {
       success: true,
       concept: {
         entityId: result.conceptEntity.entity_id,
         name: result.conceptEntity.name,
-        type: result.conceptEntity.properties?.['type'],
+        type: body.type,
       },
       relationship: {
         id: result.relationship.relationship_id,
@@ -150,7 +162,7 @@ export class GraphController {
   }
 
   /**
-   * Batch add preferences for a person
+   * Batch add preferences
    * POST /graph/preferences
    */
   @Post('preferences')
@@ -169,7 +181,7 @@ export class GraphController {
     },
   ) {
     const userId = this.ensureUserId(ctx);
-    const result = await this.graphUtility.addPreferences(userId, body.personEntityId, body.preferences);
+    const result = await this.preferenceService.addPreferences(userId, body.personEntityId, body.preferences);
 
     return {
       success: true,
@@ -183,7 +195,7 @@ export class GraphController {
   }
 
   /**
-   * Add a location to the graph
+   * Add a location
    * POST /graph/location
    */
   @Post('location')
@@ -199,21 +211,21 @@ export class GraphController {
     },
   ) {
     const userId = this.ensureUserId(ctx);
-    const location = await this.graphUtility.addLocation(userId, body);
+    const location = await this.locationService.addLocation(userId, body);
 
     return {
       success: true,
       location: {
         entityId: location.entity_id,
         name: location.name,
-        type: location.properties?.['type'],
-        coordinates: location.properties?.['coordinates'],
+        type: body.type,
+        coordinates: body.coordinates,
       },
     };
   }
 
   /**
-   * Record that a person visited a location
+   * Record a visit
    * POST /graph/visit
    */
   @Post('visit')
@@ -223,19 +235,24 @@ export class GraphController {
     body: {
       personEntityId: string;
       locationEntityId: string;
-      date?: string; // ISO date string
+      date?: Date;
       duration?: string;
       notes?: string;
       properties?: Record<string, unknown>;
     },
   ) {
     const userId = this.ensureUserId(ctx);
-    const { personEntityId, locationEntityId, date, ...visitDetails } = body;
-
-    const relationship = await this.graphUtility.addVisit(userId, personEntityId, locationEntityId, {
-      date: date ? new Date(date) : undefined,
-      ...visitDetails,
-    });
+    const relationship = await this.relationshipService.addVisit(
+      userId,
+      body.personEntityId,
+      body.locationEntityId,
+      {
+        date: body.date,
+        duration: body.duration,
+        notes: body.notes,
+        properties: body.properties,
+      },
+    );
 
     return {
       success: true,
@@ -249,7 +266,7 @@ export class GraphController {
   }
 
   /**
-   * Add a social connection between two people
+   * Add a social connection
    * POST /graph/connection
    */
   @Post('connection')
@@ -267,23 +284,23 @@ export class GraphController {
         | 'MENTORED'
         | 'TAUGHT'
         | 'LEARNED_FROM';
-      since?: string; // ISO date string
+      since?: Date;
       context?: string;
       strength?: number;
       properties?: Record<string, unknown>;
     },
   ) {
     const userId = this.ensureUserId(ctx);
-    const { fromPersonId, toPersonId, connectionType, since, ...details } = body;
-
-    const relationship = await this.graphUtility.addSocialConnection(
+    const relationship = await this.relationshipService.addSocialConnection(
       userId,
-      fromPersonId,
-      toPersonId,
-      connectionType,
+      body.fromPersonId,
+      body.toPersonId,
+      body.connectionType,
       {
-        since: since ? new Date(since) : undefined,
-        ...details,
+        since: body.since,
+        context: body.context,
+        strength: body.strength,
+        properties: body.properties,
       },
     );
 
@@ -300,20 +317,13 @@ export class GraphController {
   }
 
   /**
-   * Get user context for LLM (useful for debugging/preview)
+   * Get user context (for debugging/preview)
    * GET /graph/context
    */
   @Get('context')
   async getUserContext(@Context() ctx: RequestContext) {
     const userId = this.ensureUserId(ctx);
     const context = await this.userContext.getUserContextForLLM(userId);
-
-    if (!context) {
-      return {
-        success: false,
-        message: 'User context not available. User may need to complete onboarding.',
-      };
-    }
 
     return {
       success: true,
@@ -322,18 +332,18 @@ export class GraphController {
   }
 
   /**
-   * Get user context formatted for LLM system prompt
+   * Get formatted user context for LLM
    * GET /graph/context/formatted
    */
   @Get('context/formatted')
-  async getUserContextFormatted(@Context() ctx: RequestContext) {
+  async getFormattedUserContext(@Context() ctx: RequestContext) {
     const userId = this.ensureUserId(ctx);
     const context = await this.userContext.getUserContextForLLM(userId);
 
     if (!context) {
       return {
         success: false,
-        message: 'User context not available.',
+        message: 'User context not available',
       };
     }
 

@@ -17,6 +17,15 @@ import { RelationshipEntity } from './entities/RelationshipEntity';
 import { ThingEntity } from './entities/ThingEntity';
 import { ContentService } from './services/ContentService';
 import { EventService } from './services/EventService';
+import {
+  ConceptGraphService,
+  EventGraphService,
+  LocationGraphService,
+  PersonGraphService,
+  PreferenceService,
+  RelationshipService,
+  ThingGraphService,
+} from './services/graph';
 import { GraphUtilityService } from './services/GraphUtilityService';
 import { MemoryService } from './services/MemoryService';
 import { UserContextService } from './services/UserContextService';
@@ -36,9 +45,35 @@ import { UserContextService } from './services/UserContextService';
       FactEntity,
     ]),
   ],
-  providers: [MemoryService, ContentService, EventService, GraphUtilityService, UserContextService],
+  providers: [
+    MemoryService,
+    ContentService,
+    EventService,
+    GraphUtilityService,
+    UserContextService,
+    PersonGraphService,
+    ConceptGraphService,
+    ThingGraphService,
+    LocationGraphService,
+    EventGraphService,
+    PreferenceService,
+    RelationshipService,
+  ],
   controllers: [MemoryController, ContentController, EventController, GraphController],
-  exports: [MemoryService, ContentService, EventService, GraphUtilityService, UserContextService],
+  exports: [
+    MemoryService,
+    ContentService,
+    EventService,
+    GraphUtilityService,
+    UserContextService,
+    PersonGraphService,
+    ConceptGraphService,
+    ThingGraphService,
+    LocationGraphService,
+    EventGraphService,
+    PreferenceService,
+    RelationshipService,
+  ],
 })
 export class MemoryModule {}
 
@@ -56,7 +91,20 @@ export {
 };
 
 // Services
-export { MemoryService, ContentService, EventService, GraphUtilityService, UserContextService };
+export {
+  MemoryService,
+  ContentService,
+  EventService,
+  GraphUtilityService,
+  UserContextService,
+  PersonGraphService,
+  ConceptGraphService,
+  ThingGraphService,
+  LocationGraphService,
+  EventGraphService,
+  PreferenceService,
+  RelationshipService,
+};
 
 // Types
 export type { Memory, MemoryLocation, MemoryResponse, MemorySearchParams } from './types';

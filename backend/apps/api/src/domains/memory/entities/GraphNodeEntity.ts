@@ -8,6 +8,9 @@ export class GraphNodeEntity {
   @Column({ type: 'text' })
   entity_type!: string;
 
+  @Column({ type: 'uuid', array: true, default: '{}' })
+  outgoing_relationships!: string[];
+
   @Column({ type: 'text', nullable: true })
   name!: string | null;
 
