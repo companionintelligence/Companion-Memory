@@ -208,4 +208,52 @@ export class PersonGraphService {
 
     return { created: entities.length, entities };
   }
+
+  /**
+   * Get all nodes (entities) for a user
+   */
+  async getAllNodes(
+    ownerUserId: string,
+    filters?: {
+      entityType?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<GraphNodeEntity[]> {
+    return this.graphUtility.queryNodes(
+      ownerUserId,
+      { entityType: filters?.entityType },
+      { limit: filters?.limit || 200, offset: filters?.offset || 0 },
+    );
+  }
+
+  /**
+   * Update a node (entity) in the graph
+   */
+  async updateNode(
+    ownerUserId: string,
+    entityId: string,
+    updates: {
+      name?: string;
+      description?: string;
+      properties?: Record<string, unknown>;
+    },
+  ): Promise<GraphNodeEntity> {
+    const result = await this.graphUtility.createOrUpdateNode(ownerUserId, {
+      entityId,
+      name: updates.name,
+      description: updates.description,
+      properties: updates.properties,
+      mergeProperties: true,
+    });
+
+    return result.node;
+  }
+
+  /**
+   * Delete a node (soft delete)
+   */
+  async deleteNode(ownerUserId: string, entityId: string): Promise<void> {
+    await this.graphUtility.softDeleteNode(entityId, ownerUserId);
+  }
 }

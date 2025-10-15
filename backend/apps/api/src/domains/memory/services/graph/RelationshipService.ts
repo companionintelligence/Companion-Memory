@@ -135,4 +135,18 @@ export class RelationshipService {
 
     return true;
   }
+
+  /**
+   * Get all relationships for a user
+   */
+  async getRelationships(
+    ownerUserId: string,
+    options?: {
+      entityIds?: string[];
+      relationshipTypes?: string[];
+      direction?: 'outbound' | 'inbound' | 'both';
+    },
+  ): Promise<RelationshipEntity[]> {
+    return this.graphUtility.getRelationships(ownerUserId, options);
+  }
 }

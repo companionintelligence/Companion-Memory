@@ -337,4 +337,105 @@ export class GraphController {
       formatted,
     };
   }
+
+  /**
+   * Get all nodes and relationships for the current user
+   * GET /graph/data
+   */
+  @Get('data')
+  async getGraphData(@Context() ctx: RequestContext) {
+    const userId = this.ensureUserId(ctx);
+
+    // Get all nodes for this user
+    const nodes = await this.personService.getAllNodes(userId, { limit: 200 });
+
+    // Get all relationships for this user
+    const relationships = await this.relationshipService.getRelationships(userId, {});
+
+    return {
+      success: true,
+      data: {
+        nodes: nodes.map((node) => ({
+          id: node.entity_id,
+          entity_id: node.entity_id,
+          entity_type: node.entity_type,
+          name: node.name,
+          description: node.description,
+          properties: node.properties || {},
+        })),
+        links: relationships.map((rel) => ({
+          id: rel.relationship_id,
+          relationship_id: rel.relationship_id,
+          source: rel.from_entity_id,
+          target: rel.to_entity_id,
+          relationship_type: rel.relationship_type,
+          strength: rel.strength || 0.5,
+          properties: rel.properties || {},
+        })),
+      },
+    };
+  }
+
+  /**
+   * Delete a node from the graph
+   * POST /graph/node/delete
+   */
+  @Post('node/delete')
+  async deleteNode(@Context() ctx: RequestContext, @Body() body: { entityId: string }) {
+    const userId = this.ensureUserId(ctx);
+    await this.personService.deleteNode(userId, body.entityId);
+
+    return {
+      success: true,
+      message: 'Node deleted successfully',
+    };
+  }
+
+  /**
+   * Update a node in the graph
+   * POST /graph/node/update
+   */
+  @Post('node/update')
+  async updateNode(
+    @Context() ctx: RequestContext,
+    @Body()
+    body: {
+      entityId: string;
+      name?: string;
+      description?: string;
+      properties?: Record<string, unknown>;
+    },
+  ) {
+    const userId = this.ensureUserId(ctx);
+    const node = await this.personService.updateNode(userId, body.entityId, {
+      name: body.name,
+      description: body.description,
+      properties: body.properties,
+    });
+
+    return {
+      success: true,
+      node: {
+        entityId: node.entity_id,
+        name: node.name,
+        description: node.description,
+        properties: node.properties,
+      },
+    };
+  }
+
+  /**
+   * Delete a relationship from the graph
+   * POST /graph/relationship/delete
+   */
+  @Post('relationship/delete')
+  async deleteRelationship(@Context() ctx: RequestContext, @Body() body: { relationshipId: string }) {
+    const userId = this.ensureUserId(ctx);
+    await this.relationshipService.deleteRelationship(userId, body.relationshipId);
+
+    return {
+      success: true,
+      message: 'Relationship deleted successfully',
+    };
+  }
 }
