@@ -21,7 +21,7 @@ export class RelationshipService {
     ownerUserId: string,
     fromPersonId: string,
     toPersonId: string,
-    connectionType: 'KNOWS' | 'FRIEND' | 'WORKS_WITH' | 'COLLEAGUE' | 'MENTORED' | 'TAUGHT' | 'LEARNED_FROM',
+    connectionType: string,
     details?: {
       since?: Date;
       context?: string;

@@ -23,17 +23,7 @@ export class PreferenceService {
     personEntityId: string,
     preference: {
       name: string;
-      type:
-        | 'food'
-        | 'cuisine'
-        | 'activity'
-        | 'movie_genre'
-        | 'tv_genre'
-        | 'music_genre'
-        | 'book_genre'
-        | 'beverage'
-        | 'sport'
-        | 'hobby';
+      type: string;
       isDislike?: boolean;
       strength?: number;
       properties?: Record<string, unknown>;
@@ -104,17 +94,7 @@ export class PreferenceService {
     for (const pref of preferences) {
       const result = await this.addPreference(ownerUserId, personEntityId, {
         name: pref.name,
-        type: pref.type as
-          | 'food'
-          | 'cuisine'
-          | 'activity'
-          | 'movie_genre'
-          | 'tv_genre'
-          | 'music_genre'
-          | 'book_genre'
-          | 'beverage'
-          | 'sport'
-          | 'hobby',
+        type: pref.type,
         isDislike: pref.isDislike,
         strength: pref.strength,
         properties: pref.properties,

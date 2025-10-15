@@ -21,7 +21,7 @@ export class LocationGraphService {
     ownerUserId: string,
     location: {
       name: string;
-      type: 'city' | 'country' | 'venue' | 'address' | 'region';
+      type: string;
       coordinates?: { lat: number; lng: number };
       address?: string;
       properties?: Record<string, unknown>;

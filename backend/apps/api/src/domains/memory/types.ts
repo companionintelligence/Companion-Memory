@@ -1,6 +1,6 @@
 export interface Memory {
   id: string;
-  type: 'event' | 'content' | 'thing' | 'person' | 'contact' | 'other';
+  type: string;
   title: string;
   description: string | null;
   timestamp: Date;

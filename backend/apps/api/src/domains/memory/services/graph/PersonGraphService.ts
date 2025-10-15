@@ -54,16 +54,7 @@ export class PersonGraphService {
     },
     relationships?: Array<{
       toPersonEntityId: string;
-      type:
-        | 'SPOUSE'
-        | 'PARENT_OF'
-        | 'CHILD_OF'
-        | 'SIBLING_OF'
-        | 'FRIEND'
-        | 'PARASOCIAL'
-        | 'COLLEAGUE'
-        | 'KNOWS'
-        | 'ENEMY';
+      type: string;
       strength?: number;
       bidirectional?: boolean;
       properties?: Record<string, unknown>;
@@ -184,7 +175,7 @@ export class PersonGraphService {
     userEntityId: string,
     familyMembers: Array<{
       name: string;
-      relationship: 'SPOUSE' | 'PARENT_OF' | 'CHILD_OF' | 'SIBLING_OF';
+      relationship: string;
       age?: number;
       firstName?: string;
       lastName?: string;
