@@ -57,6 +57,7 @@ export class GraphController {
         type: string;
         strength?: number;
         bidirectional?: boolean;
+        properties?: Record<string, unknown>;
       }>;
     },
   ) {
