@@ -2,15 +2,27 @@
 
 This document provides detailed technical specifications for the CI-Server PostgreSQL database design, including entity definitions, data types, constraints, and implementation details.
 
-*Last updated: Generated from current codebase analysis on October 9, 2024*
+*Last updated: Regenerated after rebase from main on October 17, 2024*
+
+## Major Schema Changes
+
+The database has undergone significant restructuring with the following key changes:
+- **Legacy table removal**: Dropped people, contacts, places, locations, things, and embeddings tables
+- **Entity graph introduction**: New unified entity system with relationships table
+- **Digital footprint tracking**: New TimescaleDB hypertables for browser activity and screen captures  
+- **Communication tracking**: New communications table with sentiment analysis
+- **Device management**: Comprehensive device and sensor tracking system
+- **Enhanced actions**: Added priority field to actions table
+- **File relationships**: Restructured message-file relationships with dedicated join table
 
 ## Entity Specifications
 
 ### Data Types and Constraints
 
 #### Primary Keys
-- **UUID**: Most entities use UUID primary keys for distributed scalability and collision resistance
+- **UUID v7**: Most entities use time-ordered UUID v7 primary keys for distributed scalability and natural sorting
 - **VARCHAR**: Questions and answers use string IDs for flexible identification
+- **Composite Keys**: Time-series tables use composite primary keys (time, user_id, device_id)
 - **BIGINT**: Join tables use auto-incrementing BIGINT IDs for performance
 
 #### Common Columns
@@ -18,27 +30,228 @@ Most entities include:
 - `created_at` (TIMESTAMPTZ): Record creation timestamp with timezone awareness
 - `updated_at` (TIMESTAMPTZ): Last modification timestamp for change tracking
 - `user_id` (UUID): Owner reference to users table for data isolation
+- `owner_user_id` (UUID): Alternative ownership field for graph entities
 
 #### Special Data Types
-- **JSONB**: Used for flexible data storage (source_data, geolocation, tool_calls, sync_state)
+- **JSONB**: Flexible metadata storage (properties, capabilities, ui_elements, participants_metadata)
 - **TIMESTAMPTZ**: Timezone-aware timestamps for global application support
 - **TEXT**: Variable-length text fields with unlimited size
-- **BOOLEAN**: True/false flags for status and configuration
-- **BIGINT**: Large integer values (file sizes, counters)
+- **VECTOR**: pgvector type for embeddings (vector(768) for various embedding models)
+- **GEOGRAPHY**: PostGIS geographic points for sensor locations
+- **ARRAYS**: Native PostgreSQL arrays for entity lists and tags
+- **DOUBLE PRECISION**: Floating point values for scores, coordinates, and measurements
 
 #### TimescaleDB Integration
-The `api_logs` table is implemented as a TimescaleDB hypertable:
-- Partitioned by `created_at` timestamp for time-series optimization
-- Hash partitioned by `user_id` for parallel processing and user isolation
-- Composite primary key: (id, created_at, user_id) for optimal partitioning
-- Specialized indexes for time-based queries and JSONB content search
+Multiple tables are implemented as TimescaleDB hypertables:
+- **`api_logs`**: Partitioned by `created_at` and `user_id` for API monitoring
+- **`browser_activity`**: Partitioned by `time` and `user_id` for web activity tracking
+- **`screen_captures`**: Partitioned by `time` and `user_id` for screen analysis
+- Automatic compression and retention policies for long-term storage
+
+#### Vector Embeddings
+Native vector support throughout the schema:
+- **Content embeddings**: Text content vectorized for semantic search
+- **Visual embeddings**: Screen captures and images vectorized for similarity
+- **Entity embeddings**: Graph entities include semantic representations
+- **Custom transformers**: TypeORM transformers for vector serialization
 
 #### Soft Deletes
 Some entities support soft deletion for data preservation:
 - `threads.deleted_at` - Conversation thread soft deletion
 - `messages.deleted_at` - Message soft deletion with cascade considerations
+- Entity archiving through `is_archived` and `is_active` flags
 
 ## Detailed Entity Definitions
+
+### Entity Graph Domain
+
+#### entities (GraphNodeEntity)
+```sql
+CREATE TABLE entities (
+    entity_id UUID PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT,
+    description TEXT,
+    properties JSONB DEFAULT '{}',
+    embedding vector(768),
+    search_content TEXT,
+    linked_table TEXT,
+    linked_id UUID,
+    is_active BOOLEAN DEFAULT TRUE,
+    is_archived BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_accessed TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_entities_owner ON entities(owner_user_id);
+CREATE INDEX idx_entities_type ON entities(entity_type);
+CREATE INDEX idx_entities_linked ON entities(linked_table, linked_id);
+CREATE INDEX idx_entities_active ON entities(is_active, is_archived);
+CREATE INDEX idx_entities_embedding ON entities USING ivfflat (embedding vector_cosine_ops);
+```
+
+#### relationships (RelationshipEntity)
+```sql
+CREATE TABLE relationships (
+    relationship_id UUID PRIMARY KEY,
+    from_entity_id UUID NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    to_entity_id UUID NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL,
+    owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    strength DOUBLE PRECISION DEFAULT 1.0,
+    properties JSONB DEFAULT '{}',
+    is_bidirectional BOOLEAN DEFAULT FALSE,
+    is_active BOOLEAN DEFAULT TRUE,
+    start_date DATE,
+    end_date DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_relationships_from ON relationships(from_entity_id);
+CREATE INDEX idx_relationships_to ON relationships(to_entity_id);
+CREATE INDEX idx_relationships_type ON relationships(relationship_type);
+CREATE INDEX idx_relationships_owner ON relationships(owner_user_id);
+CREATE INDEX idx_relationships_strength ON relationships(strength);
+```
+
+#### communications (CommunicationEntity)
+```sql
+CREATE TABLE communications (
+    time TIMESTAMPTZ NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    communication_type TEXT NOT NULL,
+    device_id UUID REFERENCES devices(device_id) ON DELETE SET NULL,
+    direction TEXT NOT NULL,
+    thread_id TEXT,
+    from_entity_id UUID REFERENCES entities(entity_id),
+    to_entity_ids UUID[],
+    participants_metadata JSONB DEFAULT '{}',
+    subject TEXT,
+    content TEXT NOT NULL,
+    attachments JSONB DEFAULT '[]',
+    duration_seconds INTEGER,
+    sentiment_score DOUBLE PRECISION,
+    importance_score DOUBLE PRECISION,
+    urgency_score DOUBLE PRECISION,
+    content_embedding vector(768),
+    category TEXT,
+    summary TEXT,
+    tags TEXT[],
+    connection_id TEXT,
+    is_encrypted BOOLEAN DEFAULT FALSE,
+    is_archived BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (time, user_id, communication_type)
+);
+
+-- Indexes
+CREATE INDEX idx_communications_user ON communications(user_id, time DESC);
+CREATE INDEX idx_communications_type ON communications(communication_type);
+CREATE INDEX idx_communications_sentiment ON communications(sentiment_score);
+CREATE INDEX idx_communications_embedding ON communications USING ivfflat (content_embedding vector_cosine_ops);
+```
+
+### Device & Activity Domain
+
+#### devices
+```sql
+CREATE TABLE devices (
+    device_id UUID PRIMARY KEY DEFAULT gen_uuid_v7(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_entity_id UUID REFERENCES entities(entity_id),
+    device_name TEXT NOT NULL,
+    device_type TEXT NOT NULL,
+    platform TEXT,
+    model TEXT,
+    manufacturer TEXT,
+    os_version TEXT,
+    app_version TEXT,
+    last_seen TIMESTAMPTZ DEFAULT NOW(),
+    is_active BOOLEAN DEFAULT TRUE,
+    is_primary BOOLEAN DEFAULT FALSE,
+    push_token TEXT,
+    capabilities JSONB DEFAULT '{}',
+    privacy_settings JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_devices_user ON devices(user_id);
+CREATE INDEX idx_devices_entity ON devices(device_entity_id);
+CREATE UNIQUE INDEX devices_one_primary_per_user_idx ON devices (user_id) 
+    WHERE is_primary = TRUE;
+```
+
+#### browser_activity (TimescaleDB Hypertable)
+```sql
+CREATE TABLE browser_activity (
+    time TIMESTAMPTZ NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id UUID NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    domain TEXT GENERATED ALWAYS AS (
+        CASE
+            WHEN url ~ '^https?://' THEN split_part(split_part(url, '://', 2), '/', 1)
+            ELSE NULL
+        END
+    ) STORED,
+    title TEXT,
+    action_type TEXT,
+    duration_seconds INTEGER CHECK (duration_seconds >= 0),
+    scroll_depth_percent DOUBLE PRECISION CHECK (scroll_depth_percent >= 0 AND scroll_depth_percent <= 100),
+    page_summary TEXT,
+    page_embedding vector(768),
+    category TEXT,
+    productivity_score DOUBLE PRECISION CHECK (productivity_score >= 0 AND productivity_score <= 1),
+    is_incognito BOOLEAN DEFAULT FALSE,
+    contains_sensitive BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (time, user_id, device_id)
+);
+
+SELECT create_hypertable('browser_activity', 'time', 'user_id', 4);
+
+-- Indexes
+CREATE INDEX idx_browser_activity_user ON browser_activity(user_id, time DESC);
+CREATE INDEX idx_browser_activity_domain ON browser_activity(domain);
+CREATE INDEX idx_browser_activity_embedding ON browser_activity USING ivfflat (page_embedding vector_cosine_ops);
+```
+
+#### screen_captures (TimescaleDB Hypertable)
+```sql
+CREATE TABLE screen_captures (
+    time TIMESTAMPTZ NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id UUID NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    image_path TEXT NOT NULL,
+    thumbnail_path TEXT,
+    ocr_text TEXT,
+    ui_elements JSONB DEFAULT '{}',
+    applications JSONB DEFAULT '{}',
+    activity_summary TEXT,
+    visual_embedding vector(768),
+    text_embedding vector(768),
+    primary_application TEXT,
+    activity_category TEXT,
+    contains_sensitive BOOLEAN DEFAULT FALSE,
+    contains_pii BOOLEAN DEFAULT FALSE,
+    redacted BOOLEAN DEFAULT FALSE,
+    redaction_regions JSONB DEFAULT '[]',
+    PRIMARY KEY (time, user_id, device_id)
+);
+
+SELECT create_hypertable('screen_captures', 'time', 'user_id', 4);
+
+-- Indexes
+CREATE INDEX idx_screen_captures_user ON screen_captures(user_id, time DESC);
+CREATE INDEX idx_screen_captures_app ON screen_captures(primary_application);
+CREATE INDEX idx_screen_captures_visual ON screen_captures USING ivfflat (visual_embedding vector_cosine_ops);
+CREATE INDEX idx_screen_captures_text ON screen_captures USING ivfflat (text_embedding vector_cosine_ops);
+```
 
 ### User Domain
 
@@ -205,6 +418,7 @@ CREATE TABLE actions (
     title TEXT,
     text TEXT,
     image_url TEXT,
+    priority INTEGER,
     thread_id TEXT REFERENCES threads(id) ON DELETE SET NULL,
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -214,6 +428,7 @@ CREATE TABLE actions (
 -- Indexes
 CREATE INDEX idx_actions_user_id ON actions(user_id);
 CREATE INDEX idx_actions_thread_id ON actions(thread_id);
+CREATE INDEX idx_actions_priority ON actions(priority);
 ```
 
 ### Conversations Domain
@@ -394,28 +609,61 @@ CREATE GIN INDEX idx_api_logs_content ON api_logs USING GIN (content);
 ## Join Tables for Many-to-Many Relationships
 
 All many-to-many relationships use dedicated join tables with:
-- Auto-incrementing BIGINT primary key for performance
+- Auto-incrementing BIGINT primary key or composite primary key for performance
 - Foreign keys to both related entities with CASCADE constraints
 - `created_at` timestamp for audit trails
 - Composite unique constraints to prevent duplicates
 
-### Tagging Join Tables
+### Active Tagging Join Tables
 
-#### person_tag
+#### action_tag
 ```sql
-CREATE TABLE person_tag (
+CREATE TABLE action_tag (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    person_id UUID REFERENCES people(id) ON DELETE CASCADE NOT NULL,
+    action_id UUID REFERENCES actions(id) ON DELETE CASCADE NOT NULL,
     tag_id UUID REFERENCES tags(id) ON DELETE CASCADE NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(person_id, tag_id)
+    UNIQUE(action_id, tag_id)
 );
 
-CREATE INDEX idx_person_tag_person_id ON person_tag(person_id);
-CREATE INDEX idx_person_tag_tag_id ON person_tag(tag_id);
+CREATE INDEX idx_action_tag_action_id ON action_tag(action_id);
+CREATE INDEX idx_action_tag_tag_id ON action_tag(tag_id);
 ```
 
-Similar patterns for: `contact_tag`, `event_tag`, `content_tag`, `thing_tag`, `place_tag`, `location_tag`, `action_tag`
+#### content_tag
+```sql
+CREATE TABLE content_tag (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    content_id UUID REFERENCES content(id) ON DELETE CASCADE NOT NULL,
+    tag_id UUID REFERENCES tags(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(content_id, tag_id)
+);
+
+CREATE INDEX idx_content_tag_content_id ON content_tag(content_id);
+CREATE INDEX idx_content_tag_tag_id ON content_tag(tag_id);
+```
+
+#### event_tag
+```sql
+CREATE TABLE event_tag (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id UUID REFERENCES events(id) ON DELETE CASCADE NOT NULL,
+    tag_id UUID REFERENCES tags(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(event_id, tag_id)
+);
+
+CREATE INDEX idx_event_tag_event_id ON event_tag(event_id);
+CREATE INDEX idx_event_tag_tag_id ON event_tag(tag_id);
+```
+
+### Removed Join Tables
+The following join tables have been removed as part of the schema modernization:
+- `person_tag`, `contact_tag` - Related to removed people/contacts tables
+- `place_tag`, `location_tag` - Related to removed places/locations tables  
+- `thing_tag` - Related to removed things table
+- `event_person` - Event-person relationships now handled through entity graph
 
 ### Other Join Tables
 
@@ -433,28 +681,42 @@ CREATE INDEX idx_thread_file_thread_id ON thread_file(thread_id);
 CREATE INDEX idx_thread_file_file_id ON thread_file(file_id);
 ```
 
-#### event_person
+#### message_files
 ```sql
-CREATE TABLE event_person (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    event_id UUID REFERENCES events(id) ON DELETE CASCADE NOT NULL,
-    person_id UUID REFERENCES people(id) ON DELETE CASCADE NOT NULL,
+CREATE TABLE message_files (
+    message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    file_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(event_id, person_id)
+    PRIMARY KEY (message_id, file_id)
 );
 
-CREATE INDEX idx_event_person_event_id ON event_person(event_id);
-CREATE INDEX idx_event_person_person_id ON event_person(person_id);
+CREATE INDEX idx_message_files_message ON message_files(message_id);
+CREATE INDEX idx_message_files_file ON message_files(file_id);
 ```
 
 ## Vector Search Integration
 
-The `embeddings` table enables AI-powered semantic search:
-- Links to any entity via `entity_type` and `entity_id` flexible pattern
-- Stores the embedding model used for version compatibility
-- Raw input and hash for deduplication and consistency checks
-- Vector data stored as comma-separated text (compatible with pgvector when needed)
-- Supports multiple embedding models simultaneously
+Vector embeddings are integrated throughout the schema using native pgvector support:
+
+### Entity Graph Embeddings
+- **`entities.embedding`**: Semantic representation of each entity for similarity search
+- **HNSW indexing**: Optimized vector similarity search with `vector_cosine_ops`
+- **Flexible entity types**: Support for any entity type with unified embedding approach
+
+### Communication Embeddings
+- **`communications.content_embedding`**: Text content vectorized for semantic search
+- **Multi-modal search**: Combined with sentiment scores for context-aware retrieval
+
+### Activity Embeddings
+- **`browser_activity.page_embedding`**: Web page content embeddings for browsing pattern analysis
+- **`screen_captures.visual_embedding`**: Visual content embeddings for screen similarity
+- **`screen_captures.text_embedding`**: OCR text embeddings for content-based search
+
+### Vector Performance Optimization
+- **Native pgvector**: Vector(768) type for embedding storage
+- **IVFFLAT indexing**: Optimized for high-dimensional similarity search
+- **Cosine similarity**: Default distance function for semantic relationships
+- **Batch processing**: Efficient embedding generation for large datasets
 
 ## External Integration Design
 

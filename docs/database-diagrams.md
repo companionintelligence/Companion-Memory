@@ -2,7 +2,14 @@
 
 This document contains visual representations of the CI-Server PostgreSQL database schema using multiple diagram formats.
 
-*Last updated: Generated from current codebase analysis on October 9, 2024*
+*Last updated: Regenerated after rebase from main on October 17, 2024*
+
+## Major Schema Changes
+- **Entity Graph System**: New unified entity and relationship tables
+- **Digital Footprint Tracking**: TimescaleDB hypertables for browser activity and screen captures
+- **Communication Analysis**: New communications table with sentiment scoring
+- **Device Management**: Comprehensive device and sensor tracking
+- **Legacy Table Removal**: Dropped people, places, contacts, locations, things, and embeddings tables
 
 ## Mermaid Entity Relationship Diagram
 
@@ -39,23 +46,152 @@ erDiagram
         timestamptz updated_at
     }
 
+    %% Entity Graph Domain
+    entities {
+        uuid entity_id PK
+        text entity_type
+        uuid owner_user_id FK
+        text name
+        text description
+        jsonb properties
+        vector embedding
+        text search_content
+        text linked_table
+        uuid linked_id
+        boolean is_active
+        boolean is_archived
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz last_accessed
+    }
+    
+    relationships {
+        uuid relationship_id PK
+        uuid from_entity_id FK
+        uuid to_entity_id FK
+        text relationship_type
+        uuid owner_user_id FK
+        double strength
+        jsonb properties
+        boolean is_bidirectional
+        boolean is_active
+        date start_date
+        date end_date
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    
+    communications {
+        timestamptz time PK
+        uuid user_id PK FK
+        text communication_type PK
+        uuid device_id FK
+        text direction
+        text thread_id
+        uuid from_entity_id FK
+        uuid[] to_entity_ids
+        jsonb participants_metadata
+        text subject
+        text content
+        jsonb attachments
+        integer duration_seconds
+        double sentiment_score
+        double importance_score
+        double urgency_score
+        vector content_embedding
+        text category
+        text summary
+        text[] tags
+        text connection_id
+        boolean is_encrypted
+        boolean is_archived
+    }
+
+    %% Device & Activity Domain
+    devices {
+        uuid device_id PK
+        uuid user_id FK
+        uuid device_entity_id FK
+        text device_name
+        text device_type
+        text platform
+        text model
+        text manufacturer
+        text os_version
+        text app_version
+        timestamptz last_seen
+        boolean is_active
+        boolean is_primary
+        text push_token
+        jsonb capabilities
+        jsonb privacy_settings
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    
+    sensors {
+        uuid sensor_id PK
+        uuid device_id FK
+        uuid sensor_entity_id FK
+        text sensor_name
+        text sensor_type
+        text semantic_location
+        geography physical_location
+        text location_description
+        jsonb measurement_types
+        jsonb measurement_units
+        double sampling_rate_hz
+        jsonb device_info
+        jsonb calibration_data
+        boolean is_active
+        timestamptz last_reading_at
+        double battery_level
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    
+    browser_activity {
+        timestamptz time PK
+        uuid user_id PK FK
+        uuid device_id PK FK
+        text url
+        text domain
+        text title
+        text action_type
+        integer duration_seconds
+        double scroll_depth_percent
+        text page_summary
+        vector page_embedding
+        text category
+        double productivity_score
+        boolean is_incognito
+        boolean contains_sensitive
+    }
+    
+    screen_captures {
+        timestamptz time PK
+        uuid user_id PK FK
+        uuid device_id PK FK
+        text image_path
+        text thumbnail_path
+        text ocr_text
+        jsonb ui_elements
+        jsonb applications
+        text activity_summary
+        vector visual_embedding
+        vector text_embedding
+        text primary_application
+        text activity_category
+        boolean contains_sensitive
+        boolean contains_pii
+        boolean redacted
+        jsonb redaction_regions
+    }
+
     %% Search Domain
     tags {
         uuid id PK
         text label
-        uuid user_id FK
-        timestamptz created_at
-    }
-    
-    embeddings {
-        string id PK
-        string model
-        string raw_input
-        string raw_input_hash
-        string entity_type
-        string data_path
-        string entity_id
-        text embedding_vector
         uuid user_id FK
         timestamptz created_at
     }
@@ -158,13 +294,14 @@ erDiagram
         text title
         text text
         text image_url
+        integer priority
         text thread_id FK
         uuid user_id FK
         timestamptz created_at
         timestamptz updated_at
     }
 
-    %% Memory Domain
+    %% Legacy Memory Domain
     events {
         uuid id PK
         text type
@@ -181,74 +318,6 @@ erDiagram
         timestamptz updated_at
     }
     
-    people {
-        uuid id PK
-        text type
-        text first_name
-        text last_name
-        text gender
-        text address
-        text street_address
-        text street_address_2
-        text city
-        text region
-        text country
-        text postal_code
-        text avatar_url
-        text external_id
-        text source_url
-        jsonb source_data
-        uuid user_id FK
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    
-    contacts {
-        uuid id PK
-        text type
-        text avatar_url
-        text handle
-        text identifier
-        text external_id
-        text source_url
-        jsonb source_data
-        uuid user_id FK
-        uuid person_id FK
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    
-    places {
-        uuid id PK
-        text type
-        text name
-        text geo_format
-        jsonb geolocation
-        jsonb location_boundary
-        boolean estimated
-        boolean tracked
-        boolean uploaded
-        uuid parent_id FK
-        uuid user_id FK
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    
-    locations {
-        uuid id PK
-        text identifier
-        timestamptz datetime
-        text geo_format
-        jsonb geolocation
-        boolean estimated
-        boolean tracked
-        boolean uploaded
-        uuid place_id FK
-        uuid user_id FK
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    
     content {
         uuid id PK
         text type
@@ -256,20 +325,6 @@ erDiagram
         text text
         text url
         text mimetype
-        text external_id
-        text source_url
-        jsonb source_data
-        uuid user_id FK
-        uuid event_id FK
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    
-    things {
-        uuid id PK
-        text type
-        text name
-        text description
         text external_id
         text source_url
         jsonb source_data
@@ -290,24 +345,10 @@ erDiagram
         timestamptz created_at
     }
 
-    %% Join Tables for Many-to-Many relationships
-    person_tag {
+    %% Active Join Tables
+    action_tag {
         bigint id PK
-        uuid person_id FK
-        uuid tag_id FK
-        timestamptz created_at
-    }
-    
-    contact_tag {
-        bigint id PK
-        uuid contact_id FK
-        uuid tag_id FK
-        timestamptz created_at
-    }
-    
-    event_tag {
-        bigint id PK
-        uuid event_id FK
+        uuid action_id FK
         uuid tag_id FK
         timestamptz created_at
     }
@@ -319,30 +360,9 @@ erDiagram
         timestamptz created_at
     }
     
-    thing_tag {
+    event_tag {
         bigint id PK
-        uuid thing_id FK
-        uuid tag_id FK
-        timestamptz created_at
-    }
-    
-    place_tag {
-        bigint id PK
-        uuid place_id FK
-        uuid tag_id FK
-        timestamptz created_at
-    }
-    
-    location_tag {
-        bigint id PK
-        uuid location_id FK
-        uuid tag_id FK
-        timestamptz created_at
-    }
-    
-    action_tag {
-        bigint id PK
-        uuid action_id FK
+        uuid event_id FK
         uuid tag_id FK
         timestamptz created_at
     }
@@ -354,10 +374,9 @@ erDiagram
         timestamptz created_at
     }
     
-    event_person {
-        bigint id PK
-        uuid event_id FK
-        uuid person_id FK
+    message_files {
+        uuid message_id PK FK
+        uuid file_id PK FK
         timestamptz created_at
     }
 
@@ -365,7 +384,10 @@ erDiagram
     %% User relationships (central hub)
     users ||--o{ sessions : "has"
     users ||--o{ tags : "owns"
-    users ||--o{ embeddings : "owns"
+    users ||--o{ entities : "owns"
+    users ||--o{ relationships : "owns"
+    users ||--o{ communications : "has"
+    users ||--o{ devices : "owns"
     users ||--o{ connections : "has"
     users ||--o{ files : "uploads"
     users ||--o{ threads : "creates"
@@ -374,13 +396,23 @@ erDiagram
     users ||--o{ answers : "provides"
     users ||--o{ actions : "performs"
     users ||--o{ events : "has"
-    users ||--o{ people : "knows"
-    users ||--o{ contacts : "has"
-    users ||--o{ places : "visits"
-    users ||--o{ locations : "tracked_at"
     users ||--o{ content : "creates"
-    users ||--o{ things : "owns"
     users ||--o{ api_logs : "logs"
+    users ||--o{ browser_activity : "tracks"
+    users ||--o{ screen_captures : "captures"
+
+    %% Entity Graph relationships
+    entities ||--o{ relationships : "from_entity"
+    entities ||--o{ relationships : "to_entity"
+    entities ||--o{ communications : "from_entity"
+    entities ||--o{ communications : "to_entities"
+
+    %% Device relationships
+    devices ||--o{ sensors : "has"
+    devices ||--o{ communications : "device"
+    devices ||--o{ browser_activity : "device"
+    devices ||--o{ screen_captures : "device"
+    devices ||--o{ entities : "linked_entity"
 
     %% Provider and Connection relationships
     providers ||--o{ connections : "used_by"
@@ -391,101 +423,105 @@ erDiagram
     threads ||--o{ messages : "contains"
     messages ||--o{ messages : "responds_to"
     threads ||--|| actions : "linked_to"
+    communications ||--o{ threads : "thread"
 
     %% Question and Answer relationships
     questions ||--o{ answers : "answered_by"
 
-    %% Memory domain relationships
-    people ||--o{ contacts : "has_contact"
-    places ||--o{ locations : "contains"
-    places ||--o{ places : "parent_of"
+    %% Legacy content relationships
     events ||--o{ content : "contains"
-    events ||--o{ things : "involves"
 
     %% Many-to-Many relationships via join tables
-    people ||--o{ person_tag : ""
-    tags ||--o{ person_tag : ""
-    
-    contacts ||--o{ contact_tag : ""
-    tags ||--o{ contact_tag : ""
-    
-    events ||--o{ event_tag : ""
-    tags ||--o{ event_tag : ""
+    actions ||--o{ action_tag : ""
+    tags ||--o{ action_tag : ""
     
     content ||--o{ content_tag : ""
     tags ||--o{ content_tag : ""
     
-    things ||--o{ thing_tag : ""
-    tags ||--o{ thing_tag : ""
-    
-    places ||--o{ place_tag : ""
-    tags ||--o{ place_tag : ""
-    
-    locations ||--o{ location_tag : ""
-    tags ||--o{ location_tag : ""
-    
-    actions ||--o{ action_tag : ""
-    tags ||--o{ action_tag : ""
+    events ||--o{ event_tag : ""
+    tags ||--o{ event_tag : ""
     
     threads ||--o{ thread_file : ""
     files ||--o{ thread_file : ""
     
-    events ||--o{ event_person : ""
-    people ||--o{ event_person : ""
+    messages ||--o{ message_files : ""
+    files ||--o{ message_files : ""
 ```
 
 ## Domain Organization Overview
 
-The database is organized into 8 main functional domains:
+The database is organized into 9 main functional domains:
 
 ### Core Domains
 - **User Domain**: Authentication, sessions, and user management
-- **Memory Domain**: Personal information storage (people, places, events, content, things)
-- **Intelligence Domain**: AI-powered Q&A system and action tracking
-- **Conversations Domain**: Chat threads and AI interactions
+- **Entity Graph Domain**: Unified entity system with typed relationships and communications
+- **Device & Activity Domain**: Digital footprint tracking and device management
+- **Intelligence Domain**: AI-powered Q&A system and prioritized action tracking
+- **Conversations Domain**: Chat threads and AI interactions with file attachments
 
 ### Supporting Domains  
 - **Connections Domain**: External service integrations with OAuth2
-- **Search Domain**: Tagging system and vector embeddings
-- **Files Domain**: File storage and attachment management
+- **Search Domain**: Tagging system for content organization
+- **Files Domain**: File storage and multi-entity attachment management
 - **ETL Domain**: API logging and data processing monitoring
+- **Legacy Memory Domain**: Transitional content and events storage
 
 ## Special Schema Features
 
-### TimescaleDB Hypertables
-- `api_logs` is implemented as a TimescaleDB hypertable for time-series optimization
-- Partitioned by `created_at` (time) and `user_id` (space) for efficient querying  
-- Includes specialized indexes for time-based queries and JSONB content search
-- Composite primary key: (id, created_at, user_id) for optimal partitioning
+### Entity Graph System
+- **Unified Entity Storage**: All entities represented in single `entities` table with flexible typing
+- **Rich Relationship Model**: Typed, bidirectional relationships with strength scoring
+- **Integrated Embeddings**: Native vector embeddings in entity table for semantic search
+- **Flexible Properties**: JSONB properties for domain-specific metadata without schema changes
+- **Entity Linking**: Links to legacy tables via `linked_table` and `linked_id` fields
+
+### Digital Footprint Tracking
+- **Multiple TimescaleDB Hypertables**: Optimized storage for different activity types
+  - `browser_activity`: Web browsing with productivity scoring
+  - `screen_captures`: Visual analysis with OCR and AI insights
+  - `api_logs`: API monitoring and performance tracking
+- **Real-time Analysis**: Sentiment, productivity, and privacy scoring for activities
+- **Multi-modal Embeddings**: Visual, textual, and semantic embeddings for comprehensive search
+
+### Communication Intelligence
+- **Sentiment Analysis**: Automatic sentiment scoring for all communications
+- **Participant Management**: Flexible entity-based participant tracking
+- **Content Embeddings**: Vector representations for semantic communication search
+- **Privacy Controls**: Encryption and archiving flags for sensitive communications
+
+### Device Management System
+- **Comprehensive Device Tracking**: Full device capabilities and privacy controls
+- **IoT Sensor Integration**: PostGIS geographic support for sensor locations
+- **Activity Correlation**: Cross-device activity tracking and analysis
+- **Privacy-First Design**: Granular controls over data collection per device
+
+### Advanced Vector Search
+- **Native pgvector Support**: VECTOR(768) type throughout schema
+- **Multiple Embedding Types**: Content, visual, and semantic embeddings
+- **HNSW Indexing**: Optimized similarity search with `vector_cosine_ops`
+- **Cross-entity Search**: Unified similarity search across all entity types
 
 ### PGBoss Job Queue Schema
-- Dedicated `pgboss` schema contains job queue tables
-- Auto-managed by the PGBoss library for background processing
-- Handles job scheduling, retries, and parallel execution
-- Separate from main application schema for operational isolation
+- **Dedicated Schema**: Separate `pgboss` schema for operational isolation
+- **Background Processing**: Handles AI analysis, embedding generation, and data processing
+- **Scalable Architecture**: Support for distributed job processing
 
-### Vector Search Integration
-- `embeddings` table supports AI-powered semantic search across any entity type
-- Flexible entity linking via `entity_type` and `entity_id` pattern
-- Support for multiple embedding models with versioning
-- Raw input hash for deduplication and consistency validation
+### Legacy Migration Support
+- **Gradual Migration**: Support for migrating from old schema to entity graph
+- **Table Pruning**: Systematic removal of deprecated tables (people, places, contacts, etc.)
+- **Data Preservation**: Essential data migrated to new entity graph system
+- **Backward Compatibility**: Maintained during transition period
 
-### Universal Tagging System
-- Standardized many-to-many tagging across all major content entities
-- Eight dedicated `*_tag` join tables for different entity types
-- Case-insensitive tag labels with automatic normalization
-- Enables cross-domain content discovery and organization
+### Privacy and Security Features
+- **Sensitive Content Detection**: Automatic flagging in browser activity and screen captures
+- **PII Detection**: Advanced privacy controls for screen captures
+- **Data Encryption**: Support for encrypted communications and content
+- **User Isolation**: Complete data isolation via user_id scoping throughout schema
 
-### External Data Integration
-- Comprehensive data provenance tracking (`external_id`, `source_url`, `source_data`)
-- Modern OAuth2 implementation with automatic token refresh
-- API logging optimized for high-volume time-series data
-- Sync state tracking for external service synchronization
+### Performance Optimizations
+- **Composite Primary Keys**: Optimized partitioning for time-series tables
+- **Generated Columns**: Automatic domain extraction for browser activity
+- **Specialized Indexes**: GIN, GIST, and IVFFLAT indexes for different query patterns
+- **Compression**: Automatic compression for long-term data storage
 
-### Audit and Compliance
-- Complete timestamp tracking (created_at/updated_at) on all entities
-- Soft delete support for conversations (deleted_at columns)
-- Join tables include creation timestamps for complete audit trails
-- User-scoped data isolation for privacy and security
-
-This schema provides a robust foundation for a personal AI assistant with comprehensive memory management, intelligent search, external data integration, and scalable background processing capabilities.
+This modernized schema provides a foundation for next-generation personal AI with comprehensive digital footprint tracking, entity relationship management, advanced search capabilities, and privacy-first design principles.

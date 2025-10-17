@@ -1,13 +1,22 @@
 @startuml CI-Server Database Schema
 !theme plain
-title CI-Server PostgreSQL Database Schema
+title CI-Server PostgreSQL Database Schema (Post-Rebase)
 note as GeneratedNote
-Generated from current codebase analysis
-Last updated: October 9, 2024
+Regenerated after rebase from main
+Last updated: October 17, 2024
+==
+Major Changes:
+- Entity Graph System
+- Digital Footprint Tracking  
+- Communication Intelligence
+- Device Management
+- Legacy Table Removal
 end note
 
 ' Define entity colors by domain
 !define USER_COLOR #E3F2FD
+!define ENTITY_GRAPH_COLOR #F8BBD9
+!define DEVICE_COLOR #FFE0CC
 !define MEMORY_COLOR #F3E5F5
 !define INTELLIGENCE_COLOR #E8F5E8
 !define CONVERSATION_COLOR #FFF3E0
@@ -48,25 +57,166 @@ entity "sessions" as sessions <<USER_COLOR>> {
   * updated_at : TIMESTAMPTZ
 }
 
+' Entity Graph Domain Entities
+entity "entities" as entities <<ENTITY_GRAPH_COLOR>> {
+  * entity_id : UUID(PK)
+  --
+  * entity_type : TEXT
+  owner_user_id : UUID(FK)
+  name : TEXT
+  description : TEXT
+  properties : JSONB
+  embedding : VECTOR(768)
+  search_content : TEXT
+  linked_table : TEXT
+  linked_id : UUID
+  * is_active : BOOLEAN
+  * is_archived : BOOLEAN
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+  * last_accessed : TIMESTAMPTZ
+}
+
+entity "relationships" as relationships <<ENTITY_GRAPH_COLOR>> {
+  * relationship_id : UUID(PK)
+  --
+  * from_entity_id : UUID(FK)
+  * to_entity_id : UUID(FK)
+  * relationship_type : TEXT
+  owner_user_id : UUID(FK)
+  * strength : DOUBLE
+  properties : JSONB
+  * is_bidirectional : BOOLEAN
+  * is_active : BOOLEAN
+  start_date : DATE
+  end_date : DATE
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "communications" as communications <<ENTITY_GRAPH_COLOR>> {
+  * time : TIMESTAMPTZ(PK)
+  * user_id : UUID(PK,FK)
+  * communication_type : TEXT(PK)
+  --
+  device_id : UUID(FK)
+  * direction : TEXT
+  thread_id : TEXT
+  from_entity_id : UUID(FK)
+  to_entity_ids : UUID[]
+  participants_metadata : JSONB
+  subject : TEXT
+  * content : TEXT
+  attachments : JSONB
+  duration_seconds : INTEGER
+  sentiment_score : DOUBLE
+  importance_score : DOUBLE
+  urgency_score : DOUBLE
+  content_embedding : VECTOR(768)
+  category : TEXT
+  summary : TEXT
+  tags : TEXT[]
+  connection_id : TEXT
+  * is_encrypted : BOOLEAN
+  * is_archived : BOOLEAN
+}
+
+' Device & Activity Domain Entities
+entity "devices" as devices <<DEVICE_COLOR>> {
+  * device_id : UUID(PK)
+  --
+  * user_id : UUID(FK)
+  device_entity_id : UUID(FK)
+  * device_name : TEXT
+  * device_type : TEXT
+  platform : TEXT
+  model : TEXT
+  manufacturer : TEXT
+  os_version : TEXT
+  app_version : TEXT
+  * last_seen : TIMESTAMPTZ
+  * is_active : BOOLEAN
+  * is_primary : BOOLEAN
+  push_token : TEXT
+  capabilities : JSONB
+  privacy_settings : JSONB
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "sensors" as sensors <<DEVICE_COLOR>> {
+  * sensor_id : UUID(PK)
+  --
+  * device_id : UUID(FK)
+  sensor_entity_id : UUID(FK)
+  * sensor_name : TEXT
+  * sensor_type : TEXT
+  semantic_location : TEXT
+  physical_location : GEOGRAPHY
+  location_description : TEXT
+  * measurement_types : JSONB
+  measurement_units : JSONB
+  sampling_rate_hz : DOUBLE
+  device_info : JSONB
+  calibration_data : JSONB
+  * is_active : BOOLEAN
+  last_reading_at : TIMESTAMPTZ
+  battery_level : DOUBLE
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "browser_activity" as browser_activity <<DEVICE_COLOR>> {
+  * time : TIMESTAMPTZ(PK)
+  * user_id : UUID(PK,FK)
+  * device_id : UUID(PK,FK)
+  --
+  * url : TEXT
+  domain : TEXT(generated)
+  title : TEXT
+  action_type : TEXT
+  duration_seconds : INTEGER
+  scroll_depth_percent : DOUBLE
+  page_summary : TEXT
+  page_embedding : VECTOR(768)
+  category : TEXT
+  productivity_score : DOUBLE
+  * is_incognito : BOOLEAN
+  * contains_sensitive : BOOLEAN
+  --
+  note: TimescaleDB hypertable
+  note: Partitioned by time, user_id
+}
+
+entity "screen_captures" as screen_captures <<DEVICE_COLOR>> {
+  * time : TIMESTAMPTZ(PK)
+  * user_id : UUID(PK,FK)
+  * device_id : UUID(PK,FK)
+  --
+  * image_path : TEXT
+  thumbnail_path : TEXT
+  ocr_text : TEXT
+  ui_elements : JSONB
+  applications : JSONB
+  activity_summary : TEXT
+  visual_embedding : VECTOR(768)
+  text_embedding : VECTOR(768)
+  primary_application : TEXT
+  activity_category : TEXT
+  * contains_sensitive : BOOLEAN
+  * contains_pii : BOOLEAN
+  * redacted : BOOLEAN
+  redaction_regions : JSONB
+  --
+  note: TimescaleDB hypertable
+  note: AI analysis with OCR
+}
+
 ' Search Domain Entities
 entity "tags" as tags <<SEARCH_COLOR>> {
   * id : UUID(PK)
   --
   label : TEXT(normalized)
-  user_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-}
-
-entity "embeddings" as embeddings <<SEARCH_COLOR>> {
-  * id : VARCHAR(PK)
-  --
-  * model : VARCHAR
-  * raw_input : VARCHAR
-  * raw_input_hash : VARCHAR
-  * entity_type : VARCHAR
-  * data_path : VARCHAR
-  * entity_id : VARCHAR
-  * embedding_vector : TEXT
   user_id : UUID(FK)
   * created_at : TIMESTAMPTZ
 }
@@ -177,13 +327,14 @@ entity "actions" as actions <<INTELLIGENCE_COLOR>> {
   title : TEXT
   text : TEXT
   image_url : TEXT
+  priority : INTEGER
   thread_id : TEXT(FK)
   user_id : UUID(FK)
   * created_at : TIMESTAMPTZ
   * updated_at : TIMESTAMPTZ
 }
 
-' Memory Domain Entities
+' Legacy Memory Domain Entities
 entity "events" as events <<MEMORY_COLOR>> {
   * id : UUID(PK)
   --
@@ -199,78 +350,8 @@ entity "events" as events <<MEMORY_COLOR>> {
   connection_id : UUID(FK)
   * created_at : TIMESTAMPTZ
   * updated_at : TIMESTAMPTZ
-}
-
-entity "people" as people <<MEMORY_COLOR>> {
-  * id : UUID(PK)
   --
-  type : TEXT
-  first_name : TEXT
-  last_name : TEXT
-  gender : TEXT
-  address : TEXT
-  street_address : TEXT
-  street_address_2 : TEXT
-  city : TEXT
-  region : TEXT
-  country : TEXT
-  postal_code : TEXT
-  avatar_url : TEXT
-  external_id : TEXT
-  source_url : TEXT
-  source_data : JSONB
-  user_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-  * updated_at : TIMESTAMPTZ
-}
-
-entity "contacts" as contacts <<MEMORY_COLOR>> {
-  * id : UUID(PK)
-  --
-  type : TEXT
-  avatar_url : TEXT
-  handle : TEXT
-  identifier : TEXT
-  external_id : TEXT
-  source_url : TEXT
-  source_data : JSONB
-  user_id : UUID(FK)
-  person_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-  * updated_at : TIMESTAMPTZ
-}
-
-entity "places" as places <<MEMORY_COLOR>> {
-  * id : UUID(PK)
-  --
-  type : TEXT
-  name : TEXT
-  geo_format : TEXT
-  geolocation : JSONB
-  location_boundary : JSONB
-  estimated : BOOLEAN
-  tracked : BOOLEAN
-  uploaded : BOOLEAN
-  parent_id : UUID(FK)
-  user_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-  * updated_at : TIMESTAMPTZ
-}
-
-entity "locations" as locations <<MEMORY_COLOR>> {
-  * id : UUID(PK)
-  --
-  identifier : TEXT
-  datetime : TIMESTAMPTZ
-  geo_format : TEXT
-  geolocation : JSONB
-  estimated : BOOLEAN
-  tracked : BOOLEAN
-  uploaded : BOOLEAN
-  place_id : UUID(FK)
-  user_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-  * updated_at : TIMESTAMPTZ
+  note: Legacy table
 }
 
 entity "content" as content <<MEMORY_COLOR>> {
@@ -288,21 +369,8 @@ entity "content" as content <<MEMORY_COLOR>> {
   event_id : UUID(FK)
   * created_at : TIMESTAMPTZ
   * updated_at : TIMESTAMPTZ
-}
-
-entity "things" as things <<MEMORY_COLOR>> {
-  * id : UUID(PK)
   --
-  type : TEXT
-  name : TEXT
-  description : TEXT
-  external_id : TEXT
-  source_url : TEXT
-  source_data : JSONB
-  user_id : UUID(FK)
-  event_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-  * updated_at : TIMESTAMPTZ
+  note: Legacy table
 }
 
 ' ETL Domain Entities
@@ -321,27 +389,11 @@ entity "api_logs" as api_logs <<ETL_COLOR>> {
   note: Composite PK: (id, created_at, user_id)
 }
 
-' Many-to-Many Join Tables
-entity "person_tag" as person_tag {
+' Active Join Tables
+entity "action_tag" as action_tag {
   * id : BIGINT(PK)
   --
-  * person_id : UUID(FK)
-  * tag_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-}
-
-entity "contact_tag" as contact_tag {
-  * id : BIGINT(PK)
-  --
-  * contact_id : UUID(FK)
-  * tag_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-}
-
-entity "event_tag" as event_tag {
-  * id : BIGINT(PK)
-  --
-  * event_id : UUID(FK)
+  * action_id : UUID(FK)
   * tag_id : UUID(FK)
   * created_at : TIMESTAMPTZ
 }
@@ -354,34 +406,10 @@ entity "content_tag" as content_tag {
   * created_at : TIMESTAMPTZ
 }
 
-entity "thing_tag" as thing_tag {
+entity "event_tag" as event_tag {
   * id : BIGINT(PK)
   --
-  * thing_id : UUID(FK)
-  * tag_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-}
-
-entity "place_tag" as place_tag {
-  * id : BIGINT(PK)
-  --
-  * place_id : UUID(FK)
-  * tag_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-}
-
-entity "location_tag" as location_tag {
-  * id : BIGINT(PK)
-  --
-  * location_id : UUID(FK)
-  * tag_id : UUID(FK)
-  * created_at : TIMESTAMPTZ
-}
-
-entity "action_tag" as action_tag {
-  * id : BIGINT(PK)
-  --
-  * action_id : UUID(FK)
+  * event_id : UUID(FK)
   * tag_id : UUID(FK)
   * created_at : TIMESTAMPTZ
 }
@@ -394,11 +422,10 @@ entity "thread_file" as thread_file {
   * created_at : TIMESTAMPTZ
 }
 
-entity "event_person" as event_person {
-  * id : BIGINT(PK)
+entity "message_files" as message_files {
+  * message_id : UUID(PK,FK)
+  * file_id : UUID(PK,FK)
   --
-  * event_id : UUID(FK)
-  * person_id : UUID(FK)
   * created_at : TIMESTAMPTZ
 }
 
@@ -406,7 +433,10 @@ entity "event_person" as event_person {
 ' User relationships (central hub)
 users ||--o{ sessions : user_id
 users ||--o{ tags : user_id
-users ||--o{ embeddings : user_id
+users ||--o{ entities : owner_user_id
+users ||--o{ relationships : owner_user_id
+users ||--o{ communications : user_id
+users ||--o{ devices : user_id
 users ||--o{ connections : user_id
 users ||--o{ files : user_id
 users ||--o{ threads : user_id
@@ -415,13 +445,23 @@ users ||--o{ questions : user_id
 users ||--o{ answers : user_id
 users ||--o{ actions : user_id
 users ||--o{ events : user_id
-users ||--o{ people : user_id
-users ||--o{ contacts : user_id
-users ||--o{ places : user_id
-users ||--o{ locations : user_id
 users ||--o{ content : user_id
-users ||--o{ things : user_id
 users ||--o{ api_logs : user_id
+users ||--o{ browser_activity : user_id
+users ||--o{ screen_captures : user_id
+
+' Entity Graph relationships
+entities ||--o{ relationships : from_entity_id
+entities ||--o{ relationships : to_entity_id
+entities ||--o{ communications : from_entity_id
+entities ||--o{ communications : to_entity_ids
+
+' Device relationships
+devices ||--o{ sensors : device_id
+devices ||--o{ communications : device_id
+devices ||--o{ browser_activity : device_id
+devices ||--o{ screen_captures : device_id
+devices ||--o{ entities : device_entity_id
 
 ' Provider and Connection relationships
 providers ||--o{ connections : provider_id
@@ -432,56 +472,42 @@ connections ||--o{ api_logs : connection_id
 threads ||--o{ messages : thread_id
 messages ||--o{ messages : prompt_message_id
 threads ||--|| actions : thread_id
+communications ||--o{ threads : thread_id
 
 ' Question and Answer relationships
 questions ||--o{ answers : question_id
 
-' Memory domain relationships
-people ||--o{ contacts : person_id
-places ||--o{ locations : place_id
-places ||--o{ places : parent_id
+' Legacy content relationships
 events ||--o{ content : event_id
-events ||--o{ things : event_id
 
 ' Many-to-Many relationships through join tables
-people ||--o{ person_tag : person_id
-tags ||--o{ person_tag : tag_id
-
-contacts ||--o{ contact_tag : contact_id
-tags ||--o{ contact_tag : tag_id
-
-events ||--o{ event_tag : event_id
-tags ||--o{ event_tag : tag_id
+actions ||--o{ action_tag : action_id
+tags ||--o{ action_tag : tag_id
 
 content ||--o{ content_tag : content_id
 tags ||--o{ content_tag : tag_id
 
-things ||--o{ thing_tag : thing_id
-tags ||--o{ thing_tag : tag_id
-
-places ||--o{ place_tag : place_id
-tags ||--o{ place_tag : tag_id
-
-locations ||--o{ location_tag : location_id
-tags ||--o{ location_tag : tag_id
-
-actions ||--o{ action_tag : action_id
-tags ||--o{ action_tag : tag_id
+events ||--o{ event_tag : event_id
+tags ||--o{ event_tag : tag_id
 
 threads ||--o{ thread_file : thread_id
 files ||--o{ thread_file : file_id
 
-events ||--o{ event_person : event_id
-people ||--o{ event_person : person_id
+messages ||--o{ message_files : message_id
+files ||--o{ message_files : file_id
 
 note top of users : Core user management and authentication with onboarding
-note top of people : Personal contacts and family members with demographics
-note top of events : Calendar events and activities with time ranges
-note top of content : Documents, articles, media content with MIME types
+note top of entities : Universal entity graph with flexible typing and embeddings
+note top of relationships : Rich entity relationships with strength scoring and properties
+note top of communications : Multi-modal communications with sentiment analysis
+note top of devices : Device management with capabilities and privacy controls
+note top of browser_activity : Web activity tracking with productivity scoring (TimescaleDB)
+note top of screen_captures : Visual analysis with OCR and AI insights (TimescaleDB)
+note top of events : Legacy calendar events (transitional)
+note top of content : Legacy documents and media (transitional)
 note top of threads : Conversation threads with AI models and file attachments
-note top of tags : Universal tagging system with case normalization
-note top of embeddings : Vector embeddings for AI-powered semantic search
-note top of api_logs : TimescaleDB hypertable for high-volume time-series logging
+note top of tags : Tagging system for content organization
+note top of api_logs : TimescaleDB hypertable for high-volume API monitoring
 
 note as pgboss_note
 PGBoss Job Queue Schema
@@ -489,21 +515,36 @@ PGBoss Job Queue Schema
 Separate "pgboss" schema contains:
 - Job queue tables (auto-managed)
 - Background processing system
+- AI analysis and embedding generation
 - Scheduling and retry logic
 - Operational isolation from main schema
 end note
 
 note as architecture_note
-Key Architectural Features
+Key Architectural Features (Post-Rebase)
 ====
-• User-centric design with complete data isolation
-• Domain-driven organization (8 functional domains)
-• Universal tagging system across all content entities
-• External data integration with OAuth2 and provenance
-• Vector search integration for AI-powered discovery
-• TimescaleDB optimization for time-series data
-• Comprehensive audit trails and soft delete support
-• Background job processing with PGBoss
+• Entity Graph System: Unified entities with typed relationships
+• Digital Footprint Tracking: Real-time activity monitoring
+• Communication Intelligence: Sentiment analysis and embeddings
+• Device Management: IoT sensors with PostGIS support  
+• Multi-Modal Embeddings: Visual, textual, and semantic vectors
+• Privacy Controls: Granular privacy settings and sensitive content detection
+• TimescaleDB Optimization: Multiple hypertables for different data types
+• Legacy Migration: Gradual transition from old schema
+• Background Processing: Distributed AI analysis via PGBoss
+end note
+
+note as migration_note
+Schema Evolution
+====
+Major Changes in Rebase:
+• Removed: people, contacts, places, locations, things, embeddings tables
+• Added: Entity graph system (entities, relationships, communications)
+• Added: Digital footprint tracking (browser_activity, screen_captures)  
+• Added: Device management (devices, sensors)
+• Enhanced: Actions with priority field
+• Restructured: Message-file relationships (message_files table)
+• Migration: Legacy tables marked for gradual transition
 end note
 
 @enduml
