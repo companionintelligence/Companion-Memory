@@ -182,16 +182,7 @@ init: ## Initialize repository after checkout
 		printf "\t$(RED)✗$(RESET) ollama model '$$MODEL' is not yet pulled\n\n"; \
 		exit 1; \
 	fi
-
-	@HOST=dev.companionintelligence.com; \
-	IP=$$(ping -c 1 -W 1 $$HOST | grep -oE '\(([0-9:.]+)\)' | head -n1 | tr -d '()'); \
-	if [ "$$IP" = "127.0.0.1" ] || [ "$$IP" = "::1" ]; then \
-		printf "$(GREEN)✓$(RESET) $$HOST resolves to localhost ($$IP)\n\n"; \
-	else \
-		printf "$(RED)✗$(RESET) $$HOST resolves to $$IP (not localhost)\n\n"; \
-		exit 1; \
-	fi
-
+	
 	@corepack enable
 	@corepack prepare yarn@$$(grep '"packageManager"' package.json | cut -d@ -f2 | tr -d '", ') --activate
 	@which asdf >/dev/null && asdf reshim nodejs || printf "\n$(YELLOW)•$(RESET) asdf binary not found, skipping reshim step...\n\n"
