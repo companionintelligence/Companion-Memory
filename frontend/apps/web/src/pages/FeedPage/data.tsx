@@ -45,7 +45,7 @@ export const actionInsightData: FeedItem[] = [
         </div>
       </div>
     ),
-    tags: ['Insights', 'Family', 'Analytics'],
+    tags: ['Insights', 'Family', 'Knowledge'],
   },
   {
     id: 'action-2',
@@ -90,7 +90,7 @@ export const actionInsightData: FeedItem[] = [
         </div>
       </div>
     ),
-    tags: ['Productivity', 'Analytics', 'Patterns'],
+    tags: ['Productivity', 'Knowledge', 'Patterns'],
   },
   {
     id: 'action-3',

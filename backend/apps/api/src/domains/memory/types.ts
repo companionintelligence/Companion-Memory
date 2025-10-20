@@ -2,16 +2,7 @@ import type { Point } from 'typeorm';
 
 export interface Memory {
   id: string;
-  type:
-    | 'event'
-    | 'content'
-    | 'thing'
-    | 'person'
-    | 'contact'
-    | 'place'
-    | 'concept'
-    | 'communication'
-    | 'other';
+  type: string;
   title: string;
   description: string | null;
   timestamp: Date;

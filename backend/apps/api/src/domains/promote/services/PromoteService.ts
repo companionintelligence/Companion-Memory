@@ -171,6 +171,14 @@ export class PromoteService {
             content: apiLog.content,
           });
           break;
+        case ApiLogScopes.OUTLOOK_CALENDAR:
+          await this.eventService.send(Events.PROMOTE_OUTLOOK_CALENDAR_EVENTS, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
       }
 
       // Mark the API log as processed after queuing

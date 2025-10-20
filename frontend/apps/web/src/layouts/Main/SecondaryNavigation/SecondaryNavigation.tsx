@@ -62,8 +62,8 @@ const CONTENT = [
 
 const SYSTEM = [
   {
-    name: 'Analytics',
-    url: '/analytics',
+    name: 'Knowledge',
+    url: '/knowledge',
     icon: ChartPie,
   },
   {

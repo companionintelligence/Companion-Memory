@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
 import { z } from 'zod';
+
+import { GraphNodeEntity, GraphQueryService, GraphReadService } from '@ci/domains/graph';
 
 import { BaseTool } from '../../core/BaseTool';
 import type { ToolExecutionContext } from '../../core/types';
@@ -35,19 +35,40 @@ interface GetEntertainmentPreferencesOutput {
   personName: string;
 }
 
+const MEDIA_TYPE_MAP: Record<string, string[]> = {
+  movies: ['movie_genre', 'film_style'],
+  tv: ['tv_genre', 'tv_style'],
+  music: ['music_genre', 'music_style'],
+  books: ['book_genre', 'literary_genre'],
+};
+
+const RELATIONSHIP_DESCRIPTOR_PATTERNS: Array<{
+  keywords: string[];
+  relationshipTypes: string[];
+}> = [
+  {
+    keywords: ['wife', 'husband', 'spouse', 'partner', 'significant other'],
+    relationshipTypes: ['SPOUSE', 'PARTNER', 'ROMANTIC_PARTNER'],
+  },
+  {
+    keywords: ['mother', 'mom', 'father', 'dad', 'parent'],
+    relationshipTypes: ['PARENT_OF', 'CHILD_OF'],
+  },
+  {
+    keywords: ['son', 'daughter', 'child', 'kid', 'children', 'kids'],
+    relationshipTypes: ['PARENT_OF', 'CHILD_OF'],
+  },
+  { keywords: ['brother', 'sister', 'sibling'], relationshipTypes: ['SIBLING_OF'] },
+  { keywords: ['friend', 'best friend', 'buddy'], relationshipTypes: ['FRIEND', 'KNOWS'] },
+  {
+    keywords: ['colleague', 'coworker', 'boss', 'manager'],
+    relationshipTypes: ['WORKS_WITH', 'COLLEAGUE'],
+  },
+];
+
 /**
- * Tool to retrieve entertainment preferences from the graph database
+ * Tool to retrieve entertainment preferences from the graph
  * Focuses on movies, TV, music, and books for recommendation systems
- *
- * FUTURE INTEGRATIONS PLANNED:
- * - Movie theater APIs (Fandango, AMC) for current showtimes
- * - TV guide APIs for current programming
- * - Music streaming APIs (Spotify, Apple Music)
- * - Review aggregation APIs (Rotten Tomatoes, Metacritic)
- *
- * This tool serves as the foundation for understanding user preferences
- * before querying external entertainment APIs for personalized recommendations.
- * *Meant to be used in conjunction with GetStreamingAvailabilityTool*
  */
 @Injectable()
 export class GetEntertainmentPreferencesTool extends BaseTool<
@@ -125,8 +146,8 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
   };
 
   constructor(
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
+    private readonly graphQuery: GraphQueryService,
+    private readonly graphRead: GraphReadService,
   ) {
     super();
   }
@@ -143,15 +164,10 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
       throw new Error('User context is required to load entertainment preferences');
     }
 
-    // Determine target person
-    let targetPersonId: string | null = null;
-    let targetPersonName = 'Current User';
-
     const ownerUserId = context.userId;
+    const userProfile = await this.resolveUserProfile(ownerUserId);
 
-    const userProfile = await this.loadUserGraphProfile(ownerUserId);
-
-    if (!userProfile) {
+    if (!userProfile?.entityId) {
       return {
         preferences: [],
         dislikes: [],
@@ -162,19 +178,12 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
       };
     }
 
-    if (!userProfile.entityId) {
-      return {
-        preferences: [],
-        dislikes: [],
-        totalPreferences: 0,
-        totalDislikes: 0,
-        personId: '',
-        personName: userProfile.username || 'Current User',
-      };
-    }
+    let targetPersonId = userProfile.entityId;
+    let targetPersonName = userProfile.username ?? 'Current User';
 
     if (input.personName) {
-      const resolved = await this.resolvePersonEntity(userProfile.entityId, ownerUserId, input.personName);
+      const resolved = await this.resolvePersonEntity(ownerUserId, targetPersonId, input.personName);
+
       if (!resolved) {
         return {
           preferences: [],
@@ -182,93 +191,59 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
           totalPreferences: 0,
           totalDislikes: 0,
           personId: '',
-          personName: input.personName + ' (not found)',
+          personName: `${input.personName} (not found)`,
         };
       }
 
       targetPersonId = resolved.entityId;
       targetPersonName = resolved.name ?? input.personName;
-    } else {
-      targetPersonId = userProfile.entityId;
-      targetPersonName = userProfile.username || 'Current User';
     }
 
-    if (!targetPersonId) {
+    const relationshipSummaries = await this.graphRead.getPreferences(ownerUserId, {
+      personEntityId: targetPersonId,
+    });
+
+    if (relationshipSummaries.length === 0) {
       return {
         preferences: [],
         dislikes: [],
         totalPreferences: 0,
         totalDislikes: 0,
-        personId: '',
+        personId: targetPersonId,
         personName: targetPersonName,
       };
     }
 
-    // Build media type filter
-    const mediaFilter = this.buildMediaTypeFilter(input.mediaType);
+    const mediaFilter = this.buildMediaTypeSet(input.mediaType);
 
-    // Query preferences
-    const prefersQuery = `
-      SELECT 
-        e.entity_id,
-        e.entity_type,
-        e.name,
-        e.properties,
-        r.strength,
-        'PREFERS' as relationship
-      FROM relationships r
-      JOIN entities e ON r.to_entity_id = e.entity_id
-      WHERE r.from_entity_id = $1
-        AND r.relationship_type = 'PREFERS'
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.owner_user_id = $2
-        ${mediaFilter}
-      ORDER BY r.strength DESC, e.name ASC
-    `;
+    const includeContext = input.includeContext;
+    const preferences: EntertainmentPreference[] = [];
+    const dislikes: EntertainmentPreference[] = [];
 
-    // Query dislikes
-    const dislikesQuery = `
-      SELECT 
-        e.entity_id,
-        e.entity_type,
-        e.name,
-        e.properties,
-        r.strength,
-        'DISLIKES' as relationship
-      FROM relationships r
-      JOIN entities e ON r.to_entity_id = e.entity_id
-      WHERE r.from_entity_id = $1
-        AND r.relationship_type = 'DISLIKES'
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.owner_user_id = $2
-        ${mediaFilter}
-      ORDER BY r.strength DESC, e.name ASC
-    `;
+    for (const summary of relationshipSummaries) {
+      const conceptType = summary.type.toLowerCase();
+      if (mediaFilter && !mediaFilter.has(conceptType)) {
+        continue;
+      }
 
-    const [prefersResult, dislikesResult] = await Promise.all([
-      this.dataSource.query(prefersQuery, [targetPersonId, ownerUserId]),
-      this.dataSource.query(dislikesQuery, [targetPersonId, ownerUserId]),
-    ]);
+      const item: EntertainmentPreference = {
+        id: summary.entityId,
+        type: conceptType,
+        name: summary.name ?? conceptType,
+        strength: summary.strength,
+        relationship: summary.relationship,
+        properties: includeContext ? (summary.properties ?? undefined) : undefined,
+      };
 
-    const preferences: EntertainmentPreference[] = prefersResult.map((row: any) => ({
-      id: row.entity_id,
-      type: row.entity_type,
-      name: row.name,
-      strength: parseFloat(row.strength),
-      relationship: 'PREFERS' as const,
-      properties: input.includeContext ? row.properties : undefined,
-    }));
+      if (item.relationship === 'PREFERS') {
+        preferences.push(item);
+      } else {
+        dislikes.push(item);
+      }
+    }
 
-    const dislikes: EntertainmentPreference[] = dislikesResult.map((row: any) => ({
-      id: row.entity_id,
-      type: row.entity_type,
-      name: row.name,
-      strength: parseFloat(row.strength),
-      relationship: 'DISLIKES' as const,
-      properties: input.includeContext ? row.properties : undefined,
-    }));
+    preferences.sort((a, b) => b.strength - a.strength);
+    dislikes.sort((a, b) => b.strength - a.strength);
 
     return {
       preferences,
@@ -280,78 +255,35 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
     };
   }
 
-  private async loadUserGraphProfile(
-    userId: string,
-  ): Promise<{ entityId: string | null; username: string | null } | null> {
-    const query = `
-      SELECT entity_id, COALESCE(username, name) AS display_name
-      FROM users
-      WHERE id = $1
-    `;
-
-    const result = await this.dataSource.query(query, [userId]);
-
-    if (result.length === 0) {
-      return null;
-    }
-
-    let entityId: string | null = result[0].entity_id ?? null;
-
-    if (!entityId) {
-      const linkedQuery = `
-        SELECT entity_id
-        FROM entities
-        WHERE linked_table = 'users'
-          AND linked_id = $1
-          AND is_active = TRUE
-          AND owner_user_id = $2
-        LIMIT 1
-      `;
-
-      const linkedResult = await this.dataSource.query(linkedQuery, [userId, userId]);
-      if (linkedResult.length > 0) {
-        entityId = linkedResult[0].entity_id;
-
-        await this.dataSource.query(`UPDATE users SET entity_id = $2 WHERE id = $1`, [userId, entityId]);
-      }
+  private async resolveUserProfile(
+    ownerUserId: string,
+  ): Promise<{ entityId: string | null; username: string | null }> {
+    const node = await this.graphQuery.getUserEntity(ownerUserId);
+    if (!node) {
+      return {
+        entityId: null,
+        username: null,
+      };
     }
 
     return {
-      entityId,
-      username: result[0].display_name ?? null,
+      entityId: node.entity_id,
+      username: node.name ?? null,
     };
   }
 
   private async resolvePersonEntity(
-    userEntityId: string,
     ownerUserId: string,
+    userEntityId: string,
     personName: string,
-  ): Promise<{ entityId: string; name: string | null } | null> {
+  ): Promise<{ entityId: string; name?: string } | null> {
     const lowerName = personName.toLowerCase().trim();
 
-    const relationshipPatterns: Array<{ patterns: string[]; relationshipTypes: string[] }> = [
-      {
-        patterns: ['wife', 'husband', 'spouse', 'partner', 'significant other'],
-        relationshipTypes: ['SPOUSE', 'PARTNER', 'ROMANTIC_PARTNER'],
-      },
-      {
-        patterns: ['mother', 'mom', 'father', 'dad', 'parent'],
-        relationshipTypes: ['PARENT_OF', 'CHILD_OF'],
-      },
-      { patterns: ['son', 'daughter', 'child', 'kid'], relationshipTypes: ['PARENT_OF', 'CHILD_OF'] },
-      { patterns: ['brother', 'sister', 'sibling'], relationshipTypes: ['SIBLING_OF'] },
-      { patterns: ['friend', 'best friend', 'buddy'], relationshipTypes: ['FRIEND', 'KNOWS'] },
-      {
-        patterns: ['colleague', 'coworker', 'boss', 'manager'],
-        relationshipTypes: ['WORKS_WITH', 'COLLEAGUE'],
-      },
-    ];
-
-    for (const { patterns, relationshipTypes } of relationshipPatterns) {
-      if (patterns.some((pattern) => lowerName.includes(pattern))) {
+    for (const { keywords, relationshipTypes } of RELATIONSHIP_DESCRIPTOR_PATTERNS) {
+      if (keywords.some((keyword) => lowerName.includes(keyword))) {
         const candidate = await this.findRelatedEntityByRelationships(
-          userEntityId,
           ownerUserId,
+          userEntityId,
           relationshipTypes,
         );
         if (candidate) {
@@ -360,113 +292,155 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
       }
     }
 
-    return this.findRelatedEntityByName(userEntityId, ownerUserId, lowerName);
+    return this.findRelatedEntityByName(ownerUserId, userEntityId, lowerName);
   }
 
   private async findRelatedEntityByRelationships(
-    userEntityId: string,
     ownerUserId: string,
+    userEntityId: string,
     relationshipTypes: string[],
-  ): Promise<{ entityId: string; name: string | null } | null> {
+  ): Promise<{ entityId: string; name?: string } | null> {
     if (relationshipTypes.length === 0) {
       return null;
     }
 
-    const query = `
-      SELECT
-        CASE WHEN r.from_entity_id = $1 THEN r.to_entity_id ELSE r.from_entity_id END AS entity_id,
-        e.name
-      FROM relationships r
-      JOIN entities e ON e.entity_id = CASE WHEN r.from_entity_id = $1 THEN r.to_entity_id ELSE r.from_entity_id END
-      WHERE (r.from_entity_id = $1 OR r.to_entity_id = $1)
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.is_active = TRUE
-        AND e.entity_type = 'Person'
-        AND e.owner_user_id = $2
-        AND r.relationship_type = ANY($3::text[])
-      ORDER BY r.strength DESC NULLS LAST, e.name ASC
-      LIMIT 1
-    `;
+    const relationships = await this.graphQuery.getRelationships(ownerUserId, {
+      entityIds: [userEntityId],
+      relationshipTypes,
+      direction: 'both',
+    });
 
-    const result = await this.dataSource.query(query, [userEntityId, ownerUserId, relationshipTypes]);
+    if (relationships.length === 0) {
+      return null;
+    }
 
-    if (result.length === 0) {
+    relationships.sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0));
+
+    const otherIds = Array.from(
+      new Set(
+        relationships.map((rel) =>
+          rel.from_entity_id === userEntityId ? rel.to_entity_id : rel.from_entity_id,
+        ),
+      ),
+    );
+
+    const nodes = await this.graphQuery.getNodesByIds(ownerUserId, otherIds);
+    const person = nodes.find((node) => node.entity_type === 'Person');
+
+    if (!person) {
       return null;
     }
 
     return {
-      entityId: result[0].entity_id,
-      name: result[0].name,
+      entityId: person.entity_id,
+      name: person.name ?? undefined,
     };
   }
 
   private async findRelatedEntityByName(
-    userEntityId: string,
     ownerUserId: string,
+    userEntityId: string,
     lowerName: string,
-  ): Promise<{ entityId: string; name: string | null } | null> {
+  ): Promise<{ entityId: string; name?: string } | null> {
     if (!lowerName) {
       return null;
     }
 
-    const likeValue = `%${lowerName}%`;
+    const traversal = await this.graphQuery.traverseGraph(ownerUserId, [userEntityId], {
+      relationshipTypes: [
+        'SPOUSE',
+        'PARTNER',
+        'ROMANTIC_PARTNER',
+        'PARENT_OF',
+        'CHILD_OF',
+        'SIBLING_OF',
+        'FAMILY_MEMBER',
+        'FRIEND',
+        'KNOWS',
+        'WORKS_WITH',
+        'COLLEAGUE',
+      ],
+      direction: 'both',
+      maxDepth: 1,
+      maxNodes: 75,
+      maxEdges: 150,
+    });
 
-    const query = `
-      SELECT
-        CASE WHEN r.from_entity_id = $1 THEN r.to_entity_id ELSE r.from_entity_id END AS entity_id,
-        e.name,
-        r.strength
-      FROM relationships r
-      JOIN entities e ON e.entity_id = CASE WHEN r.from_entity_id = $1 THEN r.to_entity_id ELSE r.from_entity_id END
-      WHERE (r.from_entity_id = $1 OR r.to_entity_id = $1)
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.is_active = TRUE
-        AND e.entity_type = 'Person'
-        AND e.owner_user_id = $2
-        AND (
-          LOWER(e.name) = $3
-          OR LOWER(e.name) LIKE $4
-          OR LOWER(e.properties->>'first_name') = $3
-          OR LOWER(e.properties->>'last_name') = $3
-        )
-      ORDER BY r.strength DESC NULLS LAST, e.name ASC
-      LIMIT 1
-    `;
+    const candidates = Array.from(traversal.nodes.values()).filter(
+      (node) => node.entity_id !== userEntityId && node.entity_type === 'Person',
+    );
 
-    const result = await this.dataSource.query(query, [userEntityId, ownerUserId, lowerName, likeValue]);
+    const exactMatch = candidates.find((node) => node.name?.toLowerCase() === lowerName);
+    if (exactMatch) {
+      return {
+        entityId: exactMatch.entity_id,
+        name: exactMatch.name ?? undefined,
+      };
+    }
 
-    if (result.length === 0) {
+    const partialMatch = candidates.find(
+      (node) =>
+        (node.name ?? '').toLowerCase().includes(lowerName) ||
+        this.extractNameFragments(node).some((value) => value.includes(lowerName)),
+    );
+
+    if (partialMatch) {
+      return {
+        entityId: partialMatch.entity_id,
+        name: partialMatch.name ?? undefined,
+      };
+    }
+
+    const fallbackNodes = await this.graphQuery.getNodes(ownerUserId, {
+      entityType: 'Person',
+      nameContains: lowerName,
+      limit: 5,
+    });
+
+    if (fallbackNodes.length === 0) {
       return null;
     }
 
+    const bestMatch =
+      fallbackNodes.find((node) => node.name?.toLowerCase() === lowerName) ?? fallbackNodes[0];
+
     return {
-      entityId: result[0].entity_id,
-      name: result[0].name,
+      entityId: bestMatch.entity_id,
+      name: bestMatch.name ?? undefined,
     };
   }
 
-  private buildMediaTypeFilter(mediaType: string): string {
-    if (mediaType === 'all') {
-      return '';
+  private buildMediaTypeSet(mediaType: string): Set<string> | null {
+    if (!mediaType || mediaType === 'all') {
+      return new Set(
+        Object.values(MEDIA_TYPE_MAP)
+          .flat()
+          .map((type) => type.toLowerCase()),
+      );
     }
 
-    const typeMap: Record<string, string[]> = {
-      movies: ['movie_genre', 'film_style'],
-      tv: ['tv_genre', 'tv_style'],
-      music: ['music_genre', 'music_style'],
-      books: ['book_genre', 'literary_genre'],
-    };
-
-    const types = typeMap[mediaType] || [];
-    if (types.length === 0) {
-      return '';
+    const types = MEDIA_TYPE_MAP[mediaType];
+    if (!types || types.length === 0) {
+      return null;
     }
 
-    const typeList = types.map((t) => `'${t}'`).join(', ');
+    return new Set(types.map((type) => type.toLowerCase()));
+  }
 
-    return `AND e.properties->>'type' IN (${typeList})`;
+  private extractNameFragments(node: GraphNodeEntity): string[] {
+    const output: string[] = [];
+    const first = node.properties?.first_name;
+    const last = node.properties?.last_name;
+
+    if (typeof first === 'string' && first.trim()) {
+      output.push(first.toLowerCase());
+    }
+
+    if (typeof last === 'string' && last.trim()) {
+      output.push(last.toLowerCase());
+    }
+
+    return output;
   }
 
   protected sanitizeInputForLogging(input: unknown): any {

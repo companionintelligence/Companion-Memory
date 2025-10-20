@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
 import { z } from 'zod';
+
+import { GraphQueryService, GraphReadService, GraphNodeEntity } from '@ci/domains/graph';
 
 import { BaseTool } from '../../core/BaseTool';
 import type { ToolExecutionContext } from '../../core/types';
@@ -36,17 +36,45 @@ interface GetUserPreferencesOutput {
   totalDislikes: number;
   personId: string;
   personName: string;
-  debugInfo?: {
-    userId: string;
-    entityLookupMethod: string;
-    queryInfo: string;
-  };
+  debugInfo?: DebugInfo;
 }
+
+interface DebugInfo {
+  userId: string;
+  entityLookupMethod: string;
+  queryInfo: string;
+}
+
+const CATEGORY_TYPE_MAP: Record<string, string[]> = {
+  food: ['food', 'cuisine', 'dietary_preference', 'food_category'],
+  entertainment: ['movie_genre', 'tv_genre', 'book_genre'],
+  activity: ['activity', 'sport', 'hobby'],
+  beverage: ['beverage', 'drink'],
+  music: ['music_genre', 'music_style'],
+};
+
+const RELATIONSHIP_DESCRIPTOR_PATTERNS: Array<{
+  keywords: string[];
+  relationshipTypes: string[];
+}> = [
+  {
+    keywords: ['wife', 'husband', 'spouse', 'partner', 'significant other'],
+    relationshipTypes: ['SPOUSE', 'PARTNER', 'ROMANTIC_PARTNER'],
+  },
+  {
+    keywords: ['mother', 'mom', 'father', 'dad', 'parent'],
+    relationshipTypes: ['PARENT_OF', 'CHILD_OF'],
+  },
+  {
+    keywords: ['son', 'daughter', 'child', 'kid', 'children', 'kids'],
+    relationshipTypes: ['PARENT_OF', 'CHILD_OF'],
+  },
+  { keywords: ['brother', 'sister', 'sibling'], relationshipTypes: ['SIBLING_OF'] },
+];
 
 /**
  * Tool to retrieve user preferences from the graph database
- * Uses the entity-relationship graph to fetch PREFERS and DISLIKES relationships
- * Supports querying for current user or family members (e.g., "my wife")
+ * Uses the event-driven graph domain for reads via GraphQueryService
  */
 @Injectable()
 export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, GetUserPreferencesOutput> {
@@ -122,8 +150,8 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
   };
 
   constructor(
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
+    private readonly graphQuery: GraphQueryService,
+    private readonly graphRead: GraphReadService,
   ) {
     super();
   }
@@ -136,24 +164,41 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     context: ToolExecutionContext,
     input: GetUserPreferencesInput,
   ): Promise<GetUserPreferencesOutput> {
-    let targetPersonId: string | null = null;
-    let targetPersonName: string = 'Current User';
-    const debugInfo: any = {
-      userId: context.userId || 'none',
-      entityLookupMethod: '',
-      queryInfo: '',
-    };
-
     if (!context.userId) {
       throw new Error('User context is required to load preferences');
     }
 
     const ownerUserId = context.userId;
+    const debugInfo: DebugInfo = {
+      userId: ownerUserId,
+      entityLookupMethod: '',
+      queryInfo: '',
+    };
+
+    const userNode = await this.resolveUserEntity(ownerUserId);
+    if (!userNode) {
+      debugInfo.queryInfo = 'User entity not found in graph';
+
+      return {
+        preferences: [],
+        dislikes: [],
+        totalPreferences: 0,
+        totalDislikes: 0,
+        personId: '',
+        personName: 'User not found',
+        debugInfo,
+      };
+    }
+
+    let targetPersonId = userNode.entityId;
+    let targetPersonName = userNode.name ?? 'Current User';
+    debugInfo.entityLookupMethod = 'current user entity';
 
     if (input.personName) {
       debugInfo.entityLookupMethod = 'personName resolution';
-      targetPersonId = await this.resolvePersonEntity(ownerUserId, input.personName);
-      if (!targetPersonId) {
+      const resolved = await this.resolvePersonEntity(ownerUserId, targetPersonId, input.personName);
+
+      if (!resolved) {
         debugInfo.queryInfo = `Person '${input.personName}' not found in graph relationships`;
 
         return {
@@ -162,244 +207,257 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
           totalPreferences: 0,
           totalDislikes: 0,
           personId: '',
-          personName: input.personName + ' (not found)',
+          personName: `${input.personName} (not found)`,
           debugInfo,
         };
       }
 
-      targetPersonName = input.personName;
-    } else {
-      debugInfo.entityLookupMethod = 'current user entity_id';
-      const userQuery = `
-        SELECT entity_id, username
-        FROM users
-        WHERE id = $1
-      `;
-      const userResult = await this.dataSource.query(userQuery, [ownerUserId]);
-
-      if (userResult.length === 0) {
-        debugInfo.queryInfo = `User ${ownerUserId} not found in users table`;
-
-        return {
-          preferences: [],
-          dislikes: [],
-          totalPreferences: 0,
-          totalDislikes: 0,
-          personId: '',
-          personName: 'User not found',
-          debugInfo,
-        };
-      }
-
-      if (!userResult[0].entity_id) {
-        debugInfo.queryInfo = `User ${ownerUserId} has no entity_id set. User needs to be linked to a Person entity.`;
-
-        return {
-          preferences: [],
-          dislikes: [],
-          totalPreferences: 0,
-          totalDislikes: 0,
-          personId: '',
-          personName: userResult[0].username || 'Current User',
-          debugInfo,
-        };
-      }
-
-      targetPersonId = userResult[0].entity_id;
-      targetPersonName = userResult[0].username || 'Current User';
+      targetPersonId = resolved.entityId;
+      targetPersonName = resolved.name ?? input.personName;
     }
 
-    const categoryFilter = this.buildCategoryFilter(input.category);
-    debugInfo.queryInfo = `Querying entity ${targetPersonId} with category filter: ${input.category}`;
+    const relationshipSummaries = await this.graphRead.getPreferences(ownerUserId, {
+      personEntityId: targetPersonId,
+    });
 
-    // Query for PREFERS relationships
-    // NOTE: Filter by properties->>'type' because all preferences have entity_type='Concept'
-    const prefersQuery = `
-      SELECT 
-        e.entity_id,
-        e.properties->>'type' as type,
-        e.name,
-        e.properties,
-        r.strength,
-        'PREFERS' as relationship
-      FROM relationships r
-      JOIN entities e ON r.to_entity_id = e.entity_id
-      WHERE r.from_entity_id = $1
-        AND r.relationship_type = 'PREFERS'
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.owner_user_id = $2
-        ${categoryFilter}
-      ORDER BY r.strength DESC, e.name ASC
-    `;
+    if (relationshipSummaries.length === 0) {
+      debugInfo.queryInfo = 'No PREFERS or DISLIKES relationships found for this entity';
 
-    // Query for DISLIKES relationships
-    const dislikesQuery = `
-      SELECT 
-        e.entity_id,
-        e.properties->>'type' as type,
-        e.name,
-        e.properties,
-        r.strength,
-        'DISLIKES' as relationship
-      FROM relationships r
-      JOIN entities e ON r.to_entity_id = e.entity_id
-      WHERE r.from_entity_id = $1
-        AND r.relationship_type = 'DISLIKES'
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.owner_user_id = $2
-        ${categoryFilter}
-      ORDER BY r.strength DESC, e.name ASC
-    `;
-
-    const [prefersResult, dislikesResult] = await Promise.all([
-      this.dataSource.query(prefersQuery, [targetPersonId, ownerUserId]),
-      this.dataSource.query(dislikesQuery, [targetPersonId, ownerUserId]),
-    ]);
-
-    const preferences: PreferenceNode[] = prefersResult.map((row: any) => ({
-      id: row.entity_id,
-      type: row.type || 'unknown',
-      name: row.name,
-      strength: parseFloat(row.strength),
-      relationship: 'PREFERS' as const,
-      properties: input.includeContext ? row.properties : undefined,
-    }));
-
-    const dislikes: PreferenceNode[] = dislikesResult.map((row: any) => ({
-      id: row.entity_id,
-      type: row.type || 'unknown',
-      name: row.name,
-      strength: parseFloat(row.strength),
-      relationship: 'DISLIKES' as const,
-      properties: input.includeContext ? row.properties : undefined,
-    }));
-
-    if (preferences.length === 0 && dislikes.length === 0) {
-      debugInfo.queryInfo += ` | No PREFERS or DISLIKES relationships found for this entity.`;
+      return {
+        preferences: [],
+        dislikes: [],
+        totalPreferences: 0,
+        totalDislikes: 0,
+        personId: targetPersonId,
+        personName: targetPersonName,
+        debugInfo,
+      };
     }
+
+    const allowedTypes = this.buildCategoryTypeSet(input.category);
+    const includeContext = input.includeContext;
+
+    const preferences: PreferenceNode[] = [];
+    const dislikes: PreferenceNode[] = [];
+
+    for (const summary of relationshipSummaries) {
+      const normalizedType = summary.type.toLowerCase();
+      if (allowedTypes && !allowedTypes.has(normalizedType)) {
+        continue;
+      }
+
+      const payload: PreferenceNode = {
+        id: summary.entityId,
+        type: normalizedType,
+        name: summary.name ?? normalizedType,
+        strength: summary.strength,
+        relationship: summary.relationship,
+        properties: includeContext ? (summary.properties ?? undefined) : undefined,
+      };
+
+      if (payload.relationship === 'PREFERS') {
+        preferences.push(payload);
+      } else {
+        dislikes.push(payload);
+      }
+    }
+
+    preferences.sort((a, b) => b.strength - a.strength);
+    dislikes.sort((a, b) => b.strength - a.strength);
+
+    debugInfo.queryInfo = `Found ${preferences.length} preferences and ${dislikes.length} dislikes`;
 
     return {
       preferences,
       dislikes,
       totalPreferences: preferences.length,
       totalDislikes: dislikes.length,
-      personId: targetPersonId!,
+      personId: targetPersonId,
       personName: targetPersonName,
       debugInfo,
     };
   }
 
-  /**
-   * Resolve a person name to an entity ID
-   * Uses the graph relationships table to find family members
-   */
-  private async resolvePersonEntity(userId: string, personName: string): Promise<string | null> {
-    const lowerName = personName.toLowerCase().trim();
-
-    // First, get the user's entity_id
-    const userQuery = `
-      SELECT entity_id FROM users WHERE id = $1
-    `;
-    const userResult = await this.dataSource.query(userQuery, [userId]);
-    if (userResult.length === 0 || !userResult[0].entity_id) {
+  private buildCategoryTypeSet(category: string): Set<string> | null {
+    if (!category || category === 'all') {
       return null;
     }
 
-    const userEntityId = userResult[0].entity_id;
+    const types = CATEGORY_TYPE_MAP[category];
+    if (!types || types.length === 0) {
+      return null;
+    }
 
-    // Check for relationship descriptors and map to graph relationship types
-    const relationshipPatterns: Record<string, { keywords: string[]; relTypes: string[] }> = {
-      spouse: {
-        keywords: ['wife', 'husband', 'spouse', 'partner'],
-        relTypes: ['SPOUSE'],
-      },
-      parent: {
-        keywords: ['mother', 'mom', 'father', 'dad'],
-        relTypes: ['PARENT_OF'], // User is child, looking for parent
-      },
-      child: {
-        keywords: ['son', 'daughter', 'child', 'kid', 'children', 'kids'], //I know a string map is lazy but we're in this for demos right?
-        relTypes: ['CHILD_OF'], // User is parent, looking for child
-      },
-      sibling: {
-        keywords: ['brother', 'sister', 'sibling'],
-        relTypes: ['SIBLING_OF'],
-      },
+    return new Set(types.map((type) => type.toLowerCase()));
+  }
+
+  private async resolveUserEntity(ownerUserId: string): Promise<{ entityId: string; name?: string } | null> {
+    const node = await this.graphQuery.getUserEntity(ownerUserId);
+    if (!node) {
+      return null;
+    }
+
+    return {
+      entityId: node.entity_id,
+      name: node.name ?? undefined,
     };
+  }
 
-    // Check if query matches a relationship descriptor
-    for (const config of Object.values(relationshipPatterns)) {
-      if (config.keywords.some((keyword) => lowerName.includes(keyword))) {
-        // Search in relationships table for this type of relationship
-        const relTypeList = config.relTypes.map((t) => `'${t}'`).join(',');
+  private async resolvePersonEntity(
+    ownerUserId: string,
+    userEntityId: string,
+    personName: string,
+  ): Promise<{ entityId: string; name?: string } | null> {
+    const lowerName = personName.toLowerCase().trim();
 
-        const query = `
-          SELECT e.entity_id, e.name
-          FROM relationships r
-          JOIN entities e ON e.entity_id = r.to_entity_id
-          WHERE r.from_entity_id = $1
-            AND r.relationship_type IN (${relTypeList})
-            AND r.is_active = TRUE
-            AND r.owner_user_id = $2
-            AND e.entity_type = 'Person'
-            AND e.owner_user_id = $2
-          LIMIT 1
-        `;
-
-        const result = await this.dataSource.query(query, [userEntityId, userId]);
-        if (result.length > 0) {
-          return result[0].entity_id ?? null;
+    for (const { keywords, relationshipTypes } of RELATIONSHIP_DESCRIPTOR_PATTERNS) {
+      if (keywords.some((keyword) => lowerName.includes(keyword))) {
+        const candidate = await this.findRelatedEntityByRelationships(
+          ownerUserId,
+          userEntityId,
+          relationshipTypes,
+        );
+        if (candidate) {
+          return candidate;
         }
       }
     }
 
-    // If no relationship descriptor matched, search by name in entities
-    const nameQuery = `
-      SELECT entity_id, name
-      FROM entities
-      WHERE entity_type = 'Person'
-        AND owner_user_id = $3
-        AND (
-          LOWER(name) = $1
-          OR LOWER(name) LIKE $2
-        )
-      LIMIT 1
-    `;
-    const nameResult = await this.dataSource.query(nameQuery, [lowerName, `%${lowerName}%`, userId]);
-    if (nameResult.length > 0) {
-      return nameResult[0].entity_id ?? null;
-    }
-
-    return null;
+    return this.findRelatedEntityByName(ownerUserId, userEntityId, lowerName);
   }
 
-  /**
-   * Build SQL WHERE clause for category filtering
-   * NOTE: Filters by properties->>'type' because all preferences have entity_type='Concept'
-   */
-  private buildCategoryFilter(category: string): string {
-    if (category === 'all') {
-      return '';
+  private async findRelatedEntityByRelationships(
+    ownerUserId: string,
+    userEntityId: string,
+    relationshipTypes: string[],
+  ): Promise<{ entityId: string; name?: string } | null> {
+    if (relationshipTypes.length === 0) {
+      return null;
     }
 
-    const categoryMap: Record<string, string[]> = {
-      food: ['food', 'cuisine', 'dietary_preference', 'food_category'],
-      entertainment: ['movie_genre', 'tv_genre', 'book_genre'],
-      activity: ['activity', 'sport', 'hobby'],
-      beverage: ['beverage', 'drink'],
-      music: ['music_genre', 'music_style'],
+    const relationships = await this.graphQuery.getRelationships(ownerUserId, {
+      entityIds: [userEntityId],
+      relationshipTypes,
+      direction: 'both',
+    });
+
+    if (relationships.length === 0) {
+      return null;
+    }
+
+    relationships.sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0));
+
+    const otherIds = Array.from(
+      new Set(
+        relationships.map((rel) =>
+          rel.from_entity_id === userEntityId ? rel.to_entity_id : rel.from_entity_id,
+        ),
+      ),
+    );
+
+    if (otherIds.length === 0) {
+      return null;
+    }
+
+    const nodes = await this.graphQuery.getNodesByIds(ownerUserId, otherIds);
+    const person = nodes.find((node) => node.entity_type === 'Person');
+
+    if (!person) {
+      return null;
+    }
+
+    return {
+      entityId: person.entity_id,
+      name: person.name ?? undefined,
     };
+  }
 
-    const types = categoryMap[category] || [];
-    if (types.length === 0) {
-      return '';
+  private async findRelatedEntityByName(
+    ownerUserId: string,
+    userEntityId: string,
+    lowerName: string,
+  ): Promise<{ entityId: string; name?: string } | null> {
+    if (!lowerName) {
+      return null;
     }
 
-    const typeList = types.map((t) => `'${t}'`).join(', ');
+    const traversal = await this.graphQuery.traverseGraph(ownerUserId, [userEntityId], {
+      relationshipTypes: [
+        'SPOUSE',
+        'PARTNER',
+        'ROMANTIC_PARTNER',
+        'PARENT_OF',
+        'CHILD_OF',
+        'SIBLING_OF',
+        'FAMILY_MEMBER',
+        'FRIEND',
+        'KNOWS',
+      ],
+      direction: 'both',
+      maxDepth: 1,
+      maxNodes: 50,
+      maxEdges: 100,
+    });
 
-    return `AND e.properties->>'type' IN (${typeList})`;
+    const candidates = Array.from(traversal.nodes.values()).filter(
+      (node) => node.entity_id !== userEntityId && node.entity_type === 'Person',
+    );
+
+    const exactMatch = candidates.find((node) => node.name?.toLowerCase() === lowerName);
+    if (exactMatch) {
+      return {
+        entityId: exactMatch.entity_id,
+        name: exactMatch.name ?? undefined,
+      };
+    }
+
+    const partialMatch = candidates.find(
+      (node) =>
+        (node.name ?? '').toLowerCase().includes(lowerName) ||
+        this.extractNameFromProperties(node).some((value) => value.includes(lowerName)),
+    );
+
+    if (partialMatch) {
+      return {
+        entityId: partialMatch.entity_id,
+        name: partialMatch.name ?? undefined,
+      };
+    }
+
+    const fallbackNodes = await this.graphQuery.getNodes(ownerUserId, {
+      entityType: 'Person',
+      nameContains: lowerName,
+      limit: 5,
+    });
+
+    if (fallbackNodes.length === 0) {
+      return null;
+    }
+
+    const bestMatch =
+      fallbackNodes.find((node) => node.name?.toLowerCase() === lowerName) ?? fallbackNodes[0];
+
+    return {
+      entityId: bestMatch.entity_id,
+      name: bestMatch.name ?? undefined,
+    };
+  }
+
+  private extractNameFromProperties(node: GraphNodeEntity): string[] {
+    const output: string[] = [];
+
+    const first = node.properties?.first_name;
+    const last = node.properties?.last_name;
+
+    if (typeof first === 'string' && first.trim()) {
+      output.push(first.toLowerCase());
+    }
+
+    if (typeof last === 'string' && last.trim()) {
+      output.push(last.toLowerCase());
+    }
+
+    return output;
   }
 
   protected sanitizeInputForLogging(input: unknown): any {

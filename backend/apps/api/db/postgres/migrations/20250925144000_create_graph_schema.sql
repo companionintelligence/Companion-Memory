@@ -107,25 +107,6 @@ CREATE UNIQUE INDEX relationships_unique_directed_idx ON relationships (
     from_entity_id, to_entity_id, relationship_type
 ) WHERE is_active = TRUE;
 
--- migrate:down
--- Drop indexes first
-DROP INDEX IF EXISTS relationships_unique_directed_idx;
-DROP INDEX IF EXISTS relationships_strength_idx;
-DROP INDEX IF EXISTS relationships_bidirectional_idx;
-DROP INDEX IF EXISTS relationships_type_idx;
-DROP INDEX IF EXISTS relationships_to_idx;
-DROP INDEX IF EXISTS relationships_from_idx;
-DROP INDEX IF EXISTS entities_active_idx;
-DROP INDEX IF EXISTS entities_linked_idx;
-DROP INDEX IF EXISTS entities_embedding_idx;
-DROP INDEX IF EXISTS entities_search_idx;
-DROP INDEX IF EXISTS entities_name_idx;
-DROP INDEX IF EXISTS entities_type_idx;
-
--- Drop tables (relationships first due to FK)
-DROP TABLE IF EXISTS relationships;
-DROP TABLE IF EXISTS entities;
-
 
 CREATE OR REPLACE FUNCTION update_entity_outgoing_relationships()
 RETURNS TRIGGER AS $$
@@ -155,3 +136,23 @@ BEGIN
     RETURN NULL; -- For AFTER triggers, the return value is ignored
 END;
 $$ LANGUAGE plpgsql;
+
+
+-- migrate:down
+-- Drop indexes first
+DROP INDEX IF EXISTS relationships_unique_directed_idx;
+DROP INDEX IF EXISTS relationships_strength_idx;
+DROP INDEX IF EXISTS relationships_bidirectional_idx;
+DROP INDEX IF EXISTS relationships_type_idx;
+DROP INDEX IF EXISTS relationships_to_idx;
+DROP INDEX IF EXISTS relationships_from_idx;
+DROP INDEX IF EXISTS entities_active_idx;
+DROP INDEX IF EXISTS entities_linked_idx;
+DROP INDEX IF EXISTS entities_embedding_idx;
+DROP INDEX IF EXISTS entities_search_idx;
+DROP INDEX IF EXISTS entities_name_idx;
+DROP INDEX IF EXISTS entities_type_idx;
+
+-- Drop tables (relationships first due to FK)
+DROP TABLE IF EXISTS relationships;
+DROP TABLE IF EXISTS entities;

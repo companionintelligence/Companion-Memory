@@ -20,7 +20,7 @@ import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
 
 const ActionsPage = lazy(() => import('@/pages/ActionsPage'));
-const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'));
+const KnowledgePage = lazy(() => import('@/pages/AnalyticsPage'));
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const ConnectPage = lazy(() => import('@/pages/ConnectPage'));
 const ConnectionsPage = lazy(() => import('@/pages/ConnectionsPage'));
@@ -159,10 +159,10 @@ function AppRoutes() {
 
         {/* Admin / System */}
         <Route
-          path="/analytics"
+          path="/knowledge"
           element={
             <ProtectedRoute>
-              <AnalyticsPage />
+              <KnowledgePage />
             </ProtectedRoute>
           }
         />

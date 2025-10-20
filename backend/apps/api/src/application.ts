@@ -21,6 +21,7 @@ import { ConnectionsModule } from '@ci/domains/connections';
 import { EtlModule } from '@ci/domains/etl';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { GraphModule } from '@ci/domains/graph';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { JobsModule } from '@ci/domains/jobs';
 import { LLMModule } from '@ci/domains/llm';
@@ -58,6 +59,7 @@ import { UserModule } from '@ci/domains/user';
     OnboardingModule,
     ToolsModule,
     MemoryModule,
+    GraphModule,
     PromoteModule,
     SpeechModule,
     UserModule,

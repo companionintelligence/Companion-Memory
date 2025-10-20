@@ -1,4 +1,8 @@
-import type { OutlookMailSyncState } from '@ci/domains/etl';
+import type {
+  OutlookCalendarSyncState,
+  OutlookCalendarsSyncState,
+  OutlookMailSyncState,
+} from '@ci/domains/etl';
 
 import type { Connection } from '../types';
 
@@ -7,6 +11,20 @@ import type { SyncResponse } from './types';
 
 const OUTLOOK_SKIP_REGEX = /skip=(\d+)(&?)/;
 
+const MAIL_PAGE_SIZE = 50;
+const CALENDAR_PAGE_SIZE = 50;
+
+interface Calendar {
+  id: string;
+  name: string;
+  isDefaultCalendar: boolean;
+  changeKey: string;
+  owner: {
+    name: string;
+    address: string;
+  };
+}
+
 export class MicrosoftClient extends BaseOAuth2Client {
   protected readonly baseUrl = 'https://graph.microsoft.com';
 
@@ -14,7 +32,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
 
   protected readonly tokenEndpoint = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
 
-  protected readonly scopes = ['user.read', 'mail.read', 'offline_access'];
+  protected readonly scopes = ['user.read', 'mail.read', 'calendars.read', 'offline_access'];
 
   protected get clientId() {
     const clientIdVariable = 'MICROSOFT_CLIENT_ID';
@@ -46,29 +64,39 @@ export class MicrosoftClient extends BaseOAuth2Client {
     const responses: SyncResponse[] = [];
 
     // Microsoft Graph - Calendar
-    // try {
-    //   const calendarData = await this.request(connection, '/v1.0/me/calendar/events?$top=10');
-    //
-    //   responses.push({
-    //     success: true,
-    //     message: 'Microsoft Graph - Calendar sync completed successfully',
-    //     data: {
-    //       results: [{ api: 'Microsoft Graph - Calendar', data: calendarData }],
-    //       errors: [],
-    //     },
-    //   });
-    // } catch (error) {
-    //   const errorMsg = `Microsoft Calendar API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    //
-    //   responses.push({
-    //     success: false,
-    //     message: errorMsg,
-    //     data: {
-    //       results: [],
-    //       errors: [errorMsg],
-    //     },
-    //   });
-    // }
+    try {
+      const outlookCalendarsSyncState =
+        (connection.syncState?.outlookCalendars as OutlookCalendarsSyncState) ||
+        ({} as OutlookCalendarsSyncState);
+      const calendarsResults = await this.syncCalendars(connection, outlookCalendarsSyncState);
+
+      for (const response of calendarsResults) {
+        outlookCalendarsSyncState[response.calendarId] = { skip: response.syncState.skip! };
+      }
+
+      responses.push({
+        success: true,
+        message: 'Microsoft Graph - Calendar sync completed successfully',
+        data: {
+          results: [{ api: 'Microsoft Graph - Calendar', data: calendarsResults }],
+          errors: [],
+        },
+        cursor: {
+          outlookCalendars: outlookCalendarsSyncState,
+        },
+      });
+    } catch (error) {
+      const errorMsg = `Microsoft Calendar API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+
+      responses.push({
+        success: false,
+        message: errorMsg,
+        data: {
+          results: [],
+          errors: [errorMsg],
+        },
+      });
+    }
 
     // Microsoft Graph - Mail
     try {
@@ -134,7 +162,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
     const results: Array<{ data: unknown; syncState: OutlookMailSyncState }> = [];
 
     // Full sync - get all messages and establish skip
-    this.logger.log('Performing full Outlook sync', { connectionId: connection.id });
+    this.logger.log('Performing full Outlook Mail sync', { connectionId: connection.id });
 
     let nextLink: string | undefined;
     let nextSkip: string | undefined = syncState?.skip;
@@ -143,7 +171,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
 
     // Get all message IDs first
     do {
-      let endpoint = `/v1.0/me/messages?orderBy=receivedDateTime&top=50`;
+      let endpoint = `/v1.0/me/messages?orderBy=receivedDateTime&top=${MAIL_PAGE_SIZE}`;
       if (nextSkip) {
         endpoint += `&skip=${nextSkip}`;
       }
@@ -194,6 +222,119 @@ export class MicrosoftClient extends BaseOAuth2Client {
       totalPages: pageCount,
       skip: newSyncState.skip,
     });
+
+    return results;
+  }
+
+  async syncCalendars(
+    connection: Connection,
+    syncState: OutlookCalendarsSyncState | null,
+  ): Promise<Array<{ calendarId: string; data: unknown; syncState: OutlookCalendarSyncState }>> {
+    let calendars: Array<Calendar> = [];
+    const results: Array<{ calendarId: string; data: unknown; syncState: OutlookCalendarSyncState }> = [];
+
+    // Full sync - get all events and establish skip
+    this.logger.log('Performing full Outlook Calendar sync', { connectionId: connection.id });
+
+    let nextCalendarsLink: string | undefined;
+    let nextCalendarsSkip: string | null = null;
+    let pageCount = 0;
+
+    // Get all calendars first
+    do {
+      let endpoint = `/v1.0/me/calendars?top=${CALENDAR_PAGE_SIZE}`;
+      if (nextCalendarsSkip) {
+        endpoint += `&skip=${nextCalendarsSkip}`;
+      }
+
+      let response;
+      try {
+        response = (await this.request(connection, endpoint)) as Record<string, unknown>;
+      } catch (e) {
+        console.error('Error fetching calendars', e);
+        throw e;
+      }
+
+      if (response.value) {
+        calendars = calendars.concat(response.value as Calendar[]);
+      }
+
+      nextCalendarsLink = response['@odata.nextLink'] as string | undefined;
+
+      if (nextCalendarsLink) {
+        const regexExec = OUTLOOK_SKIP_REGEX.exec(nextCalendarsLink);
+        if (regexExec) {
+          nextCalendarsSkip = regexExec[1];
+        }
+      }
+
+      pageCount++;
+
+      this.logger.log('Outlook full sync page completed', {
+        connectionId: connection.id,
+        pageNumber: pageCount,
+        hasNextPage: !!nextCalendarsLink,
+      });
+    } while (nextCalendarsLink);
+
+    for (const calendar of calendars) {
+      // Full sync - get all events and establish skip
+      this.logger.log('Performing Outlook Calendar sync for', {
+        connectionId: connection.id,
+        calendarId: calendar.id,
+      });
+
+      const calendarSyncState = syncState?.[calendar.id] || null;
+      let nextPageLink: string | undefined;
+      let nextPageSkip: string | undefined = calendarSyncState?.skip;
+      let totalEvents = nextPageSkip ? parseInt(nextPageSkip) : 0;
+      let calPageCount = 0;
+
+      // Get all calendars first
+      do {
+        let endpoint = `/v1.0/me/calendars/${calendar.id}/events?top=${CALENDAR_PAGE_SIZE}`;
+        if (nextPageSkip) {
+          endpoint += `&skip=${nextPageSkip}`;
+        }
+
+        let response;
+        try {
+          response = (await this.request(connection, endpoint)) as Record<string, unknown>;
+        } catch (e) {
+          console.error('Error fetching calendars', e);
+          throw e;
+        }
+
+        const events = (response.value as unknown[]) || [];
+        nextPageLink = response['@odata.nextLink'] as string | undefined;
+        totalEvents += events.length;
+
+        if (nextPageLink) {
+          const regexExec = OUTLOOK_SKIP_REGEX.exec(nextPageLink);
+          if (regexExec) {
+            nextPageSkip = regexExec[1];
+          }
+        } else {
+          nextPageSkip = totalEvents.toString();
+        }
+
+        calPageCount++;
+
+        this.logger.log('Calendar events full sync page completed', {
+          connectionId: connection.id,
+          totalEvents,
+          pageNumber: calPageCount,
+          hasNextPage: !!nextPageLink,
+        });
+
+        // Create a result for this page (but don't include syncState yet)
+        results.push({
+          calendarId: calendar.id,
+          data: { events, skip: nextPageSkip, pageNumber: calPageCount },
+          syncState: { skip: nextPageSkip },
+        });
+      } while (nextPageLink);
+    }
 
     return results;
   }

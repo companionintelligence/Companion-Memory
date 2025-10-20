@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/services';
-import { GraphUtilityService, GraphNodeEntity } from '@ci/domains/memory';
+import { GraphUtilityService, GraphNodeEntity } from '@ci/domains/graph';
 import { UserEntity } from '@ci/domains/user';
 
 interface ParticipantInfo {

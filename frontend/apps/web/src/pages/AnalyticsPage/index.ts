@@ -1,3 +1,3 @@
-import { AnalyticsPage } from './AnalyticsPage';
+import { KnowledgePage } from './AnalyticsPage';
 
-export default AnalyticsPage;
+export default KnowledgePage;

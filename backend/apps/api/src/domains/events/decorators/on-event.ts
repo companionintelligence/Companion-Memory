@@ -4,12 +4,17 @@ import { OnEvent as BaseOnEvent } from '@nestjs/event-emitter';
 import type { EventPayloads } from '../event-registry';
 import type { EventPayload, Acknowledgement } from '../types';
 
-interface Opts {
+interface ListenerOptions {
+  async?: boolean;
+  promisify?: boolean;
+}
+
+interface Opts extends ListenerOptions {
   autoAcknowledge?: boolean;
 }
 
 export function OnEvent<E extends keyof EventPayloads>(event: E, opts?: Opts) {
-  const { autoAcknowledge = true } = opts ?? {};
+  const { autoAcknowledge = true, ...listenerOptions } = opts ?? {};
 
   const decorator = (target: unknown, key: string | symbol, descriptor: PropertyDescriptor) => {
     if (autoAcknowledge) {
@@ -29,5 +34,10 @@ export function OnEvent<E extends keyof EventPayloads>(event: E, opts?: Opts) {
     }
   };
 
-  return applyDecorators(decorator, BaseOnEvent(event));
+  const hasListenerOptions = Object.keys(listenerOptions).length > 0;
+
+  return applyDecorators(
+    decorator,
+    BaseOnEvent(event, hasListenerOptions ? (listenerOptions as ListenerOptions) : undefined),
+  );
 }

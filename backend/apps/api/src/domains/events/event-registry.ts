@@ -15,7 +15,20 @@ export enum Events {
   PROMOTE_YOUTUBE_DATA = 'PROMOTE_YOUTUBE_DATA',
   PROMOTE_CALENDAR_EVENTS = 'PROMOTE_CALENDAR_EVENTS',
   PROMOTE_GMAIL_MESSAGES = 'PROMOTE_GMAIL_MESSAGES',
+  GRAPH_PERSON_CREATED = 'graph.person.created',
+  GRAPH_FAMILY_MEMBERS_ADDED = 'graph.family.members.added',
+  GRAPH_PREFERENCE_ADDED = 'graph.preference.added',
+  GRAPH_PREFERENCES_ADDED = 'graph.preferences.added',
+  GRAPH_LOCATION_CREATED = 'graph.location.created',
+  GRAPH_VISIT_RECORDED = 'graph.visit.recorded',
+  GRAPH_CONNECTION_CREATED = 'graph.connection.created',
+  GRAPH_NODE_DELETED = 'graph.node.deleted',
+  GRAPH_NODE_UPDATED = 'graph.node.updated',
+  GRAPH_RELATIONSHIP_DELETED = 'graph.relationship.deleted',
+  GRAPH_NODE_UPSERTED = 'graph.node.upserted',
+  GRAPH_RELATIONSHIP_UPSERTED = 'graph.relationship.upserted',
   PROMOTE_OUTLOOK_MAIL_MESSAGES = 'PROMOTE_OUTLOOK_MAIL_MESSAGES',
+  PROMOTE_OUTLOOK_CALENDAR_EVENTS = 'PROMOTE_OUTLOOK_CALENDAR_EVENTS',
 }
 
 interface ApiEnqueuePayload extends EventPayload {
@@ -87,7 +100,127 @@ interface PromoteContactsPayload extends EventPayload {
   content: unknown;
 }
 
+interface GraphRelationshipInput {
+  relationshipId: string;
+  fromEntityId: string;
+  toEntityId: string;
+  relationshipType: string;
+  strength?: number;
+  properties?: Record<string, unknown>;
+  isBidirectional?: boolean;
+  startDate?: string;
+  endDate?: string;
+}
+
+interface GraphPersonCreatedPayload extends EventPayload {
+  ownerId: string;
+  person: {
+    entityId: string;
+    entityType: string;
+    name?: string | null;
+    description?: string | null;
+    properties?: Record<string, unknown>;
+  };
+  relationships?: GraphRelationshipInput[];
+}
+
+interface GraphFamilyMembersAddedPayload extends EventPayload {
+  ownerId: string;
+  members: Array<{
+    entityId: string;
+    entityType: string;
+    name?: string | null;
+    description?: string | null;
+    properties?: Record<string, unknown>;
+    relationships: GraphRelationshipInput[];
+  }>;
+}
+
+interface GraphPreferenceAddedPayload extends EventPayload {
+  ownerId: string;
+  concept: {
+    entityId: string;
+    entityType: string;
+    name?: string | null;
+    description?: string | null;
+    properties?: Record<string, unknown>;
+    ensure?: boolean;
+  };
+  relationship: GraphRelationshipInput;
+}
+
+interface GraphPreferencesAddedPayload extends EventPayload {
+  ownerId: string;
+  preferences: Array<{
+    concept: GraphPreferenceAddedPayload['concept'];
+    relationship: GraphRelationshipInput;
+  }>;
+}
+
+interface GraphLocationCreatedPayload extends EventPayload {
+  ownerId: string;
+  location: {
+    entityId: string;
+    entityType: string;
+    name?: string | null;
+    description?: string | null;
+    properties?: Record<string, unknown>;
+  };
+}
+
+interface GraphVisitRecordedPayload extends EventPayload {
+  ownerId: string;
+  relationship: GraphRelationshipInput;
+}
+
+interface GraphConnectionCreatedPayload extends EventPayload {
+  ownerId: string;
+  relationship: GraphRelationshipInput;
+}
+
+interface GraphNodeDeletedPayload extends EventPayload {
+  ownerId: string;
+  entityId: string;
+}
+
+interface GraphNodeUpdatedPayload extends EventPayload {
+  ownerId: string;
+  entityId: string;
+  nodeName?: string | null;
+  description?: string | null;
+  properties?: Record<string, unknown>;
+}
+
+interface GraphRelationshipDeletedPayload extends EventPayload {
+  ownerId: string;
+  relationshipId: string;
+}
+
+interface GraphNodeUpsertedPayload extends EventPayload {
+  ownerId: string;
+  node: GraphPersonCreatedPayload['person'] & {
+    searchContent?: string | null;
+    linkedTable?: string | null;
+    linkedId?: string | null;
+    mergeProperties?: boolean;
+  };
+}
+
+interface GraphRelationshipUpsertedPayload extends EventPayload {
+  ownerId: string;
+  relationship: GraphRelationshipInput & {
+    mergeProperties?: boolean;
+  };
+}
+
 interface PromoteOutlookMessagesPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteOutlookCalendarEventsPayload extends EventPayload {
   apiLogId: string;
   userId: string;
   connectionId: string;
@@ -107,5 +240,18 @@ export type EventPayloads = {
   [Events.PROMOTE_YOUTUBE_DATA]: PromoteYouTubeDataPayload;
   [Events.PROMOTE_DRIVE_DATA]: PromoteDriveDataPayload;
   [Events.PROMOTE_CONTACTS]: PromoteContactsPayload;
+  [Events.GRAPH_PERSON_CREATED]: GraphPersonCreatedPayload;
+  [Events.GRAPH_FAMILY_MEMBERS_ADDED]: GraphFamilyMembersAddedPayload;
+  [Events.GRAPH_PREFERENCE_ADDED]: GraphPreferenceAddedPayload;
+  [Events.GRAPH_PREFERENCES_ADDED]: GraphPreferencesAddedPayload;
+  [Events.GRAPH_LOCATION_CREATED]: GraphLocationCreatedPayload;
+  [Events.GRAPH_VISIT_RECORDED]: GraphVisitRecordedPayload;
+  [Events.GRAPH_CONNECTION_CREATED]: GraphConnectionCreatedPayload;
+  [Events.GRAPH_NODE_DELETED]: GraphNodeDeletedPayload;
+  [Events.GRAPH_NODE_UPDATED]: GraphNodeUpdatedPayload;
+  [Events.GRAPH_RELATIONSHIP_DELETED]: GraphRelationshipDeletedPayload;
+  [Events.GRAPH_NODE_UPSERTED]: GraphNodeUpsertedPayload;
+  [Events.GRAPH_RELATIONSHIP_UPSERTED]: GraphRelationshipUpsertedPayload;
   [Events.PROMOTE_OUTLOOK_MAIL_MESSAGES]: PromoteOutlookMessagesPayload;
+  [Events.PROMOTE_OUTLOOK_CALENDAR_EVENTS]: PromoteOutlookCalendarEventsPayload;
 };

@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
 import { z } from 'zod';
+
+import { GraphQueryService, GraphReadService } from '@ci/domains/graph';
 
 import { BaseTool } from '../../core/BaseTool';
 import type { ToolExecutionContext } from '../../core/types';
@@ -45,11 +45,6 @@ interface GetFamilyMembersOutput {
   userId: string;
 }
 
-/**
- * Tool to retrieve family members and social connections
- * Traverses the graph relationships table to find connected Person entities
- * Supports filtering by relationship type and optional preference loading
- */
 @Injectable()
 export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFamilyMembersOutput> {
   readonly schema = {
@@ -103,8 +98,8 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
   };
 
   constructor(
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
+    private readonly graphQuery: GraphQueryService,
+    private readonly graphRead: GraphReadService,
   ) {
     super();
   }
@@ -122,97 +117,44 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
     }
 
     const ownerUserId = context.userId;
-
-    const userProfile = await this.loadUserGraphProfile(ownerUserId);
+    const userProfile = await this.resolveUserProfile(ownerUserId);
 
     if (!userProfile?.entityId) {
       return {
         familyMembers: [],
         totalCount: 0,
-        userId: context.userId,
+        userId: ownerUserId,
       };
     }
 
     const relationshipTypes = this.mapRelationshipFilter(input.relationshipType);
-    const allowedRelationshipTypes =
+    const effectiveRelationshipTypes =
       relationshipTypes.length > 0 ? relationshipTypes : FAMILY_RELATIONSHIP_TYPES;
 
-    const query = `
-      SELECT
-        CASE WHEN r.from_entity_id = $1 THEN r.to_entity_id ELSE r.from_entity_id END AS person_entity_id,
-        e.name AS person_name,
-        r.relationship_type,
-        r.properties,
-        r.strength,
-        CASE WHEN r.from_entity_id = $1 THEN 'outbound' ELSE 'inbound' END AS direction
-      FROM relationships r
-      JOIN entities e ON e.entity_id = CASE WHEN r.from_entity_id = $1 THEN r.to_entity_id ELSE r.from_entity_id END
-      WHERE (r.from_entity_id = $1 OR r.to_entity_id = $1)
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.is_active = TRUE
-        AND e.entity_type = 'Person'
-        AND e.owner_user_id = $2
-        AND r.relationship_type = ANY($3::text[])
-      ORDER BY r.strength DESC NULLS LAST, e.name ASC
-    `;
+    const familySummaries = await this.graphRead.getFamilyMembers(ownerUserId, {
+      relationshipTypes: effectiveRelationshipTypes,
+      personEntityId: userProfile.entityId ?? undefined,
+    });
 
-    const params: unknown[] = [userProfile.entityId, ownerUserId, allowedRelationshipTypes];
-    const result = await this.dataSource.query(query, params);
-
-    const memberMap = new Map<string, FamilyMember & { _strength: number }>();
-
-    for (const row of result) {
-      const classification = this.classifyRelationship(
-        row.relationship_type,
-        row.direction as 'outbound' | 'inbound',
-      );
-      if (!classification) {
-        continue;
-      }
-
-      const rawStrength = row.strength != null ? Number(row.strength) : Number.NaN;
-      const closeness = Number.isFinite(rawStrength) ? rawStrength : 0.5;
-      const interactionFrequency =
-        row.properties?.interaction_frequency ?? row.properties?.frequency ?? 'unknown';
-      const relationshipSubtype =
-        classification.subtype ??
-        row.properties?.relationship_subtype ??
-        row.properties?.relationship ??
-        undefined;
-
-      const existing = memberMap.get(row.person_entity_id);
-
-      if (!existing) {
-        memberMap.set(row.person_entity_id, {
-          id: row.person_entity_id,
-          name: row.person_name,
-          relationshipType: classification.type,
-          relationshipSubtype,
-          closenessScore: closeness,
-          interactionFrequency,
-          _strength: closeness,
-        });
-      } else {
-        if (!existing.relationshipSubtype && relationshipSubtype) {
-          existing.relationshipSubtype = relationshipSubtype;
-        }
-
-        if (classification.type !== existing.relationshipType && input.relationshipType === 'all') {
-          existing.relationshipType = classification.type;
-        }
-
-        if (closeness > existing._strength) {
-          existing.closenessScore = closeness;
-          existing._strength = closeness;
-        }
-      }
+    if (familySummaries.length === 0) {
+      return {
+        familyMembers: [],
+        totalCount: 0,
+        userId: ownerUserId,
+      };
     }
 
-    const familyMembers: FamilyMember[] = Array.from(memberMap.values()).map(
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      ({ _strength, ...member }) => member,
-    );
+    const familyMembers: FamilyMember[] = familySummaries.map((summary) => ({
+      id: summary.entityId,
+      name: summary.name ?? this.extractDisplayName(summary.properties),
+      relationshipType: summary.relationshipType,
+      relationshipSubtype: undefined,
+      closenessScore: summary.strength ?? 0.5,
+      interactionFrequency:
+        (summary.properties?.interaction_frequency as string | undefined) ??
+        (summary.properties?.frequency as string | undefined) ??
+        'unknown',
+    }));
 
     if (input.includePreferences) {
       await Promise.all(
@@ -229,48 +171,17 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
     };
   }
 
-  /**
-   * Load preferences (PREFERS and DISLIKES) for a person entity
-   */
-  private async loadUserGraphProfile(
-    userId: string,
-  ): Promise<{ entityId: string | null; username: string | null } | null> {
-    const query = `
-      SELECT entity_id, COALESCE(username, name) AS display_name
-      FROM users
-      WHERE id = $1
-    `;
-
-    const result = await this.dataSource.query(query, [userId]);
-
-    if (result.length === 0) {
-      return null;
-    }
-
-    let entityId: string | null = result[0].entity_id ?? null;
-
-    if (!entityId) {
-      const linkedQuery = `
-        SELECT entity_id
-        FROM entities
-        WHERE linked_table = 'users'
-          AND linked_id = $1
-          AND is_active = TRUE
-          AND owner_user_id = $2
-        LIMIT 1
-      `;
-
-      const linkedResult = await this.dataSource.query(linkedQuery, [userId, userId]);
-      if (linkedResult.length > 0) {
-        entityId = linkedResult[0].entity_id;
-
-        await this.dataSource.query(`UPDATE users SET entity_id = $2 WHERE id = $1`, [userId, entityId]);
-      }
+  private async resolveUserProfile(
+    ownerUserId: string,
+  ): Promise<{ entityId: string | null; username: string | null }> {
+    const node = await this.graphQuery.getUserEntity(ownerUserId);
+    if (!node) {
+      return { entityId: null, username: null };
     }
 
     return {
-      entityId,
-      username: result[0].display_name ?? null,
+      entityId: node.entity_id,
+      username: node.name ?? null,
     };
   }
 
@@ -287,76 +198,44 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
     return mapping[filter] ?? [];
   }
 
-  private classifyRelationship(
-    graphRelationshipType: string,
-    direction: 'outbound' | 'inbound',
-  ): { type: string; subtype?: string } | null {
-    switch (graphRelationshipType) {
-      case 'SPOUSE':
-      case 'PARTNER':
-      case 'ROMANTIC_PARTNER':
-        return { type: 'romantic_partner', subtype: 'spouse' };
-      case 'PARENT_OF':
-        return { type: 'family', subtype: direction === 'outbound' ? 'child' : 'parent' };
-      case 'CHILD_OF':
-        return { type: 'family', subtype: direction === 'outbound' ? 'parent' : 'child' };
-      case 'SIBLING_OF':
-        return { type: 'family', subtype: 'sibling' };
-      case 'FAMILY_MEMBER':
-        return { type: 'family' };
-      default: {
-        if (graphRelationshipType?.startsWith('FAMILY')) {
-          return { type: 'family' };
-        }
-
-        return null;
-      }
-    }
-  }
-
   private async loadPersonPreferences(
     personEntityId: string,
     ownerUserId: string,
   ): Promise<{ likes: string[]; dislikes: string[] }> {
-    // Query for PREFERS relationships
-    const prefersQuery = `
-      SELECT e.name
-      FROM relationships r
-      JOIN entities e ON r.to_entity_id = e.entity_id
-      WHERE r.from_entity_id = $1
-        AND r.relationship_type = 'PREFERS'
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.owner_user_id = $2
-        AND r.strength >= 0.5
-      ORDER BY r.strength DESC
-      LIMIT 10
-    `;
+    const relationshipSummaries = await this.graphRead.getPreferences(ownerUserId, {
+      personEntityId,
+      relationship: 'PREFERS',
+      limit: 10,
+    });
 
-    // Query for DISLIKES relationships
-    const dislikesQuery = `
-      SELECT e.name
-      FROM relationships r
-      JOIN entities e ON r.to_entity_id = e.entity_id
-      WHERE r.from_entity_id = $1
-        AND r.relationship_type = 'DISLIKES'
-        AND r.is_active = TRUE
-        AND r.owner_user_id = $2
-        AND e.owner_user_id = $2
-        AND r.strength >= 0.5
-      ORDER BY r.strength DESC
-      LIMIT 10
-    `;
+    const dislikeSummaries = await this.graphRead.getPreferences(ownerUserId, {
+      personEntityId,
+      relationship: 'DISLIKES',
+      limit: 10,
+    });
 
-    const [likesResult, dislikesResult] = await Promise.all([
-      this.dataSource.query(prefersQuery, [personEntityId, ownerUserId]),
-      this.dataSource.query(dislikesQuery, [personEntityId, ownerUserId]),
-    ]);
+    if (relationshipSummaries.length === 0 && dislikeSummaries.length === 0) {
+      return { likes: [], dislikes: [] };
+    }
 
     return {
-      likes: likesResult.map((row: any) => row.name),
-      dislikes: dislikesResult.map((row: any) => row.name),
+      likes: relationshipSummaries.map((summary) => summary.name ?? summary.type),
+      dislikes: dislikeSummaries.map((summary) => summary.name ?? summary.type),
     };
+  }
+
+  private extractDisplayName(properties?: Record<string, unknown>): string {
+    const first = properties?.first_name as string | undefined;
+    const last = properties?.last_name as string | undefined;
+
+    if ((first && first.trim()) || (last && last.trim())) {
+      return [first, last]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join(' ')
+        .trim();
+    }
+
+    return 'Unknown';
   }
 
   protected sanitizeInputForLogging(input: unknown): any {

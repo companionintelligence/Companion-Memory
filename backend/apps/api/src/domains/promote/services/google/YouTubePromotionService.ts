@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { v7 as uuid7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/services';
-import { ContentService, GraphUtilityService, type CreateContentDto } from '@ci/domains/memory';
+import { GraphUtilityService } from '@ci/domains/graph';
+import { ContentService, type CreateContentDto } from '@ci/domains/memory';
 
 import { PersonPromotionService } from '../PersonPromotionService';
 

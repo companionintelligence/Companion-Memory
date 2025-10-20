@@ -92,9 +92,9 @@ function Navigation() {
         </Button>
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
-          <Link to="/analytics">
+          <Link to="/knowledge">
             <ChartPie className="h-4 w-4" />
-            Analytics
+            Knowledge
           </Link>
         </Button>
 

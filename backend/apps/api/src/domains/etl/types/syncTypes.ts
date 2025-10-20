@@ -47,7 +47,8 @@ export interface SyncResult {
     | DriveSyncState
     | ContactsSyncState
     | YouTubeSyncState
-    | OutlookMailSyncState;
+    | OutlookMailSyncState
+    | OutlookCalendarsSyncState;
 }
 
 export interface CalendarSyncResult {
@@ -61,5 +62,13 @@ export interface GmailSyncResult {
 }
 
 export interface OutlookMailSyncState {
+  skip?: string;
+}
+
+export interface OutlookCalendarsSyncState {
+  [key: string]: OutlookCalendarSyncState;
+}
+
+export interface OutlookCalendarSyncState {
   skip?: string;
 }

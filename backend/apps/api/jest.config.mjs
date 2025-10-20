@@ -8,7 +8,7 @@ export default {
     '^.+\\.[tj]s$': ['@swc/jest'],
   },
 
-  transformIgnorePatterns: ['/.pnp.cjs$', 'node_modules/(?!(p-limit|yocto-queue)/)'],
+  transformIgnorePatterns: ['/.pnp.cjs$'],
 
   moduleNameMapper: {
     '^@ci/(.*)$': '<rootDir>/src/$1',
