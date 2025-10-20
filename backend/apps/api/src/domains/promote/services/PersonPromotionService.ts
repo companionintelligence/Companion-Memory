@@ -36,6 +36,7 @@ export class PersonPromotionService {
     connectionId: string,
     source: 'calendar' | 'email',
     relationshipType: 'MET_WITH' | 'EMAILED' | 'RECEIVED_EMAIL_FROM' | 'ORGANIZED_EVENT_WITH',
+    interactionTimestamp?: Date,
   ): Promise<string> {
     try {
       // Get user entity and user entity ID
@@ -74,6 +75,8 @@ export class PersonPromotionService {
         const [firstName, ...restName] = nameParts;
         const lastName = restName.length > 0 ? restName.join(' ') : null;
 
+        const lastSeenDate = interactionTimestamp || new Date();
+
         const properties = {
           email: participant.email,
           first_name: firstName || participant.name,
@@ -85,7 +88,7 @@ export class PersonPromotionService {
           [`${source}_data`]: {
             participant_type: participant.type,
             response_status: participant.responseStatus,
-            last_seen: new Date().toISOString(),
+            last_seen: lastSeenDate.toISOString(),
           },
         };
 
@@ -110,32 +113,45 @@ export class PersonPromotionService {
         entityId = existingEntity.entity_id;
         const currentProperties = existingEntity.properties as Record<string, unknown>;
         const sources = (currentProperties.sources || []) as string[];
+        const lastSeenDate = interactionTimestamp || new Date();
 
-        if (!sources.includes(source)) {
-          sources.push(source);
+        // Check if we need to update - either new source or more recent interaction
+        const existingSourceData = currentProperties[`${source}_data`] as { last_seen?: string } | undefined;
+        const existingLastSeen = existingSourceData?.last_seen
+          ? new Date(existingSourceData.last_seen)
+          : null;
+        const shouldUpdate =
+          !sources.includes(source) || !existingLastSeen || lastSeenDate > existingLastSeen;
+
+        if (shouldUpdate) {
+          if (!sources.includes(source)) {
+            sources.push(source);
+          }
+
           const updatedProperties = {
             ...currentProperties,
             sources,
             [`${source}_data`]: {
               participant_type: participant.type,
               response_status: participant.responseStatus,
-              last_seen: new Date().toISOString(),
+              last_seen: lastSeenDate.toISOString(),
             },
           };
 
           existingEntity.properties = updatedProperties;
-          existingEntity.last_accessed = new Date();
           await this.entityRepository.save(existingEntity);
 
           this.logger.log('Updated existing person entity', {
             entityId,
             sources,
+            lastSeen: lastSeenDate.toISOString(),
           });
         }
       }
 
       // Create or update relationship between user and this person
       // This ensures every entity has at least one relationship
+      const relationshipTimestamp = interactionTimestamp || new Date();
       await this.createOrUpdateRelationship(
         userEntityId,
         entityId,
@@ -144,7 +160,7 @@ export class PersonPromotionService {
           source,
           connection_id: connectionId,
           participant_type: participant.type,
-          last_interaction: new Date().toISOString(),
+          last_interaction: relationshipTimestamp.toISOString(),
         },
         userId,
       );
@@ -213,11 +229,13 @@ export class PersonPromotionService {
     connectionId: string,
     source: 'calendar' | 'email',
     relationshipType: 'MET_WITH' | 'EMAILED' | 'RECEIVED_EMAIL_FROM' | 'ORGANIZED_EVENT_WITH',
+    interactionTimestamp?: Date,
   ): Promise<string[]> {
     this.logger.log(`Processing ${participants.length} participants from ${source}`, {
       userId,
       connectionId,
       source,
+      interactionTimestamp: interactionTimestamp?.toISOString(),
     });
 
     const entityIds: string[] = [];
@@ -230,6 +248,7 @@ export class PersonPromotionService {
           connectionId,
           source,
           relationshipType,
+          interactionTimestamp,
         );
         entityIds.push(entityId);
       } catch (error) {

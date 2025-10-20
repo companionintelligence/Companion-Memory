@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Point } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import { EventService, type CreateEventDto } from '@ci/domains/memory';
@@ -46,6 +47,7 @@ interface EventDetails {
   startTime: string | null;
   endTime: string | null;
   location: string | null;
+  locationCoordinates: Point | null;
   organizerEmail: string;
   organizerName: string;
   participants: Participant[];
@@ -66,6 +68,8 @@ interface Participant {
 @Injectable()
 export class GoogleCalendarEventPromotionService {
   private logger = new LoggerService(GoogleCalendarEventPromotionService.name);
+
+  private readonly GOOGLE_MAPS_API_KEY = 'AIzaSyD7dLUudRwPlBemrnLDm_RCxT4NFaT5Ab0';
 
   constructor(
     private readonly eventService: EventService,
@@ -173,7 +177,7 @@ export class GoogleCalendarEventPromotionService {
     userId: string,
     connectionId: string,
   ): Promise<void> {
-    const eventDetails = this.extractEventDetails(event);
+    const eventDetails = await this.extractEventDetails(event);
 
     this.logEventDetails(eventDetails);
 
@@ -181,8 +185,9 @@ export class GoogleCalendarEventPromotionService {
     const eventDto = this.transformToEventDto(eventDetails, event, userId, connectionId);
     await this.eventService.create({ userId }, eventDto);
 
-    // Process participants
-    await this.processParticipants(eventDetails.participants, userId, connectionId);
+    // Process participants with the event start time
+    const eventStartTime = eventDetails.startTime ? new Date(eventDetails.startTime) : undefined;
+    await this.processParticipants(eventDetails.participants, userId, connectionId, eventStartTime);
 
     this.logger.log('Calendar event saved successfully', {
       eventId: eventDetails.id,
@@ -192,7 +197,7 @@ export class GoogleCalendarEventPromotionService {
     this.logFutureEventIfApplicable(eventDetails);
   }
 
-  private extractEventDetails(event: CalendarEvent): EventDetails {
+  private async extractEventDetails(event: CalendarEvent): Promise<EventDetails> {
     const startTime = event.start?.dateTime || event.start?.date || null;
     const endTime = event.end?.dateTime || event.end?.date || null;
 
@@ -205,6 +210,14 @@ export class GoogleCalendarEventPromotionService {
       isSelf: attendee.self || false,
     }));
 
+    // Extract and geocode location
+    const location = event.location || null;
+    let locationCoordinates: Point | null = null;
+
+    if (location) {
+      locationCoordinates = await this.geocodeLocation(location);
+    }
+
     // Extract organizer info
     const organizerEmail = event.organizer?.email || 'unknown';
     const organizerName = event.organizer?.displayName || event.organizer?.email || 'unknown';
@@ -216,6 +229,7 @@ export class GoogleCalendarEventPromotionService {
       startTime,
       endTime,
       location: event.location || null,
+      locationCoordinates,
       organizerEmail,
       organizerName,
       participants,
@@ -263,6 +277,7 @@ export class GoogleCalendarEventPromotionService {
       start_time,
       end_time: end_time || undefined,
       location_name: eventDetails.location || undefined,
+      location_coordinates: eventDetails.locationCoordinates || undefined,
       source_type: 'ETL',
       source_system: 'google_calendar',
       source_id: eventDetails.id,
@@ -278,6 +293,7 @@ export class GoogleCalendarEventPromotionService {
     participants: Participant[],
     userId: string,
     connectionId: string,
+    eventStartTime?: Date,
   ): Promise<string[]> {
     const participantInfos = participants.map((p) => ({
       email: p.email,
@@ -296,6 +312,7 @@ export class GoogleCalendarEventPromotionService {
       connectionId,
       'calendar',
       'ORGANIZED_EVENT_WITH',
+      eventStartTime,
     );
 
     const attendeeEntityIds = await this.personPromotionService.processParticipants(
@@ -304,6 +321,7 @@ export class GoogleCalendarEventPromotionService {
       connectionId,
       'calendar',
       'MET_WITH',
+      eventStartTime,
     );
 
     return [...organizerEntityIds, ...attendeeEntityIds];
@@ -345,6 +363,9 @@ export class GoogleCalendarEventPromotionService {
       startTime: eventDetails.startTime,
       endTime: eventDetails.endTime,
       location: eventDetails.location,
+      locationCoordinates: eventDetails.locationCoordinates
+        ? `[${eventDetails.locationCoordinates.coordinates[1]}, ${eventDetails.locationCoordinates.coordinates[0]}]`
+        : null,
       organizer: `${eventDetails.organizerName} (${eventDetails.organizerEmail})`,
       status: eventDetails.status,
       isRecurring: eventDetails.isRecurring,
@@ -368,6 +389,50 @@ export class GoogleCalendarEventPromotionService {
         daysInFuture,
         startDate: startDate.toISOString(),
       });
+    }
+  }
+
+  private async geocodeLocation(location: string): Promise<Point | null> {
+    try {
+      this.logger.log('Geocoding location', { location });
+
+      const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+      url.searchParams.append('address', location);
+      url.searchParams.append('key', this.GOOGLE_MAPS_API_KEY);
+
+      const response = await fetch(url.toString());
+      const data = await response.json();
+
+      if (data.status !== 'OK' || !data.results || data.results.length === 0) {
+        this.logger.warn('Geocoding failed or no results', {
+          location,
+          status: data.status,
+          error: data.error_message,
+        });
+
+        return null;
+      }
+
+      const { lat, lng } = data.results[0].geometry.location;
+
+      this.logger.log('Geocoding successful', {
+        location,
+        lat,
+        lng,
+      });
+
+      // Return in GeoJSON Point format (TypeORM Point)
+      return {
+        type: 'Point',
+        coordinates: [lng, lat], // [longitude, latitude]
+      } as Point;
+    } catch (error) {
+      this.logger.error('Error geocoding location', {
+        location,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      return null;
     }
   }
 }

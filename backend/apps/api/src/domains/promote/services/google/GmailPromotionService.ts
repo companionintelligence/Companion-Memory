@@ -191,6 +191,9 @@ export class GmailPromotionService {
       const fromParticipants = messageDetails.participants.filter((p) => p.type === 'from');
       const toParticipants = messageDetails.participants.filter((p) => p.type === 'to');
 
+      // Use the message date as the interaction timestamp
+      const messageDate = messageDetails.date ? new Date(messageDetails.date) : undefined;
+
       // Create person entities for sender (with RECEIVED_EMAIL_FROM relationship)
       const fromEntityIds = await this.personPromotionService.processParticipants(
         fromParticipants,
@@ -198,6 +201,7 @@ export class GmailPromotionService {
         connectionId,
         'email',
         'RECEIVED_EMAIL_FROM',
+        messageDate,
       );
 
       // Create person entities for recipients (with EMAILED relationship)
@@ -207,6 +211,7 @@ export class GmailPromotionService {
         connectionId,
         'email',
         'EMAILED',
+        messageDate,
       );
 
       // Save to communications table

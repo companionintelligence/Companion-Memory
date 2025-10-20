@@ -183,12 +183,16 @@ export class OutlookMailPromotionService {
     const ccParticipants = messageDetails.participants.filter((p) => p.type === 'cc');
     const bccParticipants = messageDetails.participants.filter((p) => p.type === 'bcc');
 
+    // Use the message date as the interaction timestamp
+    const messageDate = messageDetails.date ? new Date(messageDetails.date) : undefined;
+
     const fromEntityIds = await this.personPromotionService.processParticipants(
       fromParticipants,
       userId,
       connectionId,
       'email',
       'RECEIVED_EMAIL_FROM',
+      messageDate,
     );
 
     // Create person entities for recipients (with EMAILED relationship)
@@ -198,6 +202,7 @@ export class OutlookMailPromotionService {
       connectionId,
       'email',
       'EMAILED',
+      messageDate,
     );
 
     // Create person entities for recipients (with EMAILED relationship)
@@ -207,15 +212,17 @@ export class OutlookMailPromotionService {
       connectionId,
       'email',
       'EMAILED',
+      messageDate,
     );
 
     // Create person entities for recipients (with EMAILED relationship)
     const bccEntityIds = await this.personPromotionService.processParticipants(
-      ccParticipants,
+      bccParticipants,
       userId,
       connectionId,
       'email',
       'EMAILED',
+      messageDate,
     );
 
     const attachmentUploads = await Promise.all(
