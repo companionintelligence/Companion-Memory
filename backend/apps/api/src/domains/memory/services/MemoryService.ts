@@ -207,6 +207,7 @@ export class MemoryService {
       let queryBuilder = this.eventRepo
         .createQueryBuilder('event')
         .leftJoinAndSelect('event.user', 'user')
+        .addSelect('ST_AsGeoJSON(event.location_coordinates)', 'location_geojson')
         .where('user.id = :userId', { userId });
 
       if (params.startDate) {
@@ -226,8 +227,22 @@ export class MemoryService {
         .orderBy('ABS(EXTRACT(EPOCH FROM (event.start_time - NOW())))', 'ASC')
         .limit(500);
 
-      const events = await queryBuilder.getMany();
-      const memories = await Promise.all(events.map((event) => this.eventToMemoryAsync(event)));
+      const results = await queryBuilder.getRawAndEntities();
+      const memories = await Promise.all(
+        results.entities.map((event, index) => {
+          // Attach the parsed GeoJSON to the event entity
+          const geoJsonStr = results.raw[index]?.location_geojson;
+          if (geoJsonStr && typeof geoJsonStr === 'string') {
+            try {
+              event.location_coordinates = JSON.parse(geoJsonStr) as Point;
+            } catch (e) {
+              console.error('Error parsing location coordinates', e);
+            }
+          }
+
+          return this.eventToMemoryAsync(event);
+        }),
+      );
 
       return { memories, count: memories.length };
     } catch {
@@ -333,12 +348,13 @@ export class MemoryService {
         }
       }
 
-      if (entityCoords || event.location_name) {
+      // Only create location object if we have valid coordinates
+      if (entityCoords) {
         location = {
           id: event.location_entity_id || `loc-${event.id}`,
           name: event.location_name,
-          lat: entityCoords?.lat ?? 0,
-          lng: entityCoords?.lng ?? 0,
+          lat: entityCoords.lat,
+          lng: entityCoords.lng,
         };
       }
     }
@@ -374,12 +390,13 @@ export class MemoryService {
     let location: Memory['location'] = undefined;
     if (event.location_name || event.location_coordinates) {
       const coords = this.parseLocationCoordinates(event.location_coordinates);
-      if (coords || event.location_name) {
+      // Only create location object if we have valid coordinates
+      if (coords) {
         location = {
           id: event.location_entity_id || `loc-${event.id}`,
           name: event.location_name,
-          lat: coords?.lat ?? 0,
-          lng: coords?.lng ?? 0,
+          lat: coords.lat,
+          lng: coords.lng,
         };
       }
     }
@@ -411,6 +428,19 @@ export class MemoryService {
     }
 
     if (typeof coordinates === 'string') {
+      // Check if it's a WKB hex string (starts with hex digits)
+      if (/^[0-9A-Fa-f]+$/.test(coordinates) && coordinates.length > 20) {
+        // It's likely a WKB hex string from PostGIS
+        // Log it and return null for now - TypeORM should handle this automatically
+        this.logger.warn('Received WKB hex string for location coordinates', {
+          wkbLength: coordinates.length,
+          wkbPreview: coordinates.substring(0, 20),
+        });
+
+        return null;
+      }
+
+      // Try to parse WKT format: POINT(lng lat)
       const pointMatch = coordinates.match(/POINT\s*\(\s*(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s*\)/i);
       if (pointMatch) {
         const lng = parseFloat(pointMatch[1]);
@@ -690,11 +720,27 @@ export class MemoryService {
     if (entity.properties && typeof entity.properties === 'object') {
       const props = entity.properties as Record<string, unknown>;
 
-      // Person: use last_seen
-      if (entityType === 'Person' && props.last_seen) {
-        const parsed = new Date(props.last_seen as string);
-        if (!isNaN(parsed.getTime())) {
-          return parsed;
+      // Person: look for most recent last_seen from source_data objects (email_data, calendar_data, etc.)
+      if (entityType === 'Person') {
+        let mostRecentLastSeen: Date | null = null;
+
+        // Check all source_data objects for last_seen timestamps
+        for (const [key, value] of Object.entries(props)) {
+          if (key.endsWith('_data') && value && typeof value === 'object') {
+            const sourceData = value as Record<string, unknown>;
+            if (sourceData.last_seen && typeof sourceData.last_seen === 'string') {
+              const parsed = new Date(sourceData.last_seen);
+              if (!isNaN(parsed.getTime())) {
+                if (!mostRecentLastSeen || parsed > mostRecentLastSeen) {
+                  mostRecentLastSeen = parsed;
+                }
+              }
+            }
+          }
+        }
+
+        if (mostRecentLastSeen) {
+          return mostRecentLastSeen;
         }
       }
 
