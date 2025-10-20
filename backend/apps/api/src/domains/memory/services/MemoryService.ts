@@ -1,9 +1,12 @@
 import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, Point } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import { RequestContext } from '@ci/common/types';
 import { GraphQueryService } from '@ci/domains/graph';
 
+import { EventEntity } from '../entities/EventEntity';
 import { Memory, MemoryLocation, MemoryResponse, MemorySearchParams } from '../types';
 
 type GraphNodeLike = {
@@ -38,7 +41,11 @@ export class MemoryService {
     'Communication',
   ];
 
-  constructor(private readonly graphQuery: GraphQueryService) {}
+  constructor(
+    private readonly graphQuery: GraphQueryService,
+    @InjectRepository(EventEntity)
+    private readonly eventRepo: Repository<EventEntity>,
+  ) {}
 
   async findAll(context: RequestContext, params: MemorySearchParams): Promise<MemoryResponse> {
     const userId = this.requireUserId(context);
@@ -53,16 +60,23 @@ export class MemoryService {
           ? params.categories
           : MemoryService.DEFAULT_ENTITY_TYPES;
 
-      const graphNodes = await this.graphQuery.getNodes(userId, {
-        limit: Math.max(limit * 4, 200),
-        offset: 0,
-        nameContains: params.query,
-      });
+      // Fetch from both graph nodes and events
+      const [graphNodes, eventsData] = await Promise.all([
+        this.graphQuery.getNodes(userId, {
+          limit: Math.max(limit * 4, 200),
+          offset: 0,
+          nameContains: params.query,
+        }),
+        this.fetchFromEvents(userId, params),
+      ]);
 
       const filteredNodes = graphNodes.filter((node) => allowedTypes.includes(node.entity_type));
-      const memories = await Promise.all(filteredNodes.map((node) => this.entityToMemory(node, userId)));
+      const graphMemories = await Promise.all(filteredNodes.map((node) => this.entityToMemory(node, userId)));
 
-      let filteredMemories = this.applyMemoryFilters(memories, params);
+      // Combine graph memories and event memories
+      const allMemories = [...graphMemories, ...eventsData.memories];
+
+      let filteredMemories = this.applyMemoryFilters(allMemories, params);
       filteredMemories = this.applySort(filteredMemories);
 
       const paginated = filteredMemories.slice(offset, offset + limit);
@@ -372,5 +386,143 @@ export class MemoryService {
     }
 
     return context.userId;
+  }
+
+  // Event-specific methods for geocoding support
+  private async fetchFromEvents(
+    userId: string,
+    params: MemorySearchParams,
+  ): Promise<{ memories: Memory[]; count: number }> {
+    try {
+      let queryBuilder = this.eventRepo
+        .createQueryBuilder('event')
+        .leftJoinAndSelect('event.user', 'user')
+        .addSelect('ST_AsGeoJSON(event.location_coordinates)', 'location_geojson')
+        .where('user.id = :userId', { userId });
+
+      if (params.startDate) {
+        queryBuilder = queryBuilder.andWhere('event.start_time >= :startDate', {
+          startDate: params.startDate,
+        });
+      }
+
+      if (params.endDate) {
+        queryBuilder = queryBuilder.andWhere('event.start_time <= :endDate', {
+          endDate: params.endDate,
+        });
+      }
+
+      // Order by proximity to current time, prioritizing recent events
+      queryBuilder = queryBuilder
+        .orderBy('ABS(EXTRACT(EPOCH FROM (event.start_time - NOW())))', 'ASC')
+        .limit(500);
+
+      const results = await queryBuilder.getRawAndEntities();
+      const memories = await Promise.all(
+        results.entities.map((event, index) => {
+          // Attach the parsed GeoJSON to the event entity
+          const geoJsonStr = results.raw[index]?.location_geojson;
+          if (geoJsonStr && typeof geoJsonStr === 'string') {
+            try {
+              event.location_coordinates = JSON.parse(geoJsonStr) as Point;
+            } catch (e) {
+              console.error('Error parsing location coordinates', e);
+            }
+          }
+
+          return this.eventToMemory(event);
+        }),
+      );
+
+      return { memories, count: memories.length };
+    } catch {
+      return { memories: [], count: 0 };
+    }
+  }
+
+  // Convert EventEntity to Memory
+  private eventToMemory(event: EventEntity): Memory {
+    // Extract source link from metadata
+    const metadata = event.metadata || {};
+    const rawEvent = (metadata.rawEvent as Record<string, unknown> | undefined) || {};
+    const sourceLink =
+      (metadata.googleCalendarUrl as string | undefined) || (rawEvent.htmlLink as string | undefined);
+
+    // Extract location with coordinates
+    let location: Memory['location'] = undefined;
+    if (event.location_name || event.location_coordinates) {
+      const coords = this.parseLocationCoordinates(event.location_coordinates);
+      // Only create location object if we have valid coordinates
+      if (coords) {
+        location = {
+          id: event.location_entity_id || `loc-${event.id}`,
+          name: event.location_name,
+          lat: coords.lat,
+          lng: coords.lng,
+        };
+      }
+    }
+
+    return {
+      id: event.id,
+      type: 'event',
+      title: event.title || 'Untitled Event',
+      description: event.description,
+      timestamp: event.start_time,
+      category: event.category || 'Event',
+      location,
+      tags: event.tags || [],
+      userId: event.user?.id || '',
+      sourceLink: sourceLink,
+      metadata: {
+        eventType: event.event_type ?? undefined,
+        category: event.category ?? undefined,
+        source: event.source_system ?? undefined,
+        ...event.metadata,
+      },
+    };
+  }
+
+  // Helper method to parse PostGIS GEOGRAPHY(POINT) format
+  private parseLocationCoordinates(coordinates: Point | string | null): { lat: number; lng: number } | null {
+    if (!coordinates) {
+      return null;
+    }
+
+    if (typeof coordinates === 'string') {
+      // Check if it's a WKB hex string (starts with hex digits)
+      if (/^[0-9A-Fa-f]+$/.test(coordinates) && coordinates.length > 20) {
+        // It's likely a WKB hex string from PostGIS
+        // Log it and return null for now - TypeORM should handle this automatically
+        this.logger.warn('Received WKB hex string for location coordinates', {
+          wkbLength: coordinates.length,
+          wkbPreview: coordinates.substring(0, 20),
+        });
+
+        return null;
+      }
+
+      // Try to parse WKT format: POINT(lng lat)
+      const pointMatch = coordinates.match(/POINT\s*\(\s*(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s*\)/i);
+      if (pointMatch) {
+        const lng = parseFloat(pointMatch[1]);
+        const lat = parseFloat(pointMatch[2]);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          return { lat, lng };
+        }
+      }
+    }
+
+    if (typeof coordinates === 'object') {
+      const geoJson = coordinates as { type: 'Point'; coordinates: [number, number] };
+      if (geoJson.type === 'Point' && Array.isArray(geoJson.coordinates)) {
+        const [lng, lat] = geoJson.coordinates;
+        if (!isNaN(lat) && !isNaN(lng)) {
+          return { lat, lng };
+        }
+      }
+    }
+
+    return null;
   }
 }
