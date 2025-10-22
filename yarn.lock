@@ -2455,7 +2455,7 @@ __metadata:
     jest-util: "npm:^30.0.2"
     knip: "npm:^5.66.0"
     nodemon: "npm:^3.1.10"
-    ollama: "npm:^0.6.0"
+    ollama: "npm:^0.5.17"
     p-limit: "npm:^7.1.1"
     parse-duration: "npm:^2.1.4"
     passport: "npm:^0.7.0"
@@ -2511,7 +2511,7 @@ __metadata:
     globals: "npm:^16.1.0"
     husky: "npm:^9.1.7"
     lint-staged: "npm:^16.1.2"
-    ollama: "npm:^0.6.0"
+    ollama: "npm:^0.5.17"
     prettier: "npm:^3.5.3"
     storybook: "npm:^9.0.8"
     typescript: "npm:^5.8.3"
@@ -16318,12 +16318,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ollama@npm:^0.6.0":
+"ollama@npm:^0.5.17":
   version: 0.6.0
-  resolution: "ollama@npm:0.6.0"
+  resolution: "ollama@npm:0.5.17"
   dependencies:
     whatwg-fetch: "npm:^3.6.20"
-  checksum: 10c0/420fb87890824a8e655eedde3e30990762e25d71ac2ed9a27ca58fa80286b682ba547df8676b4dbcdf7dc3cffcdb4f54661de06e63e7191615412f3f5c39ce7f
+  checksum: 10c0/24091d8ccb5caf5a6216a75a3ffa44802a37fb4443abcd583f5f7ff437fbbd2f1606bb335250c3ca9b6a334e685a592d78105552fa87b3830cd30dd7c825374f
   languageName: node
   linkType: hard
 
