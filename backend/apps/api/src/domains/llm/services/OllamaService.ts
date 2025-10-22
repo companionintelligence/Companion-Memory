@@ -348,14 +348,29 @@ export class OllamaService {
 
     this.logger.debug('Processing tool calls', {
       toolCallCount: toolCalls.length,
-      toolNames: toolCalls.map((tc) => tc.function.name),
+      toolNames: toolCalls.map((tc) => tc.function?.name ?? tc.name ?? 'unknown'),
       userId: context.userId,
     });
 
     // Execute each tool call
     const toolResults = await Promise.all(
       toolCalls.map(async (toolCall) => {
-        const { name, arguments: args } = toolCall.function;
+        const toolFn = toolCall.function;
+
+        if (!toolFn) {
+          this.logger.warn('Received tool call without function payload', {
+            userId: context.userId,
+            call: toolCall,
+          });
+
+          return {
+            call: toolCall,
+            result: { error: 'Tool function payload missing' },
+            success: false,
+          };
+        }
+
+        const { name, arguments: args } = toolFn;
 
         try {
           const result = await this.toolRegistry.executeTool(name, context, args);
@@ -401,7 +416,9 @@ export class OllamaService {
       function: {
         name: toolSchema.name,
         description: toolSchema.description,
-        parameters: toolSchema.parameters,
+        ...(toolSchema.parameters && {
+          parameters: toolSchema.parameters as unknown as Record<string, unknown>,
+        }),
       },
     };
   }

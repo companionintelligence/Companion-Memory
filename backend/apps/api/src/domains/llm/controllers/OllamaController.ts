@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 import { Body, Controller, Get, HttpCode, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { ToolCall, Message as OllamaMessage } from 'ollama';
@@ -169,7 +171,7 @@ export class OllamaController {
         await this.messageService.create(context, {
           model,
           role: message.role,
-          content: message.content,
+          content: message.content ?? '',
           canceled: i === stream.messages.length - 1 && signal.aborted,
           threadId: thread.id,
           ...(message.tool_calls && {
@@ -186,13 +188,17 @@ export class OllamaController {
   private async resolveMessage(context: RequestContext, message: Message): Promise<OllamaMessage> {
     const images = message.files
       ? await Promise.all(
-          message.files.map(async (file) => this.fileService.getFileContent(context, file.key)),
+          message.files.map(async (file) => {
+            const content = await this.fileService.getFileContent(context, file.key);
+
+            return Buffer.from(content).toString('base64');
+          }),
         )
       : [];
 
     return {
       role: message.role,
-      content: message.content,
+      content: message.content ?? '',
       ...(images.length > 0 && {
         images,
       }),

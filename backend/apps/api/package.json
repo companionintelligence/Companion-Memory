@@ -49,7 +49,7 @@
     "express": "^5.1.0",
     "google-auth-library": "^10.1.0",
     "googleapis": "^153.0.0",
-    "ollama": "^0.5.17",
+    "ollama": "^0.6.0",
     "p-limit": "^7.1.1",
     "parse-duration": "^2.1.4",
     "passport": "^0.7.0",
