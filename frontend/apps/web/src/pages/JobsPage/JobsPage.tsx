@@ -128,7 +128,7 @@ function SummaryCard({ loading, error, summary, distribution, onRefresh }: Summa
       <Card.Header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <Card.Title className="text-xl">Queue Activity</Card.Title>
-          <Card.Description>Current PgBoss workload and recent completions</Card.Description>
+          <Card.Description>Current job workload and recent completions</Card.Description>
         </div>
         <Button variant="outline" size="sm" onClick={onRefresh} className="w-full md:w-auto">
           <RefreshCcw className="mr-2 h-4 w-4" /> Refresh
@@ -220,7 +220,7 @@ function ColumnsGrid({ loading, activeJobs, completed, schedules, queues }: Colu
       />
       <DataColumn
         title="Schedules"
-        description="Recurring jobs configured in PgBoss"
+        description="Recurring system jobs"
         loading={loading}
         items={schedules}
         renderItem={(schedule) => <ScheduleCard key={schedule.name} schedule={schedule} />}
