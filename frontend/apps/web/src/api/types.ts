@@ -32,3 +32,37 @@ export interface Thread {
   description: string | null;
   messages?: Message[];
 }
+
+export interface UserContext {
+  currentUser: {
+    entityId: string;
+    name: string;
+    username: string | null;
+    properties?: Record<string, unknown>;
+  };
+  familyMembers: Array<{
+    entityId: string;
+    name: string;
+    relationship: string;
+    age?: number;
+    properties?: Record<string, unknown>;
+  }>;
+  topPreferences: Array<{
+    entityId: string;
+    name: string;
+    type: string;
+    strength: number;
+    relationship: 'PREFERS' | 'DISLIKES';
+  }>;
+  quickStats: {
+    totalEntities: number;
+    totalPreferences: number;
+    totalDislikes: number;
+    familySize: number;
+  };
+}
+
+export interface UserContextResponse {
+  success: boolean;
+  context: UserContext | null;
+}
