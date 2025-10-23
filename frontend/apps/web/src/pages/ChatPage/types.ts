@@ -15,3 +15,14 @@ export interface Thread {
   description: string | null;
   messages?: Message[];
 }
+
+export interface KnowledgeCard {
+  id: string;
+  messageId: string;
+  source: Message['role'];
+  sourceLabel: string;
+  title: string;
+  rawJson: string;
+  formattedJson: string;
+  data: unknown;
+}
