@@ -2511,7 +2511,7 @@ __metadata:
     globals: "npm:^16.1.0"
     husky: "npm:^9.1.7"
     lint-staged: "npm:^16.1.2"
-    ollama: "npm:^0.5.17"
+    ollama: "npm:0.5.17"
     prettier: "npm:^3.5.3"
     storybook: "npm:^9.0.8"
     typescript: "npm:^5.8.3"
@@ -16318,7 +16318,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ollama@npm:^0.5.17":
+"ollama@npm:0.5.17, ollama@npm:^0.5.17":
   version: 0.6.0
   resolution: "ollama@npm:0.5.17"
   dependencies:
