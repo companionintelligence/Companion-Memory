@@ -374,16 +374,28 @@ function KnowledgeValue({ value, depth }: { value: unknown; depth: number }) {
 
     return (
       <div className={cn('space-y-2', depth > 0 && 'border-l border-border/30 pl-3')}>
-        {entries.map(([key, val]) => (
-          <div key={key} className="flex items-start gap-3">
-            <span className="min-w-[96px] shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {key}
-            </span>
-            <div className="flex-1">
-              <KnowledgeValue value={val} depth={depth + 1} />
+        {entries
+          .slice()
+          .sort(([aKey], [bKey]) => {
+            const aIsEntityId = aKey.toLowerCase() === 'entityid';
+            const bIsEntityId = bKey.toLowerCase() === 'entityid';
+
+            if (aIsEntityId === bIsEntityId) {
+              return 0;
+            }
+
+            return aIsEntityId ? 1 : -1;
+          })
+          .map(([key, val]) => (
+            <div key={key} className="flex items-start gap-3">
+              <span className="min-w-[96px] shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {key}
+              </span>
+              <div className="flex-1">
+                <KnowledgeValue value={val} depth={depth + 1} />
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
       </div>
     );
   }
