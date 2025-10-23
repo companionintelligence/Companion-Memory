@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 import { fetchJson } from '@ci/common';
 
@@ -24,6 +24,22 @@ export function useThreadService(id: string | null): ReturnType {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
+  const latestIdRef = useRef<string | null>(id);
+  const previousIdRef = useRef<string | null>(id);
+
+  useEffect(() => {
+    latestIdRef.current = id;
+  }, [id]);
+
+  useEffect(() => {
+    if (previousIdRef.current !== id) {
+      setThread(null);
+      setError(null);
+    }
+
+    previousIdRef.current = id;
+  }, [id]);
+
   const fetchThread = useCallback(async () => {
     if (id == null) {
       setThread(null);
@@ -35,25 +51,36 @@ export function useThreadService(id: string | null): ReturnType {
 
     setLoading(true);
 
+    const requestId = id;
+
     try {
-      const thread = await fetchJson<Thread>(`/api/threads/${id}?includeMessages=true`, {
+      const result = await fetchJson<Thread>(`/api/threads/${requestId}?includeMessages=true`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
           'Content-Type': 'application/json',
         },
       });
 
-      setThread(thread);
+      if (latestIdRef.current !== requestId) {
+        return;
+      }
+
+      setThread(result);
+      setError(null);
     } catch (err) {
-      setError(err);
+      if (latestIdRef.current === requestId) {
+        setError(err);
+      }
     } finally {
-      setLoading(false);
+      if (latestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
-  }, [setLoading, setThread, setError, id]);
+  }, [authToken, id]);
 
   useEffect(() => {
-    fetchThread();
-  }, [id]);
+    void fetchThread();
+  }, [fetchThread]);
 
   return [
     {
