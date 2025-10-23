@@ -95,17 +95,21 @@ function ChatPageContent() {
   }, [initialThreadId]);
 
   useEffect(() => {
-    if (thread && !hasSetInitialMessages.current) {
+    if (thread && thread.id === resolvedThreadId.current && !hasSetInitialMessages.current) {
       setInitialMessages(thread.messages ?? []);
       hasSetInitialMessages.current = true;
     }
   }, [thread]);
 
   useEffect(() => {
-    if (thread?.messages) {
-      setKnowledgeMessages(thread.messages);
+    const activeThreadId = resolvedThreadId.current;
+
+    if (thread && thread.id === activeThreadId) {
+      setKnowledgeMessages(thread.messages ?? []);
+    } else if (thread == null) {
+      setKnowledgeMessages([]);
     }
-  }, [thread?.messages]);
+  }, [thread]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
