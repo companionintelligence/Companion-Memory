@@ -266,30 +266,48 @@ export class UserContextService {
       maxEdges: 20,
     });
 
-    const familyMembers: Array<{
-      entityId: string;
-      name: string;
-      relationship: string;
-      age?: number;
-      properties?: Record<string, unknown>;
-    }> = [];
+    type MemberRecord = {
+      member: {
+        entityId: string;
+        name: string;
+        relationship: string;
+        age?: number;
+        properties?: Record<string, unknown>;
+      };
+      hasOutboundEdge: boolean;
+    };
 
+    const familyMembers = new Map<string, MemberRecord>();
+
+    // Deduplicate reciprocal relationships while preferring edges where the user is the source
     for (const edge of edges) {
-      const relatedEntityId = edge.from_entity_id === userEntityId ? edge.to_entity_id : edge.from_entity_id;
-
+      const isOutbound = edge.from_entity_id === userEntityId;
+      const relatedEntityId = isOutbound ? edge.to_entity_id : edge.from_entity_id;
       const relatedNode = nodes.get(relatedEntityId);
-      if (relatedNode && relatedNode.entity_id !== userEntityId) {
-        familyMembers.push({
+
+      if (!relatedNode || relatedNode.entity_id === userEntityId) {
+        continue;
+      }
+
+      const memberRecord: MemberRecord = {
+        member: {
           entityId: relatedNode.entity_id,
           name: relatedNode.name ?? 'Unknown',
           relationship: edge.relationship_type,
           age: relatedNode.properties?.['age'] as number | undefined,
           properties: relatedNode.properties ?? {},
-        });
+        },
+        hasOutboundEdge: isOutbound,
+      };
+
+      const existing = familyMembers.get(relatedNode.entity_id);
+
+      if (!existing || (isOutbound && !existing.hasOutboundEdge)) {
+        familyMembers.set(relatedNode.entity_id, memberRecord);
       }
     }
 
-    return familyMembers;
+    return Array.from(familyMembers.values()).map(({ member }) => member);
   }
 
   /**
