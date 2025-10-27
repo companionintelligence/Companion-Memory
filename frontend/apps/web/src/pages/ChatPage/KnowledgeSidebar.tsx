@@ -264,7 +264,7 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
       </div>
 
       {isExpanded ? (
-        <div className="flex-1 overflow-y-auto px-3 py-4">
+        <div className="flex-1 overflow-y-auto px-3 py-4 scrollbar-hidden">
           {hasCards ? (
             <div className="space-y-2">
               {cards.map((card) => {
@@ -307,7 +307,7 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
                       {expanded && (
                         <>
                           <div className="border-t border-border/40" />
-                          <div className="relative max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-b-lg bg-muted/10 px-3 py-2 text-xs leading-5 text-foreground break-words">
+                          <div className="relative max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-b-lg bg-muted/10 px-3 py-2 text-xs leading-5 text-foreground break-words scrollbar-hidden">
                             <div className="space-y-1.5 pr-2">
                               <KnowledgeValue
                                 value={card.data ?? card.rawJson ?? card.formattedJson}
