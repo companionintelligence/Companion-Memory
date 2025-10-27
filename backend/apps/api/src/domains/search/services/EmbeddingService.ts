@@ -36,6 +36,13 @@ const ENTITY_CONFIG: Record<
     userColumn?: string;
   }
 > = {
+  entity: {
+    table: 'entities',
+    idColumn: 'entity_id',
+    textColumn: 'search_content',
+    embeddingColumn: 'embedding',
+    userColumn: 'owner_user_id',
+  },
   question: {
     table: 'questions',
     idColumn: 'question_id',

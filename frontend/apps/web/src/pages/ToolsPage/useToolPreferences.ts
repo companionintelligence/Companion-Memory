@@ -11,6 +11,7 @@ const DEFAULT_PREFERENCES: ToolPreferences = {
   'entertainment-preferences': true,
   'streaming-availability': true,
   'family-members': true,
+  'search-knowledge': true,
 };
 
 export function useToolPreferences() {

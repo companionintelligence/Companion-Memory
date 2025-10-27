@@ -8,6 +8,7 @@ import {
   Play,
   ShoppingBag,
   Utensils,
+  Search,
   Dumbbell,
 } from '@ci/shadcn/icons';
 
@@ -174,6 +175,22 @@ const AVAILABLE_TOOLS: ToolCard[] = [
     canToggle: true,
     systemStatus: 'active',
     isDemo: true,
+  },
+  {
+    id: 'search-knowledge',
+    name: 'Knowledge Search',
+    description:
+      'Run semantic searches across the personal knowledge graph to find relevant entities, documents, and facts for follow-up actions.',
+    category: 'Knowledge',
+    icon: <Search className="h-6 w-6" />,
+    capabilities: [
+      'Semantic graph search',
+      'Entity-centric results with IDs',
+      'Document and fact discovery',
+      'Jump-start follow-up graph traversals',
+    ],
+    canToggle: true,
+    systemStatus: 'active',
   },
 ];
 

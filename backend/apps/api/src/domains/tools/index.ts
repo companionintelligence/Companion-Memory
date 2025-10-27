@@ -27,6 +27,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { GraphModule } from '@ci/domains/graph';
 import { MemoryModule } from '@ci/domains/memory';
+import { EmbeddingModule } from '@ci/domains/search';
 
 import { McpController } from './controllers/McpController';
 import { McpClientManager } from './providers/mcp/McpClientManager';
@@ -38,6 +39,7 @@ import { GetStreamingAvailabilityTool } from './providers/native/GetStreamingAva
 import { GetUserPreferencesTool } from './providers/native/GetUserPreferencesTool';
 import { NativeToolProvider } from './providers/native/NativeToolProvider';
 import { ReadKnowledgeTool } from './providers/native/ReadKnowledgeTool';
+import { SearchKnowledgeTool } from './providers/native/SearchKnowledgeTool';
 import { WriteKnowledgeTool } from './providers/native/WriteKnowledgeTool';
 import { ToolRegistry } from './registry/ToolRegistry';
 import { McpToolsService } from './services/McpToolsService';
@@ -46,6 +48,7 @@ import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 // Instantiate native tools
 const nativeToolInstances = [
   ReadKnowledgeTool,
+  SearchKnowledgeTool,
   WriteKnowledgeTool,
   ForgetKnowledgeTool,
   GetUserPreferencesTool,
@@ -58,7 +61,7 @@ const nativeToolInstances = [
  * @internal
  */
 @Module({
-  imports: [EventsModule, ConversationModule, FilesModule, MemoryModule, GraphModule],
+  imports: [EventsModule, ConversationModule, FilesModule, MemoryModule, GraphModule, EmbeddingModule],
   controllers: [McpController],
   providers: [
     ToolRegistry,
