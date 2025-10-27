@@ -14,7 +14,7 @@ interface KnowledgeSidebarProps {
 
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
-const MAX_WIDTH = 600;
+const MAX_WIDTH = 840;
 const COLLAPSED_WIDTH = 48;
 
 export const KnowledgeSidebar = memo(function KnowledgeSidebar({
@@ -232,29 +232,32 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
       )}
       <div
         className={cn(
-          'flex items-center border-b border-border/40 transition-colors duration-200',
-          isExpanded ? 'justify-between px-4 py-3 gap-3' : 'justify-center py-3',
+          'relative border-b border-border/40 transition-colors duration-200',
+          isExpanded
+            ? 'flex items-center justify-between gap-3 px-4 py-3'
+            : 'flex h-[88px] items-center justify-center',
         )}
       >
         <button
           type="button"
           aria-label={isExpanded ? 'Collapse knowledge panel' : 'Expand knowledge panel'}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/70 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-lg bg-muted/70 text-muted-foreground transition hover:bg-muted hover:text-foreground',
+            !isExpanded && 'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2',
+          )}
           onClick={() => setIsExpanded((prev) => !prev)}
         >
           {isExpanded ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
         {isExpanded ? (
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Sparkles className="h-4 w-4 text-primary" />
+          <div className="flex w-full items-center justify-between text-sm font-semibold text-foreground">
             <span className="truncate">Knowledge</span>
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               {headerCount}
             </span>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-1 text-[10px] font-medium text-muted-foreground">
-            <Sparkles className="h-4 w-4 text-primary" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 flex items-center justify-center text-[10px] font-medium text-muted-foreground">
             <span>{headerCount}</span>
           </div>
         )}
@@ -263,7 +266,7 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
       {isExpanded ? (
         <div className="flex-1 overflow-y-auto px-3 py-4">
           {hasCards ? (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {cards.map((card) => {
                 const expanded = Boolean(expandedCards[card.id]);
 
@@ -271,15 +274,29 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
                   <div
                     key={card.id}
                     className={cn(
-                      'rounded-xl border border-border/50 bg-background/90 shadow-sm transition hover:border-primary/40',
+                      'rounded-lg border border-border/50 bg-background/90 shadow-sm transition hover:border-primary/40',
                       expanded && 'border-primary/40',
                     )}
                   >
                     <button type="button" className="w-full text-left" onClick={() => toggleCard(card.id)}>
-                      <div className="flex items-center justify-between gap-3 px-4 py-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-foreground">{card.title}</p>
-                          <p className="truncate text-xs text-muted-foreground">{card.sourceLabel}</p>
+                      <div
+                        className={cn(
+                          'flex items-center justify-between gap-2.5',
+                          expanded ? 'px-3 py-2.5' : 'px-3 py-1.5',
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p
+                            className={cn(
+                              'truncate font-semibold text-foreground',
+                              expanded ? 'text-sm' : 'text-xs',
+                            )}
+                          >
+                            {card.title}
+                          </p>
+                          {expanded && (
+                            <p className="truncate text-xs text-muted-foreground">{card.sourceLabel}</p>
+                          )}
                         </div>
                         {expanded ? (
                           <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -287,20 +304,19 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         )}
                       </div>
-                      <div className="border-t border-border/40" />
-                      <div
-                        className={cn(
-                          'relative px-4 py-3 text-xs leading-5 text-foreground bg-muted/10 rounded-b-xl',
-                          expanded ? 'max-h-[60vh] overflow-y-auto' : 'max-h-32 overflow-hidden',
-                        )}
-                      >
-                        <div className="space-y-2 pr-2">
-                          <KnowledgeValue value={card.data ?? card.rawJson ?? card.formattedJson} depth={0} />
-                        </div>
-                        {!expanded && (
-                          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background via-background/70 to-transparent" />
-                        )}
-                      </div>
+                      {expanded && (
+                        <>
+                          <div className="border-t border-border/40" />
+                          <div className="relative max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-b-lg bg-muted/10 px-3 py-2 text-xs leading-5 text-foreground break-words">
+                            <div className="space-y-1.5 pr-2">
+                              <KnowledgeValue
+                                value={card.data ?? card.rawJson ?? card.formattedJson}
+                                depth={0}
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </button>
                   </div>
                 );
@@ -323,7 +339,7 @@ export const KnowledgeSidebar = memo(function KnowledgeSidebar({
           )}
         </div>
       ) : (
-        <div className="flex-1" />
+        <div className="flex-1 overflow-hidden" />
       )}
     </aside>
   );
@@ -349,9 +365,12 @@ function KnowledgeValue({ value, depth }: { value: unknown; depth: number }) {
     const remaining = value.length - items.length;
 
     return (
-      <div className={cn('space-y-2', depth > 0 && 'border-l border-border/30 pl-3')}>
+      <div className={cn('space-y-1.5', depth > 0 && 'border-l border-border/30 pl-3')}>
         {items.map((item, index) => (
-          <div key={index} className="rounded-lg border border-border/30 bg-background/80 p-2 shadow-sm">
+          <div
+            key={index}
+            className="rounded-md border border-border/30 bg-background/80 p-1.5 shadow-sm overflow-hidden"
+          >
             <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Item {index + 1}
             </div>
@@ -373,7 +392,7 @@ function KnowledgeValue({ value, depth }: { value: unknown; depth: number }) {
     }
 
     return (
-      <div className={cn('space-y-2', depth > 0 && 'border-l border-border/30 pl-3')}>
+      <div className={cn('space-y-1.5', depth > 0 && 'border-l border-border/30 pl-3')}>
         {entries
           .slice()
           .sort(([aKey], [bKey]) => {
@@ -387,11 +406,11 @@ function KnowledgeValue({ value, depth }: { value: unknown; depth: number }) {
             return aIsEntityId ? 1 : -1;
           })
           .map(([key, val]) => (
-            <div key={key} className="flex items-start gap-3">
+            <div key={key} className="flex items-start gap-2.5">
               <span className="min-w-[96px] shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {key}
               </span>
-              <div className="flex-1">
+              <div className="flex-1 overflow-hidden">
                 <KnowledgeValue value={val} depth={depth + 1} />
               </div>
             </div>
