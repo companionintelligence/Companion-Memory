@@ -188,7 +188,7 @@ export class SearchKnowledgeTool extends BaseTool<SearchKnowledgeInput, SearchKn
       warnings:
         missingEntities.length > 0
           ? [
-              `${missingEntities.length} entity results were omitted because the entities could not be loaded.`,
+              `${missingEntities.length} entity results were omitted (IDs: ${missingEntities.slice(0, 3).join(', ')}${missingEntities.length > 3 ? '...' : ''}) because the entities could not be loaded.`,
             ]
           : undefined,
     };
