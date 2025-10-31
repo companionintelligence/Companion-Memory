@@ -1,7 +1,7 @@
 import { Card, cn } from '@ci/shadcn';
-import { useNavigate } from 'react-router-dom';
 
 import type { MemoryItem } from '../../types';
+import { useMemoryService } from '../../useMemoryService';
 
 interface Props {
   memory: MemoryItem;
@@ -10,10 +10,10 @@ interface Props {
 }
 
 export function GenericCard({ memory, Icon, iconColorClass }: Props) {
-  const navigate = useNavigate();
+  const { setActiveMemory } = useMemoryService();
 
   const handleClick = () => {
-    navigate(`/search?q=${encodeURIComponent(memory.title)}`);
+    setActiveMemory(memory);
   };
 
   return (

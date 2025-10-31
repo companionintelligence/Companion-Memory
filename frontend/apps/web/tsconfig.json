@@ -25,7 +25,7 @@
     "jsx": "react-jsx",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "resolveJsonModule": true,
-    "types": ["vite/client", "google.maps"],
+    "types": ["vite/client", "google.maps"]
   },
   "include": [".", ".storybook/**/*", "src"],
   "exclude": ["node_modules", "dist"]

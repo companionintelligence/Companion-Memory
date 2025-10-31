@@ -7,6 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/services';
 import { RequestContext } from '@ci/common/types';
+import { BrowserActivityEntity } from '@ci/domains/browser-activity';
 import { EventPayloads, Events, OnEvent } from '@ci/domains/events';
 import { FileService, type File } from '@ci/domains/files';
 import { GraphQueryService } from '@ci/domains/graph';
@@ -57,6 +58,7 @@ export class MemoryService {
     'Channel',
     'Video',
     'Communication',
+    'Browser',
   ];
 
   constructor(
@@ -70,6 +72,8 @@ export class MemoryService {
     private readonly communicationRepository: Repository<CommunicationEntity>,
     @InjectRepository(ContentEntity)
     private readonly contentRepository: Repository<ContentEntity>,
+    @InjectRepository(BrowserActivityEntity)
+    private readonly browserActivityRepository: Repository<BrowserActivityEntity>,
   ) {}
 
   /**
@@ -105,6 +109,14 @@ export class MemoryService {
       const contentMemories = await this.getContentMemories(userId, params);
       memories.push(...contentMemories);
       this.logger.debug('Content found', { count: contentMemories.length });
+    }
+
+    // Handle BrowserActivity entities
+    if (entityTypes.includes('Browser')) {
+      this.logger.debug('Querying browser activity table');
+      const browserActivityMemories = await this.getBrowserActivityMemories(userId, params);
+      memories.push(...browserActivityMemories);
+      this.logger.debug('Browser activity found', { count: browserActivityMemories.length });
     }
 
     this.logger.debug('getMemoriesFromSpecificTables returning', { totalCount: memories.length });
@@ -293,10 +305,10 @@ export class MemoryService {
 
       // Separate entity types into graph-based and table-based
       const graphBasedTypes = finalAllowedTypes.filter(
-        (type) => !['Event', 'Communication', 'Content'].includes(type),
+        (type) => !['Event', 'Communication', 'Content', 'Browser'].includes(type),
       );
       const tableBasedTypes = finalAllowedTypes.filter((type) =>
-        ['Event', 'Communication', 'Content'].includes(type),
+        ['Event', 'Communication', 'Content', 'Browser'].includes(type),
       );
 
       this.logger.debug('MemoryService.findAll - Type separation', {
@@ -496,6 +508,7 @@ export class MemoryService {
       Channel: 'other',
       Video: 'content',
       Communication: 'communication',
+      Browser: 'browser',
     };
 
     return map[entityType] ?? 'other';
@@ -824,5 +837,121 @@ export class MemoryService {
         eventId: content.event?.id,
       },
     };
+  }
+
+  /**
+   * Get memories from browser activity table
+   */
+  private async getBrowserActivityMemories(userId: string, params: MemorySearchParams): Promise<Memory[]> {
+    this.logger.debug('getBrowserActivityMemories called', { userId, params });
+
+    let query = this.browserActivityRepository
+      .createQueryBuilder('browser_activity')
+      .where('browser_activity.user_id = :userId', { userId });
+
+    // Apply search query
+    if (params.query) {
+      query = query.andWhere(
+        '(browser_activity.title ILIKE :query OR browser_activity.url ILIKE :query OR browser_activity.page_summary ILIKE :query)',
+        {
+          query: `%${params.query}%`,
+        },
+      );
+    }
+
+    // Apply date filters
+    if (params.startDate) {
+      query = query.andWhere('browser_activity.time >= :startDate', { startDate: params.startDate });
+    }
+
+    if (params.endDate) {
+      query = query.andWhere('browser_activity.time <= :endDate', { endDate: params.endDate });
+    }
+
+    query = query.orderBy('browser_activity.time', 'DESC').limit(100);
+
+    const browserActivities = await query.getMany();
+    const memories = browserActivities.map((activity) => this.browserActivityToMemory(activity));
+
+    return memories;
+  }
+
+  /**
+   * Convert BrowserActivityEntity to Memory
+   */
+  private browserActivityToMemory(activity: BrowserActivityEntity): Memory {
+    // Create a unique ID from the composite primary key components
+    const id = `${activity.user_id}-${activity.time.getTime()}-${activity.device_id}`;
+
+    return {
+      id,
+      type: 'browser',
+      title: activity.title || this.extractDomainFromUrl(activity.url),
+      description: activity.page_summary || `Visited ${this.extractDomainFromUrl(activity.url)}`,
+      timestamp: activity.time,
+      category: activity.category || 'Browser Activity',
+      tags: this.generateBrowserActivityTags(activity),
+      userId: activity.user_id,
+      sourceLink: activity.url,
+      metadata: {
+        entityType: 'BrowserActivity',
+        actionType: activity.action_type,
+        deviceId: activity.device_id,
+        durationSeconds: activity.duration_seconds,
+        scrollDepthPercent: activity.scroll_depth_percent,
+        productivityScore: activity.productivity_score,
+        isIncognito: activity.is_incognito,
+        containsSensitive: activity.contains_sensitive,
+        properties: activity.properties,
+        pageEmbedding: activity.page_embedding,
+        url: activity.url,
+      },
+    };
+  }
+
+  private extractDomainFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+
+      return urlObj.hostname;
+    } catch {
+      return url;
+    }
+  }
+
+  private generateBrowserActivityTags(activity: BrowserActivityEntity): string[] {
+    const tags: string[] = [];
+
+    if (activity.action_type) {
+      tags.push(activity.action_type);
+    }
+
+    if (activity.category) {
+      tags.push(activity.category);
+    }
+
+    if (activity.productivity_score && activity.productivity_score > 0.7) {
+      tags.push('productive');
+    }
+
+    if (activity.duration_seconds && activity.duration_seconds > 300) {
+      tags.push('long-session');
+    }
+
+    if (activity.scroll_depth_percent && activity.scroll_depth_percent > 80) {
+      tags.push('thoroughly-read');
+    }
+
+    // Add domain-based tags
+    const domain = this.extractDomainFromUrl(activity.url);
+    if (domain.includes('github.com')) {
+      tags.push('development');
+    } else if (domain.includes('youtube.com')) {
+      tags.push('video');
+    } else if (domain.includes('news.') || domain.includes('cnn.com') || domain.includes('bbc.com')) {
+      tags.push('news');
+    }
+
+    return tags;
   }
 }

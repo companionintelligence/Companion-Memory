@@ -3,11 +3,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Portal, fetchJson, usePageTitle } from '@ci/common';
 import { Badge, Breadcrumb, Button, Card, Drawer, Input, Skeleton, Textarea } from '@ci/shadcn';
 
+import { useGraphOverview } from '@/api/useGraphOverview';
+import { ForceGraph } from '@/components/ForceGraph';
 import { PageContent } from '@/components/layout';
 import { useAuth } from '@/hooks';
 
-import { ForceGraph } from './ForceGraph';
-import { useGraphOverview } from './use-graph-overview';
 import { useNodeDetails } from './use-node-details';
 
 type GraphSummary = {

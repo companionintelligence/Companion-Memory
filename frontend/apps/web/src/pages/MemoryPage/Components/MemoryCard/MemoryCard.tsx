@@ -1,5 +1,6 @@
 import type { MemoryItem } from '../../types';
 
+import { BrowserActivityCard } from './BrowserActivityCard';
 import { CommunicationCard } from './CommunicationCard';
 import { ConceptCard } from './ConceptCard';
 import { ContactCard } from './ContactCard';
@@ -16,6 +17,8 @@ export interface Props {
 
 export function MemoryCard({ memory }: Props) {
   switch (memory.type) {
+    case 'browser':
+      return <BrowserActivityCard memory={memory} />;
     case 'event':
       return <EventCard memory={memory} />;
     case 'communication':

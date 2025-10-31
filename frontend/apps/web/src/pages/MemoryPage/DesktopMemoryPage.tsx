@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { Portal } from '@ci/common';
-import { Breadcrumb, Tabs, Select } from '@ci/shadcn';
+import { Breadcrumb, Tabs, Select, Sheet } from '@ci/shadcn';
 import { Search, Filter } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
+import { MemoryDetails } from '@/pages/MemoryPage/Components/MemoryDetails';
 
 import { EntityTypeFilter } from './Components/EntityTypeFilter';
 import { GalleryView } from './GalleryView';
@@ -18,6 +19,7 @@ const AVAILABLE_ENTITY_TYPES = [
   'Person',
   'Event',
   'Content',
+  'Browser',
   'Thing',
   'Contact',
   'Place',
@@ -30,8 +32,9 @@ const AVAILABLE_ENTITY_TYPES = [
 ];
 
 export default function DesktopMemoryPage() {
-  const { memories, searchQuery, setSearchQuery } = useMemoryService();
+  const { memories, searchQuery, setSearchQuery, activeMemory, setActiveMemory } = useMemoryService();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [activeTab, setActiveTab] = useState('map');
 
@@ -44,6 +47,16 @@ export default function DesktopMemoryPage() {
     const selectedTypes = AVAILABLE_ENTITY_TYPES.filter((type) => !excludedEntityTypes.includes(type));
     setSelectedEntityTypes(selectedTypes);
   }, [searchParams]);
+
+  useEffect(() => {
+    setDetailsOpen(activeMemory != null);
+  }, [activeMemory]);
+
+  const toggleActiveMemory = (active: boolean) => {
+    if (!active) {
+      setActiveMemory(null);
+    }
+  };
 
   const handleSearch = useCallback(() => {
     // Update URL with search query while preserving existing parameters
@@ -117,7 +130,6 @@ export default function DesktopMemoryPage() {
           </Breadcrumb.List>
         </Breadcrumb>
       </Portal.Slot>
-
       <PageContent>
         {/* Search Bar and Filters */}
         <div className="flex items-center w-full -mx-2">
@@ -207,9 +219,14 @@ export default function DesktopMemoryPage() {
 
           {activeTab === 'gallery' && <GalleryView />}
 
-          {activeTab === 'graph' && <GraphView />}
+          {activeTab === 'graph' && <GraphView variant="desktop" />}
         </>
       </PageContent>
+      {activeMemory && (
+        <Sheet open={detailsOpen} onOpenChange={toggleActiveMemory}>
+          <MemoryDetails memory={activeMemory} />
+        </Sheet>
+      )}
     </>
   );
 }

@@ -164,7 +164,7 @@ export function FeedPage() {
               title={item.title}
               description={item.description}
               tags={item.tags}
-              className="hover:shadow-lg transition-shadow duration-200"
+              className="hover:shadow-lg transition-shadow duration-200 h-110"
             />
           ))}
         </Carousel>

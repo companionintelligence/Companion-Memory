@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 import { Portal } from '@ci/common';
-import { Breadcrumb, Tabs, Select, Button } from '@ci/shadcn';
-import { Search, Filter, MapPin, List, Images, X, Workflow } from '@ci/shadcn/icons';
+import { Breadcrumb, Tabs, Select, Button, Sheet } from '@ci/shadcn';
+import { Search, Filter, MapPin, List, Images, X, Workflow, Share2 } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 
+import { MemoryDetails } from './Components';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { MobileMapView } from './MapView';
@@ -14,13 +15,14 @@ import { TimelineView } from './TimelineView';
 import { useMemoryService } from './useMemoryService';
 
 export default function MobileMemoryPage() {
-  const { searchQuery, setSearchQuery } = useMemoryService();
+  const { searchQuery, setSearchQuery, activeMemory, setActiveMemory } = useMemoryService();
   const [, setSearchParams] = useSearchParams();
 
   const [activeTab, setActiveTab] = useState('list');
 
   // Mobile-specific states
   const [showFilters, setShowFilters] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // Handle search
   const handleSearch = () => {
@@ -48,6 +50,16 @@ export default function MobileMemoryPage() {
       handleSearch();
     }
   };
+
+  const toggleActiveMemory = (active: boolean) => {
+    if (!active) {
+      setActiveMemory(null);
+    }
+  };
+
+  useEffect(() => {
+    setDetailsOpen(activeMemory != null);
+  }, [activeMemory]);
 
   return (
     <>
@@ -106,6 +118,10 @@ export default function MobileMemoryPage() {
                 <Tabs.Trigger value="gallery" className="text-sm flex items-center gap-1">
                   <Images className="h-4 w-4" />
                   Gallery
+                </Tabs.Trigger>
+                <Tabs.Trigger value="graph" className="text-sm flex items-center gap-1">
+                  <Share2 className="h-4 w-4" />
+                  Graph
                 </Tabs.Trigger>
                 <Tabs.Trigger value="graph" className="text-sm flex items-center gap-1">
                   <Workflow className="h-4 w-4" />
@@ -167,9 +183,14 @@ export default function MobileMemoryPage() {
 
           {activeTab === 'gallery' && <GalleryView />}
 
-          {activeTab === 'graph' && <GraphView />}
+          {activeTab === 'graph' && <GraphView variant="mobile" />}
         </>
       </PageContent>
+      {activeMemory && (
+        <Sheet open={detailsOpen} onOpenChange={toggleActiveMemory}>
+          <MemoryDetails memory={activeMemory} />
+        </Sheet>
+      )}
     </>
   );
 }

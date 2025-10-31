@@ -62,9 +62,11 @@ type GraphOverviewState = {
   currentUser: GraphContextDetails['currentUser'] | null;
 };
 
-const MAX_DEPTH = 1;
-
-function buildSubgraph(data: { nodes: GraphNode[]; links: GraphLink[] }, seedId: string): Subgraph {
+function buildSubgraph(
+  data: { nodes: GraphNode[]; links: GraphLink[] },
+  seedId: string,
+  maxDepth: number,
+): Subgraph {
   const visited = new Set<string>([seedId]);
   const queue: Array<{ id: string; depth: number }> = [{ id: seedId, depth: 0 }];
   const adjacency = new Map<string, GraphLink[]>();
@@ -77,7 +79,7 @@ function buildSubgraph(data: { nodes: GraphNode[]; links: GraphLink[] }, seedId:
   while (queue.length > 0) {
     const current = queue.shift()!;
 
-    if (current.depth >= MAX_DEPTH) {
+    if (current.depth >= maxDepth) {
       continue;
     }
 
@@ -93,12 +95,20 @@ function buildSubgraph(data: { nodes: GraphNode[]; links: GraphLink[] }, seedId:
   const filteredNodes = data.nodes.filter((node) => visited.has(node.id));
   const nodeIds = new Set(filteredNodes.map((node) => node.id));
   const filteredLinks = data.links.filter((link) => nodeIds.has(link.source) && nodeIds.has(link.target));
-  const focusedLinks = filteredLinks.filter((link) => link.source === seedId || link.target === seedId);
 
-  return { nodes: filteredNodes, links: focusedLinks };
+  return { nodes: filteredNodes, links: filteredLinks };
 }
 
-export function useGraphOverview(authToken?: string | null): GraphOverviewState {
+export interface GraphOverviewOptions {
+  maxDepth?: number;
+}
+
+export function useGraphOverview(
+  authToken?: string | null,
+  options: GraphOverviewOptions = {},
+): GraphOverviewState {
+  const maxDepth = options.maxDepth ?? 1;
+
   const [state, setState] = useState<GraphOverviewState>({
     loading: true,
     error: null,
@@ -137,7 +147,7 @@ export function useGraphOverview(authToken?: string | null): GraphOverviewState 
 
         const context = contextResponse.context!;
         const userEntityId = context.currentUser.entityId;
-        const subgraph = buildSubgraph(graphResponse.data, userEntityId);
+        const subgraph = buildSubgraph(graphResponse.data, userEntityId, maxDepth);
 
         if (!cancelled) {
           setState({
@@ -177,7 +187,7 @@ export function useGraphOverview(authToken?: string | null): GraphOverviewState 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authToken, maxDepth]);
 
   return useMemo(() => state, [state]);
 }

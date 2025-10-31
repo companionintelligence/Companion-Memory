@@ -1,28 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { useAuth } from '@/hooks';
+import { ResultCard } from '@/pages/MemoryPage/GalleryView/ResultCard';
+import type { MemoryItem, SearchResult } from '@/pages/MemoryPage/types.ts';
 
 import { useMemoryService } from '../useMemoryService';
-
-interface FileMeta {
-  id: string;
-  name: string;
-  contentType: string;
-  size: string;
-  url?: string;
-}
 
 export function GalleryView() {
   const [{ authToken }] = useAuth();
 
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [files, setFiles] = useState<FileMeta[]>([]);
+  const [files, setFiles] = useState<MemoryItem[]>([]);
 
-  const { memories } = useMemoryService();
+  const { memories, searchResults } = useMemoryService();
 
   const hydrateFiles = useCallback(async () => {
-    const tempFiles: FileMeta[] = [];
+    const tempFiles: MemoryItem[] = [];
     const filtered = memories.filter((memory) => memory.metadata?.entityType === 'File');
 
     for (const memory of filtered) {
@@ -35,7 +29,8 @@ export function GalleryView() {
           })
         ).json();
         if (tempFile) {
-          tempFiles.push(tempFile);
+          memory.file = tempFile;
+          tempFiles.push(memory);
         }
       }
     }
@@ -46,6 +41,9 @@ export function GalleryView() {
   useEffect(() => {
     hydrateFiles();
   }, [memories]);
+
+  let combinedResults: (SearchResult | MemoryItem)[] = [];
+  combinedResults = combinedResults.concat(files).concat(searchResults);
 
   // File upload handler
   const handleUpload = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -107,47 +105,9 @@ export function GalleryView() {
 
       {error && <div className="mb-4 text-red-500">{error}</div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-        {files.map((file) => {
-          if (file.contentType?.startsWith('image/')) {
-            return (
-              <div
-                key={file.id}
-                className="flex flex-col items-center border rounded-lg p-2 bg-gray-50 shadow"
-              >
-                <img
-                  src={`/static/${file.url}`}
-                  alt={file.name}
-                  className="w-full h-48 object-cover rounded mb-2"
-                  loading="lazy"
-                />
-                <div className="text-xs font-medium">{file.name}</div>
-                <div className="text-[10px] text-gray-400">{(Number(file.size) / 1024).toFixed(1)} KB</div>
-              </div>
-            );
-          }
-
-          if (file.contentType?.startsWith('video/')) {
-            return (
-              <div
-                key={file.id}
-                className="flex flex-col items-center border rounded-lg p-2 bg-gray-50 shadow"
-              >
-                <video
-                  src={file.url}
-                  controls
-                  className="w-full h-48 object-cover rounded mb-2 bg-black"
-                  preload="metadata"
-                />
-                <div className="text-xs font-medium">{file.name}</div>
-                <div className="text-[10px] text-gray-400">
-                  {(Number(file.size) / 1024 / 1024).toFixed(1)} MB
-                </div>
-              </div>
-            );
-          }
-
-          return null;
-        })}
+        {combinedResults.map((result) => (
+          <ResultCard result={result} />
+        ))}
       </div>
     </>
   );

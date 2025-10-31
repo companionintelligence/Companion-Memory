@@ -36,6 +36,13 @@ const ENTITY_CONFIG: Record<
     userColumn?: string;
   }
 > = {
+  graph_node: {
+    table: 'entities',
+    idColumn: 'entity_id',
+    textColumn: 'search_content',
+    embeddingColumn: 'embedding',
+    userColumn: 'owner_user_id',
+  },
   question: {
     table: 'questions',
     idColumn: 'question_id',
@@ -49,6 +56,20 @@ const ENTITY_CONFIG: Record<
     textColumn: 'answer_text',
     embeddingColumn: 'answer_embedding',
     userColumn: 'user_id',
+  },
+  event: {
+    table: 'events',
+    idColumn: 'event_id',
+    textColumn: 'title',
+    embeddingColumn: 'event_embedding',
+    userColumn: 'user_id',
+  },
+  entity: {
+    table: 'entities',
+    idColumn: 'entity_id',
+    textColumn: 'name',
+    embeddingColumn: 'embedding',
+    userColumn: 'owner_user_id',
   },
 };
 
@@ -291,9 +312,9 @@ export class EmbeddingService {
    */
   async embedAllQuestions(): Promise<number> {
     const questions = await this.dataSource.query(`
-      SELECT question_id, question_text 
-      FROM questions 
-      WHERE question_embedding IS NULL 
+      SELECT question_id, question_text
+      FROM questions
+      WHERE question_embedding IS NULL
       AND question_text IS NOT NULL
     `);
 
@@ -321,9 +342,9 @@ export class EmbeddingService {
    */
   async embedAllAnswers(): Promise<number> {
     const answers = await this.dataSource.query(`
-      SELECT answer_id, answer_text 
-      FROM answers 
-      WHERE answer_embedding IS NULL 
+      SELECT answer_id, answer_text
+      FROM answers
+      WHERE answer_embedding IS NULL
       AND answer_text IS NOT NULL
     `);
 
@@ -351,9 +372,9 @@ export class EmbeddingService {
    */
   async embedAllContent(): Promise<number> {
     const content = await this.dataSource.query(`
-      SELECT id, text 
-      FROM content 
-      WHERE embedding IS NULL 
+      SELECT id, text
+      FROM content
+      WHERE embedding IS NULL
       AND text IS NOT NULL
     `);
 
@@ -381,9 +402,9 @@ export class EmbeddingService {
    */
   async embedAllEntities(): Promise<number> {
     const entities = await this.dataSource.query(`
-      SELECT entity_id, search_content 
-      FROM entities 
-      WHERE embedding IS NULL 
+      SELECT entity_id, search_content
+      FROM entities
+      WHERE embedding IS NULL
       AND search_content IS NOT NULL
     `);
 
@@ -411,9 +432,9 @@ export class EmbeddingService {
    */
   async embedAllInventoryItems(): Promise<number> {
     const inventory = await this.dataSource.query(`
-      SELECT object_id, name, description 
-      FROM inventory 
-      WHERE object_embedding IS NULL 
+      SELECT object_id, name, description
+      FROM inventory
+      WHERE object_embedding IS NULL
       AND (name IS NOT NULL OR description IS NOT NULL)
     `);
 
@@ -441,9 +462,9 @@ export class EmbeddingService {
    */
   async embedAllFacts(): Promise<number> {
     const facts = await this.dataSource.query(`
-      SELECT fact_id, fact_statement 
-      FROM facts 
-      WHERE fact_embedding IS NULL 
+      SELECT fact_id, fact_statement
+      FROM facts
+      WHERE fact_embedding IS NULL
       AND fact_statement IS NOT NULL
     `);
 
@@ -471,8 +492,8 @@ export class EmbeddingService {
    */
   async embedAllDocuments(): Promise<number> {
     const documents = await this.dataSource.query(`
-      SELECT document_id, title, content, summary 
-      FROM documents 
+      SELECT document_id, title, content, summary
+      FROM documents
       WHERE (title_embedding IS NULL OR content_embedding IS NULL OR summary_embedding IS NULL)
       AND (title IS NOT NULL OR content IS NOT NULL OR summary IS NOT NULL)
     `);
@@ -501,9 +522,9 @@ export class EmbeddingService {
    */
   async embedAllDocumentChunks(): Promise<number> {
     const chunks = await this.dataSource.query(`
-      SELECT chunk_id, content 
-      FROM document_chunks 
-      WHERE chunk_embedding IS NULL 
+      SELECT chunk_id, content
+      FROM document_chunks
+      WHERE chunk_embedding IS NULL
       AND content IS NOT NULL
     `);
 
@@ -531,9 +552,9 @@ export class EmbeddingService {
    */
   async embedAllMessages(): Promise<number> {
     const messages = await this.dataSource.query(`
-      SELECT message_id, content 
-      FROM messages 
-      WHERE message_embedding IS NULL 
+      SELECT message_id, content
+      FROM messages
+      WHERE message_embedding IS NULL
       AND content IS NOT NULL
     `);
 
@@ -624,7 +645,7 @@ export class EmbeddingService {
       const config = ENTITY_CONFIG[type];
 
       let selectClause = `
-        SELECT 
+        SELECT
           '${type}' as type,
           ${config.idColumn} as id,
           ${config.textColumn} as text,

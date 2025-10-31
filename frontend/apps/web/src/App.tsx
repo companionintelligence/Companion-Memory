@@ -19,12 +19,12 @@ import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
 
-const KnowledgePage = lazy(() => import('@/pages/AnalyticsPage'));
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const ConnectPage = lazy(() => import('@/pages/ConnectPage'));
 const ConnectionsPage = lazy(() => import('@/pages/ConnectionsPage'));
 const InsightsPage = lazy(() => import('@/pages/InsightsPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage'));
+const KnowledgePage = lazy(() => import('@/pages/KnowledgePage'));
 const MemoryPage = lazy(() => import('@/pages/MemoryPage'));
 const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
 const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'));

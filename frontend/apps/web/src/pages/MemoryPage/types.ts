@@ -3,6 +3,7 @@ export interface MemoryItem {
   type:
     | 'event'
     | 'content'
+    | 'browser'
     | 'thing'
     | 'person'
     | 'contact'
@@ -35,6 +36,10 @@ export interface MemoryItem {
       targetType: string;
       direction: 'outgoing' | 'incoming';
     }>;
+    properties?: {
+      type?: string;
+      [key: string]: unknown;
+    };
     [key: string]: unknown;
   };
   startDate?: string;
@@ -46,6 +51,7 @@ export interface MemoryItem {
   duration?: number;
   source?: string;
   sourceLink?: string;
+  file?: FileMeta;
 }
 
 export type Relationship = {
@@ -59,4 +65,21 @@ export type Relationship = {
 export interface ParticipantData {
   name?: string;
   email?: string;
+}
+
+export interface FileMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  size: string;
+  url?: string;
+}
+
+export interface SearchResult {
+  text: string;
+  type: string;
+  id: string;
+  path: string;
+  imageUrl?: string;
+  metadata?: Record<string, unknown>;
 }

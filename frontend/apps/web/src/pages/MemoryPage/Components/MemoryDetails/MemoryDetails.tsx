@@ -1,3 +1,6 @@
+import { Sheet } from '@ci/shadcn';
+import '../styles.css';
+
 import type { MemoryItem } from '../../types';
 
 import { CommunicationDetails } from './CommunicationDetails';
@@ -5,6 +8,7 @@ import { ConceptDetails } from './ConceptDetails';
 import { ContactDetails } from './ContactDetails';
 import { ContentDetails } from './ContentDetails';
 import { EventDetails } from './EventDetails';
+import { LocationDetails } from './LocationDetails';
 import { OtherDetails } from './OtherDetails';
 import { PersonDetails } from './PersonDetails';
 import { PlaceDetails } from './PlaceDetails';
@@ -14,27 +18,43 @@ export interface Props {
   memory: MemoryItem;
 }
 
-export function MemoryDetails({ memory }: Props) {
-  switch (memory.type) {
-    case 'communication':
+function getCategoryComponent({ memory }: Props) {
+  switch (memory.category) {
+    case 'Communication':
       return <CommunicationDetails memory={memory} />;
-    case 'concept':
+    case 'Concept':
       return <ConceptDetails memory={memory} />;
-    case 'contact':
+    case 'Contact':
       return <ContactDetails memory={memory} />;
-    case 'content':
+    case 'Content':
       return <ContentDetails memory={memory} />;
-    case 'event':
+    case 'Event':
       return <EventDetails memory={memory} />;
-    case 'other':
+    case 'File':
+      return <ContentDetails memory={memory} />;
+    case 'Location':
+      return <LocationDetails memory={memory} />;
+    case 'Other':
       return <OtherDetails memory={memory} />;
-    case 'person':
+    case 'Person':
       return <PersonDetails memory={memory} />;
-    case 'place':
+    case 'Place':
       return <PlaceDetails memory={memory} />;
-    case 'thing':
+    case 'Thing':
       return <ThingDetails memory={memory} />;
     default:
       return null;
   }
+}
+
+export function MemoryDetails({ memory }: Props) {
+  return (
+    <Sheet.Content className="z-index-1000">
+      <Sheet.Header>
+        <Sheet.Title>{memory.title}</Sheet.Title>
+        <Sheet.Description>{memory.description}</Sheet.Description>
+      </Sheet.Header>
+      {getCategoryComponent({ memory })}
+    </Sheet.Content>
+  );
 }

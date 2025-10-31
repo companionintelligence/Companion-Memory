@@ -1,10 +1,8 @@
-import { useCallback } from 'react';
-
 import { Card, Tooltip, cn } from '@ci/shadcn';
 import { Clock, User, Mail, Send, Inbox } from '@ci/shadcn/icons';
-import { useNavigate } from 'react-router-dom';
 
 import type { MemoryItem, ParticipantData } from '../../types';
+import { useMemoryService } from '../../useMemoryService';
 
 const DATE_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
   month: 'short',
@@ -20,7 +18,7 @@ interface Props {
 }
 
 export function CommunicationCard({ memory }: Props) {
-  const navigate = useNavigate();
+  const { setActiveMemory } = useMemoryService();
   const communicationType = memory.metadata?.communicationType as string | undefined;
   const direction = memory.metadata?.direction as string | undefined;
   const participantsMetadata = memory.metadata?.participantsMetadata as
@@ -71,9 +69,9 @@ export function CommunicationCard({ memory }: Props) {
     return <Mail className="h-6 w-6 flex-shrink-0 mt-1 text-[var(--accent-foreground)]" />;
   };
 
-  const handleClick = useCallback(() => {
-    navigate(`/search?q=${encodeURIComponent(memory.title)}`);
-  }, [navigate, memory.title]);
+  const handleClick = () => {
+    setActiveMemory(memory);
+  };
 
   return (
     <Card

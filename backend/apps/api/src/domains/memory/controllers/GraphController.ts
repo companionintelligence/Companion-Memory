@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { RequestContext } from '@ci/common/types';
 import { GraphQueryService, UserContextService } from '@ci/domains/graph';
+import { EmbeddingService } from '@ci/domains/search';
 
 import { GraphEventService } from '../services/GraphEventService';
 
@@ -119,6 +120,10 @@ const updateNodeSchema = z.object({
 
 const deleteRelationshipSchema = z.object({ relationshipId: z.string() });
 const getNodeDetailsSchema = z.object({ entityId: z.string() });
+const graphSearchSchema = z.object({
+  query: z.string().min(1),
+  limit: z.coerce.number().int().positive().max(50).optional(),
+});
 
 type AddPersonDto = z.infer<typeof addPersonSchema>;
 type AddFamilyMembersDto = z.infer<typeof addFamilyMembersSchema>;
@@ -131,6 +136,7 @@ type DeleteNodeDto = z.infer<typeof deleteNodeSchema>;
 type UpdateNodeDto = z.infer<typeof updateNodeSchema>;
 type DeleteRelationshipDto = z.infer<typeof deleteRelationshipSchema>;
 type GetNodeDetailsDto = z.infer<typeof getNodeDetailsSchema>;
+type GraphSearchDto = z.infer<typeof graphSearchSchema>;
 
 @Controller('graph')
 @UseGuards(JwtAuthGuard)
@@ -139,6 +145,7 @@ export class GraphController {
     private readonly graphEvents: GraphEventService,
     private readonly graphQuery: GraphQueryService,
     private readonly userContext: UserContextService,
+    private readonly embeddingService: EmbeddingService,
   ) {}
 
   private ensureUserId(ctx: RequestContext): string {
@@ -313,6 +320,86 @@ export class GraphController {
           properties: rel.properties || {},
         })),
       },
+    };
+  }
+
+  @Get('search')
+  async searchGraph(
+    @Context() ctx: RequestContext,
+    @Query(new ValidationPipe(graphSearchSchema)) query: GraphSearchDto,
+  ) {
+    const ownerId = this.ensureUserId(ctx);
+    const limit = query.limit ?? 10;
+
+    const results = await this.embeddingService.findNearest(ctx, query.query, ['graph_node'], limit);
+    const nodeIds = results
+      .filter((result) => result.type === 'graph_node')
+      .map((result) => result.id)
+      .slice(0, limit);
+
+    if (nodeIds.length === 0) {
+      return {
+        success: true,
+        nodes: [],
+      };
+    }
+
+    const nodes = await this.graphQuery.getNodesByIds(ownerId, nodeIds);
+    const nodeMap = new Map(nodes.map((node) => [node.entity_id, node]));
+    const distanceMap = new Map(results.map((result) => [result.id, result.distance]));
+
+    const relationships = await this.graphQuery.getRelationships(ownerId, {
+      entityIds: nodeIds,
+      direction: 'both',
+      includeInactive: false,
+    });
+    const filteredRelationships = relationships.filter(
+      (rel) => nodeIds.includes(rel.from_entity_id) && nodeIds.includes(rel.to_entity_id),
+    );
+
+    const responseNodes = nodeIds
+      .map((id) => {
+        const node = nodeMap.get(id);
+        if (!node) {
+          return null;
+        }
+
+        return {
+          id: node.entity_id,
+          entity_id: node.entity_id,
+          entity_type: node.entity_type,
+          name: node.name,
+          description: node.description,
+          properties: node.properties ?? {},
+          score: distanceMap.get(id) ?? null,
+        };
+      })
+      .filter(
+        (
+          value,
+        ): value is {
+          id: string;
+          entity_id: string;
+          entity_type: string;
+          name: string | null;
+          description: string | null;
+          properties: Record<string, unknown>;
+          score: number | null;
+        } => value !== null,
+      );
+
+    return {
+      success: true,
+      nodes: responseNodes,
+      links: filteredRelationships.map((rel) => ({
+        id: rel.relationship_id,
+        relationship_id: rel.relationship_id,
+        source: rel.from_entity_id,
+        target: rel.to_entity_id,
+        relationship_type: rel.relationship_type,
+        strength: rel.strength ?? 0.5,
+        properties: rel.properties ?? {},
+      })),
     };
   }
 

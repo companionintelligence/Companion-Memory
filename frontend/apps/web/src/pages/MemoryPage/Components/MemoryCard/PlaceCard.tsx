@@ -1,18 +1,18 @@
 import { Card } from '@ci/shadcn';
 import { MapPin } from '@ci/shadcn/icons';
-import { useNavigate } from 'react-router-dom';
 
 import type { MemoryItem } from '../../types';
+import { useMemoryService } from '../../useMemoryService';
 
 interface Props {
   memory: MemoryItem;
 }
 
 export function PlaceCard({ memory }: Props) {
-  const navigate = useNavigate();
+  const { setActiveMemory } = useMemoryService();
 
   const handleClick = () => {
-    navigate(`/search?q=${encodeURIComponent(memory.title)}`);
+    setActiveMemory(memory);
   };
 
   return (
