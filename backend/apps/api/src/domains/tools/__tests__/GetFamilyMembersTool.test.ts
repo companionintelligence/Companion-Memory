@@ -6,6 +6,7 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import type { RequestContext } from '@ci/common/types';
+import type { GraphQueryService, GraphReadService } from '@ci/domains/memory';
 import type { GraphNodeEntity } from '@ci/domains/memory/entities/GraphNodeEntity';
 import type { RelationshipEntity } from '@ci/domains/memory/entities/RelationshipEntity';
 
@@ -25,8 +26,11 @@ describe('GetFamilyMembersTool', () => {
     // Reset test data
     mockGraphQuery = new MockGraphQueryService();
     mockGraphRead = new MockGraphReadService(mockGraphQuery);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tool = new GetFamilyMembersTool(mockGraphQuery, mockGraphRead as any);
+    // Type assertion is safe here as MockGraphReadService implements the same interface
+    tool = new GetFamilyMembersTool(
+      mockGraphQuery as unknown as GraphQueryService,
+      mockGraphRead as unknown as GraphReadService,
+    );
 
     userId = uuidv4();
     userEntityId = uuidv4();
@@ -833,12 +837,12 @@ describe('GetFamilyMembersTool', () => {
 
   describe('Error handling', () => {
     it('should fail when user context is missing', async () => {
-      const contextWithoutUser: RequestContext = {
+      const contextWithoutUser: Partial<RequestContext> = {
         // Simulate missing userId for error handling test
         requestId: uuidv4(),
       };
 
-      const result = await tool.execute(contextWithoutUser, {
+      const result = await tool.execute(contextWithoutUser as RequestContext, {
         relationshipType: 'all',
         includePreferences: false,
       });

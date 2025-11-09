@@ -107,9 +107,15 @@ export class MockGraphQueryService {
 
 /**
  * Mock implementation of GraphReadService for testing
+ * Implements the same interface as GraphReadService for type-safe testing
  */
 export class MockGraphReadService {
   constructor(private readonly graphQuery: MockGraphQueryService) {}
+
+  // Type-safe mock that matches GraphQueryService interface
+  get graphQueryService(): MockGraphQueryService {
+    return this.graphQuery;
+  }
 
   /**
    * Mock getNode method - delegates to graphQuery
