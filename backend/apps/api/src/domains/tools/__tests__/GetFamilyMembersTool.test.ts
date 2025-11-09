@@ -6,9 +6,12 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import type { RequestContext } from '@ci/common/types';
-import type { GraphQueryService, GraphReadService } from '@ci/domains/memory';
-import type { GraphNodeEntity } from '@ci/domains/memory/entities/GraphNodeEntity';
-import type { RelationshipEntity } from '@ci/domains/memory/entities/RelationshipEntity';
+import type {
+  GraphQueryService,
+  GraphReadService,
+  GraphNodeEntity,
+  RelationshipEntity,
+} from '@ci/domains/memory';
 
 import { GetFamilyMembersTool } from '../providers/native/GetFamilyMembersTool';
 
