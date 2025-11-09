@@ -834,8 +834,7 @@ describe('GetFamilyMembersTool', () => {
   describe('Error handling', () => {
     it('should fail when user context is missing', async () => {
       const contextWithoutUser: RequestContext = {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        userId: undefined as any,
+        // Simulate missing userId for error handling test
         requestId: uuidv4(),
       };
 
