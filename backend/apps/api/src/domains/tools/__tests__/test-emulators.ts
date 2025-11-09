@@ -76,20 +76,20 @@ export class MockGraphQueryService {
     if (options.entityIds && options.entityIds.length > 0) {
       filtered = filtered.filter((rel) => {
         if (options.direction === 'outbound') {
-          return options.entityIds!.includes(rel.from_entity_id);
+          return options.entityIds.includes(rel.from_entity_id);
         } else if (options.direction === 'inbound') {
-          return options.entityIds!.includes(rel.to_entity_id);
+          return options.entityIds.includes(rel.to_entity_id);
         } else {
           // both
           return (
-            options.entityIds!.includes(rel.from_entity_id) || options.entityIds!.includes(rel.to_entity_id)
+            options.entityIds.includes(rel.from_entity_id) || options.entityIds.includes(rel.to_entity_id)
           );
         }
       });
     }
 
     if (options.relationshipTypes && options.relationshipTypes.length > 0) {
-      filtered = filtered.filter((rel) => options.relationshipTypes!.includes(rel.relationship_type));
+      filtered = filtered.filter((rel) => options.relationshipTypes.includes(rel.relationship_type));
     }
 
     return filtered;
