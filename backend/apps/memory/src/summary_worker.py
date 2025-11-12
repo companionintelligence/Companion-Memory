@@ -286,7 +286,7 @@ class SummaryWorker:
             UPDATE agent_messages
             SET status = 'completed',
                 completed_at = NOW(),
-                output_payload = :output::jsonb,
+                output_payload = CAST(:output AS jsonb),
                 execution_log = COALESCE(execution_log, '[]'::jsonb) || jsonb_build_array(
                     jsonb_build_object(
                         'event', 'completed',
@@ -308,9 +308,9 @@ class SummaryWorker:
             """
             UPDATE agent_messages
             SET status = 'failed',
-                completed_at = NOW(),
+                completed_at = NULL,
                 error_message = :error_message,
-                output_payload = :output::jsonb,
+                output_payload = CAST(:output AS jsonb),
                 execution_log = COALESCE(execution_log, '[]'::jsonb) || jsonb_build_array(
                     jsonb_build_object(
                         'event', 'failed',
