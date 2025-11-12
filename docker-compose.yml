@@ -96,7 +96,7 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@postgres:5432/companion_intel
       - LLM_API_BASE=${LLM_API_BASE:-http://host.docker.internal:11434/v1}
       - LLM_API_KEY=${LLM_API_KEY:-ollama}
-      - SUMMARY_QUEUE_NAME=${SUMMARY_QUEUE_NAME:-memory-summaries}
+      - LLM_DEFAULT_CHAT_MODEL=${LLM_DEFAULT_CHAT_MODEL}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
     extra_hosts:
       - host.docker.internal:host-gateway

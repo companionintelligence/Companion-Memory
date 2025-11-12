@@ -92,7 +92,7 @@ class SummaryStorage:
                 properties, embedding, search_content, created_at, updated_at
             ) VALUES (
                 :entity_id, :entity_type, :user_id, :name, :description,
-                :properties::jsonb, :embedding::vector, :search_content, NOW(), NOW()
+                CAST(:properties AS jsonb), CAST(:embedding AS vector), :search_content, NOW(), NOW()
             )
             """,
             {
@@ -101,8 +101,8 @@ class SummaryStorage:
                 "user_id": user_id,
                 "name": f"{summary_type.capitalize()} Summary: {start_time.strftime('%Y-%m-%d %H:%M')}",
                 "description": summary_data['summary_text'][:500],  # Truncated for description
-                "properties": str(properties).replace("'", '"'),
-                "embedding": str(summary_data['embedding']),
+                "properties": json.dumps(properties),
+                "embedding": json.dumps(summary_data['embedding']),
                 "search_content": summary_data['summary_text'],
             }
         )
@@ -191,37 +191,36 @@ class SummaryStorage:
     def _insert_relational_summary(
         self,
         user_id: uuid.UUID,
-        entity_id: uuid.UUID,
         summary_data: Dict[str, Any],
         start_time: datetime,
         end_time: datetime,
         metadata: SummaryMetadata,
+        title: Optional[str] = None,
     ) -> None:
         summary_id = uuid.uuid4()
         params = {
             "summary_id": str(summary_id),
             "user_id": str(user_id),
-            "summary_entity_id": str(entity_id),
             "period_start": start_time,
             "period_end": end_time,
             "period_type": summary_data['summary_type'],
             "timezone": metadata.timezone,
             "source_types": list(metadata.source_types) or ["memory"],
-            "title": f"{summary_data['summary_type'].capitalize()} Summary",
+            "title": title or f"{summary_data['summary_type'].capitalize()} Summary",
             "content": summary_data['summary_text'],
             "structured_context": self._to_json(metadata.structured_context or {}),
             "tags": self._to_json(list(metadata.tags) if metadata.tags is not None else []),
             "participants": self._to_uuid_array(metadata.participants),
             "related_goal_ids": self._to_uuid_array(metadata.related_goal_ids),
             "related_activity_ids": self._to_uuid_array(metadata.related_activity_ids),
-            "related_habit_ids": self._to_uuid_array(metadata.related_habit_ids),
-            "related_entity_ids": self._to_uuid_array(metadata.related_entity_ids),
-            "related_document_ids": self._to_uuid_array(metadata.related_document_ids),
-            "related_communication_ids": self._to_uuid_array(metadata.related_communication_ids),
-            "related_file_ids": self._to_uuid_array(metadata.related_file_ids),
-            "related_event_ids": self._to_uuid_array(metadata.related_event_ids),
+            "related_habits_ids": self._to_uuid_array(metadata.related_habit_ids),
+            "related_entities_ids": self._to_uuid_array(metadata.related_entity_ids),
+            "related_documents_ids": self._to_uuid_array(metadata.related_document_ids),
+            "related_communications_ids": self._to_uuid_array(metadata.related_communication_ids),
+            "related_files_ids": self._to_uuid_array(metadata.related_file_ids),
+            "related_events_ids": self._to_uuid_array(metadata.related_event_ids),
             "confidence_score": summary_data.get('confidence_score', 1.0),
-            "summary_embedding": str(summary_data.get('embedding', [])),
+            "summary_embedding": json.dumps(summary_data.get('embedding', [])),
             "metadata": self._to_json(metadata.metadata or {}),
         }
 
@@ -230,7 +229,6 @@ class SummaryStorage:
             INSERT INTO summaries (
                 summary_id,
                 user_id,
-                summary_entity_id,
                 period_start,
                 period_end,
                 period_type,
@@ -257,7 +255,6 @@ class SummaryStorage:
             ) VALUES (
                 :summary_id,
                 :user_id,
-                :summary_entity_id,
                 :period_start,
                 :period_end,
                 :period_type,
@@ -265,8 +262,8 @@ class SummaryStorage:
                 :source_types,
                 :title,
                 :content,
-                :structured_context::jsonb,
-                :tags::jsonb,
+                CAST(:structured_context AS jsonb),
+                CAST(:tags AS jsonb),
                 :participants,
                 :related_goal_ids,
                 :related_activity_ids,
@@ -277,8 +274,8 @@ class SummaryStorage:
                 :related_file_ids,
                 :related_event_ids,
                 :confidence_score,
-                :summary_embedding::vector,
-                :metadata::jsonb,
+                CAST(:summary_embedding AS vector),
+                CAST(:metadata AS jsonb),
                 NOW(),
                 NOW()
             )

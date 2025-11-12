@@ -44,15 +44,15 @@ CI-Server Backend → agent_messages table → CI-Memory Agent
 
 All configuration now lives in the root `.env` / `.env.default` files at the
 repo root. Update those files (or export the same variables in your shell) so
-the memory service picks up values for `DATABASE_URL`, `LLM_*`,
-`SUMMARY_QUEUE_NAME`, etc.
+the memory service picks up values for `DATABASE_URL` (if running standalone)
+and the `LLM_*` settings. No separate `.env` file is required inside this app.
 
 ### 2. Configuration
 
 Key environment variables:
 
 ```bash
-# Database
+# Database (only needed if you run the worker outside docker-compose)
 DATABASE_URL=postgresql://user:pass@postgres:5432/compint
 
 # LLM (Ollama default)
@@ -61,10 +61,7 @@ LLM_MODEL=qwen2.5:32b  # Or llama3.1:70b, mistral, etc.
 EMBEDDING_MODEL=nomic-embed-text
 
 # Agent
-AGENT_CHECK_INTERVAL_SECONDS=30
-SUMMARY_QUEUE_NAME=memory-summaries
-QUEUE_FETCH_BATCH_SIZE=5
-QUEUE_EMPTY_BACKOFF_SECONDS=5
+AGENT_CHECK_INTERVAL_SECONDS=30  # Configurable via root .env if needed
 ```
 
 ### 3. Run with Docker Compose
