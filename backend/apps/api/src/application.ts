@@ -30,6 +30,7 @@ import { OnboardingModule } from '@ci/domains/onboarding';
 import { PromoteModule } from '@ci/domains/promote';
 import { EmbeddingModule } from '@ci/domains/search';
 import { SpeechModule } from '@ci/domains/speech';
+import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
 
@@ -63,6 +64,7 @@ import { UserModule } from '@ci/domains/user';
     PromoteModule,
     SpeechModule,
     UserModule,
+    SummariesModule,
   ],
   controllers: [],
   providers: [

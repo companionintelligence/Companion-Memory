@@ -48,6 +48,9 @@ build: mcp ## Build the application
 	@printf "\nBuilding Text-to-speech service image...\n\n"
 	@docker compose build tts-service
 
+	@printf "\nBuilding Memory service image...\n\n"
+	@docker compose build memory-service
+
 	@printf "\nCompiling API...\n\n"
 	@cd backend/apps/api && yarn clean && yarn build
 
