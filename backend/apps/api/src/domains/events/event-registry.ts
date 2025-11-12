@@ -33,7 +33,10 @@ export const enum Events {
   PROMOTE_OUTLOOK_MAIL_MESSAGES = 'PROMOTE_OUTLOOK_MAIL_MESSAGES',
   PROMOTE_OUTLOOK_CALENDAR_EVENTS = 'PROMOTE_OUTLOOK_CALENDAR_EVENTS',
   PROMOTE_ONEDRIVE_FILES = 'PROMOTE_ONEDRIVE_FILES',
+  MEMORY_SUMMARY_GENERATION = 'memory.summary.generate',
 }
+
+export type SummaryPeriodType = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'seasonal' | 'yearly';
 
 interface FileUploadPayload extends EventPayload {
   fileId: string;
@@ -264,6 +267,15 @@ interface PromoteOneDriveFilePayload extends EventPayload {
   content: unknown;
 }
 
+interface SummaryGenerationPayload extends EventPayload {
+  userId: string;
+  periodType: SummaryPeriodType;
+  periodStart: string;
+  periodEnd: string;
+  timezone?: string;
+  sourceTypes?: string[];
+}
+
 export type EventPayloads = {
   [Events.FILE_UPLOAD]: FileUploadPayload;
   [Events.CHAT_SUMMARIZATION]: ChatSummarizationPayload;
@@ -295,4 +307,5 @@ export type EventPayloads = {
   [Events.PROMOTE_OUTLOOK_MAIL_MESSAGES]: PromoteOutlookMessagesPayload;
   [Events.PROMOTE_OUTLOOK_CALENDAR_EVENTS]: PromoteOutlookCalendarEventsPayload;
   [Events.PROMOTE_ONEDRIVE_FILES]: PromoteOneDriveFilePayload;
+  [Events.MEMORY_SUMMARY_GENERATION]: SummaryGenerationPayload;
 };

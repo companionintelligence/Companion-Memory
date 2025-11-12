@@ -85,6 +85,28 @@ services:
     restart: unless-stopped
     profiles: [ "all", "infra" ]
 
+  memory-service:
+    build:
+      context: ./backend/apps/memory
+      dockerfile: Dockerfile
+    image: ci/memory-service
+    pull_policy: build
+    container_name: memory-service
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@postgres:5432/companion_intel
+      - LLM_API_BASE=${LLM_API_BASE:-http://host.docker.internal:11434/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-ollama}
+      - SUMMARY_QUEUE_NAME=${SUMMARY_QUEUE_NAME:-memory-summaries}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - web
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    profiles: [ "all", "infra" ]
+
   webserver:
     image: nginx:stable
     container_name: webserver

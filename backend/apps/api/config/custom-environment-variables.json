@@ -40,6 +40,7 @@
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",
     "scheduled.entity.promotion": "ENABLE_SCHEDULED_ENTITY_PROMOTION",
+    "scheduled.memory.summaries": "ENABLE_SCHEDULED_MEMORY_SUMMARIES",
     "pinned.demo.models": "ENABLE_PINNED_DEMO_MODELS"
   },
   "environment": {

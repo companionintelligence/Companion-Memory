@@ -1,0 +1,1 @@
+export { SummariesModule } from './SummariesModule';

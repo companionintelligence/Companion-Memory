@@ -66,6 +66,7 @@
     "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,
     "scheduled.entity.promotion": true,
+    "scheduled.memory.summaries": true,
     "pinned.demo.models": false
   },
   "environment": {
