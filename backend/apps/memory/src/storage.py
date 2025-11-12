@@ -109,7 +109,6 @@ class SummaryStorage:
 
         self._insert_relational_summary(
             user_id=user_id,
-            entity_id=entity_id,
             summary_data=summary_data,
             start_time=start_time,
             end_time=end_time,

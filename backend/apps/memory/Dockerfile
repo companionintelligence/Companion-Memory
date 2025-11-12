@@ -14,9 +14,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
+COPY entrypoint.sh ./
+
+# Make entrypoint executable
+RUN chmod +x entrypoint.sh
 
 # Run as non-root user
 RUN useradd -m -u 1000 memorizer && chown -R memorizer:memorizer /app
 USER memorizer
 
-CMD ["python", "-m", "src.main"]
+# Expose API port
+EXPOSE 8001
+
+CMD ["./entrypoint.sh"]
