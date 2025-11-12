@@ -47,6 +47,7 @@ class DataAggregator:
             "messages": self._get_messages(user_id, start_time, end_time),
             "files": self._get_files(user_id, start_time, end_time),
             "api_logs": self._get_api_logs(user_id, start_time, end_time),
+            "browser_activity": self._get_browser_activity(user_id, start_time, end_time),
         }
         
         return aggregated
@@ -261,6 +262,36 @@ class DataAggregator:
           AND created_at >= :start
           AND created_at < :end
         ORDER BY created_at DESC
+        LIMIT :limit
+        """
+        return db.execute_query(query, {
+            "user_id": user_id,
+            "start": start,
+            "end": end,
+            "limit": settings.max_items_per_category
+        })
+
+    def _get_browser_activity(self, user_id: UUID, start: datetime, end: datetime) -> List[Dict]:
+        """Get browser activity for time period."""
+        query = """
+        SELECT 
+            time,
+            url,
+            domain,
+            title,
+            action_type,
+            duration_seconds,
+            scroll_depth_percent,
+            category,
+            productivity_score,
+            is_incognito,
+            contains_sensitive,
+            page_summary
+        FROM browser_activity
+        WHERE user_id = :user_id
+          AND time >= :start
+          AND time < :end
+        ORDER BY time DESC
         LIMIT :limit
         """
         return db.execute_query(query, {

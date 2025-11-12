@@ -42,20 +42,22 @@ class Summarizer:
         """
         self._ensure_client()
 
-        logger.info("generating_hourly_summary",
-                   user_id=aggregated_data.get("user_id"),
-                   start=aggregated_data.get("start_time"))
-        
+        logger.info(
+            "generating_hourly_summary",
+            user_id=aggregated_data.get("user_id"),
+            start=aggregated_data.get("start_time"),
+        )
+
+        activity_counts = self._count_activities(aggregated_data)
+        logger.info("hourly_activity_counts", counts=activity_counts)
+
         # Build structured prompt
-        prompt = self._build_hourly_prompt(aggregated_data)
+        prompt = self._build_hourly_prompt(aggregated_data, activity_counts)
         
-        try:
-            response = self.client.chat.completions.create(
-                model=settings.llm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an AI assistant that creates concise, insightful hourly summaries of user activity. 
+        messages = [
+            {
+                "role": "system",
+                "content": """You are an AI assistant that creates concise, insightful hourly summaries of user activity. 
 Analyze the provided data and generate:
 1. A narrative summary (2-3 sentences) describing the hour
 2. 3-5 key insights or patterns
@@ -63,15 +65,23 @@ Analyze the provided data and generate:
 4. Any anomalies or interesting observations
 
 Be factual and concise. Focus on what's meaningful and actionable."""
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=settings.llm_temperature,
-                max_tokens=settings.llm_max_tokens,
-            )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
+        chat_kwargs = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+        }
+
+        try:
+            self._log_llm_request("chat.completions.create", chat_kwargs)
+            response = self.client.chat.completions.create(**chat_kwargs)
             
             summary_text = response.choices[0].message.content
             
@@ -88,7 +98,7 @@ Be factual and concise. Focus on what's meaningful and actionable."""
                 "notable_events": parsed.get("events", []),
                 "anomalies": parsed.get("anomalies", []),
                 "embedding": embedding,
-                "activity_counts": self._count_activities(aggregated_data),
+                "activity_counts": activity_counts,
                 "tokens_used": response.usage.total_tokens if response.usage else 0,
             }
             
@@ -96,13 +106,23 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             logger.error("summary_generation_failed", error=str(e))
             raise
     
-    def _build_hourly_prompt(self, data: Dict[str, Any]) -> str:
+    def _build_hourly_prompt(self, data: Dict[str, Any], activity_counts: Dict[str, int]) -> str:
         """Build the prompt for hourly summarization."""
         parts = [
             f"Time Period: {data['start_time']} to {data['end_time']}",
             f"User ID: {data['user_id']}",
             "",
         ]
+
+        non_zero_counts = [
+            f"- {key.replace('_', ' ')}: {count}"
+            for key, count in activity_counts.items()
+            if key != "total" and count
+        ]
+        if non_zero_counts:
+            parts.append("DATA COUNTS:")
+            parts.extend(non_zero_counts)
+            parts.append("")
         
         # Add measurements summary
         if data.get('measurements'):
@@ -161,6 +181,24 @@ Be factual and concise. Focus on what's meaningful and actionable."""
                 filename = f['filename']
                 parts.append(f"- {filename}")
             parts.append("")
+
+        # Add browser activity
+        if data.get('browser_activity'):
+            parts.append("BROWSER ACTIVITY:")
+            for entry in data['browser_activity'][:10]:
+                domain = entry.get('domain') or 'unknown'
+                title = entry.get('title') or entry.get('url') or domain
+                action = entry.get('action_type') or 'visit'
+                duration = entry.get('duration_seconds')
+                category = entry.get('category') or 'uncategorized'
+                duration_text = f", {duration}s" if duration is not None else ""
+                parts.append(
+                    f"- {title} ({domain}) [{action}{duration_text}, category={category}]"
+                )
+                summary = (entry.get('page_summary') or '').strip()
+                if summary:
+                    parts.append(f"  ↳ {summary[:200]}")
+            parts.append("")
         
         return "\n".join(parts)
     
@@ -209,6 +247,10 @@ Be factual and concise. Focus on what's meaningful and actionable."""
         """Generate embedding for text using the embedding model."""
         self._ensure_client()
         try:
+            self._log_llm_request(
+                "embeddings.create",
+                {"model": settings.embedding_model, "input": text},
+            )
             response = self.client.embeddings.create(
                 model=settings.embedding_model,
                 input=text
@@ -230,6 +272,7 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             "messages": len(data.get('messages', [])),
             "files": len(data.get('files', [])),
             "api_logs": len(data.get('api_logs', [])),
+            "browser_activity": len(data.get('browser_activity', [])),
         }
         counts["total"] = sum(counts.values())
         return counts
@@ -261,22 +304,27 @@ Be factual and concise. Focus on what's meaningful and actionable."""
 
         prompt = self._build_history_prompt(level, start_time, end_time, stats, sample_entries)
 
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a personal intelligence analyst. Given browser history data, infer what the user is likely working on, learning, or planning. Highlight intents, research threads, and context in 2-3 sentences.""",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+
+        chat_kwargs = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "max_tokens": min(settings.llm_max_tokens, 400),
+        }
+
         try:
-            response = self.client.chat.completions.create(
-                model=settings.llm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a personal intelligence analyst. Given browser history data, infer what the user is likely working on, learning, or planning. Highlight intents, research threads, and context in 2-3 sentences.""",
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
-                temperature=settings.llm_temperature,
-                max_tokens=min(settings.llm_max_tokens, 400),
-            )
+            self._log_llm_request("chat.completions.create", chat_kwargs)
+            response = self.client.chat.completions.create(**chat_kwargs)
             return response.choices[0].message.content.strip()
         except Exception as exc:
             logger.error("history_summary_generation_failed", error=str(exc))
@@ -330,13 +378,10 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             for i, s in enumerate(hourly_summaries)
         ])
         
-        try:
-            response = self.client.chat.completions.create(
-                model=settings.llm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an AI assistant that synthesizes multiple hourly summaries into a coherent daily summary.
+        messages = [
+            {
+                "role": "system",
+                "content": """You are an AI assistant that synthesizes multiple hourly summaries into a coherent daily summary.
 Create a concise daily narrative that:
 1. Highlights the main themes and patterns of the day
 2. Identifies the most significant activities and events
@@ -344,15 +389,23 @@ Create a concise daily narrative that:
 4. Provides actionable insights
 
 Be factual and insightful. Focus on what's most meaningful."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Synthesize these hourly summaries into a daily summary:\n\n{all_text}"
-                    }
-                ],
-                temperature=settings.llm_temperature,
-                max_tokens=settings.llm_max_tokens,
-            )
+            },
+            {
+                "role": "user",
+                "content": f"Synthesize these hourly summaries into a daily summary:\n\n{all_text}"
+            }
+        ]
+
+        chat_kwargs = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+        }
+
+        try:
+            self._log_llm_request("chat.completions.create", chat_kwargs)
+            response = self.client.chat.completions.create(**chat_kwargs)
             
             summary_text = response.choices[0].message.content
             embedding = self.generate_embedding(summary_text)
@@ -367,6 +420,7 @@ Be factual and insightful. Focus on what's most meaningful."""
                 "messages": sum(s['activity_counts'].get('messages', 0) for s in hourly_summaries),
                 "files": sum(s['activity_counts'].get('files', 0) for s in hourly_summaries),
                 "api_logs": sum(s['activity_counts'].get('api_logs', 0) for s in hourly_summaries),
+                "browser_activity": sum(s['activity_counts'].get('browser_activity', 0) for s in hourly_summaries),
             }
             total_counts["total"] = sum(total_counts.values())
             
@@ -404,28 +458,33 @@ Be factual and insightful. Focus on what's most meaningful."""
             for i, s in enumerate(child_summaries)
         ])
 
-        try:
-            response = self.client.chat.completions.create(
-                model=settings.llm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": f"""You are an AI assistant that synthesizes {child_label} summaries into a coherent {period_label} overview. Provide:
+        messages = [
+            {
+                "role": "system",
+                "content": f"""You are an AI assistant that synthesizes {child_label} summaries into a coherent {period_label} overview. Provide:
 1. Dominant themes and highlights for the {period_label}
 2. Key accomplishments or risks
 3. Trends or shifts observed across the {child_label}s
 4. Actionable insights or next steps
 
 Deliver a concise, reflective narrative.""",
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Synthesize these {child_label} summaries into a {period_label} summary:\n\n{all_text}",
-                    },
-                ],
-                temperature=settings.llm_temperature,
-                max_tokens=settings.llm_max_tokens,
-            )
+            },
+            {
+                "role": "user",
+                "content": f"Synthesize these {child_label} summaries into a {period_label} summary:\n\n{all_text}",
+            },
+        ]
+
+        chat_kwargs = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+        }
+
+        try:
+            self._log_llm_request("chat.completions.create", chat_kwargs)
+            response = self.client.chat.completions.create(**chat_kwargs)
 
             summary_text = response.choices[0].message.content
             embedding = self.generate_embedding(summary_text)
@@ -453,6 +512,7 @@ Deliver a concise, reflective narrative.""",
             "messages",
             "files",
             "api_logs",
+            "browser_activity",
         ]
         totals = {key: 0 for key in keys}
         for summary in summaries:
@@ -461,6 +521,26 @@ Deliver a concise, reflective narrative.""",
                 totals[key] += counts.get(key, 0)
         totals['total'] = sum(totals.values())
         return totals
+
+    def _log_llm_request(self, operation: str, payload: Dict[str, Any]) -> None:
+        """Emit the exact payload heading to the LLM for debugging."""
+        try:
+            logger.info(
+                "llm_request",
+                operation=operation,
+                payload=self._serialize_payload(payload),
+            )
+        except Exception as exc:
+            logger.warning("llm_request_logging_failed", error=str(exc), operation=operation)
+
+    def _serialize_payload(self, value: Any):
+        if isinstance(value, dict):
+            return {k: self._serialize_payload(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._serialize_payload(v) for v in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
 
 
 # Global summarizer instance
