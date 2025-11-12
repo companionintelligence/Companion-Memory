@@ -92,6 +92,8 @@ services:
     image: ci/memory-service
     pull_policy: build
     container_name: memory-service
+    ports:
+      - 8001:8001
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@postgres:5432/companion_intel
       - LLM_API_BASE=${LLM_API_BASE:-http://host.docker.internal:11434/v1}
