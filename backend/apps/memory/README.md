@@ -67,8 +67,15 @@ AGENT_CHECK_INTERVAL_SECONDS=30  # Configurable via root .env if needed
 ### 3. Run with Docker Compose
 
 ```bash
-docker-compose up --build
+# Build and start the service
+docker-compose build memory-service
+docker-compose up memory-service
+
+# Or with full profile
+docker-compose --profile infra up
 ```
+
+The service now runs both the worker (PgBoss listener) and the FastAPI server (port 8000) simultaneously. See [DOCKER_ACCESS_GUIDE.md](DOCKER_ACCESS_GUIDE.md) for details on accessing the API from outside the container.
 
 ### 4. Run Locally (Development)
 
@@ -118,9 +125,77 @@ WHERE entity_type IN ('HourlySummary', 'DailySummary', 'WeeklySummary')
 ORDER BY created_at DESC;
 ```
 
+### Manual Summary Trigger (Testing & Debugging)
+
+For testing and debugging, you can manually trigger summary generation without going through the PgBoss queue:
+
+#### REST API Endpoint
+
+```bash
+# Start the API server
+uvicorn src.api:app --reload
+
+# Trigger a summary (defaults to last hour)
+curl -X POST http://localhost:8000/summary/manual-trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<user-uuid>",
+    "period_type": "hourly"
+  }'
+
+# Trigger with custom time range
+curl -X POST http://localhost:8000/summary/manual-trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<user-uuid>",
+    "period_type": "daily",
+    "start_time": "2025-11-12T00:00:00Z",
+    "end_time": "2025-11-12T23:59:59Z",
+    "timezone": "America/Los_Angeles"
+  }'
+```
+
+#### Test Scripts
+
+Two convenience scripts are provided:
+
+**Bash Script:**
+```bash
+# Default (last hour)
+USER_ID="<your-user-uuid>" ./test_manual_summary.sh
+
+# Custom period type
+USER_ID="<your-user-uuid>" PERIOD_TYPE="daily" ./test_manual_summary.sh
+
+# Custom API endpoint
+API_BASE="http://localhost:8080" USER_ID="<uuid>" ./test_manual_summary.sh
+```
+
+**Python Script:**
+```bash
+# Default (last hour)
+python test_manual_summary.py --user-id "<your-user-uuid>"
+
+# Daily summary
+python test_manual_summary.py --user-id "<uuid>" --period-type daily
+
+# Custom time range
+python test_manual_summary.py \
+  --user-id "<uuid>" \
+  --period-type hourly \
+  --start-time "2025-11-12T10:00:00Z" \
+  --end-time "2025-11-12T11:00:00Z"
+```
+
+The manual trigger endpoint bypasses the queue system and executes the same summary generation logic that the worker uses, making it perfect for:
+- Testing summary generation without scheduling
+- Debugging issues with specific time ranges
+- Backfilling summaries for specific periods
+- Development and local testing
+
 ### Manual Browser History Processing
 
-You can now summarize ad-hoc browser history exports without going through the queue/listener.
+You can also summarize ad-hoc browser history exports without going through the queue/listener.
 
 #### CLI
 
@@ -134,11 +209,9 @@ python -m src.history_cli --input data/history.csv --disable-llm
 
 The CLI emits a combined CSV containing all hourly rows followed by daily rows, along with the computed stats and LLM-written summary for each bucket. Use `--disable-llm` when you just want the deterministic fallback text.
 
-#### API Endpoint
+#### Browser History API Endpoints
 
 ```bash
-uvicorn src.api:app --reload
-
 # Upload an export directly
 curl -X POST \
   -F "file=@data/history.csv" \

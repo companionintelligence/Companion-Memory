@@ -71,7 +71,10 @@ class SummaryStorage:
             "activity_counts": summary_data['activity_counts'],
             "tokens_used": summary_data.get('tokens_used', 0),
         }
-        
+
+        if summary_data.get('structured_summary'):
+            properties['structured_summary'] = summary_data['structured_summary']
+
         # Add type-specific properties
         if 'key_insights' in summary_data:
             properties['key_insights'] = summary_data['key_insights']
@@ -206,7 +209,7 @@ class SummaryStorage:
             "timezone": metadata.timezone,
             "source_types": list(metadata.source_types) or ["memory"],
             "title": title or f"{summary_data['summary_type'].capitalize()} Summary",
-            "content": summary_data['summary_text'],
+            "content": json.dumps(self._prepare_content_payload(summary_data)),
             "structured_context": self._to_json(metadata.structured_context or {}),
             "tags": self._to_json(list(metadata.tags) if metadata.tags is not None else []),
             "participants": self._to_uuid_array(metadata.participants),
@@ -260,7 +263,7 @@ class SummaryStorage:
                 :timezone,
                 :source_types,
                 :title,
-                :content,
+                CAST(:content AS jsonb),
                 CAST(:structured_context AS jsonb),
                 CAST(:tags AS jsonb),
                 :participants,
@@ -296,6 +299,34 @@ class SummaryStorage:
         if isinstance(obj, uuid.UUID):
             return str(obj)
         return str(obj)
+    
+    def _prepare_content_payload(self, summary_data: Dict[str, Any]) -> Dict[str, Any]:
+        structured = summary_data.get('structured_summary')
+        if isinstance(structured, str):
+            try:
+                structured = json.loads(structured)
+            except json.JSONDecodeError:
+                structured = None
+        if isinstance(structured, dict):
+            return structured
+
+        summary_text = summary_data.get('summary_text', '')
+        if isinstance(summary_text, str):
+            try:
+                parsed = json.loads(summary_text)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        return {
+            "summary": {
+                "narrative": summary_text,
+                "insights": summary_data.get('key_insights', []),
+                "notable_events": summary_data.get('notable_events', []),
+                "anomalies": summary_data.get('anomalies', []),
+            }
+        }
     
     def get_daily_summaries(self,
                            user_id: uuid.UUID,

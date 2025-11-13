@@ -1,8 +1,9 @@
 """LLM-based summarization using OpenAI-compatible API."""
 import json
+import re
 from datetime import datetime
 import structlog
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from openai import OpenAI
 
 from .config import settings
@@ -51,26 +52,61 @@ class Summarizer:
         activity_counts = self._count_activities(aggregated_data)
         logger.info("hourly_activity_counts", counts=activity_counts)
 
+        if activity_counts.get("total", 0) == 0:
+            logger.info(
+                "skipping_hourly_summary_no_data",
+                user_id=aggregated_data.get("user_id"),
+                start=aggregated_data.get("start_time"),
+                end=aggregated_data.get("end_time"),
+            )
+            structured = {
+                "summary": {
+                    "narrative": "No activity recorded during this window.",
+                    "insights": [],
+                    "notable_events": [],
+                    "anomalies": [],
+                    "tags": [],
+                }
+            }
+            summary_text = json.dumps(structured, ensure_ascii=False)
+            embedding = self.generate_embedding(summary_text)
+            return {
+                "summary_text": summary_text,
+                "summary_type": "hourly",
+                "key_insights": [],
+                "notable_events": [],
+                "anomalies": [],
+                "embedding": embedding,
+                "activity_counts": activity_counts,
+                "tokens_used": 0,
+                "structured_summary": structured,
+            }
+
         # Build structured prompt
         prompt = self._build_hourly_prompt(aggregated_data, activity_counts)
-        
+
         messages = [
             {
                 "role": "system",
-                "content": """You are an AI assistant that creates concise, insightful hourly summaries of user activity. 
+                "content": """You are an AI assistant that creates concise, insightful hourly summaries of user activity.
 Analyze the provided data and generate:
 1. A narrative summary (2-3 sentences) describing the hour
 2. 3-5 key insights or patterns
 3. Notable events or activities
 4. Any anomalies or interesting observations
+5. A list of tags that describe the events, content, and activities.
 
-Be factual and concise. Focus on what's meaningful and actionable."""
+Be factual and concise. Focus on what's meaningful and actionable.
+Response must be valid JSON (no markdown/code fences) with nested sections.
+If there is no data to summarize, return an empty JSON object."""
             },
             {
                 "role": "user",
                 "content": prompt
             }
         ]
+
+        self._log_prompt("hourly", messages)
 
         chat_kwargs = {
             "model": settings.llm_model,
@@ -83,10 +119,12 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
             
-            summary_text = response.choices[0].message.content
-            
+            raw_response = response.choices[0].message.content
+
+            summary_text, structured = self._coerce_json_summary(raw_response)
+
             # Parse the response to extract structured information
-            parsed = self._parse_summary_response(summary_text)
+            parsed = self._parse_structured_or_text(structured, raw_response)
             
             # Generate embedding for the summary
             embedding = self.generate_embedding(summary_text)
@@ -100,6 +138,7 @@ Be factual and concise. Focus on what's meaningful and actionable."""
                 "embedding": embedding,
                 "activity_counts": activity_counts,
                 "tokens_used": response.usage.total_tokens if response.usage else 0,
+                "structured_summary": structured,
             }
             
         except Exception as e:
@@ -201,7 +240,7 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             parts.append("")
         
         return "\n".join(parts)
-    
+
     def _parse_summary_response(self, summary_text: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract structured information.
@@ -242,7 +281,38 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             "events": events,
             "anomalies": anomalies,
         }
-    
+
+    def _parse_structured_or_text(
+        self,
+        structured_summary: Optional[Dict[str, Any]],
+        fallback_text: str,
+    ) -> Dict[str, Any]:
+        if structured_summary:
+            return self._parse_structured_summary(structured_summary)
+        return self._parse_summary_response(fallback_text)
+
+    def _parse_structured_summary(self, structured_summary: Dict[str, Any]) -> Dict[str, Any]:
+        summary_block = structured_summary.get("summary", structured_summary)
+        insights = summary_block.get("insights") or []
+        anomalies = summary_block.get("anomalies") or summary_block.get("risks") or []
+        events_data = summary_block.get("notable_events") or summary_block.get("events") or []
+
+        events: List[str] = []
+        if isinstance(events_data, list):
+            for item in events_data:
+                if isinstance(item, dict):
+                    event = item.get("event") or item.get("description") or "event"
+                    time = item.get("time")
+                    events.append(f"{event} ({time})" if time else event)
+                elif isinstance(item, str):
+                    events.append(item)
+
+        return {
+            "insights": insights if isinstance(insights, list) else [str(insights)],
+            "events": events,
+            "anomalies": anomalies if isinstance(anomalies, list) else [str(anomalies)],
+        }
+
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the embedding model."""
         self._ensure_client()
@@ -322,7 +392,10 @@ Be factual and concise. Focus on what's meaningful and actionable."""
             "max_tokens": min(settings.llm_max_tokens, 400),
         }
 
+        self._log_prompt(f"daily-from-hourly", all_text)
+
         try:
+            self._log_prompt(f"browser-history-{level}", messages)
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
             return response.choices[0].message.content.strip()
@@ -404,6 +477,7 @@ Be factual and insightful. Focus on what's most meaningful."""
         }
 
         try:
+            self._log_prompt("daily", messages)
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
             
@@ -457,6 +531,8 @@ Be factual and insightful. Focus on what's most meaningful."""
             f"{child_label.title()} {i+1}: {s['summary_text']}"
             for i, s in enumerate(child_summaries)
         ])
+
+        self._log_prompt(f"{period_label}-from-{child_label}", all_text)
 
         messages = [
             {
@@ -522,6 +598,54 @@ Deliver a concise, reflective narrative.""",
         totals['total'] = sum(totals.values())
         return totals
 
+    def _coerce_json_summary(self, response_text: str) -> Tuple[str, Dict[str, Any]]:
+        """Ensure the LLM response is valid JSON, stripping markdown fences."""
+        cleaned = response_text.strip()
+        cleaned = self._strip_code_fences(cleaned)
+
+        parsed = self._try_parse_json(cleaned)
+        if not parsed:
+            blob = self._extract_json_blob(cleaned)
+            parsed = self._try_parse_json(blob) if blob else None
+
+        if not parsed:
+            logger.warning("llm_response_not_json", preview=cleaned[:200])
+            parsed = {
+                "summary": {
+                    "narrative": cleaned,
+                    "insights": [],
+                    "notable_events": [],
+                    "anomalies": [],
+                }
+            }
+
+        normalized = json.dumps(parsed, ensure_ascii=False, indent=2)
+        return normalized, parsed
+
+    def _strip_code_fences(self, text: str) -> str:
+        fence = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+        if text.startswith("```"):
+            text = fence.sub("", text)
+        return text.strip()
+
+    def _extract_json_blob(self, text: str) -> Optional[str]:
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            return text[start:end + 1]
+        return None
+
+    def _try_parse_json(self, text: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not text:
+            return None
+        try:
+            value = json.loads(text)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            return None
+        return None
+
     def _log_llm_request(self, operation: str, payload: Dict[str, Any]) -> None:
         """Emit the exact payload heading to the LLM for debugging."""
         try:
@@ -541,6 +665,13 @@ Deliver a concise, reflective narrative.""",
         if isinstance(value, datetime):
             return value.isoformat()
         return value
+
+    def _log_prompt(self, summary_type: str, messages: List[Dict[str, Any]]) -> None:
+        try:
+            formatted = json.dumps(messages, ensure_ascii=False, indent=2)
+        except Exception:
+            formatted = str(messages)
+        print(f"[llm_prompt][{summary_type}]\n{formatted}\n", flush=True)
 
 
 # Global summarizer instance
