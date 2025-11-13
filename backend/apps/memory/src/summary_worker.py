@@ -396,8 +396,8 @@ class SummaryWorker:
         hourly_summaries_raw = storage.get_hourly_summaries(user_id, start_time, end_time)
         hourly_summaries = [
             {
-                "summary_text": h["properties"]["summary_text"],
-                "activity_counts": h["properties"]["activity_counts"],
+                "summary_text": self._extract_summary_text(h),
+                "activity_counts": self._extract_activity_counts(h),
             }
             for h in hourly_summaries_raw
         ]
@@ -407,7 +407,7 @@ class SummaryWorker:
 
         summary_data = summarizer.generate_daily_summary(hourly_summaries)
 
-        child_ids = [str(h['entity_id']) for h in hourly_summaries_raw]
+        child_ids = [str(h['summary_id']) for h in hourly_summaries_raw]
         metadata = SummaryMetadata(
             timezone=timezone,
             source_types=['memory.hourly'],
@@ -426,10 +426,6 @@ class SummaryWorker:
             end_time,
             metadata=metadata,
         )
-
-        for h in hourly_summaries_raw:
-            storage.link_to_parent_summary(h["entity_id"], entity_id, user_id)
-
         return {
             "summary_entity_id": str(entity_id),
             "summary_type": "daily",
@@ -460,8 +456,8 @@ class SummaryWorker:
         daily_summaries_raw = storage.get_daily_summaries(user_id, start_time, end_time)
         daily_summaries = [
             {
-                "summary_text": record['properties']['summary_text'],
-                "activity_counts": record['properties']['activity_counts'],
+                "summary_text": self._extract_summary_text(record),
+                "activity_counts": self._extract_activity_counts(record),
             }
             for record in daily_summaries_raw
         ]
@@ -472,7 +468,7 @@ class SummaryWorker:
         summary_data = summarizer.generate_period_rollup(period_type, 'daily', daily_summaries)
         summary_data.setdefault('num_child_summaries', len(daily_summaries_raw))
         summary_data.setdefault('num_daily_summaries', len(daily_summaries_raw))
-        child_ids = [str(record['entity_id']) for record in daily_summaries_raw]
+        child_ids = [str(record['summary_id']) for record in daily_summaries_raw]
 
         metadata = SummaryMetadata(
             timezone=timezone,
@@ -492,9 +488,6 @@ class SummaryWorker:
             end_time,
             metadata=metadata,
         )
-
-        for record in daily_summaries_raw:
-            storage.link_to_parent_summary(record['entity_id'], entity_id, user_id)
 
         return {
             "summary_entity_id": str(entity_id),
@@ -583,6 +576,32 @@ class SummaryWorker:
         if isinstance(insights, list):
             return insights[:5]
         return []
+
+    def _extract_summary_text(self, record: Dict[str, Any]) -> str:
+        content = record.get('content') or {}
+        if isinstance(content, dict):
+            summary_text = content.get('summary_text')
+            if isinstance(summary_text, str):
+                return summary_text
+            summary_block = content.get('summary')
+            if isinstance(summary_block, dict):
+                narrative = summary_block.get('narrative')
+                if isinstance(narrative, str):
+                    return narrative
+        return ""
+
+    def _extract_activity_counts(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        content = record.get('content') or {}
+        if isinstance(content, dict):
+            counts = content.get('activity_counts')
+            if isinstance(counts, dict):
+                return counts
+        context = record.get('structured_context') or {}
+        if isinstance(context, dict):
+            counts = context.get('activity_counts')
+            if isinstance(counts, dict):
+                return counts
+        return {}
 
 
 worker = SummaryWorker()

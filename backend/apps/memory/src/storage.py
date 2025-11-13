@@ -34,7 +34,7 @@ class SummaryMetadata:
 
 
 class SummaryStorage:
-    """Stores summaries as entities and in relational tables."""
+    """Stores summaries in the relational summaries table."""
 
     def store_summary(
         self,
@@ -44,73 +44,10 @@ class SummaryStorage:
         end_time: datetime,
         metadata: Optional[SummaryMetadata] = None,
     ) -> uuid.UUID:
-        """
-        Store a summary as an entity in the knowledge graph.
-        
-        Args:
-            user_id: User UUID
-            summary_data: Summary dictionary from summarizer
-            start_time: Start time of period
-            end_time: End time of period
-        
-        Returns:
-            Entity ID of created summary
-        """
-        summary_type = summary_data['summary_type']
-        entity_type = f"{summary_type.capitalize()}Summary"  # HourlySummary, DailySummary, etc.
-
-        entity_id = uuid.uuid4()
+        """Persist a summary and return its summary_id."""
         summary_metadata = metadata or SummaryMetadata()
-        
-        # Build properties JSONB
-        properties = {
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "summary_text": summary_data['summary_text'],
-            "summary_type": summary_type,
-            "activity_counts": summary_data['activity_counts'],
-            "tokens_used": summary_data.get('tokens_used', 0),
-        }
 
-        if summary_data.get('structured_summary'):
-            properties['structured_summary'] = summary_data['structured_summary']
-
-        # Add type-specific properties
-        if 'key_insights' in summary_data:
-            properties['key_insights'] = summary_data['key_insights']
-        if 'notable_events' in summary_data:
-            properties['notable_events'] = summary_data['notable_events']
-        if 'anomalies' in summary_data:
-            properties['anomalies'] = summary_data['anomalies']
-        if 'num_hourly_summaries' in summary_data:
-            properties['num_hourly_summaries'] = summary_data['num_hourly_summaries']
-        if 'num_daily_summaries' in summary_data:
-            properties['num_daily_summaries'] = summary_data['num_daily_summaries']
-        
-        # Create the entity
-        db.execute_write(
-            """
-            INSERT INTO entities (
-                entity_id, entity_type, owner_user_id, name, description,
-                properties, embedding, search_content, created_at, updated_at
-            ) VALUES (
-                :entity_id, :entity_type, :user_id, :name, :description,
-                CAST(:properties AS jsonb), CAST(:embedding AS vector), :search_content, NOW(), NOW()
-            )
-            """,
-            {
-                "entity_id": entity_id,
-                "entity_type": entity_type,
-                "user_id": user_id,
-                "name": f"{summary_type.capitalize()} Summary: {start_time.strftime('%Y-%m-%d %H:%M')}",
-                "description": summary_data['summary_text'][:500],  # Truncated for description
-                "properties": json.dumps(properties),
-                "embedding": json.dumps(summary_data['embedding']),
-                "search_content": summary_data['summary_text'],
-            }
-        )
-
-        self._insert_relational_summary(
+        summary_id = self._insert_relational_summary(
             user_id=user_id,
             summary_data=summary_data,
             start_time=start_time,
@@ -118,72 +55,40 @@ class SummaryStorage:
             metadata=summary_metadata,
         )
 
-        logger.info("summary_stored",
-                   entity_id=str(entity_id),
-                   entity_type=entity_type,
-                   user_id=str(user_id))
-
-        return entity_id
-    
-    def link_to_parent_summary(self, 
-                               child_summary_id: uuid.UUID,
-                               parent_summary_id: uuid.UUID,
-                               user_id: uuid.UUID):
-        """
-        Create a relationship between a child summary and parent summary.
-        E.g., hourly -> daily, daily -> weekly
-        """
-        relationship_id = uuid.uuid4()
-        
-        db.execute_write(
-            """
-            INSERT INTO relationships (
-                relationship_id, from_entity_id, to_entity_id, relationship_type,
-                owner_user_id, strength, properties, created_at, updated_at
-            ) VALUES (
-                :relationship_id, :from_entity_id, :to_entity_id, 'SUMMARIZED_BY',
-                :user_id, 1.0, '{}'::jsonb, NOW(), NOW()
-            )
-            """,
-            {
-                "relationship_id": relationship_id,
-                "from_entity_id": child_summary_id,
-                "to_entity_id": parent_summary_id,
-                "user_id": user_id,
-            }
+        logger.info(
+            "summary_stored",
+            summary_id=str(summary_id),
+            summary_type=summary_data['summary_type'],
+            user_id=str(user_id),
         )
-        
-        logger.info("summary_relationship_created",
-                   child_id=str(child_summary_id),
-                   parent_id=str(parent_summary_id))
+
+        return summary_id
     
-    def get_hourly_summaries(self, 
-                            user_id: uuid.UUID,
-                            start_time: datetime,
-                            end_time: datetime) -> list:
-        """Retrieve hourly summaries for a time period."""
+    def get_hourly_summaries(self,
+                             user_id: uuid.UUID,
+                             start_time: datetime,
+                             end_time: datetime) -> list:
+        """Retrieve hourly summaries from the summaries table."""
         results = db.execute_query(
             """
-            SELECT entity_id, properties, embedding
-            FROM entities
-            WHERE owner_user_id = :user_id
-              AND entity_type = 'HourlySummary'
-              AND (properties->>'start_time')::timestamptz >= :start_time
-              AND (properties->>'start_time')::timestamptz < :end_time
-            ORDER BY (properties->>'start_time')::timestamptz
+            SELECT summary_id, content, structured_context, period_start, period_end
+            FROM summaries
+            WHERE user_id = :user_id
+              AND period_type = 'hourly'
+              AND period_start >= :start_time
+              AND period_start < :end_time
+            ORDER BY period_start
             """,
             {
-                "user_id": user_id,
+                "user_id": str(user_id),
                 "start_time": start_time,
                 "end_time": end_time,
             }
         )
-        
-        # Parse properties JSON
-        for r in results:
-            if isinstance(r['properties'], str):
-                import json
-                r['properties'] = json.loads(r['properties'])
+
+        for row in results:
+            row['content'] = self._ensure_json(row.get('content'))
+            row['structured_context'] = self._ensure_json(row.get('structured_context'))
 
         return results
 
@@ -198,7 +103,7 @@ class SummaryStorage:
         end_time: datetime,
         metadata: SummaryMetadata,
         title: Optional[str] = None,
-    ) -> None:
+    ) -> uuid.UUID:
         summary_id = uuid.uuid4()
         params = {
             "summary_id": str(summary_id),
@@ -285,6 +190,8 @@ class SummaryStorage:
             params,
         )
 
+        return summary_id
+
     def _to_uuid_array(self, values: Optional[Sequence[str]]) -> Optional[list[str]]:
         if not values:
             return None
@@ -307,56 +214,67 @@ class SummaryStorage:
                 structured = json.loads(structured)
             except json.JSONDecodeError:
                 structured = None
-        if isinstance(structured, dict):
-            return structured
 
-        summary_text = summary_data.get('summary_text', '')
-        if isinstance(summary_text, str):
-            try:
-                parsed = json.loads(summary_text)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
-
-        return {
-            "summary": {
+        if not isinstance(structured, dict):
+            summary_text = summary_data.get('summary_text', '')
+            structured = {
                 "narrative": summary_text,
                 "insights": summary_data.get('key_insights', []),
                 "notable_events": summary_data.get('notable_events', []),
                 "anomalies": summary_data.get('anomalies', []),
+                "tags": summary_data.get('tags', []),
             }
+
+        return {
+            "summary": structured,
+            "summary_text": summary_data.get('summary_text'),
+            "key_insights": summary_data.get('key_insights', []),
+            "notable_events": summary_data.get('notable_events', []),
+            "anomalies": summary_data.get('anomalies', []),
+            "tags": summary_data.get('tags', []),
+            "activity_counts": summary_data.get('activity_counts', {}),
+            "tokens_used": summary_data.get('tokens_used', 0),
         }
     
     def get_daily_summaries(self,
-                           user_id: uuid.UUID,
-                           start_time: datetime,
-                           end_time: datetime) -> list:
+                            user_id: uuid.UUID,
+                            start_time: datetime,
+                            end_time: datetime) -> list:
         """Retrieve daily summaries for a time period."""
         results = db.execute_query(
             """
-            SELECT entity_id, properties, embedding
-            FROM entities
-            WHERE owner_user_id = :user_id
-              AND entity_type = 'DailySummary'
-              AND (properties->>'start_time')::timestamptz >= :start_time
-              AND (properties->>'start_time')::timestamptz < :end_time
-            ORDER BY (properties->>'start_time')::timestamptz
+            SELECT summary_id, content, structured_context, period_start, period_end
+            FROM summaries
+            WHERE user_id = :user_id
+              AND period_type = 'daily'
+              AND period_start >= :start_time
+              AND period_start < :end_time
+            ORDER BY period_start
             """,
             {
-                "user_id": user_id,
+                "user_id": str(user_id),
                 "start_time": start_time,
                 "end_time": end_time,
             }
         )
-        
-        # Parse properties JSON
-        for r in results:
-            if isinstance(r['properties'], str):
-                import json
-                r['properties'] = json.loads(r['properties'])
-        
+
+        for row in results:
+            row['content'] = self._ensure_json(row.get('content'))
+            row['structured_context'] = self._ensure_json(row.get('structured_context'))
+
         return results
+
+    def _ensure_json(self, value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
 
 # Global storage instance
