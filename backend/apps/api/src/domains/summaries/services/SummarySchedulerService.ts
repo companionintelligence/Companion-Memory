@@ -6,7 +6,6 @@ import { Repository } from 'typeorm';
 import { LoggerService } from '@ci/common/services';
 import config from '@ci/configuration';
 import { EventService, Events, SummaryPeriodType } from '@ci/domains/events';
-import { SUMMARY_QUEUE } from '@ci/domains/events/constants';
 import { UserEntity } from '@ci/domains/user';
 
 interface DateWindow {
@@ -19,6 +18,9 @@ export class SummarySchedulerService {
   private readonly logger = new LoggerService(SummarySchedulerService.name);
 
   private readonly timezone = 'UTC';
+
+  /** Queue name for memory summaries (mirrors memory service default). */
+  private readonly summaryQueue = 'memory-summaries';
 
   constructor(
     private readonly eventService: EventService,
@@ -93,7 +95,7 @@ export class SummarySchedulerService {
               ...payloadBase,
               userId: id,
             },
-            { queue: SUMMARY_QUEUE },
+            { queue: this.summaryQueue },
           );
 
           return jobIds.length;
