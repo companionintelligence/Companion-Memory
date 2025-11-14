@@ -19,7 +19,7 @@ CREATE TABLE summaries (
     title TEXT,
 
     -- Content and structure
-    content TEXT NOT NULL,
+    content JSONB NOT NULL DEFAULT '{}'::jsonb,
     structured_context JSONB DEFAULT '{}'::jsonb,
     tags JSONB DEFAULT '{}',
     participants UUID[], -- Entity IDs for people/services involved

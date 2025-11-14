@@ -224,7 +224,7 @@ def _execute_hourly_summary(
         tags=_derive_tags(summary_data, aggregated_data),
     )
 
-    entity_id = storage.store_summary(
+    summary_id = storage.store_summary(
         user_id,
         summary_data,
         start_time,
@@ -233,7 +233,7 @@ def _execute_hourly_summary(
     )
 
     return {
-        "summary_entity_id": str(entity_id),
+        "summary_id": str(summary_id),
         "summary_type": "hourly",
         "summary_text": summary_data["summary_text"],
         "key_insights": summary_data.get("key_insights", []),
@@ -274,7 +274,7 @@ def _execute_daily_summary(
         related_entity_ids=child_ids,
     )
 
-    entity_id = storage.store_summary(
+    summary_id = storage.store_summary(
         user_id,
         summary_data,
         start_time,
@@ -283,7 +283,7 @@ def _execute_daily_summary(
     )
 
     return {
-        "summary_entity_id": str(entity_id),
+        "summary_id": str(summary_id),
         "summary_type": "daily",
         "summary_text": summary_data["summary_text"],
         "activity_counts": summary_data["activity_counts"],
@@ -326,7 +326,7 @@ def _execute_weekly_summary(
         related_entity_ids=child_ids,
     )
 
-    entity_id = storage.store_summary(
+    summary_id = storage.store_summary(
         user_id,
         summary_data,
         start_time,
@@ -335,7 +335,7 @@ def _execute_weekly_summary(
     )
 
     return {
-        "summary_entity_id": str(entity_id),
+        "summary_id": str(summary_id),
         "summary_type": summary_data['summary_type'],
         "summary_text": summary_data['summary_text'],
         "activity_counts": summary_data['activity_counts'],

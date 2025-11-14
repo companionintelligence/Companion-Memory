@@ -13,7 +13,7 @@ logger = structlog.get_logger()
 
 class Summarizer:
     """Generates summaries using local LLM and embeddings."""
-    
+
     def __init__(self):
         self.client = None
         self._init_error: Optional[Exception] = None
@@ -30,14 +30,14 @@ class Summarizer:
         except Exception as exc:
             self._init_error = exc
             logger.error("llm_client_initialization_failed", error=str(exc))
-    
+
     def generate_hourly_summary(self, aggregated_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate an hourly summary from aggregated data.
-        
+
         Args:
             aggregated_data: Dictionary with all data sources for the hour
-        
+
         Returns:
             Dictionary with summary text, insights, and statistics
         """
@@ -88,11 +88,12 @@ class Summarizer:
         messages = [
             {
                 "role": "system",
-                "content": """You are an AI assistant that creates concise, insightful hourly summaries of user activity.
+                "content": """You are an AI summarizer that creates concise, insightful hourly summaries of user activity.
+You infer behavior and describe without opinion or bias. You will be given incomplete data and you must infer what the user is doing.
 Analyze the provided data and generate:
 1. A narrative summary (2-3 sentences) describing the hour
-2. 3-5 key insights or patterns
-3. Notable events or activities
+2. 3-5 key insights and/or patterns
+3. Notable events and/or activities
 4. Any anomalies or interesting observations
 5. A list of tags that describe the events, content, and activities.
 
@@ -118,20 +119,22 @@ If there is no data to summarize, return an empty JSON object."""
         try:
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
-            
+
             raw_response = response.choices[0].message.content
 
             summary_text, structured = self._coerce_json_summary(raw_response)
 
             # Parse the response to extract structured information
             parsed = self._parse_structured_or_text(structured, raw_response)
-            
+
             # Generate embedding for the summary
             embedding = self.generate_embedding(summary_text)
-            
+
             return {
                 "summary_text": summary_text,
                 "summary_type": "hourly",
+                "actions": parsed.get("actions", []),
+                "events": parsed.get("events", []),
                 "key_insights": parsed.get("insights", []),
                 "notable_events": parsed.get("events", []),
                 "anomalies": parsed.get("anomalies", []),
@@ -140,11 +143,11 @@ If there is no data to summarize, return an empty JSON object."""
                 "tokens_used": response.usage.total_tokens if response.usage else 0,
                 "structured_summary": structured,
             }
-            
+
         except Exception as e:
             logger.error("summary_generation_failed", error=str(e))
             raise
-    
+
     def _build_hourly_prompt(self, data: Dict[str, Any], activity_counts: Dict[str, int]) -> str:
         """Build the prompt for hourly summarization."""
         parts = [
@@ -162,14 +165,14 @@ If there is no data to summarize, return an empty JSON object."""
             parts.append("DATA COUNTS:")
             parts.extend(non_zero_counts)
             parts.append("")
-        
+
         # Add measurements summary
         if data.get('measurements'):
             parts.append("SENSOR MEASUREMENTS:")
             for m in data['measurements'][:10]:  # Top 10
                 parts.append(f"- {m['measurement_type']}: avg={m['avg_value']:.2f} {m['units']} (count={m['count']})")
             parts.append("")
-        
+
         # Add location data
         if data.get('positions'):
             parts.append("LOCATIONS:")
@@ -177,7 +180,7 @@ If there is no data to summarize, return an empty JSON object."""
                 activity = p['activity_type'] or 'unknown'
                 parts.append(f"- {activity} activity (count={p['count']})")
             parts.append("")
-        
+
         # Add communications
         if data.get('communications'):
             parts.append("COMMUNICATIONS:")
@@ -187,7 +190,7 @@ If there is no data to summarize, return an empty JSON object."""
                 subject = c.get('subject', 'No subject')[:50]
                 parts.append(f"- {comm_type} ({direction}): {subject}")
             parts.append("")
-        
+
         # Add activities
         if data.get('activities'):
             parts.append("ACTIVITIES:")
@@ -196,7 +199,7 @@ If there is no data to summarize, return an empty JSON object."""
                 duration = a.get('duration_minutes', 'unknown')
                 parts.append(f"- {name} ({duration} min)")
             parts.append("")
-        
+
         # Add events
         if data.get('events'):
             parts.append("CALENDAR EVENTS:")
@@ -205,14 +208,14 @@ If there is no data to summarize, return an empty JSON object."""
                 event_type = e.get('event_type', 'event')
                 parts.append(f"- {title} ({event_type})")
             parts.append("")
-        
+
         # Add messages
         if data.get('messages'):
             parts.append("CHAT MESSAGES:")
             msg_count = len(data['messages'])
             parts.append(f"- {msg_count} messages exchanged")
             parts.append("")
-        
+
         # Add file activity
         if data.get('files'):
             parts.append("FILE ACTIVITY:")
@@ -238,7 +241,7 @@ If there is no data to summarize, return an empty JSON object."""
                 if summary:
                     parts.append(f"  ↳ {summary[:200]}")
             parts.append("")
-        
+
         return "\n".join(parts)
 
     def _parse_summary_response(self, summary_text: str) -> Dict[str, Any]:
@@ -248,17 +251,17 @@ If there is no data to summarize, return an empty JSON object."""
         """
         # Simple extraction based on common patterns
         lines = summary_text.split('\n')
-        
+
         insights = []
         events = []
         anomalies = []
-        
+
         current_section = None
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            
+
             # Detect sections
             if 'insight' in line.lower() or 'key point' in line.lower():
                 current_section = 'insights'
@@ -275,7 +278,7 @@ If there is no data to summarize, return an empty JSON object."""
                     events.append(item)
                 elif current_section == 'anomalies':
                     anomalies.append(item)
-        
+
         return {
             "insights": insights,
             "events": events,
@@ -330,7 +333,7 @@ If there is no data to summarize, return an empty JSON object."""
             logger.error("embedding_generation_failed", error=str(e))
             # Return zero vector on failure
             return [0.0] * settings.embedding_dimensions
-    
+
     def _count_activities(self, data: Dict[str, Any]) -> Dict[str, int]:
         """Count activities by type."""
         counts = {
@@ -432,25 +435,25 @@ If there is no data to summarize, return an empty JSON object."""
 
         lines.append("\nProvide a concise narrative of what the user is likely doing.")
         return "\n".join(lines)
-    
+
     def generate_daily_summary(self, hourly_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Generate a daily summary from hourly summaries.
-        
+
         Args:
             hourly_summaries: List of hourly summary dictionaries
-        
+
         Returns:
             Dictionary with daily summary
         """
         logger.info("generating_daily_summary", num_hours=len(hourly_summaries))
-        
+
         # Aggregate all hourly summaries
         all_text = "\n\n".join([
-            f"Hour {i+1}: {s['summary_text']}" 
+            f"Hour {i+1}: {s['summary_text']}"
             for i, s in enumerate(hourly_summaries)
         ])
-        
+
         messages = [
             {
                 "role": "system",
@@ -480,10 +483,10 @@ Be factual and insightful. Focus on what's most meaningful."""
             self._log_prompt("daily", messages)
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
-            
+
             summary_text = response.choices[0].message.content
             embedding = self.generate_embedding(summary_text)
-            
+
             # Aggregate activity counts
             total_counts = {
                 "measurements": sum(s['activity_counts'].get('measurements', 0) for s in hourly_summaries),
@@ -497,7 +500,7 @@ Be factual and insightful. Focus on what's most meaningful."""
                 "browser_activity": sum(s['activity_counts'].get('browser_activity', 0) for s in hourly_summaries),
             }
             total_counts["total"] = sum(total_counts.values())
-            
+
             return {
                 "summary_text": summary_text,
                 "summary_type": "daily",
@@ -506,11 +509,11 @@ Be factual and insightful. Focus on what's most meaningful."""
                 "num_hourly_summaries": len(hourly_summaries),
                 "tokens_used": response.usage.total_tokens if response.usage else 0,
             }
-            
+
         except Exception as e:
             logger.error("daily_summary_generation_failed", error=str(e))
             raise
-    
+
     def generate_weekly_summary(self, daily_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
         return self.generate_period_rollup('weekly', 'daily', daily_summaries)
 

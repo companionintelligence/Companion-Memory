@@ -102,7 +102,7 @@ class AgentRegistration:
         output_schema = {
             "type": "object",
             "properties": {
-                "summary_entity_id": {
+                "summary_id": {
                     "type": "string",
                     "format": "uuid"
                 },
