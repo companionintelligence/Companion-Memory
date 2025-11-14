@@ -107,7 +107,8 @@ If there is no data to summarize, return an empty JSON object."""
             }
         ]
 
-        self._log_prompt("hourly", messages)
+        if settings.debug_prompts:
+            self._log_prompt("hourly", messages)
 
         chat_kwargs = {
             "model": settings.llm_model,
@@ -133,10 +134,8 @@ If there is no data to summarize, return an empty JSON object."""
             return {
                 "summary_text": summary_text,
                 "summary_type": "hourly",
-                "actions": parsed.get("actions", []),
-                "events": parsed.get("events", []),
                 "key_insights": parsed.get("insights", []),
-                "notable_events": parsed.get("events", []),
+                "events": parsed.get("events", parsed.get("notable_events", [])),
                 "anomalies": parsed.get("anomalies", []),
                 "embedding": embedding,
                 "activity_counts": activity_counts,
@@ -298,17 +297,10 @@ If there is no data to summarize, return an empty JSON object."""
         summary_block = structured_summary.get("summary", structured_summary)
         insights = summary_block.get("insights") or []
         anomalies = summary_block.get("anomalies") or summary_block.get("risks") or []
-        events_data = summary_block.get("notable_events") or summary_block.get("events") or []
 
         events: List[str] = []
-        if isinstance(events_data, list):
-            for item in events_data:
-                if isinstance(item, dict):
-                    event = item.get("event") or item.get("description") or "event"
-                    time = item.get("time")
-                    events.append(f"{event} ({time})" if time else event)
-                elif isinstance(item, str):
-                    events.append(item)
+        for key in ("events", "notable_events", "activities"):
+            events.extend(self._normalize_entries(summary_block.get(key)))
 
         return {
             "insights": insights if isinstance(insights, list) else [str(insights)],
@@ -395,10 +387,9 @@ If there is no data to summarize, return an empty JSON object."""
             "max_tokens": min(settings.llm_max_tokens, 400),
         }
 
-        self._log_prompt(f"daily-from-hourly", all_text)
-
         try:
-            self._log_prompt(f"browser-history-{level}", messages)
+            if settings.debug_prompts:
+                self._log_prompt(f"browser-history-{level}", messages)
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
             return response.choices[0].message.content.strip()
@@ -480,7 +471,8 @@ Be factual and insightful. Focus on what's most meaningful."""
         }
 
         try:
-            self._log_prompt("daily", messages)
+            if settings.debug_prompts:
+                self._log_prompt("daily", messages)
             self._log_llm_request("chat.completions.create", chat_kwargs)
             response = self.client.chat.completions.create(**chat_kwargs)
 
@@ -535,7 +527,11 @@ Be factual and insightful. Focus on what's most meaningful."""
             for i, s in enumerate(child_summaries)
         ])
 
-        self._log_prompt(f"{period_label}-from-{child_label}", all_text)
+        if settings.debug_prompts:
+            self._log_prompt(
+                f"{period_label}-from-{child_label}",
+                [{"role": "user", "content": all_text}],
+            )
 
         messages = [
             {
@@ -675,6 +671,25 @@ Deliver a concise, reflective narrative.""",
         except Exception:
             formatted = str(messages)
         print(f"[llm_prompt][{summary_type}]\n{formatted}\n", flush=True)
+
+    def _normalize_entries(self, entries: Any) -> List[str]:
+        normalized: List[str] = []
+        if not isinstance(entries, list):
+            return normalized
+        for item in entries:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    normalized.append(text)
+            elif isinstance(item, dict):
+                descriptor = item.get('event') or item.get('description') or item.get('title')
+                if isinstance(descriptor, str) and descriptor.strip():
+                    text = descriptor.strip()
+                    timestamp = item.get('time')
+                    if isinstance(timestamp, str) and timestamp.strip():
+                        text = f"{text} ({timestamp.strip()})"
+                    normalized.append(text)
+        return normalized
 
 
 # Global summarizer instance

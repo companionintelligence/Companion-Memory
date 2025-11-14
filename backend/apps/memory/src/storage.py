@@ -89,6 +89,8 @@ class SummaryStorage:
         for row in results:
             row['content'] = self._ensure_json(row.get('content'))
             row['structured_context'] = self._ensure_json(row.get('structured_context'))
+            row['summary_text'] = self._extract_summary_text(row)
+            row['activity_counts'] = self._extract_activity_counts(row)
 
         return results
 
@@ -215,23 +217,72 @@ class SummaryStorage:
             except json.JSONDecodeError:
                 structured = None
 
-        if not isinstance(structured, dict):
+        summary_block: Dict[str, Any] | None = None
+        if isinstance(structured, dict):
+            if isinstance(structured.get('summary'), dict):
+                summary_block = structured['summary']
+            else:
+                summary_block = structured
+
+        if summary_block is None:
             summary_text = summary_data.get('summary_text', '')
-            structured = {
+            summary_block = {
                 "narrative": summary_text,
                 "insights": summary_data.get('key_insights', []),
-                "notable_events": summary_data.get('notable_events', []),
+                "events": summary_data.get('events', summary_data.get('notable_events', [])),
                 "anomalies": summary_data.get('anomalies', []),
                 "tags": summary_data.get('tags', []),
             }
 
+        narrative = summary_block.get('narrative')
+        if not isinstance(narrative, str):
+            narrative = summary_data.get('summary_text', '')
+
+        insights = summary_block.get('insights')
+        if not isinstance(insights, list):
+            insights = summary_data.get('key_insights', [])
+
+        anomalies = summary_block.get('anomalies')
+        if not isinstance(anomalies, list):
+            anomalies = summary_data.get('anomalies', [])
+
+        tags = summary_block.get('tags')
+        if not isinstance(tags, list):
+            tags = summary_data.get('tags', [])
+
+        events: list[str] = []
+        for key in ('events', 'notable_events', 'activities'):
+            value = summary_block.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str) and item.strip():
+                        events.append(item.strip())
+                    elif isinstance(item, dict):
+                        descriptor = item.get('event') or item.get('description') or item.get('title')
+                        if isinstance(descriptor, str) and descriptor.strip():
+                            text = descriptor.strip()
+                            timestamp = item.get('time')
+                            if isinstance(timestamp, str) and timestamp.strip():
+                                text = f"{text} ({timestamp.strip()})"
+                            events.append(text)
+
+        if not events:
+            fallback_events = summary_data.get('events', summary_data.get('notable_events', []))
+            if isinstance(fallback_events, list):
+                events.extend(str(item).strip() for item in fallback_events if str(item).strip())
+
+        summary_block['tags'] = tags
+        summary_block['insights'] = insights
+        summary_block['anomalies'] = anomalies
+        summary_block['events'] = events
+
         return {
-            "summary": structured,
-            "summary_text": summary_data.get('summary_text'),
-            "key_insights": summary_data.get('key_insights', []),
-            "notable_events": summary_data.get('notable_events', []),
-            "anomalies": summary_data.get('anomalies', []),
-            "tags": summary_data.get('tags', []),
+            "summary": summary_block,
+            "narrative": narrative,
+            "key_insights": insights,
+            "events": events,
+            "anomalies": anomalies,
+            "tags": tags,
             "activity_counts": summary_data.get('activity_counts', {}),
             "tokens_used": summary_data.get('tokens_used', 0),
         }
@@ -261,6 +312,8 @@ class SummaryStorage:
         for row in results:
             row['content'] = self._ensure_json(row.get('content'))
             row['structured_context'] = self._ensure_json(row.get('structured_context'))
+            row['summary_text'] = self._extract_summary_text(row)
+            row['activity_counts'] = self._extract_activity_counts(row)
 
         return results
 
@@ -274,6 +327,32 @@ class SummaryStorage:
                 return json.loads(value)
             except json.JSONDecodeError:
                 return {}
+        return {}
+
+    def _extract_summary_text(self, record: Dict[str, Any]) -> str:
+        content = record.get('content') or {}
+        if isinstance(content, dict):
+            summary_text = content.get('summary_text')
+            if isinstance(summary_text, str):
+                return summary_text
+            summary_block = content.get('summary')
+            if isinstance(summary_block, dict):
+                narrative = summary_block.get('narrative')
+                if isinstance(narrative, str):
+                    return narrative
+        return ""
+
+    def _extract_activity_counts(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        content = record.get('content') or {}
+        if isinstance(content, dict):
+            counts = content.get('activity_counts')
+            if isinstance(counts, dict):
+                return counts
+        context = record.get('structured_context') or {}
+        if isinstance(context, dict):
+            counts = context.get('activity_counts')
+            if isinstance(counts, dict):
+                return counts
         return {}
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -246,7 +247,7 @@ def _execute_hourly_summary(
             "activity_counts": summary_data['activity_counts'],
             "aggregated_data": aggregated_data,
             "key_insights": summary_data.get('key_insights'),
-            "notable_events": summary_data.get('notable_events'),
+            "events": summary_data.get('events'),
             "anomalies": summary_data.get('anomalies'),
         },
         tags=_derive_tags(summary_data, aggregated_data),
@@ -263,7 +264,7 @@ def _execute_hourly_summary(
     return {
         "summary_id": str(summary_id),
         "summary_type": "hourly",
-        "summary_text": summary_data["summary_text"],
+        "summary_text": _decode_summary_text(summary_data),
         "key_insights": summary_data.get("key_insights", []),
         "activity_counts": summary_data["activity_counts"],
     }
@@ -279,8 +280,8 @@ def _execute_daily_summary(
     hourly_summaries_raw = storage.get_hourly_summaries(user_id, start_time, end_time)
     hourly_summaries = [
         {
-            "summary_text": _summary_text_from_record(h),
-            "activity_counts": _activity_counts_from_record(h),
+            "summary_text": h.get("summary_text", ""),
+            "activity_counts": h.get("activity_counts", {}),
         }
         for h in hourly_summaries_raw
     ]
@@ -313,7 +314,7 @@ def _execute_daily_summary(
     return {
         "summary_id": str(summary_id),
         "summary_type": "daily",
-        "summary_text": summary_data["summary_text"],
+        "summary_text": _decode_summary_text(summary_data),
         "activity_counts": summary_data["activity_counts"],
         "num_hourly_summaries": len(hourly_summaries),
     }
@@ -329,8 +330,8 @@ def _execute_weekly_summary(
     daily_summaries_raw = storage.get_daily_summaries(user_id, start_time, end_time)
     daily_summaries = [
         {
-            "summary_text": _summary_text_from_record(record),
-            "activity_counts": _activity_counts_from_record(record),
+            "summary_text": record.get("summary_text", ""),
+            "activity_counts": record.get("activity_counts", {}),
         }
         for record in daily_summaries_raw
     ]
@@ -365,7 +366,7 @@ def _execute_weekly_summary(
     return {
         "summary_id": str(summary_id),
         "summary_type": summary_data['summary_type'],
-        "summary_text": summary_data['summary_text'],
+        "summary_text": _decode_summary_text(summary_data),
         "activity_counts": summary_data['activity_counts'],
         "num_daily_summaries": len(daily_summaries),
     }
@@ -390,32 +391,15 @@ def _derive_tags(summary_data: Dict[str, Any], aggregated_data: Dict[str, Any]) 
     return []
 
 
-def _summary_text_from_record(record: Dict[str, Any]) -> str:
-    content = record.get('content') or {}
-    if isinstance(content, dict):
-        summary_text = content.get('summary_text')
-        if isinstance(summary_text, str):
-            return summary_text
-        summary_block = content.get('summary')
-        if isinstance(summary_block, dict):
-            narrative = summary_block.get('narrative')
-            if isinstance(narrative, str):
-                return narrative
-    return ""
+def _decode_summary_text(summary_data: Dict[str, Any]) -> Any:
+    text = summary_data.get('summary_text')
+    if isinstance(text, str):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+    return text
 
-
-def _activity_counts_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    content = record.get('content') or {}
-    if isinstance(content, dict):
-        counts = content.get('activity_counts')
-        if isinstance(counts, dict):
-            return counts
-    context = record.get('structured_context') or {}
-    if isinstance(context, dict):
-        counts = context.get('activity_counts')
-        if isinstance(counts, dict):
-            return counts
-    return {}
 
 
 __all__ = ["app"]

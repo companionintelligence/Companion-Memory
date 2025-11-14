@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = Field(default_factory=lambda: os.getenv("MEMORY_LOG_LEVEL", "INFO"))
+    debug_prompts: bool = Field(default_factory=lambda: os.getenv("MEMORY_DEBUG_PROMPTS", "false").lower() == "true")
     
     model_config = SettingsConfigDict(
         extra="ignore",

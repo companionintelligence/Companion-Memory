@@ -362,7 +362,7 @@ class SummaryWorker:
                 "activity_counts": summary_data['activity_counts'],
                 "aggregated_data": aggregated_data,
                 "key_insights": summary_data.get('key_insights'),
-                "notable_events": summary_data.get('notable_events'),
+                "events": summary_data.get('events'),
                 "anomalies": summary_data.get('anomalies'),
             },
             tags=self._derive_tags(summary_data, aggregated_data),
@@ -379,7 +379,7 @@ class SummaryWorker:
         return {
             "summary_id": str(summary_id),
             "summary_type": "hourly",
-            "summary_text": summary_data["summary_text"],
+            "summary_text": self._decode_summary_text(summary_data),
             "key_insights": summary_data.get("key_insights", []),
             "activity_counts": summary_data["activity_counts"],
         }
@@ -396,8 +396,8 @@ class SummaryWorker:
         hourly_summaries_raw = storage.get_hourly_summaries(user_id, start_time, end_time)
         hourly_summaries = [
             {
-                "summary_text": self._extract_summary_text(h),
-                "activity_counts": self._extract_activity_counts(h),
+                "summary_text": h.get("summary_text", ""),
+                "activity_counts": h.get("activity_counts", {}),
             }
             for h in hourly_summaries_raw
         ]
@@ -429,7 +429,7 @@ class SummaryWorker:
         return {
             "summary_id": str(summary_id),
             "summary_type": "daily",
-            "summary_text": summary_data["summary_text"],
+            "summary_text": self._decode_summary_text(summary_data),
             "activity_counts": summary_data["activity_counts"],
             "num_hourly_summaries": len(hourly_summaries),
         }
@@ -456,8 +456,8 @@ class SummaryWorker:
         daily_summaries_raw = storage.get_daily_summaries(user_id, start_time, end_time)
         daily_summaries = [
             {
-                "summary_text": self._extract_summary_text(record),
-                "activity_counts": self._extract_activity_counts(record),
+                "summary_text": record.get("summary_text", ""),
+                "activity_counts": record.get("activity_counts", {}),
             }
             for record in daily_summaries_raw
         ]
@@ -492,7 +492,7 @@ class SummaryWorker:
         return {
             "summary_id": str(summary_id),
             "summary_type": summary_data['summary_type'],
-            "summary_text": summary_data['summary_text'],
+            "summary_text": self._decode_summary_text(summary_data),
             "activity_counts": summary_data['activity_counts'],
             "num_daily_summaries": len(daily_summaries),
         }
@@ -577,31 +577,14 @@ class SummaryWorker:
             return insights[:5]
         return []
 
-    def _extract_summary_text(self, record: Dict[str, Any]) -> str:
-        content = record.get('content') or {}
-        if isinstance(content, dict):
-            summary_text = content.get('summary_text')
-            if isinstance(summary_text, str):
-                return summary_text
-            summary_block = content.get('summary')
-            if isinstance(summary_block, dict):
-                narrative = summary_block.get('narrative')
-                if isinstance(narrative, str):
-                    return narrative
-        return ""
-
-    def _extract_activity_counts(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        content = record.get('content') or {}
-        if isinstance(content, dict):
-            counts = content.get('activity_counts')
-            if isinstance(counts, dict):
-                return counts
-        context = record.get('structured_context') or {}
-        if isinstance(context, dict):
-            counts = context.get('activity_counts')
-            if isinstance(counts, dict):
-                return counts
-        return {}
+    def _decode_summary_text(self, summary_data: Dict[str, Any]) -> Any:
+        text = summary_data.get('summary_text')
+        if isinstance(text, str):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return text
+        return text
 
 
 worker = SummaryWorker()
