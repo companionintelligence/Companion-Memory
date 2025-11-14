@@ -13,11 +13,9 @@ User answers to intelligence questions that help build their personal profile.
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
 | `id` | UUID | Unique answer identifier | `01993a45-1122-3344-5566-778899aabbcc` |
-| `question_id` | UUID | Question being answered | `d53229b9-0fa0-487b-b494-d65c42a4e1ae` |
 | `user_id` | UUID | User providing the answer | `b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b` |
-| `answer_text` | String | The user's answer | `I would describe myself as curious, empathetic, analytical, creative, and introverted.` |
-| `created_at` | ISO 8601 Date | When answer was created | `2025-05-20T10:30:00Z` |
-| `updated_at` | ISO 8601 Date | When answer was last updated | `2025-05-20T10:30:00Z` |
+| `question_id` | UUID | Question being answered | `d53229b9-0fa0-487b-b494-d65c42a4e1ae` |
+| `give_answer_1` | String | The user's answer | `I would describe myself as curious, empathetic, analytical, creative, and introverted.` |
 
 ## Field Details
 
@@ -37,27 +35,37 @@ User answers to intelligence questions that help build their personal profile.
 - **Required:** Yes
 - **Validation:** Must reference existing user
 
-### `answer_text` - Answer Content
+### `give_answer_1` - Answer Content
 - **Type:** String (long text)
 - **Required:** Yes
 - **Description:** The user's response to the question
+- **Field Name Note:** Uses legacy field name `give_answer_1` from original schema
 - **Best Practices:**
   - Thoughtful, detailed responses
   - Natural, conversational language
   - 1-5 sentences typically
   - Reflects user's authentic voice
 
-### `created_at` / `updated_at` - Timestamps
-- **Type:** ISO 8601 DateTime
-- **Required:** Yes
-- **Format:** `YYYY-MM-DDTHH:MM:SSZ`
+## Auto-Generated Fields
+
+During import, additional fields are automatically set:
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `answer_id` | Same as `id` | Primary key in answers table |
+| `answer_text` | From `give_answer_1` | Mapped to new schema field |
+| `answer_source` | `imported` | Marks as imported data |
+| `answer_method` | `survey` | Original collection method |
+| `answered_at` | `NOW()` | Timestamp of import |
+| `is_sensitive` | `false` | Default for seed data |
+| `sharing_level` | `private` | Default privacy setting |
 
 ## Example CSV
 
 ```csv
-id,question_id,user_id,answer_text,created_at,updated_at
-01993a45-1122-3344-5566-778899aabbcc,d53229b9-0fa0-487b-b494-d65c42a4e1ae,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"I would describe myself as curious, empathetic, analytical, creative, and introverted.",2025-05-20T10:30:00Z,2025-05-20T10:30:00Z
-01993a45-2233-4455-6677-889900bbccdd,6e5f1233-f06b-49df-b8fe-c6d9ba6a9368,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"My three core values are integrity, compassion, and continuous learning. These guide all my major decisions.",2025-05-20T11:00:00Z,2025-05-20T11:00:00Z
+id,user_id,question_id,give_answer_1
+01993a45-1122-3344-5566-778899aabbcc,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,d53229b9-0fa0-487b-b494-d65c42a4e1ae,"I would describe myself as curious, empathetic, analytical, creative, and introverted."
+01993a45-2233-4455-6677-889900bbccdd,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,6e5f1233-f06b-49df-b8fe-c6d9ba6a9368,"My three core values are integrity, compassion, and continuous learning. These guide all my major decisions."
 ```
 
 ## Multi-line Answers
@@ -65,22 +73,25 @@ id,question_id,user_id,answer_text,created_at,updated_at
 For answers with multiple paragraphs:
 
 ```csv
-id,question_id,user_id,answer_text,created_at,updated_at
-01993a45-3344-5566-7788-99aa00bbccdd,5d59cc37-2627-4b1f-88fc-d352428d98b3,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,"My values are a combination of teaching and experience.
+id,user_id,question_id,give_answer_1
+01993a45-3344-5566-7788-99aa00bbccdd,b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b,5d59cc37-2627-4b1f-88fc-d352428d98b3,"My values are a combination of teaching and experience.
 
-My parents emphasized integrity from a young age. Compassion grew through volunteering and seeing others' struggles. Personal growth became important after realizing I wanted to keep evolving throughout life.",2025-05-20T11:30:00Z,2025-05-20T11:30:00Z
+My parents emphasized integrity from a young age. Compassion grew through volunteering and seeing others' struggles. Personal growth became important after realizing I wanted to keep evolving throughout life."
 ```
 
 ## Database Schema
 
 ```sql
 CREATE TABLE answers (
-  id UUID PRIMARY KEY,
+  answer_id UUID PRIMARY KEY,
   question_id UUID NOT NULL REFERENCES questions(question_id),
   user_id UUID NOT NULL REFERENCES ci_core.users(id),
   answer_text TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE,
-  updated_at TIMESTAMP WITH TIME ZONE
+  answer_source VARCHAR(50),
+  answer_method VARCHAR(50),
+  answered_at TIMESTAMP WITH TIME ZONE,
+  is_sensitive BOOLEAN DEFAULT false,
+  sharing_level VARCHAR(50) DEFAULT 'private'
 );
 ```
 
@@ -88,8 +99,8 @@ CREATE TABLE answers (
 
 - **Authentic responses:** Write answers as the user would
 - **Appropriate detail:** Match the depth of example answers
-- **Chronological timestamps:** Later questions should have later timestamps
 - **Consistency:** Answers should align with user's overall profile
+- **Column order:** Use `id,user_id,question_id,give_answer_1` order as shown in examples
 
 ## Next Steps
 
