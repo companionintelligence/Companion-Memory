@@ -189,6 +189,34 @@ async def manual_trigger_summary(
         ) from exc
 
 
+@app.get("/summary/aggregate")
+async def get_aggregate_preview(
+    request: ManualSummaryRequest,
+) -> Dict[str, Any]:
+    try:
+        user_id = uuid.UUID(request.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid user_id UUID: {exc}") from exc
+
+    if request.end_time:
+        end_time = _parse_iso(request.end_time)
+    else:
+        end_time = datetime.utcnow()
+
+    if request.start_time:
+        start_time = _parse_iso(request.start_time)
+    else:
+        start_time = end_time - timedelta(hours=1)
+
+    aggregated = aggregator.aggregate_hour(user_id, start_time, end_time)
+    return {
+        "user_id": str(user_id),
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "aggregated_data": aggregated,
+    }
+
+
 def _parse_iso(iso_str: str) -> datetime:
     """Parse ISO format timestamp."""
     if iso_str.endswith("Z"):

@@ -27,6 +27,7 @@ class DatabaseManager:
                 settings.database_url,
                 poolclass=NullPool,  # Simple connection management
                 echo=False,
+                connect_args={"options": "-c search_path=ci_core,public"},
             )
             logger.info("database_connected", url=settings.database_url.split('@')[1] if '@' in settings.database_url else 'localhost')
         except Exception as e:
