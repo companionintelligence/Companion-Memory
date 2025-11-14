@@ -36,6 +36,7 @@ The CI-Server supports importing data from various sources through a CSV-based s
   - [Content](./docs/data-sources/content.md) - User-generated content (optional)
   - [Things](./docs/data-sources/things.md) - Inventory items (optional)
   - [Places](./docs/data-sources/places.md) - Locations (optional)
+- **[examples/](./examples/)** - Sample CSV files demonstrating correct format
 
 ## Data Import Order
 
@@ -64,9 +65,12 @@ All CSV files must:
 ## Examples
 
 Example CSV files are available in:
+- **[examples/](./examples/)** - Complete sample dataset with proper formatting
 - `backend/apps/api/scripts/seed-database/js1-data/` - John Smith example data
 - `backend/apps/api/scripts/seed-database/intelligence-data/` - Intelligence questions
 - `backend/apps/api/scripts/seed-database/providers-data/` - Provider configuration
+
+See [examples/README.md](./examples/README.md) for details on using the sample data.
 
 ## Common Issues
 

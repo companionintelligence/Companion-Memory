@@ -1,0 +1,11 @@
+id,model,text,mimetype,canceled,user_id,thread_id,role
+01987f3g-3o4p-9q8r-1m2n-o3p4q5r6m7n8,qwen3:8b,"Hi! I'd love to help you plan a relaxing weekend. What kind of activities do you enjoy?",text/markdown,false,01987b9c-4f5g-0h9i-2d3e-f4g5h6i7d8e9,01987e2f-1m2n-7o6p-9k0l-m1n2o3p4k5l6,assistant
+01987f3g-4p5q-0r9s-2n3o-p4q5r6s7n8o9,qwen3:8b,"I enjoy hiking, reading, and spending time with friends. Maybe something outdoors?",text/plain,false,01987b9c-4f5g-0h9i-2d3e-f4g5h6i7d8e9,01987e2f-1m2n-7o6p-9k0l-m1n2o3p4k5l6,user
+01987f3g-5q6r-1s0t-3o4p-q5r6s7t8o9p0,qwen3:8b,"Perfect! Here are some ideas for an outdoor weekend:
+
+1. **Saturday Morning:** Go for a sunrise hike at a nearby trail
+2. **Saturday Afternoon:** Pack a picnic lunch and read at a scenic spot
+3. **Saturday Evening:** Invite friends for an outdoor dinner
+4. **Sunday:** Leisurely nature walk and journaling
+
+Would you like specific trail recommendations?",text/markdown,false,01987b9c-4f5g-0h9i-2d3e-f4g5h6i7d8e9,01987e2f-1m2n-7o6p-9k0l-m1n2o3p4k5l6,assistant
