@@ -241,6 +241,28 @@ If there is no data to summarize, return an empty JSON object."""
                     parts.append(f"  ↳ {summary[:200]}")
             parts.append("")
 
+        # Add screen captures
+        if data.get('screen_captures'):
+            parts.append("SCREEN CAPTURES:")
+            for capture in data['screen_captures'][:5]:
+                timestamp = capture.get('time')
+                timestamp_text = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
+                primary_app = capture.get('primary_application') or 'unknown app'
+                category = capture.get('activity_category') or 'uncategorized'
+                flags = []
+                if capture.get('contains_sensitive'):
+                    flags.append('sensitive')
+                if capture.get('contains_pii'):
+                    flags.append('pii')
+                if capture.get('redacted'):
+                    flags.append('redacted')
+                flag_text = f" ({', '.join(flags)})" if flags else ''
+                parts.append(f"- {timestamp_text}: {primary_app} [{category}]{flag_text}")
+                summary = (capture.get('activity_summary') or capture.get('ocr_text') or '').strip()
+                if summary:
+                    parts.append(f"  ↳ {summary[:200]}")
+            parts.append("")
+
         return "\n".join(parts)
 
     def _parse_summary_response(self, summary_text: str) -> Dict[str, Any]:
@@ -338,6 +360,7 @@ If there is no data to summarize, return an empty JSON object."""
             "files": len(data.get('files', [])),
             "api_logs": len(data.get('api_logs', [])),
             "browser_activity": len(data.get('browser_activity', [])),
+            "screen_captures": len(data.get('screen_captures', [])),
         }
         counts["total"] = sum(counts.values())
         return counts
@@ -490,6 +513,7 @@ Be factual and insightful. Focus on what's most meaningful."""
                 "files": sum(s['activity_counts'].get('files', 0) for s in hourly_summaries),
                 "api_logs": sum(s['activity_counts'].get('api_logs', 0) for s in hourly_summaries),
                 "browser_activity": sum(s['activity_counts'].get('browser_activity', 0) for s in hourly_summaries),
+                "screen_captures": sum(s['activity_counts'].get('screen_captures', 0) for s in hourly_summaries),
             }
             total_counts["total"] = sum(total_counts.values())
 
@@ -588,6 +612,7 @@ Deliver a concise, reflective narrative.""",
             "files",
             "api_logs",
             "browser_activity",
+            "screen_captures",
         ]
         totals = {key: 0 for key in keys}
         for summary in summaries:

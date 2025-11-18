@@ -48,6 +48,7 @@ class DataAggregator:
             "files": self._get_files(user_id, start_time, end_time),
             "api_logs": self._get_api_logs(user_id, start_time, end_time),
             "browser_activity": self._get_browser_activity(user_id, start_time, end_time),
+            "screen_captures": self._get_screen_captures(user_id, start_time, end_time),
         }
         
         return aggregated
@@ -301,6 +302,35 @@ class DataAggregator:
             "limit": settings.max_items_per_category
         })
 
+    def _get_screen_captures(self, user_id: UUID, start: datetime, end: datetime) -> List[Dict]:
+        """Get analyzed screen captures for time period."""
+        query = """
+        SELECT
+            time,
+            image_path,
+            thumbnail_path,
+            activity_summary,
+            primary_application,
+            activity_category,
+            applications,
+            ui_elements,
+            contains_sensitive,
+            contains_pii,
+            redacted,
+            ocr_text
+        FROM screen_captures
+        WHERE user_id = :user_id
+          AND time >= :start
+          AND time < :end
+        ORDER BY time DESC
+        LIMIT :limit
+        """
+        return db.execute_query(query, {
+            "user_id": user_id,
+            "start": start,
+            "end": end,
+            "limit": settings.max_items_per_category
+        })
 
 # Global aggregator instance
 aggregator = DataAggregator()
