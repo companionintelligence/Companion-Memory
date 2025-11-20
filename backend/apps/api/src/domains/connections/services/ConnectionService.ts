@@ -15,6 +15,8 @@ import type {
   UpdateConnectionCredentialsDto,
 } from '../types';
 
+import { ProviderService } from './ProviderService';
+
 @Injectable()
 export class ConnectionService {
   private logger = new LoggerService(ConnectionService.name);
@@ -24,6 +26,7 @@ export class ConnectionService {
     @InjectRepository(ConnectionEntity)
     private readonly connectionRepository: Repository<ConnectionEntity>,
     private readonly clientFactory: ClientFactory,
+    private readonly providerService: ProviderService,
   ) {}
 
   async create(context: RequestContext, data: CreateConnectionDto): Promise<Connection> {
@@ -183,11 +186,50 @@ export class ConnectionService {
   }
 
   async callback(context: RequestContext, connectionId: string, code: string): Promise<Connection> {
-    const connection = await this.findOne(context, connectionId);
+    // Check if connectionId is actually a provider ID (for Discord direct OAuth flow)
+    let connection: Connection | null = null;
+
+    try {
+      connection = await this.findOne(context, connectionId);
+    } catch {
+      // Connection doesn't exist, check if it's a provider ID
+      try {
+        const provider = await this.providerService.findOne(connectionId);
+
+        if (provider) {
+          // Create connection for this provider
+          const clientIdVariable = `${provider.name?.toUpperCase()}_CLIENT_ID`;
+          const clientSecretVariable = `${provider.name?.toUpperCase()}_CLIENT_SECRET`;
+          const clientId = process.env[clientIdVariable];
+          const clientSecret = process.env[clientSecretVariable];
+
+          if (!clientId || !clientSecret) {
+            throw new Error(`Client credentials not configured for provider ${provider.name}`);
+          }
+
+          connection = await this.create(context, {
+            providerId: provider.id,
+            name: provider.name ?? 'My Connection',
+            clientid: clientId,
+            clientsecret: clientSecret,
+            schedule: '1 hour',
+          });
+        } else {
+          throw new Error(`Connection or provider not found: ${connectionId}`);
+        }
+      } catch {
+        throw new Error(`Connection or provider not found: ${connectionId}`);
+      }
+    }
+
+    if (!connection) {
+      throw new Error(`Connection not found: ${connectionId}`);
+    }
+
     const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
     const tokenExchange = await client.exchangeAuthorizationCode(code);
 
-    return this.update(context, connectionId, {
+    return this.update(context, connection.id, {
       ...tokenExchange,
     });
   }

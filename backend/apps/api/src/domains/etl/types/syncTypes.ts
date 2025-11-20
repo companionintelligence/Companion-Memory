@@ -49,7 +49,11 @@ export interface SyncResult {
     | YouTubeSyncState
     | OutlookMailSyncState
     | OutlookCalendarsSyncState
-    | OneDriveSyncState;
+    | OneDriveSyncState
+    | DiscordGuildSyncState
+    | DiscordDMSyncState
+    | DiscordRelationshipsSyncState
+    | DiscordConnectionsSyncState;
 }
 
 export interface CalendarSyncResult {
@@ -76,4 +80,42 @@ export interface OutlookCalendarSyncState {
 
 export interface OneDriveSyncState {
   nextLink?: string | undefined;
+}
+
+export interface DiscordGuildSyncState {
+  lastGuildId?: string;
+  channels?: {
+    [channelId: string]: {
+      lastMessageId?: string;
+    };
+  };
+  members?: {
+    [guildId: string]: {
+      lastMemberId?: string;
+    };
+  };
+}
+
+export interface DiscordDMSyncState {
+  channels?: {
+    [channelId: string]: {
+      lastMessageId?: string;
+    };
+  };
+}
+
+export interface DiscordRelationshipsSyncState {
+  lastRelationshipId?: string;
+}
+
+export interface DiscordConnectionsSyncState {
+  lastSyncAt?: string;
+}
+
+export interface DiscordSyncState {
+  guilds?: DiscordGuildSyncState;
+  dms?: DiscordDMSyncState;
+  relationships?: DiscordRelationshipsSyncState;
+  connections?: DiscordConnectionsSyncState;
+  [key: string]: unknown;
 }

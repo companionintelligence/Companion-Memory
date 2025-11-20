@@ -37,15 +37,51 @@ function useConnectService(): ReturnType {
       setError(null);
 
       try {
-        const response = await fetchJson<ConnectResponse>(`/api/providers/${providerId}`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-          },
-        });
+        // For Discord, build OAuth URL client-side and redirect directly (no API call)
+        if (providerId === '0198779b-4d44-84eb-a35f-93e1f0a56b71') {
+          // Build Discord OAuth URL with scopes for reading data from servers user is a member of
+          // (not requiring server management permissions or elevated roles)
+          // const discordScopes = [
+          //   'identify', // Basic user information
+          //   'guilds', // List of guilds user is in
+          //   'guilds.channels.read', // Read channels in guilds
+          //   'email', // User's email
+          //   'connections', // Connected accounts
+          //   'relationships.read', // Friends list
+          //   'dm_channels.read', // DM channels
+          //   'dm_channels.messages.read', // DM messages
+          //   'messages.read', // Read messages in channels
+          //   'rpc.notifications.read', // Read user notifications
+          //   'presences.read', // Read user presence/status
+          //   'activities.read', // Read activities/games
+          //   'applications.entitlements', // Read app entitlements
+          //   'openid', // OpenID Connect
+          // ];
 
-        setAuthorizationUrl(response.authorizationUrl);
+          // const params = new URLSearchParams({
+          //   client_id: '1427223844636065853',
+          //   response_type: 'code',
+          //   redirect_uri: 'https://dev.companionintelligence.com/oauth/callback',
+          //   integration_type: '0',
+          //   scope: discordScopes.join(' '),
+          //   state: providerId, // Pass provider ID in state so we can create connection on callback
+          // });
+
+          //const discordAuthUrl = `https://discord.com/oauth2/authorize?${params.toString()}`;
+          const discordAuthUrl = `https://discord.com/oauth2/authorize?client_id=1427223844636065853&response_type=code&redirect_uri=https%3A%2F%2Fdev.companionintelligence.com%2Foauth%2Fcallback&scope=identify+guilds+guilds.channels.read+email+connections+relationships.read+dm_channels.messages.read+dm_channels.read+messages.read+rpc.notifications.read+presences.read+activities.read+applications.entitlements+openid`;
+          setAuthorizationUrl(discordAuthUrl);
+        } else {
+          // For other providers (Google, Microsoft), use existing flow
+          const response = await fetchJson<ConnectResponse>(`/api/providers/${providerId}`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          setAuthorizationUrl(response.authorizationUrl);
+        }
       } catch (err: unknown) {
         setError(err);
       } finally {
@@ -234,8 +270,8 @@ export function ConnectPage() {
               logo="/branding/discord/logo.svg"
               background="bg-indigo-500"
               border="border-indigo-400"
-              text="Connect Discord to sync your server activity, messages, and community interactions. Coming soon."
-              disabled
+              text="Connect Discord to sync your server activity, messages, and community interactions."
+              onClick={() => connect('0198779b-4d44-84eb-a35f-93e1f0a56b71')}
             />
             <Card
               logo="/branding/github/logo.svg"
