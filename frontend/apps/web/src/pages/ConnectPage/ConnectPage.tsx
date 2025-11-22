@@ -253,8 +253,8 @@ export function ConnectPage() {
               logo="/branding/instagram/logo.svg"
               background="bg-pink-500"
               border="border-pink-400"
-              text="Sync Instagram to capture your visual memories, stories, and social interactions. Coming soon."
-              disabled
+              text="Sync Instagram to capture your visual memories, stories, and social interactions."
+              onClick={() => connect('0198779b-4d44-74eb-a395-93f1e0b56e71')}
             />
             <Card
               logo="/branding/shopify/logo.svg"
