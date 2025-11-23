@@ -737,7 +737,7 @@ export class InstagramClient extends BaseOAuth2Client {
           success: true,
           message: 'Instagram Profile sync completed successfully',
           data: {
-            results: [{ api: 'Instagram Profile', data: profile }],
+            results: [{ api: 'Profile', data: profile }],
             errors: [],
           },
           cursor: {
@@ -795,18 +795,24 @@ export class InstagramClient extends BaseOAuth2Client {
         // Handle expected errors gracefully:
         // - Media posted before business account conversion (expected for old posts)
         // - Invalid metrics for certain media types
+        // - Metrics not supported for specific media product types
         if (
           errorMsg.includes("posted before the most recent time that the user's account was converted") ||
-          errorMsg.includes('must be one of the following values')
+          errorMsg.includes('must be one of the following values') ||
+          errorMsg.includes('does not support') ||
+          errorMsg.includes('not support')
         ) {
           // These are expected errors - log at debug level
           this.logger.debug('Skipping insight metric (expected limitation)', {
             connectionId: connection.id,
             mediaId,
             metric,
+            mediaType,
             reason: errorMsg.includes('posted before')
               ? 'pre-business-conversion-media'
-              : 'invalid-metric-for-media-type',
+              : errorMsg.includes('does not support') || errorMsg.includes('not support')
+                ? 'metric-not-supported-for-media-type'
+                : 'invalid-metric-for-media-type',
           });
         } else {
           // Unexpected errors - log at warn level
@@ -814,6 +820,7 @@ export class InstagramClient extends BaseOAuth2Client {
             connectionId: connection.id,
             mediaId,
             metric,
+            mediaType,
             error: errorMsg,
           });
         }
@@ -988,7 +995,7 @@ export class InstagramClient extends BaseOAuth2Client {
             data: {
               results: [
                 {
-                  api: `Instagram Media:${item.media_type}`,
+                  api: 'media',
                   data: aggregatedMediaData,
                   // Note: scope field not in SyncResult type, but _endpoints is in data for reference
                 },
@@ -1161,7 +1168,7 @@ export class InstagramClient extends BaseOAuth2Client {
             data: {
               results: [
                 {
-                  api: 'Instagram Story',
+                  api: 'media',
                   data: aggregatedStoryData,
                   // Note: scope field not in SyncResult type, but _endpoints is in data for reference
                 },
@@ -1236,20 +1243,44 @@ export class InstagramClient extends BaseOAuth2Client {
     }
   }
 
-  private async syncDMs(
+  /**
+   * Fetch all messages for a conversation with pagination
+   * Returns all messages and conversation metadata, or null if fetching fails
+   */
+  private async fetchAllMessagesForConversation(
     connection: Connection,
-    igUserId: string,
-    syncState: InstagramDMSyncState | null | undefined,
-  ): Promise<SyncResponse[]> {
-    const responses: SyncResponse[] = [];
+    conversationId: string,
+    messagePaginationCursor?: string,
+  ): Promise<{
+    allMessages: InstagramMessage[];
+    participants: Array<{ id: string; username?: string }>;
+    updatedTime?: string;
+  } | null> {
+    const allMessages: InstagramMessage[] = [];
+    let currentCursor = messagePaginationCursor;
+    let participants: Array<{ id: string; username?: string }> = [];
+    let updatedTime: string | undefined;
+
+    this.logger.log('Fetching all messages for conversation', {
+      connectionId: connection.id,
+      conversationId,
+      hasInitialCursor: !!messagePaginationCursor,
+    });
 
     try {
-      // If we have a current conversation ID and message cursor, continue fetching messages for that conversation
-      if (syncState?.currentConversationId && syncState?.messagePaginationCursor) {
-        // Continue paginating messages for the current conversation
+      do {
         const messagesFields = 'id,created_time,from,to,message';
-        const messagesEndpoint = `/${syncState.currentConversationId}?fields=messages{${messagesFields}},participants,updated_time&after=${syncState.messagePaginationCursor}`;
+        // Instagram Graph API uses nested field syntax with pagination
+        // Format: messages.after(cursor){fields} or just messages{fields} for first page
+        // Requires platform=instagram parameter
+        let messagesEndpoint = `/${conversationId}?platform=instagram&fields=messages`;
+        if (currentCursor) {
+          messagesEndpoint += `.after(${currentCursor})`;
+        }
 
+        messagesEndpoint += `{${messagesFields}},participants,updated_time`;
+
+        // Messages endpoint is on Instagram Graph API
         const messagesResponse = (await this.request<{
           messages?: {
             data: InstagramMessage[];
@@ -1287,69 +1318,147 @@ export class InstagramClient extends BaseOAuth2Client {
         };
 
         const messages = messagesResponse.messages?.data || [];
-        const messageAfterCursor = messagesResponse.messages?.paging?.cursors?.after;
-        const hasMoreMessages = !!messagesResponse.messages?.paging?.next;
+        allMessages.push(...messages);
 
-        // Create API log entry for this page of messages
+        // Store participants and updated time from first page
+        if (allMessages.length === messages.length) {
+          participants = messagesResponse.participants?.data || [];
+          updatedTime = messagesResponse.updated_time;
+        }
+
+        currentCursor = messagesResponse.messages?.paging?.cursors?.after;
+      } while (currentCursor);
+
+      this.logger.log('Finished fetching messages for conversation', {
+        connectionId: connection.id,
+        conversationId,
+        totalMessages: allMessages.length,
+      });
+
+      return {
+        allMessages,
+        participants,
+        updatedTime,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn('Failed to fetch messages for conversation', {
+        connectionId: connection.id,
+        conversationId,
+        error: errorMsg,
+        messagesFetchedSoFar: allMessages.length,
+      });
+
+      // Return null to indicate failure, but don't throw - we'll still save conversation data
+      return null;
+    }
+  }
+
+  private async syncDMs(
+    connection: Connection,
+    igUserId: string,
+    syncState: InstagramDMSyncState | null | undefined,
+  ): Promise<SyncResponse[]> {
+    const responses: SyncResponse[] = [];
+
+    this.logger.log('Starting Instagram DMs sync', {
+      connectionId: connection.id,
+      igUserId,
+      hasCurrentConversationId: !!syncState?.currentConversationId,
+      hasConversationCursor: !!syncState?.conversationPaginationCursor,
+    });
+
+    try {
+      // If we have a current conversation ID, we're resuming a conversation
+      // Refetch all messages from the beginning to ensure we have complete data for the blob
+      if (syncState?.currentConversationId) {
+        this.logger.log('Resuming conversation sync', {
+          connectionId: connection.id,
+          conversationId: syncState.currentConversationId,
+        });
+        const conversationId = syncState.currentConversationId;
+        // Refetch from beginning to ensure completeness - don't use cursor
+        const messagesResult = await this.fetchAllMessagesForConversation(connection, conversationId);
+
+        // Get conversation metadata even if messages failed
+        let conversationData: InstagramConversation | null = null;
+        try {
+          const conversationResponse = (await this.request<InstagramConversation>(
+            connection,
+            `/${conversationId}?platform=instagram&fields=id,updated_time,message_count,participants`,
+          )) as InstagramConversation;
+          conversationData = conversationResponse;
+        } catch (error) {
+          this.logger.warn('Failed to fetch conversation metadata', {
+            connectionId: connection.id,
+            conversationId,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+
+        // Create comprehensive conversation blob with all data
+        const conversationBlob = {
+          conversation: conversationData
+            ? {
+                id: conversationData.id,
+                updatedTime: conversationData.updated_time,
+                messageCount: conversationData.message_count,
+                participants: conversationData.participants?.data || [],
+              }
+            : {
+                id: conversationId,
+                updatedTime: messagesResult?.updatedTime,
+                messageCount: messagesResult?.allMessages.length || 0,
+                participants: messagesResult?.participants || [],
+              },
+          participants: messagesResult?.participants || conversationData?.participants?.data || [],
+          updatedTime: messagesResult?.updatedTime || conversationData?.updated_time,
+          messages: messagesResult?.allMessages || [],
+          messageCount: messagesResult?.allMessages.length || 0,
+          messagesFetched: messagesResult !== null,
+        };
+
         responses.push({
           success: true,
-          message: `Instagram DMs sync for conversation ${syncState.currentConversationId}: ${messages.length} messages${hasMoreMessages ? ' (more available)' : ''}`,
+          message: `Instagram DMs sync for conversation ${conversationId}: ${conversationBlob.messageCount} messages`,
           data: {
             results: [
               {
-                api: 'Instagram Direct Messages',
-                data: {
-                  conversationId: syncState.currentConversationId,
-                  participants: messagesResponse.participants?.data || [],
-                  updatedTime: messagesResponse.updated_time,
-                  messages,
-                  count: messages.length,
-                  hasMore: hasMoreMessages,
-                },
+                api: 'DMs',
+                data: conversationBlob,
               },
             ],
-            errors: [],
+            errors: messagesResult === null ? ['Failed to fetch some messages'] : [],
           },
           cursor: {
             instagram: {
               dms: {
                 lastSyncAt: new Date().toISOString(),
-                currentConversationId: syncState.currentConversationId,
                 conversationPaginationCursor: syncState.conversationPaginationCursor,
-                messagePaginationCursor: messageAfterCursor, // Store cursor for next sync
+                // Clear currentConversationId and messagePaginationCursor to fetch next conversation
               },
             },
           },
         });
 
-        // If no more messages for this conversation, move to next conversation
-        if (!hasMoreMessages) {
-          // Reset message cursor and move to next conversation
-          const newSyncState: InstagramDMSyncState = {
-            lastSyncAt: new Date().toISOString(),
-            conversationPaginationCursor: syncState.conversationPaginationCursor,
-            // Clear currentConversationId and messagePaginationCursor to fetch next conversation
-          };
-          // Update last response cursor to indicate we're moving to next conversation
-          if (responses.length > 0) {
-            responses[responses.length - 1].cursor = {
-              instagram: {
-                dms: newSyncState,
-              },
-            };
-          }
-        }
-
         return responses;
       }
 
-      // Otherwise, get next conversation(s) to fetch messages for
+      // Otherwise, get next conversation(s) to process
       const fields = 'id,updated_time,message_count,participants';
-      let conversationsEndpoint = `/${igUserId}/conversations?fields=${fields}&limit=100`;
+      let conversationsEndpoint = `/${igUserId}/conversations?platform=instagram&fields=${fields}&limit=100`;
       if (syncState?.conversationPaginationCursor) {
-        conversationsEndpoint = `/${igUserId}/conversations?fields=${fields}&limit=100&after=${syncState.conversationPaginationCursor}`;
+        conversationsEndpoint = `/${igUserId}/conversations?platform=instagram&fields=${fields}&limit=100&after=${syncState.conversationPaginationCursor}`;
       }
 
+      this.logger.log('Fetching Instagram conversations', {
+        connectionId: connection.id,
+        igUserId,
+        endpoint: conversationsEndpoint,
+        hasPaginationCursor: !!syncState?.conversationPaginationCursor,
+      });
+
+      // Conversations endpoint is on Instagram Graph API with platform=instagram parameter
       const conversationsResponse = (await this.request<{
         data: InstagramConversation[];
         paging?: {
@@ -1372,8 +1481,20 @@ export class InstagramClient extends BaseOAuth2Client {
       const conversationAfterCursor = conversationsResponse.paging?.cursors?.after;
       const hasMoreConversations = !!conversationsResponse.paging?.next;
 
+      this.logger.log('Instagram conversations fetched', {
+        connectionId: connection.id,
+        conversationCount: conversations.length,
+        hasMoreConversations,
+        conversationAfterCursor: conversationAfterCursor ? 'present' : 'none',
+      });
+
       if (conversations.length === 0) {
         // No more conversations
+        this.logger.log('No Instagram conversations found', {
+          connectionId: connection.id,
+          igUserId,
+        });
+
         return [
           {
             success: true,
@@ -1390,85 +1511,49 @@ export class InstagramClient extends BaseOAuth2Client {
         ];
       }
 
-      // Fetch first page of messages for the first conversation
+      // Process the first conversation: fetch all messages and save as complete blob
       const conversation = conversations[0];
-      const messagesFields = 'id,created_time,from,to,message';
-      const messagesEndpoint = `/${conversation.id}?fields=messages{${messagesFields}},participants,updated_time`;
+      this.logger.log('Fetching messages for conversation', {
+        connectionId: connection.id,
+        conversationId: conversation.id,
+        messageCount: conversation.message_count,
+      });
+      const messagesResult = await this.fetchAllMessagesForConversation(connection, conversation.id);
 
-      const messagesResponse = (await this.request<{
-        messages?: {
-          data: InstagramMessage[];
-          paging?: {
-            cursors?: {
-              after?: string;
-            };
-            next?: string;
-          };
-        };
-        participants?: {
-          data: Array<{
-            id: string;
-            username?: string;
-          }>;
-        };
-        updated_time?: string;
-      }>(connection, messagesEndpoint)) as {
-        messages?: {
-          data: InstagramMessage[];
-          paging?: {
-            cursors?: {
-              after?: string;
-            };
-            next?: string;
-          };
-        };
-        participants?: {
-          data: Array<{
-            id: string;
-            username?: string;
-          }>;
-        };
-        updated_time?: string;
+      // Create comprehensive conversation blob with all data
+      const conversationBlob = {
+        conversation: {
+          id: conversation.id,
+          updatedTime: conversation.updated_time,
+          messageCount: conversation.message_count,
+          participants: conversation.participants?.data || [],
+        },
+        participants: messagesResult?.participants || conversation.participants?.data || [],
+        updatedTime: messagesResult?.updatedTime || conversation.updated_time,
+        messages: messagesResult?.allMessages || [],
+        messageCount: messagesResult?.allMessages.length || 0,
+        messagesFetched: messagesResult !== null,
       };
 
-      const messages = messagesResponse.messages?.data || [];
-      const messageAfterCursor = messagesResponse.messages?.paging?.cursors?.after;
-      const hasMoreMessages = !!messagesResponse.messages?.paging?.next;
-
-      // Create API log entry for this conversation's first page of messages
       responses.push({
         success: true,
-        message: `Instagram DMs sync for conversation ${conversation.id}: ${messages.length} messages${hasMoreMessages ? ' (more messages available)' : hasMoreConversations ? ' (more conversations available)' : ''}`,
+        message: `Instagram DMs sync for conversation ${conversation.id}: ${conversationBlob.messageCount} messages${hasMoreConversations ? ' (more conversations available)' : ''}`,
         data: {
           results: [
             {
-              api: 'Instagram Direct Messages',
-              data: {
-                conversationId: conversation.id,
-                conversation: {
-                  id: conversation.id,
-                  updatedTime: conversation.updated_time,
-                  messageCount: conversation.message_count,
-                  participants: conversation.participants?.data || [],
-                },
-                participants: messagesResponse.participants?.data || [],
-                updatedTime: messagesResponse.updated_time || conversation.updated_time,
-                messages,
-                count: messages.length,
-                hasMore: hasMoreMessages || hasMoreConversations,
-              },
+              api: 'DMs',
+              data: conversationBlob,
             },
           ],
-          errors: [],
+          errors: messagesResult === null ? ['Failed to fetch some messages'] : [],
         },
         cursor: {
           instagram: {
             dms: {
               lastSyncAt: new Date().toISOString(),
               lastConversationId: conversation.id,
-              currentConversationId: conversation.id,
               conversationPaginationCursor: conversationAfterCursor, // Store cursor for conversation pagination
-              messagePaginationCursor: messageAfterCursor, // Store cursor for message pagination
+              // Will set currentConversationId and messagePaginationCursor if there are more messages to fetch
             },
           },
         },
@@ -1477,7 +1562,12 @@ export class InstagramClient extends BaseOAuth2Client {
       return responses;
     } catch (error) {
       const errorMsg = `Instagram DMs API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.logger.error(errorMsg, { connectionId: connection.id });
+      this.logger.error('Instagram DMs sync failed', {
+        connectionId: connection.id,
+        igUserId,
+        error: errorMsg,
+        errorDetails: error instanceof Error ? error.stack : undefined,
+      });
 
       return [
         {
