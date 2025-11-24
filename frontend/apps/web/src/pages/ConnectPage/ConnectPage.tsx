@@ -37,38 +37,15 @@ function useConnectService(): ReturnType {
       setError(null);
 
       try {
-        // For Discord, build OAuth URL client-side and redirect directly (no API call)
         if (providerId === '0198779b-4d44-84eb-a35f-93e1f0a56b71') {
-          // Build Discord OAuth URL with scopes for reading data from servers user is a member of
-          // (not requiring server management permissions or elevated roles)
-          // const discordScopes = [
-          //   'identify', // Basic user information
-          //   'guilds', // List of guilds user is in
-          //   'guilds.channels.read', // Read channels in guilds
-          //   'email', // User's email
-          //   'connections', // Connected accounts
-          //   'relationships.read', // Friends list
-          //   'dm_channels.read', // DM channels
-          //   'dm_channels.messages.read', // DM messages
-          //   'messages.read', // Read messages in channels
-          //   'rpc.notifications.read', // Read user notifications
-          //   'presences.read', // Read user presence/status
-          //   'activities.read', // Read activities/games
-          //   'applications.entitlements', // Read app entitlements
-          //   'openid', // OpenID Connect
-          // ];
+          const discordScopes = ['identify', 'guilds', 'email', 'connections', 'openid'];
+          const scopeString = discordScopes.join(' ');
+          const redirectUri = encodeURIComponent('https://dev.companionintelligence.com/oauth/callback');
+          const encodedScope = encodeURIComponent(scopeString);
+          const encodedState = encodeURIComponent(providerId);
 
-          // const params = new URLSearchParams({
-          //   client_id: '1427223844636065853',
-          //   response_type: 'code',
-          //   redirect_uri: 'https://dev.companionintelligence.com/oauth/callback',
-          //   integration_type: '0',
-          //   scope: discordScopes.join(' '),
-          //   state: providerId, // Pass provider ID in state so we can create connection on callback
-          // });
+          const discordAuthUrl = `https://discord.com/oauth2/authorize?client_id=1427223844636065853&response_type=code&redirect_uri=${redirectUri}&scope=${encodedScope}&state=${encodedState}`;
 
-          //const discordAuthUrl = `https://discord.com/oauth2/authorize?${params.toString()}`;
-          const discordAuthUrl = `https://discord.com/oauth2/authorize?client_id=1427223844636065853&response_type=code&redirect_uri=https%3A%2F%2Fdev.companionintelligence.com%2Foauth%2Fcallback&scope=identify+guilds+guilds.channels.read+email+connections+relationships.read+dm_channels.messages.read+dm_channels.read+messages.read+rpc.notifications.read+presences.read+activities.read+applications.entitlements+openid`;
           setAuthorizationUrl(discordAuthUrl);
         } else {
           // For other providers (Google, Microsoft), use existing flow

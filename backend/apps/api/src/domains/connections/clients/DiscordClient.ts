@@ -123,17 +123,14 @@ export class DiscordClient extends BaseOAuth2Client {
   protected readonly tokenEndpoint = 'https://discord.com/api/v10/oauth2/token';
 
   // Valid Discord OAuth2 scopes
-  // Note: Discord doesn't have granular "read" scopes like guilds.channels.read or dm_channels.read.
-  // We use basic scopes to get an access token, then use that token to access REST API endpoints.
-  // The REST API endpoints check the user's actual permissions in each guild/channel.
+  // Starting with ONLY core scopes to avoid malformed URL errors
+  // Will add other scopes incrementally after testing
   protected readonly scopes = [
-    'identify', // Basic user information
-    'guilds', // List of guilds user is in
-    'email', // User's email
-    'connections', // Connected accounts (Spotify, Steam, etc.)
-    'activities.read', // Read activities/games
-    'applications.entitlements', // Read app entitlements
-    'openid', // OpenID Connect
+    'identify', // Basic user information - DEFINITELY VALID
+    'guilds', // List of guilds user is in - DEFINITELY VALID
+    'email', // User's email - DEFINITELY VALID
+    'connections', // Connected accounts (Spotify, Steam, etc.) - DEFINITELY VALID
+    'openid', // OpenID Connect - DEFINITELY VALID
   ];
 
   protected get clientId() {
@@ -192,7 +189,7 @@ export class DiscordClient extends BaseOAuth2Client {
       });
     }
 
-    // Sync guilds (servers) and their messages
+    // Sync guilds (servers) with channels, messages, and members
     try {
       const guildSyncState = connection.syncState?.guilds as DiscordGuildSyncState | null;
       const guildResults = await this.syncGuilds(connection, guildSyncState);
@@ -224,7 +221,10 @@ export class DiscordClient extends BaseOAuth2Client {
       });
     }
 
-    // Sync DMs
+    // Note: Guild members are now included in the guilds sync blob above
+    // This separate sync is no longer needed as members are fetched per-guild in syncGuilds
+
+    // Sync DMs - gracefully handle if we don't have permissions
     try {
       const dmSyncState = connection.syncState?.dms as DiscordDMSyncState | null;
       const dmResults = await this.syncDMs(connection, dmSyncState);
@@ -241,52 +241,18 @@ export class DiscordClient extends BaseOAuth2Client {
         },
       });
     } catch (error) {
+      // Don't fail the entire sync if DMs fail - just log and continue
       const errorMsg = `Discord DMs API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.logger.error('Discord DMs sync failed', {
+      this.logger.warn('Discord DMs sync failed - may require special OAuth scopes', {
         connectionId: connection.id,
         error: errorMsg,
       });
-      responses.push({
-        success: false,
-        message: errorMsg,
-        data: {
-          results: [],
-          errors: [errorMsg],
-        },
-      });
-    }
-
-    // Note: Guild members sync removed - requires 'guilds.members.read' scope which needs
-    // privileged permissions and server management access. Regular members cannot use this scope.
-
-    // Sync Relationships (friends)
-    try {
-      const relationshipsSyncState = connection.syncState
-        ?.relationships as DiscordRelationshipsSyncState | null;
-      const relationshipResults = await this.syncRelationships(connection, relationshipsSyncState);
-
+      // Add a warning response but don't mark as failure
       responses.push({
         success: true,
-        message: 'Discord relationships sync completed successfully',
+        message: 'Discord DMs sync skipped (requires special OAuth scopes)',
         data: {
-          results: [{ api: 'discord relationships', data: relationshipResults }],
-          errors: [],
-        },
-        cursor: {
-          relationships: relationshipResults[0]?.syncState || relationshipsSyncState || {},
-        },
-      });
-    } catch (error) {
-      const errorMsg = `Discord relationships API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.logger.error('Discord relationships sync failed', {
-        connectionId: connection.id,
-        error: errorMsg,
-      });
-      responses.push({
-        success: false,
-        message: errorMsg,
-        data: {
-          results: [],
+          results: [{ api: 'discord dms', data: [] }],
           errors: [errorMsg],
         },
       });
@@ -324,6 +290,39 @@ export class DiscordClient extends BaseOAuth2Client {
       });
     }
 
+    // Sync Relationships (friends)
+    try {
+      const relationshipsSyncState = connection.syncState
+        ?.relationships as DiscordRelationshipsSyncState | null;
+      const relationshipResults = await this.syncRelationships(connection, relationshipsSyncState);
+
+      responses.push({
+        success: true,
+        message: 'Discord relationships sync completed successfully',
+        data: {
+          results: [{ api: 'discord relationships', data: relationshipResults }],
+          errors: [],
+        },
+        cursor: {
+          relationships: relationshipResults[0]?.syncState || relationshipsSyncState || {},
+        },
+      });
+    } catch (error) {
+      const errorMsg = `Discord relationships API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      this.logger.warn('Discord relationships sync failed (may require special OAuth scopes)', {
+        connectionId: connection.id,
+        error: errorMsg,
+      });
+      responses.push({
+        success: true,
+        message: 'Discord relationships sync skipped',
+        data: {
+          results: [{ api: 'discord relationships', data: [] }],
+          errors: [errorMsg],
+        },
+      });
+    }
+
     // Sync Presences (user presence/status)
     try {
       const presences = await this.syncPresences(connection);
@@ -338,11 +337,18 @@ export class DiscordClient extends BaseOAuth2Client {
       });
     } catch (error) {
       const errorMsg = `Discord presences API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.logger.warn('Discord presences sync failed (may not be available via REST API)', {
+      this.logger.warn('Discord presences sync failed (may require special OAuth scopes)', {
         connectionId: connection.id,
         error: errorMsg,
       });
-      // Don't add error response - presences might not be available via REST API
+      responses.push({
+        success: true,
+        message: 'Discord presences sync skipped',
+        data: {
+          results: [{ api: 'discord presences', data: [] }],
+          errors: [errorMsg],
+        },
+      });
     }
 
     // Sync Activities (games/activities users are playing)
@@ -359,11 +365,18 @@ export class DiscordClient extends BaseOAuth2Client {
       });
     } catch (error) {
       const errorMsg = `Discord activities API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.logger.warn('Discord activities sync failed (may not be available via REST API)', {
+      this.logger.warn('Discord activities sync failed (may require special OAuth scopes)', {
         connectionId: connection.id,
         error: errorMsg,
       });
-      // Don't add error response - activities might not be available via REST API
+      responses.push({
+        success: true,
+        message: 'Discord activities sync skipped',
+        data: {
+          results: [{ api: 'discord activities', data: [] }],
+          errors: [errorMsg],
+        },
+      });
     }
 
     // Sync Application Entitlements (what apps user has access to)
@@ -380,11 +393,18 @@ export class DiscordClient extends BaseOAuth2Client {
       });
     } catch (error) {
       const errorMsg = `Discord entitlements API failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.logger.warn('Discord entitlements sync failed', {
+      this.logger.warn('Discord entitlements sync failed (may require special OAuth scopes)', {
         connectionId: connection.id,
         error: errorMsg,
       });
-      // Don't add error response - entitlements might fail if not available
+      responses.push({
+        success: true,
+        message: 'Discord entitlements sync skipped',
+        data: {
+          results: [{ api: 'discord entitlements', data: [] }],
+          errors: [errorMsg],
+        },
+      });
     }
 
     // Note: RPC notifications (rpc.notifications.read scope) require WebSocket connection
@@ -408,7 +428,6 @@ export class DiscordClient extends BaseOAuth2Client {
     connection: Connection,
     syncState: DiscordGuildSyncState | null,
   ): Promise<Array<{ data: unknown; syncState: DiscordGuildSyncState }>> {
-    const results: Array<{ data: unknown; syncState: DiscordGuildSyncState }> = [];
     const newSyncState: DiscordGuildSyncState = {
       channels: syncState?.channels || ({} as Record<string, { lastMessageId?: string }>),
     };
@@ -422,34 +441,81 @@ export class DiscordClient extends BaseOAuth2Client {
       guildCount: guilds.length,
     });
 
-    // For each guild, fetch channels and messages
+    // Create a consolidated guilds blob with all guilds, each containing members and channels
+    const guildsBlob: Array<{
+      guild: DiscordGuild;
+      members: DiscordGuildMember[];
+      channels: Array<{
+        channel: DiscordChannel;
+        messages: DiscordMessage[];
+      }>;
+    }> = [];
+
+    // For each guild, create a blob with guild info, members, and channels (with messages)
     for (const guild of guilds) {
       try {
-        // Fetch channels for this guild
-        const channels =
-          (await this.request<DiscordChannel[]>(connection, `/guilds/${guild.id}/channels`)) || [];
+        const guildBlob: {
+          guild: DiscordGuild;
+          members: DiscordGuildMember[];
+          channels: Array<{
+            channel: DiscordChannel;
+            messages: DiscordMessage[];
+          }>;
+        } = {
+          guild,
+          members: [],
+          channels: [],
+        };
 
-        // Filter for text channels (type 0) and forum channels (type 15)
-        const textChannels = channels.filter((ch) => ch.type === 0 || ch.type === 15);
+        // Try to fetch members for this guild
+        try {
+          const guildMemberSyncState = syncState?.members?.[guild.id];
+          guildBlob.members = await this.fetchGuildMembers(
+            connection,
+            guild.id,
+            guildMemberSyncState?.lastMemberId,
+          );
+          this.logger.log('Discord guild members fetched', {
+            connectionId: connection.id,
+            guildId: guild.id,
+            guildName: guild.name,
+            memberCount: guildBlob.members.length,
+          });
+        } catch (error) {
+          this.logger.warn('Failed to fetch members for guild (may require special OAuth scopes)', {
+            connectionId: connection.id,
+            guildId: guild.id,
+            guildName: guild.name,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          // Members array remains empty - this is fine, we still have the guild info
+        }
 
-        this.logger.log('Discord guild channels fetched', {
-          connectionId: connection.id,
-          guildId: guild.id,
-          guildName: guild.name,
-          channelCount: textChannels.length,
-        });
+        // Try to fetch channels for this guild
+        try {
+          const channels =
+            (await this.request<DiscordChannel[]>(connection, `/guilds/${guild.id}/channels`)) || [];
 
-        // Sync messages for each channel
-        for (const channel of textChannels) {
-          try {
-            const channelSyncState = syncState?.channels?.[channel.id];
-            const messages = await this.fetchChannelMessages(
-              connection,
-              channel.id,
-              channelSyncState?.lastMessageId,
-            );
+          // Filter for text channels (type 0) and forum channels (type 15)
+          const textChannels = channels.filter((ch) => ch.type === 0 || ch.type === 15);
 
-            if (messages.length > 0) {
+          this.logger.log('Discord guild channels fetched', {
+            connectionId: connection.id,
+            guildId: guild.id,
+            guildName: guild.name,
+            channelCount: textChannels.length,
+          });
+
+          // For each channel, fetch messages and add to guild blob
+          for (const channel of textChannels) {
+            try {
+              const channelSyncState = syncState?.channels?.[channel.id];
+              const messages = await this.fetchChannelMessages(
+                connection,
+                channel.id,
+                channelSyncState?.lastMessageId,
+              );
+
               // Store the newest message ID (first in array, as Discord returns newest first)
               const newestMessageId = messages[0]?.id;
               if (newestMessageId && newSyncState.channels) {
@@ -458,13 +524,9 @@ export class DiscordClient extends BaseOAuth2Client {
                 };
               }
 
-              results.push({
-                data: {
-                  guild,
-                  channel,
-                  messages,
-                },
-                syncState: newSyncState,
+              guildBlob.channels.push({
+                channel,
+                messages,
               });
 
               this.logger.log('Discord channel messages fetched', {
@@ -474,18 +536,34 @@ export class DiscordClient extends BaseOAuth2Client {
                 channelName: channel.name,
                 messageCount: messages.length,
               });
+            } catch (error) {
+              this.logger.warn('Failed to fetch messages for channel (may require special OAuth scopes)', {
+                connectionId: connection.id,
+                guildId: guild.id,
+                channelId: channel.id,
+                error: error instanceof Error ? error.message : 'Unknown error',
+              });
+              // Channel without messages is still added - we have the channel info
+              guildBlob.channels.push({
+                channel,
+                messages: [],
+              });
             }
-          } catch (error) {
-            this.logger.warn('Failed to fetch messages for channel', {
-              connectionId: connection.id,
-              guildId: guild.id,
-              channelId: channel.id,
-              error: error instanceof Error ? error.message : 'Unknown error',
-            });
           }
+        } catch (error) {
+          this.logger.warn('Failed to fetch channels for guild (may require special OAuth scopes)', {
+            connectionId: connection.id,
+            guildId: guild.id,
+            guildName: guild.name,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          // Channels array remains empty - this is fine, we still have the guild info
         }
+
+        // Add the guild blob (even if members/channels failed, we still have the guild)
+        guildsBlob.push(guildBlob);
       } catch (error) {
-        this.logger.warn('Failed to fetch channels for guild', {
+        this.logger.warn('Failed to process guild', {
           connectionId: connection.id,
           guildId: guild.id,
           error: error instanceof Error ? error.message : 'Unknown error',
@@ -493,15 +571,13 @@ export class DiscordClient extends BaseOAuth2Client {
       }
     }
 
-    // If no results, return at least the guilds list
-    if (results.length === 0) {
-      results.push({
-        data: { guilds },
+    // Return a single consolidated blob with all guilds
+    return [
+      {
+        data: guildsBlob,
         syncState: newSyncState,
-      });
-    }
-
-    return results;
+      },
+    ];
   }
 
   private async syncDMs(
@@ -513,69 +589,108 @@ export class DiscordClient extends BaseOAuth2Client {
       channels: syncState?.channels || ({} as Record<string, { lastMessageId?: string }>),
     };
 
-    // Fetch all DM channels
-    this.logger.log('Fetching Discord DM channels', { connectionId: connection.id });
-    const dmChannels = (await this.request<DiscordDMChannel[]>(connection, '/users/@me/channels')) || [];
+    // Try to fetch DM channels - this may fail due to missing OAuth scopes
+    let dmChannels: DiscordDMChannel[] = [];
+    try {
+      this.logger.log('Fetching Discord DM channels', { connectionId: connection.id });
+      dmChannels = (await this.request<DiscordDMChannel[]>(connection, '/users/@me/channels')) || [];
 
-    // Filter for DM channels (type 1) and group DMs (type 3)
-    const filteredDMs = dmChannels.filter((ch) => ch.type === 1 || ch.type === 3);
+      // Filter for DM channels (type 1) and group DMs (type 3)
+      const filteredDMs = dmChannels.filter((ch) => ch.type === 1 || ch.type === 3);
 
-    this.logger.log('Discord DM channels fetched', {
-      connectionId: connection.id,
-      dmChannelCount: filteredDMs.length,
-    });
+      this.logger.log('Discord DM channels fetched', {
+        connectionId: connection.id,
+        dmChannelCount: filteredDMs.length,
+      });
 
-    // Sync messages for each DM channel
-    for (const dmChannel of filteredDMs) {
-      try {
-        const channelSyncState = syncState?.channels?.[dmChannel.id];
-        const messages = await this.fetchChannelMessages(
-          connection,
-          dmChannel.id,
-          channelSyncState?.lastMessageId,
-        );
+      // Create a blob for each DM channel with people and messages
+      for (const dmChannel of filteredDMs) {
+        try {
+          const dmBlob: {
+            channel: DiscordDMChannel;
+            people: Array<{
+              id: string;
+              username: string;
+              discriminator: string;
+              avatar: string | null;
+            }>;
+            messages: DiscordMessage[];
+          } = {
+            channel: dmChannel,
+            people: dmChannel.recipients || [],
+            messages: [],
+          };
 
-        if (messages.length > 0) {
-          // Store the newest message ID (first in array, as Discord returns newest first)
-          const newestMessageId = messages[0]?.id;
-          if (newestMessageId && newSyncState.channels) {
-            newSyncState.channels[dmChannel.id] = {
-              lastMessageId: newestMessageId,
-            };
+          // Try to fetch messages for this DM channel
+          try {
+            const channelSyncState = syncState?.channels?.[dmChannel.id];
+            dmBlob.messages = await this.fetchChannelMessages(
+              connection,
+              dmChannel.id,
+              channelSyncState?.lastMessageId,
+            );
+
+            // Store the newest message ID (first in array, as Discord returns newest first)
+            const newestMessageId = dmBlob.messages[0]?.id;
+            if (newestMessageId && newSyncState.channels) {
+              newSyncState.channels[dmChannel.id] = {
+                lastMessageId: newestMessageId,
+              };
+            }
+
+            this.logger.log('Discord DM messages fetched', {
+              connectionId: connection.id,
+              channelId: dmChannel.id,
+              messageCount: dmBlob.messages.length,
+              peopleCount: dmBlob.people.length,
+            });
+          } catch (error) {
+            this.logger.warn('Failed to fetch messages for DM channel', {
+              connectionId: connection.id,
+              channelId: dmChannel.id,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
           }
 
+          // Add the DM blob to results (even if messages failed, we still have the channel and people)
           results.push({
-            data: {
-              channel: dmChannel,
-              messages,
-            },
+            data: dmBlob,
             syncState: newSyncState,
           });
-
-          this.logger.log('Discord DM messages fetched', {
+        } catch (error) {
+          this.logger.warn('Failed to process DM channel', {
             connectionId: connection.id,
             channelId: dmChannel.id,
-            messageCount: messages.length,
+            error: error instanceof Error ? error.message : 'Unknown error',
           });
         }
-      } catch (error) {
-        this.logger.warn('Failed to fetch messages for DM channel', {
-          connectionId: connection.id,
-          channelId: dmChannel.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
       }
-    }
-
-    // If no results, return at least the DM channels list
-    if (results.length === 0) {
-      results.push({
-        data: { dmChannels: filteredDMs },
-        syncState: newSyncState,
+    } catch (error) {
+      // If we can't fetch DM channels at all (missing OAuth scopes), return empty result
+      this.logger.warn('Failed to fetch DM channels - may require special OAuth scopes', {
+        connectionId: connection.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
+
+      // Return empty array instead of throwing - this allows the sync to continue
+      return [
+        {
+          data: [],
+          syncState: newSyncState,
+        },
+      ];
     }
 
-    return results;
+    // Return a single consolidated blob with all DMs
+    // Extract just the data from each result to create a clean array of DM blobs
+    const dmsBlob = results.map((r) => r.data);
+
+    return [
+      {
+        data: dmsBlob.length > 0 ? dmsBlob : [],
+        syncState: newSyncState,
+      },
+    ];
   }
 
   private async fetchChannelMessages(
@@ -768,7 +883,6 @@ export class DiscordClient extends BaseOAuth2Client {
     connection: Connection,
     syncState: DiscordRelationshipsSyncState | null,
   ): Promise<Array<{ data: unknown; syncState: DiscordRelationshipsSyncState }>> {
-    const results: Array<{ data: unknown; syncState: DiscordRelationshipsSyncState }> = [];
     const newSyncState: DiscordRelationshipsSyncState = {
       lastRelationshipId: syncState?.lastRelationshipId,
     };
@@ -777,31 +891,26 @@ export class DiscordClient extends BaseOAuth2Client {
     this.logger.log('Fetching Discord relationships', { connectionId: connection.id });
     const relationships = await this.fetchRelationships(connection, syncState?.lastRelationshipId);
 
+    // Store the last relationship ID for pagination
     if (relationships.length > 0) {
-      // Store the last relationship ID for pagination
       const lastRelationshipId = relationships[relationships.length - 1]?.id;
       if (lastRelationshipId) {
         newSyncState.lastRelationshipId = lastRelationshipId;
       }
-
-      results.push({
-        data: { relationships },
-        syncState: newSyncState,
-      });
-
-      this.logger.log('Discord relationships fetched', {
-        connectionId: connection.id,
-        relationshipCount: relationships.length,
-      });
-    } else {
-      // Return empty result with sync state
-      results.push({
-        data: { relationships: [] },
-        syncState: newSyncState,
-      });
     }
 
-    return results;
+    this.logger.log('Discord relationships fetched', {
+      connectionId: connection.id,
+      relationshipCount: relationships.length,
+    });
+
+    // Return a single consolidated blob with all relationships
+    return [
+      {
+        data: relationships,
+        syncState: newSyncState,
+      },
+    ];
   }
 
   private async fetchRelationships(
