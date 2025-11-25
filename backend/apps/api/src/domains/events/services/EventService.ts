@@ -1,7 +1,9 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { InjectDataSource } from '@nestjs/typeorm';
 import plimit from 'p-limit';
 import PgBoss, { JobWithMetadata } from 'pg-boss';
+import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/services';
 import { RequestContextService } from '@ci/common/services/RequestContextService';
@@ -45,7 +47,10 @@ export class EventService implements OnModuleInit, OnModuleDestroy {
     max: 10,
   });
 
-  constructor(private eventEmitter: EventEmitter2) {}
+  constructor(
+    private eventEmitter: EventEmitter2,
+    @InjectDataSource() private readonly dataSource: DataSource,
+  ) {}
 
   async onModuleInit() {
     const listeners = EventListenerRegistry.getListeners();
@@ -59,8 +64,10 @@ export class EventService implements OnModuleInit, OnModuleDestroy {
     });
 
     try {
-      this.logger.log('Initializing PgBoss client...');
+      this.logger.log('Ensuring PgBoss schema exists...');
+      await this.ensurePgBossSchema();
 
+      this.logger.log('Initializing PgBoss client...');
       await this.boss.start();
 
       this.logger.log('Initialized PgBoss client');
@@ -190,6 +197,18 @@ export class EventService implements OnModuleInit, OnModuleDestroy {
     this.logger.debug(`Sent event ${name} to ${jobIds.length} queues`);
 
     return jobIds;
+  }
+
+  private async ensurePgBossSchema() {
+    try {
+      await this.dataSource.query('CREATE SCHEMA IF NOT EXISTS pgboss');
+    } catch (err: unknown) {
+      this.logger.error(
+        'Failed to ensure PgBoss schema exists',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      throw err;
+    }
   }
 
   private getRegisteredQueues(): Set<string> {
