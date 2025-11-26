@@ -128,7 +128,11 @@ export class FileService implements OnModuleInit {
     return this.signFiles(entities);
   }
 
-  async upload(context: RequestContext, file: Express.Multer.File): Promise<File> {
+  async upload(
+    context: RequestContext,
+    file: Express.Multer.File,
+    documentMetadata?: Record<string, unknown>,
+  ): Promise<File> {
     const fileId = uuidv7();
     const fileKey = uuidv4();
     const bucket = config.staticfiles.bucket;
@@ -149,6 +153,7 @@ export class FileService implements OnModuleInit {
       content_type: file.mimetype,
       size: file.size,
       file_hash: createHmac('sha256', config.auth.session.fieldPepper).update(file.buffer).digest('hex'),
+      document_metadata: documentMetadata || {},
       user: {
         id: context.userId,
       },

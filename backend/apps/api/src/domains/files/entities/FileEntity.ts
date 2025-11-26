@@ -56,6 +56,9 @@ export class FileEntity {
   @Column({ type: 'bigint', name: 'file_size_bytes' })
   size!: number;
 
+  @Column({ type: 'jsonb', name: 'document_metadata', nullable: true })
+  document_metadata!: Record<string, unknown> | null;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;

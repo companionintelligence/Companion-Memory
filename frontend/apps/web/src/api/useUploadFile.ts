@@ -13,7 +13,7 @@ type ReturnType = [
     error: unknown | null;
   },
   {
-    upload: (file: File[]) => void;
+    upload: (files: File[], metadata?: Array<Record<string, unknown>>) => void;
     reset: () => void;
   },
 ];
@@ -26,7 +26,7 @@ export function useUploadFile(): ReturnType {
   const [error, setError] = useState<unknown | null>(null);
 
   const upload = useCallback(
-    async (files: File[]) => {
+    async (files: File[], metadata?: Array<Record<string, unknown>>) => {
       setFiles([]);
       setError(null);
       setLoading(true);
@@ -36,6 +36,13 @@ export function useUploadFile(): ReturnType {
       files.forEach((file) => {
         formData.append('files', file);
       });
+
+      // Add metadata as JSON strings if provided
+      if (metadata && metadata.length > 0) {
+        metadata.forEach((meta) => {
+          formData.append('metadata', JSON.stringify(meta));
+        });
+      }
 
       let success = false;
 
