@@ -24,7 +24,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
   const [{ selectedModel }] = useModel();
 
   const { isMobile } = useDeviceLayout();
-  const { location, requestLocation } = useLocation();
+  const { requestLocation } = useLocation();
 
   const [files, setFiles] = useState<FileData[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -51,29 +51,25 @@ export function CaptureModal({ open = false, onClose }: Props) {
     if (!open) {
       setFiles([]);
       setThreadId(null);
-    } else {
-      // Request location when modal opens
-      requestLocation().catch(() => {
-        // Silently handle location request failures
-      });
     }
-  }, [open, requestLocation]);
+  }, [open]);
 
   const handleMediaCaptured = useCallback(
     async (file: File) => {
-      // Only include location for images (pictures), not videos
-      // Gracefully handle missing location - upload proceeds without metadata
-      const isImage = file.type.startsWith('image/');
+      // Capture location at the time the picture/video is taken
+      // Request fresh location at capture time for both images and videos
       let metadata: Array<Record<string, unknown>> | undefined = undefined;
 
-      if (isImage && location) {
+      const currentLocation = await requestLocation().catch(() => null);
+
+      if (currentLocation) {
         metadata = [
           {
             location: {
-              latitude: location.latitude,
-              longitude: location.longitude,
-              accuracy: location.accuracy,
-              timestamp: location.timestamp,
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude,
+              accuracy: currentLocation.accuracy,
+              timestamp: currentLocation.timestamp,
             },
           },
         ];
@@ -83,7 +79,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
       // The upload function handles undefined metadata gracefully
       upload([file], metadata);
     },
-    [upload, location],
+    [upload, requestLocation],
   );
 
   const createFileThread = useCallback(async () => {
