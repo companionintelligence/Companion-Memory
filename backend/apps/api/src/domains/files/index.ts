@@ -14,7 +14,7 @@
  * @module FilesModule
  */
 
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DeviceModule } from '@ci/domains/devices';
@@ -29,12 +29,7 @@ import { FileService } from './services/FileService';
  * @internal
  */
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([FileEntity]),
-    EventsModule,
-    DeviceModule,
-    forwardRef(() => PositionModule),
-  ],
+  imports: [TypeOrmModule.forFeature([FileEntity]), EventsModule, DeviceModule, PositionModule],
   providers: [FileService],
   controllers: [FilesController],
   exports: [FileService],

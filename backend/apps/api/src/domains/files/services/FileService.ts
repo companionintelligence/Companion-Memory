@@ -8,7 +8,7 @@ import {
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Inject, Injectable, NotFoundException, OnModuleInit, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
@@ -58,7 +58,6 @@ export class FileService implements OnModuleInit {
     private readonly fileRepository: Repository<FileEntity>,
     private readonly eventService: EventService,
     private readonly deviceService: DeviceService,
-    @Inject(forwardRef(() => PositionService))
     private readonly positionService: PositionService,
   ) {}
 
