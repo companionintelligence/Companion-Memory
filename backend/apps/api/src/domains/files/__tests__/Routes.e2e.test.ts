@@ -6,7 +6,9 @@ import request from 'supertest';
 
 import { IdFormatGuard, JwtAuthGuard } from '@ci/common/guards';
 import { RequestContextMiddleware } from '@ci/common/middleware';
+import { DeviceEntity } from '@ci/domains/devices';
 import { EventService } from '@ci/domains/events';
+import { PositionEntity } from '@ci/domains/position';
 
 import { FilesModule } from '..';
 import { FileEntity } from '../entities/FileEntity';
@@ -24,6 +26,8 @@ describe('File routes', () => {
   beforeAll(async () => {
     const repositoryTokensToMock = [
       getRepositoryToken(FileEntity),
+      getRepositoryToken(DeviceEntity),
+      getRepositoryToken(PositionEntity),
       'PgBossJobEntityRepository',
       'PgBossArchiveEntityRepository',
       'PgBossScheduleEntityRepository',

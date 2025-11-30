@@ -21,7 +21,7 @@
  * @module MemoryModule
  */
 
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { BrowserActivityModule, BrowserActivityEntity } from '@ci/domains/browser-activity';
@@ -81,7 +81,7 @@ import { UserContextService } from './services/UserContextService';
     UserModule,
     EventsModule,
     EmbeddingModule,
-    FilesModule,
+    forwardRef(() => FilesModule),
     BrowserActivityModule,
   ],
   providers: [
