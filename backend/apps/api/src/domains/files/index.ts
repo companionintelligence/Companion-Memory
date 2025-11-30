@@ -17,7 +17,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { DeviceModule } from '@ci/domains/devices';
 import { EventsModule } from '@ci/domains/events';
+import { PositionModule } from '@ci/domains/position';
 
 import { FilesController } from './controllers/FilesController';
 import { FileEntity } from './entities/FileEntity';
@@ -27,7 +29,7 @@ import { FileService } from './services/FileService';
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([FileEntity]), EventsModule],
+  imports: [TypeOrmModule.forFeature([FileEntity]), EventsModule, DeviceModule, PositionModule],
   providers: [FileService],
   controllers: [FilesController],
   exports: [FileService],

@@ -213,4 +213,46 @@ export class DeviceService {
 
     return this.findOne(context, deviceId);
   }
+
+  /**
+   * Get or create a device for the user. If a device with the given ID exists, return it.
+   * Otherwise, create a new device with the provided or default settings.
+   */
+  async getOrCreateDevice(
+    context: RequestContext,
+    deviceId?: string,
+    deviceData?: Partial<CreateDeviceDto>,
+  ): Promise<Device> {
+    // If deviceId is provided, try to find existing device
+    if (deviceId) {
+      const existingDevice = await this.findOne(context, deviceId);
+      if (existingDevice) {
+        return existingDevice;
+      }
+    }
+
+    // Find primary device or first active device as fallback
+    const existingDevices = await this.findAll(context);
+    const primaryDevice = existingDevices.find((d) => d.is_primary);
+    if (primaryDevice) {
+      return primaryDevice;
+    }
+
+    const activeDevice = existingDevices.find((d) => d.is_active);
+    if (activeDevice) {
+      return activeDevice;
+    }
+
+    // Create a new device with provided data or defaults
+    const defaultDeviceData: CreateDeviceDto = {
+      device_type: deviceData?.device_type ?? 'browser',
+      platform: deviceData?.platform ?? 'web',
+      device_name: deviceData?.device_name,
+      ...deviceData,
+    };
+
+    const newDevice = await this.create(context, defaultDeviceData);
+
+    return Array.isArray(newDevice) ? newDevice[0] : newDevice;
+  }
 }

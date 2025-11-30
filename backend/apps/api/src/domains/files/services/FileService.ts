@@ -16,7 +16,9 @@ import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/services';
 import { RequestContext } from '@ci/common/types';
 import config from '@ci/configuration';
+import { DeviceService } from '@ci/domains/devices';
 import { EventService, Events } from '@ci/domains/events';
+import { PositionService } from '@ci/domains/position';
 
 import { FileEntity } from '../entities/FileEntity';
 import type { File, FileQuery } from '../types';
@@ -55,6 +57,8 @@ export class FileService implements OnModuleInit {
     @InjectRepository(FileEntity)
     private readonly fileRepository: Repository<FileEntity>,
     private readonly eventService: EventService,
+    private readonly deviceService: DeviceService,
+    private readonly positionService: PositionService,
   ) {}
 
   async onModuleInit() {
@@ -175,7 +179,75 @@ export class FileService implements OnModuleInit {
       userId: context.userId,
     });
 
+    // Create position record if location metadata exists
+    if (documentMetadata?.location) {
+      await this.createPositionFromMetadata(context, documentMetadata, result.id);
+    }
+
     return this.signFile(entity);
+  }
+
+  private async createPositionFromMetadata(
+    context: RequestContext,
+    metadata: Record<string, unknown>,
+    fileId: string,
+  ): Promise<void> {
+    try {
+      const locationData = metadata.location as {
+        latitude?: number;
+        longitude?: number;
+        accuracy?: number;
+        timestamp?: number;
+        altitude?: number;
+        heading?: number;
+        speed?: number;
+      };
+
+      if (!locationData?.latitude || !locationData?.longitude) {
+        this.logger.debug('Location metadata missing required latitude/longitude', { fileId });
+
+        return;
+      }
+
+      // Get or create a device for this user
+      const device = await this.deviceService.getOrCreateDevice(context, undefined, {
+        device_type: 'browser',
+        platform: 'web',
+      });
+
+      // Create position record
+      const positionTime = locationData.timestamp ? new Date(locationData.timestamp) : new Date();
+
+      await this.positionService.create(context, [
+        {
+          time: positionTime.toISOString(),
+          device_id: device.device_id,
+          location: {
+            x: locationData.longitude,
+            y: locationData.latitude,
+          },
+          accuracy_meters: locationData.accuracy,
+          altitude_meters: locationData.altitude ?? undefined,
+          heading_degrees: locationData.heading ?? undefined,
+          speed_meters_per_second: locationData.speed ?? undefined,
+          source: 'gps',
+          description: `Captured with file upload: ${fileId}`,
+        },
+      ]);
+
+      this.logger.log('Created position record from file upload', {
+        fileId,
+        deviceId: device.device_id,
+        userId: context.userId,
+      });
+    } catch (error) {
+      // Log error but don't fail the file upload
+      this.logger.error('Failed to create position record from file metadata', {
+        fileId,
+        error: error instanceof Error ? error.message : String(error),
+        userId: context.userId,
+      });
+    }
   }
 
   async getFileContent(context: RequestContext, key: string): Promise<Uint8Array> {
