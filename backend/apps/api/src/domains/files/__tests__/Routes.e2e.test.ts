@@ -5,6 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 
 import { IdFormatGuard, JwtAuthGuard } from '@ci/common/guards';
+import { RequestContextMiddleware } from '@ci/common/middleware';
 import { EventService } from '@ci/domains/events';
 
 import { FilesModule } from '..';
@@ -59,6 +60,8 @@ describe('File routes', () => {
 
     app = module.createNestApplication();
 
+    app.use(new RequestContextMiddleware().use);
+
     await app.init();
   });
 
@@ -75,7 +78,7 @@ describe('File routes', () => {
       return request(app.getHttpServer()).get('/files').expect(200);
     });
 
-    it('should return a 401 for GET → /files/upload', async () => {
+    it('should return a 201 for POST → /files/upload', async () => {
       const buffer = Buffer.from('Hello, world!');
 
       return request(app.getHttpServer())
@@ -88,7 +91,7 @@ describe('File routes', () => {
       return request(app.getHttpServer()).get('/files/3207432f-0d07-44d6-8d56-412f5f873ec2').expect(200);
     });
 
-    it('should return a 200 for GET → /files/3207432f-0d07-44d6-8d56-412f5f873ec2/presign', async () => {
+    it('should return a 200 for POST → /files/3207432f-0d07-44d6-8d56-412f5f873ec2/presign', async () => {
       return request(app.getHttpServer())
         .post('/files/3207432f-0d07-44d6-8d56-412f5f873ec2/presign')
         .expect(200);
@@ -110,7 +113,7 @@ describe('File routes', () => {
       return request(app.getHttpServer()).get('/files').expect(401);
     });
 
-    it('should return a 401 for GET → /files/upload', async () => {
+    it('should return a 401 for POST → /files/upload', async () => {
       return request(app.getHttpServer()).post('/files/upload').expect(401);
     });
 
@@ -118,7 +121,7 @@ describe('File routes', () => {
       return request(app.getHttpServer()).get('/files/3207432f-0d07-44d6-8d56-412f5f873ec2').expect(401);
     });
 
-    it('should return a 401 for GET → /files/3207432f-0d07-44d6-8d56-412f5f873ec2/presign', async () => {
+    it('should return a 401 for POST → /files/3207432f-0d07-44d6-8d56-412f5f873ec2/presign', async () => {
       return request(app.getHttpServer())
         .post('/files/3207432f-0d07-44d6-8d56-412f5f873ec2/presign')
         .expect(401);

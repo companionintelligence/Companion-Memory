@@ -116,14 +116,32 @@ CREATE TABLE messages (
     
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    -- Full-text search vector (generated column)
+    search_vector tsvector GENERATED ALWAYS AS (
+      to_tsvector('english',
+        coalesce(content, '') || ' ' ||
+        coalesce(array_to_string(extracted_entities, ' '), '') || ' ' ||
+        coalesce(array_to_string(intent_categories, ' '), '')
+      )
+    ) STORED
     
     -- Constraints
    -- CONSTRAINT valid_sequence_per_thread UNIQUE (thread_id, sequence_number),
    -- CONSTRAINT content_not_empty CHECK (LENGTH(TRIM(content)) > 0)
 );
 
--- Step 6: Add thread_id column back to actions table and create FK constraint
+-- Step 6: Create indexes for messages table
+CREATE INDEX messages_thread_idx ON messages(thread_id);
+CREATE INDEX messages_user_idx ON messages(user_id);
+CREATE INDEX messages_role_idx ON messages(role);
+CREATE INDEX messages_created_idx ON messages(created_at DESC);
+CREATE INDEX messages_fts_idx ON messages USING GIN(search_vector);
+CREATE INDEX messages_embedding_idx ON messages USING hnsw (message_embedding vector_cosine_ops)
+    WHERE message_embedding IS NOT NULL;
+
+-- Step 7: Add thread_id column back to actions table and create FK constraint
 ALTER TABLE actions ADD COLUMN thread_id UUID;
 ALTER TABLE actions ADD CONSTRAINT actions_thread_fk 
     FOREIGN KEY (thread_id) REFERENCES threads(thread_id);
@@ -132,6 +150,14 @@ ALTER TABLE actions ADD CONSTRAINT actions_thread_fk
 -- Revert all changes
 ALTER TABLE actions DROP CONSTRAINT IF EXISTS actions_thread_fk;
 ALTER TABLE actions DROP COLUMN IF EXISTS thread_id;
+
+-- Drop indexes first
+DROP INDEX IF EXISTS messages_embedding_idx;
+DROP INDEX IF EXISTS messages_fts_idx;
+DROP INDEX IF EXISTS messages_created_idx;
+DROP INDEX IF EXISTS messages_role_idx;
+DROP INDEX IF EXISTS messages_user_idx;
+DROP INDEX IF EXISTS messages_thread_idx;
 
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS threads;

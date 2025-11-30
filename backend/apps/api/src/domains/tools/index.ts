@@ -30,6 +30,7 @@ import { MemoryModule } from '@ci/domains/memory';
 import { McpController } from './controllers/McpController';
 import { McpClientManager } from './providers/mcp/McpClientManager';
 import { McpToolProvider } from './providers/mcp/McpToolProvider';
+import { DatabaseSearchTool } from './providers/native/DatabaseSearchTool';
 import { ForgetKnowledgeTool } from './providers/native/ForgetKnowledgeTool';
 import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from './providers/native/GetFamilyMembersTool';
@@ -51,6 +52,7 @@ const nativeToolInstances = [
   GetFamilyMembersTool,
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
+  DatabaseSearchTool,
 ];
 
 /**

@@ -59,7 +59,9 @@ export function ContentCard({ result }: Props) {
               className="w-full h-48 object-cover rounded mb-2"
               loading="lazy"
             />
-            <div className="text-xs font-medium">{result.file.name}</div>
+            <div className="text-xs font-medium truncate w-full text-center" title={result.file.name}>
+              {result.file.name}
+            </div>
             <div className="text-[10px] text-gray-400">{(Number(result.file.size) / 1024).toFixed(1)} KB</div>
           </div>
         )}
@@ -72,7 +74,9 @@ export function ContentCard({ result }: Props) {
               className="w-full h-48 object-cover rounded mb-2 bg-black"
               preload="metadata"
             />
-            <div className="text-xs font-medium">{result.file.name}</div>
+            <div className="text-xs font-medium truncate w-full text-center" title={result.file.name}>
+              {result.file.name}
+            </div>
             <div className="text-[10px] text-gray-400">
               {(Number(result.file.size) / 1024 / 1024).toFixed(1)} MB
             </div>

@@ -220,10 +220,17 @@ export class MemoryService {
    * Get memories from content table
    */
   private async getContentMemories(userId: string, params: MemorySearchParams): Promise<Memory[]> {
+    this.logger.debug('getContentMemories called', {
+      userId,
+      paramsCategories: params.categories,
+      paramsExcludeCategories: params.excludeCategories,
+      paramsQuery: params.query,
+    });
+
     let query = this.contentRepository
       .createQueryBuilder('content')
       .leftJoin('content.user', 'user')
-      .where('user.id = :userId', { userId });
+      .where('content.user_id = :userId', { userId });
 
     // Apply search query
     if (params.query) {
@@ -243,7 +250,10 @@ export class MemoryService {
 
     // Apply category filters
     if (params.categories && params.categories.length > 0) {
+      this.logger.debug('Filtering content by categories', { categories: params.categories });
       query = query.andWhere('content.type IN (:...categories)', { categories: params.categories });
+    } else {
+      this.logger.debug('No category filter applied - returning all content types for user');
     }
 
     if (params.excludeCategories && params.excludeCategories.length > 0) {
@@ -254,7 +264,45 @@ export class MemoryService {
 
     query = query.orderBy('content.created_at', 'DESC');
 
+    // Log the SQL query for debugging
+    const sql = query.getSql();
+    this.logger.debug('Content query SQL', { sql });
+
     const contents = await query.getMany();
+
+    // Also query ALL content for this user to see what's actually in the database
+    const allContentForUser = await this.contentRepository
+      .createQueryBuilder('content')
+      .leftJoin('content.user', 'user')
+      .where('content.user_id = :userId', { userId })
+      .orderBy('content.created_at', 'DESC')
+      .take(50)
+      .getMany();
+
+    this.logger.debug('getContentMemories query results', {
+      userId,
+      paramsCategories: params.categories,
+      paramsExcludeCategories: params.excludeCategories,
+      contentCount: contents.length,
+      contentTypes: [...new Set(contents.map((c) => c.type))],
+      contentDetails: contents.slice(0, 10).map((c) => ({
+        id: c.id,
+        type: c.type,
+        title: c.title,
+        external_id: c.external_id,
+        created_at: c.created_at,
+      })),
+      allContentInDb: {
+        total: allContentForUser.length,
+        types: [...new Set(allContentForUser.map((c) => c.type))],
+        sample: allContentForUser.slice(0, 20).map((c) => ({
+          id: c.id,
+          type: c.type,
+          title: c.title?.substring(0, 50),
+          external_id: c.external_id,
+        })),
+      },
+    });
 
     return contents.map((content) => this.contentToMemory(content));
   }
@@ -273,10 +321,17 @@ export class MemoryService {
           : MemoryService.DEFAULT_ENTITY_TYPES;
 
       // Apply exclusions if specified
-      const finalAllowedTypes =
+      let finalAllowedTypes =
         params.excludeCategories && params.excludeCategories.length > 0
           ? allowedTypes.filter((type) => !params.excludeCategories!.includes(type))
           : allowedTypes;
+
+      // If Content is explicitly requested in categories, ensure it's included
+      if (params.categories && params.categories.includes('Content')) {
+        if (!finalAllowedTypes.includes('Content')) {
+          finalAllowedTypes = [...finalAllowedTypes, 'Content'];
+        }
+      }
 
       this.logger.debug('MemoryService.findAll - Entity type filtering', {
         allowedTypes,
@@ -321,12 +376,21 @@ export class MemoryService {
         this.logger.debug('MemoryService.findAll - Querying specific tables', { tableBasedTypes });
         const tableMemories = await this.getMemoriesFromSpecificTables(userId, tableBasedTypes, params);
         allMemories.push(...tableMemories);
-        this.logger.debug('MemoryService.findAll - Table memories found', { count: tableMemories.length });
+        this.logger.debug('MemoryService.findAll - Table memories found', {
+          count: tableMemories.length,
+          breakdown: {
+            events: tableMemories.filter((m) => m.category === 'Event').length,
+            communications: tableMemories.filter((m) => m.category === 'Communication').length,
+            content: tableMemories.filter((m) => m.category === 'Content').length,
+            browser: tableMemories.filter((m) => m.category === 'Browser').length,
+          },
+        });
       } else {
         this.logger.debug('MemoryService.findAll - No table-based types to query', {
           tableBasedTypes,
           finalAllowedTypes,
           excludeCategories: params.excludeCategories,
+          categories: params.categories,
         });
       }
 
@@ -733,22 +797,51 @@ export class MemoryService {
    * Convert ContentEntity to Memory
    */
   private contentToMemory(content: ContentEntity): Memory {
+    // Extract file_id or file_ids from source_data if it exists
+    const sourceData = content.source_data as Record<string, unknown> | null;
+    const fileId = sourceData?.file_id as string | undefined;
+    const fileIds = sourceData?.file_ids as string[] | undefined;
+
+    // Use created_time from source_data if available, otherwise use content.created_at
+    let timestamp = content.created_at;
+    if (sourceData?.created_time) {
+      const createdTime = sourceData.created_time as string;
+      try {
+        timestamp = new Date(createdTime);
+      } catch {
+        // If parsing fails, use content.created_at as fallback
+        this.logger.warn('Failed to parse created_time from source_data', {
+          contentId: content.id,
+          createdTime,
+        });
+      }
+    }
+
+    // Extract link from url or source_url (should be set during promotion)
+    const sourceLink: string | undefined = content.url || content.source_url || undefined;
+
+    const category = content.type || 'Content';
+
     return {
       id: content.id,
       type: 'content',
       title: content.title || 'Content',
       description: content.text,
-      timestamp: content.created_at,
-      category: content.type || 'Content',
+      timestamp,
+      category,
       tags: [],
       userId: content.user?.id || '',
-      sourceLink: content.url || content.source_url || undefined,
+      sourceLink: sourceLink || undefined,
       metadata: {
         contentType: content.type,
         mimetype: content.mimetype,
         externalId: content.external_id,
         sourceData: content.source_data,
         eventId: content.event?.id,
+        // Set linkedId so frontend can display file previews (use first file_id if multiple)
+        linkedId: fileId || (fileIds && fileIds.length > 0 ? fileIds[0] : undefined),
+        // Store all file IDs for posts with multiple attachments
+        linkedIds: fileIds && fileIds.length > 0 ? fileIds : undefined,
       },
     };
   }

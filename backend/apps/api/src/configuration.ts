@@ -44,6 +44,9 @@ export const ConfigSchema = z.object({
       microsoft: z.object({
         id: z.string(),
       }),
+      facebook: z.object({
+        id: z.string(),
+      }),
     }),
     oauth: z.object({
       callbackUrl: z.string(),

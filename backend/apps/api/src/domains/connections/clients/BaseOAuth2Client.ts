@@ -34,7 +34,30 @@ export abstract class BaseOAuth2Client extends BaseClient {
     });
 
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+      let errorMessage = `API request failed: ${response.statusText}`;
+      let errorDetails: unknown;
+
+      try {
+        const errorData = (await response.json()) as {
+          error?: { message?: string; type?: string; code?: number; error_subcode?: number };
+        };
+        if (errorData.error) {
+          errorMessage = errorData.error.message || errorMessage;
+          errorDetails = {
+            type: errorData.error.type,
+            code: errorData.error.code,
+            error_subcode: errorData.error.error_subcode,
+            message: errorData.error.message,
+          };
+        }
+      } catch {
+        // If we can't parse the error response, use the default message
+      }
+
+      const error = new Error(errorMessage);
+      (error as Error & { details?: unknown }).details = errorDetails;
+
+      throw error;
     }
 
     const data: T = await response.json();

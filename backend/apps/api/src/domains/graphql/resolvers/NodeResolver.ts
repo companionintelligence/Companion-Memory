@@ -2,7 +2,7 @@ import { UseGuards } from '@nestjs/common';
 import { Query, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
-import { GqlJwtAuthGuard } from '@ci/common/guards';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext } from '@ci/common/types';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { PersonService } from '@ci/domains/memory';
@@ -13,7 +13,7 @@ import { Node } from '../types/Node';
 import { PersonType } from '../types/PersonType';
 import { ThreadType } from '../types/ThreadType';
 
-@UseGuards(GqlJwtAuthGuard)
+@UseGuards(JwtAuthGuard)
 @Resolver(() => Node)
 export class NodeResolver {
   constructor(

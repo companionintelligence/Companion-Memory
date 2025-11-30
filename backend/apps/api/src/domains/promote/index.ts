@@ -30,14 +30,22 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConnectionsModule, ConnectionEntity } from '@ci/domains/connections';
 import { EtlModule, ApiLogEntity } from '@ci/domains/etl';
 import { EventsModule } from '@ci/domains/events';
-import { FilesModule } from '@ci/domains/files';
-import { MemoryModule, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
+import { FilesModule, FileEntity } from '@ci/domains/files';
+import { MemoryModule, GraphNodeEntity, RelationshipEntity, ContentEntity } from '@ci/domains/memory';
 import { OneDrivePromotionService } from '@ci/domains/promote/services/microsoft/OneDrivePromotionService';
 import { OutlookCalendarPromotionService } from '@ci/domains/promote/services/microsoft/OutlookCalendarPromotionService';
 import { UserModule } from '@ci/domains/user';
 
+import { PromoteController as FacebookPromoteController } from './controllers/facebook/PromoteController';
 import { PromoteController } from './controllers/google/PromoteController';
 import { PromoteController as MicrosoftPromoteController } from './controllers/microsoft/PromoteController';
+import { FacebookFriendsPromotionService } from './services/facebook/FacebookFriendsPromotionService';
+import { FacebookLikesPromotionService } from './services/facebook/FacebookLikesPromotionService';
+import { FacebookPhotosPromotionService } from './services/facebook/FacebookPhotosPromotionService';
+import { FacebookPostsPromotionService } from './services/facebook/FacebookPostsPromotionService';
+import { FacebookProfilePromotionService } from './services/facebook/FacebookProfilePromotionService';
+import { FacebookPromotionUtils } from './services/facebook/FacebookPromotionUtils';
+import { FacebookVideosPromotionService } from './services/facebook/FacebookVideosPromotionService';
 import { GoogleCalendarEventPromotionService } from './services/google/CalendarPromotionService';
 import { ContactsPromotionService } from './services/google/ContactsPromotionService';
 import { DrivePromotionService } from './services/google/DrivePromotionService';
@@ -51,7 +59,14 @@ import { PromoteService } from './services/PromoteService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ApiLogEntity, ConnectionEntity, GraphNodeEntity, RelationshipEntity]),
+    TypeOrmModule.forFeature([
+      ApiLogEntity,
+      ConnectionEntity,
+      GraphNodeEntity,
+      RelationshipEntity,
+      FileEntity,
+      ContentEntity,
+    ]),
     ConnectionsModule,
     FilesModule,
     EtlModule,
@@ -69,8 +84,15 @@ import { PromoteService } from './services/PromoteService';
     OutlookMailPromotionService,
     OutlookCalendarPromotionService,
     OneDrivePromotionService,
+    FacebookPromotionUtils,
+    FacebookProfilePromotionService,
+    FacebookPostsPromotionService,
+    FacebookPhotosPromotionService,
+    FacebookVideosPromotionService,
+    FacebookFriendsPromotionService,
+    FacebookLikesPromotionService,
   ],
-  controllers: [PromoteController, MicrosoftPromoteController],
+  controllers: [PromoteController, MicrosoftPromoteController, FacebookPromoteController],
   exports: [
     PromoteService,
     GmailPromotionService,

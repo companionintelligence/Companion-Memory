@@ -215,6 +215,54 @@ export class PromoteService {
             content: apiLog.content,
           });
           break;
+        case ApiLogScopes.FACEBOOK_PROFILE:
+          await this.eventService.send(Events.PROMOTE_FACEBOOK_PROFILE, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
+        case ApiLogScopes.FACEBOOK_POSTS:
+          await this.eventService.send(Events.PROMOTE_FACEBOOK_POSTS, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
+        case ApiLogScopes.FACEBOOK_PHOTOS:
+          await this.eventService.send(Events.PROMOTE_FACEBOOK_PHOTOS, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
+        case ApiLogScopes.FACEBOOK_VIDEOS:
+          await this.eventService.send(Events.PROMOTE_FACEBOOK_VIDEOS, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
+        case ApiLogScopes.FACEBOOK_FRIENDS:
+          await this.eventService.send(Events.PROMOTE_FACEBOOK_FRIENDS, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
+        case ApiLogScopes.FACEBOOK_LIKES:
+          await this.eventService.send(Events.PROMOTE_FACEBOOK_LIKES, {
+            apiLogId: apiLog.id,
+            userId: context.userId,
+            connectionId: apiLog.connection_id,
+            content: apiLog.content,
+          });
+          break;
       }
 
       // Mark the API log as processed after queuing
@@ -456,8 +504,19 @@ export class PromoteService {
       throw new Error(`User not found: ${userId}`);
     }
 
-    if (user.id) {
-      return user.id;
+    // Check if user already has an entity ID
+    if (user.entityId) {
+      // Verify the entity exists in the entities table
+      const existingEntity = await this.personService.findOne({ userId }, user.entityId);
+      if (existingEntity) {
+        return user.entityId;
+      }
+
+      // Entity doesn't exist, need to create a new one
+      this.logger.warn('User has entityId but entity does not exist, creating new entity', {
+        userId,
+        entityId: user.entityId,
+      });
     }
 
     return this.ensureUserHasEntity(user);
@@ -468,7 +527,7 @@ export class PromoteService {
    * Creates one if it doesn't exist (for legacy users)
    */
   private async ensureUserHasEntity(user: User): Promise<string> {
-    const entityId = uuid7();
+    let entityId: string;
     const nameParts = (user.name ?? '').trim().split(/\s+/).filter(Boolean);
     const [firstName, ...restName] = nameParts;
 
@@ -498,6 +557,7 @@ export class PromoteService {
     );
 
     if (existingEntities.length === 0) {
+      entityId = uuid7();
       await this.personService.create(
         { userId: user.id },
         {
@@ -515,6 +575,23 @@ export class PromoteService {
 
       // Update the user record with the new entity ID
       await this.userService.update(user.id, { entityId });
+
+      this.logger.log('Created entity for user', {
+        userId: user.id,
+        entityId,
+      });
+    } else {
+      // Entity already exists, use it and update user record if needed
+      const existingEntity = existingEntities[0];
+      entityId = existingEntity.id;
+
+      if (!user.entityId || user.entityId !== entityId) {
+        await this.userService.update(user.id, { entityId });
+        this.logger.log('Updated user with existing entity ID', {
+          userId: user.id,
+          entityId,
+        });
+      }
     }
 
     this.logger.log('Created entity for legacy user', {

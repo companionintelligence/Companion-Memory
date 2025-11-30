@@ -1,16 +1,14 @@
-import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
-import { GqlExecutionContext } from '@nestjs/graphql';
+import { createParamDecorator, InternalServerErrorException } from '@nestjs/common';
 
-import type { RequestContext, RequestWithContext } from '../types';
+import { ContextService } from '../services';
+import type { RequestContext } from '../types';
 
-export const Context = createParamDecorator((data: unknown, ctx: ExecutionContext): RequestContext => {
-  if (ctx.getType<'graphql' | 'http'>() === 'graphql') {
-    const gqlCtx = GqlExecutionContext.create(ctx);
+export const Context = createParamDecorator((): RequestContext => {
+  const context = ContextService.getContext();
 
-    return gqlCtx.getContext<RequestContext>();
+  if (context == null) {
+    throw new InternalServerErrorException('Request context not found');
   }
 
-  const req = ctx.switchToHttp().getRequest<RequestWithContext>();
-
-  return req.context ?? {};
+  return context;
 });

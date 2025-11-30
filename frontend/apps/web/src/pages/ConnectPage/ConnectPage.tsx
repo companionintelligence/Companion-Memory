@@ -232,8 +232,8 @@ export function ConnectPage() {
               logo="/branding/meta/logo.svg"
               background="bg-blue-500"
               border="border-blue-400"
-              text="Sync with Meta to stay connected with your community, manage Marketplace items, and track your Quest activity. Coming Soon."
-              disabled
+              text="Connect your Meta account to sync your Facebook posts, photos, videos, friends, and likes. Stay connected with your community."
+              onClick={() => connect('dbb8002f-12da-4cd9-b02b-37db7791a900')}
             />
             <Card
               logo="/branding/discord/logo.svg"

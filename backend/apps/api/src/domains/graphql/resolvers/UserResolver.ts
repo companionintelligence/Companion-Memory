@@ -2,13 +2,13 @@ import { NotFoundException, UseGuards } from '@nestjs/common';
 import { Query, Resolver } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
-import { GqlJwtAuthGuard } from '@ci/common/guards';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext } from '@ci/common/types';
 import { UserService } from '@ci/domains/user';
 
 import { UserType } from '../types/UserType';
 
-@UseGuards(GqlJwtAuthGuard)
+@UseGuards(JwtAuthGuard)
 @Resolver(() => UserType)
 export class UserResolver {
   constructor(private readonly userService: UserService) {}

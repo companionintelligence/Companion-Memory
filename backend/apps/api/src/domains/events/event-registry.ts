@@ -44,6 +44,12 @@ export const enum Events {
   PROMOTE_OUTLOOK_MAIL_MESSAGES = 'PROMOTE_OUTLOOK_MAIL_MESSAGES',
   PROMOTE_OUTLOOK_CALENDAR_EVENTS = 'PROMOTE_OUTLOOK_CALENDAR_EVENTS',
   PROMOTE_ONEDRIVE_FILES = 'PROMOTE_ONEDRIVE_FILES',
+  PROMOTE_FACEBOOK_PROFILE = 'PROMOTE_FACEBOOK_PROFILE',
+  PROMOTE_FACEBOOK_POSTS = 'PROMOTE_FACEBOOK_POSTS',
+  PROMOTE_FACEBOOK_PHOTOS = 'PROMOTE_FACEBOOK_PHOTOS',
+  PROMOTE_FACEBOOK_VIDEOS = 'PROMOTE_FACEBOOK_VIDEOS',
+  PROMOTE_FACEBOOK_FRIENDS = 'PROMOTE_FACEBOOK_FRIENDS',
+  PROMOTE_FACEBOOK_LIKES = 'PROMOTE_FACEBOOK_LIKES',
 }
 
 interface FileUploadPayload extends EventPayload {
@@ -271,6 +277,48 @@ interface PromoteOneDriveFilePayload extends EventPayload {
   content: unknown;
 }
 
+interface PromoteFacebookProfilePayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookPostsPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookPhotosPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookVideosPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookFriendsPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookLikesPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
 export type EventPayloads = {
   [Events.FILE_UPLOAD]: FileUploadPayload;
   [Events.CHAT_SUMMARIZATION]: ChatSummarizationPayload;
@@ -301,4 +349,10 @@ export type EventPayloads = {
   [Events.PROMOTE_OUTLOOK_MAIL_MESSAGES]: PromoteOutlookMessagesPayload;
   [Events.PROMOTE_OUTLOOK_CALENDAR_EVENTS]: PromoteOutlookCalendarEventsPayload;
   [Events.PROMOTE_ONEDRIVE_FILES]: PromoteOneDriveFilePayload;
+  [Events.PROMOTE_FACEBOOK_PROFILE]: PromoteFacebookProfilePayload;
+  [Events.PROMOTE_FACEBOOK_POSTS]: PromoteFacebookPostsPayload;
+  [Events.PROMOTE_FACEBOOK_PHOTOS]: PromoteFacebookPhotosPayload;
+  [Events.PROMOTE_FACEBOOK_VIDEOS]: PromoteFacebookVideosPayload;
+  [Events.PROMOTE_FACEBOOK_FRIENDS]: PromoteFacebookFriendsPayload;
+  [Events.PROMOTE_FACEBOOK_LIKES]: PromoteFacebookLikesPayload;
 };

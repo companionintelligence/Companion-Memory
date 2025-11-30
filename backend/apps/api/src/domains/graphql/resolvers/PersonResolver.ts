@@ -2,7 +2,7 @@ import { UseGuards } from '@nestjs/common';
 import { Query, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
-import { GqlJwtAuthGuard } from '@ci/common/guards';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext } from '@ci/common/types';
 import { PersonService } from '@ci/domains/memory';
 
@@ -13,7 +13,7 @@ import { PersonEdge } from '../types/PersonEdge';
 import { PersonType } from '../types/PersonType';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(GqlJwtAuthGuard)
+@UseGuards(JwtAuthGuard)
 @Resolver(() => PersonType)
 export class PersonResolver {
   constructor(private readonly personService: PersonService) {}

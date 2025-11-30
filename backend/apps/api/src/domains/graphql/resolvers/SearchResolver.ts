@@ -2,7 +2,7 @@ import { UseGuards } from '@nestjs/common';
 import { Args, Query, Resolver } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
-import { GqlJwtAuthGuard } from '@ci/common/guards';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext } from '@ci/common/types';
 import { ThreadService } from '@ci/domains/conversations';
 import { PersonService } from '@ci/domains/memory';
@@ -12,7 +12,7 @@ import { SearchConnection } from '../types/SearchConnection';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(GqlJwtAuthGuard)
+@UseGuards(JwtAuthGuard)
 @Resolver()
 export class SearchResolver {
   constructor(

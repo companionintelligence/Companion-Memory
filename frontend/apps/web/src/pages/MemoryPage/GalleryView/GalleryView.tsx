@@ -16,9 +16,24 @@ export function GalleryView() {
   });
   combinedResults = combinedResults.concat(memories).concat(uniqueSearchResults);
 
+  // Deduplicate files - if multiple memories reference the same file, only show the first one
+  const seenFileIds = new Set<string>();
+  const deduplicatedResults = combinedResults.filter((result) => {
+    // For MemoryItem with file, check if we've seen this file ID before
+    if ('file' in result && result.file?.id) {
+      if (seenFileIds.has(result.file.id)) {
+        return false; // Skip duplicate file
+      }
+
+      seenFileIds.add(result.file.id);
+    }
+
+    return true; // Include all other results
+  });
+
   return (
     <>
-      {combinedResults.length === 0 ? (
+      {deduplicatedResults.length === 0 ? (
         <Empty
           title="No files or results found"
           description="Upload a file or search to see content here"
@@ -26,7 +41,7 @@ export function GalleryView() {
         />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 p-4 pt-0">
-          {combinedResults.map((result) => (
+          {deduplicatedResults.map((result) => (
             <ResultCard key={result.id || Math.random()} result={result} />
           ))}
         </div>

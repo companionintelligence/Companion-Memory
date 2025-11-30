@@ -21,8 +21,8 @@ export const createBrowserActivitySchemaRoot = z.object({
 });
 
 export const createBrowserActivitySchema = z.union([
-  createBrowserActivitySchemaRoot.partial(),
-  z.array(createBrowserActivitySchemaRoot.partial()),
+  createBrowserActivitySchemaRoot,
+  z.array(createBrowserActivitySchemaRoot),
 ]);
 
 export const updateBrowserActivitySchema = createBrowserActivitySchemaRoot.partial();

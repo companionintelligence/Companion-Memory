@@ -2,7 +2,7 @@ import { UseGuards } from '@nestjs/common';
 import { Query, Resolver, Args, Parent, ResolveField, ID } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
-import { GqlJwtAuthGuard } from '@ci/common/guards';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext } from '@ci/common/types';
 import { ThreadService } from '@ci/domains/conversations';
 
@@ -17,7 +17,7 @@ import { ThreadEdge } from '../types/ThreadEdge';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(GqlJwtAuthGuard)
+@UseGuards(JwtAuthGuard)
 @Resolver(() => ThreadType)
 export class ThreadResolver {
   constructor(
