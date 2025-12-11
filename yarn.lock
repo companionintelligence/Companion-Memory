@@ -2868,6 +2868,7 @@ __metadata:
     react-leaflet: "npm:^5.0.0"
     react-markdown: "npm:^10.1.0"
     react-router-dom: "npm:^7.6.1"
+    react-voice-visualizer: "npm:^2.0.8"
     recharts: "npm:^2.15.3"
     remark-gfm: "npm:^4.0.1"
     rimraf: "npm:^6.0.1"
@@ -19014,6 +19015,16 @@ __metadata:
     react: ">=16.6.0"
     react-dom: ">=16.6.0"
   checksum: 10c0/2ba754ba748faefa15f87c96dfa700d5525054a0141de8c75763aae6734af0740e77e11261a1e8f4ffc08fd9ab78510122e05c21c2d79066c38bb6861a886c82
+  languageName: node
+  linkType: hard
+
+"react-voice-visualizer@npm:^2.0.8":
+  version: 2.0.8
+  resolution: "react-voice-visualizer@npm:2.0.8"
+  peerDependencies:
+    react: ^18.2.0
+    react-dom: ^18.2.0
+  checksum: 10c0/1136a635e1d69df36c451bb138de31b5e44b72c591a256894aaeb79c21bca2cd8c822b1e10098c715dee71c00b8878fda1e6e041c77d147d5e36f7fffd08d4c7
   languageName: node
   linkType: hard
 

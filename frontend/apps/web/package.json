@@ -35,6 +35,7 @@
     "react-leaflet": "^5.0.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.6.1",
+    "react-voice-visualizer": "^2.0.8",
     "recharts": "^2.15.3",
     "remark-gfm": "^4.0.1",
     "streaming-markdown": "^0.2.15",
