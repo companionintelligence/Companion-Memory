@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Portal } from '@ci/common';
 import { Button, DropdownMenu, Separator } from '@ci/shadcn';
-import { Upload, Camera, Plus, Cable } from '@ci/shadcn/icons';
+import { Upload, Camera, Plus, Cable, Mic } from '@ci/shadcn/icons';
 import { useNavigate } from 'react-router-dom';
 
 import { useUploadFile } from '@/api';
 import { CaptureModal } from '@/components/modals/CaptureModal';
+import { RecordModal } from '@/components/modals/RecordModal';
 import { UploadModal } from '@/components/modals/UploadModal';
 import { useModalControls } from '@/hooks';
 
@@ -18,6 +19,8 @@ export function PrimaryNavigation() {
   const [{ isOpen: isCaptureModalOpen }, { open: openCaptureModal, close: closeCaptureModal }] =
     useModalControls();
   const [{ isOpen: isUploadModalOpen }, { open: openUploadModal, close: closeUploadModal }] =
+    useModalControls();
+  const [{ isOpen: isRecordModalOpen }, { open: openRecordModal, close: closeRecordModal }] =
     useModalControls();
 
   const [, { upload, reset: resetUploader }] = useUploadFile();
@@ -92,6 +95,14 @@ export function PrimaryNavigation() {
                   </DropdownMenu.Item>
 
                   <DropdownMenu.Item
+                    onSelect={openRecordModal}
+                    className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
+                  >
+                    <Mic className="h-6! w-6!" strokeWidth={1.25} />
+                    <span className="text-xs">Record</span>
+                  </DropdownMenu.Item>
+
+                  <DropdownMenu.Item
                     onSelect={() => navigate('/connect')}
                     className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                   >
@@ -121,6 +132,14 @@ export function PrimaryNavigation() {
         onClose={() => {
           resetUploader();
           closeCaptureModal();
+        }}
+      />
+
+      <RecordModal
+        open={isRecordModalOpen}
+        onClose={() => {
+          resetUploader();
+          closeRecordModal();
         }}
       />
     </>
