@@ -1,23 +1,23 @@
-export type EmbeddableEntityType = 'person';
+import type { IndexableEntity } from '@ci/domains/search-next';
 
 export interface UpsertEmbeddingDto {
-  entityType: EmbeddableEntityType;
+  entityType: IndexableEntity;
   entityId: string;
   embedding: number[];
 }
 
 export interface UpsertVectorDto {
-  entityType: EmbeddableEntityType;
+  entityType: IndexableEntity;
   entityId: string;
   searchableText: string[];
 }
 
 export interface RemoveEmbeddingDto {
-  entityType: EmbeddableEntityType;
+  entityType: IndexableEntity;
   entityId: string;
 }
 
 export interface RemoveVectorDto {
-  entityType: EmbeddableEntityType;
+  entityType: IndexableEntity;
   entityId: string;
 }
