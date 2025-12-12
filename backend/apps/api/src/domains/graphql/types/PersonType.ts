@@ -9,6 +9,8 @@ import { Node } from './Node';
 export class PersonType implements Node {
   __typename = PersonType.name;
 
+  __source: Person | null = null;
+
   @Field(() => ID)
   id!: string;
 
@@ -54,6 +56,7 @@ export class PersonType implements Node {
   static toType(person: Person): PersonType {
     return {
       __typename: PersonType.name,
+      __source: person,
       id: GlobalUID.encode('person', person.id),
       name: person.name,
       description: person.description,
