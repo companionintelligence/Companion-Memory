@@ -26,13 +26,6 @@ export interface TagEntitiesDto {
 }
 
 export type SearchResult = {
-  type: string;
-  entityId: string;
-};
-
-export type RawEmbedding = {
+  type: IndexableEntity;
   id: string;
-  entity_id: string;
-  entity_type: string;
-  user_id: string;
 };
