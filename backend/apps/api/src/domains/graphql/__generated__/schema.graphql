@@ -23,6 +23,11 @@ interface Edge {
   node: Node!
 }
 
+type EntityTagType {
+  label: String!
+  taggedAt: DateTime!
+}
+
 type FactConnection implements Connection {
   edges: [FactEdge!]!
   pageInfo: PageInfo!
@@ -127,6 +132,8 @@ type MessageType implements Node {
 type Mutation {
   createPerson(input: CreatePersonInput!): PersonType!
   removePerson(input: RemovePersonInput!): Boolean!
+  tagEntities(input: TagEntitiesInput!): Boolean!
+  untagEntities(input: TagEntitiesInput!): Boolean!
   updatePerson(input: UpdatePersonInput!): PersonType
 }
 
@@ -152,7 +159,7 @@ type PersonEdge implements Edge {
   node: PersonType!
 }
 
-type PersonType implements Node {
+type PersonType implements Node & Taggable {
   address: String
   avatarUrl: String
   city: String
@@ -167,6 +174,7 @@ type PersonType implements Node {
   region: String
   streetAddress: String
   streetAddress2: String
+  tags: [EntityTagType!]!
 }
 
 type Query {
@@ -181,6 +189,8 @@ type Query {
   people(after: String, before: String, first: Int, last: Int): PersonConnection!
   person(id: ID!): PersonType
   search(query: String!): SearchConnection!
+  tag(id: ID!): TagType
+  tags(after: String, before: String, first: Int, last: Int): TagConnection!
   thread(id: ID!): ThreadType
   threads(after: String, before: String, first: Int, last: Int): ThreadConnection!
 }
@@ -201,6 +211,32 @@ type SearchEdge {
 }
 
 union SearchResult = PersonType | ThreadType
+
+type TagConnection implements Connection {
+  edges: [TagEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type TagEdge implements Edge {
+  cursor: String!
+  node: TagType!
+}
+
+input TagEntitiesInput {
+  ids: [ID!]!
+  label: String!
+}
+
+type TagType implements Node {
+  description: String
+  id: ID!
+  label: String!
+}
+
+interface Taggable {
+  tags: [EntityTagType!]!
+}
 
 type ThreadConnection implements Connection {
   edges: [ThreadEdge!]!
