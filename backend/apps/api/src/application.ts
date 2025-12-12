@@ -34,6 +34,7 @@ import { PositionModule } from '@ci/domains/position';
 import { PromoteModule } from '@ci/domains/promote';
 import { EmbeddingModule } from '@ci/domains/search';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
+import { SearchNextModule } from '@ci/domains/search-next';
 import { SpeechModule } from '@ci/domains/speech';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
@@ -70,6 +71,7 @@ import { UserModule } from '@ci/domains/user';
     MemoryModule,
     PromoteModule,
     SearchIngressModule,
+    SearchNextModule,
     SpeechModule,
     UserModule,
   ],
