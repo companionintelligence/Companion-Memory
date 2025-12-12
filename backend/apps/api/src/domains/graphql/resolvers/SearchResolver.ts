@@ -1,67 +1,59 @@
-import { UseGuards } from '@nestjs/common';
+import { BadRequestException, UseGuards } from '@nestjs/common';
 import { Args, Query, Resolver } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
-import { RequestContext } from '@ci/common/types';
+import { RequestContext, UserServiceContext } from '@ci/common/types';
 import { toServiceContext } from '@ci/common/utils';
-import { ThreadService } from '@ci/domains/conversations';
 import { PersonService } from '@ci/domains/memory';
-import { SearchService } from '@ci/domains/search-next';
+import {
+  SearchService,
+  TagService,
+  type EntityIdentifier,
+  type IndexableEntity,
+  type TaggableEntity,
+} from '@ci/domains/search-next';
 
 import { PersonType } from '../types/PersonType';
 import { SearchConnection } from '../types/SearchConnection';
-import { ThreadType } from '../types/ThreadType';
+import { SearchInput } from '../types/SearchInput';
+import { type SearchResult } from '../types/SearchResultType';
 import { Paginator } from '../utils/Paginator';
+
 @UseGuards(JwtAuthGuard)
 @Resolver()
 export class SearchResolver {
   constructor(
-    private readonly threadService: ThreadService,
     private readonly personService: PersonService,
-    private readonly searchEgressServiceService: SearchService,
+    private readonly searchService: SearchService,
+    private readonly tagService: TagService,
   ) {}
 
   @Query(() => SearchConnection)
   async search(
     @Context() context: RequestContext,
-
-    @Args('query', { type: () => String }) query: string,
+    @Args('input') input: SearchInput,
   ): Promise<SearchConnection> {
     const serviceContext = toServiceContext(context);
 
-    const queryResult = await this.searchEgressServiceService.searchByQuery(serviceContext, query);
+    if (input.query == null && (!input.tags || input.tags.length === 0)) {
+      throw new BadRequestException('Must provide either query or tags');
+    }
 
-    const hydrated = await Promise.all(
-      queryResult.map(async (result) => {
-        console.log('person to hydrate', result);
+    if (input.query != null && input.tags && input.tags.length > 0) {
+      throw new BadRequestException('Cannot provide both query and tags');
+    }
 
-        return this.personService.findById(serviceContext, result.entityId);
-      }),
-    );
+    const results: SearchResult[] = [];
 
-    console.log('hydrated', hydrated);
+    if (input.tags && input.tags.length > 0) {
+      const tagResults = await this.searchByTags(serviceContext, input.tags);
 
-    const [threads, people] = await Promise.all([
-      this.threadService.findAll(serviceContext),
-      this.personService.findAll(serviceContext),
-    ]);
+      results.push(...tagResults);
+    } else if (input.query != null) {
+      const queryResults = await this.searchByQuery(serviceContext, input.query);
 
-    const threadResults = threads.map((entity) => ThreadType.toType(entity));
-    const personResults = people.map((entity) => PersonType.toType(entity));
-
-    // Interleave results
-    const results: (ThreadType | PersonType)[] = [];
-    const maxLength = Math.max(threadResults.length, personResults.length);
-
-    for (let i = 0; i < maxLength; i++) {
-      if (i < threadResults.length) {
-        results.push(threadResults[i]);
-      }
-
-      if (i < personResults.length) {
-        results.push(personResults[i]);
-      }
+      results.push(...queryResults);
     }
 
     const { slice, pageInfo, totalCount } = Paginator.paginate(results, {
@@ -79,4 +71,58 @@ export class SearchResolver {
       totalCount,
     };
   }
+
+  private async searchByQuery(context: UserServiceContext, query: string): Promise<SearchResult[]> {
+    const queryResults = await this.searchService.search(context, {
+      query,
+      maxResults: 25,
+    });
+
+    return this.resolveEntities(context, queryResults);
+  }
+
+  private async searchByTags(context: UserServiceContext, tags: string[]): Promise<SearchResult[]> {
+    if (tags.length === 0) {
+      return [];
+    }
+
+    const tagResults = await this.tagService.getEntitiesForTags(context, tags);
+
+    return this.resolveEntities(context, tagResults);
+  }
+
+  private async resolveEntities(
+    context: UserServiceContext,
+    results: EntityIdentifier<IndexableEntity | TaggableEntity>[],
+  ): Promise<SearchResult[]> {
+    const groupedByType: Map<IndexableEntity | TaggableEntity, string[]> = results.reduce((acc, result) => {
+      if (!acc.has(result.type)) {
+        acc.set(result.type, []);
+      }
+
+      acc.get(result.type)!.push(result.id);
+
+      return acc;
+    }, new Map());
+
+    const peopleIds = groupedByType.get('person') || [];
+
+    const [people] = await Promise.all([this.personService.findByIds(context, peopleIds)]);
+
+    const personResults = people.map((entity) => PersonType.toType(entity));
+
+    const resultMap = new Map<string, SearchResult>();
+
+    personResults.forEach((person) => resultMap.set(makeCompositeKey('person', person.__source.id), person));
+
+    const orderedResults = results
+      .map((result) => resultMap.get(makeCompositeKey(result.type, result.id)))
+      .filter((entity): entity is SearchResult => entity != null);
+
+    return orderedResults;
+  }
+}
+
+function makeCompositeKey(type: IndexableEntity | TaggableEntity, id: string): string {
+  return `${type}:${id}`;
 }
