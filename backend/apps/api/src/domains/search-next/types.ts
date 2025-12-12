@@ -24,3 +24,15 @@ export interface TagEntitiesDto {
   forUserId?: string;
   entities: EntityIdentifier<TaggableEntity>[];
 }
+
+export type SearchResult = {
+  type: string;
+  entityId: string;
+};
+
+export type RawEmbedding = {
+  id: string;
+  entity_id: string;
+  entity_type: string;
+  user_id: string;
+};

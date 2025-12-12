@@ -8,20 +8,28 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { EmbeddingModule } from '@ci/common/embeddings';
+
+import { EmbeddingEntity } from './entities/EmbeddingEntity';
 import { type EntityTag, EntityTagEntity } from './entities/EntityTagEntity';
 import { type Tag, type TimestampedTag, TagEntity } from './entities/TagEntity';
+import { VectorEntity } from './entities/VectorEntity';
+import { SearchService } from './services/SearchService';
 import { TagService } from './services/TagService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([TagEntity, EntityTagEntity])],
-  providers: [TagService],
-  exports: [TagService],
+  imports: [
+    TypeOrmModule.forFeature([EmbeddingEntity, EntityTagEntity, TagEntity, VectorEntity]),
+    EmbeddingModule,
+  ],
+  providers: [SearchService, TagService],
+  exports: [SearchService, TagService],
 })
 export class SearchNextModule {}
 
-export { TagService };
+export { SearchService, TagService };
 export type { EntityTag, Tag, TimestampedTag };
 export type { EntityIdentifier, IndexableEntity, TaggableEntity } from './types';

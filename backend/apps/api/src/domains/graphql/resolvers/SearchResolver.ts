@@ -7,27 +7,40 @@ import { RequestContext } from '@ci/common/types';
 import { toServiceContext } from '@ci/common/utils';
 import { ThreadService } from '@ci/domains/conversations';
 import { PersonService } from '@ci/domains/memory';
+import { SearchService } from '@ci/domains/search-next';
 
 import { PersonType } from '../types/PersonType';
 import { SearchConnection } from '../types/SearchConnection';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
-
 @UseGuards(JwtAuthGuard)
 @Resolver()
 export class SearchResolver {
   constructor(
     private readonly threadService: ThreadService,
     private readonly personService: PersonService,
+    private readonly searchEgressServiceService: SearchService,
   ) {}
 
   @Query(() => SearchConnection)
   async search(
     @Context() context: RequestContext,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
     @Args('query', { type: () => String }) query: string,
   ): Promise<SearchConnection> {
     const serviceContext = toServiceContext(context);
+
+    const queryResult = await this.searchEgressServiceService.searchByQuery(serviceContext, query);
+
+    const hydrated = await Promise.all(
+      queryResult.map(async (result) => {
+        console.log('person to hydrate', result);
+
+        return this.personService.findById(serviceContext, result.entityId);
+      }),
+    );
+
+    console.log('hydrated', hydrated);
 
     const [threads, people] = await Promise.all([
       this.threadService.findAll(serviceContext),

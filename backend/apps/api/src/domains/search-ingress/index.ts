@@ -25,3 +25,5 @@ import { VectorService } from './services/VectorService';
   providers: [EmbeddingService, PersonSearchIndexListener, VectorService],
 })
 export class SearchIngressModule {}
+
+export { EmbeddingEntity, VectorEntity };
