@@ -1,5 +1,5 @@
 import { UseGuards } from '@nestjs/common';
-import { Mutation, Query, Resolver, Args, ID } from '@nestjs/graphql';
+import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
@@ -7,7 +7,9 @@ import { RequestContext } from '@ci/common/types';
 import { toServiceContext } from '@ci/common/utils';
 import { PersonService } from '@ci/domains/memory';
 
+import { TagLoader } from '../loaders/TagLoader';
 import { CreatePersonInput } from '../types/CreatePersonInput';
+import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonConnection } from '../types/PersonConnection';
@@ -20,7 +22,10 @@ import { Paginator } from '../utils/Paginator';
 @UseGuards(JwtAuthGuard)
 @Resolver(() => PersonType)
 export class PersonResolver {
-  constructor(private readonly personService: PersonService) {}
+  constructor(
+    private readonly personService: PersonService,
+    private readonly tagLoader: TagLoader,
+  ) {}
 
   @Mutation(() => PersonType)
   async createPerson(
@@ -104,5 +109,21 @@ export class PersonResolver {
     const entity = await this.personService.findById(serviceContext, id);
 
     return entity ? PersonType.toType(entity) : null;
+  }
+
+  @ResolveField(() => [EntityTagType])
+  async tags(@Context() context: RequestContext, @Parent() parent: PersonType): Promise<EntityTagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    if (parent.__source?.id == null) {
+      return [];
+    }
+
+    const tags = await this.tagLoader.load(serviceContext, {
+      type: 'person',
+      id: parent.__source.id,
+    });
+
+    return tags.map((tag) => EntityTagType.toType(tag));
   }
 }

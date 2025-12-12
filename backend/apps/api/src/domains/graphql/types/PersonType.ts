@@ -2,12 +2,16 @@ import { Field, ID, ObjectType } from '@nestjs/graphql';
 
 import { type Person } from '@ci/domains/memory';
 
+import { EntityTagType } from './EntityTagType';
 import { GlobalUID } from './GlobalUID';
 import { Node } from './Node';
+import { Taggable } from './Taggable';
 
-@ObjectType({ implements: () => [Node] })
-export class PersonType implements Node {
+@ObjectType({ implements: () => [Node, Taggable] })
+export class PersonType implements Node, Taggable {
   __typename = PersonType.name;
+
+  __source: Person | null = null;
 
   @Field(() => ID)
   id!: string;
@@ -51,9 +55,13 @@ export class PersonType implements Node {
   @Field(() => String, { nullable: true })
   avatarUrl!: string | null;
 
+  @Field(() => [EntityTagType])
+  tags!: EntityTagType[];
+
   static toType(person: Person): PersonType {
     return {
       __typename: PersonType.name,
+      __source: person,
       id: GlobalUID.encode('person', person.id),
       name: person.name,
       description: person.description,
@@ -68,6 +76,7 @@ export class PersonType implements Node {
       country: person.country,
       postalCode: person.postalCode,
       avatarUrl: person.avatarUrl,
+      tags: [], // Resolved by PersonResolver
     };
   }
 }
