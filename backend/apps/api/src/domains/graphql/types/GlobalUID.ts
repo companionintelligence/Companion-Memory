@@ -1,4 +1,4 @@
-type ResourceType = 'fact' | 'file' | 'item' | 'message' | 'person' | 'thread' | 'user';
+type ResourceType = 'fact' | 'file' | 'item' | 'message' | 'person' | 'tag' | 'thread' | 'user';
 
 export class GlobalUID {
   static encode(type: ResourceType, id: string): string {

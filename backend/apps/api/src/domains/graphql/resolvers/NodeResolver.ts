@@ -8,6 +8,7 @@ import { toServiceContext } from '@ci/common/utils';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { FileService } from '@ci/domains/files';
 import { ItemService, PersonService } from '@ci/domains/memory';
+import { TagService } from '@ci/domains/search-next';
 import { UserService } from '@ci/domains/user';
 
 import { FileType } from '../types/FileType';
@@ -16,6 +17,7 @@ import { ItemType } from '../types/ItemType';
 import { MessageType } from '../types/MessageType';
 import { Node } from '../types/Node';
 import { PersonType } from '../types/PersonType';
+import { TagType } from '../types/TagType';
 import { ThreadType } from '../types/ThreadType';
 import { UserType } from '../types/UserType';
 
@@ -27,6 +29,7 @@ export class NodeResolver {
     private readonly itemService: ItemService,
     private readonly messageService: MessageService,
     private readonly personService: PersonService,
+    private readonly tagService: TagService,
     private readonly threadService: ThreadService,
     private readonly userService: UserService,
   ) {}
@@ -62,6 +65,12 @@ export class NodeResolver {
         const person = await this.personService.findById(serviceContext, id);
 
         return person ? PersonType.toType(person) : null;
+      }
+
+      case 'tag': {
+        const tag = await this.tagService.findById(serviceContext, id);
+
+        return tag ? TagType.toType(tag) : null;
       }
 
       case 'thread': {
