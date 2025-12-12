@@ -9,14 +9,19 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { type EntityTag, EntityTagEntity } from './entities/EntityTagEntity';
-import { type Tag, TagEntity } from './entities/TagEntity';
+import { type Tag, type TimestampedTag, TagEntity } from './entities/TagEntity';
+import { TagService } from './services/TagService';
 
 /**
  * @internal
  */
 @Module({
   imports: [TypeOrmModule.forFeature([TagEntity, EntityTagEntity])],
+  providers: [TagService],
+  exports: [TagService],
 })
 export class SearchNextModule {}
 
-export type { Tag, EntityTag };
+export { TagService };
+export type { EntityTag, Tag, TimestampedTag };
+export type { EntityIdentifier, IndexableEntity } from './types';

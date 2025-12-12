@@ -3,8 +3,7 @@ import {
   PrimaryColumn,
   Column,
   CreateDateColumn,
-  JoinTable,
-  ManyToMany,
+  OneToMany,
   UpdateDateColumn,
   DeleteDateColumn,
   Unique,
@@ -27,13 +26,7 @@ export class TagEntity {
   @Column({ name: 'user_id', type: 'uuid' })
   userId!: string;
 
-  @ManyToMany(() => EntityTagEntity)
-  @JoinTable({
-    schema: 'ci_search',
-    name: 'entity_tags',
-    joinColumn: { name: 'tag_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'entity_id', referencedColumnName: 'id' },
-  })
+  @OneToMany(() => EntityTagEntity, (entityTag) => entityTag.tag)
   entities?: EntityTagEntity[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
@@ -59,6 +52,10 @@ export class TagEntity {
   }
 }
 
-export type Tag = Readonly<Omit<TagEntity, 'entities'>> & {
-  entities?: EntityTag[];
-};
+export type Tag = Readonly<
+  Omit<TagEntity, 'entities'> & {
+    entities?: EntityTag[];
+  }
+>;
+
+export type TimestampedTag = Readonly<Pick<Tag, 'label'> & Pick<EntityTag, 'taggedAt'>>;

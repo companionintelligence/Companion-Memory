@@ -1,4 +1,6 @@
-import { Entity, Column, CreateDateColumn, PrimaryColumn } from 'typeorm';
+import { Entity, Column, CreateDateColumn, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+
+import { TagEntity } from './TagEntity';
 
 @Entity({ schema: 'ci_search', name: 'entity_tag' })
 export class EntityTagEntity {
@@ -14,6 +16,10 @@ export class EntityTagEntity {
   @Column({ name: 'tag_id', type: 'uuid' })
   tagId!: string;
 
+  @ManyToOne(() => TagEntity, (tag) => tag.entities)
+  @JoinColumn({ name: 'tag_id' })
+  tag?: TagEntity;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -21,9 +27,13 @@ export class EntityTagEntity {
     return {
       entityType: entity.entityType,
       entityId: entity.entityId,
-      createdAt: entity.createdAt,
+      taggedAt: entity.createdAt,
     };
   }
 }
 
-export type EntityTag = Readonly<Omit<EntityTagEntity, 'id' | 'tagId'>>;
+export type EntityTag = Readonly<
+  Omit<EntityTagEntity, 'id' | 'tagId' | 'createdAt'> & {
+    taggedAt: Date;
+  }
+>;

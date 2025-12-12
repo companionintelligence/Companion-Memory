@@ -1257,6 +1257,31 @@
   },
   {
     "type": "cycle",
+    "from": "src/domains/search-next/entities/EntityTagEntity.ts",
+    "to": "src/domains/search-next/entities/TagEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-circular"
+    },
+    "cycle": [
+      {
+        "name": "src/domains/search-next/entities/TagEntity.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/domains/search-next/entities/EntityTagEntity.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      }
+    ]
+  },
+  {
+    "type": "cycle",
     "from": "src/domains/tools/providers/mcp/McpToolProvider.ts",
     "to": "src/domains/tools/providers/mcp/McpToolWrapper.ts",
     "rule": {
