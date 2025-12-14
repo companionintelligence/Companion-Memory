@@ -5,6 +5,7 @@ import { Context } from '@ci/common/decorators';
 import { JwtAuthGuard } from '@ci/common/guards';
 import { RequestContext, UserServiceContext } from '@ci/common/types';
 import { toServiceContext } from '@ci/common/utils';
+import { ThreadService } from '@ci/domains/conversations';
 import { PersonService } from '@ci/domains/memory';
 import {
   SearchService,
@@ -18,6 +19,7 @@ import { PersonType } from '../types/PersonType';
 import { SearchConnection } from '../types/SearchConnection';
 import { SearchInput } from '../types/SearchInput';
 import { type SearchResult } from '../types/SearchResultType';
+import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtAuthGuard)
@@ -27,6 +29,7 @@ export class SearchResolver {
     private readonly personService: PersonService,
     private readonly searchService: SearchService,
     private readonly tagService: TagService,
+    private readonly threadService: ThreadService,
   ) {}
 
   @Query(() => SearchConnection)
@@ -106,14 +109,20 @@ export class SearchResolver {
     }, new Map());
 
     const peopleIds = groupedByType.get('person') || [];
+    const threadIds = groupedByType.get('thread') || [];
 
-    const [people] = await Promise.all([this.personService.findByIds(context, peopleIds)]);
+    const [people, threads] = await Promise.all([
+      this.personService.findByIds(context, peopleIds),
+      this.threadService.findByIds(context, threadIds),
+    ]);
 
     const personResults = people.map((entity) => PersonType.toType(entity));
+    const threadResults = threads.map((entity) => ThreadType.toType(entity));
 
     const resultMap = new Map<string, SearchResult>();
 
     personResults.forEach((person) => resultMap.set(makeCompositeKey('person', person.__source.id), person));
+    threadResults.forEach((thread) => resultMap.set(makeCompositeKey('thread', thread.__source.id), thread));
 
     const orderedResults = results
       .map((result) => resultMap.get(makeCompositeKey(result.type, result.id)))

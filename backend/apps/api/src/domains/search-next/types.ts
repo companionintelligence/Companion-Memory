@@ -1,6 +1,6 @@
 export type IndexableEntity = 'person';
 
-export type TaggableEntity = 'person';
+export type TaggableEntity = 'person' | 'thread';
 
 export interface EntityIdentifier<T> {
   type: T;

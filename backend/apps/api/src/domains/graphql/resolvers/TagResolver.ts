@@ -115,7 +115,7 @@ export class TagResolver {
 }
 
 function isTaggableEntity(type: string): type is TaggableEntity {
-  const validTypes: TaggableEntity[] = ['person'];
+  const validTypes: TaggableEntity[] = ['person', 'thread'];
 
   return validTypes.includes(type as TaggableEntity);
 }

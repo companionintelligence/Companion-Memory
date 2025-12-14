@@ -7,7 +7,9 @@ import { RequestContext } from '@ci/common/types';
 import { toServiceContext } from '@ci/common/utils';
 import { ThreadService } from '@ci/domains/conversations';
 
+import { TagLoader } from '../loaders/TagLoader';
 import { ThreadMessagesLoader } from '../loaders/ThreadMessagesLoader';
+import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { MessageConnection } from '../types/MessageConnection';
 import { MessageEdge } from '../types/MessageEdge';
@@ -22,6 +24,7 @@ import { Paginator } from '../utils/Paginator';
 @Resolver(() => ThreadType)
 export class ThreadResolver {
   constructor(
+    private readonly tagLoader: TagLoader,
     private readonly threadMessagesLoader: ThreadMessagesLoader,
     private readonly threadService: ThreadService,
   ) {}
@@ -101,5 +104,17 @@ export class ThreadResolver {
       pageInfo,
       totalCount,
     };
+  }
+
+  @ResolveField(() => [EntityTagType])
+  async tags(@Context() context: RequestContext, @Parent() parent: ThreadType): Promise<EntityTagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagLoader.load(serviceContext, {
+      type: 'thread',
+      id: parent.__source.id,
+    });
+
+    return tags.map((tag) => EntityTagType.toType(tag));
   }
 }
