@@ -188,7 +188,7 @@ type Query {
   node(id: ID!): Node
   people(after: String, before: String, first: Int, last: Int): PersonConnection!
   person(id: ID!): PersonType
-  search(query: String!): SearchConnection!
+  search(input: SearchInput!): SearchConnection!
   tag(id: ID!): TagType
   tags(after: String, before: String, first: Int, last: Int): TagConnection!
   thread(id: ID!): ThreadType
@@ -200,17 +200,22 @@ input RemovePersonInput {
 }
 
 type SearchConnection {
-  edges: [SearchEdge!]!
+  edges: [SearchResultEdge!]!
   pageInfo: PageInfo!
   totalCount: Int!
 }
 
-type SearchEdge {
-  cursor: String!
-  node: SearchResult!
+input SearchInput {
+  query: String
+  tags: [String!]
 }
 
-union SearchResult = PersonType | ThreadType
+type SearchResultEdge {
+  cursor: String!
+  node: SearchResultType!
+}
+
+union SearchResultType = PersonType
 
 type TagConnection implements Connection {
   edges: [TagEdge!]!
