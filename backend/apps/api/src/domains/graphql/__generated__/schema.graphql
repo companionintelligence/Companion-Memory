@@ -215,7 +215,7 @@ type SearchResultEdge {
   node: SearchResultType!
 }
 
-union SearchResultType = PersonType
+union SearchResultType = PersonType | ThreadType
 
 type TagConnection implements Connection {
   edges: [TagEdge!]!
@@ -254,11 +254,12 @@ type ThreadEdge implements Edge {
   node: ThreadType!
 }
 
-type ThreadType implements Node {
+type ThreadType implements Node & Taggable {
   description: String
   id: ID!
   messages(after: String, before: String, first: Int, last: Int): MessageConnection!
   name: String
+  tags: [EntityTagType!]!
 }
 
 input UpdatePersonInput {
