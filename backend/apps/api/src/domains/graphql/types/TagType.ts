@@ -9,6 +9,8 @@ import { Node } from './Node';
 export class TagType {
   __typename = TagType.name;
 
+  __source!: Tag;
+
   @Field(() => ID)
   id!: string;
 
@@ -21,6 +23,7 @@ export class TagType {
   static toType(tag: Tag): TagType {
     return {
       __typename: TagType.name,
+      __source: tag,
       id: GlobalUID.encode('tag', tag.id),
       label: tag.label,
       description: tag.description,

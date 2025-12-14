@@ -115,10 +115,6 @@ export class PersonResolver {
   async tags(@Context() context: RequestContext, @Parent() parent: PersonType): Promise<EntityTagType[]> {
     const serviceContext = toServiceContext(context);
 
-    if (parent.__source?.id == null) {
-      return [];
-    }
-
     const tags = await this.tagLoader.load(serviceContext, {
       type: 'person',
       id: parent.__source.id,

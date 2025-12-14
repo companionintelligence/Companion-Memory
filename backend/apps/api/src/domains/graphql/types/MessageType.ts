@@ -9,6 +9,8 @@ import { Node } from './Node';
 export class MessageType implements Node {
   __typename: string = MessageType.name;
 
+  __source!: Message;
+
   @Field(() => ID)
   id!: string;
 
@@ -24,6 +26,7 @@ export class MessageType implements Node {
   static toType(message: Message): MessageType {
     return {
       __typename: MessageType.name,
+      __source: message,
       id: GlobalUID.encode('message', message.id),
       content: message.content,
       role: message.role,

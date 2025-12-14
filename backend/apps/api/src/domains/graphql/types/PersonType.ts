@@ -11,7 +11,7 @@ import { Taggable } from './Taggable';
 export class PersonType implements Node, Taggable {
   __typename = PersonType.name;
 
-  __source: Person | null = null;
+  __source!: Person;
 
   @Field(() => ID)
   id!: string;

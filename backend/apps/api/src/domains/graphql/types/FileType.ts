@@ -10,7 +10,7 @@ import { Node } from './Node';
 export class FileType implements Node {
   __typename = FileType.name;
 
-  __source: SignedFile | null = null;
+  __source!: SignedFile;
 
   @Field(() => ID)
   id!: string;

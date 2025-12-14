@@ -72,7 +72,7 @@ export class ItemResolver {
   async file(@Context() context: RequestContext, @Parent() parent: ItemType): Promise<FileType | null> {
     const serviceContext = toServiceContext(context);
 
-    if (parent.__source?.sourceFileId == null) {
+    if (parent.__source.sourceFileId == null) {
       return null;
     }
 

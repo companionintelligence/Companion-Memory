@@ -9,6 +9,8 @@ import { Node } from './Node';
 export class ThreadType implements Node {
   __typename = ThreadType.name;
 
+  __source!: Thread;
+
   @Field(() => ID)
   id!: string;
 
@@ -21,6 +23,7 @@ export class ThreadType implements Node {
   static toType(thread: Thread): ThreadType {
     return {
       __typename: ThreadType.name,
+      __source: thread,
       id: GlobalUID.encode('thread', thread.id),
       name: thread.name,
       description: thread.description,

@@ -25,7 +25,7 @@ registerEnumType(ItemCondition, {
 export class ItemType implements Node {
   __typename = ItemType.name;
 
-  __source: Item | null = null;
+  __source!: Item;
 
   @Field(() => ID)
   id!: string;
