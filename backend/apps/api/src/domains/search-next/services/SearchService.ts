@@ -18,11 +18,17 @@ type ScoredRowResult = {
 type ScoredSearchResult = EntityIdentifier<IndexableEntity> & {
   score: number;
 };
-interface SearchOptions {
+
+type BaseSearchOptions = {
   query: string;
   mode?: 'semantic' | 'keyword' | 'hybrid' | 'auto';
   maxResults?: number;
-}
+};
+
+type SearchOptions =
+  | (BaseSearchOptions & { includeTypes: IndexableEntity[]; excludeTypes?: never })
+  | (BaseSearchOptions & { excludeTypes: IndexableEntity[]; includeTypes?: never })
+  | (BaseSearchOptions & { includeTypes?: never; excludeTypes?: never });
 
 @Injectable()
 export class SearchService {
@@ -156,11 +162,9 @@ export class SearchService {
 
     const vector = await this.embeddingGenerationService.generateEmbeddingString(query);
 
-    // Distance threshold for pgvector cosine distance (0-2 range)
-    // 0 = identical, 2 = opposite
-    // Similarity score (1 - distance) ranges from -1 to 1
-    // We want similarity > 0.5, which means distance < 0.5
     const distanceThreshold = 0.5;
+
+    const typeFilter = this.buildTypeFilter(options, 4);
 
     const sql = `
       SELECT
@@ -170,12 +174,17 @@ export class SearchService {
       FROM
         ci_search.embeddings
       WHERE user_id = $1
-        AND (embedding <-> $2) < $3
+        AND (embedding <-> $2) < $3::double precision
+        ${typeFilter.clause}
       ORDER BY score DESC
       LIMIT ${maxResults}
     `;
 
-    const params = [context.userId, vector, distanceThreshold];
+    const params: (number | string | string[])[] = [context.userId, vector, distanceThreshold];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
 
     const results = await this.embeddingRepo.query(sql, params);
 
@@ -192,6 +201,8 @@ export class SearchService {
   ): Promise<ScoredSearchResult[]> {
     const { query, maxResults = 25 } = options;
 
+    const typeFilter = this.buildTypeFilter(options, 3);
+
     const sql = `
       SELECT
         entity_id,
@@ -201,21 +212,48 @@ export class SearchService {
         ci_search.vectors
       WHERE user_id = $1
         AND vector @@ websearch_to_tsquery('english', $2)
+        ${typeFilter.clause}
       ORDER BY score DESC
       LIMIT ${maxResults}
     `;
 
-    const params = [context.userId, query];
+    const params: (string | string[])[] = [context.userId, query];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
 
     const results = await this.vectorRepo.query(sql, params);
 
-    const entities = results.map((row: ScoredRowResult) => ({
+    return results.map((row: ScoredRowResult) => ({
       id: row.entity_id,
       type: row.entity_type as IndexableEntity,
       score: parseFloat(row.score),
     }));
+  }
 
-    return entities;
+  private buildTypeFilter(
+    options: SearchOptions,
+    paramOffset: number,
+  ): { clause: string; param: string[] | null } {
+    if (options.includeTypes && options.includeTypes.length > 0) {
+      return {
+        clause: `AND entity_type = ANY($${paramOffset})`,
+        param: options.includeTypes,
+      };
+    }
+
+    if (options.excludeTypes && options.excludeTypes.length > 0) {
+      return {
+        clause: `AND entity_type != ALL($${paramOffset})`,
+        param: options.excludeTypes,
+      };
+    }
+
+    return {
+      clause: '',
+      param: null,
+    };
   }
 }
 
