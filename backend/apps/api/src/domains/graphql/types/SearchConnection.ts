@@ -1,10 +1,10 @@
 import { Field, ObjectType } from '@nestjs/graphql';
 
 import { Connection } from './Connection';
-import { SearchEdge } from './SearchEdge';
+import { SearchResultEdge } from './SearchResultEdge';
 
 @ObjectType()
 export class SearchConnection extends Connection {
-  @Field(() => [SearchEdge])
-  declare edges: SearchEdge[];
+  @Field(() => [SearchResultEdge])
+  declare edges: SearchResultEdge[];
 }
