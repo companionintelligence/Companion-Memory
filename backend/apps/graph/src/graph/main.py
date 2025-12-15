@@ -232,6 +232,47 @@ class GraphManager:
             print(f"Steiner tree error: {e}")
             return None
 
+    def get_ego_graph(self, root_label: str, radius: int = 1) -> Optional[SubgraphResponse]:
+        if root_label not in self.node_map:
+            return None
+
+        root_idx = self.node_map[root_label]
+
+        # Use undirected graph for traversal to find both incoming and outgoing neighbors
+        undirected = self.graph.to_undirected()
+
+        # Find nodes within radius (hops)
+        distances = rx.dijkstra_shortest_path_lengths(
+            undirected, root_idx, edge_cost_fn=lambda _: 1.0
+        )
+
+        node_indices = [n for n, dist in distances.items() if dist <= radius]
+
+        if not node_indices:
+            return None
+
+        try:
+            # Extract subgraph from the ORIGINAL directed graph to preserve edge directions
+            subgraph = self.graph.subgraph(node_indices)
+
+            result_nodes = []
+            result_edges = []
+
+            for node_idx in subgraph.node_indices():
+                node_label = subgraph.get_node_data(node_idx)
+                result_nodes.append(node_label)
+
+            for u_idx, v_idx, weight in subgraph.edge_index_map().values():
+                u_label = subgraph.get_node_data(u_idx)
+                v_label = subgraph.get_node_data(v_idx)
+                result_edges.append(
+                    Edge(source=u_label, target=v_label, weight=float(weight))
+                )
+
+            return SubgraphResponse(nodes=result_nodes, edges=result_edges)
+        except Exception:
+            return None
+
 
 # --- Database & Lifespan Logic ---
 
@@ -331,4 +372,16 @@ def steiner_tree(
     res = graph_manager.get_steiner_tree(nodes)
     if not res:
         raise HTTPException(status_code=404, detail="Steiner tree could not be generated")
+    return res
+
+
+@app.get("/ego-graph/{node}")
+def ego_graph(
+    node: str,
+    radius: int = 1,
+    token: Dict[str, str] = Depends(verify_token),
+) -> SubgraphResponse:
+    res = graph_manager.get_ego_graph(node, radius)
+    if not res:
+        raise HTTPException(status_code=404, detail="Ego graph could not be generated")
     return res
