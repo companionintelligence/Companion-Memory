@@ -4,8 +4,40 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = []
 
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "ruff>=0.14.9",
+]
+
 [tool.uv.workspace]
 members = [
     "lib/python/*",
     "backend/apps/graph"
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+exclude = [
+    "backend/apps/api",
+    "backend/apps/stt",
+    "backend/apps/tts"
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["graph", "pgboss"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+mypy_path = "lib/python/pgboss/src:backend/apps/graph/src"
+exclude = [
+    "backend/apps/api",
+    "backend/apps/stt",
+    "backend/apps/tts"
 ]
