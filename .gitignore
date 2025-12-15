@@ -1,31 +1,78 @@
+# ==========================
+# GLOBAL / SHARED
+# ==========================
+# Environment Variables
+.env
+!.env.template
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# ==========================
+# AI Cruft
+# ==========================
+
 .aider*
-todo.md
-.vscode
+.specstory/
+AGENTS.md
+TODO.md
+
+# ==========================
+# JAVASCRIPT (Yarn Berry / PnP)
+# ==========================
+# Core Yarn PnP files
+.pnp.*
 .yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
-.DS_store
-# Whether you use PnP or not, the node_modules folder is often used to store
-# build artifacts that should be gitignored
-node_modules
 
-*.tsbuildinfo
+# Dependency directories (if you ever unplug packages)
+node_modules/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
 
-# Swap the comments on the following lines if you wish to use zero-installs
-# In that case, don't forget to run `yarn config set enableGlobalCache false`!
-# Documentation here: https://yarnpkg.com/features/caching#zero-installs
+# JS Build Artifacts (Adjust based on your JS framework)
+dist/
+out/
+coverage/
+.next/
+.nuxt/
+.cache/
+storybook-static/
 
-#!.yarn/cache
-.pnp.*
-.aider*
-.env
-.venv
+# ==========================
+# PYTHON (UV Workspace)
+# ==========================
+# The centralized virtual environment created by 'uv sync'
+.venv/
 
-.specstory/
-AGENTS.md
+# Python Build & Runtime
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+.egg
 
-.idea/
-
+# Python Testing & Linting
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
