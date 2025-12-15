@@ -120,11 +120,11 @@ dev: ## Boot the application
 format: ## Run code formatting tasks
 	@printf "🧹 Formatting code...\n\n"
 
-	@uv run ruff check --fix .
+	@uv run ruff format .
 
 	@printf "\n"
 
-	@uv run ruff format .
+	@uv run ruff check --fix .
 
 	@printf "\nCode formatted\n"
 
