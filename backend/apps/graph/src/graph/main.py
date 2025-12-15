@@ -74,16 +74,18 @@ class GraphManager:
         self.node_map: Dict[str, int] = {}
         self.reverse_map: Dict[int, str] = {}
 
+    def add_node(self, node: str) -> None:
+        if node not in self.node_map:
+            idx = self.graph.add_node(node)
+            self.node_map[node] = idx
+            self.reverse_map[idx] = node
+
     def add_edge(self, start: str, end: str, weight: float) -> None:
         if start not in self.node_map:
-            s_idx = self.graph.add_node(start)
-            self.node_map[start] = s_idx
-            self.reverse_map[s_idx] = start
+            self.add_node(start)
 
         if end not in self.node_map:
-            e_idx = self.graph.add_node(end)
-            self.node_map[end] = e_idx
-            self.reverse_map[e_idx] = end
+            self.add_node(end)
 
         u = self.node_map[start]
         v = self.node_map[end]
@@ -174,7 +176,7 @@ class GraphManager:
 graph_manager = GraphManager()
 
 
-async def mock_db_fetch() -> List[Tuple[str, str, float]]:
+async def mock_db_fetch() -> Tuple[List[str], List[Tuple[str, str, float]]]:
     """Simulate a slow DB query."""
 
     print("Hydrating graph from DB...")
@@ -182,12 +184,16 @@ async def mock_db_fetch() -> List[Tuple[str, str, float]]:
     await asyncio.sleep(2)  # Simulate network latency
 
     # Return mock rows: (Source, Target, Weight)
-    return [
+    nodes = ["F", "G", "H"]
+
+    edges = [
         ("A", "B", 1.0),
         ("B", "C", 2.0),
         ("C", "D", 1.0),
         ("A", "E", 10.0),
     ]
+
+    return nodes, edges
 
 
 @asynccontextmanager
@@ -195,12 +201,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- STARTUP PHASE ---
     # This block runs BEFORE the server accepts requests.
     try:
-        data = await mock_db_fetch()
+        nodes, edges = await mock_db_fetch()
 
-        for start, end, weight in data:
+        for node in nodes:
+            graph_manager.add_node(node)
+
+        for start, end, weight in edges:
             graph_manager.add_edge(start, end, weight)
 
-        print(f"Graph hydration complete. Loaded {len(data)} edges.")
+        print(f"Graph hydration complete. Loaded {len(nodes)} nodes and {len(edges)} edges.")
     except Exception as e:
         print(f"CRITICAL: Failed to load graph data: {e}")
         # Raising an exception here will prevent the server from starting
