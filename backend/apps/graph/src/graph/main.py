@@ -1,10 +1,48 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 
+import jwt
 import rustworkx as rx
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+
+# --- Config ---
+
+load_dotenv()
+
+# --- Auth Logic ---
+
+security = HTTPBearer()
+JWT_SECRET = os.environ.get("AUTH_TOKEN_SECRET", "secret")
+JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
+
+
+def verify_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> Dict[str, str]:
+    token = credentials.credentials
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+
+        return payload  # type: ignore
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
 
 # --- Pydantic Models ---
 
@@ -63,6 +101,7 @@ class GraphManager:
             # Calculate total distance based on path (Alternatively, use
             # dijkstra_shortest_path_lengths for just the cost)
             distance = 0.0
+
             for i in range(len(node_indices) - 1):
                 # get_edge_data returns the weight we stored
                 u, v = node_indices[i], node_indices[i + 1]
@@ -91,8 +130,11 @@ graph_manager = GraphManager()
 
 async def mock_db_fetch() -> List[Tuple[str, str, float]]:
     """Simulate a slow DB query."""
+
     print("Hydrating graph from DB...")
+
     await asyncio.sleep(2)  # Simulate network latency
+
     # Return mock rows: (Source, Target, Weight)
     return [
         ("A", "B", 1.0),
@@ -108,8 +150,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # This block runs BEFORE the server accepts requests.
     try:
         data = await mock_db_fetch()
+
         for start, end, weight in data:
             graph_manager.add_edge(start, end, weight)
+
         print(f"Graph hydration complete. Loaded {len(data)} edges.")
     except Exception as e:
         print(f"CRITICAL: Failed to load graph data: {e}")
@@ -132,12 +176,19 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/health")
 def health_check() -> Dict[str, str]:
     """Simple probe to verify app is awake."""
+
     return {"status": "ok"}
 
 
 @app.get("/path/{start}/{end}")
-def get_path(start: str, end: str) -> PathResponse:
+def get_path(
+    start: str,
+    end: str,
+    token: Dict[str, str] = Depends(verify_token),
+) -> PathResponse:
     res = graph_manager.get_shortest_path(start, end)
+
     if not res:
         raise HTTPException(status_code=404, detail="Path not found")
+
     return res

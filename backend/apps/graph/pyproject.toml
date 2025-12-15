@@ -8,6 +8,8 @@ dependencies = [
     "fastapi>=0.124.4",
     "pgboss",
     "pydantic>=2.12.5",
+    "pyjwt",
+    "python-dotenv",
     "rustworkx>=0.17.1",
     "uvicorn>=0.38.0",
 ]
