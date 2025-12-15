@@ -54,6 +54,17 @@ class PathResponse(BaseModel):
     path_nodes: List[str]
 
 
+class Edge(BaseModel):
+    source: str
+    target: str
+    weight: float
+
+
+class SubgraphResponse(BaseModel):
+    nodes: List[str]
+    edges: List[Edge]
+
+
 # --- Graph Logic ---
 
 
@@ -121,6 +132,41 @@ class GraphManager:
         except Exception:
             return None
 
+    def get_subgraph(self, nodes: List[str]) -> Optional[SubgraphResponse]:
+        node_indices = []
+        for node in nodes:
+            if node in self.node_map:
+                node_indices.append(self.node_map[node])
+
+        if not node_indices:
+            return None
+
+        try:
+            subgraph = self.graph.subgraph(node_indices)
+
+            # Map subgraph indices back to original labels Note: subgraph nodes
+            # might be re-indexed, but we can get the payload (label) Actually,
+            # rustworkx subgraph preserves the payload (which is the label in
+            # our case)
+
+            result_nodes = []
+            result_edges = []
+
+            for node_idx in subgraph.node_indices():
+                node_label = subgraph.get_node_data(node_idx)
+                result_nodes.append(node_label)
+
+            for u_idx, v_idx, weight in subgraph.edge_index_map().values():
+                u_label = subgraph.get_node_data(u_idx)
+                v_label = subgraph.get_node_data(v_idx)
+                result_edges.append(
+                    Edge(source=u_label, target=v_label, weight=float(weight))
+                )
+
+            return SubgraphResponse(nodes=result_nodes, edges=result_edges)
+        except Exception:
+            return None
+
 
 # --- Database & Lifespan Logic ---
 
@@ -180,8 +226,8 @@ def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/path/{start}/{end}")
-def get_path(
+@app.get("/shortest-path/{start}/{end}")
+def shortest_path(
     start: str,
     end: str,
     token: Dict[str, str] = Depends(verify_token),
@@ -191,4 +237,15 @@ def get_path(
     if not res:
         raise HTTPException(status_code=404, detail="Path not found")
 
+    return res
+
+
+@app.post("/subgraph")
+def subgraph(
+    nodes: List[str],
+    token: Dict[str, str] = Depends(verify_token),
+) -> SubgraphResponse:
+    res = graph_manager.get_subgraph(nodes)
+    if not res:
+        raise HTTPException(status_code=404, detail="Subgraph could not be generated")
     return res
