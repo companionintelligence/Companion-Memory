@@ -169,6 +169,69 @@ class GraphManager:
         except Exception:
             return None
 
+    def get_steiner_tree(self, nodes: List[str]) -> Optional[SubgraphResponse]:
+        node_indices = set()
+        for node in nodes:
+            if node in self.node_map:
+                node_indices.add(self.node_map[node])
+
+        if not node_indices:
+            return None
+
+        try:
+            # Steiner tree requires an undirected graph
+            undirected = self.graph.to_undirected()
+
+            # Identify connected components to handle disconnected groups
+            components = rx.connected_components(undirected)
+
+            final_nodes = set()
+            final_edges = []
+
+            for component in components:
+                # Intersection of this component and our requested nodes
+                terminals_in_component = list(component.intersection(node_indices))
+
+                if not terminals_in_component:
+                    continue
+
+                if len(terminals_in_component) == 1:
+                    # Isolated node (relative to the request)
+                    idx = terminals_in_component[0]
+                    final_nodes.add(undirected.get_node_data(idx))
+                    continue
+
+                # Calculate Steiner Tree for this component
+                try:
+                    sub_tree = rx.steiner_tree(
+                        undirected,
+                        terminals_in_component,
+                        weight_fn=lambda x: float(x),
+                    )
+
+                    # Extract data
+                    for n_idx in sub_tree.node_indices():
+                        final_nodes.add(sub_tree.get_node_data(n_idx))
+
+                    for u, v, w in sub_tree.edge_index_map().values():
+                        u_data = sub_tree.get_node_data(u)
+                        v_data = sub_tree.get_node_data(v)
+                        final_edges.append(
+                            Edge(source=u_data, target=v_data, weight=float(w))
+                        )
+
+                except Exception as e:
+                    print(f"Steiner tree failed for component: {e}")
+                    # Fallback: just add the nodes
+                    for idx in terminals_in_component:
+                        final_nodes.add(undirected.get_node_data(idx))
+
+            return SubgraphResponse(nodes=list(final_nodes), edges=final_edges)
+
+        except Exception as e:
+            print(f"Steiner tree error: {e}")
+            return None
+
 
 # --- Database & Lifespan Logic ---
 
@@ -257,4 +320,15 @@ def subgraph(
     res = graph_manager.get_subgraph(nodes)
     if not res:
         raise HTTPException(status_code=404, detail="Subgraph could not be generated")
+    return res
+
+
+@app.post("/steiner-tree")
+def steiner_tree(
+    nodes: List[str],
+    token: Dict[str, str] = Depends(verify_token),
+) -> SubgraphResponse:
+    res = graph_manager.get_steiner_tree(nodes)
+    if not res:
+        raise HTTPException(status_code=404, detail="Steiner tree could not be generated")
     return res
