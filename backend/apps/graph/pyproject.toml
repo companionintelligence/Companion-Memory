@@ -6,8 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
-    "uvicorn",
-    "pgboss"
+    "pgboss",
+    "pydantic",
+    "uvicorn"
 ]
 
 [tool.uv.sources]

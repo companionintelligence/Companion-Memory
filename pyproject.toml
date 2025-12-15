@@ -8,6 +8,8 @@ dependencies = []
 dev = [
     "mypy>=1.19.1",
     "ruff>=0.14.9",
+    "graph",
+    "pgboss"
 ]
 
 [tool.uv.workspace]
@@ -15,6 +17,10 @@ members = [
     "lib/python/*",
     "backend/apps/graph"
 ]
+
+[tool.uv.sources]
+graph = { workspace = true }
+pgboss = { workspace = true }
 
 [tool.ruff]
 line-length = 88

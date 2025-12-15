@@ -8,6 +8,7 @@ class RootResponse(BaseModel):
     service: str
     lib_response: str
 
+
 app = FastAPI()
 
 
@@ -15,8 +16,4 @@ app = FastAPI()
 def read_root() -> RootResponse:
     msg = get_shared_message()
 
-
-    return RootResponse(
-        service="Graph App",
-        lib_response=msg
-    )
+    return RootResponse(service="Graph App", lib_response=msg)

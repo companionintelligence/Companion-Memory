@@ -1,4 +1,4 @@
-.PHONY: help build chatreset dbclear dev health index init install local migrate seed staging gentoken useradd userpw mcp mcp-web-search mcp-check mcp-clean mcp-enable mcp-disable mcp-config mcp-update mcp-logs
+.PHONY: help build chatreset dbclear dev format health index init install local migrate seed staging gentoken useradd userpw mcp mcp-web-search mcp-check mcp-clean mcp-enable mcp-disable mcp-config mcp-update mcp-logs
 .DEFAULT_GOAL := help
 
 RED=\033[0;31m
@@ -117,6 +117,17 @@ dev: ## Boot the application
 	tmux select-pane -t 0; \
 	tmux attach -t $$SESSION
 
+format: ## Run code formatting tasks
+	@printf "🧹 Formatting code...\n\n"
+
+	@uv run ruff check --fix .
+
+	@printf "\n"
+
+	@uv run ruff format .
+
+	@printf "\nCode formatted\n"
+
 health: ## Check the repository for prerequisites
 	@printf "🩺 Checking health of prerequisites...\n\n"
 
@@ -181,7 +192,6 @@ health: ## Check the repository for prerequisites
 		exit 1; \
 	fi
 
-
 index: ## Generate vector embeddings for indexable content
 	@printf "🗂 Indexing database...\n\n"
 	@cd backend/apps/api && yarn run exec -- scripts/bulk-generate-embeddings.ts
@@ -204,6 +214,10 @@ init: ## Initialize repository after checkout
 	@printf "\n"
 	@yarn prepare
 
+	@printf "\n"
+
+	@uv sync
+
 	@if [ ! -f .env ]; then \
 		printf "\nCopying dotenv template file... "; \
 		cp -v .env.default .env; \
@@ -213,8 +227,25 @@ init: ## Initialize repository after checkout
 
 install: ## Install project dependencies
 	@printf "📦 Installing dependencies...\n\n"
+
 	@yarn install
+
+	@printf "\n"
+
+	@uv sync
+
 	@printf "\nDependencies successfully installed.\n"
+
+lint: ## Check for code formatting errors
+	@printf "🧹 Checking code format...\n\n"
+
+	@uv run ruff check .
+
+	@printf "\n"
+
+	@uv run mypy .
+
+	@printf "\n"
 
 local: ## Run the local dependencies from Docker images
 	@printf "⌨️ Starting the local services...\n\n"

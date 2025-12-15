@@ -47,7 +47,9 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "graph" },
     { name = "mypy" },
+    { name = "pgboss" },
     { name = "ruff" },
 ]
 
@@ -55,7 +57,9 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "graph", editable = "backend/apps/graph" },
     { name = "mypy", specifier = ">=1.19.1" },
+    { name = "pgboss", editable = "lib/python/pgboss" },
     { name = "ruff", specifier = ">=0.14.9" },
 ]
 
@@ -102,6 +106,7 @@ source = { editable = "backend/apps/graph" }
 dependencies = [
     { name = "fastapi" },
     { name = "pgboss" },
+    { name = "pydantic" },
     { name = "uvicorn" },
 ]
 
@@ -109,6 +114,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi" },
     { name = "pgboss", editable = "lib/python/pgboss" },
+    { name = "pydantic" },
     { name = "uvicorn" },
 ]
 
