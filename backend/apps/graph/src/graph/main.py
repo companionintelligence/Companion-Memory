@@ -1,4 +1,6 @@
-from typing import Dict, List, Optional
+import asyncio
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 import rustworkx as rx
 from fastapi import FastAPI, HTTPException
@@ -6,9 +8,6 @@ from pydantic import BaseModel
 
 # --- Pydantic Models ---
 
-class RootResponse(BaseModel):
-    service: str
-    status: str
 
 class PathResponse(BaseModel):
     source: str
@@ -16,113 +15,129 @@ class PathResponse(BaseModel):
     distance: float
     path_nodes: List[str]
 
+
 # --- Graph Logic ---
 
+
 class GraphManager:
-    """
-    Encapsulates the rustworkx graph and helper methods for node-string mapping.
-    """
     def __init__(self) -> None:
-        # PyDiGraph is a directed graph.
-        # Type hints: PyDiGraph[NodePayload, EdgePayload]
         self.graph: rx.PyDiGraph = rx.PyDiGraph()
-        self.node_map: Dict[str, int] = {}  # Maps "Label" -> NodeIndex
-        self.reverse_map: Dict[int, str] = {} # Maps NodeIndex -> "Label"
+        self.node_map: Dict[str, int] = {}
+        self.reverse_map: Dict[int, str] = {}
 
-    def add_node(self, label: str) -> int:
-        if label in self.node_map:
-            return self.node_map[label]
+    def add_edge(self, start: str, end: str, weight: float) -> None:
+        if start not in self.node_map:
+            s_idx = self.graph.add_node(start)
+            self.node_map[start] = s_idx
+            self.reverse_map[s_idx] = start
 
-        idx = self.graph.add_node(label)
-        self.node_map[label] = idx
-        self.reverse_map[idx] = label
-        return idx
+        if end not in self.node_map:
+            e_idx = self.graph.add_node(end)
+            self.node_map[end] = e_idx
+            self.reverse_map[e_idx] = end
 
-    def add_edge(self, start: str, end: str, weight: float) -> int:
-        u = self.add_node(start)
-        v = self.add_node(end)
-        return self.graph.add_edge(u, v, weight)
+        u = self.node_map[start]
+        v = self.node_map[end]
+        self.graph.add_edge(u, v, weight)
 
-    def get_shortest_path(self, start_label: str, end_label: str) -> Optional[PathResponse]:
+    def get_shortest_path(
+        self, start_label: str, end_label: str
+    ) -> Optional[PathResponse]:
         if start_label not in self.node_map or end_label not in self.node_map:
             return None
 
         start_idx = self.node_map[start_label]
         end_idx = self.node_map[end_label]
 
-        # rustworkx.dijkstra_shortest_paths returns a Dictionary of {target_node_index: distance}
-        # To get the specific path, we can use dijkstra_shortest_path_lengths for distance
-        # and checking paths, or use the standard shortest_path method if weights are 1.
-        # For weighted graphs, `dijkstra_shortest_paths` is robust.
-
         try:
-            # Compute path using Dijkstra. Returns Path object.
-            # weight_fn is a lambda extracting the edge weight.
-            path_indices = rx.dijkstra_shortest_path_lengths(
-                self.graph, start_idx, lambda x: float(x), goal=end_idx
-            )
-
-            if end_idx not in path_indices:
-                return None
-
-            distance = path_indices[end_idx]
-
-            # Reconstruct the actual path nodes
-            # rustworkx.dijkstra_shortest_paths just gives lengths.
-            # We use `dijkstra_shortest_paths` specifically to get the sequence:
-            full_paths = rx.dijkstra_shortest_paths(
+            # Get path sequence
+            paths = rx.dijkstra_shortest_paths(
                 self.graph, start_idx, weight_fn=lambda x: float(x), target=end_idx
             )
 
-            # full_paths[end_idx] is a list of node indices
-            node_indices = full_paths[end_idx]
+            if end_idx not in paths:
+                return None
+
+            node_indices = paths[end_idx]
+
+            # Calculate total distance based on path (Alternatively, use
+            # dijkstra_shortest_path_lengths for just the cost)
+            distance = 0.0
+            for i in range(len(node_indices) - 1):
+                # get_edge_data returns the weight we stored
+                u, v = node_indices[i], node_indices[i + 1]
+                # Note: rustworkx allows multiple edges; we assume simple graph
+                # here or take first
+                edge_data = self.graph.get_edge_data(u, v)
+                distance += float(edge_data)
+
             path_labels = [self.reverse_map[idx] for idx in node_indices]
 
             return PathResponse(
                 source=start_label,
                 target=end_label,
                 distance=distance,
-                path_nodes=path_labels
+                path_nodes=path_labels,
             )
-
         except Exception:
             return None
 
-# --- Application Setup ---
 
-app = FastAPI()
+# --- Database & Lifespan Logic ---
+
+# 1. Instantiate the manager globally
 graph_manager = GraphManager()
 
-# Populate Mock Data on Startup
-# Creating a graph: A -> B -> C -> D, and a shortcut A -> D
-# A -> B (1.0)
-# B -> C (2.0)
-# C -> D (1.0)  => Total A->D via C = 4.0
-# A -> D (10.0) => Direct is slower
-# A -> E (1.0)
-@app.on_event("startup")
-def startup_event() -> None:
-    graph_manager.add_edge("A", "B", 1.0)
-    graph_manager.add_edge("B", "C", 2.0)
-    graph_manager.add_edge("C", "D", 1.0)
-    graph_manager.add_edge("A", "D", 10.0) # Expensive direct path
-    graph_manager.add_edge("A", "E", 1.0)
-    print("Graph initialized with mock data.")
+
+async def mock_db_fetch() -> List[Tuple[str, str, float]]:
+    """Simulate a slow DB query."""
+    print("Hydrating graph from DB...")
+    await asyncio.sleep(2)  # Simulate network latency
+    # Return mock rows: (Source, Target, Weight)
+    return [
+        ("A", "B", 1.0),
+        ("B", "C", 2.0),
+        ("C", "D", 1.0),
+        ("A", "E", 10.0),
+    ]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # --- STARTUP PHASE ---
+    # This block runs BEFORE the server accepts requests.
+    try:
+        data = await mock_db_fetch()
+        for start, end, weight in data:
+            graph_manager.add_edge(start, end, weight)
+        print(f"Graph hydration complete. Loaded {len(data)} edges.")
+    except Exception as e:
+        print(f"CRITICAL: Failed to load graph data: {e}")
+        # Raising an exception here will prevent the server from starting
+        raise e
+
+    yield  # Server is running and accepting requests now
+
+    # --- SHUTDOWN PHASE ---
+    # Clean up resources if needed
+    print("Shutting down...")
+
+
+# 2. Pass lifespan to FastAPI
+app = FastAPI(lifespan=lifespan)
 
 # --- Endpoints ---
 
-@app.get("/")
-def read_root() -> RootResponse:
-    return RootResponse(service="Graph App", status="Running")
 
-@app.get("/path/{start_node}/{end_node}")
-def get_shortest_path(start_node: str, end_node: str) -> PathResponse:
-    result = graph_manager.get_shortest_path(start_node, end_node)
+@app.get("/health")
+def health_check() -> Dict[str, str]:
+    """Simple probe to verify app is awake."""
+    return {"status": "ok"}
 
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No path found between {start_node} and {end_node}"
-        )
 
-    return result
+@app.get("/path/{start}/{end}")
+def get_path(start: str, end: str) -> PathResponse:
+    res = graph_manager.get_shortest_path(start, end)
+    if not res:
+        raise HTTPException(status_code=404, detail="Path not found")
+    return res
