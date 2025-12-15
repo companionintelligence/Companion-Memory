@@ -1,0 +1,18 @@
+[project]
+name = "graph"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pgboss"
+]
+
+[tool.uv.sources]
+pgboss = { workspace = true }
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"

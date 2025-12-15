@@ -1,0 +1,11 @@
+[project]
+name = "ci-server"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = [
+    "lib/python/*",
+    "backend/apps/graph"
+]
