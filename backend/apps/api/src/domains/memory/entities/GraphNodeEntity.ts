@@ -20,6 +20,9 @@ export class GraphNodeEntity {
   @Column({ type: 'jsonb', default: '{}' })
   properties!: Record<string, unknown>;
 
+  @Column({ type: 'jsonb', nullable: true })
+  dossier!: Record<string, unknown> | null;
+
   @Column({
     type: 'text',
     nullable: true,

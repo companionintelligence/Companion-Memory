@@ -92,6 +92,30 @@ services:
     restart: unless-stopped
     profiles: [ "all", "local", "staging" ]
 
+  memory-service:
+    build:
+      context: ./backend/apps/memory
+      dockerfile: Dockerfile
+    image: ci/memory-service
+    pull_policy: build
+    container_name: memory-service
+    ports:
+      - 8001:8001
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@postgres:5432/companion_intel
+      - LLM_API_BASE=${LLM_API_BASE:-http://host.docker.internal:11434/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-ollama}
+      - LLM_DEFAULT_CHAT_MODEL=${LLM_DEFAULT_CHAT_MODEL}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - web
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    profiles: [ "all", "local", "infra" ]
+
   dev-webserver:
     image: nginx:stable
     container_name: dev-webserver

@@ -1,0 +1,32 @@
+# Alternative with pinned versions (if you prefer explicit pins)
+# Replace pyproject.toml dependencies section with this:
+
+dependencies = [
+    # Database
+    "psycopg2-binary==2.9.9",
+    "sqlalchemy==2.0.23",
+    "asyncpg==0.29.0",
+
+    # LLM Integration
+    "pydantic-ai==1.35.0",
+    "httpx==0.28.1",
+
+    # Environment & Configuration
+    "python-dotenv==1.2.1",
+    "pydantic==2.12.5",
+    "pydantic-settings==2.12.0",
+
+    # Utilities
+    "python-dateutil==2.8.2",
+    "pytz==2024.1",
+    "tenacity==8.2.3",
+    "apscheduler==3.10.4",
+
+    # Logging
+    "structlog==24.1.0",
+
+    # API / HTTP
+    "fastapi==0.125.0",
+    "uvicorn==0.38.0",
+    "python-multipart==0.0.21",
+]

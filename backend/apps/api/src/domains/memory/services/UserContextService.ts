@@ -8,6 +8,18 @@ import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 
 import { GraphQueryService } from './GraphQueryService';
 
+export interface UserDossier {
+  summary: string;
+  tone?: string | null;
+  personalityTraits?: string[] | null;
+  interactionGuidelines?: string[] | null;
+  preferences?: string[] | null;
+  challenges?: string[] | null;
+  metadata?: Record<string, unknown> | null;
+  lastUpdatedAt?: string | null;
+  sourceWindow?: Record<string, unknown> | null;
+}
+
 /**
  * User context data structure for LLM system prompts
  */
@@ -17,6 +29,7 @@ export interface UserContext {
     name: string;
     username: string | null;
     properties?: Record<string, unknown>;
+    dossier?: UserDossier | null;
   };
   familyMembers: Array<{
     entityId: string;
@@ -104,6 +117,7 @@ export class UserContextService {
           name: userEntity.name ?? 'User',
           username: await this.getUsernameFromUsersTable(userId),
           properties: this.pickImportantProperties(userEntity.properties ?? {}),
+          dossier: this.normalizeDossier(userEntity.dossier),
         },
         familyMembers: familyMembers.map((member) => ({
           entityId: member.entityId,
@@ -182,6 +196,20 @@ export class UserContextService {
     lines.push(`- Total preferences: ${context.quickStats.totalPreferences}`);
     lines.push(`- Total dislikes: ${context.quickStats.totalDislikes}`);
     lines.push(`- Family members: ${context.quickStats.familySize}`);
+
+    if (context.currentUser.dossier) {
+      lines.push('', '## User Dossier Snapshot');
+      const dossier = context.currentUser.dossier;
+      lines.push(`- Summary: ${dossier.summary}`);
+      if (dossier.tone) {
+        lines.push(`- Tone: ${dossier.tone}`);
+      }
+
+      this.renderList(lines, 'Personality Traits', dossier.personalityTraits);
+      this.renderList(lines, 'Interaction Guidelines', dossier.interactionGuidelines, 5);
+      this.renderList(lines, 'Preferences', dossier.preferences, 5);
+      this.renderList(lines, 'Challenges', dossier.challenges, 5);
+    }
 
     lines.push('', '---');
     lines.push(
@@ -431,5 +459,58 @@ export class UserContextService {
     }
 
     return picked;
+  }
+
+  private normalizeDossier(raw: unknown): UserDossier | null {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    const dossier = raw as Record<string, unknown>;
+    const summary =
+      typeof dossier.summary === 'string' && dossier.summary.trim().length > 0 ? dossier.summary : null;
+    if (!summary) {
+      return null;
+    }
+
+    return {
+      summary,
+      tone: this.coerceOptionalString(dossier.tone),
+      personalityTraits: this.coerceOptionalStringArray(dossier.personalityTraits),
+      interactionGuidelines: this.coerceOptionalStringArray(dossier.interactionGuidelines),
+      preferences: this.coerceOptionalStringArray(dossier.preferences),
+      challenges: this.coerceOptionalStringArray(dossier.challenges),
+      metadata: typeof dossier.metadata === 'object' ? (dossier.metadata as Record<string, unknown>) : null,
+      lastUpdatedAt: this.coerceOptionalString(dossier.lastUpdatedAt),
+      sourceWindow:
+        typeof dossier.sourceWindow === 'object' ? (dossier.sourceWindow as Record<string, unknown>) : null,
+    };
+  }
+
+  private coerceOptionalString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim().length > 0 ? value : null;
+  }
+
+  private coerceOptionalStringArray(value: unknown): string[] | null {
+    if (!Array.isArray(value)) {
+      return null;
+    }
+
+    const normalized = value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0);
+
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private renderList(lines: string[], heading: string, values: string[] | null | undefined, limit = 3): void {
+    if (!values || values.length === 0) {
+      return;
+    }
+
+    lines.push(`- ${heading}:`);
+    values.slice(0, limit).forEach((value) => {
+      lines.push(`  - ${value}`);
+    });
   }
 }
