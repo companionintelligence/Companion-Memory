@@ -31,11 +31,61 @@ class HourlySummaryResponse(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Tags describing activities and content")
 
 
-class RollupSummaryResponse(BaseModel):
-    """Structured response for daily/weekly/monthly rollups."""
-    summary_text: str = Field(description="Concise narrative synthesizing the period")
-    key_themes: List[str] = Field(default_factory=list, description="Main themes of the period")
+class DailySummaryResponse(BaseModel):
+    """Structured response for daily summaries."""
+    summary_text: str = Field(description="Narrative summary of the day")
+    daily_rhythm: List[str] = Field(default_factory=list, description="Patterns of activity across the day")
+    productivity_patterns: List[str] = Field(default_factory=list, description="Productivity peaks and valleys")
+    social_interactions: List[str] = Field(default_factory=list, description="Key social interactions")
+    key_accomplishments: List[str] = Field(default_factory=list, description="What got done today")
     notable_events: List[str] = Field(default_factory=list, description="Significant events")
+    mood_indicators: Optional[List[str]] = Field(default=None, description="Hints about emotional state")
+
+
+class WeeklySummaryResponse(BaseModel):
+    """Structured response for weekly summaries."""
+    summary_text: str = Field(description="Narrative summary of the week")
+    work_life_balance: Optional[str] = Field(default=None, description="Assessment of work-life balance this week")
+    recurring_patterns: List[str] = Field(default_factory=list, description="Patterns that repeated throughout the week")
+    project_progress: List[str] = Field(default_factory=list, description="Progress on ongoing projects or goals")
+    social_dynamics: List[str] = Field(default_factory=list, description="Relationship interactions and dynamics")
+    weekday_vs_weekend: Optional[str] = Field(default=None, description="Behavioral differences between weekdays and weekend")
+    accomplishments: List[str] = Field(default_factory=list, description="Key accomplishments this week")
+    challenges: List[str] = Field(default_factory=list, description="Obstacles or difficulties faced")
+
+
+class MonthlySummaryResponse(BaseModel):
+    """Structured response for monthly summaries."""
+    summary_text: str = Field(description="Narrative arc of the month")
+    major_milestones: List[str] = Field(default_factory=list, description="Significant achievements or events")
+    evolving_priorities: List[str] = Field(default_factory=list, description="How focus areas shifted during the month")
+    habit_changes: List[str] = Field(default_factory=list, description="New habits formed or old ones dropped")
+    relationship_developments: List[str] = Field(default_factory=list, description="How relationships evolved")
+    growth_areas: List[str] = Field(default_factory=list, description="Areas of personal or professional growth")
+    challenges: List[str] = Field(default_factory=list, description="Major challenges or setbacks")
+
+
+class SeasonalSummaryResponse(BaseModel):
+    """Structured response for seasonal (quarterly) summaries."""
+    summary_text: str = Field(description="Narrative arc of the quarter")
+    life_transitions: List[str] = Field(default_factory=list, description="Major life phase changes or transitions")
+    major_outcomes: List[str] = Field(default_factory=list, description="Completed projects or major results")
+    behavioral_shifts: List[str] = Field(default_factory=list, description="Significant changes in behavior patterns")
+    strategic_changes: List[str] = Field(default_factory=list, description="Pivots in direction or priorities")
+    personal_evolution: List[str] = Field(default_factory=list, description="How personal or professional identity evolved")
+    transformative_themes: List[str] = Field(default_factory=list, description="Major themes that defined this quarter")
+
+
+class YearlySummaryResponse(BaseModel):
+    """Structured response for yearly summaries."""
+    summary_text: str = Field(description="Bird's-eye narrative of the year as a life chapter")
+    annual_achievements: List[str] = Field(default_factory=list, description="Major accomplishments of the year")
+    annual_challenges: List[str] = Field(default_factory=list, description="Significant setbacks or difficulties")
+    identity_shifts: List[str] = Field(default_factory=list, description="How sense of self changed")
+    trajectory_changes: List[str] = Field(default_factory=list, description="Changes in life direction or path")
+    relationship_evolution: List[str] = Field(default_factory=list, description="How key relationships changed over the year")
+    enduring_patterns: List[str] = Field(default_factory=list, description="Consistent behaviors or themes throughout the year")
+    growth_themes: List[str] = Field(default_factory=list, description="Overarching themes of personal growth")
 
 
 class UserDossierResponse(BaseModel):
@@ -81,12 +131,64 @@ class Summarizer:
             ),
         )
 
-        self.rollup_agent = Agent(
+        # Time-scale specific agents
+        self.daily_agent = Agent(
             self.model,
-            output_type=RollupSummaryResponse,
+            output_type=DailySummaryResponse,
             system_prompt=(
-                "Synthesize summaries into a cohesive overview. "
-                "Focus on themes, patterns, and significant events."
+                "You synthesize hourly summaries into a daily overview. "
+                "Focus on: daily rhythms and routines, workflow patterns, "
+                "productivity peaks and valleys, social interactions, "
+                "and how the day's activities connected together. "
+                "Identify what made this day distinct or typical."
+            ),
+        )
+
+        self.weekly_agent = Agent(
+            self.model,
+            output_type=WeeklySummaryResponse,
+            system_prompt=(
+                "You synthesize daily summaries into a weekly overview. "
+                "Focus on: work-life balance, recurring weekly patterns, "
+                "progress on projects or goals, social dynamics, "
+                "behavioral trends across weekdays vs weekends. "
+                "Identify how the week developed and key accomplishments or challenges."
+            ),
+        )
+
+        self.monthly_agent = Agent(
+            self.model,
+            output_type=MonthlySummaryResponse,
+            system_prompt=(
+                "You synthesize weekly summaries into a monthly overview. "
+                "Focus on: major milestones and achievements, evolving priorities, "
+                "habit formation or changes, relationship developments, "
+                "month-over-month growth or shifts in focus areas. "
+                "Identify the arc of the month and significant transitions."
+            ),
+        )
+
+        self.seasonal_agent = Agent(
+            self.model,
+            output_type=SeasonalSummaryResponse,
+            system_prompt=(
+                "You synthesize monthly summaries into a seasonal (3-month) overview. "
+                "Focus on: life phase transitions, major project outcomes, "
+                "seasonal behavioral patterns, strategic direction changes, "
+                "personal or professional evolution. "
+                "Identify the broader narrative arc and transformative themes of this quarter."
+            ),
+        )
+
+        self.yearly_agent = Agent(
+            self.model,
+            output_type=YearlySummaryResponse,
+            system_prompt=(
+                "You synthesize seasonal summaries into a yearly overview. "
+                "Focus on: annual achievements and setbacks, identity shifts, "
+                "life trajectory changes, enduring patterns vs. experiments, "
+                "key relationships and their evolution, personal growth themes. "
+                "Provide a bird's-eye view of the year as a chapter in their life story."
             ),
         )
 
@@ -143,12 +245,16 @@ class Summarizer:
         response = result.output
         embedding = self.generate_embedding(response.summary_text)
 
+        # Convert Pydantic response to dict to capture all structured fields
+        response_dict = response.model_dump(exclude_none=True)
+
         return {
             "summary_text": response.summary_text,
             "summary_type": "hourly",
             "key_insights": response.key_insights,
             "events": response.notable_events,
             "anomalies": response.anomalies,
+            "structured_data": response_dict,  # Store all structured fields
             "embedding": embedding,
             "activity_counts": activity_counts,
             "tokens_used": result.usage().total_tokens if result.usage() else 0,
@@ -156,7 +262,7 @@ class Summarizer:
 
     def generate_daily_summary(self, hourly_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Generate daily summary from hourly summaries."""
-        return self._generate_rollup("daily", hourly_summaries)
+        return self._generate_rollup("daily", hourly_summaries, self.daily_agent)
 
     def generate_period_rollup(
         self,
@@ -164,7 +270,15 @@ class Summarizer:
         child_summaries: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Generate rollup summary (weekly/monthly/etc) from child summaries."""
-        return self._generate_rollup(period_type, child_summaries)
+        # Select the appropriate time-scale specific agent
+        agent_map = {
+            'weekly': self.weekly_agent,
+            'monthly': self.monthly_agent,
+            'seasonal': self.seasonal_agent,
+            'yearly': self.yearly_agent,
+        }
+        agent = agent_map.get(period_type, self.daily_agent)
+        return self._generate_rollup(period_type, child_summaries, agent)
 
     def generate_user_dossier(
         self,
@@ -277,9 +391,9 @@ What was the user likely doing? (2-3 sentences)
     # ========================================================================
 
     def _generate_rollup(
-        self, period_type: str, child_summaries: List[Dict[str, Any]]
+        self, period_type: str, child_summaries: List[Dict[str, Any]], agent: Agent
     ) -> Dict[str, Any]:
-        """Generic rollup for daily/weekly/monthly/etc."""
+        """Generic rollup for daily/weekly/monthly/etc using specified time-scale agent."""
         combined_text = "\n\n".join(
             [
                 f"Summary {i + 1}: {s.get('summary_text', '')}"
@@ -289,7 +403,7 @@ What was the user likely doing? (2-3 sentences)
 
         prompt = f"Synthesize these summaries into a {period_type} overview:\n\n{combined_text}"
 
-        result = self.rollup_agent.run_sync(
+        result = agent.run_sync(
             prompt,
             model_settings={
                 "temperature": settings.llm_temperature,
@@ -307,9 +421,13 @@ What was the user likely doing? (2-3 sentences)
             for key, value in counts.items():
                 total_counts[key] = total_counts.get(key, 0) + value
 
+        # Convert Pydantic response to dict to capture all structured fields
+        response_dict = response.model_dump(exclude_none=True)
+
         return {
             "summary_text": response.summary_text,
             "summary_type": period_type,
+            "structured_data": response_dict,  # Store all structured fields
             "embedding": embedding,
             "activity_counts": total_counts,
             "num_child_summaries": len(child_summaries),

@@ -201,6 +201,10 @@ def _store_summary(
         "tokens_used": summary_data.get("tokens_used", 0),
     }
 
+    # Include structured data if present (time-scale specific fields)
+    if "structured_data" in summary_data:
+        content["structured_data"] = summary_data["structured_data"]
+
     # Determine source types from activity counts
     activity_counts = summary_data.get("activity_counts", {})
     source_types = [
