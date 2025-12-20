@@ -82,7 +82,7 @@ export class CommunicationEntity {
   @Column({ type: 'boolean', default: false, name: 'is_archived' })
   isArchived!: boolean;
 
-  @Column({ type: 'text', name: 'snippet' })
+  @Column({ type: 'text', name: 'preview' })
   preview!: string | null;
 
   static toEgressType(entity: CommunicationEntity) {
