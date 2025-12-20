@@ -189,31 +189,6 @@ export class EmbeddingService {
   }
 
   /**
-   * Generate and store embedding for a communication record
-   */
-  async embedCommunication(
-    userId: string,
-    communicationType: string,
-    occurredAt: string,
-    searchContent: string,
-  ): Promise<boolean> {
-    try {
-      const embeddingString = await this.generateEmbeddingString(searchContent);
-      await this.dataSource.query(
-        `UPDATE ci.communications SET content_embedding = $1 WHERE time = $2 AND user_id = $3 AND communication_type = $4`,
-        [embeddingString, new Date(occurredAt), userId, communicationType],
-      );
-
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to embed communication ${userId}:${communicationType}:${occurredAt}: ${message}`);
-
-      return false;
-    }
-  }
-
-  /**
    * Generate and store embedding for an inventory item
    */
   async embedInventoryItem(

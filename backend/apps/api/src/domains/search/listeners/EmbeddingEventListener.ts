@@ -99,49 +99,6 @@ export class EmbeddingEventListener {
     }
   }
 
-  @OnEvent(Events.SEARCH_EMBED_COMMUNICATION)
-  async handleCommunicationEmbedding(payload: EventPayloads[Events.SEARCH_EMBED_COMMUNICATION]) {
-    const { communication } = payload;
-    const segments: Array<string | null> = [communication.subject ?? null, communication.content ?? null];
-    const searchContent = segments
-      .filter((segment): segment is string => this.hasMeaningfulText(segment))
-      .join(' ')
-      .trim();
-
-    try {
-      if (!this.hasMeaningfulText(searchContent)) {
-        this.logger.debug('Skipping communication embedding due to empty search content', {
-          ownerId: payload.ownerId,
-          communicationType: communication.communicationType,
-          occurredAt: communication.occurredAt,
-        });
-
-        return;
-      }
-
-      const success = await this.embeddingService.embedCommunication(
-        communication.userId,
-        communication.communicationType,
-        communication.occurredAt,
-        searchContent,
-      );
-
-      if (!success) {
-        throw new Error('Embedding service reported a failure while generating communication embedding.');
-      }
-    } catch (error) {
-      this.logger.error('Failed to embed communication record', {
-        ownerId: payload.ownerId,
-        userId: communication.userId,
-        communicationType: communication.communicationType,
-        occurredAt: communication.occurredAt,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      throw error;
-    }
-  }
-
   private hasMeaningfulText(value?: string | null): value is string {
     return typeof value === 'string' && value.trim().length > 0;
   }

@@ -6,9 +6,8 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { ConnectionService } from '@ci/domains/connections';
-import { EventService, Events } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
-import { CommunicationEntity, CommunicationService } from '@ci/domains/memory';
+import { CommunicationService } from '@ci/domains/memory';
 
 import { PromoteService } from '../PromoteService';
 
@@ -83,7 +82,6 @@ export class OutlookMailPromotionService {
     private readonly communicationService: CommunicationService,
     private readonly promoteService: PromoteService,
     private readonly connectionService: ConnectionService,
-    private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OutlookMailPromotionService.name);
@@ -269,10 +267,7 @@ export class OutlookMailPromotionService {
       toEntityIdsCombined = toEntityIdsCombined.concat(bccEntityIds);
     }
 
-    const searchContent = this.buildCommunicationSearchContent(messageDetails);
-
-    // Save to communications table
-    const communication = await this.communicationService.create(
+    await this.communicationService.create(
       { userId },
       {
         time: messageDetails.date ? new Date(messageDetails.date) : new Date(),
@@ -291,76 +286,9 @@ export class OutlookMailPromotionService {
         category: 'personal', // TODO: Classify emails
         connection_id: connectionId,
         attachments: attachmentUploadIds,
+        preview: messageDetails.bodyPreview ?? null,
       },
     );
-
-    await this.enqueueCommunicationEmbedding(userId, communication, searchContent);
-  }
-
-  private async enqueueCommunicationEmbedding(
-    userId: string,
-    communication: CommunicationEntity,
-    searchContent: string | null,
-  ) {
-    if (!searchContent || searchContent.trim().length === 0) {
-      return;
-    }
-
-    try {
-      await this.eventService.send(Events.SEARCH_EMBED_COMMUNICATION, {
-        ownerId: userId,
-        communication: {
-          userId,
-          communicationType: communication.communicationType,
-          occurredAt: communication.time.toISOString(),
-          subject: communication.subject,
-          content: searchContent,
-        },
-      });
-    } catch (error) {
-      this.logger.error('Failed to enqueue Outlook mail embedding', {
-        userId,
-        occurredAt: communication.time.toISOString(),
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private buildCommunicationSearchContent(details: ExtractedMessage): string | null {
-    const parts = new Set<string>();
-
-    const push = (value: unknown) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-
-      const normalized = value.trim();
-      if (normalized.length === 0) {
-        return;
-      }
-
-      parts.add(normalized);
-    };
-
-    push(details.subject);
-    push(details.bodyPreview);
-    push(details.body);
-
-    if (details.from) {
-      push(details.from.name);
-      push(details.from.email);
-    }
-
-    for (const participant of details.participants) {
-      push(participant.name);
-      push(participant.email);
-    }
-
-    if (parts.size === 0) {
-      return null;
-    }
-
-    return Array.from(parts).join(' ');
   }
 
   private async extractMessageDetails(
