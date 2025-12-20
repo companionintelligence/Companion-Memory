@@ -31,6 +31,7 @@ import { ConnectionsModule, ConnectionEntity } from '@ci/domains/connections';
 import { EtlModule, ApiLogEntity } from '@ci/domains/etl';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule, FileEntity } from '@ci/domains/files';
+import { GraphModule } from '@ci/domains/graph';
 import { MemoryModule, GraphNodeEntity, RelationshipEntity, ContentEntity } from '@ci/domains/memory';
 import { OneDrivePromotionService } from '@ci/domains/promote/services/microsoft/OneDrivePromotionService';
 import { OutlookCalendarPromotionService } from '@ci/domains/promote/services/microsoft/OutlookCalendarPromotionService';
@@ -69,9 +70,10 @@ import { PromoteService } from './services/PromoteService';
       ContentEntity,
     ]),
     ConnectionsModule,
-    FilesModule,
     EtlModule,
     EventsModule,
+    FilesModule,
+    GraphModule,
     MemoryModule,
     SearchNextModule,
     UserModule,
