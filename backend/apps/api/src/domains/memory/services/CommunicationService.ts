@@ -46,6 +46,7 @@ export class CommunicationService {
       attachments: data.attachments || [],
       isEncrypted: data.is_encrypted || false,
       isArchived: data.is_archived || false,
+      preview: data.preview ?? null,
     });
 
     // TODO: Build relationships using from_entity_id and to_entity_ids
@@ -180,6 +181,10 @@ export class CommunicationService {
 
     if (data.is_archived) {
       updateData.isArchived = data.is_archived;
+    }
+
+    if (data.preview !== 'undefined') {
+      updateData.preview = data.preview;
     }
 
     const communication = await this.communicationRepository.findOne({

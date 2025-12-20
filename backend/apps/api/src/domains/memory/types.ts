@@ -385,6 +385,7 @@ export interface CreateCommunicationDto {
   connection_id?: string;
   is_encrypted?: boolean;
   is_archived?: boolean;
+  preview?: string | null;
 }
 
 export const createCommunicationSchema = z.object({
@@ -409,6 +410,7 @@ export const createCommunicationSchema = z.object({
   connection_id: z.string().optional(),
   is_encrypted: z.boolean().optional(),
   is_archived: z.boolean().optional(),
+  preview: z.string().optional(),
 });
 
 export interface UpdateCommunicationDto {
@@ -433,6 +435,7 @@ export interface UpdateCommunicationDto {
   connection_id?: string;
   is_encrypted?: boolean;
   is_archived?: boolean;
+  preview?: string | null;
 }
 
 export const updateCommunicationSchema = z.object({
@@ -457,6 +460,7 @@ export const updateCommunicationSchema = z.object({
   connection_id: z.string().optional(),
   is_encrypted: z.boolean().optional(),
   is_archived: z.boolean().optional(),
+  preview: z.string().optional(),
 });
 
 const createEventSchemaRoot = z.object({
