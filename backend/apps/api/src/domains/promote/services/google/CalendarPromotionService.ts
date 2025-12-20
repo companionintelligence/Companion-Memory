@@ -281,8 +281,6 @@ export class GoogleCalendarEventPromotionService {
   ): Promise<void> {
     const eventDetails = this.extractEventDetails(event);
 
-    this.logEventDetails(eventDetails);
-
     // Transform and save event
     const eventDto = await this.transformToEventDto(eventDetails, event, userId, connectionId);
 
@@ -295,8 +293,6 @@ export class GoogleCalendarEventPromotionService {
       eventId: eventDetails.id,
       summary: eventDetails.summary,
     });
-
-    this.logFutureEventIfApplicable(eventDetails);
   }
 
   private extractEventDetails(event: CalendarEvent): EventDetails {
@@ -448,38 +444,5 @@ export class GoogleCalendarEventPromotionService {
     };
 
     return statusMap[status.toLowerCase()] || 'confirmed';
-  }
-
-  private logEventDetails(eventDetails: EventDetails): void {
-    this.logger.log('Processing calendar event', {
-      eventId: eventDetails.id,
-      summary: eventDetails.summary,
-      startTime: eventDetails.startTime,
-      endTime: eventDetails.endTime,
-      location: eventDetails.location,
-      organizer: `${eventDetails.organizerName} (${eventDetails.organizerEmail})`,
-      status: eventDetails.status,
-      isRecurring: eventDetails.isRecurring,
-      participantCount: eventDetails.participants.length,
-    });
-  }
-
-  private logFutureEventIfApplicable(eventDetails: EventDetails): void {
-    if (!eventDetails.startTime) {
-      return;
-    }
-
-    const startDate = new Date(eventDetails.startTime);
-    const now = new Date();
-
-    if (startDate > now) {
-      const daysInFuture = Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      this.logger.log('Future event detected', {
-        eventId: eventDetails.id,
-        summary: eventDetails.summary,
-        daysInFuture,
-        startDate: startDate.toISOString(),
-      });
-    }
   }
 }
