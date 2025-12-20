@@ -44,7 +44,9 @@ export class FacebookProfilePromotionService {
     }
 
     // Get user entity ID
-    const userEntityId = await this.promoteService.getUserEntityId(userId);
+    const { userNode } = await this.promoteService.getUserAndEntity({ userId }, userId);
+
+    const userEntityId = userNode.entityId;
 
     // Search for existing person by facebook_id first (most reliable)
     let existingEntities = await this.personService.search(

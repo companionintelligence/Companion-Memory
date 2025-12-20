@@ -87,7 +87,9 @@ export class ContactsPromotionService {
     });
 
     // Get user's entity ID (create if missing)
-    const userEntityId = await this.promoteService.getUserEntityId(userId);
+    const { userNode } = await this.promoteService.getUserAndEntity({ userId }, userId);
+
+    const userEntityId = userNode.entityId;
 
     for (const contact of contacts) {
       try {

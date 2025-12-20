@@ -41,7 +41,9 @@ export class FacebookFriendsPromotionService {
       return;
     }
 
-    const userEntityId = await this.promoteService.getUserEntityId(userId);
+    const { userNode } = await this.promoteService.getUserAndEntity({ userId }, userId);
+
+    const userEntityId = userNode.entityId;
 
     for (const friend of friends) {
       try {
