@@ -186,50 +186,40 @@ export class GoogleCalendarEventPromotionService {
       connectionId,
     });
 
-    try {
-      const events = this.extractCalendarEvents(apiLogContent);
+    const events = this.extractCalendarEvents(apiLogContent);
 
-      if (events.length === 0) {
-        this.logger.log('No calendar events found to promote', { userId, connectionId });
+    if (events.length === 0) {
+      this.logger.log('No calendar events found to promote', { userId, connectionId });
 
-        return;
-      }
-
-      this.logger.log(`Processing ${events.length} calendar events`, {
-        userId,
-        connectionId,
-        eventCount: events.length,
-      });
-
-      for (const event of events) {
-        try {
-          await this.processCalendarEvent(event, userId, connectionId);
-        } catch (error) {
-          this.logger.error('Error processing individual calendar event', {
-            userId,
-            connectionId,
-            eventId: event.id,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-
-          // Don't throw - continue processing other events
-        }
-      }
-
-      this.logger.log('Calendar event promotion completed', {
-        userId,
-        connectionId,
-        processedCount: events.length,
-      });
-    } catch (error) {
-      this.logger.error('Error promoting calendar events', {
-        userId,
-        connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      throw error;
+      return;
     }
+
+    this.logger.log(`Processing ${events.length} calendar events`, {
+      userId,
+      connectionId,
+      eventCount: events.length,
+    });
+
+    for (const event of events) {
+      try {
+        await this.processCalendarEvent(event, userId, connectionId);
+      } catch (error) {
+        this.logger.error('Error processing individual calendar event', {
+          userId,
+          connectionId,
+          eventId: event.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+
+        // Don't throw - continue processing other events
+      }
+    }
+
+    this.logger.log('Calendar event promotion completed', {
+      userId,
+      connectionId,
+      processedCount: events.length,
+    });
   }
 
   private extractCalendarEvents(content: unknown): CalendarEvent[] {
