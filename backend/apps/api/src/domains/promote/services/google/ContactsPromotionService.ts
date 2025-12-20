@@ -72,49 +72,39 @@ export class ContactsPromotionService {
       connectionId,
     });
 
-    try {
-      const contacts = this.extractContacts(apiLogContent);
+    const contacts = this.extractContacts(apiLogContent);
 
-      if (contacts.length === 0) {
-        this.logger.log('No contacts found to promote', { userId, connectionId });
+    if (contacts.length === 0) {
+      this.logger.log('No contacts found to promote', { userId, connectionId });
 
-        return;
-      }
-
-      this.logger.log(`Processing ${contacts.length} contacts`, {
-        userId,
-        connectionId,
-        contactCount: contacts.length,
-      });
-
-      // Get user's entity ID (create if missing)
-      const userEntityId = await this.promoteService.getUserEntityId(userId);
-
-      for (const contact of contacts) {
-        try {
-          await this.processContact(contact, userId, userEntityId, connectionId);
-        } catch (error) {
-          this.logger.error('Error processing contact', {
-            contact: contact.names?.[0]?.displayName,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-        }
-      }
-
-      this.logger.log('Contacts promotion completed', {
-        userId,
-        connectionId,
-        processedCount: contacts.length,
-      });
-    } catch (error) {
-      this.logger.error('Error promoting contacts', {
-        userId,
-        connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      throw error;
+      return;
     }
+
+    this.logger.log(`Processing ${contacts.length} contacts`, {
+      userId,
+      connectionId,
+      contactCount: contacts.length,
+    });
+
+    // Get user's entity ID (create if missing)
+    const userEntityId = await this.promoteService.getUserEntityId(userId);
+
+    for (const contact of contacts) {
+      try {
+        await this.processContact(contact, userId, userEntityId, connectionId);
+      } catch (error) {
+        this.logger.error('Error processing contact', {
+          contact: contact.names?.[0]?.displayName,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    this.logger.log('Contacts promotion completed', {
+      userId,
+      connectionId,
+      processedCount: contacts.length,
+    });
   }
 
   private extractContacts(content: unknown): GoogleContact[] {
