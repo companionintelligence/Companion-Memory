@@ -201,7 +201,20 @@ export class GoogleCalendarEventPromotionService {
         eventCount: events.length,
       });
 
-      await this.processEvents(events, userId, connectionId);
+      for (const event of events) {
+        try {
+          await this.processCalendarEvent(event, userId, connectionId);
+        } catch (error) {
+          this.logger.error('Error processing individual calendar event', {
+            userId,
+            connectionId,
+            eventId: event.id,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+
+          // Don't throw - continue processing other events
+        }
+      }
 
       this.logger.log('Calendar event promotion completed', {
         userId,
@@ -244,34 +257,6 @@ export class GoogleCalendarEventPromotionService {
     });
 
     return [];
-  }
-
-  private async processEvents(events: CalendarEvent[], userId: string, connectionId: string): Promise<void> {
-    let processedCount = 0;
-
-    for (const event of events) {
-      try {
-        await this.processCalendarEvent(event, userId, connectionId);
-        processedCount++;
-
-        if (processedCount % 10 === 0) {
-          this.logger.log('Calendar event promotion progress', {
-            userId,
-            connectionId,
-            processedCount,
-            totalEvents: events.length,
-          });
-        }
-      } catch (error) {
-        this.logger.error('Error processing individual calendar event', {
-          userId,
-          connectionId,
-          eventId: event.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-        // Don't throw - continue processing other events
-      }
-    }
   }
 
   private async processCalendarEvent(
