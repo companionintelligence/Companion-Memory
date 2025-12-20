@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { v7 as uuid7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
-import { EventService, Events } from '@ci/domains/events';
 import { PersonService, PersonEntity } from '@ci/domains/memory';
 
 import { PromoteService } from '../PromoteService';
@@ -59,7 +58,6 @@ interface GoogleContact {
 export class ContactsPromotionService {
   constructor(
     private readonly personService: PersonService,
-    private readonly eventService: EventService,
     private readonly promoteService: PromoteService,
     private readonly logger: LoggerService,
   ) {
@@ -164,7 +162,6 @@ export class ContactsPromotionService {
     existingEntity = existingEntities.length > 0 ? existingEntities[0] : null;
 
     let contactEntityId: string;
-    let searchContent: string | null = null;
 
     if (!existingEntity) {
       // Create new contact entity
@@ -226,8 +223,6 @@ export class ContactsPromotionService {
         properties.photo_url = contact.photos[0].url;
       }
 
-      searchContent = this.buildContactSearchContent(displayName, properties);
-
       await this.personService.create(
         { userId },
         {
@@ -235,7 +230,6 @@ export class ContactsPromotionService {
           name: displayName,
           description: `Contact from Google Contacts`,
           properties,
-          searchContent: searchContent || undefined,
         },
       );
 
@@ -259,15 +253,11 @@ export class ContactsPromotionService {
         properties: updatedProperties,
       });
 
-      searchContent = this.buildContactSearchContent(displayName, updatedProperties);
-
       this.logger.log('Updated existing contact entity', {
         contactEntityId,
         name: displayName,
       });
     }
-
-    await this.enqueueContactEmbedding(userId, contactEntityId, searchContent);
 
     // Create KNOWS relationship (ensuring every entity has at least one relationship)
     // FIXME: This should be re-implemented after we create a RelationshipService
@@ -324,72 +314,6 @@ export class ContactsPromotionService {
       contactEntityId,
       name: displayName,
     });
-  }
-
-  private async enqueueContactEmbedding(ownerId: string, entityId: string, searchContent: string | null) {
-    if (!searchContent || searchContent.trim().length === 0) {
-      return;
-    }
-
-    try {
-      await this.eventService.send(Events.SEARCH_EMBED_ENTITY, {
-        ownerId,
-        entityId,
-        entityType: 'Person',
-        searchContent,
-      });
-    } catch (error) {
-      this.logger.error('Failed to enqueue contact embedding', {
-        ownerId,
-        entityId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private buildContactSearchContent(displayName: string, properties: Record<string, unknown>): string | null {
-    const parts = new Set<string>();
-    const push = (value: unknown) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-
-      const normalized = value.trim();
-      if (normalized.length === 0) {
-        return;
-      }
-
-      parts.add(normalized);
-    };
-
-    push(displayName);
-    push(properties.email);
-    push(properties.phone);
-    push(properties.first_name);
-    push(properties.last_name);
-    push(properties.organization);
-    push(properties.job_title);
-    push(properties.occupation);
-
-    const emails = properties.emails;
-    if (Array.isArray(emails)) {
-      for (const email of emails) {
-        push(email?.value);
-      }
-    }
-
-    const phones = properties.phones;
-    if (Array.isArray(phones)) {
-      for (const phone of phones) {
-        push(phone?.value);
-      }
-    }
-
-    if (parts.size === 0) {
-      return null;
-    }
-
-    return Array.from(parts).join(' ');
   }
 
   private normalizeRelationType(type: string): string | null {

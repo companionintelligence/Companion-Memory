@@ -163,7 +163,19 @@ export class PersonSearchIndexListener {
     push(person.description ?? null);
 
     const properties = (person.properties ?? {}) as Record<string, unknown>;
-    const candidateKeys = ['first_name', 'last_name', 'email', 'occupation', 'bio'];
+    // We don't have a schema on properties yet. These values are an accumulated
+    // superset of values we've indexed in various places.
+    const candidateKeys = [
+      'first_name',
+      'last_name',
+      'email',
+      'occupation',
+      'bio',
+      'phone',
+      'organization',
+      'job_title',
+      'occupation',
+    ];
 
     for (const key of candidateKeys) {
       push(properties[key]);
