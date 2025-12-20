@@ -27,6 +27,7 @@ export class ContentSearchIndexListener {
     // push((contentDto as { text?: string }).text ?? null);
     // push(contentDto.mimetype ?? null);
     // push(contentDto.url ?? null);
+    // push(contentDto.type ?? null);
 
     // if (parts.size === 0) {
     //   return null;
