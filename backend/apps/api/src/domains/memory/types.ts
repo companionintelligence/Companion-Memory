@@ -220,7 +220,7 @@ export interface SearchEventDto {
 }
 
 export interface CreateContentDto {
-  id: string;
+  id?: string;
   type: string;
   title?: string;
   text?: string;
