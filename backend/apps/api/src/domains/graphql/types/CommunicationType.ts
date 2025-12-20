@@ -17,6 +17,9 @@ export class CommunicationType implements Node {
   @Field(() => String, { nullable: true })
   subject!: string | null;
 
+  @Field(() => String, { nullable: true })
+  preview!: string | null;
+
   @Field(() => String)
   content!: string;
 
@@ -35,6 +38,7 @@ export class CommunicationType implements Node {
       __source: entity,
       id: GlobalUID.encode('communication', entity.id),
       subject: entity.subject,
+      preview: entity.preview,
       content: entity.content,
       type: entity.communicationType,
       direction: entity.direction,
