@@ -129,8 +129,6 @@ export class FacebookProfilePromotionService {
       properties.location = profile.location.name;
     }
 
-    const searchContent = this.utils.buildPersonSearchContent(profile.name, properties);
-
     if (existingEntities.length > 0) {
       // Update existing person
       const existingEntity = existingEntities[0];
@@ -168,10 +166,7 @@ export class FacebookProfilePromotionService {
         name: updatedName,
         properties: mergedProperties,
         lastAccessed: new Date(),
-        searchContent: searchContent || undefined,
       });
-
-      await this.utils.enqueuePersonEmbedding(userId, existingEntity.id, searchContent);
 
       this.logger.log('Updated existing person with Facebook profile', {
         userId,
@@ -189,11 +184,8 @@ export class FacebookProfilePromotionService {
           name: profile.name,
           description: `Facebook profile: ${profile.name}`,
           properties,
-          searchContent: searchContent || undefined,
         },
       );
-
-      await this.utils.enqueuePersonEmbedding(userId, entityId, searchContent);
 
       // Create relationship to user
       await this.eventService.send(Events.GRAPH_PERSON_CREATED, {

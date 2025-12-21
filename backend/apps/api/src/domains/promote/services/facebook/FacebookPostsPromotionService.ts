@@ -307,12 +307,6 @@ export class FacebookPostsPromotionService {
             fileCount: fileIds.length,
             type: contentRecord.type,
           });
-
-          await this.utils.enqueueContentEmbedding(
-            userId,
-            contentId,
-            this.utils.buildContentSearchText(contentDto),
-          );
         } catch (contentError) {
           this.logger.error('Failed to create content record for Facebook post', {
             postId: post.id,

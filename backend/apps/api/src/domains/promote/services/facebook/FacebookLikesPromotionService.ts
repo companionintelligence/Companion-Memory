@@ -3,8 +3,6 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import { ContentService, type CreateContentDto } from '@ci/domains/memory';
 
-import { FacebookPromotionUtils } from './FacebookPromotionUtils';
-
 interface FacebookLike {
   id: string;
   name: string;
@@ -16,7 +14,6 @@ interface FacebookLike {
 export class FacebookLikesPromotionService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly utils: FacebookPromotionUtils,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookLikesPromotionService.name);
@@ -52,18 +49,7 @@ export class FacebookLikesPromotionService {
           user: { id: userId },
         };
 
-        const createdContent = await this.contentService.create(
-          { userId },
-          contentDto as unknown as CreateContentDto,
-        );
-        const contentRecord = Array.isArray(createdContent) ? createdContent[0] : createdContent;
-        const contentId = contentRecord?.id ?? like.id;
-
-        await this.utils.enqueueContentEmbedding(
-          userId,
-          contentId,
-          this.utils.buildContentSearchText(contentDto),
-        );
+        await this.contentService.create({ userId }, contentDto as unknown as CreateContentDto);
       } catch (error) {
         this.logger.error('Error processing Facebook like', {
           likeId: like.id,

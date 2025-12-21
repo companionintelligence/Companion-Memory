@@ -7,8 +7,6 @@ import { PersonService } from '@ci/domains/memory';
 
 import { PromoteService } from '../PromoteService';
 
-import { FacebookPromotionUtils } from './FacebookPromotionUtils';
-
 interface FacebookFriend {
   id: string;
   name: string;
@@ -25,7 +23,6 @@ export class FacebookFriendsPromotionService {
     private readonly personService: PersonService,
     private readonly eventService: EventService,
     private readonly promoteService: PromoteService,
-    private readonly utils: FacebookPromotionUtils,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookFriendsPromotionService.name);
@@ -77,8 +74,6 @@ export class FacebookFriendsPromotionService {
           }
         }
 
-        const searchContent = this.utils.buildPersonSearchContent(friend.name, properties);
-
         if (existingEntities.length > 0) {
           // Update existing person
           const existingEntity = existingEntities[0];
@@ -89,8 +84,6 @@ export class FacebookFriendsPromotionService {
             properties: mergedProperties,
             lastAccessed: new Date(),
           });
-
-          await this.utils.enqueuePersonEmbedding(userId, existingEntity.id, searchContent);
         } else {
           // Create new person
           const entityId = uuidv7();
@@ -101,11 +94,8 @@ export class FacebookFriendsPromotionService {
               name: friend.name,
               description: `Facebook friend: ${friend.name}`,
               properties,
-              searchContent: searchContent || undefined,
             },
           );
-
-          await this.utils.enqueuePersonEmbedding(userId, entityId, searchContent);
 
           // Create relationship to user
           await this.eventService.send(Events.GRAPH_PERSON_CREATED, {

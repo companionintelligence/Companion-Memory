@@ -7,10 +7,7 @@ import { Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { EventService, Events } from '@ci/domains/events';
 import { FileService, FileEntity } from '@ci/domains/files';
-import { type CreateContentDto } from '@ci/domains/memory';
-import { PersonService } from '@ci/domains/memory';
 
 @Injectable()
 export class FacebookPromotionUtils {
@@ -18,8 +15,6 @@ export class FacebookPromotionUtils {
     private readonly fileService: FileService,
     @InjectRepository(FileEntity)
     private readonly fileRepository: Repository<FileEntity>,
-    private readonly personService: PersonService,
-    private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookPromotionUtils.name);
@@ -193,106 +188,5 @@ export class FacebookPromotionUtils {
     const sortedImages = [...photo.images].sort((a, b) => b.width * b.height - a.width * a.height);
 
     return sortedImages[0]?.source || photo.picture || photo.link || null;
-  }
-
-  async enqueueContentEmbedding(ownerId: string, contentId: string, searchContent: string | null) {
-    if (!searchContent || searchContent.trim().length === 0) {
-      return;
-    }
-
-    try {
-      await this.eventService.send(Events.SEARCH_EMBED_CONTENT, {
-        ownerId,
-        contentId,
-        text: searchContent,
-      });
-    } catch (error) {
-      this.logger.error('Failed to enqueue content embedding', {
-        ownerId,
-        contentId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  async enqueuePersonEmbedding(ownerId: string, entityId: string, searchContent: string | null) {
-    if (!searchContent || searchContent.trim().length === 0) {
-      return;
-    }
-
-    try {
-      await this.eventService.send(Events.SEARCH_EMBED_ENTITY, {
-        ownerId,
-        entityId,
-        entityType: 'Person',
-        searchContent,
-      });
-    } catch (error) {
-      this.logger.error('Failed to enqueue person embedding', {
-        ownerId,
-        entityId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  buildContentSearchText(contentDto: CreateContentDto): string | null {
-    const parts = new Set<string>();
-    const push = (value: unknown) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-
-      const normalized = value.trim();
-      if (normalized.length === 0) {
-        return;
-      }
-
-      parts.add(normalized);
-    };
-
-    push(contentDto.title ?? null);
-    push((contentDto as { text?: string }).text ?? null);
-    push(contentDto.mimetype ?? null);
-    push(contentDto.url ?? null);
-
-    if (parts.size === 0) {
-      return null;
-    }
-
-    return Array.from(parts).join(' ');
-  }
-
-  buildPersonSearchContent(
-    name: string | null | undefined,
-    properties?: Record<string, unknown>,
-  ): string | null {
-    const parts = new Set<string>();
-    const push = (value: unknown) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-
-      const normalized = value.trim();
-      if (normalized.length === 0) {
-        return;
-      }
-
-      parts.add(normalized);
-    };
-
-    push(name ?? null);
-
-    const props: Record<string, unknown> = properties ?? {};
-    const candidateKeys = ['first_name', 'last_name', 'email', 'occupation', 'bio', 'phone'];
-    for (const key of candidateKeys) {
-      push(props[key]);
-    }
-
-    if (parts.size === 0) {
-      return null;
-    }
-
-    return Array.from(parts).join(' ');
   }
 }
