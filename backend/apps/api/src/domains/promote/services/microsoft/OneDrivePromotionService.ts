@@ -10,7 +10,7 @@ import config from '@ci/configuration';
 import { ConnectionService } from '@ci/domains/connections';
 import { OneDrivePageEntity, OneDriveFileEntity } from '@ci/domains/connections/clients/MicrosoftClient';
 import { FileService as FileStorageService } from '@ci/domains/files';
-import { EventService as MemoryEventService, FileService } from '@ci/domains/memory';
+import { EventService as MemoryEventService } from '@ci/domains/memory';
 
 import { PromoteService } from '../PromoteService';
 
@@ -37,7 +37,6 @@ export class OneDrivePromotionService {
     private readonly eventService: MemoryEventService,
     private readonly connectionService: ConnectionService,
     private readonly fileStorageService: FileStorageService,
-    private readonly fileService: FileService,
     private readonly promoteService: PromoteService,
     private readonly logger: LoggerService,
   ) {
