@@ -121,36 +121,26 @@ export class OutlookCalendarPromotionService {
       contentKeys: apiLogContent && typeof apiLogContent === 'object' ? Object.keys(apiLogContent) : [],
     });
 
-    try {
-      // Extract event ids from the API log content
-      const events = this.extractOutlookCalendarEvents(apiLogContent as RawData[]);
+    // Extract event ids from the API log content
+    const events = this.extractOutlookCalendarEvents(apiLogContent as RawData[]);
 
-      // Get the connection
-      const connection = await this.connectionService.findById({ userId }, connectionId);
-      if (!connection || !connection.accessToken) {
-        this.logger.error('Connection not found or missing access token', { connectionId });
+    // Get the connection
+    const connection = await this.connectionService.findById({ userId }, connectionId);
+    if (!connection || !connection.accessToken) {
+      this.logger.error('Connection not found or missing access token', { connectionId });
 
-        return;
+      return;
+    }
+
+    // Process each event individually
+    for (const event of events) {
+      if (!event.id) {
+        this.logger.warn('Skipping event without ID', { event });
+        continue;
       }
 
-      // Process each event individually
-      for (const event of events) {
-        if (!event.id) {
-          this.logger.warn('Skipping event without ID', { event });
-          continue;
-        }
-
-        // Process the event
-        await this.processOutlookCalendarEvent(event, userId, connectionId);
-      }
-    } catch (error) {
-      this.logger.error('Error promoting Outlook Calendar events', {
-        userId,
-        connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      throw error;
+      // Process the event
+      await this.processOutlookCalendarEvent(event, userId, connectionId);
     }
   }
 
