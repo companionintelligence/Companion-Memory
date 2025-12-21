@@ -10,7 +10,7 @@ import config from '@ci/configuration';
 import { ConnectionService } from '@ci/domains/connections';
 import { OneDrivePageEntity, OneDriveFileEntity } from '@ci/domains/connections/clients/MicrosoftClient';
 import { FileService as FileStorageService } from '@ci/domains/files';
-import { EventService as MemoryEventService, type CreateEventDto, FileService } from '@ci/domains/memory';
+import { EventService as MemoryEventService, FileService } from '@ci/domains/memory';
 
 import { PromoteService } from '../PromoteService';
 
@@ -149,52 +149,56 @@ export class OneDrivePromotionService {
       );
 
       if (existingFiles.length === 0) {
-        const file = {
-          fieldname: 'attachment', //Multer requires this, but it's not actually used in our logic
-          originalname: fileDetails.content.name, //Multer requires this, but it's not actually used in our logic
-          mimetype: fileDetails.content.file?.mimeType,
-          size: fileDetails.content.size,
-          encoding: 'base64',
-          destination: '',
-          stream: '' as unknown as Readable,
-          filename: fileDetails.content.name,
-          path: '',
-          buffer: buff,
-        };
-        await this.fileStorageService.upload({ userId }, file);
+        await this.fileStorageService.upload(
+          { userId },
+          {
+            fieldname: 'attachment', //Multer requires this, but it's not actually used in our logic
+            originalname: fileDetails.content.name, //Multer requires this, but it's not actually used in our logic
+            mimetype: fileDetails.content.file?.mimeType,
+            size: fileDetails.content.size,
+            encoding: 'base64',
+            destination: '',
+            stream: '' as unknown as Readable,
+            filename: fileDetails.content.name,
+            path: '',
+            buffer: buff,
+          },
+        );
       }
     }
 
-    const eventSearch = {
-      start_time: new Date(fileDetails.startTime),
-      title: 'Edited ' + fileDetails.content?.name,
-      category: 'document_edit',
-      source_system: 'Microsoft OneDrive',
-      event_type: 'work',
-      source_type: 'ETL',
-    };
-
-    const existingEvents = await this.eventService.search({ userId }, eventSearch);
-
-    if (existingEvents.length === 0) {
-      const newEvent = {
-        id: uuidv7(),
+    const existingEvents = await this.eventService.search(
+      { userId },
+      {
         start_time: new Date(fileDetails.startTime),
         title: 'Edited ' + fileDetails.content?.name,
-        user: {
-          id: userId,
-        },
         category: 'document_edit',
         source_system: 'Microsoft OneDrive',
         event_type: 'work',
         source_type: 'ETL',
-        participant_entity_ids: participantEntityIds,
-        metadata: {
-          connection_id: connectionId,
-        },
-      } as CreateEventDto;
+      },
+    );
 
-      await this.eventService.create({ userId }, newEvent);
+    if (existingEvents.length === 0) {
+      await this.eventService.create(
+        { userId },
+        {
+          id: uuidv7(),
+          start_time: new Date(fileDetails.startTime),
+          title: 'Edited ' + fileDetails.content?.name,
+          user: {
+            id: userId,
+          },
+          category: 'document_edit',
+          source_system: 'Microsoft OneDrive',
+          event_type: 'work',
+          source_type: 'ETL',
+          participant_entity_ids: participantEntityIds,
+          metadata: {
+            connection_id: connectionId,
+          },
+        },
+      );
     }
   }
 
