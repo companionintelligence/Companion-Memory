@@ -52,36 +52,26 @@ export class OneDrivePromotionService {
       contentKeys: apiLogContent && typeof apiLogContent === 'object' ? Object.keys(apiLogContent) : [],
     });
 
-    try {
-      // Extract event ids from the API log content
-      const files = this.extractOneDriveFiles(apiLogContent as RawData[]);
+    // Extract event ids from the API log content
+    const files = this.extractOneDriveFiles(apiLogContent as RawData[]);
 
-      // Get the connection
-      const connection = await this.connectionService.findById({ userId }, connectionId);
-      if (!connection || !connection.accessToken) {
-        this.logger.error('Connection not found or missing access token', { connectionId });
+    // Get the connection
+    const connection = await this.connectionService.findById({ userId }, connectionId);
+    if (!connection || !connection.accessToken) {
+      this.logger.error('Connection not found or missing access token', { connectionId });
 
-        return;
+      return;
+    }
+
+    // Process each event individually
+    for (const file of files) {
+      if (!file.id) {
+        this.logger.warn('Skipping event without ID', { file });
+        continue;
       }
 
-      // Process each event individually
-      for (const file of files) {
-        if (!file.id) {
-          this.logger.warn('Skipping event without ID', { file });
-          continue;
-        }
-
-        // Process the event
-        await this.processOneDriveFile(file, userId, connectionId);
-      }
-    } catch (error) {
-      this.logger.error('Error promoting Outlook Calendar events', {
-        userId,
-        connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      throw error;
+      // Process the event
+      await this.processOneDriveFile(file, userId, connectionId);
     }
   }
 
