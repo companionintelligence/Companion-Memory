@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuidv7 } from 'uuid';
 
+import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { RelationshipService } from '@ci/domains/graph';
 import { PersonService } from '@ci/domains/memory';
+
+import { PromoteService } from '../PromoteService';
 
 interface FacebookFriend {
   id: string;
@@ -18,6 +21,8 @@ interface FacebookFriend {
 export class FacebookFriendsPromotionService {
   constructor(
     private readonly personService: PersonService,
+    private readonly promoteService: PromoteService,
+    private readonly relationshipService: RelationshipService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookFriendsPromotionService.name);
@@ -25,6 +30,9 @@ export class FacebookFriendsPromotionService {
 
   async promoteFriends(apiLogContent: unknown, userId: string, connectionId: string): Promise<void> {
     this.logger.log('Promoting Facebook friends', { userId, connectionId });
+
+    const context = toServiceContext({ userId });
+    const { userNode } = await this.promoteService.getUserAndEntity(context, userId);
 
     const friends = this.extractFriends(apiLogContent);
     if (friends.length === 0) {
@@ -76,40 +84,24 @@ export class FacebookFriendsPromotionService {
             lastAccessed: new Date(),
           });
         } else {
-          // Create new person
-          const entityId = uuidv7();
-          await this.personService.create(
+          const newPerson = await this.personService.create(
             { userId },
             {
-              id: entityId,
               name: friend.name,
               description: `Facebook friend: ${friend.name}`,
               properties,
             },
           );
 
-          // Create relationship to user
-          // TODO: Use RelationshipService here.
-          // await this.eventService.send(Events.GRAPH_PERSON_CREATED, {
-          //   ownerId: userId,
-          //   person: {
-          //     entityId,
-          //     entityType: 'Person',
-          //     name: friend.name,
-          //   },
-          //   relationships: [
-          //     {
-          //       fromEntityId: userEntityId,
-          //       toEntityId: entityId,
-          //       relationshipType: 'FRIEND',
-          //       properties: {
-          //         source: 'facebook',
-          //         connection_id: connectionId,
-          //         last_interaction: new Date().toISOString(),
-          //       },
-          //     },
-          //   ],
-          // });
+          await this.relationshipService.create(context, {
+            fromNodeId: userNode.entityId,
+            toNodeId: newPerson.id,
+            type: 'FRIENDS_WITH',
+            properties: {
+              source: 'facebook',
+              connection_id: connectionId,
+            },
+          });
         }
       } catch (error) {
         this.logger.error('Error processing Facebook friend', {
