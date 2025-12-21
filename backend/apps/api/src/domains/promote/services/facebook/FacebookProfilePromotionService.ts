@@ -188,26 +188,27 @@ export class FacebookProfilePromotionService {
       );
 
       // Create relationship to user
-      await this.eventService.send(Events.GRAPH_PERSON_CREATED, {
-        ownerId: userId,
-        person: {
-          entityId,
-          entityType: 'Person',
-          name: profile.name,
-        },
-        relationships: [
-          {
-            fromEntityId: userEntityId,
-            toEntityId: entityId,
-            relationshipType: 'IS',
-            properties: {
-              source: 'facebook',
-              connection_id: connectionId,
-              last_interaction: new Date().toISOString(),
-            },
-          },
-        ],
-      });
+      // TODO: Use RelationshipService
+      // await this.eventService.send(Events.GRAPH_PERSON_CREATED, {
+      //   ownerId: userId,
+      //   person: {
+      //     entityId,
+      //     entityType: 'Person',
+      //     name: profile.name,
+      //   },
+      //   relationships: [
+      //     {
+      //       fromEntityId: userEntityId,
+      //       toEntityId: entityId,
+      //       relationshipType: 'IS',
+      //       properties: {
+      //         source: 'facebook',
+      //         connection_id: connectionId,
+      //         last_interaction: new Date().toISOString(),
+      //       },
+      //     },
+      //   ],
+      // });
 
       this.logger.log('Created new person from Facebook profile', {
         userId,

@@ -98,26 +98,27 @@ export class FacebookFriendsPromotionService {
           );
 
           // Create relationship to user
-          await this.eventService.send(Events.GRAPH_PERSON_CREATED, {
-            ownerId: userId,
-            person: {
-              entityId,
-              entityType: 'Person',
-              name: friend.name,
-            },
-            relationships: [
-              {
-                fromEntityId: userEntityId,
-                toEntityId: entityId,
-                relationshipType: 'FRIEND',
-                properties: {
-                  source: 'facebook',
-                  connection_id: connectionId,
-                  last_interaction: new Date().toISOString(),
-                },
-              },
-            ],
-          });
+          // TODO: Use RelationshipService here.
+          // await this.eventService.send(Events.GRAPH_PERSON_CREATED, {
+          //   ownerId: userId,
+          //   person: {
+          //     entityId,
+          //     entityType: 'Person',
+          //     name: friend.name,
+          //   },
+          //   relationships: [
+          //     {
+          //       fromEntityId: userEntityId,
+          //       toEntityId: entityId,
+          //       relationshipType: 'FRIEND',
+          //       properties: {
+          //         source: 'facebook',
+          //         connection_id: connectionId,
+          //         last_interaction: new Date().toISOString(),
+          //       },
+          //     },
+          //   ],
+          // });
         }
       } catch (error) {
         this.logger.error('Error processing Facebook friend', {
