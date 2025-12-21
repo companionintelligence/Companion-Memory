@@ -18,7 +18,6 @@ export const enum Events {
   CHAT_SUMMARIZATION = 'chat.summarization',
   INFER_QUESTION_ANSWER = 'infer.question.answer',
   SYNC_CONNECTION = 'sync.connection',
-  MCP_TOOL_CALL = 'mcp.tool.call',
   PROMOTE_CONTACTS = 'PROMOTE_CONTACTS',
   PROMOTE_DRIVE_DATA = 'PROMOTE_DRIVE_DATA',
   PROMOTE_YOUTUBE_DATA = 'PROMOTE_YOUTUBE_DATA',
@@ -37,8 +36,6 @@ export const enum Events {
   GRAPH_NODE_UPSERTED = 'graph.node.upserted',
   GRAPH_RELATIONSHIP_UPSERTED = 'graph.relationship.upserted',
   SEARCH_EMBED_ENTITY = 'search.embed.entity',
-  SEARCH_EMBED_CONTENT = 'search.embed.content',
-  SEARCH_EMBED_EVENT = 'search.embed.event',
   PROMOTE_OUTLOOK_MAIL_MESSAGES = 'PROMOTE_OUTLOOK_MAIL_MESSAGES',
   PROMOTE_OUTLOOK_CALENDAR_EVENTS = 'PROMOTE_OUTLOOK_CALENDAR_EVENTS',
   PROMOTE_ONEDRIVE_FILES = 'PROMOTE_ONEDRIVE_FILES',
@@ -63,12 +60,6 @@ interface InferQuestionAnswerPayload extends EventPayload {
 interface SyncConnectionPayload extends EventPayload {
   connectionId: string;
   userId: string;
-}
-
-interface McpToolCallPayload extends EventPayload {
-  userId: string;
-  toolName: string;
-  arguments: unknown;
 }
 
 interface PromoteGmailMessagesPayload extends EventPayload {
@@ -226,18 +217,6 @@ interface SearchEmbedEntityPayload extends EventPayload {
   entityType?: string;
 }
 
-interface SearchEmbedContentPayload extends EventPayload {
-  ownerId: string;
-  contentId: string;
-  text: string;
-}
-
-interface SearchEmbedEventPayload extends EventPayload {
-  ownerId: string;
-  eventId: string;
-  searchContent: string;
-}
-
 interface PromoteOutlookMessagesPayload extends EventPayload {
   apiLogId: string;
   userId: string;
@@ -305,7 +284,6 @@ export type EventPayloads = {
   [Events.CHAT_SUMMARIZATION]: ChatSummarizationPayload;
   [Events.INFER_QUESTION_ANSWER]: InferQuestionAnswerPayload;
   [Events.SYNC_CONNECTION]: SyncConnectionPayload;
-  [Events.MCP_TOOL_CALL]: McpToolCallPayload;
   [Events.PROMOTE_GMAIL_MESSAGES]: PromoteGmailMessagesPayload;
   [Events.PROMOTE_CALENDAR_EVENTS]: PromoteCalendarEventsPayload;
   [Events.PROMOTE_YOUTUBE_DATA]: PromoteYouTubeDataPayload;
@@ -324,8 +302,6 @@ export type EventPayloads = {
   [Events.GRAPH_NODE_UPSERTED]: GraphNodeUpsertedPayload;
   [Events.GRAPH_RELATIONSHIP_UPSERTED]: GraphRelationshipUpsertedPayload;
   [Events.SEARCH_EMBED_ENTITY]: SearchEmbedEntityPayload;
-  [Events.SEARCH_EMBED_CONTENT]: SearchEmbedContentPayload;
-  [Events.SEARCH_EMBED_EVENT]: SearchEmbedEventPayload;
   [Events.PROMOTE_OUTLOOK_MAIL_MESSAGES]: PromoteOutlookMessagesPayload;
   [Events.PROMOTE_OUTLOOK_CALENDAR_EVENTS]: PromoteOutlookCalendarEventsPayload;
   [Events.PROMOTE_ONEDRIVE_FILES]: PromoteOneDriveFilePayload;
