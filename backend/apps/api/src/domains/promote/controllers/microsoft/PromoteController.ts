@@ -1,25 +1,17 @@
 import { Controller } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
-import { ApiLogEntity } from '@ci/domains/etl';
 import { EventPayloads, Events, OnEvent } from '@ci/domains/events';
 import { OneDrivePromotionService } from '@ci/domains/promote/services/microsoft/OneDrivePromotionService';
 import { OutlookCalendarPromotionService } from '@ci/domains/promote/services/microsoft/OutlookCalendarPromotionService';
 import { OutlookMailPromotionService } from '@ci/domains/promote/services/microsoft/OutlookMailPromotionService';
 
-import { PromoteService } from '../../services/PromoteService';
-
 @Controller('promote')
 export class PromoteController {
   constructor(
-    private readonly promoteService: PromoteService,
     private readonly outlookMailPromotionService: OutlookMailPromotionService,
     private readonly outlookCalendarPromotionService: OutlookCalendarPromotionService,
     private readonly oneDrivePromotionService: OneDrivePromotionService,
-    @InjectRepository(ApiLogEntity)
-    private readonly apiLogRepository: Repository<ApiLogEntity>,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PromoteController.name);

@@ -2,10 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
-import { EventService, Events } from '@ci/domains/events';
 import { PersonService } from '@ci/domains/memory';
-
-import { PromoteService } from '../PromoteService';
 
 interface FacebookFriend {
   id: string;
@@ -21,8 +18,6 @@ interface FacebookFriend {
 export class FacebookFriendsPromotionService {
   constructor(
     private readonly personService: PersonService,
-    private readonly eventService: EventService,
-    private readonly promoteService: PromoteService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookFriendsPromotionService.name);
@@ -37,10 +32,6 @@ export class FacebookFriendsPromotionService {
 
       return;
     }
-
-    const { userNode } = await this.promoteService.getUserAndEntity({ userId }, userId);
-
-    const userEntityId = userNode.entityId;
 
     for (const friend of friends) {
       try {

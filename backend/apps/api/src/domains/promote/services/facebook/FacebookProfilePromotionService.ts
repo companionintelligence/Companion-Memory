@@ -2,12 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
-import { EventService, Events } from '@ci/domains/events';
 import { PersonService } from '@ci/domains/memory';
-
-import { PromoteService } from '../PromoteService';
-
-import { FacebookPromotionUtils } from './FacebookPromotionUtils';
 
 interface FacebookProfile {
   id: string;
@@ -25,9 +20,6 @@ interface FacebookProfile {
 export class FacebookProfilePromotionService {
   constructor(
     private readonly personService: PersonService,
-    private readonly eventService: EventService,
-    private readonly promoteService: PromoteService,
-    private readonly utils: FacebookPromotionUtils,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookProfilePromotionService.name);
@@ -42,11 +34,6 @@ export class FacebookProfilePromotionService {
 
       return;
     }
-
-    // Get user entity ID
-    const { userNode } = await this.promoteService.getUserAndEntity({ userId }, userId);
-
-    const userEntityId = userNode.entityId;
 
     // Search for existing person by facebook_id first (most reliable)
     let existingEntities = await this.personService.search(
