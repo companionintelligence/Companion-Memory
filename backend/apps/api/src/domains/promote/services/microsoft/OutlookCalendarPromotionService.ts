@@ -7,7 +7,6 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { ConnectionService } from '@ci/domains/connections';
-import { EventService as DomainEventService, Events } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 import { EventService as MemoryEventService, type CreateEventDto } from '@ci/domains/memory';
 
@@ -105,7 +104,6 @@ export class OutlookCalendarPromotionService {
     private readonly eventService: MemoryEventService,
     private readonly promoteService: PromoteService,
     private readonly connectionService: ConnectionService,
-    private readonly domainEventService: DomainEventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OutlookCalendarPromotionService.name);
@@ -298,64 +296,6 @@ export class OutlookCalendarPromotionService {
 
       await this.eventService.create({ userId }, newEvent);
     }
-  }
-
-  private async enqueueEventEmbedding(ownerId: string, eventId: string, searchContent: string | null) {
-    if (!searchContent || searchContent.trim().length === 0) {
-      return;
-    }
-
-    try {
-      await this.domainEventService.send(Events.SEARCH_EMBED_EVENT, {
-        ownerId,
-        eventId,
-        searchContent,
-      });
-    } catch (error) {
-      this.logger.error('Failed to enqueue Outlook calendar event embedding', {
-        ownerId,
-        eventId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private buildEventSearchContent(eventDetails: ExtractedEvent, newEvent: CreateEventDto): string | null {
-    const parts = new Set<string>();
-    const push = (value: unknown) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-
-      const normalized = value.trim();
-      if (normalized.length === 0) {
-        return;
-      }
-
-      parts.add(normalized);
-    };
-
-    push(eventDetails.subject);
-    push(eventDetails.bodyPreview);
-    push(eventDetails.body);
-    push(eventDetails.location?.displayName);
-
-    push(newEvent.category);
-    push(newEvent.event_type);
-
-    for (const participant of eventDetails.participants) {
-      push(participant.name);
-      push(participant.email);
-    }
-
-    push(eventDetails.organizer.name);
-    push(eventDetails.organizer.email);
-
-    if (parts.size === 0) {
-      return null;
-    }
-
-    return Array.from(parts).join(' ');
   }
 
   private async extractEventDetails(
