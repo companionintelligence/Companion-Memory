@@ -36,6 +36,7 @@ import { EventController } from './controllers/EventController';
 import { GraphController } from './controllers/GraphController';
 import { MemoryController } from './controllers/MemoryController';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
+import { ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
 import { EventEntity } from './entities/EventEntity';
 import { type Fact, FactEntity } from './entities/FactEntity';
@@ -48,6 +49,7 @@ import { RelationshipEntity } from './entities/RelationshipEntity';
 import { ThingEntity } from './entities/ThingEntity';
 import { GraphEventListener } from './listeners/GraphEventListener';
 import { CommunicationService } from './services/CommunicationService';
+import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
 import { EventService } from './services/EventService';
 import { FactService } from './services/FactService';
@@ -72,6 +74,7 @@ import { UserContextService } from './services/UserContextService';
       ContentEntity,
       EventEntity,
       PersonEntity,
+      ConceptEntity,
       PlaceEntity,
       ThingEntity,
       GraphNodeEntity,
@@ -103,6 +106,7 @@ import { UserContextService } from './services/UserContextService';
     UserContextService,
     GraphEventListener,
     PersonService,
+    ConceptService,
     FileService,
     SearchService,
     PlaceService,
@@ -123,6 +127,7 @@ import { UserContextService } from './services/UserContextService';
     GraphEventService,
     ItemService,
     PersonService,
+    ConceptService,
     UserContextService,
     GraphUtilityService,
     GraphQueryService,
@@ -139,6 +144,7 @@ export {
   ContentEntity,
   EventEntity,
   PersonEntity,
+  ConceptEntity,
   PlaceEntity,
   ThingEntity,
   GraphNodeEntity,
@@ -155,6 +161,7 @@ export {
   GraphEventService,
   ItemService,
   PersonService,
+  ConceptService,
   UserContextService,
   GraphUtilityService,
   GraphQueryService,
@@ -188,3 +195,4 @@ export type {
 } from './services/SearchService';
 
 export type { Fact, Item, InventoryCondition, Person, Communication, Place };
+export type { Concept } from './entities/ConceptEntity';

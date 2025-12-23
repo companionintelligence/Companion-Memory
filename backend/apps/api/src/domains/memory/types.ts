@@ -359,6 +359,27 @@ export interface UpdatePersonDto {
   };
 }
 
+export interface CreateConceptDto {
+  id?: string;
+  name?: string;
+  description?: string;
+  searchContent?: string;
+  linkedId?: string | null;
+  linkedTable?: string | null;
+  lastAccessed?: Date;
+  properties?: Record<string, unknown>;
+}
+
+export interface UpdateConceptDto {
+  name?: string;
+  description?: string;
+  searchContent?: string;
+  linkedId?: string | null;
+  linkedTable?: string | null;
+  lastAccessed?: Date;
+  properties?: Record<string, unknown>;
+}
+
 export interface CreateCommunicationDto {
   time: Date;
   communication_type: 'email' | 'sms' | 'call';

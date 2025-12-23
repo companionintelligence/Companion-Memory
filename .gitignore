@@ -29,3 +29,5 @@ AGENTS.md
 
 .idea/
 
+
+backend/apps/summary/src/__pycache__/

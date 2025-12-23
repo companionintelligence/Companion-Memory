@@ -217,6 +217,49 @@ declare module '@ci/domains/events/registry' {
 }
 
 /**
+ * Event emitted when creating a new concept.
+ */
+export const ConceptCreatedEvent = 'concept.created';
+export const ConceptUpdatedEvent = 'concept.updated';
+export const ConceptRemovedEvent = 'concept.deleted';
+
+/**
+ * Concept payload of the event {@link ConceptCreatedEvent}.
+ */
+export type ConceptCreatedPayload = {
+  /** The identifier of the newly created concept */
+  conceptId: string;
+};
+
+/**
+ * Concept payload of the event {@link ConceptUpdatedEvent}.
+ */
+export type ConceptUpdatedPayload = {
+  /** The identifier of the updated concept */
+  conceptId: string;
+};
+
+/**
+ * Concept payload of the event {@link ConceptRemovedEvent}.
+ */
+export type ConceptDeletedPayload = {
+  /** The identifier of the removed concept */
+  conceptId: string;
+};
+
+defineEvent<ConceptCreatedPayload>(ConceptCreatedEvent);
+defineEvent<ConceptUpdatedPayload>(ConceptUpdatedEvent);
+defineEvent<ConceptDeletedPayload>(ConceptRemovedEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [ConceptCreatedEvent]: ConceptCreatedPayload;
+    [ConceptUpdatedEvent]: ConceptUpdatedPayload;
+    [ConceptRemovedEvent]: ConceptDeletedPayload;
+  }
+}
+
+/**
  * Event emitted when creating a new place.
  *
  * @see {@link PlaceService.create} - The method that emits this event
