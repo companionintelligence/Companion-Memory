@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { v7 as uuid7 } from 'uuid';
 
 import { type UserServiceContext, SYSTEM_USER, toServiceContext } from '@ci/common/context';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { ActionService, AnswerService, QuestionService } from '@ci/domains/intelligence';
-import { GraphEventService, GraphQueryService } from '@ci/domains/memory';
-import { UserService } from '@ci/domains/user';
+import { ConceptService, PersonService, RelationshipService } from '@ci/domains/memory';
+import { type User, UserService } from '@ci/domains/user';
 
 import { OnboardingInput } from '../types';
 
@@ -71,8 +72,9 @@ export class OnboardingService {
     private readonly actionService: ActionService,
     private readonly questionService: QuestionService,
     private readonly answerService: AnswerService,
-    private readonly graphEvents: GraphEventService,
-    private readonly graphQuery: GraphQueryService,
+    private readonly personService: PersonService,
+    private readonly conceptService: ConceptService,
+    private readonly relationshipService: RelationshipService,
   ) {}
 
   async onboard(context: UserServiceContext, input: OnboardingInput) {
@@ -82,7 +84,7 @@ export class OnboardingService {
       throw new NotFoundException();
     }
 
-    const userEntityId = await this.ensureUserEntity(context.userId, user.name, user.email);
+    const userEntityId = await this.ensureUserEntity(context, user);
 
     if (!user.onboarded) {
       await this.bootstrapUserExperience(context);
@@ -104,19 +106,28 @@ export class OnboardingService {
     };
   }
 
-  private async ensureUserEntity(userId: string, name: string | null, email: string) {
-    const existing = await this.graphQuery.getUserEntity(userId);
+  private async ensureUserEntity(context: UserServiceContext, user: User) {
+    const existing = await this.personService.search(context, {
+      linkedId: user.id,
+      linkedTable: 'users',
+    });
 
-    if (existing?.entity_id) {
-      return existing.entity_id;
+    if (existing.length > 0) {
+      const entityId = existing[0].id;
+
+      if (user.entityId !== entityId) {
+        await this.userService.update({ userId: SYSTEM_USER }, user.id, { entityId });
+      }
+
+      return entityId;
     }
 
-    const fallbackName = name?.trim() || email;
+    const fallbackName = user.name?.trim() || user.email;
     const properties: Record<string, unknown> = {
-      email,
+      email: user.email,
     };
 
-    const nameParts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+    const nameParts = (user.name ?? '').trim().split(/\s+/).filter(Boolean);
 
     if (nameParts.length > 0) {
       properties.first_name = nameParts[0];
@@ -126,20 +137,18 @@ export class OnboardingService {
       properties.last_name = nameParts.slice(1).join(' ');
     }
 
-    const { entityId } = await this.graphEvents.upsertNode(userId, {
-      entityId: existing?.entity_id ?? undefined,
-      entityType: 'Person',
+    const person = await this.personService.create(context, {
       name: fallbackName,
       description: fallbackName,
-      properties,
+      searchContent: fallbackName,
       linkedTable: 'users',
-      linkedId: userId,
-      mergeProperties: true,
+      linkedId: user.id,
+      properties,
     });
 
-    await this.userService.update({ userId: SYSTEM_USER }, userId, { entityId });
+    await this.userService.update({ userId: SYSTEM_USER }, user.id, { entityId: person.id });
 
-    return entityId;
+    return person.id;
   }
 
   private async captureFocusAreas(ownerId: string, userEntityId: string, focusAreas: string[] | null) {
@@ -147,28 +156,38 @@ export class OnboardingService {
       return;
     }
 
-    const preferences = focusAreas
+    const metadata = focusAreas
       .map((id) => FOCUS_AREAS[id])
-      .filter((meta): meta is FocusAreaMetadata => !!meta)
-      .map((meta) => ({
-        name: meta.name,
-        type: 'FocusArea',
-        strength: 0.9,
-        properties: {
-          focusAreaId: meta.id,
-          description: meta.description,
-          source: 'onboarding',
-        },
-      }));
+      .filter((meta): meta is FocusAreaMetadata => !!meta);
 
-    if (preferences.length === 0) {
+    if (metadata.length === 0) {
       return;
     }
 
-    await this.graphEvents.addPreferences(ownerId, {
-      personEntityId: userEntityId,
-      preferences,
-    });
+    const serviceContext = {
+      userId: ownerId,
+    };
+
+    await Promise.all(
+      metadata.map(async (meta) => {
+        const conceptId = await this.ensureConcept(serviceContext, meta.name, 'FocusArea', {
+          focusAreaId: meta.id,
+          description: meta.description,
+          source: 'onboarding',
+        });
+
+        await this.relationshipService.create(serviceContext, {
+          fromEntityId: userEntityId,
+          toEntityId: conceptId,
+          relationshipType: 'PREFERS',
+          strength: 0.9,
+          properties: {
+            focusAreaId: meta.id,
+            source: 'onboarding',
+          },
+        });
+      }),
+    );
   }
 
   private async captureConnections(ownerId: string, userEntityId: string, people: OnboardingInput['people']) {
@@ -184,88 +203,98 @@ export class OnboardingService {
       return;
     }
 
+    const serviceContext = {
+      userId: ownerId,
+    };
+
     await Promise.all(
-      entries.map((person) => {
+      entries.map(async (person) => {
         const relationship = this.mapRelationship(person.relationship);
 
-        return this.graphEvents.addPerson(ownerId, {
+        const created = await this.personService.create(serviceContext, {
           name: person.displayName,
-          firstName: person.firstName,
-          lastName: person.lastName,
+          description: person.displayName,
+          searchContent: person.displayName,
+          linkedTable: 'onboarding_people',
+          linkedId: uuid7(),
           properties: {
             source: 'onboarding',
             relationshipInput: person.relationship,
+            first_name: person.firstName,
+            last_name: person.lastName,
           },
-          relationships: [
-            {
-              toPersonEntityId: userEntityId,
-              type: relationship.type,
-              strength: relationship.type === 'FRIEND' ? 0.8 : 0.7,
-              bidirectional: relationship.bidirectional,
-              properties: {
-                source: 'onboarding',
-                label: person.relationship,
-              },
-            },
-          ],
+        });
+
+        await this.relationshipService.create(serviceContext, {
+          fromEntityId: created.id,
+          toEntityId: userEntityId,
+          relationshipType: relationship.type,
+          strength: relationship.type === 'FRIEND' ? 0.8 : 0.7,
+          isBidirectional: relationship.bidirectional ?? false,
+          properties: {
+            source: 'onboarding',
+            label: person.relationship,
+          },
         });
       }),
     );
   }
 
   private async capturePreferences(ownerId: string, userEntityId: string, input: OnboardingInput) {
-    const tasks: Array<Promise<unknown>> = [];
+    const serviceContext = {
+      userId: ownerId,
+    };
 
-    if (input.food_preference) {
-      tasks.push(
-        this.graphEvents.addPreference(ownerId, {
-          personEntityId: userEntityId,
-          name: input.food_preference,
-          type: 'Cuisine',
-          strength: 0.85,
-          properties: {
-            category: 'food',
-            source: 'onboarding',
-          },
+    const preferences: Array<{
+      value: string | null;
+      type: string;
+      strength: number;
+      conceptProps: Record<string, unknown>;
+      relationshipProps: Record<string, unknown>;
+    }> = [
+      {
+        value: input.food_preference,
+        type: 'Cuisine',
+        strength: 0.85,
+        conceptProps: { category: 'food', source: 'onboarding' },
+        relationshipProps: { category: 'food', source: 'onboarding' },
+      },
+      {
+        value: input.movie_preference,
+        type: 'MovieGenre',
+        strength: 0.85,
+        conceptProps: { category: 'entertainment', source: 'onboarding' },
+        relationshipProps: { category: 'entertainment', source: 'onboarding' },
+      },
+      {
+        value: input.activity_preference,
+        type: 'Activity',
+        strength: 0.85,
+        conceptProps: { category: 'activity', source: 'onboarding' },
+        relationshipProps: { category: 'activity', source: 'onboarding' },
+      },
+    ];
+
+    await Promise.all(
+      preferences
+        .filter((pref) => pref.value)
+        .map(async (pref) => {
+          const conceptId = await this.ensureConcept(
+            serviceContext,
+            pref.value!,
+            pref.type,
+            pref.conceptProps,
+          );
+
+          await this.relationshipService.create(serviceContext, {
+            fromEntityId: userEntityId,
+            toEntityId: conceptId,
+            relationshipType: 'PREFERS',
+            strength: pref.strength,
+            properties: pref.relationshipProps,
+          });
         }),
-      );
-    }
-
-    if (input.movie_preference) {
-      tasks.push(
-        this.graphEvents.addPreference(ownerId, {
-          personEntityId: userEntityId,
-          name: input.movie_preference,
-          type: 'MovieGenre',
-          strength: 0.85,
-          properties: {
-            category: 'entertainment',
-            source: 'onboarding',
-          },
-        }),
-      );
-    }
-
-    if (input.activity_preference) {
-      tasks.push(
-        this.graphEvents.addPreference(ownerId, {
-          personEntityId: userEntityId,
-          name: input.activity_preference,
-          type: 'Activity',
-          strength: 0.85,
-          properties: {
-            category: 'activity',
-            source: 'onboarding',
-          },
-        }),
-      );
-    }
-
-    if (tasks.length === 0) {
-      return;
-    }
-
-    await Promise.all(tasks);
+    );
   }
 
   private async captureSurveyResponses(context: UserServiceContext, input: OnboardingInput) {
@@ -395,5 +424,32 @@ export class OnboardingService {
       type: 'ASSOCIATED_WITH',
       bidirectional: true,
     };
+  }
+
+  private async ensureConcept(
+    context: UserServiceContext,
+    name: string,
+    type: string,
+    extraProps: Record<string, unknown> = {},
+  ): Promise<string> {
+    const existing = await this.conceptService.search(context, { name });
+
+    if (existing.length > 0) {
+      return existing[0].id;
+    }
+
+    const concept = await this.conceptService.create(context, {
+      name,
+      description: `${type}: ${name}`,
+      searchContent: name,
+      linkedTable: 'onboarding_concepts',
+      linkedId: uuid7(),
+      properties: {
+        type,
+        ...extraProps,
+      },
+    });
+
+    return concept.id;
   }
 }

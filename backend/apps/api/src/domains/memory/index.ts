@@ -62,6 +62,7 @@ import { ItemService } from './services/ItemService';
 import { MemoryService } from './services/MemoryService';
 import { PersonService } from './services/PersonService';
 import { PlaceService } from './services/PlaceService';
+import { RelationshipService } from './services/RelationshipService';
 import { SearchService } from './services/SearchService';
 import { UserContextService } from './services/UserContextService';
 /**
@@ -106,6 +107,7 @@ import { UserContextService } from './services/UserContextService';
     UserContextService,
     GraphEventListener,
     PersonService,
+    RelationshipService,
     ConceptService,
     FileService,
     SearchService,
@@ -127,6 +129,7 @@ import { UserContextService } from './services/UserContextService';
     GraphEventService,
     ItemService,
     PersonService,
+    RelationshipService,
     ConceptService,
     UserContextService,
     GraphUtilityService,
@@ -161,6 +164,7 @@ export {
   GraphEventService,
   ItemService,
   PersonService,
+  RelationshipService,
   ConceptService,
   UserContextService,
   GraphUtilityService,

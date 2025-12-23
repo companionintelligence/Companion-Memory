@@ -380,6 +380,31 @@ export interface UpdateConceptDto {
   properties?: Record<string, unknown>;
 }
 
+export interface CreateRelationshipDto {
+  id?: string;
+  fromEntityId: string;
+  toEntityId: string;
+  relationshipType: string;
+  strength?: number;
+  properties?: Record<string, unknown>;
+  isBidirectional?: boolean;
+  startDate?: Date;
+  endDate?: Date;
+  mergeProperties?: boolean;
+}
+
+export interface UpdateRelationshipDto {
+  fromEntityId?: string;
+  toEntityId?: string;
+  relationshipType?: string;
+  strength?: number;
+  properties?: Record<string, unknown>;
+  isBidirectional?: boolean;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  mergeProperties?: boolean;
+}
+
 export interface CreateCommunicationDto {
   time: Date;
   communication_type: 'email' | 'sms' | 'call';
