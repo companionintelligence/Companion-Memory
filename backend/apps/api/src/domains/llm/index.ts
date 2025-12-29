@@ -24,6 +24,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
+import { TemporalModule } from '@ci/domains/temporal';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { OllamaController } from './controllers/OllamaController';
@@ -35,7 +36,15 @@ import { OllamaService } from './services/OllamaService';
  * @internal
  */
 @Module({
-  imports: [ConversationModule, EventsModule, FilesModule, IntelligenceModule, MemoryModule, ToolsModule],
+  imports: [
+    ConversationModule,
+    EventsModule,
+    FilesModule,
+    IntelligenceModule,
+    MemoryModule,
+    TemporalModule,
+    ToolsModule,
+  ],
   providers: [AnswerInferenceCron, AnswerInferenceCron, InventoryListener, OllamaService],
   controllers: [OllamaController],
   exports: [],

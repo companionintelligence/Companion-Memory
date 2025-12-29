@@ -81,6 +81,9 @@ export const ConfigSchema = z.object({
     tts: z.object({
       host: z.string(),
     }),
+    summary: z.object({
+      host: z.string(),
+    }),
   }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,

@@ -266,6 +266,35 @@ async def get_workflow_status() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Status fetch failed: {str(exc)}") from exc
 
 
+class ResumeWorkflowsRequest(BaseModel):
+    workflow_types: Optional[list[str]] = Field(
+        default=None,
+        description="Workflow types to resume (hourly, dossier). If None, resumes all frequent tasks."
+    )
+
+
+@app.post("/workflows/resume")
+async def resume_background_workflows_endpoint(request: ResumeWorkflowsRequest) -> Dict[str, Any]:
+    """
+    Manually trigger background workflows to resume processing.
+
+    Use this after canceling workflows for high-priority work (like chat) to
+    immediately resume background summarization without waiting for the next schedule.
+
+    By default, triggers hourly summaries and dossier refresh (the most frequent tasks).
+    Daily/weekly/monthly workflows run less frequently and typically don't need manual resumption.
+    """
+    try:
+        results = await workflow_control.resume_background_workflows(request.workflow_types)
+        return {
+            "status": "success",
+            "message": "Background workflow resumption requested",
+            "results": results,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Resume failed: {str(exc)}") from exc
+
+
 # ============================================================================
 # Helpers
 # ============================================================================

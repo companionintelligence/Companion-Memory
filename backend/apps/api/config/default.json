@@ -63,6 +63,9 @@
     },
     "tts": {
       "host": "http://localhost:9002"
+    },
+    "summary": {
+      "host": "http://localhost:8001"
     }
   },
   "features": {

@@ -215,8 +215,109 @@ async def get_running_workflows() -> dict:
     return workflow_counts
 
 
+async def resume_background_workflows(
+    workflow_types: Optional[List[str]] = None
+) -> dict:
+    """
+    Manually trigger system workflows to resume background processing.
+
+    This is useful after canceling workflows for high-priority work (like chat),
+    allowing background summarization to resume without waiting for the next schedule.
+
+    Args:
+        workflow_types: List of workflow types to trigger. If None, triggers all.
+                       Options: ["hourly", "dossier"]
+                       (daily/weekly/monthly run less frequently so not included by default)
+
+    Returns:
+        Dict with trigger results
+    """
+    from datetime import datetime, timezone
+    from .priority import Priority, get_task_queue
+    from .system_workflows import (
+        SystemHourlySummariesWorkflow,
+        SystemDossierRefreshWorkflow,
+    )
+
+    logger.info("resuming_background_workflows", types=workflow_types)
+
+    # Connect to Temporal
+    client = await Client.connect(
+        settings.temporal_address,
+        namespace=settings.temporal_namespace,
+    )
+
+    # Default to hourly and dossier (most frequent background tasks)
+    if workflow_types is None:
+        workflow_types = ["hourly", "dossier"]
+
+    results = {
+        "triggered": [],
+        "already_running": [],
+        "errors": [],
+    }
+
+    now = datetime.now(timezone.utc)
+
+    # Trigger each workflow type
+    for wf_type in workflow_types:
+        try:
+            # Generate unique workflow ID based on current time
+            workflow_id = f"system-{wf_type}-resume-{now.isoformat()}"
+
+            # Select workflow class
+            if wf_type == "hourly":
+                workflow_class = SystemHourlySummariesWorkflow.run
+            elif wf_type == "dossier":
+                workflow_class = SystemDossierRefreshWorkflow.run
+            else:
+                results["errors"].append({
+                    "workflow_type": wf_type,
+                    "error": f"Unsupported workflow type for resume: {wf_type}"
+                })
+                continue
+
+            # Check if one is already running
+            existing_id = f"system-{wf_type}-summaries" if wf_type != "dossier" else "system-dossier-refresh"
+            try:
+                handle = client.get_workflow_handle(existing_id)
+                status = await handle.describe()
+                if status.status.name == "RUNNING":
+                    results["already_running"].append(existing_id)
+                    logger.info("workflow_already_running", workflow_id=existing_id)
+                    continue
+            except RPCError:
+                # Not running, proceed with trigger
+                pass
+
+            # Trigger workflow on MEDIUM queue
+            await client.start_workflow(
+                workflow_class,
+                id=workflow_id,
+                task_queue=get_task_queue(Priority.MEDIUM),
+            )
+
+            results["triggered"].append(workflow_id)
+            logger.info("workflow_triggered", workflow_id=workflow_id, type=wf_type)
+
+        except Exception as e:
+            results["errors"].append({
+                "workflow_type": wf_type,
+                "error": str(e)
+            })
+            logger.error("workflow_trigger_failed", workflow_type=wf_type, error=str(e))
+
+    logger.info("background_workflow_resume_complete",
+                triggered=len(results["triggered"]),
+                already_running=len(results["already_running"]),
+                errors=len(results["errors"]))
+
+    return results
+
+
 __all__ = [
     "cancel_system_workflows",
     "cancel_user_workflows",
     "get_running_workflows",
+    "resume_background_workflows",
 ]

@@ -25,6 +25,7 @@ import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/e
 import { FileService } from '@ci/domains/files';
 import { ActionService } from '@ci/domains/intelligence';
 import { UserContextService } from '@ci/domains/memory';
+import { TemporalService } from '@ci/domains/temporal';
 
 import { OllamaService } from '../services/OllamaService';
 import type { PromptInput } from '../types';
@@ -55,6 +56,7 @@ export class OllamaController {
     private readonly threadService: ThreadService,
     private readonly fileService: FileService,
     private readonly userContextService: UserContextService,
+    private readonly temporalService: TemporalService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OllamaController.name);
@@ -126,6 +128,16 @@ export class OllamaController {
       enableThinking: input.enableThinking,
       enableTools: input.enableTools,
     });
+
+    // Pause background summarization workflows to prioritize chat
+    // Chat needs immediate LLM access for good UX
+    const workflowStatus = await this.temporalService.getWorkflowStatus();
+    if (workflowStatus.total > 0) {
+      this.logger.log('Pausing background workflows for chat', {
+        runningWorkflows: workflowStatus.total,
+      });
+      await this.temporalService.pauseBackgroundWork();
+    }
 
     res.socket?.setNoDelay(true);
     res.writeHead(200, {
@@ -221,6 +233,13 @@ export class OllamaController {
           promptMessageId: promptMessage.id,
         });
       }
+
+      // Schedule background workflows to resume after 5 minutes
+      // This gives users time to read responses and continue the conversation
+      // before background summarization resumes
+      const FIVE_MINUTES = 5 * 60 * 1000; // 5 minutes in milliseconds
+      this.logger.log('Scheduling background workflow resume in 5 minutes');
+      this.temporalService.scheduleResume(FIVE_MINUTES);
 
       res.end();
     }
