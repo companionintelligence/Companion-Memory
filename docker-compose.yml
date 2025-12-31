@@ -194,6 +194,9 @@ services:
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE_MEDIUM: medium
     networks:
       - web
     extra_hosts:
@@ -203,6 +206,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      temporal:
+        condition: service_started
     restart: unless-stopped
     profiles: [ "all", "staging" ]
 

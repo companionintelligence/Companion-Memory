@@ -25,7 +25,7 @@ import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/e
 import { FileService } from '@ci/domains/files';
 import { ActionService } from '@ci/domains/intelligence';
 import { UserContextService } from '@ci/domains/memory';
-import { TemporalService } from '@ci/domains/temporal';
+import { TemporalService, TemporalClientService } from '@ci/domains/temporal';
 
 import { OllamaService } from '../services/OllamaService';
 import type { PromptInput } from '../types';
@@ -57,6 +57,7 @@ export class OllamaController {
     private readonly fileService: FileService,
     private readonly userContextService: UserContextService,
     private readonly temporalService: TemporalService,
+    private readonly temporalClientService: TemporalClientService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OllamaController.name);
@@ -218,21 +219,20 @@ export class OllamaController {
         this.logger.error('Error proxying Ollama stream:', err as Error);
       }
     } finally {
-      for (let i = 0; i < stream.messages.length; i++) {
-        const message = stream.messages[i];
-
-        await this.messageService.create(serviceContext, {
-          model,
-          role: message.role,
-          content: message.content,
-          canceled: i === stream.messages.length - 1 && signal.aborted,
-          threadId: thread.id,
-          ...(message.tool_calls && {
-            toolCalls: message.tool_calls as unknown[] as Record<string, unknown>[],
-          }),
-          promptMessageId: promptMessage.id,
-        });
-      }
+      // Trigger Temporal workflow to save chat messages with retry logic and observability
+      // This provides durability - if DB is down, Temporal will retry
+      await this.temporalClientService.startSaveChatMessages({
+        threadId: thread.id,
+        promptMessageId: promptMessage.id,
+        model,
+        streamMessages: stream.messages.map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+          thinking: msg.thinking,
+          tool_calls: msg.tool_calls,
+        })),
+        canceled: signal.aborted,
+      });
 
       // Schedule background workflows to resume after 5 minutes
       // This gives users time to read responses and continue the conversation

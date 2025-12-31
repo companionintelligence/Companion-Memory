@@ -47,6 +47,6 @@ import { OllamaService } from './services/OllamaService';
   ],
   providers: [AnswerInferenceCron, AnswerInferenceCron, InventoryListener, OllamaService],
   controllers: [OllamaController],
-  exports: [],
+  exports: [OllamaService],
 })
 export class LLMModule {}
