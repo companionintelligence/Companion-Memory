@@ -25,7 +25,9 @@ import { saveChatMessagesWorkflow } from './workflows/save-chat-messages.workflo
 export class TemporalClientService implements OnModuleInit, OnModuleDestroy {
   private client: Client | null = null;
 
-  private worker: Worker | null = null;
+  private highPriorityWorker: Worker | null = null;
+
+  private mediumPriorityWorker: Worker | null = null;
 
   constructor(
     private readonly logger: LoggerService,
@@ -64,34 +66,46 @@ export class TemporalClientService implements OnModuleInit, OnModuleDestroy {
 
       chatActivities.setMessageService(this.messageService);
 
-      // Combine all activities
-      const activities = {
-        ...inventoryActivities,
-        ...chatActivities,
-      };
+      // Create HIGH priority worker for chat message persistence
+      this.highPriorityWorker = await Worker.create({
+        connection,
+        namespace: process.env.TEMPORAL_NAMESPACE || 'default',
+        taskQueue: process.env.TEMPORAL_TASK_QUEUE_HIGH || 'high',
+        workflowsPath: require.resolve('./workflows'),
+        activities: chatActivities,
+        maxConcurrentActivityTaskExecutions: 5, // HIGH queue concurrency
+      });
 
-      // Create and start worker in the same process
-      // Worker handles both inventory (MEDIUM queue) and chat (HIGH queue) workflows
-      this.worker = await Worker.create({
+      this.logger.log('HIGH priority Temporal worker created', {
+        taskQueue: process.env.TEMPORAL_TASK_QUEUE_HIGH || 'high',
+        workflows: ['saveChatMessagesWorkflow'],
+      });
+
+      // Create MEDIUM priority worker for inventory analysis
+      this.mediumPriorityWorker = await Worker.create({
         connection,
         namespace: process.env.TEMPORAL_NAMESPACE || 'default',
         taskQueue: process.env.TEMPORAL_TASK_QUEUE_MEDIUM || 'medium',
         workflowsPath: require.resolve('./workflows'),
-        activities,
+        activities: inventoryActivities,
         maxConcurrentActivityTaskExecutions: 3, // MEDIUM queue concurrency
       });
 
-      this.logger.log('Temporal worker created', {
+      this.logger.log('MEDIUM priority Temporal worker created', {
         taskQueue: process.env.TEMPORAL_TASK_QUEUE_MEDIUM || 'medium',
-        workflows: ['inventoryAnalysisWorkflow', 'saveChatMessagesWorkflow'],
+        workflows: ['inventoryAnalysisWorkflow'],
       });
 
-      // Run worker in background (non-blocking)
-      this.worker.run().catch((error) => {
-        this.logger.error('Temporal worker error', error as Error);
+      // Run both workers in background (non-blocking)
+      this.highPriorityWorker.run().catch((error) => {
+        this.logger.error('HIGH priority Temporal worker error', error as Error);
       });
 
-      this.logger.log('Temporal worker started');
+      this.mediumPriorityWorker.run().catch((error) => {
+        this.logger.error('MEDIUM priority Temporal worker error', error as Error);
+      });
+
+      this.logger.log('Temporal workers started');
     } catch (error) {
       this.logger.error('Failed to initialize Temporal client/worker', error as Error);
       // Don't fail app startup if Temporal is unavailable
@@ -99,9 +113,14 @@ export class TemporalClientService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    if (this.worker) {
-      this.logger.log('Shutting down Temporal worker');
-      await this.worker.shutdown();
+    if (this.highPriorityWorker) {
+      this.logger.log('Shutting down HIGH priority Temporal worker');
+      await this.highPriorityWorker.shutdown();
+    }
+
+    if (this.mediumPriorityWorker) {
+      this.logger.log('Shutting down MEDIUM priority Temporal worker');
+      await this.mediumPriorityWorker.shutdown();
     }
   }
 
@@ -166,7 +185,7 @@ export class TemporalClientService implements OnModuleInit, OnModuleDestroy {
       const workflowId = `chat-save-${input.threadId}-${Date.now()}`;
 
       const handle = await this.client.workflow.start(saveChatMessagesWorkflow, {
-        taskQueue: process.env.TEMPORAL_TASK_QUEUE_MEDIUM || 'medium',
+        taskQueue: process.env.TEMPORAL_TASK_QUEUE_HIGH || 'high',
         args: [input],
         workflowId,
       });

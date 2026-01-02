@@ -196,6 +196,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE_HIGH: high
       TEMPORAL_TASK_QUEUE_MEDIUM: medium
     networks:
       - web

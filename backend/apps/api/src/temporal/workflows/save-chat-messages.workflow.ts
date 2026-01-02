@@ -28,7 +28,7 @@ export interface SaveChatMessagesInput {
 /**
  * Workflow that persists chat messages to the database after streaming completes.
  *
- * Runs on MEDIUM priority queue since this happens after user sees the response.
+ * Runs on HIGH priority queue to ensure prompt persistence after user interactions.
  * Provides durability and retry logic for message persistence.
  */
 export async function saveChatMessagesWorkflow(input: SaveChatMessagesInput): Promise<void> {
