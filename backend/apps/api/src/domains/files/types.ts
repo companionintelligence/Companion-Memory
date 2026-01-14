@@ -1,3 +1,5 @@
+import type { IndexableEntity } from '@ci/domains/search-next';
+
 export interface FileQuery {
   filePath?: string;
   mimeType?: string;
@@ -18,4 +20,21 @@ export interface FileQuery {
 
 export interface UpdateFileDto {
   analysisCompleted?: boolean;
+}
+
+export interface CreateSavedSearchDto {
+  id?: string;
+  name?: string;
+  description?: string;
+  query?: string;
+  entityTypes?: IndexableEntity[];
+  tags?: string[];
+}
+
+export interface UpdateSavedSearchDto {
+  name?: string;
+  description?: string;
+  query?: string;
+  entityTypes?: IndexableEntity[];
+  tags?: string[];
 }

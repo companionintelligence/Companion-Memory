@@ -15,7 +15,7 @@ import type { CreateMessageDto, UpdateMessageDto } from '../types';
 export class MessageService {
   constructor(
     @InjectRepository(MessageEntity)
-    private readonly messsageRepository: Repository<MessageEntity>,
+    private readonly messageRepository: Repository<MessageEntity>,
     private readonly fileService: FileService,
     private readonly eventService: EventService,
   ) {}
@@ -25,7 +25,7 @@ export class MessageService {
 
     const id = data.id ?? uuid7();
 
-    const instance = this.messsageRepository.create({
+    const instance = this.messageRepository.create({
       ...rest,
       id,
       content,
@@ -41,14 +41,14 @@ export class MessageService {
       },
     });
 
-    const entity = await this.messsageRepository.save(instance);
+    const entity = await this.messageRepository.save(instance);
 
     // Link files to this message if provided
     if (fileIds && fileIds.length > 0) {
       const files = (await this.fileService.findByIds(context, fileIds)).filter((entity) => entity != null);
 
       if (files.length > 0) {
-        await this.messsageRepository
+        await this.messageRepository
           .createQueryBuilder()
           .relation(MessageEntity, 'files')
           .of(entity.id)
@@ -64,7 +64,7 @@ export class MessageService {
   }
 
   async findAll(context: ServiceContext): Promise<Message[]> {
-    const entities = await this.messsageRepository.find({
+    const entities = await this.messageRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
           user: {
@@ -80,7 +80,7 @@ export class MessageService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Message | null)[]> {
-    const entities = await this.messsageRepository.find({
+    const entities = await this.messageRepository.find({
       where: {
         id: In(ids),
         ...(context.userId !== SYSTEM_USER && {
@@ -99,7 +99,7 @@ export class MessageService {
   }
 
   async findById(context: ServiceContext, id: string): Promise<Message | null> {
-    const entity = await this.messsageRepository.findOne({
+    const entity = await this.messageRepository.findOne({
       where: {
         id,
         ...(context.userId !== SYSTEM_USER && {
@@ -120,7 +120,7 @@ export class MessageService {
   }
 
   exists(context: ServiceContext, id: string): Promise<boolean> {
-    return this.messsageRepository.exists({
+    return this.messageRepository.exists({
       where: {
         id,
         ...(context.userId !== SYSTEM_USER && {
@@ -140,7 +140,7 @@ export class MessageService {
    * Thread. This access must be ensured before safely calling this method.
    */
   async findByThreadId(context: ServiceContext, threadId: string): Promise<Message[]> {
-    const entities = await this.messsageRepository.find({
+    const entities = await this.messageRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
           user: {
@@ -173,7 +173,7 @@ export class MessageService {
       return new Map();
     }
 
-    const entities = await this.messsageRepository.find({
+    const entities = await this.messageRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
           user: {
@@ -209,7 +209,7 @@ export class MessageService {
   }
 
   async update(context: ServiceContext, id: string, data: UpdateMessageDto): Promise<Message | null> {
-    const result = await this.messsageRepository.update(
+    const result = await this.messageRepository.update(
       {
         id,
         ...(context.userId !== SYSTEM_USER && {
@@ -234,7 +234,7 @@ export class MessageService {
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const result = await this.messsageRepository.delete({
+    const result = await this.messageRepository.delete({
       id,
       ...(context.userId !== SYSTEM_USER && {
         user: {
@@ -255,7 +255,7 @@ export class MessageService {
   }
 
   async softRemove(context: ServiceContext, id: string): Promise<boolean> {
-    const result = await this.messsageRepository.update(
+    const result = await this.messageRepository.update(
       {
         id,
         ...(context.userId !== SYSTEM_USER && {

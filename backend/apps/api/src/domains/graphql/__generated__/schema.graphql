@@ -221,16 +221,29 @@ input CreateQuestionInput {
   text: String!
 }
 
+input CreateSavedSearchInput {
+  description: String
+  entityTypes: [String!]
+  name: String
+  query: String
+  tags: [ID!]
+}
+
+type CreateSavedSearchPayload {
+  savedSearch: SavedSearchType
+  success: Boolean!
+}
+
 """
 A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
 """
 scalar DateTime
 
-input DeleteNoteInput {
+input DeleteByIdInput {
   id: String!
 }
 
-type DeleteNotePayload {
+type DeleteByIdPayload {
   deletedId: ID
   success: Boolean!
 }
@@ -389,7 +402,9 @@ type Mutation {
   createPerson(input: CreatePersonInput!): PersonType!
   createPlace(input: CreatePlaceInput!): PlaceType!
   createQuestion(input: CreateQuestionInput!): QuestionType!
-  deleteNote(input: DeleteNoteInput!): DeleteNotePayload!
+  createSavedSearch(input: CreateSavedSearchInput!): CreateSavedSearchPayload!
+  deleteNote(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteSavedSearch(input: DeleteByIdInput!): DeleteByIdPayload!
   removeAnswer(id: String!): Boolean!
   removeContent(id: String!): Boolean!
   removeEvent(id: String!): Boolean!
@@ -405,6 +420,7 @@ type Mutation {
   updatePerson(input: UpdatePersonInput!): PersonType
   updatePlace(input: UpdatePlaceInput!): PlaceType
   updateQuestion(input: UpdateQuestionInput!): QuestionType
+  updateSavedSearch(input: UpdateSavedSearchInput!): UpdateSavedSearchPayload!
 }
 
 interface Node {
@@ -555,6 +571,8 @@ type Query {
   providers(after: String, before: String, first: Int, last: Int): ProviderConnection!
   question(id: ID!): QuestionType
   questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
+  savedSearch(id: ID!): SavedSearchType
+  savedSearches(after: String, before: String, first: Int, last: Int): SavedSearchConnection!
   search(input: SearchInput!): SearchConnection!
   summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
   summary(id: ID!): SummaryType
@@ -586,6 +604,28 @@ type QuestionType implements Node {
 
 input RemovePersonInput {
   id: String!
+}
+
+type SavedSearchConnection implements Connection {
+  edges: [SavedSearchEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SavedSearchEdge implements Edge {
+  cursor: String!
+  node: SavedSearchType!
+}
+
+type SavedSearchType implements Node {
+  createdAt: DateTime!
+  description: String
+  entityTypes: [String!]
+  id: ID!
+  name: String
+  query: String
+  tags: [ID!]
+  updatedAt: DateTime!
 }
 
 type SearchConnection {
@@ -764,6 +804,20 @@ input UpdateQuestionInput {
   category: String!
   id: String!
   text: String!
+}
+
+input UpdateSavedSearchInput {
+  description: String
+  entityTypes: [String!]
+  id: ID!
+  name: String
+  query: String
+  tags: [ID!]
+}
+
+type UpdateSavedSearchPayload {
+  savedSearch: SavedSearchType
+  success: Boolean!
 }
 
 type UserType implements Node {

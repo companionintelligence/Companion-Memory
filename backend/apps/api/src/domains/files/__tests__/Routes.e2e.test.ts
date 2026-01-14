@@ -11,6 +11,7 @@ import { EventService } from '@ci/domains/events';
 
 import { FilesModule } from '..';
 import { FileEntity } from '../entities/FileEntity';
+import { SavedSearchEntity } from '../entities/SavedSearchEntity';
 import { FileService } from '../services/FileService';
 
 const mockCanActivate = jest.fn();
@@ -27,6 +28,7 @@ describe('File routes', () => {
 
     const repositoryTokensToMock = [
       getRepositoryToken(FileEntity),
+      getRepositoryToken(SavedSearchEntity),
       'PgBossJobEntityRepository',
       'PgBossArchiveEntityRepository',
       'PgBossScheduleEntityRepository',

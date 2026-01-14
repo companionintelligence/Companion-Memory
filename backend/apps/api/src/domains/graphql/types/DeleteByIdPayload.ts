@@ -3,7 +3,7 @@ import { Field, ObjectType, ID } from '@nestjs/graphql';
 import { MutationPayload } from './MutationPayload';
 
 @ObjectType()
-export class DeleteNotePayload extends MutationPayload {
+export class DeleteByIdPayload extends MutationPayload {
   @Field(() => ID, { nullable: true })
   deletedId?: string;
 }

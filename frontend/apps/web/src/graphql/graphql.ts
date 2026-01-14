@@ -256,12 +256,26 @@ export type CreateQuestionInput = {
   text: Scalars['String']['input'];
 };
 
-export type DeleteNoteInput = {
+export type CreateSavedSearchInput = {
+  description?: InputMaybe<Scalars['String']['input']>;
+  entityTypes?: InputMaybe<Array<Scalars['String']['input']>>;
+  name?: InputMaybe<Scalars['String']['input']>;
+  query?: InputMaybe<Scalars['String']['input']>;
+  tags?: InputMaybe<Array<Scalars['ID']['input']>>;
+};
+
+export type CreateSavedSearchPayload = {
+  __typename?: 'CreateSavedSearchPayload';
+  savedSearch?: Maybe<SavedSearchType>;
+  success: Scalars['Boolean']['output'];
+};
+
+export type DeleteByIdInput = {
   id: Scalars['String']['input'];
 };
 
-export type DeleteNotePayload = {
-  __typename?: 'DeleteNotePayload';
+export type DeleteByIdPayload = {
+  __typename?: 'DeleteByIdPayload';
   deletedId?: Maybe<Scalars['ID']['output']>;
   success: Scalars['Boolean']['output'];
 };
@@ -439,7 +453,9 @@ export type Mutation = {
   createPerson: PersonType;
   createPlace: PlaceType;
   createQuestion: QuestionType;
-  deleteNote: DeleteNotePayload;
+  createSavedSearch: CreateSavedSearchPayload;
+  deleteNote: DeleteByIdPayload;
+  deleteSavedSearch: DeleteByIdPayload;
   removeAnswer: Scalars['Boolean']['output'];
   removeContent: Scalars['Boolean']['output'];
   removeEvent: Scalars['Boolean']['output'];
@@ -455,6 +471,7 @@ export type Mutation = {
   updatePerson?: Maybe<PersonType>;
   updatePlace?: Maybe<PlaceType>;
   updateQuestion?: Maybe<QuestionType>;
+  updateSavedSearch: UpdateSavedSearchPayload;
 };
 
 
@@ -493,8 +510,18 @@ export type MutationCreateQuestionArgs = {
 };
 
 
+export type MutationCreateSavedSearchArgs = {
+  input: CreateSavedSearchInput;
+};
+
+
 export type MutationDeleteNoteArgs = {
-  input: DeleteNoteInput;
+  input: DeleteByIdInput;
+};
+
+
+export type MutationDeleteSavedSearchArgs = {
+  input: DeleteByIdInput;
 };
 
 
@@ -570,6 +597,11 @@ export type MutationUpdatePlaceArgs = {
 
 export type MutationUpdateQuestionArgs = {
   input: UpdateQuestionInput;
+};
+
+
+export type MutationUpdateSavedSearchArgs = {
+  input: UpdateSavedSearchInput;
 };
 
 export type Node = {
@@ -736,6 +768,8 @@ export type Query = {
   providers: ProviderConnection;
   question?: Maybe<QuestionType>;
   questions: QuestionConnection;
+  savedSearch?: Maybe<SavedSearchType>;
+  savedSearches: SavedSearchConnection;
   search: SearchConnection;
   tag?: Maybe<TagType>;
   tags: TagConnection;
@@ -944,6 +978,19 @@ export type QueryQuestionsArgs = {
 };
 
 
+export type QuerySavedSearchArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type QuerySavedSearchesArgs = {
+  after?: InputMaybe<Scalars['String']['input']>;
+  before?: InputMaybe<Scalars['String']['input']>;
+  first?: InputMaybe<Scalars['Int']['input']>;
+  last?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
 export type QuerySearchArgs = {
   input: SearchInput;
 };
@@ -999,6 +1046,31 @@ export type QuestionType = Node & {
 
 export type RemovePersonInput = {
   id: Scalars['String']['input'];
+};
+
+export type SavedSearchConnection = Connection & {
+  __typename?: 'SavedSearchConnection';
+  edges: Array<SavedSearchEdge>;
+  pageInfo: PageInfo;
+  totalCount: Scalars['Int']['output'];
+};
+
+export type SavedSearchEdge = Edge & {
+  __typename?: 'SavedSearchEdge';
+  cursor: Scalars['String']['output'];
+  node: SavedSearchType;
+};
+
+export type SavedSearchType = Node & {
+  __typename?: 'SavedSearchType';
+  createdAt: Scalars['DateTime']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  entityTypes?: Maybe<Array<Scalars['String']['output']>>;
+  id: Scalars['ID']['output'];
+  name?: Maybe<Scalars['String']['output']>;
+  query?: Maybe<Scalars['String']['output']>;
+  tags?: Maybe<Array<Scalars['ID']['output']>>;
+  updatedAt: Scalars['DateTime']['output'];
 };
 
 export type SearchConnection = {
@@ -1159,6 +1231,21 @@ export type UpdateQuestionInput = {
   category: Scalars['String']['input'];
   id: Scalars['String']['input'];
   text: Scalars['String']['input'];
+};
+
+export type UpdateSavedSearchInput = {
+  description?: InputMaybe<Scalars['String']['input']>;
+  entityTypes?: InputMaybe<Array<Scalars['String']['input']>>;
+  id: Scalars['ID']['input'];
+  name?: InputMaybe<Scalars['String']['input']>;
+  query?: InputMaybe<Scalars['String']['input']>;
+  tags?: InputMaybe<Array<Scalars['ID']['input']>>;
+};
+
+export type UpdateSavedSearchPayload = {
+  __typename?: 'UpdateSavedSearchPayload';
+  savedSearch?: Maybe<SavedSearchType>;
+  success: Scalars['Boolean']['output'];
 };
 
 export type UserType = Node & {
@@ -1322,11 +1409,11 @@ export type CreateNoteMutation = { __typename?: 'Mutation', createNote: { __type
 export type NewNoteFragment = { __typename?: 'NoteType', id: string, title?: string | null, content?: string | null, updatedAt: any } & { ' $fragmentName'?: 'NewNoteFragment' };
 
 export type DeleteNoteMutationVariables = Exact<{
-  input: DeleteNoteInput;
+  input: DeleteByIdInput;
 }>;
 
 
-export type DeleteNoteMutation = { __typename?: 'Mutation', deleteNote: { __typename?: 'DeleteNotePayload', success: boolean, deletedId?: string | null } };
+export type DeleteNoteMutation = { __typename?: 'Mutation', deleteNote: { __typename?: 'DeleteByIdPayload', success: boolean, deletedId?: string | null } };
 
 export type NoteGridItemFragmentFragment = { __typename?: 'NoteType', id: string, title?: string | null, content?: string | null } & { ' $fragmentName'?: 'NoteGridItemFragmentFragment' };
 
@@ -1388,6 +1475,6 @@ export const SearchDocument = {"kind":"Document","definitions":[{"kind":"Operati
 export const GetNoteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetNote"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"note"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"content"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<GetNoteQuery, GetNoteQueryVariables>;
 export const UpdateNoteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"UpdateNote"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"UpdateNoteInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"updateNote"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"note"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"content"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]}}]} as unknown as DocumentNode<UpdateNoteMutation, UpdateNoteMutationVariables>;
 export const CreateNoteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"CreateNote"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"CreateNoteInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"createNote"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"note"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"content"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]}}]} as unknown as DocumentNode<CreateNoteMutation, CreateNoteMutationVariables>;
-export const DeleteNoteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"DeleteNote"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"DeleteNoteInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"deleteNote"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"deletedId"}}]}}]}}]} as unknown as DocumentNode<DeleteNoteMutation, DeleteNoteMutationVariables>;
+export const DeleteNoteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"DeleteNote"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"DeleteByIdInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"deleteNote"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"deletedId"}}]}}]}}]} as unknown as DocumentNode<DeleteNoteMutation, DeleteNoteMutationVariables>;
 export const GetNotesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetNotes"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"first"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"after"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"notes"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"first"},"value":{"kind":"Variable","name":{"kind":"Name","value":"first"}}},{"kind":"Argument","name":{"kind":"Name","value":"after"},"value":{"kind":"Variable","name":{"kind":"Name","value":"after"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"edges"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"node"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"FragmentSpread","name":{"kind":"Name","value":"NoteGridItemFragment"}}]}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"NoteGridItemFragment"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"NoteType"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"content"}}]}}]} as unknown as DocumentNode<GetNotesQuery, GetNotesQueryVariables>;
 export const GetProviderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetProvider"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"provider"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"logoUrl"}},{"kind":"Field","name":{"kind":"Name","value":"theme"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"backgroundColor"}},{"kind":"Field","name":{"kind":"Name","value":"borderColor"}}]}},{"kind":"FragmentSpread","name":{"kind":"Name","value":"ProviderEndpointsFragment"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"ProviderEndpointsFragment"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"ProviderType"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"endpoints"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"description"}}]}}]}}]} as unknown as DocumentNode<GetProviderQuery, GetProviderQueryVariables>;
