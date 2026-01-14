@@ -12,72 +12,11 @@ import { useModalControls } from '@/hooks';
 import { BentoCard } from '../../components/BentoCard';
 import { Carousel } from '../../components/Carousel';
 
+import { actionInsightData } from './data';
 import { FeedModal } from './FeedModal';
+import type { FeedItem } from './types';
 
 type CarouselProps = Partial<ComponentProps<typeof Carousel>>;
-
-const PLACEHOLDER_SUMMARIES: Summary[] = [
-  {
-    id: 'placeholder-summary-1',
-    title: 'Daily Snapshot Preview',
-    periodType: 'Daily',
-    periodStart: '2024-05-01T08:00:00.000Z',
-    periodEnd: '2024-05-01T20:00:00.000Z',
-    summaryText:
-      'Companion will highlight the conversations, meetings, and focus areas that defined your day once enough activity has been captured.',
-    keyInsights: [
-      'Identify the busiest part of your schedule',
-      'Surface follow-ups hiding inside chats and emails',
-      'Spot breaks in your routine before they become habits',
-    ],
-    notableEvents: [],
-    anomalies: [],
-    tags: ['Preview', 'Coming Soon'],
-    activityCounts: {
-      total: 12,
-      browserActivity: 4,
-      communications: 5,
-      files: 3,
-    },
-    dailyRhythm: [],
-    productivityPatterns: [],
-    socialInteractions: [],
-    keyAccomplishments: [],
-    moodIndicators: [],
-  },
-  {
-    id: 'placeholder-summary-2',
-    title: 'Weekly Planning Preview',
-    periodType: 'Weekly',
-    periodStart: '2024-04-22T00:00:00.000Z',
-    periodEnd: '2024-04-28T23:59:59.000Z',
-    summaryText:
-      'Weekly summaries will roll up the projects you touched, who you collaborated with, and the documents that need another pass.',
-    keyInsights: [
-      'Track which teammates you collaborated with most',
-      'See the balance between creative vs. admin work',
-      'Spot documents or threads that stalled out mid-week',
-    ],
-    notableEvents: [],
-    anomalies: [],
-    tags: ['Preview'],
-    activityCounts: {
-      total: 42,
-      browserActivity: 16,
-      communications: 18,
-      files: 8,
-    },
-    dailyRhythm: [],
-    productivityPatterns: [],
-    socialInteractions: [],
-    keyAccomplishments: [],
-    moodIndicators: [],
-  },
-];
-
-const PLACEHOLDER_PREFIX = 'placeholder-summary';
-
-const isPlaceholderSummary = (summary: Summary) => summary.id.startsWith(PLACEHOLDER_PREFIX);
 
 export function FeedPage() {
   usePageTitle('Feed - Companion Intelligence');
@@ -89,9 +28,35 @@ export function FeedPage() {
   const [{ data: actions, loading, error }] = useActionListService();
   const [{ data: summaries, loading: summariesLoading, error: summariesError }] = useSummariesService(10);
 
-  const combinedSummaries = useMemo(() => [...PLACEHOLDER_SUMMARIES, ...summaries], [summaries]);
+  // Intersperse real summaries between placeholder insight cards
+  const combinedInsights = useMemo(() => {
+    const result: Array<{ type: 'insight'; data: FeedItem } | { type: 'summary'; data: Summary }> = [];
 
-  const showPreviewMessage = !summariesLoading && !summariesError && summaries.length === 0;
+    // Add first insight card
+    if (actionInsightData[0]) {
+      result.push({ type: 'insight', data: actionInsightData[0] });
+    }
+
+    // Add real summaries interspersed with remaining insight cards
+    let insightIndex = 1;
+    summaries.forEach((summary) => {
+      result.push({ type: 'summary', data: summary });
+
+      // Add insight card after every summary (if available)
+      if (insightIndex < actionInsightData.length) {
+        result.push({ type: 'insight', data: actionInsightData[insightIndex] });
+        insightIndex++;
+      }
+    });
+
+    // Add any remaining insight cards at the end
+    while (insightIndex < actionInsightData.length) {
+      result.push({ type: 'insight', data: actionInsightData[insightIndex] });
+      insightIndex++;
+    }
+
+    return result;
+  }, [summaries]);
 
   const selectedActionIndex = useMemo(
     () => actions.findIndex((item) => item.id === actionId),
@@ -193,29 +158,38 @@ export function FeedPage() {
               />
             ))}
 
-          {combinedSummaries.map((summary) => {
-            const placeholder = isPlaceholderSummary(summary);
+          {combinedInsights.map((item) => {
+            if (item.type === 'insight') {
+              return (
+                <BentoCard
+                  key={item.data.id}
+                  title={item.data.title}
+                  description={item.data.description}
+                  tags={item.data.tags}
+                  className="cursor-default opacity-95"
+                />
+              );
+            } else {
+              const summary = item.data as Summary;
 
-            return (
-              <BentoCard
-                key={summary.id}
-                title={summary.title || 'Summary'}
-                description={formatSummaryDescription(summary)}
-                tags={summary.tags}
-                onClick={placeholder ? undefined : () => handleSummaryClick(summary.id)}
-                className={placeholder ? 'cursor-default opacity-95' : undefined}
-              />
-            );
+              return (
+                <BentoCard
+                  key={summary.id}
+                  title={summary.title || 'Summary'}
+                  description={formatSummaryDescription(summary)}
+                  tags={summary.tags}
+                  onClick={() => handleSummaryClick(summary.id)}
+                />
+              );
+            }
           })}
         </Carousel>
 
-        {(summariesLoading || summariesError || showPreviewMessage) && (
+        {(summariesLoading || summariesError) && (
           <div className="py-4 text-center text-sm text-muted-foreground">
             {summariesLoading
               ? 'Fetching your personalized insights...'
-              : summariesError
-                ? 'We could not load live insights. Preview cards are shown until the service recovers.'
-                : 'Your personalized insights will appear here soon — here is what they will look like.'}
+              : 'We could not load live insights. Preview cards are shown until the service recovers.'}
           </div>
         )}
 
@@ -274,33 +248,40 @@ export function FeedPage() {
         <h2 className="text-2xl font-bold text-foreground">Insights</h2>
 
         <div className="space-y-3">
-          {(summariesLoading || summariesError || showPreviewMessage) && (
+          {(summariesLoading || summariesError) && (
             <div className={cn('text-sm', summariesError ? 'text-destructive' : 'text-muted-foreground')}>
               {summariesLoading
                 ? 'Fetching your personalized insights...'
-                : summariesError
-                  ? 'We could not load live insights. Preview cards are shown until the service recovers.'
-                  : 'Your personalized insights will appear here soon — here is what they will look like.'}
+                : 'We could not load live insights. Preview cards are shown until the service recovers.'}
             </div>
           )}
 
           <Carousel {...carouselProps}>
-            {combinedSummaries.map((summary) => {
-              const placeholder = isPlaceholderSummary(summary);
+            {combinedInsights.map((item) => {
+              if (item.type === 'insight') {
+                return (
+                  <BentoCard
+                    key={item.data.id}
+                    title={item.data.title}
+                    description={item.data.description}
+                    tags={item.data.tags}
+                    className="hover:shadow-lg transition-shadow duration-200 h-110 cursor-default opacity-95"
+                  />
+                );
+              } else {
+                const summary = item.data as Summary;
 
-              return (
-                <BentoCard
-                  key={summary.id}
-                  title={summary.title || 'Summary'}
-                  description={formatSummaryDescription(summary)}
-                  tags={summary.tags}
-                  onClick={placeholder ? undefined : () => handleSummaryClick(summary.id)}
-                  className={cn(
-                    'hover:shadow-lg transition-shadow duration-200 h-110',
-                    placeholder ? 'cursor-default opacity-95' : undefined,
-                  )}
-                />
-              );
+                return (
+                  <BentoCard
+                    key={summary.id}
+                    title={summary.title || 'Summary'}
+                    description={formatSummaryDescription(summary)}
+                    tags={summary.tags}
+                    onClick={() => handleSummaryClick(summary.id)}
+                    className="hover:shadow-lg transition-shadow duration-200 h-110"
+                  />
+                );
+              }
             })}
           </Carousel>
         </div>
