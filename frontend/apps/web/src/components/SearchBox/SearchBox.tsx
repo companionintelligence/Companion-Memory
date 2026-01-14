@@ -22,10 +22,10 @@ import {
   formDataSchema as s,
   cn,
 } from '@ci/shadcn';
-import { ArrowDown, Search, X } from '@ci/shadcn/icons';
+import { Funnel, Search, X } from '@ci/shadcn/icons';
 
-import { DropdownContent } from './DropdownContent.tsx';
-import { DropdownProvider, useDropdown } from './useDropdown';
+import { FilterContent } from './FilterContent';
+import { FiltersProvider, useFilters } from './useFilters';
 
 const FormSchema = s.object({
   query: s.string(),
@@ -61,12 +61,10 @@ interface Props {
   autoSubmit?: boolean;
   autoSubmitDelay?: number;
   displayResults?: boolean;
-  displayDropdown?: boolean;
-  saveSupported?: boolean;
-  onSearch?: (data: FormData & { entityDropdowns?: string[] }) => boolean | void | Promise<boolean | void>;
+  displayFilters?: boolean;
+  onSearch?: (data: FormData & { entityFilters?: string[] }) => boolean | void | Promise<boolean | void>;
   onClear?: () => void;
   onResultSelect?: (result: SearchResultItem) => void;
-  onSave?: (query: string, entityTypes: string[]) => void;
 }
 
 function SearchBox(
@@ -80,12 +78,10 @@ function SearchBox(
     autoSubmit = false,
     autoSubmitDelay = 300,
     displayResults = false,
-    displayDropdown = false,
-    saveSupported = true,
+    displayFilters = false,
     onSearch,
     onClear,
     onResultSelect,
-    onSave,
   }: Props,
   forwardedRef: ForwardedRef<HTMLInputElement>,
 ) {
@@ -94,7 +90,7 @@ function SearchBox(
     defaultValues: EMPTY,
   });
 
-  const [{ isDropdownPanelVisible }, { toggleDropdownPanel }] = useDropdown();
+  const [{ isFiltersPanelVisible }, { toggleFilterPanel }] = useFilters();
 
   const queryValue = form.watch('query');
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
@@ -220,16 +216,6 @@ function SearchBox(
     [disabled, form, results, selectedIndex, onResultSelect, handleClear],
   );
 
-  const handleSaveSearch = useCallback(
-    async (entityTypes: string[]) => {
-      await onSave?.(
-        queryValue,
-        entityTypes.map((type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP]),
-      );
-    },
-    [onSave, queryValue],
-  );
-
   // Auto-submit with debounce
   useEffect(() => {
     if (!autoSubmit || !queryValue.trim() || disabled) {
@@ -284,7 +270,7 @@ function SearchBox(
 
   // Close filters panel on outside click
   useEffect(() => {
-    if (!isDropdownPanelVisible) {
+    if (!isFiltersPanelVisible) {
       return;
     }
 
@@ -304,18 +290,18 @@ function SearchBox(
         return;
       }
 
-      toggleDropdownPanel();
+      toggleFilterPanel();
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
 
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [isDropdownPanelVisible, toggleDropdownPanel]);
+  }, [isFiltersPanelVisible, toggleFilterPanel]);
 
   let resultsNode: ReactNode | null = null;
 
-  if (displayDropdown && isDropdownPanelVisible) {
-    resultsNode = <DropdownContent onSave={handleSaveSearch} saveSupported={saveSupported} />;
+  if (displayFilters && isFiltersPanelVisible) {
+    resultsNode = <FilterContent />;
   } else if (queryValue.length > 0 && !disabled && displayResults) {
     if (isLoading) {
       resultsNode = (
@@ -450,21 +436,16 @@ function SearchBox(
                   </Button>
                 )}
 
-                {displayDropdown && (
+                {displayFilters && (
                   <Button
                     type="button"
                     disabled={disabled}
-                    variant={isDropdownPanelVisible ? 'secondary' : 'ghost'}
+                    variant={isFiltersPanelVisible ? 'secondary' : 'ghost'}
                     size="sm"
                     className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-                    onClick={toggleDropdownPanel}
+                    onClick={toggleFilterPanel}
                   >
-                    <ArrowDown
-                      className={cn(
-                        'h-4 w-4 transition-transform duration-200',
-                        isDropdownPanelVisible && 'rotate-180',
-                      )}
-                    />
+                    <Funnel className="h-4 w-4" />
                   </Button>
                 )}
 
@@ -498,7 +479,7 @@ const SearchBoxForwarded = forwardRef(SearchBox);
 const SearchBoxWithContext = forwardRef<HTMLInputElement, Props>((props, ref) => (
   <DropdownProvider args={[{ changeSearchParams: true }]}>
     <SearchBoxForwarded {...props} ref={ref} />
-  </DropdownProvider>
+  </FiltersProvider>
 ));
 
 export { SearchBoxWithContext as SearchBox };

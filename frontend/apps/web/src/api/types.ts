@@ -32,3 +32,27 @@ export interface Thread {
   description: string | null;
   messages?: Message[];
 }
+
+export interface Summary {
+  id: string;
+  title: string | null;
+  periodType: string;
+  periodStart: string;
+  periodEnd: string;
+  summaryText: string;
+  keyInsights: string[];
+  notableEvents: string[];
+  anomalies: string[];
+  tags: string[];
+  activityCounts: {
+    total: number;
+    browserActivity?: number;
+    communications?: number;
+    files?: number;
+  };
+  dailyRhythm?: string[];
+  productivityPatterns?: string[];
+  socialInteractions?: string[];
+  keyAccomplishments?: string[];
+  moodIndicators?: string[];
+}

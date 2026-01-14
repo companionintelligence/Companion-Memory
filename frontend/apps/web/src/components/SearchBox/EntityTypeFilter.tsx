@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Button, DropdownMenu } from '@ci/shadcn';
 import { ChevronDown } from '@ci/shadcn/icons';
 
-import { AVAILABLE_ENTITY_TYPES, useDropdown } from './useDropdown.ts';
+import { AVAILABLE_ENTITY_TYPES, useFilters } from './useFilters';
 
 interface Props {
   modal?: boolean;
@@ -12,7 +12,7 @@ interface Props {
 export function EntityTypeFilter({ modal = true }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [{ selectedEntityTypes }, { clearEntityTypes, selectAllEntityTypes, toggleEntityType }] =
-    useDropdown();
+    useFilters();
 
   const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
 

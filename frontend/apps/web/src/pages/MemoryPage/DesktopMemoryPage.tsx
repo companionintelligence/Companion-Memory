@@ -143,20 +143,6 @@ export default function DesktopMemoryPage() {
     setSearchParams(currentParams);
   }, [setSearchQuery, searchParams, setSearchParams]);
 
-  const handleSaveSearch = useCallback(async (query: string, entityTypes: string[]) => {
-    await createSavedSearch({
-      variables: {
-        input: {
-          name: '',
-          description: '',
-          query,
-          entityTypes,
-          tags: [],
-        },
-      },
-    });
-  }, []);
-
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -178,13 +164,7 @@ export default function DesktopMemoryPage() {
       <PageContent className="p-0 gap-0">
         <div className="flex items-center gap-2 p-4">
           <div className="flex-1">
-            <SearchBox
-              onSearch={handleSearch}
-              onClear={handleClear}
-              onSave={handleSaveSearch}
-              autoSubmit
-              displayDropdown
-            />
+            <SearchBox onSearch={handleSearch} onClear={handleClear} autoSubmit displayFilters />
           </div>
 
           {/* View Toggle */}
