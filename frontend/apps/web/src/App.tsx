@@ -36,6 +36,7 @@ const ProviderPage = lazy(() => import('@/pages/ProviderPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const FilesPage = lazy(() => import('@/pages/FilesPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
 const SystemPage = lazy(() => import('@/pages/SystemPage'));
 const ToolsPage = lazy(() => import('@/pages/ToolsPage'));
 
@@ -150,6 +151,15 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <InsightsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/insights/:id"
+          element={
+            <ProtectedRoute>
+              <SummaryDetailPage />
             </ProtectedRoute>
           }
         />

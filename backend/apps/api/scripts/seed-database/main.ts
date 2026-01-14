@@ -24,6 +24,7 @@ import { seedNotes } from './seed-notes';
 import { seedPeople } from './seed-people';
 import { seedPlaces } from './seed-places';
 import { seedRelationships } from './seed-relationships';
+import { seedSummaries } from './seed-summaries';
 import { seedThreads } from './seed-threads';
 import { seedUsers } from './seed-users';
 
@@ -117,6 +118,7 @@ const logger = new LoggerService();
     await seedConcepts(module, multibar);
     await seedContent(module, multibar);
     await seedRelationships(module, multibar);
+    await seedSummaries(module, multibar);
   } catch (err) {
     error = err as Error;
   }

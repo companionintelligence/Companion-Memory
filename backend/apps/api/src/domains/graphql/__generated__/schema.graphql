@@ -24,6 +24,20 @@ type ActionType implements Node & Taggable {
   updatedAt: DateTime!
 }
 
+type ActivityCountsType {
+  activities: Int
+  apiLogs: Int
+  browserActivity: Int
+  communications: Int
+  events: Int
+  files: Int
+  measurements: Int
+  messages: Int
+  positions: Int
+  screenCaptures: Int
+  total: Int!
+}
+
 type AnswerConnection implements Connection {
   edges: [AnswerEdge!]!
   pageInfo: PageInfo!
@@ -542,6 +556,8 @@ type Query {
   question(id: ID!): QuestionType
   questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
   search(input: SearchInput!): SearchConnection!
+  summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
+  summary(id: ID!): SummaryType
   tag(id: ID!): TagType
   tags(after: String, before: String, first: Int, last: Int): TagConnection!
   thread(id: ID!): ThreadType
@@ -591,6 +607,41 @@ type SearchResultEdge {
 }
 
 union SearchResultType = AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+type SummaryConnection implements Connection {
+  edges: [SummaryEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SummaryEdge implements Edge {
+  cursor: String!
+  node: SummaryType!
+}
+
+type SummaryType implements Node {
+  activityCounts: ActivityCountsType!
+  anomalies: [String!]!
+  confidenceScore: Float
+  createdAt: DateTime!
+  dailyRhythm: [String!]
+  id: ID!
+  keyAccomplishments: [String!]
+  keyInsights: [String!]!
+  moodIndicators: [String!]
+  notableEvents: [String!]!
+  periodEnd: DateTime!
+  periodStart: DateTime!
+  periodType: String!
+  productivityPatterns: [String!]
+  socialInteractions: [String!]
+  sourceTypes: [String!]!
+  summaryText: String!
+  tags: [String!]!
+  timezone: String!
+  title: String
+  updatedAt: DateTime!
+}
 
 type TagConnection implements Connection {
   edges: [TagEdge!]!

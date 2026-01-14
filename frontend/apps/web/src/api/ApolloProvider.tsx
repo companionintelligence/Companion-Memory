@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 
 import {
   ApolloClient,
@@ -14,10 +14,7 @@ export function ApolloProvider({ children }: { children: ReactNode }) {
   const [{ authToken }] = useAuth();
 
   const tokenRef = useRef(authToken);
-
-  useEffect(() => {
-    tokenRef.current = authToken;
-  }, [authToken]);
+  tokenRef.current = authToken;
 
   const client = useMemo(() => {
     const httpLink = createHttpLink({
