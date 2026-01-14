@@ -21,34 +21,42 @@ import { EventsModule } from '@ci/domains/events';
 
 import { FilesController } from './controllers/FilesController';
 import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
+import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
 import { FileService } from './services/FileService';
+import { SavedSearchService } from './services/SavedSearchService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([FileEntity]), EventsModule],
-  providers: [FileService],
+  imports: [TypeOrmModule.forFeature([FileEntity, SavedSearchEntity]), EventsModule],
+  providers: [FileService, SavedSearchService],
   controllers: [FilesController],
-  exports: [FileService],
+  exports: [FileService, SavedSearchService],
 })
 export class FilesModule {}
 
 // Entities
-export { FileEntity };
+export { FileEntity, SavedSearchEntity };
 
 // Services
-export { FileService };
+export { FileService, SavedSearchService };
 
 //Types
-export type { File, SignedFile };
+export type { File, SignedFile, SavedSearch };
 export {
   FileCreatedEvent,
   FileUpdatedEvent,
   FileUploadedEvent,
   FileRemovedEvent,
+  SavedSearchCreatedEvent,
+  SavedSearchUpdatedEvent,
+  SavedSearchDeletedEvent,
   type FileCreatedPayload,
   type FileUpdatedPayload,
   type FileUploadedPayload,
   type FileDeletedPayload,
+  type SavedSearchCreatedPayload,
+  type SavedSearchUpdatedPayload,
+  type SavedSearchDeletedPayload,
 } from './events';

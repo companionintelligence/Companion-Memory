@@ -7,8 +7,8 @@ import { NoteService } from '@ci/domains/notes';
 
 import { CreateNoteInput } from '../types/CreateNoteInput';
 import { CreateNotePayload } from '../types/CreateNotePayload';
-import { DeleteNoteInput } from '../types/DeleteNoteInput';
-import { DeleteNotePayload } from '../types/DeleteNotePayload';
+import { DeleteByIdInput } from '../types/DeleteByIdInput';
+import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
 import { GlobalUID } from '../types/GlobalUID';
 import { NoteConnection } from '../types/NoteConnection';
 import { NoteEdge } from '../types/NoteEdge';
@@ -73,11 +73,11 @@ export class NoteResolver {
     };
   }
 
-  @Mutation(() => DeleteNotePayload)
+  @Mutation(() => DeleteByIdPayload)
   async deleteNote(
     @Context() context: RequestContext,
-    @Args('input') input: DeleteNoteInput,
-  ): Promise<DeleteNotePayload> {
+    @Args('input') input: DeleteByIdInput,
+  ): Promise<DeleteByIdPayload> {
     const serviceContext = toServiceContext(context);
 
     const id = GlobalUID.parse('note', input.id);

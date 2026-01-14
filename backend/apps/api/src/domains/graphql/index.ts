@@ -41,6 +41,7 @@ import { PersonResolver } from './resolvers/PersonResolver';
 import { PlaceResolver } from './resolvers/PlaceResolver';
 import { ProviderResolver } from './resolvers/ProviderResolver';
 import { QuestionResolver } from './resolvers/QuestionResolver';
+import { SavedSearchResolver } from './resolvers/SavedSearchResolver';
 import { SearchResolver } from './resolvers/SearchResolver';
 import { SummaryResolver } from './resolvers/SummaryResolver';
 import { TagResolver } from './resolvers/TagResolver';
@@ -89,6 +90,7 @@ import { UserResolver } from './resolvers/UserResolver';
     PersonResolver,
     QuestionLoader,
     QuestionResolver,
+    SavedSearchResolver,
     SearchResolver,
     SummaryResolver,
     TagLoader,

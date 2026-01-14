@@ -16,6 +16,7 @@ type ResourceType =
   | 'provider'
   | 'question'
   | 'summary'
+  | 'saved-search'
   | 'tag'
   | 'thread'
   | 'user';

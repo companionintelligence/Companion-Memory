@@ -9,7 +9,7 @@ interface Props {
 }
 
 const DELETE_NOTE = gql(`
-  mutation DeleteNote($input: DeleteNoteInput!) {
+  mutation DeleteNote($input: DeleteByIdInput!) {
     deleteNote(input: $input) {
       success
       deletedId
