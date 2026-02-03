@@ -1,5 +1,5 @@
 import { UseGuards } from '@nestjs/common';
-import { Parent, Query, ResolveField, Resolver, Args, ID } from '@nestjs/graphql';
+import { Parent, Query, ResolveField, Resolver, Args, ID, Mutation, Int } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtAuthGuard } from '@ci/common/guards';
@@ -92,5 +92,31 @@ export class ActionResolver {
     });
 
     return tags.map((tag) => EntityTagType.toType(tag));
+  }
+
+  @Query(() => [ActionType], { description: 'Get actions for the feed, prioritizing unseen actions' })
+  async feedActions(
+    @Context() context: RequestContext,
+    @Args('limit', { type: () => Int, defaultValue: 5 }) limit: number,
+  ): Promise<ActionType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const entities = await this.actionService.findForFeed(serviceContext, limit);
+
+    return entities.map((entity) => ActionType.toType(entity));
+  }
+
+  @Mutation(() => ActionType, { nullable: true, description: 'Mark an action as seen' })
+  async markActionAsSeen(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) gid: string,
+  ): Promise<ActionType | null> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('action', gid);
+
+    const entity = await this.actionService.markAsSeen(serviceContext, id);
+
+    return entity ? ActionType.toType(entity) : null;
   }
 }

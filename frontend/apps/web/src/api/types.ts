@@ -1,3 +1,10 @@
+export interface ActionMetadata {
+  seen: boolean;
+  type?: string;
+  context?: string;
+  relatedPerson?: string;
+}
+
 export interface Action {
   id: string;
   title: string;
@@ -5,6 +12,8 @@ export interface Action {
   imageUrl?: string;
   threadId?: string;
   tags: string[];
+  priority?: number;
+  metadata?: ActionMetadata;
 }
 
 export interface File {

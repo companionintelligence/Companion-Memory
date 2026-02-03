@@ -18,7 +18,8 @@ import type { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query GetActions {\n    actions {\n      edges {\n        node {\n          id\n          title\n          text\n          imageUrl\n          thread {\n            id\n          }\n          tags {\n            id\n            label\n          }\n        }\n      }\n    }\n  }\n": typeof types.GetActionsDocument,
+    "\n  query GetFeedActions($limit: Int) {\n    feedActions(limit: $limit) {\n      id\n      title\n      text\n      imageUrl\n      priority\n      metadata {\n        seen\n        type\n        context\n        relatedPerson\n      }\n      thread {\n        id\n      }\n      tags {\n        id\n        label\n      }\n    }\n  }\n": typeof types.GetFeedActionsDocument,
+    "\n  mutation MarkActionAsSeen($id: ID!) {\n    markActionAsSeen(id: $id) {\n      id\n      metadata {\n        seen\n      }\n    }\n  }\n": typeof types.MarkActionAsSeenDocument,
     "\n  mutation TagEntities($input: TagEntitiesInput!) {\n    tagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": typeof types.TagEntitiesDocument,
     "\n  mutation UntagEntities($input: TagEntitiesInput!) {\n    untagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": typeof types.UntagEntitiesDocument,
     "\n  fragment ActionGridItemData on ActionType {\n    id\n    actionTitle: title\n    actionText: text\n  }\n": typeof types.ActionGridItemDataFragmentDoc,
@@ -99,7 +100,8 @@ type Documents = {
     "\n  query GetTags {\n    tags {\n      edges {\n        node {\n          id\n          label\n          description\n        }\n      }\n    }\n  }\n": typeof types.GetTagsDocument,
 };
 const documents: Documents = {
-    "\n  query GetActions {\n    actions {\n      edges {\n        node {\n          id\n          title\n          text\n          imageUrl\n          thread {\n            id\n          }\n          tags {\n            id\n            label\n          }\n        }\n      }\n    }\n  }\n": types.GetActionsDocument,
+    "\n  query GetFeedActions($limit: Int) {\n    feedActions(limit: $limit) {\n      id\n      title\n      text\n      imageUrl\n      priority\n      metadata {\n        seen\n        type\n        context\n        relatedPerson\n      }\n      thread {\n        id\n      }\n      tags {\n        id\n        label\n      }\n    }\n  }\n": types.GetFeedActionsDocument,
+    "\n  mutation MarkActionAsSeen($id: ID!) {\n    markActionAsSeen(id: $id) {\n      id\n      metadata {\n        seen\n      }\n    }\n  }\n": types.MarkActionAsSeenDocument,
     "\n  mutation TagEntities($input: TagEntitiesInput!) {\n    tagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": types.TagEntitiesDocument,
     "\n  mutation UntagEntities($input: TagEntitiesInput!) {\n    untagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": types.UntagEntitiesDocument,
     "\n  fragment ActionGridItemData on ActionType {\n    id\n    actionTitle: title\n    actionText: text\n  }\n": types.ActionGridItemDataFragmentDoc,
@@ -197,7 +199,11 @@ export function gql(source: string): unknown;
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  query GetActions {\n    actions {\n      edges {\n        node {\n          id\n          title\n          text\n          imageUrl\n          thread {\n            id\n          }\n          tags {\n            id\n            label\n          }\n        }\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetActions {\n    actions {\n      edges {\n        node {\n          id\n          title\n          text\n          imageUrl\n          thread {\n            id\n          }\n          tags {\n            id\n            label\n          }\n        }\n      }\n    }\n  }\n"];
+export function gql(source: "\n  query GetFeedActions($limit: Int) {\n    feedActions(limit: $limit) {\n      id\n      title\n      text\n      imageUrl\n      priority\n      metadata {\n        seen\n        type\n        context\n        relatedPerson\n      }\n      thread {\n        id\n      }\n      tags {\n        id\n        label\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetFeedActions($limit: Int) {\n    feedActions(limit: $limit) {\n      id\n      title\n      text\n      imageUrl\n      priority\n      metadata {\n        seen\n        type\n        context\n        relatedPerson\n      }\n      thread {\n        id\n      }\n      tags {\n        id\n        label\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  mutation MarkActionAsSeen($id: ID!) {\n    markActionAsSeen(id: $id) {\n      id\n      metadata {\n        seen\n      }\n    }\n  }\n"): (typeof documents)["\n  mutation MarkActionAsSeen($id: ID!) {\n    markActionAsSeen(id: $id) {\n      id\n      metadata {\n        seen\n      }\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

@@ -112,4 +112,79 @@ export class ActionService {
 
     return ActionEntity.toEgressType(entity);
   }
+
+  /**
+   * Find actions for the feed display.
+   * Returns up to `limit` actions, prioritizing unseen ones.
+   * If there are fewer unseen actions than the limit, fills with random seen actions.
+   */
+  async findForFeed(context: ServiceContext, limit: number = 5): Promise<Action[]> {
+    // First, get unseen actions (metadata->>'seen' = 'false' or metadata is null/empty)
+    const unseenEntities = await this.actionRepository
+      .createQueryBuilder('action')
+      .leftJoinAndSelect('action.tags', 'tags')
+      .where(context.userId !== SYSTEM_USER ? 'action.user_id = :userId' : '1=1', { userId: context.userId })
+      .andWhere("(action.metadata->>'seen' = 'false' OR action.metadata->>'seen' IS NULL)")
+      .orderBy('action.created_at', 'DESC')
+      .take(limit)
+      .getMany();
+
+    const results = unseenEntities.map((entity) => ActionEntity.toEgressType(entity));
+
+    // If we have enough unseen actions, return them
+    if (results.length >= limit) {
+      return results;
+    }
+
+    // Otherwise, fill with random seen actions
+    const remaining = limit - results.length;
+    const unseenIds = results.map((a) => a.id);
+
+    const seenQuery = this.actionRepository
+      .createQueryBuilder('action')
+      .leftJoinAndSelect('action.tags', 'tags')
+      .where(context.userId !== SYSTEM_USER ? 'action.user_id = :userId' : '1=1', { userId: context.userId })
+      .andWhere("action.metadata->>'seen' = 'true'");
+
+    if (unseenIds.length > 0) {
+      seenQuery.andWhere('action.id NOT IN (:...unseenIds)', { unseenIds });
+    }
+
+    const seenEntities = await seenQuery.orderBy('RANDOM()').take(remaining).getMany();
+
+    const seenActions = seenEntities.map((entity) => ActionEntity.toEgressType(entity));
+
+    return [...results, ...seenActions];
+  }
+
+  /**
+   * Mark an action as seen.
+   */
+  async markAsSeen(context: ServiceContext, id: string): Promise<Action | null> {
+    const entity = await this.actionRepository.findOne({
+      where: {
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+        id,
+      },
+      relations: ['tags'],
+    });
+
+    if (entity == null) {
+      return null;
+    }
+
+    // Update metadata to mark as seen
+    entity.metadata = {
+      ...entity.metadata,
+      seen: true,
+    };
+
+    const updated = await this.actionRepository.save(entity);
+
+    return ActionEntity.toEgressType(updated);
+  }
 }

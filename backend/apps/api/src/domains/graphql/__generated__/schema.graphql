@@ -13,10 +13,31 @@ type ActionEdge implements Edge {
   node: ActionType!
 }
 
+"""Metadata associated with an action"""
+type ActionMetadataType {
+  """Context explaining why this action is relevant"""
+  context: String
+
+  """Name of related person if applicable"""
+  relatedPerson: String
+
+  """Whether the user has seen/interacted with this action"""
+  seen: Boolean!
+
+  """Type of action: conversation_starter or time_suggestion"""
+  type: String
+}
+
 type ActionType implements Node & Taggable {
   createdAt: DateTime!
   id: ID!
   imageUrl: String
+
+  """Action metadata including seen status"""
+  metadata: ActionMetadataType!
+
+  """Priority/relevance level 1-10"""
+  priority: Int
   tags: [EntityTagType!]!
   text: String!
   thread: ThreadType
@@ -479,6 +500,9 @@ type Mutation {
   deletePerson(input: DeleteByIdInput!): DeleteByIdPayload!
   deleteRelationship(input: DeleteByIdInput!): DeleteByIdPayload!
   deleteSavedSearch(input: DeleteByIdInput!): DeleteByIdPayload!
+
+  """Mark an action as seen"""
+  markActionAsSeen(id: ID!): ActionType
   removeAnswer(id: String!): Boolean!
   removeContent(id: String!): Boolean!
   removeEvent(id: String!): Boolean!
@@ -633,6 +657,9 @@ type Query {
   events(after: String, before: String, first: Int, last: Int): EventConnection!
   fact(id: ID!): FactType
   facts(after: String, before: String, first: Int, last: Int): FactConnection!
+
+  """Get actions for the feed, prioritizing unseen actions"""
+  feedActions(limit: Int! = 5): [ActionType!]!
   file(id: ID!): FileType
   files(after: String, before: String, first: Int, last: Int): FileConnection!
   item(id: ID!): ItemType
