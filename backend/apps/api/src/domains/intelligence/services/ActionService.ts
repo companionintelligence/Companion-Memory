@@ -122,7 +122,6 @@ export class ActionService {
     // First, get unseen actions (metadata->>'seen' = 'false' or metadata is null/empty)
     const unseenEntities = await this.actionRepository
       .createQueryBuilder('action')
-      .leftJoinAndSelect('action.tags', 'tags')
       .where(context.userId !== SYSTEM_USER ? 'action.user_id = :userId' : '1=1', { userId: context.userId })
       .andWhere("(action.metadata->>'seen' = 'false' OR action.metadata->>'seen' IS NULL)")
       .orderBy('action.created_at', 'DESC')
@@ -136,13 +135,12 @@ export class ActionService {
       return results;
     }
 
-    // Otherwise, fill with random seen actions
+    // Otherwise, fill with seen actions ordered by created_at
     const remaining = limit - results.length;
     const unseenIds = results.map((a) => a.id);
 
     const seenQuery = this.actionRepository
       .createQueryBuilder('action')
-      .leftJoinAndSelect('action.tags', 'tags')
       .where(context.userId !== SYSTEM_USER ? 'action.user_id = :userId' : '1=1', { userId: context.userId })
       .andWhere("action.metadata->>'seen' = 'true'");
 
@@ -150,7 +148,7 @@ export class ActionService {
       seenQuery.andWhere('action.id NOT IN (:...unseenIds)', { unseenIds });
     }
 
-    const seenEntities = await seenQuery.orderBy('RANDOM()').take(remaining).getMany();
+    const seenEntities = await seenQuery.orderBy('action.created_at', 'DESC').take(remaining).getMany();
 
     const seenActions = seenEntities.map((entity) => ActionEntity.toEgressType(entity));
 
