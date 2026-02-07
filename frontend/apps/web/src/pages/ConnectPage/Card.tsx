@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { cn } from '@ci/shadcn';
 
@@ -23,6 +23,12 @@ export function Card({
   className,
   subtext,
 }: Props) {
+  const [imageSrc, setImageSrc] = useState(logo);
+
+  useEffect(() => {
+    setImageSrc(logo);
+  }, [logo]);
+
   const backgroundStyle = useMemo(() => {
     if (isHexColor(background)) {
       return {
@@ -63,7 +69,12 @@ export function Card({
           )}
           style={borderStyle}
         >
-          <img src={logo} className="w-12 h-12" />
+          <img
+            src={imageSrc}
+            className="w-12 h-12"
+            alt="Provider logo"
+            onError={() => setImageSrc('/logo.svg')}
+          />
         </div>
       </div>
       <div className="font-semibold text-sm p-6">{text}</div>

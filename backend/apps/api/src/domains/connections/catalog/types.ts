@@ -52,7 +52,7 @@ export interface ProviderCatalogEntry {
   displayName: string;
   lifecycle: ProviderLifecycle;
   origin: ProviderOrigin;
-  providerId?: string;
+  providerId: string;
   auth: ProviderAuthDefinition;
   streams: ProviderStreamDefinition[];
 }

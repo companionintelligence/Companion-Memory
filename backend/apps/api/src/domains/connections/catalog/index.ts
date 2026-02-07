@@ -1,4 +1,5 @@
-import { ACTIVE_PROVIDER_ID_SET, PROVIDER_CATALOG } from './definitions';
+import { listProviderConnectCatalog } from './connectCards';
+import { CATALOG_PROVIDER_ID_SET, PROVIDER_CATALOG } from './definitions';
 import type {
   OAuthCredentialResolution,
   OAuthEnvVarNames,
@@ -33,7 +34,7 @@ export function getProviderCatalogByKey(providerKey: string): ProviderCatalogEnt
 }
 
 export function getProviderCatalogByProviderId(providerId: string): ProviderCatalogEntry | undefined {
-  if (!ACTIVE_PROVIDER_ID_SET.has(providerId)) {
+  if (!CATALOG_PROVIDER_ID_SET.has(providerId)) {
     return undefined;
   }
 
@@ -97,3 +98,6 @@ export function resolveOAuthCredentials(
     clientSecret,
   };
 }
+
+export { listProviderConnectCatalog };
+export type { ProviderConnectCatalogEntry } from './connectCards';

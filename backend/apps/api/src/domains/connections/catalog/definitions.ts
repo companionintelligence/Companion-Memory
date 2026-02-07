@@ -1,9 +1,37 @@
 import type { ProviderCatalogEntry, ProviderStreamDefinition } from './types';
 
-const ACTIVE_PROVIDER_IDS = {
+const PROVIDER_IDS = {
   google: '0198779b-182c-716e-9275-b81d99a47fdb',
   microsoft: '0198779b-3c33-73da-84e5-82e0df145260',
   facebook: 'dbb8002f-12da-4cd9-b02b-37db7791a900',
+  discord: '16b14988-6dcf-4cb1-bb49-e20516561780',
+  github: 'd10b5b7f-a0cf-44b1-9942-659cc35e0231',
+  instagram: '06f04db1-b48b-4932-aaa9-b9bde58c3d05',
+  shopify: '48a655f8-a238-4a39-beed-64c7b0fa83ca',
+  signal: 'bdf9a344-9c02-4bc8-9ef0-0cc9f3bf4896',
+  slack: 'd26c97d7-d30c-4194-80d2-1ba9d26ffec6',
+  spotify: 'a233bb12-7c76-45ba-9771-b91da50d2243',
+  steam: '3d4c303a-bfcb-44b9-98ce-010b1065b250',
+  x: '4a569143-78bd-444b-a4f8-5ac1111e24eb',
+  linkedin: '6ffb910a-683a-4b8b-be0c-732a0aa0e6bf',
+  notion: '848e630d-c5d0-41ce-bc3b-e4afeebeb7ea',
+  twitch: '69e3c459-9980-4707-8603-ea7f54073e26',
+  reddit: '4bfa2f77-4581-4c1a-9885-29d444fc8ee9',
+  dropbox: '7215fe01-2dd5-47fa-a221-115ff5cbf4c4',
+  evernote: 'ecce11f7-b2e5-4fd3-b200-9fcb225922dc',
+  garmin: '1f9f9206-a3b1-4006-9f29-e1b2134777fb',
+  whoop: 'f6284d9e-fad6-41f2-a7cb-c57ff506e9e1',
+  fitbit: '801f340d-eca0-47cc-a12b-6a4a9c55d18f',
+  monday: 'a7bb151c-9e98-475c-84e8-34e472b4a22a',
+  hubspot: '2299918c-2af9-4c4e-8fa1-81e4eb26a4f6',
+  jira: '7b856d83-09d1-4176-9b1b-e70bb8b90a04',
+  xero: '8acf44b6-e037-4262-bc4a-d9dfd668acb0',
+  quickbooks: '9a8fb775-6587-4cc5-88b2-944449b799a7',
+  box: '6728a769-ac5d-4261-a31b-9e8c1b5491f0',
+  plaid: '8e759ef5-4f7a-4742-ba69-3edaa6dd4285',
+  pinterest: '368a6f03-3c44-41df-91af-d506f4fc8cee',
+  lyft: '7d51809a-0160-4f30-8848-bb6fe0ca2614',
+  uber: '16bf550d-618a-4282-bc83-b0daa662d303',
 } as const;
 
 function buildAuthEnvTemplate(providerKey: string, legacyPrefix?: string) {
@@ -32,7 +60,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Google',
     lifecycle: 'active',
     origin: 'implemented',
-    providerId: ACTIVE_PROVIDER_IDS.google,
+    providerId: PROVIDER_IDS.google,
     auth: {
       type: 'oauth2',
       env: buildAuthEnvTemplate('google', 'GOOGLE'),
@@ -99,7 +127,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Microsoft',
     lifecycle: 'active',
     origin: 'implemented',
-    providerId: ACTIVE_PROVIDER_IDS.microsoft,
+    providerId: PROVIDER_IDS.microsoft,
     auth: {
       type: 'oauth2',
       env: buildAuthEnvTemplate('microsoft', 'MICROSOFT'),
@@ -145,7 +173,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Facebook',
     lifecycle: 'active',
     origin: 'implemented',
-    providerId: ACTIVE_PROVIDER_IDS.facebook,
+    providerId: PROVIDER_IDS.facebook,
     auth: {
       type: 'oauth2',
       env: buildAuthEnvTemplate('facebook', 'FACEBOOK'),
@@ -219,6 +247,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Discord',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '16b14988-6dcf-4cb1-bb49-e20516561780',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('discord') },
     streams: [
       stream({
@@ -246,6 +275,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'GitHub',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: 'd10b5b7f-a0cf-44b1-9942-659cc35e0231',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('github') },
     streams: [
       stream({
@@ -274,6 +304,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Instagram',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '06f04db1-b48b-4932-aaa9-b9bde58c3d05',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('instagram') },
     streams: [
       stream({
@@ -293,6 +324,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Shopify',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '48a655f8-a238-4a39-beed-64c7b0fa83ca',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('shopify') },
     streams: [
       stream({
@@ -320,6 +352,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Signal',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: 'bdf9a344-9c02-4bc8-9ef0-0cc9f3bf4896',
     auth: { type: 'unknown', env: buildAuthEnvTemplate('signal') },
     streams: [
       stream({
@@ -338,6 +371,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Slack',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: 'd26c97d7-d30c-4194-80d2-1ba9d26ffec6',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('slack') },
     streams: [
       stream({
@@ -367,6 +401,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Spotify',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: 'a233bb12-7c76-45ba-9771-b91da50d2243',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('spotify') },
     streams: [
       stream({
@@ -396,6 +431,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Steam',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '3d4c303a-bfcb-44b9-98ce-010b1065b250',
     auth: { type: 'openid', env: buildAuthEnvTemplate('steam') },
     streams: [
       stream({
@@ -425,6 +461,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'X',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '4a569143-78bd-444b-a4f8-5ac1111e24eb',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('x') },
     streams: [
       stream({
@@ -443,6 +480,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'LinkedIn',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '6ffb910a-683a-4b8b-be0c-732a0aa0e6bf',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('linkedin') },
     streams: [
       stream({
@@ -470,6 +508,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Notion',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '848e630d-c5d0-41ce-bc3b-e4afeebeb7ea',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('notion') },
     streams: [
       stream({
@@ -497,6 +536,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Twitch',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '69e3c459-9980-4707-8603-ea7f54073e26',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('twitch') },
     streams: [
       stream({
@@ -524,6 +564,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Reddit',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '4bfa2f77-4581-4c1a-9885-29d444fc8ee9',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('reddit') },
     streams: [
       stream({
@@ -553,6 +594,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Dropbox',
     lifecycle: 'planned',
     origin: 'connections_page',
+    providerId: '7215fe01-2dd5-47fa-a221-115ff5cbf4c4',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('dropbox') },
     streams: [
       stream({
@@ -567,11 +609,312 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
       }),
     ],
   },
+
+  {
+    key: 'evernote',
+    displayName: 'Evernote',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: 'ecce11f7-b2e5-4fd3-b200-9fcb225922dc',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('evernote') },
+    streams: [
+      stream({
+        key: 'Notes',
+        displayName: 'Notes',
+        description: 'Sync notes, attachments, and update history.',
+        dataDomain: 'productivity',
+        defaultEnabled: true,
+        requiredScopes: ['notes:read'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Notebooks',
+        displayName: 'Notebooks',
+        description: 'Sync notebook metadata and structure.',
+        dataDomain: 'productivity',
+        defaultEnabled: true,
+        requiredScopes: ['notes:read'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'garmin',
+    displayName: 'Garmin',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '1f9f9206-a3b1-4006-9f29-e1b2134777fb',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('garmin') },
+    streams: [
+      stream({
+        key: 'Activities',
+        displayName: 'Activities',
+        description: 'Sync activity and workout summaries.',
+        dataDomain: 'activity',
+        defaultEnabled: true,
+        requiredScopes: ['activity.read'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Sleep',
+        displayName: 'Sleep',
+        description: 'Sync nightly sleep summaries and signals.',
+        dataDomain: 'activity',
+        defaultEnabled: true,
+        requiredScopes: ['sleep.read'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'whoop',
+    displayName: 'WHOOP',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: 'f6284d9e-fad6-41f2-a7cb-c57ff506e9e1',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('whoop') },
+    streams: [
+      stream({
+        key: 'Recovery',
+        displayName: 'Recovery',
+        description: 'Sync recovery, strain, and sleep metrics.',
+        dataDomain: 'activity',
+        defaultEnabled: true,
+        requiredScopes: ['read:recovery'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'fitbit',
+    displayName: 'Fitbit',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '801f340d-eca0-47cc-a12b-6a4a9c55d18f',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('fitbit') },
+    streams: [
+      stream({
+        key: 'Activity',
+        displayName: 'Activity',
+        description: 'Sync activity summaries and heart rate aggregates.',
+        dataDomain: 'activity',
+        defaultEnabled: true,
+        requiredScopes: ['activity', 'heartrate'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Sleep',
+        displayName: 'Sleep',
+        description: 'Sync sleep sessions and sleep score trends.',
+        dataDomain: 'activity',
+        defaultEnabled: true,
+        requiredScopes: ['sleep'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'monday',
+    displayName: 'monday.com',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: 'a7bb151c-9e98-475c-84e8-34e472b4a22a',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('monday') },
+    streams: [
+      stream({
+        key: 'Boards',
+        displayName: 'Boards',
+        description: 'Sync board metadata and ownership.',
+        dataDomain: 'productivity',
+        defaultEnabled: true,
+        requiredScopes: ['boards:read'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Items',
+        displayName: 'Items',
+        description: 'Sync task items, updates, and assignments.',
+        dataDomain: 'productivity',
+        defaultEnabled: true,
+        requiredScopes: ['boards:read'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'hubspot',
+    displayName: 'HubSpot',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '2299918c-2af9-4c4e-8fa1-81e4eb26a4f6',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('hubspot') },
+    streams: [
+      stream({
+        key: 'Contacts',
+        displayName: 'Contacts',
+        description: 'Sync CRM contacts and profile attributes.',
+        dataDomain: 'contacts',
+        defaultEnabled: true,
+        requiredScopes: ['crm.objects.contacts.read'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Deals',
+        displayName: 'Deals',
+        description: 'Sync deal pipeline and stage transitions.',
+        dataDomain: 'commerce',
+        defaultEnabled: true,
+        requiredScopes: ['crm.objects.deals.read'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'jira',
+    displayName: 'Jira',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '7b856d83-09d1-4176-9b1b-e70bb8b90a04',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('jira') },
+    streams: [
+      stream({
+        key: 'Issues',
+        displayName: 'Issues',
+        description: 'Sync issues, comments, and status changes.',
+        dataDomain: 'productivity',
+        defaultEnabled: true,
+        requiredScopes: ['read:jira-work'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Projects',
+        displayName: 'Projects',
+        description: 'Sync project metadata and permissions.',
+        dataDomain: 'productivity',
+        defaultEnabled: true,
+        requiredScopes: ['read:jira-work'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'xero',
+    displayName: 'Xero',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '8acf44b6-e037-4262-bc4a-d9dfd668acb0',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('xero') },
+    streams: [
+      stream({
+        key: 'Invoices',
+        displayName: 'Invoices',
+        description: 'Sync invoices, statuses, and totals.',
+        dataDomain: 'commerce',
+        defaultEnabled: true,
+        requiredScopes: ['accounting.transactions.read'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Contacts',
+        displayName: 'Contacts',
+        description: 'Sync accounting contacts and vendors.',
+        dataDomain: 'contacts',
+        defaultEnabled: true,
+        requiredScopes: ['accounting.contacts.read'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'quickbooks',
+    displayName: 'QuickBooks',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '9a8fb775-6587-4cc5-88b2-944449b799a7',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('quickbooks') },
+    streams: [
+      stream({
+        key: 'Invoices',
+        displayName: 'Invoices',
+        description: 'Sync invoices and payment statuses.',
+        dataDomain: 'commerce',
+        defaultEnabled: true,
+        requiredScopes: ['com.intuit.quickbooks.accounting'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Expenses',
+        displayName: 'Expenses',
+        description: 'Sync expenses and vendor payments.',
+        dataDomain: 'commerce',
+        defaultEnabled: true,
+        requiredScopes: ['com.intuit.quickbooks.accounting'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'box',
+    displayName: 'Box',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '6728a769-ac5d-4261-a31b-9e8c1b5491f0',
+    auth: { type: 'oauth2', env: buildAuthEnvTemplate('box') },
+    streams: [
+      stream({
+        key: 'Files',
+        displayName: 'Files',
+        description: 'Sync file metadata and collaboration updates.',
+        dataDomain: 'files',
+        defaultEnabled: true,
+        requiredScopes: ['root_readwrite'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Folders',
+        displayName: 'Folders',
+        description: 'Sync folder structure and ownership metadata.',
+        dataDomain: 'files',
+        defaultEnabled: true,
+        requiredScopes: ['root_readwrite'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
+  {
+    key: 'plaid',
+    displayName: 'Plaid',
+    lifecycle: 'planned',
+    origin: 'connections_page',
+    providerId: '8e759ef5-4f7a-4742-ba69-3edaa6dd4285',
+    auth: { type: 'apikey', env: buildAuthEnvTemplate('plaid') },
+    streams: [
+      stream({
+        key: 'Accounts',
+        displayName: 'Accounts',
+        description: 'Sync linked financial account metadata.',
+        dataDomain: 'commerce',
+        defaultEnabled: true,
+        requiredScopes: ['accounts:read'],
+        cursorStrategy: 'timestamp',
+      }),
+      stream({
+        key: 'Transactions',
+        displayName: 'Transactions',
+        description: 'Sync personal and business transaction history.',
+        dataDomain: 'commerce',
+        defaultEnabled: true,
+        requiredScopes: ['transactions:read'],
+        cursorStrategy: 'timestamp',
+      }),
+    ],
+  },
   {
     key: 'pinterest',
     displayName: 'Pinterest',
     lifecycle: 'planned',
     origin: 'lifescope_legacy',
+    providerId: '368a6f03-3c44-41df-91af-d506f4fc8cee',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('pinterest') },
     streams: [
       stream({
@@ -591,6 +934,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Lyft',
     lifecycle: 'planned',
     origin: 'lifescope_legacy',
+    providerId: '7d51809a-0160-4f30-8848-bb6fe0ca2614',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('lyft') },
     streams: [
       stream({
@@ -610,6 +954,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     displayName: 'Uber',
     lifecycle: 'planned',
     origin: 'lifescope_legacy',
+    providerId: '16bf550d-618a-4282-bc83-b0daa662d303',
     auth: { type: 'oauth2', env: buildAuthEnvTemplate('uber') },
     streams: [
       stream({
@@ -626,6 +971,4 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   },
 ];
 
-export const ACTIVE_PROVIDER_ID_SET: ReadonlySet<string> = new Set<string>(
-  Object.values(ACTIVE_PROVIDER_IDS),
-);
+export const CATALOG_PROVIDER_ID_SET: ReadonlySet<string> = new Set<string>(Object.values(PROVIDER_IDS));

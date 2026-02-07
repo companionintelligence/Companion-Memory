@@ -25,7 +25,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventsModule } from '@ci/domains/events';
 
 import * as ProviderCatalog from './catalog';
-import { ClientFactory, FacebookClient, GoogleClient, MicrosoftClient } from './clients';
+import { CatalogMockClient, ClientFactory, FacebookClient, GoogleClient, MicrosoftClient } from './clients';
 import { ConnectionsController } from './controllers/ConnectionsController';
 import { ProvidersController } from './controllers/ProvidersController';
 import { ConnectionEntity } from './entities/ConnectionEntity';
@@ -39,6 +39,7 @@ import { ProviderService } from './services/ProviderService';
 @Module({
   imports: [TypeOrmModule.forFeature([ConnectionEntity, ProviderEntity]), EventsModule],
   providers: [
+    CatalogMockClient,
     ClientFactory,
     FacebookClient,
     GoogleClient,
@@ -47,7 +48,15 @@ import { ProviderService } from './services/ProviderService';
     MicrosoftClient,
   ],
   controllers: [ConnectionsController, ProvidersController],
-  exports: [ClientFactory, ConnectionService, ProviderService, FacebookClient, GoogleClient, MicrosoftClient],
+  exports: [
+    CatalogMockClient,
+    ClientFactory,
+    ConnectionService,
+    ProviderService,
+    FacebookClient,
+    GoogleClient,
+    MicrosoftClient,
+  ],
 })
 export class ConnectionsModule {}
 
@@ -59,12 +68,13 @@ export { ConnectionService, ProviderService };
 export { ClientFactory } from './clients';
 
 // Clients
-export { FacebookClient, GoogleClient, MicrosoftClient };
+export { CatalogMockClient, FacebookClient, GoogleClient, MicrosoftClient };
 
 // Provider Catalog
 export { ProviderCatalog };
 export {
   getOAuthEnvVarNames,
+  listProviderConnectCatalog,
   getProviderCatalogByKey,
   getProviderCatalogByProviderId,
   listProviderCatalog,
@@ -72,6 +82,7 @@ export {
 } from './catalog';
 export type {
   ProviderCatalogEntry,
+  ProviderConnectCatalogEntry,
   ProviderAuthType,
   ProviderLifecycle,
   ProviderOrigin,

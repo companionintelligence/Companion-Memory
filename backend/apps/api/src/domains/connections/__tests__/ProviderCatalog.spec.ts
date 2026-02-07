@@ -34,6 +34,17 @@ describe('ProviderCatalog', () => {
         'twitch',
         'reddit',
         'dropbox',
+        'evernote',
+        'garmin',
+        'whoop',
+        'fitbit',
+        'monday',
+        'hubspot',
+        'jira',
+        'xero',
+        'quickbooks',
+        'box',
+        'plaid',
       ]),
     );
   });
@@ -57,6 +68,12 @@ describe('ProviderCatalog', () => {
 
     expect(facebook?.streams.some((stream) => stream.key === 'Profile')).toBe(true);
     expect(facebook?.streams.some((stream) => stream.scopeAliases?.includes('facebook profile'))).toBe(true);
+  });
+
+  it('assigns stable provider ids for every catalog connector entry', () => {
+    const entries = listProviderCatalog();
+
+    expect(entries.every((entry) => !!entry.providerId)).toBe(true);
   });
 
   it('builds oauth environment variable candidates using new and legacy conventions', () => {

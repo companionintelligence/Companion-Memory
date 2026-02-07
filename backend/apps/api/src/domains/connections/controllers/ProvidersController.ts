@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   InternalServerErrorException,
+  NotImplementedException,
   NotFoundException,
   Param,
   Post,
@@ -14,7 +15,7 @@ import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 
-import { resolveOAuthCredentials } from '../catalog';
+import { listProviderConnectCatalog, resolveOAuthCredentials } from '../catalog';
 import { ClientFactory } from '../clients';
 import { ConnectionService } from '../services/ConnectionService';
 import { ProviderService } from '../services/ProviderService';
@@ -37,6 +38,12 @@ export class ProvidersController {
     const serviceContext = toServiceContext(context);
 
     return this.providerService.findAll(serviceContext);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('catalog')
+  async catalog() {
+    return listProviderConnectCatalog((providerId) => this.clientFactory.hasClientForProviderId(providerId));
   }
 
   @UseGuards(JwtAuthGuard)
@@ -64,12 +71,11 @@ export class ProvidersController {
       throw new NotFoundException();
     }
 
-    const client = this.clientFactory.getClientByProviderId(id);
-
+    const client = this.clientFactory.getClientByProviderIdOrNull(id);
     if (client == null) {
       this.logger.log('Attmpted to create a connection without an associated client');
 
-      throw new InternalServerErrorException();
+      throw new NotImplementedException('Provider connector is not enabled in this environment');
     }
 
     // TODO:
