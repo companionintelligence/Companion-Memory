@@ -1,0 +1,45 @@
+{
+  "id": "shopify",
+  "name": "Shopify",
+  "description": "Connect your Shopify store to sync orders, products, and customers.",
+  "logoUrl": "/branding/shopify/logo.svg",
+  "theme": {
+    "backgroundColor": "#96BF48",
+    "borderColor": "#7AB547"
+  },
+  "sources": [
+    {
+      "name": "Orders",
+      "description": "Your Shopify orders",
+      "enabledByDefault": true,
+      "endpoints": ["Orders"],
+      "scopes": ["read_orders"],
+      "transformMap": "shopify_orders_to_content"
+    },
+    {
+      "name": "Products",
+      "description": "Your store products",
+      "enabledByDefault": false,
+      "endpoints": ["Products"],
+      "scopes": ["read_products"],
+      "transformMap": "shopify_products_to_content"
+    },
+    {
+      "name": "Customers",
+      "description": "Your store customers",
+      "enabledByDefault": false,
+      "endpoints": ["Customers"],
+      "scopes": ["read_customers"],
+      "transformMap": "shopify_customers_to_relationship"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://{shop}.myshopify.com/admin/oauth/authorize",
+    "tokenUrl": "https://{shop}.myshopify.com/admin/oauth/access_token",
+    "scopes": ["read_orders", "read_products"],
+    "extraParams": {}
+  },
+  "apiSpecId": "shopify_admin_api_v2024",
+  "enabled": true
+}

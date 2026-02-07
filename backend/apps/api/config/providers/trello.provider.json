@@ -1,0 +1,39 @@
+{
+  "id": "trello",
+  "name": "Trello",
+  "description": "Connect your Trello account to sync boards, cards, and lists.",
+  "logoUrl": "/branding/trello/logo.svg",
+  "theme": {
+    "backgroundColor": "#0079BF",
+    "borderColor": "#026AA7"
+  },
+  "sources": [
+    {
+      "name": "Boards",
+      "description": "Your Trello boards",
+      "enabledByDefault": true,
+      "endpoints": ["MemberBoards"],
+      "scopes": ["read"],
+      "transformMap": "trello_boards_to_content"
+    },
+    {
+      "name": "Cards",
+      "description": "Your Trello cards",
+      "enabledByDefault": true,
+      "endpoints": ["MemberCards"],
+      "scopes": ["read"],
+      "transformMap": "trello_cards_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth1",
+    "authorizationUrl": "https://trello.com/1/authorize",
+    "tokenUrl": "https://trello.com/1/OAuthGetAccessToken",
+    "scopes": ["read"],
+    "extraParams": {
+      "expiration": "never"
+    }
+  },
+  "apiSpecId": "trello_api_v1",
+  "enabled": true
+}

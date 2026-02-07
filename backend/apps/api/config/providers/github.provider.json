@@ -1,0 +1,53 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "description": "Connect your GitHub account to sync repositories, issues, pull requests, and activity.",
+  "logoUrl": "/branding/github/logo.svg",
+  "theme": {
+    "backgroundColor": "#24292e",
+    "borderColor": "#1b1f23"
+  },
+  "sources": [
+    {
+      "name": "Repositories",
+      "description": "Your repositories and starred repositories",
+      "enabledByDefault": true,
+      "endpoints": ["UserRepos", "StarredRepos"],
+      "scopes": ["repo"],
+      "transformMap": "github_repos_to_content"
+    },
+    {
+      "name": "Issues",
+      "description": "Issues assigned to you or created by you",
+      "enabledByDefault": true,
+      "endpoints": ["UserIssues"],
+      "scopes": ["repo"],
+      "transformMap": "github_issues_to_content"
+    },
+    {
+      "name": "Pull Requests",
+      "description": "Pull requests you've created or reviewed",
+      "enabledByDefault": false,
+      "endpoints": ["UserPullRequests"],
+      "scopes": ["repo"],
+      "transformMap": "github_prs_to_content"
+    },
+    {
+      "name": "Activity",
+      "description": "Your GitHub activity and events",
+      "enabledByDefault": false,
+      "endpoints": ["UserEvents"],
+      "scopes": ["read:user"],
+      "transformMap": "github_events_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://github.com/login/oauth/authorize",
+    "tokenUrl": "https://github.com/login/oauth/access_token",
+    "scopes": ["user", "read:user"],
+    "extraParams": {}
+  },
+  "apiSpecId": "github_rest_api_v3",
+  "enabled": true
+}

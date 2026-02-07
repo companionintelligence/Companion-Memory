@@ -1,0 +1,45 @@
+{
+  "id": "icloud",
+  "name": "iCloud",
+  "description": "Connect your iCloud account to sync photos, contacts, and files.",
+  "logoUrl": "/branding/icloud/logo.svg",
+  "theme": {
+    "backgroundColor": "#3b82f6",
+    "borderColor": "#2563eb"
+  },
+  "sources": [
+    {
+      "name": "Photos",
+      "description": "Your iCloud photos",
+      "enabledByDefault": true,
+      "endpoints": ["PhotosLibrary"],
+      "scopes": [],
+      "transformMap": "icloud_photos_to_content"
+    },
+    {
+      "name": "Contacts",
+      "description": "Your iCloud contacts",
+      "enabledByDefault": false,
+      "endpoints": ["Contacts"],
+      "scopes": [],
+      "transformMap": "icloud_contacts_to_relationship"
+    },
+    {
+      "name": "Drive",
+      "description": "Your iCloud Drive files",
+      "enabledByDefault": false,
+      "endpoints": ["DriveItems"],
+      "scopes": [],
+      "transformMap": "icloud_drive_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://appleid.apple.com/auth/authorize",
+    "tokenUrl": "https://appleid.apple.com/auth/token",
+    "scopes": ["email", "name"],
+    "extraParams": {}
+  },
+  "apiSpecId": "icloud_api_v1",
+  "enabled": false
+}

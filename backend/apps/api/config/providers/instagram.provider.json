@@ -1,0 +1,29 @@
+{
+  "id": "instagram",
+  "name": "Instagram",
+  "description": "Connect your Instagram account to sync posts, stories, and media.",
+  "logoUrl": "/branding/instagram/logo.svg",
+  "theme": {
+    "backgroundColor": "#E4405F",
+    "borderColor": "#C13584"
+  },
+  "sources": [
+    {
+      "name": "Media",
+      "description": "Your Instagram posts and media",
+      "enabledByDefault": true,
+      "endpoints": ["UserMedia"],
+      "scopes": ["instagram_basic", "instagram_graph_user_media"],
+      "transformMap": "instagram_media_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://api.instagram.com/oauth/authorize",
+    "tokenUrl": "https://api.instagram.com/oauth/access_token",
+    "scopes": ["instagram_basic"],
+    "extraParams": {}
+  },
+  "apiSpecId": "instagram_graph_api",
+  "enabled": true
+}

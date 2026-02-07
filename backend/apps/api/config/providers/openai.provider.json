@@ -1,0 +1,37 @@
+{
+  "id": "openai",
+  "name": "OpenAI",
+  "description": "Connect your OpenAI account to sync ChatGPT conversations and usage.",
+  "logoUrl": "/branding/openai/logo.svg",
+  "theme": {
+    "backgroundColor": "#10a37f",
+    "borderColor": "#0d8a6a"
+  },
+  "sources": [
+    {
+      "name": "Conversations",
+      "description": "Your ChatGPT conversation history",
+      "enabledByDefault": true,
+      "endpoints": ["Conversations"],
+      "scopes": [],
+      "transformMap": "openai_conversations_to_communication"
+    },
+    {
+      "name": "Models",
+      "description": "Available AI models",
+      "enabledByDefault": false,
+      "endpoints": ["Models"],
+      "scopes": [],
+      "transformMap": "openai_models_to_content"
+    }
+  ],
+  "auth": {
+    "type": "api_key",
+    "authorizationUrl": "https://platform.openai.com/account/api-keys",
+    "tokenUrl": "",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "openai_api_v1",
+  "enabled": true
+}

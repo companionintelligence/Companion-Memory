@@ -1,0 +1,31 @@
+{
+  "id": "signal",
+  "name": "Signal",
+  "description": "Connect your Signal account to sync messages (requires Signal Desktop with linked device).",
+  "logoUrl": "/branding/signal/logo.svg",
+  "theme": {
+    "backgroundColor": "#3a76f0",
+    "borderColor": "#2563d0"
+  },
+  "sources": [
+    {
+      "name": "Messages",
+      "description": "Your Signal messages",
+      "enabledByDefault": true,
+      "endpoints": ["GetMessages"],
+      "scopes": [],
+      "transformMap": "signal_messages_to_communication"
+    }
+  },
+  "auth": {
+    "type": "api_key",
+    "authorizationUrl": "",
+    "tokenUrl": "",
+    "scopes": [],
+    "extraParams": {
+      "note": "Requires Signal CLI or Desktop API access"
+    }
+  },
+  "apiSpecId": "signal_api_v1",
+  "enabled": false
+}

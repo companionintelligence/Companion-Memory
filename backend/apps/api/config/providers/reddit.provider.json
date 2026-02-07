@@ -1,0 +1,47 @@
+{
+  "id": "reddit",
+  "name": "Reddit",
+  "description": "Connect your Reddit account to sync posts, comments, and saved content.",
+  "logoUrl": "/branding/reddit/logo.svg",
+  "theme": {
+    "backgroundColor": "#FF4500",
+    "borderColor": "#FF5700"
+  },
+  "sources": [
+    {
+      "name": "Posts",
+      "description": "Your Reddit posts and submissions",
+      "enabledByDefault": true,
+      "endpoints": ["UserSubmitted"],
+      "scopes": ["history", "read"],
+      "transformMap": "reddit_posts_to_content"
+    },
+    {
+      "name": "Comments",
+      "description": "Your Reddit comments",
+      "enabledByDefault": true,
+      "endpoints": ["UserComments"],
+      "scopes": ["history", "read"],
+      "transformMap": "reddit_comments_to_communication"
+    },
+    {
+      "name": "Saved",
+      "description": "Your saved posts and comments",
+      "enabledByDefault": false,
+      "endpoints": ["UserSaved"],
+      "scopes": ["history", "read"],
+      "transformMap": "reddit_saved_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://www.reddit.com/api/v1/authorize",
+    "tokenUrl": "https://www.reddit.com/api/v1/access_token",
+    "scopes": ["identity", "read", "history"],
+    "extraParams": {
+      "duration": "permanent"
+    }
+  },
+  "apiSpecId": "reddit_api_v1",
+  "enabled": true
+}

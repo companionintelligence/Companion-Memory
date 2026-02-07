@@ -1,0 +1,29 @@
+{
+  "id": "box",
+  "name": "Box",
+  "description": "Connect your Box account to sync files and folders.",
+  "logoUrl": "/branding/box/logo.svg",
+  "theme": {
+    "backgroundColor": "#0061D5",
+    "borderColor": "#0052B4"
+  },
+  "sources": [
+    {
+      "name": "Files",
+      "description": "Your Box files and folders",
+      "enabledByDefault": true,
+      "endpoints": ["FolderItems", "FileInfo"],
+      "scopes": ["root_readwrite"],
+      "transformMap": "box_files_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://account.box.com/api/oauth2/authorize",
+    "tokenUrl": "https://api.box.com/oauth2/token",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "box_api_v2",
+  "enabled": true
+}

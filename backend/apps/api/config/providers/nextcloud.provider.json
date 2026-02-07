@@ -1,0 +1,45 @@
+{
+  "id": "nextcloud",
+  "name": "Nextcloud",
+  "description": "Connect your Nextcloud instance to sync files and contacts.",
+  "logoUrl": "/branding/nextcloud/logo.svg",
+  "theme": {
+    "backgroundColor": "#0082c9",
+    "borderColor": "#006ea8"
+  },
+  "sources": [
+    {
+      "name": "Files",
+      "description": "Your Nextcloud files",
+      "enabledByDefault": true,
+      "endpoints": ["WebDAVList"],
+      "scopes": [],
+      "transformMap": "nextcloud_files_to_content"
+    },
+    {
+      "name": "Contacts",
+      "description": "Your Nextcloud contacts",
+      "enabledByDefault": false,
+      "endpoints": ["CardDAVContacts"],
+      "scopes": [],
+      "transformMap": "nextcloud_contacts_to_relationship"
+    },
+    {
+      "name": "Calendar",
+      "description": "Your Nextcloud calendar",
+      "enabledByDefault": false,
+      "endpoints": ["CalDAVEvents"],
+      "scopes": [],
+      "transformMap": "nextcloud_calendar_to_event"
+    }
+  },
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://{instance}/apps/oauth2/authorize",
+    "tokenUrl": "https://{instance}/apps/oauth2/api/v1/token",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "nextcloud_webdav_api",
+  "enabled": true
+}

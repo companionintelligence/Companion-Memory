@@ -1,0 +1,37 @@
+{
+  "id": "zoom",
+  "name": "Zoom",
+  "description": "Connect your Zoom account to sync meetings and recordings.",
+  "logoUrl": "/branding/zoom/logo.svg",
+  "theme": {
+    "backgroundColor": "#2D8CFF",
+    "borderColor": "#1F7BE5"
+  },
+  "sources": [
+    {
+      "name": "Meetings",
+      "description": "Your Zoom meetings",
+      "enabledByDefault": true,
+      "endpoints": ["Meetings"],
+      "scopes": ["meeting:read"],
+      "transformMap": "zoom_meetings_to_event"
+    },
+    {
+      "name": "Recordings",
+      "description": "Your meeting recordings",
+      "enabledByDefault": false,
+      "endpoints": ["Recordings"],
+      "scopes": ["recording:read"],
+      "transformMap": "zoom_recordings_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://zoom.us/oauth/authorize",
+    "tokenUrl": "https://zoom.us/oauth/token",
+    "scopes": ["user:read"],
+    "extraParams": {}
+  },
+  "apiSpecId": "zoom_api_v2",
+  "enabled": true
+}

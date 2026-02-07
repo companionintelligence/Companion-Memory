@@ -1,0 +1,45 @@
+{
+  "id": "steam",
+  "name": "Steam",
+  "description": "Connect your Steam account to sync games, achievements, and playtime.",
+  "logoUrl": "/branding/steam/logo.svg",
+  "theme": {
+    "backgroundColor": "#171a21",
+    "borderColor": "#1b2838"
+  },
+  "sources": [
+    {
+      "name": "Games",
+      "description": "Your Steam game library",
+      "enabledByDefault": true,
+      "endpoints": ["OwnedGames"],
+      "scopes": [],
+      "transformMap": "steam_games_to_content"
+    },
+    {
+      "name": "Achievements",
+      "description": "Your game achievements",
+      "enabledByDefault": false,
+      "endpoints": ["PlayerAchievements"],
+      "scopes": [],
+      "transformMap": "steam_achievements_to_event"
+    },
+    {
+      "name": "RecentGames",
+      "description": "Recently played games",
+      "enabledByDefault": false,
+      "endpoints": ["RecentlyPlayedGames"],
+      "scopes": [],
+      "transformMap": "steam_recent_to_event"
+    }
+  ],
+  "auth": {
+    "type": "api_key",
+    "authorizationUrl": "https://steamcommunity.com/dev/apikey",
+    "tokenUrl": "",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "steam_web_api_v1",
+  "enabled": true
+}

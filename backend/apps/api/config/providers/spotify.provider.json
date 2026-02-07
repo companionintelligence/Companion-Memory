@@ -1,0 +1,45 @@
+{
+  "id": "spotify",
+  "name": "Spotify",
+  "description": "Connect your Spotify account to sync playlists, listening history, and saved tracks.",
+  "logoUrl": "/branding/spotify/logo.svg",
+  "theme": {
+    "backgroundColor": "#1DB954",
+    "borderColor": "#1ed760"
+  },
+  "sources": [
+    {
+      "name": "Playlists",
+      "description": "Your Spotify playlists",
+      "enabledByDefault": true,
+      "endpoints": ["UserPlaylists", "PlaylistTracks"],
+      "scopes": ["playlist-read-private", "playlist-read-collaborative"],
+      "transformMap": "spotify_playlists_to_content"
+    },
+    {
+      "name": "Saved Tracks",
+      "description": "Your saved songs and albums",
+      "enabledByDefault": true,
+      "endpoints": ["UserSavedTracks"],
+      "scopes": ["user-library-read"],
+      "transformMap": "spotify_tracks_to_content"
+    },
+    {
+      "name": "Recently Played",
+      "description": "Your recent listening history",
+      "enabledByDefault": false,
+      "endpoints": ["RecentlyPlayed"],
+      "scopes": ["user-read-recently-played"],
+      "transformMap": "spotify_history_to_event"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://accounts.spotify.com/authorize",
+    "tokenUrl": "https://accounts.spotify.com/api/token",
+    "scopes": ["user-read-email", "user-read-private"],
+    "extraParams": {}
+  },
+  "apiSpecId": "spotify_web_api_v1",
+  "enabled": true
+}

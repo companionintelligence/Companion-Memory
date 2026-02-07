@@ -1,0 +1,40 @@
+{
+  "id": "twitter",
+  "name": "X (Twitter)",
+  "description": "Connect your X account to sync tweets, likes, and followers.",
+  "logoUrl": "/branding/twitter/logo.svg",
+  "theme": {
+    "backgroundColor": "#000000",
+    "borderColor": "#333333"
+  },
+  "sources": [
+    {
+      "name": "Tweets",
+      "description": "Your tweets and retweets",
+      "enabledByDefault": true,
+      "endpoints": ["UserTweets"],
+      "scopes": ["tweet.read", "users.read"],
+      "transformMap": "twitter_tweets_to_content"
+    },
+    {
+      "name": "Likes",
+      "description": "Tweets you've liked",
+      "enabledByDefault": false,
+      "endpoints": ["UserLikedTweets"],
+      "scopes": ["like.read", "users.read"],
+      "transformMap": "twitter_likes_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://twitter.com/i/oauth2/authorize",
+    "tokenUrl": "https://api.twitter.com/2/oauth2/token",
+    "scopes": ["tweet.read", "users.read"],
+    "extraParams": {
+      "code_challenge": "challenge",
+      "code_challenge_method": "S256"
+    }
+  },
+  "apiSpecId": "twitter_api_v2",
+  "enabled": true
+}

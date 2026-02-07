@@ -1,0 +1,37 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "description": "Connect your Slack workspace to sync messages, channels, and files.",
+  "logoUrl": "/branding/slack/logo.svg",
+  "theme": {
+    "backgroundColor": "#4A154B",
+    "borderColor": "#611f69"
+  },
+  "sources": [
+    {
+      "name": "Messages",
+      "description": "Messages from channels and direct messages",
+      "enabledByDefault": true,
+      "endpoints": ["ConversationsHistory", "ConversationsList"],
+      "scopes": ["channels:history", "groups:history", "im:history", "mpim:history"],
+      "transformMap": "slack_messages_to_communication"
+    },
+    {
+      "name": "Files",
+      "description": "Files shared in your workspace",
+      "enabledByDefault": false,
+      "endpoints": ["FilesList"],
+      "scopes": ["files:read"],
+      "transformMap": "slack_files_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+    "tokenUrl": "https://slack.com/api/oauth.v2.access",
+    "scopes": ["users:read", "users:read.email"],
+    "extraParams": {}
+  },
+  "apiSpecId": "slack_web_api",
+  "enabled": true
+}

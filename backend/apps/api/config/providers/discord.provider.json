@@ -1,0 +1,37 @@
+{
+  "id": "discord",
+  "name": "Discord",
+  "description": "Connect your Discord account to sync messages, servers, and channels.",
+  "logoUrl": "/branding/discord/logo.svg",
+  "theme": {
+    "backgroundColor": "#5865F2",
+    "borderColor": "#4752C4"
+  },
+  "sources": [
+    {
+      "name": "Messages",
+      "description": "Direct messages and server messages",
+      "enabledByDefault": true,
+      "endpoints": ["UserMessages", "DMChannels"],
+      "scopes": ["messages.read"],
+      "transformMap": "discord_messages_to_communication"
+    },
+    {
+      "name": "Servers",
+      "description": "Discord servers (guilds) you're a member of",
+      "enabledByDefault": true,
+      "endpoints": ["UserGuilds"],
+      "scopes": ["guilds"],
+      "transformMap": "discord_guilds_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://discord.com/api/oauth2/authorize",
+    "tokenUrl": "https://discord.com/api/oauth2/token",
+    "scopes": ["identify", "email"],
+    "extraParams": {}
+  },
+  "apiSpecId": "discord_v10",
+  "enabled": true
+}

@@ -1,0 +1,29 @@
+{
+  "id": "anthropic",
+  "name": "Claude (Anthropic)",
+  "description": "Connect your Anthropic account to sync Claude conversations.",
+  "logoUrl": "/branding/anthropic/logo.svg",
+  "theme": {
+    "backgroundColor": "#D97757",
+    "borderColor": "#C96542"
+  },
+  "sources": [
+    {
+      "name": "Conversations",
+      "description": "Your Claude conversation history",
+      "enabledByDefault": true,
+      "endpoints": ["Messages"],
+      "scopes": [],
+      "transformMap": "anthropic_messages_to_communication"
+    }
+  ],
+  "auth": {
+    "type": "api_key",
+    "authorizationUrl": "https://console.anthropic.com/account/keys",
+    "tokenUrl": "",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "anthropic_api_v1",
+  "enabled": true
+}

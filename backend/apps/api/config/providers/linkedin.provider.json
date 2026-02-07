@@ -1,0 +1,37 @@
+{
+  "id": "linkedin",
+  "name": "LinkedIn",
+  "description": "Connect your LinkedIn account to sync posts, connections, and profile activity.",
+  "logoUrl": "/branding/linkedin/logo.svg",
+  "theme": {
+    "backgroundColor": "#0077B5",
+    "borderColor": "#005582"
+  },
+  "sources": [
+    {
+      "name": "Posts",
+      "description": "Your LinkedIn posts and shares",
+      "enabledByDefault": true,
+      "endpoints": ["UserPosts"],
+      "scopes": ["r_liteprofile", "r_emailaddress", "w_member_social"],
+      "transformMap": "linkedin_posts_to_content"
+    },
+    {
+      "name": "Connections",
+      "description": "Your LinkedIn connections",
+      "enabledByDefault": false,
+      "endpoints": ["Connections"],
+      "scopes": ["r_basicprofile", "r_network"],
+      "transformMap": "linkedin_connections_to_relationship"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://www.linkedin.com/oauth/v2/authorization",
+    "tokenUrl": "https://www.linkedin.com/oauth/v2/accessToken",
+    "scopes": ["r_liteprofile", "r_emailaddress"],
+    "extraParams": {}
+  },
+  "apiSpecId": "linkedin_v2",
+  "enabled": true
+}

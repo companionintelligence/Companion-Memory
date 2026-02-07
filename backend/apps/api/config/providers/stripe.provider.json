@@ -1,0 +1,45 @@
+{
+  "id": "stripe",
+  "name": "Stripe",
+  "description": "Connect your Stripe account to sync payments, customers, and transactions.",
+  "logoUrl": "/branding/stripe/logo.svg",
+  "theme": {
+    "backgroundColor": "#635BFF",
+    "borderColor": "#5348E6"
+  },
+  "sources": [
+    {
+      "name": "Payments",
+      "description": "Your Stripe payments and charges",
+      "enabledByDefault": true,
+      "endpoints": ["Charges", "PaymentIntents"],
+      "scopes": ["read_only"],
+      "transformMap": "stripe_payments_to_content"
+    },
+    {
+      "name": "Customers",
+      "description": "Your Stripe customers",
+      "enabledByDefault": false,
+      "endpoints": ["Customers"],
+      "scopes": ["read_only"],
+      "transformMap": "stripe_customers_to_relationship"
+    },
+    {
+      "name": "Subscriptions",
+      "description": "Your Stripe subscriptions",
+      "enabledByDefault": false,
+      "endpoints": ["Subscriptions"],
+      "scopes": ["read_only"],
+      "transformMap": "stripe_subscriptions_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://connect.stripe.com/oauth/authorize",
+    "tokenUrl": "https://connect.stripe.com/oauth/token",
+    "scopes": ["read_only"],
+    "extraParams": {}
+  },
+  "apiSpecId": "stripe_api_v1",
+  "enabled": true
+}

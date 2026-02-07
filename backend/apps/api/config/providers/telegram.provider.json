@@ -1,0 +1,29 @@
+{
+  "id": "telegram",
+  "name": "Telegram",
+  "description": "Connect your Telegram account to sync messages and media.",
+  "logoUrl": "/branding/telegram/logo.svg",
+  "theme": {
+    "backgroundColor": "#0088cc",
+    "borderColor": "#0077b5"
+  },
+  "sources": [
+    {
+      "name": "Messages",
+      "description": "Your Telegram messages",
+      "enabledByDefault": true,
+      "endpoints": ["GetUpdates", "GetMessages"],
+      "scopes": [],
+      "transformMap": "telegram_messages_to_communication"
+    }
+  ],
+  "auth": {
+    "type": "api_key",
+    "authorizationUrl": "https://core.telegram.org/bots",
+    "tokenUrl": "",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "telegram_bot_api_v6",
+  "enabled": true
+}

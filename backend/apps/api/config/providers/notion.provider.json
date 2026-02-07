@@ -1,0 +1,37 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "description": "Connect your Notion workspace to sync pages, databases, and content.",
+  "logoUrl": "/branding/notion/logo.svg",
+  "theme": {
+    "backgroundColor": "#000000",
+    "borderColor": "#37352F"
+  },
+  "sources": [
+    {
+      "name": "Pages",
+      "description": "Your Notion pages and content",
+      "enabledByDefault": true,
+      "endpoints": ["Search", "PageContent"],
+      "scopes": [],
+      "transformMap": "notion_pages_to_content"
+    },
+    {
+      "name": "Databases",
+      "description": "Your Notion databases",
+      "enabledByDefault": false,
+      "endpoints": ["DatabaseQuery"],
+      "scopes": [],
+      "transformMap": "notion_databases_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://api.notion.com/v1/oauth/authorize",
+    "tokenUrl": "https://api.notion.com/v1/oauth/token",
+    "scopes": [],
+    "extraParams": {}
+  },
+  "apiSpecId": "notion_api_v1",
+  "enabled": true
+}

@@ -1,0 +1,37 @@
+{
+  "id": "asana",
+  "name": "Asana",
+  "description": "Connect your Asana account to sync projects, tasks, and teams.",
+  "logoUrl": "/branding/asana/logo.svg",
+  "theme": {
+    "backgroundColor": "#F06A6A",
+    "borderColor": "#E85555"
+  },
+  "sources": [
+    {
+      "name": "Tasks",
+      "description": "Your Asana tasks",
+      "enabledByDefault": true,
+      "endpoints": ["UserTasks"],
+      "scopes": ["default"],
+      "transformMap": "asana_tasks_to_content"
+    },
+    {
+      "name": "Projects",
+      "description": "Your Asana projects",
+      "enabledByDefault": false,
+      "endpoints": ["Projects"],
+      "scopes": ["default"],
+      "transformMap": "asana_projects_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://app.asana.com/-/oauth_authorize",
+    "tokenUrl": "https://app.asana.com/-/oauth_token",
+    "scopes": ["default"],
+    "extraParams": {}
+  },
+  "apiSpecId": "asana_api_v1",
+  "enabled": true
+}

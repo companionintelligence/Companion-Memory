@@ -1,0 +1,45 @@
+{
+  "id": "twitch",
+  "name": "Twitch",
+  "description": "Connect your Twitch account to sync streams, clips, and follows.",
+  "logoUrl": "/branding/twitch/logo.svg",
+  "theme": {
+    "backgroundColor": "#9146FF",
+    "borderColor": "#772CE8"
+  },
+  "sources": [
+    {
+      "name": "Streams",
+      "description": "Your Twitch streams and videos",
+      "enabledByDefault": true,
+      "endpoints": ["UserVideos"],
+      "scopes": ["user:read:email"],
+      "transformMap": "twitch_videos_to_content"
+    },
+    {
+      "name": "Follows",
+      "description": "Channels you follow",
+      "enabledByDefault": false,
+      "endpoints": ["UserFollows"],
+      "scopes": ["user:read:follows"],
+      "transformMap": "twitch_follows_to_relationship"
+    },
+    {
+      "name": "Clips",
+      "description": "Your Twitch clips",
+      "enabledByDefault": false,
+      "endpoints": ["Clips"],
+      "scopes": ["clips:edit"],
+      "transformMap": "twitch_clips_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://id.twitch.tv/oauth2/authorize",
+    "tokenUrl": "https://id.twitch.tv/oauth2/token",
+    "scopes": ["user:read:email"],
+    "extraParams": {}
+  },
+  "apiSpecId": "twitch_helix_api",
+  "enabled": true
+}
