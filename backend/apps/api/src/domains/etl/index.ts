@@ -48,6 +48,8 @@ export { EtlController };
 
 // Types
 export type { ApiLog } from './types';
+
+// Legacy sync types (deprecated - use types/sync.ts)
 export type {
   CalendarSyncState,
   GmailSyncState,
@@ -64,3 +66,46 @@ export type {
   CalendarSyncResult,
   GmailSyncResult,
 } from './types/syncTypes';
+
+// New ETL system types
+export type {
+  ProviderConfig,
+  ProviderSource,
+  ProviderTheme,
+  OAuthConfig,
+  CreateProviderConfigDto,
+  UpdateProviderConfigDto,
+} from './types/provider';
+
+export type {
+  ApiSpec,
+  EndpointSpec,
+  ParamSpec,
+  PaginationConfig,
+  RateLimitConfig,
+  ApiMetadata,
+  CreateApiSpecDto,
+  UpdateApiSpecDto,
+} from './types/api-spec';
+
+export type {
+  TransformMap,
+  FieldMapping,
+  ComputedField,
+  TypeTransform,
+  TransformMapMetadata,
+  TransformResult,
+  CreateTransformMapDto,
+  UpdateTransformMapDto,
+} from './types/transform';
+
+export type {
+  SyncResponse,
+  SourceSyncResult,
+  ConnectionSyncResult,
+  SyncJob,
+  SyncJobStatus,
+  SyncOptions,
+  RateLimiterState,
+  ApiRequestMetadata,
+} from './types/sync';
