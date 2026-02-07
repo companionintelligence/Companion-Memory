@@ -1,0 +1,59 @@
+{
+  "id": "openai_api_v1",
+  "name": "OpenAI API v1",
+  "baseUrl": "http://localhost:3001/mock/openai",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "email",
+    "profileEndpoint": "dashboard/user/api_keys"
+  },
+  "endpoints": {
+    "Conversations": {
+      "name": "Conversations",
+      "method": "GET",
+      "path": "/v1/chat/conversations",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.openai.conversationsOffset",
+          "default": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10,
+        "requestsPerDay": 10000
+      }
+    },
+    "Models": {
+      "name": "Models",
+      "method": "GET",
+      "path": "/v1/models",
+      "responseType": "collection",
+      "dataPath": "data",
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerDay": 10000
+  }
+}

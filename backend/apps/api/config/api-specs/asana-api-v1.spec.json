@@ -1,0 +1,82 @@
+{
+  "id": "asana_api_v1",
+  "name": "Asana API v1",
+  "baseUrl": "http://localhost:3001/mock/asana",
+  "version": "1.0",
+  "meta": {
+    "uniquenessField": "gid",
+    "defaultNameField": "name",
+    "profileEndpoint": "users/me"
+  },
+  "endpoints": {
+    "UserTasks": {
+      "name": "UserTasks",
+      "method": "GET",
+      "path": "/user_task_lists/{userTaskListGid}/tasks",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.asana.tasksOffset",
+          "required": false
+        },
+        "opt_fields": {
+          "type": "static",
+          "value": "name,notes,completed,due_on,assignee,projects"
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 15,
+        "requestsPerMinute": 1500
+      }
+    },
+    "Projects": {
+      "name": "Projects",
+      "method": "GET",
+      "path": "/projects",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.asana.projectsOffset",
+          "required": false
+        },
+        "workspace": {
+          "type": "dynamic",
+          "source": "workspaceGid",
+          "required": true
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 15
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 15,
+    "requestsPerMinute": 1500
+  }
+}

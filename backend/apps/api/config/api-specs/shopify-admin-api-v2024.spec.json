@@ -1,0 +1,107 @@
+{
+  "id": "shopify_admin_api_v2024",
+  "name": "Shopify Admin API 2024",
+  "baseUrl": "http://localhost:3001/mock/shopify",
+  "version": "2024-01",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "shop.name",
+    "profileEndpoint": "admin/api/2024-01/shop.json"
+  },
+  "endpoints": {
+    "Orders": {
+      "name": "Orders",
+      "method": "GET",
+      "path": "/admin/api/2024-01/orders.json",
+      "responseType": "collection",
+      "dataPath": "orders",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 250
+        },
+        "since_id": {
+          "type": "dynamic",
+          "source": "syncState.shopify.lastOrderId",
+          "required": false
+        },
+        "status": {
+          "type": "static",
+          "value": "any"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_page_info",
+        "cursorParam": "page_info",
+        "limitParam": "limit",
+        "defaultLimit": 250,
+        "maxLimit": 250
+      },
+      "rateLimit": {
+        "requestsPerSecond": 2,
+        "requestsPerDay": 10000
+      }
+    },
+    "Products": {
+      "name": "Products",
+      "method": "GET",
+      "path": "/admin/api/2024-01/products.json",
+      "responseType": "collection",
+      "dataPath": "products",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 250
+        },
+        "since_id": {
+          "type": "dynamic",
+          "source": "syncState.shopify.lastProductId",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_page_info",
+        "cursorParam": "page_info",
+        "limitParam": "limit",
+        "defaultLimit": 250
+      },
+      "rateLimit": {
+        "requestsPerSecond": 2
+      }
+    },
+    "Customers": {
+      "name": "Customers",
+      "method": "GET",
+      "path": "/admin/api/2024-01/customers.json",
+      "responseType": "collection",
+      "dataPath": "customers",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 250
+        },
+        "since_id": {
+          "type": "dynamic",
+          "source": "syncState.shopify.lastCustomerId",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_page_info",
+        "cursorParam": "page_info",
+        "limitParam": "limit",
+        "defaultLimit": 250
+      },
+      "rateLimit": {
+        "requestsPerSecond": 2
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 2,
+    "requestsPerDay": 10000
+  }
+}

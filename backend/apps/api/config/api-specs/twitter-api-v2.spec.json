@@ -1,0 +1,84 @@
+{
+  "id": "twitter_api_v2",
+  "name": "Twitter API v2",
+  "baseUrl": "http://localhost:3001/mock/twitter",
+  "version": "2",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "username",
+    "profileEndpoint": "users/me"
+  },
+  "endpoints": {
+    "UserTweets": {
+      "name": "UserTweets",
+      "method": "GET",
+      "path": "/users/{userId}/tweets",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "max_results": {
+          "type": "static",
+          "value": 100
+        },
+        "pagination_token": {
+          "type": "dynamic",
+          "source": "syncState.twitter.tweetsPaginationToken",
+          "required": false
+        },
+        "tweet.fields": {
+          "type": "static",
+          "value": "created_at,author_id,text,public_metrics"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "meta.next_token",
+        "cursorParam": "pagination_token",
+        "limitParam": "max_results",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1,
+        "requestsPerMinute": 15
+      }
+    },
+    "UserLikedTweets": {
+      "name": "UserLikedTweets",
+      "method": "GET",
+      "path": "/users/{userId}/liked_tweets",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "max_results": {
+          "type": "static",
+          "value": 100
+        },
+        "pagination_token": {
+          "type": "dynamic",
+          "source": "syncState.twitter.likesPaginationToken",
+          "required": false
+        },
+        "tweet.fields": {
+          "type": "static",
+          "value": "created_at,author_id,text,public_metrics"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "meta.next_token",
+        "cursorParam": "pagination_token",
+        "limitParam": "max_results",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1,
+        "requestsPerMinute": 15
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 1,
+    "requestsPerMinute": 15
+  }
+}

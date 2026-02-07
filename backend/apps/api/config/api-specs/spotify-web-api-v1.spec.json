@@ -1,0 +1,127 @@
+{
+  "id": "spotify_web_api_v1",
+  "name": "Spotify Web API v1",
+  "baseUrl": "http://localhost:3001/mock/spotify",
+  "version": "v1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "display_name",
+    "profileEndpoint": "me"
+  },
+  "endpoints": {
+    "UserPlaylists": {
+      "name": "UserPlaylists",
+      "method": "GET",
+      "path": "/me/playlists",
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 50
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.spotify.playlistsOffset",
+          "default": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 50,
+        "maxLimit": 50
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "PlaylistTracks": {
+      "name": "PlaylistTracks",
+      "method": "GET",
+      "path": "/playlists/{playlistId}/tracks",
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.spotify.tracksOffset",
+          "default": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "UserSavedTracks": {
+      "name": "UserSavedTracks",
+      "method": "GET",
+      "path": "/me/tracks",
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 50
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.spotify.savedTracksOffset",
+          "default": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 50
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "RecentlyPlayed": {
+      "name": "RecentlyPlayed",
+      "method": "GET",
+      "path": "/me/player/recently-played",
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 50
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.spotify.recentlyPlayedAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "cursors.after",
+        "cursorParam": "after",
+        "limitParam": "limit",
+        "defaultLimit": 50
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerDay": 100000
+  }
+}

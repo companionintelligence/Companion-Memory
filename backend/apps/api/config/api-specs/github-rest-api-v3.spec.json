@@ -1,0 +1,170 @@
+{
+  "id": "github_rest_api_v3",
+  "name": "GitHub REST API v3",
+  "baseUrl": "http://localhost:3001/mock/github",
+  "version": "v3",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "login",
+    "profileEndpoint": "user"
+  },
+  "endpoints": {
+    "UserRepos": {
+      "name": "UserRepos",
+      "method": "GET",
+      "path": "/user/repos",
+      "responseType": "collection",
+      "dataPath": "repositories",
+      "queryParams": {
+        "per_page": {
+          "type": "static",
+          "value": 100
+        },
+        "page": {
+          "type": "dynamic",
+          "source": "syncState.github.reposPage",
+          "default": 1
+        },
+        "sort": {
+          "type": "static",
+          "value": "updated"
+        },
+        "direction": {
+          "type": "static",
+          "value": "desc"
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "per_page",
+        "offsetParam": "page",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10,
+        "requestsPerHour": 5000
+      }
+    },
+    "StarredRepos": {
+      "name": "StarredRepos",
+      "method": "GET",
+      "path": "/user/starred",
+      "responseType": "collection",
+      "dataPath": "repositories",
+      "queryParams": {
+        "per_page": {
+          "type": "static",
+          "value": 100
+        },
+        "page": {
+          "type": "dynamic",
+          "source": "syncState.github.starredPage",
+          "default": 1
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "per_page",
+        "offsetParam": "page",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "UserIssues": {
+      "name": "UserIssues",
+      "method": "GET",
+      "path": "/user/issues",
+      "responseType": "collection",
+      "dataPath": "issues",
+      "queryParams": {
+        "per_page": {
+          "type": "static",
+          "value": 100
+        },
+        "page": {
+          "type": "dynamic",
+          "source": "syncState.github.issuesPage",
+          "default": 1
+        },
+        "state": {
+          "type": "static",
+          "value": "all"
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "per_page",
+        "offsetParam": "page",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "UserPullRequests": {
+      "name": "UserPullRequests",
+      "method": "GET",
+      "path": "/search/issues",
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "q": {
+          "type": "static",
+          "value": "is:pr author:@me"
+        },
+        "per_page": {
+          "type": "static",
+          "value": 100
+        },
+        "page": {
+          "type": "dynamic",
+          "source": "syncState.github.prsPage",
+          "default": 1
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "per_page",
+        "offsetParam": "page",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "UserEvents": {
+      "name": "UserEvents",
+      "method": "GET",
+      "path": "/users/{username}/events",
+      "responseType": "collection",
+      "dataPath": "events",
+      "queryParams": {
+        "per_page": {
+          "type": "static",
+          "value": 100
+        },
+        "page": {
+          "type": "dynamic",
+          "source": "syncState.github.eventsPage",
+          "default": 1
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "per_page",
+        "offsetParam": "page",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerHour": 5000
+  }
+}

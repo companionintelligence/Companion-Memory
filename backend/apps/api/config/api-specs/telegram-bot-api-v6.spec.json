@@ -1,0 +1,74 @@
+{
+  "id": "telegram_bot_api_v6",
+  "name": "Telegram Bot API v6",
+  "baseUrl": "http://localhost:3001/mock/telegram",
+  "version": "6",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "username",
+    "profileEndpoint": "getMe"
+  },
+  "endpoints": {
+    "GetUpdates": {
+      "name": "GetUpdates",
+      "method": "GET",
+      "path": "/getUpdates",
+      "responseType": "collection",
+      "dataPath": "result",
+      "queryParams": {
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.telegram.updateId",
+          "required": false
+        },
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "timeout": {
+          "type": "static",
+          "value": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 30
+      }
+    },
+    "GetMessages": {
+      "name": "GetMessages",
+      "method": "GET",
+      "path": "/getMessages",
+      "responseType": "collection",
+      "dataPath": "result.messages",
+      "queryParams": {
+        "chat_id": {
+          "type": "dynamic",
+          "source": "chatId",
+          "required": true
+        },
+        "limit": {
+          "type": "static",
+          "value": 100
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 30
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 30
+  }
+}

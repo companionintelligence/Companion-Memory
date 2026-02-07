@@ -1,0 +1,64 @@
+{
+  "id": "box_api_v2",
+  "name": "Box API v2",
+  "baseUrl": "http://localhost:3001/mock/box",
+  "version": "2.0",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "name",
+    "profileEndpoint": "users/me"
+  },
+  "endpoints": {
+    "FolderItems": {
+      "name": "FolderItems",
+      "method": "GET",
+      "path": "/folders/{folderId}/items",
+      "responseType": "collection",
+      "dataPath": "entries",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 1000
+        },
+        "offset": {
+          "type": "dynamic",
+          "source": "syncState.box.itemsOffset",
+          "default": 0
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,name,type,size,created_at,modified_at,path_collection"
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "limit",
+        "offsetParam": "offset",
+        "defaultLimit": 1000,
+        "maxLimit": 1000
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "FileInfo": {
+      "name": "FileInfo",
+      "method": "GET",
+      "path": "/files/{fileId}",
+      "responseType": "object",
+      "dataPath": ".",
+      "queryParams": {
+        "fields": {
+          "type": "static",
+          "value": "id,name,size,created_at,modified_at,description,shared_link"
+        }
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10
+  }
+}

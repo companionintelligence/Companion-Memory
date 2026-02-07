@@ -1,0 +1,51 @@
+{
+  "id": "instagram_graph_api",
+  "name": "Instagram Graph API",
+  "baseUrl": "http://localhost:3001/mock/instagram",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "username",
+    "profileEndpoint": "me"
+  },
+  "endpoints": {
+    "UserMedia": {
+      "name": "UserMedia",
+      "method": "GET",
+      "path": "/me/media",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "fields": {
+          "type": "static",
+          "value": "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp"
+        },
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.instagram.mediaCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "paging.cursors.after",
+        "cursorParam": "after",
+        "limitParam": "limit",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5,
+        "requestsPerHour": 200
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 5,
+    "requestsPerHour": 200
+  }
+}

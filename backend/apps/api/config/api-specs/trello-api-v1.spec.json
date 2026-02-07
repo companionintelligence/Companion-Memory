@@ -1,0 +1,64 @@
+{
+  "id": "trello_api_v1",
+  "name": "Trello API v1",
+  "baseUrl": "http://localhost:3001/mock/trello",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "username",
+    "profileEndpoint": "members/me"
+  },
+  "endpoints": {
+    "MemberBoards": {
+      "name": "MemberBoards",
+      "method": "GET",
+      "path": "/members/me/boards",
+      "responseType": "collection",
+      "dataPath": "boards",
+      "queryParams": {
+        "filter": {
+          "type": "static",
+          "value": "all"
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,name,desc,closed,dateLastActivity,url"
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10,
+        "requestsPerDay": 10000
+      }
+    },
+    "MemberCards": {
+      "name": "MemberCards",
+      "method": "GET",
+      "path": "/members/me/cards",
+      "responseType": "collection",
+      "dataPath": "cards",
+      "queryParams": {
+        "filter": {
+          "type": "static",
+          "value": "all"
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,name,desc,closed,due,idBoard,idList,labels,url"
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerDay": 10000
+  }
+}

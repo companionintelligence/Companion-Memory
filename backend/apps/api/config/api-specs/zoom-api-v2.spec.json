@@ -1,0 +1,84 @@
+{
+  "id": "zoom_api_v2",
+  "name": "Zoom API v2",
+  "baseUrl": "http://localhost:3001/mock/zoom",
+  "version": "2",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "email",
+    "profileEndpoint": "users/me"
+  },
+  "endpoints": {
+    "Meetings": {
+      "name": "Meetings",
+      "method": "GET",
+      "path": "/users/me/meetings",
+      "responseType": "collection",
+      "dataPath": "meetings",
+      "queryParams": {
+        "type": {
+          "type": "static",
+          "value": "scheduled"
+        },
+        "page_size": {
+          "type": "static",
+          "value": 100
+        },
+        "next_page_token": {
+          "type": "dynamic",
+          "source": "syncState.zoom.meetingsPageToken",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_page_token",
+        "cursorParam": "next_page_token",
+        "limitParam": "page_size",
+        "defaultLimit": 100,
+        "maxLimit": 300
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10,
+        "requestsPerDay": 10000
+      }
+    },
+    "Recordings": {
+      "name": "Recordings",
+      "method": "GET",
+      "path": "/users/me/recordings",
+      "responseType": "collection",
+      "dataPath": "meetings",
+      "queryParams": {
+        "page_size": {
+          "type": "static",
+          "value": 100
+        },
+        "next_page_token": {
+          "type": "dynamic",
+          "source": "syncState.zoom.recordingsPageToken",
+          "required": false
+        },
+        "from": {
+          "type": "dynamic",
+          "source": "syncState.zoom.lastSyncTime",
+          "default": "2020-01-01"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_page_token",
+        "cursorParam": "next_page_token",
+        "limitParam": "page_size",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerDay": 10000
+  }
+}

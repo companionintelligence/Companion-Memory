@@ -1,0 +1,111 @@
+{
+  "id": "slack_web_api",
+  "name": "Slack Web API",
+  "baseUrl": "http://localhost:3001/mock/slack",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "user_id",
+    "defaultNameField": "real_name",
+    "profileEndpoint": "users.info"
+  },
+  "endpoints": {
+    "ConversationsHistory": {
+      "name": "ConversationsHistory",
+      "method": "GET",
+      "path": "/conversations.history",
+      "responseType": "collection",
+      "dataPath": "messages",
+      "queryParams": {
+        "channel": {
+          "type": "dynamic",
+          "source": "channelId",
+          "required": true
+        },
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "cursor": {
+          "type": "dynamic",
+          "source": "syncState.slack.messageCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "response_metadata.next_cursor",
+        "cursorParam": "cursor",
+        "limitParam": "limit",
+        "defaultLimit": 100,
+        "maxLimit": 1000
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1,
+        "requestsPerMinute": 60
+      }
+    },
+    "ConversationsList": {
+      "name": "ConversationsList",
+      "method": "GET",
+      "path": "/conversations.list",
+      "responseType": "collection",
+      "dataPath": "channels",
+      "queryParams": {
+        "types": {
+          "type": "static",
+          "value": "public_channel,private_channel,mpim,im"
+        },
+        "limit": {
+          "type": "static",
+          "value": 200
+        },
+        "cursor": {
+          "type": "dynamic",
+          "source": "syncState.slack.channelCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "response_metadata.next_cursor",
+        "cursorParam": "cursor",
+        "limitParam": "limit",
+        "defaultLimit": 200
+      },
+      "rateLimit": {
+        "requestsPerSecond": 20
+      }
+    },
+    "FilesList": {
+      "name": "FilesList",
+      "method": "GET",
+      "path": "/files.list",
+      "responseType": "collection",
+      "dataPath": "files",
+      "queryParams": {
+        "count": {
+          "type": "static",
+          "value": 100
+        },
+        "page": {
+          "type": "dynamic",
+          "source": "syncState.slack.filesPage",
+          "default": 1
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "count",
+        "offsetParam": "page",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 20
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 1,
+    "requestsPerMinute": 60
+  }
+}

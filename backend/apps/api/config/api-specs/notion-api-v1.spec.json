@@ -1,0 +1,87 @@
+{
+  "id": "notion_api_v1",
+  "name": "Notion API v1",
+  "baseUrl": "http://localhost:3001/mock/notion",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "name",
+    "profileEndpoint": "users/me"
+  },
+  "endpoints": {
+    "Search": {
+      "name": "Search",
+      "method": "POST",
+      "path": "/search",
+      "responseType": "collection",
+      "dataPath": "results",
+      "queryParams": {
+        "filter": {
+          "type": "static",
+          "value": { "property": "object", "value": "page" }
+        },
+        "page_size": {
+          "type": "static",
+          "value": 100
+        },
+        "start_cursor": {
+          "type": "dynamic",
+          "source": "syncState.notion.searchCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_cursor",
+        "cursorParam": "start_cursor",
+        "limitParam": "page_size",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 3
+      }
+    },
+    "PageContent": {
+      "name": "PageContent",
+      "method": "GET",
+      "path": "/pages/{pageId}",
+      "responseType": "object",
+      "dataPath": ".",
+      "rateLimit": {
+        "requestsPerSecond": 3
+      }
+    },
+    "DatabaseQuery": {
+      "name": "DatabaseQuery",
+      "method": "POST",
+      "path": "/databases/{databaseId}/query",
+      "responseType": "collection",
+      "dataPath": "results",
+      "queryParams": {
+        "page_size": {
+          "type": "static",
+          "value": 100
+        },
+        "start_cursor": {
+          "type": "dynamic",
+          "source": "syncState.notion.dbCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_cursor",
+        "cursorParam": "start_cursor",
+        "limitParam": "page_size",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 3
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 3
+  }
+}

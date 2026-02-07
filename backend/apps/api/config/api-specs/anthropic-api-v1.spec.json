@@ -1,0 +1,47 @@
+{
+  "id": "anthropic_api_v1",
+  "name": "Anthropic API v1",
+  "baseUrl": "http://localhost:3001/mock/anthropic",
+  "version": "2023-06-01",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "email",
+    "profileEndpoint": "v1/account"
+  },
+  "endpoints": {
+    "Messages": {
+      "name": "Messages",
+      "method": "GET",
+      "path": "/v1/messages",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "page_token": {
+          "type": "dynamic",
+          "source": "syncState.anthropic.messagesPageToken",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "next_page_token",
+        "cursorParam": "page_token",
+        "limitParam": "limit",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5,
+        "requestsPerDay": 10000
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 5,
+    "requestsPerDay": 10000
+  }
+}

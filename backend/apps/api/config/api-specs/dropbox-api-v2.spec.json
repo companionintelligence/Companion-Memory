@@ -1,0 +1,73 @@
+{
+  "id": "dropbox_api_v2",
+  "name": "Dropbox API v2",
+  "baseUrl": "http://localhost:3001/mock/dropbox",
+  "version": "2",
+  "meta": {
+    "uniquenessField": "account_id",
+    "defaultNameField": "name.display_name",
+    "profileEndpoint": "users/get_current_account"
+  },
+  "endpoints": {
+    "ListFolder": {
+      "name": "ListFolder",
+      "method": "POST",
+      "path": "/files/list_folder",
+      "responseType": "collection",
+      "dataPath": "entries",
+      "queryParams": {
+        "path": {
+          "type": "dynamic",
+          "source": "folderPath",
+          "default": ""
+        },
+        "recursive": {
+          "type": "static",
+          "value": false
+        },
+        "include_media_info": {
+          "type": "static",
+          "value": true
+        },
+        "limit": {
+          "type": "static",
+          "value": 2000
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "cursor",
+        "cursorParam": "cursor",
+        "defaultLimit": 2000
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "ListFolderContinue": {
+      "name": "ListFolderContinue",
+      "method": "POST",
+      "path": "/files/list_folder/continue",
+      "responseType": "collection",
+      "dataPath": "entries",
+      "queryParams": {
+        "cursor": {
+          "type": "dynamic",
+          "source": "syncState.dropbox.folderCursor",
+          "required": true
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "cursor",
+        "cursorParam": "cursor"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10
+  }
+}

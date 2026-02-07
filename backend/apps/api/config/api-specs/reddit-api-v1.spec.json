@@ -1,0 +1,103 @@
+{
+  "id": "reddit_api_v1",
+  "name": "Reddit API v1",
+  "baseUrl": "http://localhost:3001/mock/reddit",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "name",
+    "profileEndpoint": "api/v1/me"
+  },
+  "endpoints": {
+    "UserSubmitted": {
+      "name": "UserSubmitted",
+      "method": "GET",
+      "path": "/user/{username}/submitted",
+      "responseType": "collection",
+      "dataPath": "data.children",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.reddit.submittedAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data.after",
+        "cursorParam": "after",
+        "limitParam": "limit",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1,
+        "requestsPerMinute": 60
+      }
+    },
+    "UserComments": {
+      "name": "UserComments",
+      "method": "GET",
+      "path": "/user/{username}/comments",
+      "responseType": "collection",
+      "dataPath": "data.children",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.reddit.commentsAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data.after",
+        "cursorParam": "after",
+        "limitParam": "limit",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1
+      }
+    },
+    "UserSaved": {
+      "name": "UserSaved",
+      "method": "GET",
+      "path": "/user/{username}/saved",
+      "responseType": "collection",
+      "dataPath": "data.children",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.reddit.savedAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data.after",
+        "cursorParam": "after",
+        "limitParam": "limit",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 1,
+    "requestsPerMinute": 60
+  }
+}

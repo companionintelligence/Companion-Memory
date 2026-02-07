@@ -1,0 +1,131 @@
+{
+  "id": "stripe_api_v1",
+  "name": "Stripe API v1",
+  "baseUrl": "http://localhost:3001/mock/stripe",
+  "version": "2023-10-16",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "email",
+    "profileEndpoint": "account"
+  },
+  "endpoints": {
+    "Charges": {
+      "name": "Charges",
+      "method": "GET",
+      "path": "/v1/charges",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "starting_after": {
+          "type": "dynamic",
+          "source": "syncState.stripe.chargesStartingAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data[0].id",
+        "cursorParam": "starting_after",
+        "limitParam": "limit",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 25,
+        "requestsPerDay": 100000
+      }
+    },
+    "PaymentIntents": {
+      "name": "PaymentIntents",
+      "method": "GET",
+      "path": "/v1/payment_intents",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "starting_after": {
+          "type": "dynamic",
+          "source": "syncState.stripe.paymentIntentsStartingAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data[0].id",
+        "cursorParam": "starting_after",
+        "limitParam": "limit",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 25
+      }
+    },
+    "Customers": {
+      "name": "Customers",
+      "method": "GET",
+      "path": "/v1/customers",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "starting_after": {
+          "type": "dynamic",
+          "source": "syncState.stripe.customersStartingAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data[0].id",
+        "cursorParam": "starting_after",
+        "limitParam": "limit",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 25
+      }
+    },
+    "Subscriptions": {
+      "name": "Subscriptions",
+      "method": "GET",
+      "path": "/v1/subscriptions",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "starting_after": {
+          "type": "dynamic",
+          "source": "syncState.stripe.subscriptionsStartingAfter",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "data[0].id",
+        "cursorParam": "starting_after",
+        "limitParam": "limit",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 25
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 25,
+    "requestsPerDay": 100000
+  }
+}

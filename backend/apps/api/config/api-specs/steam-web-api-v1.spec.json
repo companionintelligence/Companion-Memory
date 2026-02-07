@@ -1,0 +1,95 @@
+{
+  "id": "steam_web_api_v1",
+  "name": "Steam Web API v1",
+  "baseUrl": "http://localhost:3001/mock/steam",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "steamid",
+    "defaultNameField": "personaname",
+    "profileEndpoint": "ISteamUser/GetPlayerSummaries/v2"
+  },
+  "endpoints": {
+    "OwnedGames": {
+      "name": "OwnedGames",
+      "method": "GET",
+      "path": "/IPlayerService/GetOwnedGames/v1",
+      "responseType": "collection",
+      "dataPath": "response.games",
+      "queryParams": {
+        "steamid": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "include_appinfo": {
+          "type": "static",
+          "value": true
+        },
+        "include_played_free_games": {
+          "type": "static",
+          "value": true
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1,
+        "requestsPerDay": 100000
+      }
+    },
+    "PlayerAchievements": {
+      "name": "PlayerAchievements",
+      "method": "GET",
+      "path": "/ISteamUserStats/GetPlayerAchievements/v1",
+      "responseType": "collection",
+      "dataPath": "playerstats.achievements",
+      "queryParams": {
+        "steamid": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "appid": {
+          "type": "dynamic",
+          "source": "gameId",
+          "required": true
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1
+      }
+    },
+    "RecentlyPlayedGames": {
+      "name": "RecentlyPlayedGames",
+      "method": "GET",
+      "path": "/IPlayerService/GetRecentlyPlayedGames/v1",
+      "responseType": "collection",
+      "dataPath": "response.games",
+      "queryParams": {
+        "steamid": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "count": {
+          "type": "static",
+          "value": 100
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 1
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 1,
+    "requestsPerDay": 100000
+  }
+}

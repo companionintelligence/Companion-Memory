@@ -1,0 +1,86 @@
+{
+  "id": "linkedin_v2",
+  "name": "LinkedIn API v2",
+  "baseUrl": "http://localhost:3001/mock/linkedin",
+  "version": "2",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "localizedFirstName",
+    "profileEndpoint": "me"
+  },
+  "endpoints": {
+    "UserPosts": {
+      "name": "UserPosts",
+      "method": "GET",
+      "path": "/ugcPosts",
+      "responseType": "collection",
+      "dataPath": "elements",
+      "queryParams": {
+        "q": {
+          "type": "static",
+          "value": "authors"
+        },
+        "authors": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "count": {
+          "type": "static",
+          "value": 100
+        },
+        "start": {
+          "type": "dynamic",
+          "source": "syncState.linkedin.postsStart",
+          "default": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "count",
+        "offsetParam": "start",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 2,
+        "requestsPerDay": 500
+      }
+    },
+    "Connections": {
+      "name": "Connections",
+      "method": "GET",
+      "path": "/connections",
+      "responseType": "collection",
+      "dataPath": "elements",
+      "queryParams": {
+        "q": {
+          "type": "static",
+          "value": "viewer"
+        },
+        "count": {
+          "type": "static",
+          "value": 100
+        },
+        "start": {
+          "type": "dynamic",
+          "source": "syncState.linkedin.connectionsStart",
+          "default": 0
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "count",
+        "offsetParam": "start",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 2
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 2,
+    "requestsPerDay": 500
+  }
+}

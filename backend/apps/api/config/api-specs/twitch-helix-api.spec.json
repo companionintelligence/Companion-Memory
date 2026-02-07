@@ -1,0 +1,118 @@
+{
+  "id": "twitch_helix_api",
+  "name": "Twitch Helix API",
+  "baseUrl": "http://localhost:3001/mock/twitch",
+  "version": "helix",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "display_name",
+    "profileEndpoint": "users"
+  },
+  "endpoints": {
+    "UserVideos": {
+      "name": "UserVideos",
+      "method": "GET",
+      "path": "/videos",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "user_id": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "first": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.twitch.videosCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "pagination.cursor",
+        "cursorParam": "after",
+        "limitParam": "first",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 20,
+        "requestsPerMinute": 800
+      }
+    },
+    "UserFollows": {
+      "name": "UserFollows",
+      "method": "GET",
+      "path": "/users/follows",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "from_id": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "first": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.twitch.followsCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "pagination.cursor",
+        "cursorParam": "after",
+        "limitParam": "first",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 20
+      }
+    },
+    "Clips": {
+      "name": "Clips",
+      "method": "GET",
+      "path": "/clips",
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "broadcaster_id": {
+          "type": "dynamic",
+          "source": "userId",
+          "required": true
+        },
+        "first": {
+          "type": "static",
+          "value": 100
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.twitch.clipsCursor",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "pagination.cursor",
+        "cursorParam": "after",
+        "limitParam": "first",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 20
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 20,
+    "requestsPerMinute": 800
+  }
+}

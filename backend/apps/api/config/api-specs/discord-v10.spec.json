@@ -1,0 +1,85 @@
+{
+  "id": "discord_v10",
+  "name": "Discord API v10",
+  "baseUrl": "http://localhost:3001/mock/discord",
+  "version": "10",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "username",
+    "profileEndpoint": "users/@me"
+  },
+  "endpoints": {
+    "UserMessages": {
+      "name": "UserMessages",
+      "method": "GET",
+      "path": "/channels/{channelId}/messages",
+      "responseType": "collection",
+      "dataPath": "messages",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "before": {
+          "type": "dynamic",
+          "source": "syncState.discord.lastMessageId",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "before",
+        "cursorParam": "before",
+        "limitParam": "limit",
+        "defaultLimit": 100,
+        "maxLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5,
+        "requestsPerHour": 5000
+      }
+    },
+    "DMChannels": {
+      "name": "DMChannels",
+      "method": "GET",
+      "path": "/users/@me/channels",
+      "responseType": "collection",
+      "dataPath": "channels",
+      "rateLimit": {
+        "requestsPerSecond": 5
+      }
+    },
+    "UserGuilds": {
+      "name": "UserGuilds",
+      "method": "GET",
+      "path": "/users/@me/guilds",
+      "responseType": "collection",
+      "dataPath": "guilds",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 200
+        },
+        "after": {
+          "type": "dynamic",
+          "source": "syncState.discord.lastGuildId",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "after",
+        "cursorParam": "after",
+        "limitParam": "limit",
+        "defaultLimit": 200
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 50,
+    "requestsPerDay": 50000
+  }
+}

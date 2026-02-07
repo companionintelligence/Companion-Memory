@@ -1,0 +1,73 @@
+{
+  "id": "nextcloud_webdav_api",
+  "name": "Nextcloud WebDAV API",
+  "baseUrl": "http://localhost:3001/mock/nextcloud",
+  "version": "1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "displayName",
+    "profileEndpoint": "ocs/v1.php/cloud/user"
+  },
+  "endpoints": {
+    "WebDAVList": {
+      "name": "WebDAVList",
+      "method": "PROPFIND",
+      "path": "/remote.php/dav/files/{userId}",
+      "responseType": "collection",
+      "dataPath": "multistatus.response",
+      "queryParams": {
+        "depth": {
+          "type": "static",
+          "value": 1
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "CardDAVContacts": {
+      "name": "CardDAVContacts",
+      "method": "PROPFIND",
+      "path": "/remote.php/dav/addressbooks/users/{userId}/contacts",
+      "responseType": "collection",
+      "dataPath": "multistatus.response",
+      "queryParams": {
+        "depth": {
+          "type": "static",
+          "value": 1
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "CalDAVEvents": {
+      "name": "CalDAVEvents",
+      "method": "PROPFIND",
+      "path": "/remote.php/dav/calendars/{userId}/personal",
+      "responseType": "collection",
+      "dataPath": "multistatus.response",
+      "queryParams": {
+        "depth": {
+          "type": "static",
+          "value": 1
+        }
+      },
+      "pagination": {
+        "type": "none"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10
+  }
+}
