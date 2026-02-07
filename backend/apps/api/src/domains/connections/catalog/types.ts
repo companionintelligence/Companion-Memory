@@ -44,6 +44,7 @@ export interface ProviderStreamDefinition {
   requiredScopes: string[];
   cursorStrategy: ProviderCursorStrategy;
   mapKey?: string;
+  scopeAliases?: string[];
 }
 
 export interface ProviderCatalogEntry {

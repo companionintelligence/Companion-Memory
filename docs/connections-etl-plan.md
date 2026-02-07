@@ -228,3 +228,66 @@ Where `<NAME>` uses uppercase provider key (example: `GOOGLE`, `SLACK`, `GITHUB`
 - Active provider runtime remains unchanged for users.
 - ETL pipeline contracts are in place for next migration steps.
 - Targeted tests validate catalog and provider env conventions.
+
+## Connector Discovery Plan
+
+### Goal
+
+Continuously discover and prioritize new connectors that increase memory quality and user retention.
+
+### Discovery Inputs
+
+1. In-product demand signals
+- Track `connect` page card clicks on disabled providers.
+- Track failed manual import attempts and user support requests.
+
+2. Existing data graph gaps
+- Audit missing domains in user graphs (finance, travel, health, commerce, smart home, developer tools).
+- Prioritize connectors that fill high-frequency empty entities/relationships.
+
+3. External ecosystem scan
+- Quarterly scan of official API catalogs and provider changelogs.
+- Track API policy changes that affect existing or planned integrations.
+
+### Selection Rubric
+
+Score each candidate 1-5 in:
+
+1. User value density (daily/weekly relevance)
+2. API reliability and long-term policy stability
+3. Security/compliance complexity
+4. ETL complexity (pagination, rate limits, backfills)
+5. Promotion readiness (can data map cleanly to canonical entities)
+
+Prioritize highest total score with implementation feasibility.
+
+### Implementation Pipeline
+
+1. Add catalog entry (`planned`) with auth/env template and stream list.
+2. Add mock payload fixtures and adapter classification tests.
+3. Implement connector extraction and pipeline adapter.
+4. Add transform/load assertions in integration tests.
+5. Launch behind feature flag to a small cohort before broad rollout.
+
+### Cadence
+
+- Weekly triage of candidate queue.
+- Monthly connector roadmap refresh.
+- Quarterly pruning of stale or deprecated candidates.
+
+### Candidate Queue (Next Discovery Pass)
+
+1. Developer and productivity
+- GitLab, Linear, Jira, Asana.
+
+2. Personal finance and commerce
+- Plaid, Stripe, PayPal, Amazon order history.
+
+3. Travel and mobility
+- Delta/United trip history, Airbnb, Google Maps timeline exports.
+
+4. Health and wearables
+- Apple Health exports, Oura, Garmin, Fitbit.
+
+5. Media and communication
+- Apple Music, WhatsApp export ingestion, Substack, Pocket.

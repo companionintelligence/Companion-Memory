@@ -47,6 +47,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['gmail.readonly'],
         cursorStrategy: 'token',
         mapKey: 'GmailInbox',
+        scopeAliases: ['Gmail'],
       }),
       stream({
         key: 'Calendar',
@@ -57,6 +58,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['calendar.readonly'],
         cursorStrategy: 'token',
         mapKey: 'CalendarList',
+        scopeAliases: ['Google Calendar'],
       }),
       stream({
         key: 'Drive',
@@ -67,6 +69,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['drive.readonly'],
         cursorStrategy: 'token',
         mapKey: 'DriveChanges',
+        scopeAliases: ['Google Drive'],
       }),
       stream({
         key: 'Contacts',
@@ -77,6 +80,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['contacts'],
         cursorStrategy: 'token',
         mapKey: 'ContactGroupsList',
+        scopeAliases: ['Google Contacts'],
       }),
       stream({
         key: 'YouTube',
@@ -86,6 +90,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         defaultEnabled: true,
         requiredScopes: ['youtube'],
         cursorStrategy: 'composite',
+        scopeAliases: ['YouTube'],
       }),
     ],
   },
@@ -109,6 +114,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['mail.read'],
         cursorStrategy: 'token',
         mapKey: 'Mailbox',
+        scopeAliases: ['Microsoft Graph - Mail'],
       }),
       stream({
         key: 'Calendar',
@@ -119,6 +125,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['calendars.read'],
         cursorStrategy: 'token',
         mapKey: 'CalendarEvents',
+        scopeAliases: ['Microsoft Graph - Calendar'],
       }),
       stream({
         key: 'OneDrive',
@@ -129,6 +136,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['files.read'],
         cursorStrategy: 'url',
         mapKey: 'DriveDelta',
+        scopeAliases: ['Microsoft Graph - OneDrive Files'],
       }),
     ],
   },
@@ -144,6 +152,16 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     },
     streams: [
       stream({
+        key: 'Profile',
+        displayName: 'Profile',
+        description: 'Sync account profile and identity metadata.',
+        dataDomain: 'contacts',
+        defaultEnabled: true,
+        requiredScopes: ['public_profile'],
+        cursorStrategy: 'none',
+        scopeAliases: ['facebook profile'],
+      }),
+      stream({
         key: 'Posts',
         displayName: 'Posts',
         description: 'Sync timeline posts and status updates.',
@@ -152,6 +170,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         requiredScopes: ['user_posts'],
         cursorStrategy: 'url',
         mapKey: 'UserFeed',
+        scopeAliases: ['facebook posts'],
       }),
       stream({
         key: 'Photos',
@@ -161,6 +180,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         defaultEnabled: true,
         requiredScopes: ['user_photos'],
         cursorStrategy: 'url',
+        scopeAliases: ['facebook photos'],
       }),
       stream({
         key: 'Videos',
@@ -170,6 +190,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         defaultEnabled: true,
         requiredScopes: ['user_videos'],
         cursorStrategy: 'url',
+        scopeAliases: ['facebook videos'],
       }),
       stream({
         key: 'Friends',
@@ -179,6 +200,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         defaultEnabled: true,
         requiredScopes: ['user_friends'],
         cursorStrategy: 'url',
+        scopeAliases: ['facebook friends'],
       }),
       stream({
         key: 'Likes',
@@ -188,6 +210,7 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
         defaultEnabled: true,
         requiredScopes: ['user_likes'],
         cursorStrategy: 'url',
+        scopeAliases: ['facebook likes'],
       }),
     ],
   },

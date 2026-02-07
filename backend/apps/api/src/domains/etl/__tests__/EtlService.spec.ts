@@ -15,7 +15,10 @@ import {
 } from '@ci/test/mocks';
 
 import type { ApiLogEntity } from '../entities/ApiLogEntity';
+import { ConnectionPipelineOrchestrator } from '../pipeline/ConnectionPipelineOrchestrator';
 import { EtlService } from '../services/EtlService';
+
+const GOOGLE_PROVIDER_ID = '0198779b-182c-716e-9275-b81d99a47fdb';
 
 describe('EtlService', () => {
   let service: EtlService;
@@ -29,6 +32,7 @@ describe('EtlService', () => {
     save: jest.Mock;
     find: jest.Mock;
   };
+  let connectionPipelineOrchestrator: ConnectionPipelineOrchestrator;
 
   beforeEach(() => {
     mockClientFactory = {
@@ -46,10 +50,13 @@ describe('EtlService', () => {
       find: jest.fn(),
     };
 
+    connectionPipelineOrchestrator = new ConnectionPipelineOrchestrator();
+
     service = new EtlService(
       mockApiLogRepository as unknown as Repository<ApiLogEntity>,
       mockClientFactory as unknown as ClientFactory,
       mockConnectionService as unknown as ConnectionService,
+      connectionPipelineOrchestrator,
       createMockLogger() as unknown as LoggerService,
     );
   });
@@ -57,9 +64,10 @@ describe('EtlService', () => {
   describe('handleConnectionSync', () => {
     it('should sync a valid Google connection', async () => {
       const mockConnection = createMockConnection('google', {
+        providerId: GOOGLE_PROVIDER_ID,
         active: true,
         activeEndpoints: ['Calendar', 'Gmail'],
-        provider: { id: 'google' } as unknown as Connection['provider'],
+        provider: { id: GOOGLE_PROVIDER_ID } as unknown as Connection['provider'],
       });
       const context = createMockContext();
 
@@ -98,9 +106,9 @@ describe('EtlService', () => {
     });
 
     it('should handle sync errors gracefully', async () => {
-      const mockConnection = createMockConnection('google', {
+      const mockConnection = createMockConnection(GOOGLE_PROVIDER_ID, {
         active: true,
-        provider: { id: 'google' } as unknown as Connection['provider'],
+        provider: { id: GOOGLE_PROVIDER_ID } as unknown as Connection['provider'],
       });
       const context = createMockContext();
 

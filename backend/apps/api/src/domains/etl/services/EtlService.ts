@@ -15,6 +15,8 @@ import {
 import { OnEvent, Events, EventPayloads } from '@ci/domains/events';
 
 import { ApiLogEntity } from '../entities/ApiLogEntity';
+import { createConnectionSyncResponseAdapter } from '../pipeline/adapters/ConnectionSyncResponseAdapters';
+import { ConnectionPipelineOrchestrator } from '../pipeline/ConnectionPipelineOrchestrator';
 
 @Injectable()
 export class EtlService {
@@ -23,6 +25,7 @@ export class EtlService {
     private readonly apiLogRepository: Repository<ApiLogEntity>,
     private readonly clientFactory: ClientFactory,
     private readonly connectionService: ConnectionService,
+    private readonly connectionPipelineOrchestrator: ConnectionPipelineOrchestrator,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(EtlService.name);
@@ -62,7 +65,6 @@ export class EtlService {
 
     // Perform sync
     const syncResponses = await this.syncConnection(context, connection.id);
-
     const updatedSyncState = await this.processSyncResponses(context, connection, syncResponses);
 
     // Update sync state if there are changes
@@ -196,6 +198,42 @@ export class EtlService {
   }
 
   private async processSyncResponses(
+    context: RequestContext,
+    connection: Connection,
+    syncResponses: SyncResponse[],
+  ): Promise<Record<string, unknown>> {
+    const providerCatalog = getProviderCatalogByProviderId(connection.providerId);
+    if (!providerCatalog) {
+      return this.processSyncResponsesLegacy(context, connection, syncResponses);
+    }
+
+    const adapter = createConnectionSyncResponseAdapter(providerCatalog, syncResponses);
+    const pipelineResult = await this.connectionPipelineOrchestrator.run(adapter, {
+      request: context,
+      connection: {
+        id: connection.id,
+        providerId: connection.providerId,
+        userId: connection.userId,
+        activeEndpoints: connection.activeEndpoints,
+        syncState: connection.syncState,
+      },
+    });
+
+    if (pipelineResult.transform.records.length > 0) {
+      await this.saveApiLogs(
+        context,
+        connection,
+        pipelineResult.transform.records.map((record) => ({
+          api: record.scope,
+          data: record.payload,
+        })),
+      );
+    }
+
+    return pipelineResult.extract.checkpoint;
+  }
+
+  private async processSyncResponsesLegacy(
     context: RequestContext,
     connection: Connection,
     syncResponses: SyncResponse[],
