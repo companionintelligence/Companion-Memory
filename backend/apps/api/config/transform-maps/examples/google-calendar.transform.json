@@ -1,0 +1,101 @@
+{
+  "id": "google_calendar_to_event",
+  "name": "Google Calendar Events to Event",
+  "description": "Transforms Google Calendar API event format into internal Event schema",
+  "sourceType": "google_calendar_event",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "summary",
+      "default": "(No Title)"
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "startTime": {
+      "type": "computed",
+      "compute": {
+        "function": "parseCalendarDateTime",
+        "inputs": ["start"]
+      },
+      "required": true
+    },
+    "endTime": {
+      "type": "computed",
+      "compute": {
+        "function": "parseCalendarDateTime",
+        "inputs": ["end"]
+      },
+      "required": true
+    },
+    "duration": {
+      "type": "computed",
+      "compute": {
+        "function": "extractEventDuration",
+        "inputs": ["start", "end"]
+      }
+    },
+    "location": {
+      "type": "direct",
+      "source": "location"
+    },
+    "attendees": {
+      "type": "computed",
+      "compute": {
+        "function": "extractAttendees",
+        "inputs": ["attendees"]
+      }
+    },
+    "organizer": {
+      "type": "nested",
+      "path": "organizer.email"
+    },
+    "isAllDay": {
+      "type": "nested",
+      "path": "start.date",
+      "transform": {
+        "type": "boolean"
+      },
+      "default": false
+    },
+    "recurrence": {
+      "type": "computed",
+      "compute": {
+        "function": "parseRecurrenceRule",
+        "inputs": ["recurrence[0]"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "google_calendar"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "calendar_event"
+    },
+    "metadata": {
+      "type": "template",
+      "template": "{\"calendarId\":\"{{ attendees }}\",\"eventType\":\"{{ eventType }}\"}"
+    }
+  },
+  "transformers": [
+    "parseCalendarDateTime",
+    "extractEventDuration",
+    "extractAttendees",
+    "parseRecurrenceRule"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["google", "calendar", "event"],
+    "notes": "Handles both regular and all-day events. Supports recurring events with RRULE parsing."
+  },
+  "enabled": true
+}

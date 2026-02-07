@@ -1,0 +1,215 @@
+{
+  "id": "google_apis_v1",
+  "name": "Google APIs v1",
+  "baseUrl": "https://www.googleapis.com",
+  "version": "v1",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "email",
+    "profileEndpoint": "oauth2/v2/userinfo"
+  },
+  "endpoints": {
+    "GmailMessages": {
+      "name": "GmailMessages",
+      "method": "GET",
+      "path": "/gmail/v1/users/me/messages",
+      "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+      "responseType": "collection",
+      "dataPath": "messages",
+      "queryParams": {
+        "maxResults": {
+          "type": "static",
+          "value": 100
+        },
+        "pageToken": {
+          "type": "template",
+          "template": "{{ syncState.gmail.nextPageToken }}",
+          "required": false
+        },
+        "labelIds": {
+          "type": "static",
+          "value": "INBOX"
+        }
+      },
+      "pagination": {
+        "type": "token",
+        "nextTokenField": "nextPageToken",
+        "tokenParam": "pageToken",
+        "limitParam": "maxResults",
+        "defaultLimit": 100,
+        "maxLimit": 500
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5,
+        "requestsPerHour": 10000
+      },
+      "timeout": 30000
+    },
+    "GmailLabels": {
+      "name": "GmailLabels",
+      "method": "GET",
+      "path": "/gmail/v1/users/me/labels",
+      "responseType": "collection",
+      "dataPath": "labels",
+      "rateLimit": {
+        "requestsPerSecond": 5
+      }
+    },
+    "CalendarEvents": {
+      "name": "CalendarEvents",
+      "method": "GET",
+      "path": "/calendar/v3/calendars/primary/events",
+      "scopes": ["https://www.googleapis.com/auth/calendar.readonly"],
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "maxResults": {
+          "type": "static",
+          "value": 250
+        },
+        "pageToken": {
+          "type": "template",
+          "template": "{{ syncState.calendar.nextPageToken }}",
+          "required": false
+        },
+        "timeMin": {
+          "type": "dynamic",
+          "source": "syncState.calendar.lastSyncTime",
+          "default": "2020-01-01T00:00:00Z"
+        },
+        "singleEvents": {
+          "type": "static",
+          "value": true
+        }
+      },
+      "pagination": {
+        "type": "token",
+        "nextTokenField": "nextPageToken",
+        "tokenParam": "pageToken",
+        "limitParam": "maxResults",
+        "defaultLimit": 250
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "CalendarList": {
+      "name": "CalendarList",
+      "method": "GET",
+      "path": "/calendar/v3/users/me/calendarList",
+      "responseType": "collection",
+      "dataPath": "items",
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "DriveFiles": {
+      "name": "DriveFiles",
+      "method": "GET",
+      "path": "/drive/v3/files",
+      "scopes": ["https://www.googleapis.com/auth/drive.readonly"],
+      "responseType": "collection",
+      "dataPath": "files",
+      "queryParams": {
+        "pageSize": {
+          "type": "static",
+          "value": 100
+        },
+        "pageToken": {
+          "type": "template",
+          "template": "{{ syncState.drive.nextPageToken }}"
+        },
+        "fields": {
+          "type": "static",
+          "value": "files(id,name,mimeType,size,createdTime,modifiedTime,owners,thumbnailLink)"
+        }
+      },
+      "pagination": {
+        "type": "token",
+        "nextTokenField": "nextPageToken",
+        "tokenParam": "pageToken",
+        "limitParam": "pageSize"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "DriveChanges": {
+      "name": "DriveChanges",
+      "method": "GET",
+      "path": "/drive/v3/changes",
+      "responseType": "collection",
+      "dataPath": "changes",
+      "queryParams": {
+        "pageToken": {
+          "type": "dynamic",
+          "source": "syncState.drive.changeToken",
+          "required": true
+        },
+        "pageSize": {
+          "type": "static",
+          "value": 100
+        }
+      },
+      "pagination": {
+        "type": "token",
+        "nextTokenField": "nextPageToken",
+        "tokenParam": "pageToken"
+      }
+    },
+    "YouTubePlaylists": {
+      "name": "YouTubePlaylists",
+      "method": "GET",
+      "path": "/youtube/v3/playlists",
+      "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
+      "responseType": "collection",
+      "dataPath": "items",
+      "queryParams": {
+        "part": {
+          "type": "static",
+          "value": "snippet,contentDetails"
+        },
+        "mine": {
+          "type": "static",
+          "value": true
+        },
+        "maxResults": {
+          "type": "static",
+          "value": 50
+        },
+        "pageToken": {
+          "type": "template",
+          "template": "{{ syncState.youtube.playlistsPageToken }}"
+        }
+      },
+      "pagination": {
+        "type": "token",
+        "nextTokenField": "nextPageToken",
+        "tokenParam": "pageToken"
+      }
+    },
+    "ContactGroups": {
+      "name": "ContactGroups",
+      "method": "GET",
+      "path": "/people/v1/contactGroups",
+      "scopes": ["https://www.googleapis.com/auth/contacts.readonly"],
+      "responseType": "collection",
+      "dataPath": "contactGroups",
+      "queryParams": {
+        "pageSize": {
+          "type": "static",
+          "value": 100
+        }
+      },
+      "pagination": {
+        "type": "token",
+        "nextTokenField": "nextPageToken",
+        "tokenParam": "pageToken"
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerDay": 100000
+  }
+}

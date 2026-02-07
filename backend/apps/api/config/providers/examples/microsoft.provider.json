@@ -1,0 +1,55 @@
+{
+  "id": "microsoft",
+  "name": "Microsoft",
+  "description": "Connect your Microsoft 365 account to sync Outlook Mail, Calendar, and OneDrive.",
+  "logoUrl": "/branding/microsoft/logo.svg",
+  "theme": {
+    "backgroundColor": "#0078d4",
+    "borderColor": "#005a9e"
+  },
+  "sources": [
+    {
+      "name": "Outlook Mail",
+      "description": "Email messages and folders from Outlook",
+      "enabledByDefault": true,
+      "endpoints": ["OutlookMessages", "OutlookFolders"],
+      "scopes": [
+        "https://graph.microsoft.com/Mail.Read"
+      ],
+      "transformMap": "microsoft_outlook_to_communication"
+    },
+    {
+      "name": "Outlook Calendar",
+      "description": "Calendar events and meetings from Outlook",
+      "enabledByDefault": true,
+      "endpoints": ["OutlookEvents", "OutlookCalendars"],
+      "scopes": [
+        "https://graph.microsoft.com/Calendars.Read"
+      ],
+      "transformMap": "microsoft_calendar_to_event"
+    },
+    {
+      "name": "OneDrive",
+      "description": "Files and folders from OneDrive",
+      "enabledByDefault": false,
+      "endpoints": ["OneDriveItems", "OneDriveChanges"],
+      "scopes": [
+        "https://graph.microsoft.com/Files.Read"
+      ],
+      "transformMap": "microsoft_onedrive_to_content"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    "tokenUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    "scopes": [
+      "https://graph.microsoft.com/User.Read"
+    ],
+    "extraParams": {
+      "response_mode": "query"
+    }
+  },
+  "apiSpecId": "microsoft_graph_v1",
+  "enabled": true
+}

@@ -1,0 +1,147 @@
+{
+  "id": "microsoft_graph_v1",
+  "name": "Microsoft Graph API v1.0",
+  "baseUrl": "https://graph.microsoft.com/v1.0",
+  "version": "v1.0",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "displayName",
+    "profileEndpoint": "me"
+  },
+  "endpoints": {
+    "OutlookMessages": {
+      "name": "OutlookMessages",
+      "method": "GET",
+      "path": "/me/messages",
+      "scopes": ["https://graph.microsoft.com/Mail.Read"],
+      "responseType": "collection",
+      "dataPath": "value",
+      "queryParams": {
+        "$top": {
+          "type": "static",
+          "value": 100
+        },
+        "$skip": {
+          "type": "dynamic",
+          "source": "syncState.outlook.messagesSkip",
+          "default": 0
+        },
+        "$select": {
+          "type": "static",
+          "value": "id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead"
+        },
+        "$filter": {
+          "type": "template",
+          "template": "receivedDateTime ge {{ syncState.outlook.lastSyncTime }}",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "$top",
+        "defaultLimit": 100
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10,
+        "requestsPerHour": 10000
+      }
+    },
+    "OutlookFolders": {
+      "name": "OutlookFolders",
+      "method": "GET",
+      "path": "/me/mailFolders",
+      "responseType": "collection",
+      "dataPath": "value",
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "OutlookEvents": {
+      "name": "OutlookEvents",
+      "method": "GET",
+      "path": "/me/events",
+      "scopes": ["https://graph.microsoft.com/Calendars.Read"],
+      "responseType": "collection",
+      "dataPath": "value",
+      "queryParams": {
+        "$top": {
+          "type": "static",
+          "value": 250
+        },
+        "$select": {
+          "type": "static",
+          "value": "id,subject,start,end,location,attendees,organizer,isAllDay,recurrence"
+        },
+        "$filter": {
+          "type": "template",
+          "template": "start/dateTime ge '{{ syncState.calendar.lastSyncTime }}'",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "offset",
+        "limitParam": "$top",
+        "defaultLimit": 250
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "OutlookCalendars": {
+      "name": "OutlookCalendars",
+      "method": "GET",
+      "path": "/me/calendars",
+      "responseType": "collection",
+      "dataPath": "value",
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "OneDriveItems": {
+      "name": "OneDriveItems",
+      "method": "GET",
+      "path": "/me/drive/root/children",
+      "scopes": ["https://graph.microsoft.com/Files.Read"],
+      "responseType": "collection",
+      "dataPath": "value",
+      "queryParams": {
+        "$top": {
+          "type": "static",
+          "value": 100
+        },
+        "$select": {
+          "type": "static",
+          "value": "id,name,size,createdDateTime,lastModifiedDateTime,file,folder"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "@odata.nextLink"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 10
+      }
+    },
+    "OneDriveChanges": {
+      "name": "OneDriveChanges",
+      "method": "GET",
+      "path": "/me/drive/root/delta",
+      "responseType": "collection",
+      "dataPath": "value",
+      "queryParams": {
+        "token": {
+          "type": "dynamic",
+          "source": "syncState.onedrive.deltaToken"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "@odata.nextLink"
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 10,
+    "requestsPerHour": 10000
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "id": "facebook_graph_v18",
+  "name": "Facebook Graph API v18.0",
+  "baseUrl": "https://graph.facebook.com/v18.0",
+  "version": "v18.0",
+  "meta": {
+    "uniquenessField": "id",
+    "defaultNameField": "name",
+    "profileEndpoint": "me"
+  },
+  "endpoints": {
+    "FacebookPosts": {
+      "name": "FacebookPosts",
+      "method": "GET",
+      "path": "/me/posts",
+      "scopes": ["user_posts"],
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,message,created_time,story,full_picture,reactions,shares,comments"
+        },
+        "since": {
+          "type": "dynamic",
+          "source": "syncState.posts.lastSyncTime",
+          "required": false
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "paging.next"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5,
+        "requestsPerHour": 200
+      }
+    },
+    "FacebookPhotos": {
+      "name": "FacebookPhotos",
+      "method": "GET",
+      "path": "/me/photos",
+      "scopes": ["user_photos"],
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 100
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,created_time,name,picture,images,album"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "paging.next"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5
+      }
+    },
+    "FacebookVideos": {
+      "name": "FacebookVideos",
+      "method": "GET",
+      "path": "/me/videos",
+      "scopes": ["user_videos"],
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 50
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,created_time,description,title,source,picture,length"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "paging.next"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5
+      }
+    },
+    "FacebookFriends": {
+      "name": "FacebookFriends",
+      "method": "GET",
+      "path": "/me/friends",
+      "scopes": ["user_friends"],
+      "responseType": "collection",
+      "dataPath": "data",
+      "queryParams": {
+        "limit": {
+          "type": "static",
+          "value": 500
+        },
+        "fields": {
+          "type": "static",
+          "value": "id,name,picture"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "nextTokenField": "paging.next"
+      },
+      "rateLimit": {
+        "requestsPerSecond": 5
+      }
+    }
+  },
+  "globalRateLimit": {
+    "requestsPerSecond": 5,
+    "requestsPerHour": 200
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "id": "google",
+  "name": "Google",
+  "description": "Connect your Google account to sync Gmail, Calendar, Drive, YouTube, and Contacts.",
+  "logoUrl": "/branding/google/logo.svg",
+  "theme": {
+    "backgroundColor": "#4285f4",
+    "borderColor": "#1967d2"
+  },
+  "sources": [
+    {
+      "name": "Gmail",
+      "description": "Email messages, labels, and threads from Gmail",
+      "enabledByDefault": true,
+      "endpoints": ["GmailMessages", "GmailLabels"],
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "transformMap": "google_gmail_to_communication"
+    },
+    {
+      "name": "Calendar",
+      "description": "Calendar events, meetings, and scheduling information",
+      "enabledByDefault": true,
+      "endpoints": ["CalendarEvents", "CalendarList"],
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ],
+      "transformMap": "google_calendar_to_event"
+    },
+    {
+      "name": "Drive",
+      "description": "Files, folders, and document changes from Google Drive",
+      "enabledByDefault": false,
+      "endpoints": ["DriveFiles", "DriveChanges"],
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly"
+      ],
+      "transformMap": "google_drive_to_content"
+    },
+    {
+      "name": "YouTube",
+      "description": "YouTube playlists, likes, subscriptions, and activity",
+      "enabledByDefault": false,
+      "endpoints": ["YouTubePlaylists", "YouTubeLikes", "YouTubeSubscriptions"],
+      "scopes": [
+        "https://www.googleapis.com/auth/youtube.readonly"
+      ],
+      "transformMap": "google_youtube_to_content"
+    },
+    {
+      "name": "Contacts",
+      "description": "Google Contacts and contact groups",
+      "enabledByDefault": false,
+      "endpoints": ["ContactGroups", "ContactsList"],
+      "scopes": [
+        "https://www.googleapis.com/auth/contacts.readonly"
+      ],
+      "transformMap": "google_contacts_to_relationship"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+    "tokenUrl": "https://oauth2.googleapis.com/token",
+    "scopes": [],
+    "extraParams": {
+      "access_type": "offline",
+      "prompt": "consent"
+    }
+  },
+  "apiSpecId": "google_apis_v1",
+  "enabled": true
+}

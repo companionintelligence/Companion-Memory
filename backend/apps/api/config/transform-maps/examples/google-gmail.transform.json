@@ -1,0 +1,81 @@
+{
+  "id": "google_gmail_to_communication",
+  "name": "Gmail Messages to Communication",
+  "description": "Transforms Gmail API message format into internal Communication schema",
+  "sourceType": "google_gmail_message",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "nested",
+      "path": "payload.headers[name=Subject].value",
+      "default": "(No Subject)"
+    },
+    "content": {
+      "type": "computed",
+      "compute": {
+        "function": "extractEmailBody",
+        "inputs": ["payload"]
+      }
+    },
+    "sender": {
+      "type": "computed",
+      "compute": {
+        "function": "extractEmailSender",
+        "inputs": ["payload.headers"]
+      }
+    },
+    "recipients": {
+      "type": "computed",
+      "compute": {
+        "function": "extractEmailRecipients",
+        "inputs": ["payload.headers"]
+      }
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "internalDate",
+      "transform": {
+        "type": "date",
+        "format": "unix_ms"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "email"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "gmail"
+    },
+    "metadata": {
+      "type": "nested",
+      "path": "labelIds"
+    },
+    "threadId": {
+      "type": "direct",
+      "source": "threadId"
+    },
+    "snippet": {
+      "type": "direct",
+      "source": "snippet"
+    }
+  },
+  "transformers": [
+    "extractEmailBody",
+    "extractEmailSender",
+    "extractEmailRecipients"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["google", "gmail", "email", "communication"],
+    "notes": "Handles both simple and multipart MIME messages. Uses custom transformers for parsing email-specific fields."
+  },
+  "enabled": true
+}

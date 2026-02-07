@@ -1,0 +1,64 @@
+{
+  "id": "facebook",
+  "name": "Facebook",
+  "description": "Connect your Facebook account to sync posts, photos, videos, and friends.",
+  "logoUrl": "/branding/facebook/logo.svg",
+  "theme": {
+    "backgroundColor": "#1877f2",
+    "borderColor": "#166fe5"
+  },
+  "sources": [
+    {
+      "name": "Posts",
+      "description": "Your Facebook posts and feed",
+      "enabledByDefault": true,
+      "endpoints": ["FacebookPosts"],
+      "scopes": [
+        "user_posts"
+      ],
+      "transformMap": "facebook_posts_to_content"
+    },
+    {
+      "name": "Photos",
+      "description": "Photos you've uploaded to Facebook",
+      "enabledByDefault": false,
+      "endpoints": ["FacebookPhotos"],
+      "scopes": [
+        "user_photos"
+      ],
+      "transformMap": "facebook_photos_to_content"
+    },
+    {
+      "name": "Videos",
+      "description": "Videos you've uploaded to Facebook",
+      "enabledByDefault": false,
+      "endpoints": ["FacebookVideos"],
+      "scopes": [
+        "user_videos"
+      ],
+      "transformMap": "facebook_videos_to_content"
+    },
+    {
+      "name": "Friends",
+      "description": "Your Facebook friends and connections",
+      "enabledByDefault": false,
+      "endpoints": ["FacebookFriends"],
+      "scopes": [
+        "user_friends"
+      ],
+      "transformMap": "facebook_friends_to_relationship"
+    }
+  ],
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://www.facebook.com/v18.0/dialog/oauth",
+    "tokenUrl": "https://graph.facebook.com/v18.0/oauth/access_token",
+    "scopes": [
+      "email",
+      "public_profile"
+    ],
+    "extraParams": {}
+  },
+  "apiSpecId": "facebook_graph_v18",
+  "enabled": true
+}

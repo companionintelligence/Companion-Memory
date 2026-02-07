@@ -19,6 +19,13 @@ This directory contains comprehensive planning and design documentation for the 
   - Transform map schema
   - Sync engine design
   - File structure and organization
+- **[JSON Configuration Reference](./json-configuration-reference.md)** - Complete JSON config documentation **NEW**
+  - Provider config schema with examples
+  - API spec schema with examples
+  - Transform map schema with examples
+  - Field-by-field documentation
+  - Template syntax guide
+  - Custom transformer reference
 
 ### Provider Planning
 - **[Provider Integration Roadmap](./provider-integration-roadmap.md)** - All 17 planned provider integrations
@@ -55,8 +62,10 @@ This directory contains comprehensive planning and design documentation for the 
 
 ### For Developers
 1. Read [ETL System Design](./etl-system-design.md) for technical details
-2. Follow [Implementation Checklist](./etl-implementation-checklist.md) for tasks
-3. Reference [Testing Strategy](./mock-api-testing-strategy.md) for test patterns
+2. Use [JSON Configuration Reference](./json-configuration-reference.md) for config syntax **NEW**
+3. Review [example configs](../backend/apps/api/config/README.md) for templates **NEW**
+4. Follow [Implementation Checklist](./etl-implementation-checklist.md) for tasks
+5. Reference [Testing Strategy](./mock-api-testing-strategy.md) for test patterns
 
 ### For Project Managers
 1. Review [Executive Summary](./etl-executive-summary.md) for timeline
@@ -65,7 +74,8 @@ This directory contains comprehensive planning and design documentation for the 
 
 ## 📊 Project Stats
 
-- **Total Documentation**: 5 documents, 102KB
+- **Total Documentation**: 6 documents, 126KB **UPDATED**
+- **JSON Examples**: 10 configuration files (3 providers, 3 API specs, 3 transform maps) **NEW**
 - **Providers Planned**: 17 across 5 tiers
 - **Implementation Timeline**: 12 weeks
 - **Development Effort**: ~14-15 weeks (1 senior engineer)
@@ -192,6 +202,12 @@ Defines **how** to normalize provider data.
 
 ## 📝 Related Documentation
 
+### JSON Configuration Examples **NEW**
+- [Configuration Examples README](../backend/apps/api/config/README.md) - Guide to example files
+- `backend/apps/api/config/providers/examples/` - Provider config examples
+- `backend/apps/api/config/api-specs/examples/` - API spec examples
+- `backend/apps/api/config/transform-maps/examples/` - Transform map examples
+
 ### Current Implementation
 - `backend/apps/api/src/domains/connections/` - Current connection system
 - `backend/apps/api/src/domains/etl/` - Current ETL service
@@ -213,6 +229,8 @@ When implementing this refactoring:
 ## 📞 Questions?
 
 For questions about:
+- **JSON Configuration**: See [JSON Configuration Reference](./json-configuration-reference.md) **NEW**
+- **Example Configs**: See [Config Examples README](../backend/apps/api/config/README.md) **NEW**
 - **Architecture**: See [ETL System Design](./etl-system-design.md)
 - **Specific Providers**: See [Provider Roadmap](./provider-integration-roadmap.md)
 - **Testing**: See [Testing Strategy](./mock-api-testing-strategy.md)

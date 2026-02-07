@@ -1,0 +1,105 @@
+{
+  "id": "google_drive_to_content",
+  "name": "Google Drive Files to Content",
+  "description": "Transforms Google Drive API file format into internal Content schema",
+  "sourceType": "google_drive_file",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "mimeType": {
+      "type": "direct",
+      "source": "mimeType"
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFile",
+        "inputs": ["mimeType"]
+      }
+    },
+    "size": {
+      "type": "direct",
+      "source": "size",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["size"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "createdTime",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "modifiedTime",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "owner": {
+      "type": "nested",
+      "path": "owners[0].displayName"
+    },
+    "ownerEmail": {
+      "type": "nested",
+      "path": "owners[0].emailAddress"
+    },
+    "thumbnailUrl": {
+      "type": "computed",
+      "compute": {
+        "function": "generateThumbnailUrl",
+        "inputs": ["thumbnailLink", "id"],
+        "params": {
+          "provider": "google",
+          "size": 200
+        }
+      }
+    },
+    "extension": {
+      "type": "computed",
+      "compute": {
+        "function": "extractFileExtension",
+        "inputs": ["name"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "google_drive"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    }
+  },
+  "transformers": [
+    "categorizeFile",
+    "formatFileSize",
+    "generateThumbnailUrl",
+    "extractFileExtension"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["google", "drive", "files", "content"],
+    "notes": "Categorizes files by MIME type. Generates thumbnails for supported file types."
+  },
+  "enabled": true
+}
