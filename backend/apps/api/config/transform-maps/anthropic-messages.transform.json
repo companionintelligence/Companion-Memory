@@ -1,0 +1,68 @@
+{
+  "id": "anthropic_messages_to_communication",
+  "name": "Claude Messages to Communication",
+  "description": "Transforms Anthropic API message format into internal Communication schema",
+  "sourceType": "anthropic_message",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateClaudeConversationTitle",
+        "inputs": ["content"]
+      },
+      "default": "Claude Conversation"
+    },
+    "content": {
+      "type": "computed",
+      "compute": {
+        "function": "extractClaudeContent",
+        "inputs": ["content"]
+      }
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "ai_conversation"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "anthropic"
+    },
+    "model": {
+      "type": "direct",
+      "source": "model"
+    },
+    "role": {
+      "type": "direct",
+      "source": "role"
+    },
+    "tokens": {
+      "type": "nested",
+      "path": "usage.input_tokens"
+    }
+  },
+  "transformers": [
+    "generateClaudeConversationTitle",
+    "extractClaudeContent"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["anthropic", "claude", "ai", "communication"],
+    "notes": "Handles Claude conversation messages with token usage."
+  },
+  "enabled": true
+}

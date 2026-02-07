@@ -1,0 +1,65 @@
+{
+  "id": "openai_conversations_to_communication",
+  "name": "ChatGPT Conversations to Communication",
+  "description": "Transforms OpenAI API conversation format into internal Communication schema",
+  "sourceType": "openai_conversation",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "title",
+      "default": "ChatGPT Conversation"
+    },
+    "content": {
+      "type": "computed",
+      "compute": {
+        "function": "extractChatGPTContent",
+        "inputs": ["messages"]
+      }
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "create_time",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "ai_conversation"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "openai"
+    },
+    "model": {
+      "type": "direct",
+      "source": "model"
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "update_time",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    }
+  },
+  "transformers": [
+    "extractChatGPTContent"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["openai", "chatgpt", "ai", "communication"],
+    "notes": "Handles ChatGPT conversation history with model info."
+  },
+  "enabled": true
+}

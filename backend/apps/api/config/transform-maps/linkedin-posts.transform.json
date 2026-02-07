@@ -1,0 +1,60 @@
+{
+  "id": "linkedin_posts_to_content",
+  "name": "LinkedIn Posts to Content",
+  "description": "Transforms LinkedIn API post format into internal Content schema",
+  "sourceType": "linkedin_post",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateLinkedInTitle",
+        "inputs": ["text"]
+      },
+      "default": "LinkedIn Post"
+    },
+    "description": {
+      "type": "nested",
+      "path": "specificContent.com.linkedin.ugc.ShareContent.shareCommentary.text"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created.time",
+      "transform": {
+        "type": "date",
+        "format": "unix_ms"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "linkedin"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "post"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "social_post"
+    },
+    "visibility": {
+      "type": "nested",
+      "path": "visibility.com.linkedin.ugc.MemberNetworkVisibility"
+    }
+  },
+  "transformers": [
+    "generateLinkedInTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["linkedin", "posts", "content", "social"],
+    "notes": "Handles LinkedIn UGC posts with share content."
+  },
+  "enabled": true
+}

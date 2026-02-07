@@ -1,0 +1,59 @@
+{
+  "id": "steam_games_to_content",
+  "name": "Steam Games to Content",
+  "description": "Transforms Steam API game format into internal Content schema",
+  "sourceType": "steam_game",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "appid",
+      "transform": {
+        "type": "string"
+      },
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "thumbnailUrl": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSteamGameIcon",
+        "inputs": ["appid", "img_icon_url"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "steam"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "game"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "gaming"
+    },
+    "playtimeForever": {
+      "type": "direct",
+      "source": "playtime_forever"
+    },
+    "playtime2Weeks": {
+      "type": "direct",
+      "source": "playtime_2weeks"
+    }
+  },
+  "transformers": [
+    "generateSteamGameIcon"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["steam", "games", "content", "gaming"],
+    "notes": "Handles Steam game library with playtime stats."
+  },
+  "enabled": true
+}

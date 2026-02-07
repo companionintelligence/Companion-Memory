@@ -1,0 +1,52 @@
+{
+  "id": "icloud_contacts_to_relationship",
+  "name": "iCloud Contacts to Relationship",
+  "description": "Transforms iCloud API contact format into internal Relationship schema",
+  "sourceType": "icloud_contact",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "contactId",
+      "required": true
+    },
+    "name": {
+      "type": "computed",
+      "compute": {
+        "function": "extractContactName",
+        "inputs": ["firstName", "lastName"]
+      },
+      "required": true
+    },
+    "email": {
+      "type": "nested",
+      "path": "emailAddresses[0].field"
+    },
+    "phone": {
+      "type": "nested",
+      "path": "phoneNumbers[0].field"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "icloud"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "contact"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "contact"
+    }
+  },
+  "transformers": [
+    "extractContactName"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["icloud", "contacts", "relationship"],
+    "notes": "Handles iCloud contacts with CardDAV format."
+  },
+  "enabled": true
+}

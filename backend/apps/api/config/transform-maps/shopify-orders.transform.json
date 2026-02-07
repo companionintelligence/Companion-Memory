@@ -1,0 +1,78 @@
+{
+  "id": "shopify_orders_to_content",
+  "name": "Shopify Orders to Content",
+  "description": "Transforms Shopify API order format into internal Content schema",
+  "sourceType": "shopify_order",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "transform": {
+        "type": "string"
+      },
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateOrderTitle",
+        "inputs": ["name", "order_number"]
+      },
+      "required": true
+    },
+    "description": {
+      "type": "computed",
+      "compute": {
+        "function": "generateOrderDescription",
+        "inputs": ["line_items"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "shopify"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "order"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "commerce"
+    },
+    "totalPrice": {
+      "type": "direct",
+      "source": "total_price"
+    },
+    "currency": {
+      "type": "direct",
+      "source": "currency"
+    },
+    "orderNumber": {
+      "type": "direct",
+      "source": "order_number"
+    },
+    "status": {
+      "type": "direct",
+      "source": "financial_status"
+    }
+  },
+  "transformers": [
+    "generateOrderTitle",
+    "generateOrderDescription"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["shopify", "orders", "content", "commerce"],
+    "notes": "Handles Shopify orders with financial status."
+  },
+  "enabled": true
+}

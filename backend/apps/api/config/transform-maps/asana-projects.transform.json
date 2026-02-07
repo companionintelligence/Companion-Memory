@@ -1,0 +1,69 @@
+{
+  "id": "asana_projects_to_content",
+  "name": "Asana Projects to Content",
+  "description": "Transforms Asana API project format into internal Content schema",
+  "sourceType": "asana_project",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "gid",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "notes"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "modified_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "asana"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "project"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "project"
+    },
+    "archived": {
+      "type": "direct",
+      "source": "archived"
+    },
+    "color": {
+      "type": "direct",
+      "source": "color"
+    },
+    "owner": {
+      "type": "nested",
+      "path": "owner.name"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["asana", "projects", "content", "project-management"],
+    "notes": "Handles Asana projects with archival status."
+  },
+  "enabled": true
+}

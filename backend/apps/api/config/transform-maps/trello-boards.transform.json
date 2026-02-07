@@ -1,0 +1,59 @@
+{
+  "id": "trello_boards_to_content",
+  "name": "Trello Boards to Content",
+  "description": "Transforms Trello API board format into internal Content schema",
+  "sourceType": "trello_board",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "desc"
+    },
+    "url": {
+      "type": "direct",
+      "source": "url"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "trello"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "board"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "project"
+    },
+    "closed": {
+      "type": "direct",
+      "source": "closed"
+    },
+    "starred": {
+      "type": "direct",
+      "source": "starred"
+    },
+    "backgroundColor": {
+      "type": "nested",
+      "path": "prefs.backgroundColor"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["trello", "boards", "content", "project-management"],
+    "notes": "Handles Trello boards with preferences."
+  },
+  "enabled": true
+}

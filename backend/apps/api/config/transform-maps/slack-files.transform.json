@@ -1,0 +1,83 @@
+{
+  "id": "slack_files_to_content",
+  "name": "Slack Files to Content",
+  "description": "Transforms Slack API file format into internal Content schema",
+  "sourceType": "slack_file",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "mimeType": {
+      "type": "direct",
+      "source": "mimetype"
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFile",
+        "inputs": ["mimetype"]
+      }
+    },
+    "size": {
+      "type": "direct",
+      "source": "size",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["size"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "thumb_360"
+    },
+    "url": {
+      "type": "direct",
+      "source": "url_private"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "slack"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    },
+    "owner": {
+      "type": "direct",
+      "source": "user"
+    }
+  },
+  "transformers": [
+    "categorizeFile",
+    "formatFileSize"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["slack", "files", "content"],
+    "notes": "Handles Slack file shares with categorization."
+  },
+  "enabled": true
+}

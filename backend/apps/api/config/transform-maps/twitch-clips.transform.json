@@ -1,0 +1,66 @@
+{
+  "id": "twitch_clips_to_content",
+  "name": "Twitch Clips to Content",
+  "description": "Transforms Twitch API clip format into internal Content schema",
+  "sourceType": "twitch_clip",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "title",
+      "required": true
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "thumbnail_url"
+    },
+    "url": {
+      "type": "direct",
+      "source": "url"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "twitch"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "clip"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "duration": {
+      "type": "direct",
+      "source": "duration"
+    },
+    "viewCount": {
+      "type": "direct",
+      "source": "view_count"
+    },
+    "creatorName": {
+      "type": "direct",
+      "source": "creator_name"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["twitch", "clips", "content", "video"],
+    "notes": "Handles Twitch clips with creator and view information."
+  },
+  "enabled": true
+}

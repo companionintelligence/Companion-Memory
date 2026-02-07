@@ -1,0 +1,75 @@
+{
+  "id": "spotify_tracks_to_content",
+  "name": "Spotify Saved Tracks to Content",
+  "description": "Transforms Spotify API saved track format into internal Content schema",
+  "sourceType": "spotify_saved_track",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "nested",
+      "path": "track.id",
+      "required": true
+    },
+    "title": {
+      "type": "nested",
+      "path": "track.name",
+      "required": true
+    },
+    "description": {
+      "type": "computed",
+      "compute": {
+        "function": "generateTrackDescription",
+        "inputs": ["track.artists", "track.album"]
+      }
+    },
+    "thumbnailUrl": {
+      "type": "nested",
+      "path": "track.album.images[0].url"
+    },
+    "url": {
+      "type": "nested",
+      "path": "track.external_urls.spotify"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "added_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "spotify"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "track"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "music"
+    },
+    "artist": {
+      "type": "nested",
+      "path": "track.artists[0].name"
+    },
+    "album": {
+      "type": "nested",
+      "path": "track.album.name"
+    },
+    "duration": {
+      "type": "nested",
+      "path": "track.duration_ms"
+    }
+  },
+  "transformers": [
+    "generateTrackDescription"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["spotify", "tracks", "content", "music"],
+    "notes": "Handles Spotify saved tracks with artist and album info."
+  },
+  "enabled": true
+}

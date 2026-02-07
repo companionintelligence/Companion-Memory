@@ -1,0 +1,71 @@
+{
+  "id": "twitch_videos_to_content",
+  "name": "Twitch Videos to Content",
+  "description": "Transforms Twitch API video format into internal Content schema",
+  "sourceType": "twitch_video",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "title",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "thumbnail_url"
+    },
+    "url": {
+      "type": "direct",
+      "source": "url"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "twitch"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "duration": {
+      "type": "computed",
+      "compute": {
+        "function": "parseTwitchDuration",
+        "inputs": ["duration"]
+      }
+    },
+    "viewCount": {
+      "type": "direct",
+      "source": "view_count"
+    }
+  },
+  "transformers": [
+    "parseTwitchDuration"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["twitch", "videos", "content", "streaming"],
+    "notes": "Handles Twitch VODs and clips with view counts."
+  },
+  "enabled": true
+}

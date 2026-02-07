@@ -1,0 +1,76 @@
+{
+  "id": "microsoft_outlook_to_communication",
+  "name": "Outlook Mail to Communication",
+  "description": "Transforms Microsoft Graph API message format into internal Communication schema",
+  "sourceType": "microsoft_outlook_message",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "subject",
+      "default": "(No Subject)"
+    },
+    "content": {
+      "type": "computed",
+      "compute": {
+        "function": "extractEmailBody",
+        "inputs": ["body"]
+      }
+    },
+    "sender": {
+      "type": "nested",
+      "path": "from.emailAddress.address"
+    },
+    "recipients": {
+      "type": "computed",
+      "compute": {
+        "function": "extractOutlookRecipients",
+        "inputs": ["toRecipients", "ccRecipients"]
+      }
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "receivedDateTime",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "email"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "outlook"
+    },
+    "isRead": {
+      "type": "direct",
+      "source": "isRead"
+    },
+    "importance": {
+      "type": "direct",
+      "source": "importance"
+    },
+    "conversationId": {
+      "type": "direct",
+      "source": "conversationId"
+    }
+  },
+  "transformers": [
+    "extractEmailBody",
+    "extractOutlookRecipients"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["microsoft", "outlook", "email", "communication"],
+    "notes": "Handles Microsoft Graph message format with HTML body content."
+  },
+  "enabled": true
+}

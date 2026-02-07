@@ -1,0 +1,51 @@
+{
+  "id": "openai_models_to_content",
+  "name": "OpenAI Models to Content",
+  "description": "Transforms OpenAI API model format into internal Content schema",
+  "sourceType": "openai_model",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "openai"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "ai_model"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "ai_resource"
+    },
+    "ownedBy": {
+      "type": "direct",
+      "source": "owned_by"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["openai", "models", "content", "ai"],
+    "notes": "Handles OpenAI available models list."
+  },
+  "enabled": true
+}

@@ -1,0 +1,97 @@
+{
+  "id": "box_files_to_content",
+  "name": "Box Files to Content",
+  "description": "Transforms Box API file format into internal Content schema",
+  "sourceType": "box_file",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "mimeType": {
+      "type": "direct",
+      "source": "mime_type"
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFile",
+        "inputs": ["mime_type"]
+      }
+    },
+    "size": {
+      "type": "direct",
+      "source": "size",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["size"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "modified_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "owner": {
+      "type": "nested",
+      "path": "owned_by.name"
+    },
+    "ownerEmail": {
+      "type": "nested",
+      "path": "owned_by.login"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "box"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    },
+    "extension": {
+      "type": "computed",
+      "compute": {
+        "function": "extractFileExtension",
+        "inputs": ["name"]
+      }
+    },
+    "sha1": {
+      "type": "direct",
+      "source": "sha1"
+    }
+  },
+  "transformers": [
+    "categorizeFile",
+    "formatFileSize",
+    "extractFileExtension"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["box", "files", "content", "storage"],
+    "notes": "Handles Box files with SHA1 hash for verification."
+  },
+  "enabled": true
+}

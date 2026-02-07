@@ -1,0 +1,70 @@
+{
+  "id": "shopify_customers_to_relationship",
+  "name": "Shopify Customers to Relationship",
+  "description": "Transforms Shopify API customer format into internal Relationship schema",
+  "sourceType": "shopify_customer",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "transform": {
+        "type": "string"
+      },
+      "required": true
+    },
+    "name": {
+      "type": "computed",
+      "compute": {
+        "function": "extractContactName",
+        "inputs": ["first_name", "last_name"]
+      },
+      "required": true
+    },
+    "email": {
+      "type": "direct",
+      "source": "email"
+    },
+    "phone": {
+      "type": "direct",
+      "source": "phone"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "shopify"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "customer"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "customer"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "totalSpent": {
+      "type": "direct",
+      "source": "total_spent"
+    },
+    "ordersCount": {
+      "type": "direct",
+      "source": "orders_count"
+    }
+  },
+  "transformers": [
+    "extractContactName"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["shopify", "customers", "relationship", "commerce"],
+    "notes": "Handles Shopify customers with purchase history."
+  },
+  "enabled": true
+}

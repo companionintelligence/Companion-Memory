@@ -1,0 +1,76 @@
+{
+  "id": "reddit_posts_to_content",
+  "name": "Reddit Posts to Content",
+  "description": "Transforms Reddit API submission format into internal Content schema",
+  "sourceType": "reddit_submission",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "title",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "selftext"
+    },
+    "url": {
+      "type": "computed",
+      "compute": {
+        "function": "generateRedditUrl",
+        "inputs": ["permalink"]
+      }
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "thumbnail"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_utc",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "reddit"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "post"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "social_post"
+    },
+    "subreddit": {
+      "type": "direct",
+      "source": "subreddit"
+    },
+    "score": {
+      "type": "direct",
+      "source": "score"
+    },
+    "numComments": {
+      "type": "direct",
+      "source": "num_comments"
+    }
+  },
+  "transformers": [
+    "generateRedditUrl"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["reddit", "posts", "content", "social"],
+    "notes": "Handles Reddit submissions with scores and comments."
+  },
+  "enabled": true
+}

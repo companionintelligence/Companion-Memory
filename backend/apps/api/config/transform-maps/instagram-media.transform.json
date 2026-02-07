@@ -1,0 +1,79 @@
+{
+  "id": "instagram_media_to_content",
+  "name": "Instagram Media to Content",
+  "description": "Transforms Instagram Graph API media format into internal Content schema",
+  "sourceType": "instagram_media",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateInstagramTitle",
+        "inputs": ["caption", "timestamp"]
+      },
+      "default": "Instagram Post"
+    },
+    "description": {
+      "type": "direct",
+      "source": "caption"
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "thumbnail_url"
+    },
+    "url": {
+      "type": "direct",
+      "source": "permalink"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "timestamp",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "instagram"
+    },
+    "type": {
+      "type": "computed",
+      "compute": {
+        "function": "mapInstagramMediaType",
+        "inputs": ["media_type"]
+      }
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeInstagramMedia",
+        "inputs": ["media_type"]
+      }
+    },
+    "mediaType": {
+      "type": "direct",
+      "source": "media_type"
+    },
+    "mediaUrl": {
+      "type": "direct",
+      "source": "media_url"
+    }
+  },
+  "transformers": [
+    "generateInstagramTitle",
+    "mapInstagramMediaType",
+    "categorizeInstagramMedia"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["instagram", "media", "content", "social"],
+    "notes": "Handles Instagram photos, videos, and carousel posts."
+  },
+  "enabled": true
+}

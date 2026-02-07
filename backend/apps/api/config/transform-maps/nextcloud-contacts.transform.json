@@ -1,0 +1,56 @@
+{
+  "id": "nextcloud_contacts_to_relationship",
+  "name": "Nextcloud Contacts to Relationship",
+  "description": "Transforms Nextcloud CardDAV format into internal Relationship schema",
+  "sourceType": "nextcloud_contact",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "uid",
+      "required": true
+    },
+    "name": {
+      "type": "direct",
+      "source": "fn",
+      "required": true
+    },
+    "email": {
+      "type": "computed",
+      "compute": {
+        "function": "extractVCardEmail",
+        "inputs": ["email"]
+      }
+    },
+    "phone": {
+      "type": "computed",
+      "compute": {
+        "function": "extractVCardPhone",
+        "inputs": ["tel"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "nextcloud"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "contact"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "contact"
+    }
+  },
+  "transformers": [
+    "extractVCardEmail",
+    "extractVCardPhone"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["nextcloud", "contacts", "relationship", "carddav"],
+    "notes": "Handles Nextcloud CardDAV vCard format."
+  },
+  "enabled": true
+}

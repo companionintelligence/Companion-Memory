@@ -1,0 +1,68 @@
+{
+  "id": "nextcloud_calendar_to_event",
+  "name": "Nextcloud Calendar to Event",
+  "description": "Transforms Nextcloud CalDAV format into internal Event schema",
+  "sourceType": "nextcloud_calendar_event",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "uid",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "summary",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "startTime": {
+      "type": "direct",
+      "source": "dtstart",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "endTime": {
+      "type": "direct",
+      "source": "dtend",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "location": {
+      "type": "direct",
+      "source": "location"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "nextcloud"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "calendar_event"
+    },
+    "organizer": {
+      "type": "computed",
+      "compute": {
+        "function": "extractCalDAVOrganizer",
+        "inputs": ["organizer"]
+      }
+    }
+  },
+  "transformers": [
+    "extractCalDAVOrganizer"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["nextcloud", "calendar", "event", "caldav"],
+    "notes": "Handles Nextcloud CalDAV iCal format."
+  },
+  "enabled": true
+}

@@ -1,0 +1,72 @@
+{
+  "id": "discord_messages_to_communication",
+  "name": "Discord Messages to Communication",
+  "description": "Transforms Discord API message format into internal Communication schema",
+  "sourceType": "discord_message",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateDiscordMessageTitle",
+        "inputs": ["channel_id", "author"]
+      },
+      "default": "Discord Message"
+    },
+    "content": {
+      "type": "direct",
+      "source": "content"
+    },
+    "sender": {
+      "type": "nested",
+      "path": "author.username"
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "timestamp",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "chat"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "discord"
+    },
+    "channelId": {
+      "type": "direct",
+      "source": "channel_id"
+    },
+    "guildId": {
+      "type": "direct",
+      "source": "guild_id"
+    },
+    "attachments": {
+      "type": "computed",
+      "compute": {
+        "function": "extractDiscordAttachments",
+        "inputs": ["attachments"]
+      }
+    }
+  },
+  "transformers": [
+    "generateDiscordMessageTitle",
+    "extractDiscordAttachments"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["discord", "messages", "communication", "chat"],
+    "notes": "Handles Discord messages with attachment support."
+  },
+  "enabled": true
+}

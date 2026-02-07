@@ -1,0 +1,86 @@
+{
+  "id": "trello_cards_to_content",
+  "name": "Trello Cards to Content",
+  "description": "Transforms Trello API card format into internal Content schema",
+  "sourceType": "trello_card",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "desc"
+    },
+    "url": {
+      "type": "direct",
+      "source": "url"
+    },
+    "createdAt": {
+      "type": "computed",
+      "compute": {
+        "function": "extractTrelloCreatedDate",
+        "inputs": ["id"]
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "dateLastActivity",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "trello"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "card"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "task"
+    },
+    "boardId": {
+      "type": "direct",
+      "source": "idBoard"
+    },
+    "listId": {
+      "type": "direct",
+      "source": "idList"
+    },
+    "dueDate": {
+      "type": "direct",
+      "source": "due",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "labels": {
+      "type": "computed",
+      "compute": {
+        "function": "extractTrelloLabels",
+        "inputs": ["labels"]
+      }
+    }
+  },
+  "transformers": [
+    "extractTrelloCreatedDate",
+    "extractTrelloLabels"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["trello", "cards", "content", "tasks"],
+    "notes": "Handles Trello cards with due dates and labels."
+  },
+  "enabled": true
+}

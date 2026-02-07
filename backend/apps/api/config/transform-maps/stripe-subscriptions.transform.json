@@ -1,0 +1,72 @@
+{
+  "id": "stripe_subscriptions_to_content",
+  "name": "Stripe Subscriptions to Content",
+  "description": "Transforms Stripe API subscription format into internal Content schema",
+  "sourceType": "stripe_subscription",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSubscriptionTitle",
+        "inputs": ["items.data[0].price.product"]
+      },
+      "required": true
+    },
+    "description": {
+      "type": "nested",
+      "path": "items.data[0].price.nickname"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "stripe"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "subscription"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "finance"
+    },
+    "status": {
+      "type": "direct",
+      "source": "status"
+    },
+    "customerId": {
+      "type": "direct",
+      "source": "customer"
+    },
+    "currentPeriodEnd": {
+      "type": "direct",
+      "source": "current_period_end",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    }
+  },
+  "transformers": [
+    "generateSubscriptionTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["stripe", "subscriptions", "content", "finance"],
+    "notes": "Handles Stripe subscriptions with status tracking."
+  },
+  "enabled": true
+}

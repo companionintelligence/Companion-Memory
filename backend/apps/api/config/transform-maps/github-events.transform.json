@@ -1,0 +1,67 @@
+{
+  "id": "github_events_to_content",
+  "name": "GitHub Events to Content",
+  "description": "Transforms GitHub API event format into internal Content schema",
+  "sourceType": "github_event",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateGitHubEventTitle",
+        "inputs": ["type", "repo"]
+      },
+      "required": true
+    },
+    "description": {
+      "type": "computed",
+      "compute": {
+        "function": "extractGitHubEventDescription",
+        "inputs": ["payload", "type"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "github"
+    },
+    "type": {
+      "type": "direct",
+      "source": "type"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "activity"
+    },
+    "repoName": {
+      "type": "nested",
+      "path": "repo.name"
+    },
+    "actor": {
+      "type": "nested",
+      "path": "actor.login"
+    }
+  },
+  "transformers": [
+    "generateGitHubEventTitle",
+    "extractGitHubEventDescription"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["github", "events", "content", "activity"],
+    "notes": "Handles GitHub activity events with payload extraction."
+  },
+  "enabled": true
+}

@@ -1,0 +1,72 @@
+{
+  "id": "reddit_saved_to_content",
+  "name": "Reddit Saved Items to Content",
+  "description": "Transforms Reddit API saved item format into internal Content schema",
+  "sourceType": "reddit_saved",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "extractRedditSavedTitle",
+        "inputs": ["title", "link_title"]
+      },
+      "required": true
+    },
+    "description": {
+      "type": "computed",
+      "compute": {
+        "function": "extractRedditSavedBody",
+        "inputs": ["selftext", "body"]
+      }
+    },
+    "url": {
+      "type": "computed",
+      "compute": {
+        "function": "generateRedditUrl",
+        "inputs": ["permalink"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_utc",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "reddit"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "saved"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "bookmark"
+    },
+    "subreddit": {
+      "type": "direct",
+      "source": "subreddit"
+    }
+  },
+  "transformers": [
+    "extractRedditSavedTitle",
+    "extractRedditSavedBody",
+    "generateRedditUrl"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["reddit", "saved", "content", "bookmarks"],
+    "notes": "Handles Reddit saved posts and comments."
+  },
+  "enabled": true
+}

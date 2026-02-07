@@ -1,0 +1,66 @@
+{
+  "id": "facebook_videos_to_content",
+  "name": "Facebook Videos to Content",
+  "description": "Transforms Facebook Graph API video format into internal Content schema",
+  "sourceType": "facebook_video",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "title",
+      "default": "Facebook Video"
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "picture"
+    },
+    "url": {
+      "type": "direct",
+      "source": "source"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "facebook"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "mimeType": {
+      "type": "constant",
+      "constantValue": "video/mp4"
+    },
+    "duration": {
+      "type": "direct",
+      "source": "length"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["facebook", "videos", "content", "media"],
+    "notes": "Handles Facebook video uploads with duration and source URL."
+  },
+  "enabled": true
+}

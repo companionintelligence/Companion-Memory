@@ -1,0 +1,67 @@
+{
+  "id": "twitter_likes_to_content",
+  "name": "Twitter Likes to Content",
+  "description": "Transforms Twitter API v2 liked tweet format into internal Content schema",
+  "sourceType": "twitter_liked_tweet",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateTweetTitle",
+        "inputs": ["text"]
+      },
+      "default": "Liked Tweet"
+    },
+    "description": {
+      "type": "direct",
+      "source": "text"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_at",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "twitter"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "liked_tweet"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "social_post"
+    },
+    "url": {
+      "type": "computed",
+      "compute": {
+        "function": "generateTweetUrl",
+        "inputs": ["id", "author_id"]
+      }
+    },
+    "authorId": {
+      "type": "direct",
+      "source": "author_id"
+    }
+  },
+  "transformers": [
+    "generateTweetTitle",
+    "generateTweetUrl"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["twitter", "likes", "content", "social"],
+    "notes": "Handles Twitter liked tweets for user activity tracking."
+  },
+  "enabled": true
+}

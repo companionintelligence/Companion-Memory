@@ -1,0 +1,67 @@
+{
+  "id": "facebook_posts_to_content",
+  "name": "Facebook Posts to Content",
+  "description": "Transforms Facebook Graph API post format into internal Content schema",
+  "sourceType": "facebook_post",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generatePostTitle",
+        "inputs": ["message", "story"]
+      },
+      "default": "Facebook Post"
+    },
+    "description": {
+      "type": "direct",
+      "source": "message"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "facebook"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "post"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "social_post"
+    },
+    "url": {
+      "type": "direct",
+      "source": "permalink_url"
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "full_picture"
+    },
+    "metadata": {
+      "type": "template",
+      "template": "{\"story\":\"{{ story }}\",\"type\":\"{{ type }}\"}"
+    }
+  },
+  "transformers": [
+    "generatePostTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["facebook", "posts", "content", "social"],
+    "notes": "Handles Facebook posts with text, photos, and links."
+  },
+  "enabled": true
+}

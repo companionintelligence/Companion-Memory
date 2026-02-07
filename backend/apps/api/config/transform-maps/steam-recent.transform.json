@@ -1,0 +1,65 @@
+{
+  "id": "steam_recent_to_event",
+  "name": "Steam Recent Games to Event",
+  "description": "Transforms Steam API recently played format into internal Event schema",
+  "sourceType": "steam_recent_game",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSteamRecentId",
+        "inputs": ["appid", "playtime_2weeks"]
+      },
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "startTime": {
+      "type": "computed",
+      "compute": {
+        "function": "estimateSteamPlayTime",
+        "inputs": ["playtime_2weeks"]
+      },
+      "required": true
+    },
+    "endTime": {
+      "type": "computed",
+      "compute": {
+        "function": "estimateSteamPlayTime",
+        "inputs": ["playtime_2weeks"]
+      },
+      "required": true
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "steam"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "gaming_session"
+    },
+    "appId": {
+      "type": "direct",
+      "source": "appid"
+    },
+    "playtimeRecent": {
+      "type": "direct",
+      "source": "playtime_2weeks"
+    }
+  },
+  "transformers": [
+    "generateSteamRecentId",
+    "estimateSteamPlayTime"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["steam", "recent-games", "event", "gaming"],
+    "notes": "Handles Steam recently played games as events."
+  },
+  "enabled": true
+}

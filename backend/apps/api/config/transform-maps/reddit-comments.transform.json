@@ -1,0 +1,69 @@
+{
+  "id": "reddit_comments_to_communication",
+  "name": "Reddit Comments to Communication",
+  "description": "Transforms Reddit API comment format into internal Communication schema",
+  "sourceType": "reddit_comment",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateRedditCommentTitle",
+        "inputs": ["link_title", "subreddit"]
+      },
+      "default": "Reddit Comment"
+    },
+    "content": {
+      "type": "direct",
+      "source": "body"
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "created_utc",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "comment"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "reddit"
+    },
+    "subreddit": {
+      "type": "direct",
+      "source": "subreddit"
+    },
+    "score": {
+      "type": "direct",
+      "source": "score"
+    },
+    "parentId": {
+      "type": "direct",
+      "source": "parent_id"
+    },
+    "linkId": {
+      "type": "direct",
+      "source": "link_id"
+    }
+  },
+  "transformers": [
+    "generateRedditCommentTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["reddit", "comments", "communication"],
+    "notes": "Handles Reddit comments with threading support."
+  },
+  "enabled": true
+}

@@ -1,0 +1,63 @@
+{
+  "id": "spotify_playlists_to_content",
+  "name": "Spotify Playlists to Content",
+  "description": "Transforms Spotify API playlist format into internal Content schema",
+  "sourceType": "spotify_playlist",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "thumbnailUrl": {
+      "type": "nested",
+      "path": "images[0].url"
+    },
+    "url": {
+      "type": "nested",
+      "path": "external_urls.spotify"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "spotify"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "playlist"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "music"
+    },
+    "trackCount": {
+      "type": "nested",
+      "path": "tracks.total"
+    },
+    "owner": {
+      "type": "nested",
+      "path": "owner.display_name"
+    },
+    "isPublic": {
+      "type": "direct",
+      "source": "public"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["spotify", "playlists", "content", "music"],
+    "notes": "Handles Spotify playlists with track counts."
+  },
+  "enabled": true
+}

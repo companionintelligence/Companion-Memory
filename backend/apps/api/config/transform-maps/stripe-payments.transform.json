@@ -1,0 +1,72 @@
+{
+  "id": "stripe_payments_to_content",
+  "name": "Stripe Payments to Content",
+  "description": "Transforms Stripe API payment format into internal Content schema",
+  "sourceType": "stripe_charge",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generatePaymentTitle",
+        "inputs": ["amount", "currency", "description"]
+      },
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "stripe"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "payment"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "finance"
+    },
+    "amount": {
+      "type": "direct",
+      "source": "amount"
+    },
+    "currency": {
+      "type": "direct",
+      "source": "currency"
+    },
+    "status": {
+      "type": "direct",
+      "source": "status"
+    },
+    "customerId": {
+      "type": "direct",
+      "source": "customer"
+    }
+  },
+  "transformers": [
+    "generatePaymentTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["stripe", "payments", "content", "finance"],
+    "notes": "Handles Stripe charges and payment intents."
+  },
+  "enabled": true
+}

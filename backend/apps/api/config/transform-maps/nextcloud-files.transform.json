@@ -1,0 +1,82 @@
+{
+  "id": "nextcloud_files_to_content",
+  "name": "Nextcloud Files to Content",
+  "description": "Transforms Nextcloud WebDAV format into internal Content schema",
+  "sourceType": "nextcloud_file",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "computed",
+      "compute": {
+        "function": "generateNextcloudFileId",
+        "inputs": ["href"]
+      },
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "extractFileName",
+        "inputs": ["href"]
+      },
+      "required": true
+    },
+    "path": {
+      "type": "direct",
+      "source": "href"
+    },
+    "size": {
+      "type": "direct",
+      "source": "getcontentlength",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["getcontentlength"]
+      }
+    },
+    "mimeType": {
+      "type": "direct",
+      "source": "getcontenttype"
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "getlastmodified",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "nextcloud"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFile",
+        "inputs": ["getcontenttype"]
+      }
+    }
+  },
+  "transformers": [
+    "generateNextcloudFileId",
+    "extractFileName",
+    "formatFileSize",
+    "categorizeFile"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["nextcloud", "files", "content", "webdav"],
+    "notes": "Handles Nextcloud WebDAV file listings."
+  },
+  "enabled": true
+}

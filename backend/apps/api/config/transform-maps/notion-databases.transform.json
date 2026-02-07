@@ -1,0 +1,70 @@
+{
+  "id": "notion_databases_to_content",
+  "name": "Notion Databases to Content",
+  "description": "Transforms Notion API database format into internal Content schema",
+  "sourceType": "notion_database",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "extractNotionDatabaseTitle",
+        "inputs": ["title"]
+      },
+      "required": true
+    },
+    "description": {
+      "type": "computed",
+      "compute": {
+        "function": "extractNotionDescription",
+        "inputs": ["description"]
+      }
+    },
+    "url": {
+      "type": "direct",
+      "source": "url"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "last_edited_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "notion"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "database"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "database"
+    }
+  },
+  "transformers": [
+    "extractNotionDatabaseTitle",
+    "extractNotionDescription"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["notion", "databases", "content"],
+    "notes": "Handles Notion databases with schema extraction."
+  },
+  "enabled": true
+}

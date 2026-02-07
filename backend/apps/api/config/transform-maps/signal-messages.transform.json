@@ -1,0 +1,65 @@
+{
+  "id": "signal_messages_to_communication",
+  "name": "Signal Messages to Communication",
+  "description": "Transforms Signal API message format into internal Communication schema",
+  "sourceType": "signal_message",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSignalMessageId",
+        "inputs": ["timestamp", "source"]
+      },
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSignalMessageTitle",
+        "inputs": ["source", "groupInfo"]
+      },
+      "default": "Signal Message"
+    },
+    "content": {
+      "type": "direct",
+      "source": "message"
+    },
+    "sender": {
+      "type": "direct",
+      "source": "source"
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "timestamp",
+      "transform": {
+        "type": "date",
+        "format": "unix_ms"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "encrypted_message"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "signal"
+    },
+    "groupId": {
+      "type": "nested",
+      "path": "groupInfo.groupId"
+    }
+  },
+  "transformers": [
+    "generateSignalMessageId",
+    "generateSignalMessageTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["signal", "messages", "communication", "encrypted"],
+    "notes": "Handles Signal encrypted messages with group support."
+  },
+  "enabled": true
+}

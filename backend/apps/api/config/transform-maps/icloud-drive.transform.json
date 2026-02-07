@@ -1,0 +1,75 @@
+{
+  "id": "icloud_drive_to_content",
+  "name": "iCloud Drive Files to Content",
+  "description": "Transforms iCloud API file format into internal Content schema",
+  "sourceType": "icloud_drive_item",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "docwsid",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "size": {
+      "type": "direct",
+      "source": "size",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["size"]
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "dateModified",
+      "transform": {
+        "type": "date",
+        "format": "unix_ms"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "icloud_drive"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFileByExtension",
+        "inputs": ["name"]
+      }
+    },
+    "extension": {
+      "type": "computed",
+      "compute": {
+        "function": "extractFileExtension",
+        "inputs": ["name"]
+      }
+    }
+  },
+  "transformers": [
+    "formatFileSize",
+    "categorizeFileByExtension",
+    "extractFileExtension"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["icloud", "drive", "files", "content"],
+    "notes": "Handles iCloud Drive files with docwsid identifiers."
+  },
+  "enabled": true
+}

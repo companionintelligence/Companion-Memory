@@ -1,0 +1,60 @@
+{
+  "id": "discord_guilds_to_content",
+  "name": "Discord Servers to Content",
+  "description": "Transforms Discord API guild format into internal Content schema",
+  "sourceType": "discord_guild",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "thumbnailUrl": {
+      "type": "computed",
+      "compute": {
+        "function": "generateDiscordGuildIcon",
+        "inputs": ["id", "icon"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "discord"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "server"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "community"
+    },
+    "memberCount": {
+      "type": "direct",
+      "source": "approximate_member_count"
+    },
+    "ownerId": {
+      "type": "direct",
+      "source": "owner_id"
+    }
+  },
+  "transformers": [
+    "generateDiscordGuildIcon"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["discord", "servers", "guilds", "content"],
+    "notes": "Handles Discord servers (guilds) with member counts."
+  },
+  "enabled": true
+}

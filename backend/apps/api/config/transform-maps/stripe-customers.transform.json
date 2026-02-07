@@ -1,0 +1,63 @@
+{
+  "id": "stripe_customers_to_relationship",
+  "name": "Stripe Customers to Relationship",
+  "description": "Transforms Stripe API customer format into internal Relationship schema",
+  "sourceType": "stripe_customer",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "name": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "email": {
+      "type": "direct",
+      "source": "email"
+    },
+    "phone": {
+      "type": "direct",
+      "source": "phone"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "stripe"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "customer"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "customer"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      }
+    },
+    "balance": {
+      "type": "direct",
+      "source": "balance"
+    },
+    "currency": {
+      "type": "direct",
+      "source": "currency"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["stripe", "customers", "relationship", "finance"],
+    "notes": "Handles Stripe customers with account balance."
+  },
+  "enabled": true
+}

@@ -1,0 +1,51 @@
+{
+  "id": "facebook_friends_to_relationship",
+  "name": "Facebook Friends to Relationship",
+  "description": "Transforms Facebook Graph API friend format into internal Relationship schema",
+  "sourceType": "facebook_friend",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "name": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "email": {
+      "type": "direct",
+      "source": "email"
+    },
+    "photoUrl": {
+      "type": "nested",
+      "path": "picture.data.url"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "facebook"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "friend"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "friend"
+    },
+    "profileUrl": {
+      "type": "direct",
+      "source": "link"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["facebook", "friends", "relationship", "social"],
+    "notes": "Handles Facebook friends with basic profile information."
+  },
+  "enabled": true
+}

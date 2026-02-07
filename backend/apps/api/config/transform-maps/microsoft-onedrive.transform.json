@@ -1,0 +1,101 @@
+{
+  "id": "microsoft_onedrive_to_content",
+  "name": "OneDrive Files to Content",
+  "description": "Transforms Microsoft Graph API file format into internal Content schema",
+  "sourceType": "microsoft_onedrive_item",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "mimeType": {
+      "type": "nested",
+      "path": "file.mimeType"
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFile",
+        "inputs": ["file.mimeType"]
+      }
+    },
+    "size": {
+      "type": "direct",
+      "source": "size",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["size"]
+      }
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "createdDateTime",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "lastModifiedDateTime",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "owner": {
+      "type": "nested",
+      "path": "createdBy.user.displayName"
+    },
+    "ownerEmail": {
+      "type": "nested",
+      "path": "createdBy.user.email"
+    },
+    "thumbnailUrl": {
+      "type": "nested",
+      "path": "thumbnails[0].large.url"
+    },
+    "extension": {
+      "type": "computed",
+      "compute": {
+        "function": "extractFileExtension",
+        "inputs": ["name"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "onedrive"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    },
+    "webUrl": {
+      "type": "direct",
+      "source": "webUrl"
+    }
+  },
+  "transformers": [
+    "categorizeFile",
+    "formatFileSize",
+    "extractFileExtension"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["microsoft", "onedrive", "files", "content"],
+    "notes": "Handles Microsoft Graph DriveItem format with file and folder support."
+  },
+  "enabled": true
+}

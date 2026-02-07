@@ -1,0 +1,75 @@
+{
+  "id": "facebook_photos_to_content",
+  "name": "Facebook Photos to Content",
+  "description": "Transforms Facebook Graph API photo format into internal Content schema",
+  "sourceType": "facebook_photo",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generatePhotoTitle",
+        "inputs": ["name", "created_time"]
+      },
+      "default": "Facebook Photo"
+    },
+    "description": {
+      "type": "direct",
+      "source": "name"
+    },
+    "thumbnailUrl": {
+      "type": "direct",
+      "source": "picture"
+    },
+    "url": {
+      "type": "direct",
+      "source": "link"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "facebook"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "photo"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "image"
+    },
+    "mimeType": {
+      "type": "constant",
+      "constantValue": "image/jpeg"
+    },
+    "width": {
+      "type": "direct",
+      "source": "width"
+    },
+    "height": {
+      "type": "direct",
+      "source": "height"
+    }
+  },
+  "transformers": [
+    "generatePhotoTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["facebook", "photos", "content", "media"],
+    "notes": "Handles Facebook photo uploads with metadata."
+  },
+  "enabled": true
+}

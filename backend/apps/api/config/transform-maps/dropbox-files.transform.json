@@ -1,0 +1,82 @@
+{
+  "id": "dropbox_files_to_content",
+  "name": "Dropbox Files to Content",
+  "description": "Transforms Dropbox API file format into internal Content schema",
+  "sourceType": "dropbox_file",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "name",
+      "required": true
+    },
+    "path": {
+      "type": "direct",
+      "source": "path_display"
+    },
+    "size": {
+      "type": "direct",
+      "source": "size",
+      "transform": {
+        "type": "number"
+      }
+    },
+    "sizeFormatted": {
+      "type": "computed",
+      "compute": {
+        "function": "formatFileSize",
+        "inputs": ["size"]
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "client_modified",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "category": {
+      "type": "computed",
+      "compute": {
+        "function": "categorizeFileByExtension",
+        "inputs": ["name"]
+      }
+    },
+    "extension": {
+      "type": "computed",
+      "compute": {
+        "function": "extractFileExtension",
+        "inputs": ["name"]
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "dropbox"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "file"
+    },
+    "contentHash": {
+      "type": "direct",
+      "source": "content_hash"
+    }
+  },
+  "transformers": [
+    "formatFileSize",
+    "categorizeFileByExtension",
+    "extractFileExtension"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["dropbox", "files", "content", "storage"],
+    "notes": "Handles Dropbox files with content hash for deduplication."
+  },
+  "enabled": true
+}

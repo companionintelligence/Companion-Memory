@@ -1,0 +1,68 @@
+{
+  "id": "icloud_photos_to_content",
+  "name": "iCloud Photos to Content",
+  "description": "Transforms iCloud API photo format into internal Content schema",
+  "sourceType": "icloud_photo",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "recordName",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generatePhotoTitle",
+        "inputs": ["fields.assetDate.value"]
+      },
+      "default": "iCloud Photo"
+    },
+    "createdAt": {
+      "type": "nested",
+      "path": "fields.assetDate.value",
+      "transform": {
+        "type": "date",
+        "format": "unix_ms"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "icloud"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "photo"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "image"
+    },
+    "mimeType": {
+      "type": "constant",
+      "constantValue": "image/jpeg"
+    },
+    "width": {
+      "type": "nested",
+      "path": "fields.resOriginalWidth.value"
+    },
+    "height": {
+      "type": "nested",
+      "path": "fields.resOriginalHeight.value"
+    },
+    "size": {
+      "type": "nested",
+      "path": "fields.resOriginalFileSize.value"
+    }
+  },
+  "transformers": [
+    "generatePhotoTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["icloud", "photos", "content", "media"],
+    "notes": "Handles iCloud photos with CloudKit record structure."
+  },
+  "enabled": true
+}

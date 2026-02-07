@@ -1,0 +1,69 @@
+{
+  "id": "slack_messages_to_communication",
+  "name": "Slack Messages to Communication",
+  "description": "Transforms Slack API message format into internal Communication schema",
+  "sourceType": "slack_message",
+  "targetType": "communication",
+  "fields": {
+    "externalId": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSlackMessageId",
+        "inputs": ["ts", "channel"]
+      },
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSlackMessageTitle",
+        "inputs": ["channel", "user"]
+      },
+      "default": "Slack Message"
+    },
+    "content": {
+      "type": "direct",
+      "source": "text"
+    },
+    "sender": {
+      "type": "direct",
+      "source": "user"
+    },
+    "timestamp": {
+      "type": "direct",
+      "source": "ts",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      },
+      "required": true
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "chat"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "slack"
+    },
+    "channelId": {
+      "type": "direct",
+      "source": "channel"
+    },
+    "threadTs": {
+      "type": "direct",
+      "source": "thread_ts"
+    }
+  },
+  "transformers": [
+    "generateSlackMessageId",
+    "generateSlackMessageTitle"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["slack", "messages", "communication", "chat"],
+    "notes": "Handles Slack messages from channels and DMs with thread support."
+  },
+  "enabled": true
+}

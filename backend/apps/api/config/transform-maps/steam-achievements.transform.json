@@ -1,0 +1,70 @@
+{
+  "id": "steam_achievements_to_event",
+  "name": "Steam Achievements to Event",
+  "description": "Transforms Steam API achievement format into internal Event schema",
+  "sourceType": "steam_achievement",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSteamAchievementId",
+        "inputs": ["apiname", "unlocktime"]
+      },
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "displayName",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "description"
+    },
+    "startTime": {
+      "type": "direct",
+      "source": "unlocktime",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      },
+      "required": true
+    },
+    "endTime": {
+      "type": "direct",
+      "source": "unlocktime",
+      "transform": {
+        "type": "date",
+        "format": "unix"
+      },
+      "required": true
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "steam"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "achievement"
+    },
+    "achieved": {
+      "type": "direct",
+      "source": "achieved"
+    },
+    "iconUrl": {
+      "type": "direct",
+      "source": "icon"
+    }
+  },
+  "transformers": [
+    "generateSteamAchievementId"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["steam", "achievements", "event", "gaming"],
+    "notes": "Handles Steam game achievements as events."
+  },
+  "enabled": true
+}

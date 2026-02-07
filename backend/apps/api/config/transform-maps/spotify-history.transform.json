@@ -1,0 +1,73 @@
+{
+  "id": "spotify_history_to_event",
+  "name": "Spotify Recently Played to Event",
+  "description": "Transforms Spotify API recently played format into internal Event schema",
+  "sourceType": "spotify_play_history",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "computed",
+      "compute": {
+        "function": "generateSpotifyHistoryId",
+        "inputs": ["track.id", "played_at"]
+      },
+      "required": true
+    },
+    "title": {
+      "type": "nested",
+      "path": "track.name",
+      "required": true
+    },
+    "description": {
+      "type": "computed",
+      "compute": {
+        "function": "generateTrackDescription",
+        "inputs": ["track.artists", "track.album"]
+      }
+    },
+    "startTime": {
+      "type": "direct",
+      "source": "played_at",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "endTime": {
+      "type": "computed",
+      "compute": {
+        "function": "calculatePlayEndTime",
+        "inputs": ["played_at", "track.duration_ms"]
+      },
+      "required": true
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "spotify"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "listening_event"
+    },
+    "trackId": {
+      "type": "nested",
+      "path": "track.id"
+    },
+    "artist": {
+      "type": "nested",
+      "path": "track.artists[0].name"
+    }
+  },
+  "transformers": [
+    "generateSpotifyHistoryId",
+    "generateTrackDescription",
+    "calculatePlayEndTime"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["spotify", "history", "event", "music"],
+    "notes": "Handles Spotify listening history as events."
+  },
+  "enabled": true
+}

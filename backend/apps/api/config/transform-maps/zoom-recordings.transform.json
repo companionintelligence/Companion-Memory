@@ -1,0 +1,66 @@
+{
+  "id": "zoom_recordings_to_content",
+  "name": "Zoom Recordings to Content",
+  "description": "Transforms Zoom API recording format into internal Content schema",
+  "sourceType": "zoom_recording",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "topic",
+      "required": true
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "start_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "duration": {
+      "type": "direct",
+      "source": "duration"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "zoom"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "recording"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "mimeType": {
+      "type": "constant",
+      "constantValue": "video/mp4"
+    },
+    "size": {
+      "type": "nested",
+      "path": "recording_files[0].file_size"
+    },
+    "url": {
+      "type": "nested",
+      "path": "recording_files[0].play_url"
+    },
+    "hostId": {
+      "type": "direct",
+      "source": "host_id"
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["zoom", "recordings", "content", "video"],
+    "notes": "Handles Zoom meeting recordings with playback URLs."
+  },
+  "enabled": true
+}

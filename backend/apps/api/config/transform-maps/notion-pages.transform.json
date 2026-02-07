@@ -1,0 +1,74 @@
+{
+  "id": "notion_pages_to_content",
+  "name": "Notion Pages to Content",
+  "description": "Transforms Notion API page format into internal Content schema",
+  "sourceType": "notion_page",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "computed",
+      "compute": {
+        "function": "extractNotionPageTitle",
+        "inputs": ["properties"]
+      },
+      "required": true
+    },
+    "url": {
+      "type": "direct",
+      "source": "url"
+    },
+    "createdAt": {
+      "type": "direct",
+      "source": "created_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "modifiedAt": {
+      "type": "direct",
+      "source": "last_edited_time",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "notion"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "page"
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "document"
+    },
+    "icon": {
+      "type": "computed",
+      "compute": {
+        "function": "extractNotionIcon",
+        "inputs": ["icon"]
+      }
+    },
+    "archived": {
+      "type": "direct",
+      "source": "archived"
+    }
+  },
+  "transformers": [
+    "extractNotionPageTitle",
+    "extractNotionIcon"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["notion", "pages", "content", "documents"],
+    "notes": "Handles Notion pages with property extraction."
+  },
+  "enabled": true
+}

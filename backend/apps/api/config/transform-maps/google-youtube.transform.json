@@ -1,0 +1,71 @@
+{
+  "id": "google_youtube_to_content",
+  "name": "YouTube Videos to Content",
+  "description": "Transforms YouTube API video/playlist format into internal Content schema",
+  "sourceType": "google_youtube_video",
+  "targetType": "content",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "nested",
+      "path": "snippet.title",
+      "required": true
+    },
+    "description": {
+      "type": "nested",
+      "path": "snippet.description"
+    },
+    "thumbnailUrl": {
+      "type": "nested",
+      "path": "snippet.thumbnails.high.url"
+    },
+    "createdAt": {
+      "type": "nested",
+      "path": "snippet.publishedAt",
+      "transform": {
+        "type": "date"
+      }
+    },
+    "category": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "youtube"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "video"
+    },
+    "url": {
+      "type": "computed",
+      "compute": {
+        "function": "generateYouTubeUrl",
+        "inputs": ["id"]
+      }
+    },
+    "channelName": {
+      "type": "nested",
+      "path": "snippet.channelTitle"
+    },
+    "channelId": {
+      "type": "nested",
+      "path": "snippet.channelId"
+    }
+  },
+  "transformers": [
+    "generateYouTubeUrl"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["google", "youtube", "video", "content"],
+    "notes": "Handles YouTube playlists, likes, and subscriptions. Generates proper YouTube URLs."
+  },
+  "enabled": true
+}

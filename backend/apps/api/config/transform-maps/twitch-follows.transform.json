@@ -1,0 +1,46 @@
+{
+  "id": "twitch_follows_to_relationship",
+  "name": "Twitch Follows to Relationship",
+  "description": "Transforms Twitch API follow format into internal Relationship schema",
+  "sourceType": "twitch_follow",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "to_id",
+      "required": true
+    },
+    "name": {
+      "type": "direct",
+      "source": "to_name",
+      "required": true
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "twitch"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "follow"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "follow"
+    },
+    "followedAt": {
+      "type": "direct",
+      "source": "followed_at",
+      "transform": {
+        "type": "date"
+      }
+    }
+  },
+  "transformers": [],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["twitch", "follows", "relationship"],
+    "notes": "Handles Twitch channel follows."
+  },
+  "enabled": true
+}

@@ -1,0 +1,60 @@
+{
+  "id": "linkedin_connections_to_relationship",
+  "name": "LinkedIn Connections to Relationship",
+  "description": "Transforms LinkedIn API connection format into internal Relationship schema",
+  "sourceType": "linkedin_connection",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "name": {
+      "type": "computed",
+      "compute": {
+        "function": "extractLinkedInName",
+        "inputs": ["firstName", "lastName"]
+      },
+      "required": true
+    },
+    "photoUrl": {
+      "type": "nested",
+      "path": "profilePicture.displayImage"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "linkedin"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "connection"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "professional"
+    },
+    "headline": {
+      "type": "direct",
+      "source": "headline"
+    },
+    "profileUrl": {
+      "type": "computed",
+      "compute": {
+        "function": "generateLinkedInProfileUrl",
+        "inputs": ["vanityName"]
+      }
+    }
+  },
+  "transformers": [
+    "extractLinkedInName",
+    "generateLinkedInProfileUrl"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["linkedin", "connections", "relationship"],
+    "notes": "Handles LinkedIn professional connections."
+  },
+  "enabled": true
+}

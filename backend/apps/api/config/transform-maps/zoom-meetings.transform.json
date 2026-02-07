@@ -1,0 +1,76 @@
+{
+  "id": "zoom_meetings_to_event",
+  "name": "Zoom Meetings to Event",
+  "description": "Transforms Zoom API meeting format into internal Event schema",
+  "sourceType": "zoom_meeting",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "transform": {
+        "type": "string"
+      },
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "topic",
+      "required": true
+    },
+    "description": {
+      "type": "direct",
+      "source": "agenda"
+    },
+    "startTime": {
+      "type": "direct",
+      "source": "start_time",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "duration": {
+      "type": "direct",
+      "source": "duration"
+    },
+    "endTime": {
+      "type": "computed",
+      "compute": {
+        "function": "calculateZoomEndTime",
+        "inputs": ["start_time", "duration"]
+      },
+      "required": true
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "zoom"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "video_meeting"
+    },
+    "joinUrl": {
+      "type": "direct",
+      "source": "join_url"
+    },
+    "hostId": {
+      "type": "direct",
+      "source": "host_id"
+    },
+    "timezone": {
+      "type": "direct",
+      "source": "timezone"
+    }
+  },
+  "transformers": [
+    "calculateZoomEndTime"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["zoom", "meetings", "event", "video"],
+    "notes": "Handles Zoom meetings with join URLs and duration."
+  },
+  "enabled": true
+}

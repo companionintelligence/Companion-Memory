@@ -1,0 +1,64 @@
+{
+  "id": "google_contacts_to_relationship",
+  "name": "Google Contacts to Relationship",
+  "description": "Transforms Google Contacts API format into internal Relationship schema",
+  "sourceType": "google_contacts_contact",
+  "targetType": "relationship",
+  "fields": {
+    "externalId": {
+      "type": "nested",
+      "path": "resourceName",
+      "required": true
+    },
+    "name": {
+      "type": "computed",
+      "compute": {
+        "function": "extractContactName",
+        "inputs": ["names[0]"]
+      },
+      "required": true
+    },
+    "email": {
+      "type": "nested",
+      "path": "emailAddresses[0].value"
+    },
+    "phone": {
+      "type": "nested",
+      "path": "phoneNumbers[0].value"
+    },
+    "photoUrl": {
+      "type": "nested",
+      "path": "photos[0].url"
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "google_contacts"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "contact"
+    },
+    "relationshipType": {
+      "type": "constant",
+      "constantValue": "contact"
+    },
+    "metadata": {
+      "type": "computed",
+      "compute": {
+        "function": "extractContactMetadata",
+        "inputs": ["organizations", "addresses", "memberships"]
+      }
+    }
+  },
+  "transformers": [
+    "extractContactName",
+    "extractContactMetadata"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["google", "contacts", "relationship"],
+    "notes": "Handles Google People API contact format with nested structures."
+  },
+  "enabled": true
+}

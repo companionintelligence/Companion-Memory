@@ -1,0 +1,89 @@
+{
+  "id": "microsoft_calendar_to_event",
+  "name": "Outlook Calendar to Event",
+  "description": "Transforms Microsoft Graph API event format into internal Event schema",
+  "sourceType": "microsoft_outlook_event",
+  "targetType": "event",
+  "fields": {
+    "externalId": {
+      "type": "direct",
+      "source": "id",
+      "required": true
+    },
+    "title": {
+      "type": "direct",
+      "source": "subject",
+      "default": "(No Title)"
+    },
+    "description": {
+      "type": "nested",
+      "path": "body.content"
+    },
+    "startTime": {
+      "type": "nested",
+      "path": "start.dateTime",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "endTime": {
+      "type": "nested",
+      "path": "end.dateTime",
+      "transform": {
+        "type": "date"
+      },
+      "required": true
+    },
+    "duration": {
+      "type": "computed",
+      "compute": {
+        "function": "extractEventDuration",
+        "inputs": ["start", "end"]
+      }
+    },
+    "location": {
+      "type": "nested",
+      "path": "location.displayName"
+    },
+    "attendees": {
+      "type": "computed",
+      "compute": {
+        "function": "extractOutlookAttendees",
+        "inputs": ["attendees"]
+      }
+    },
+    "organizer": {
+      "type": "nested",
+      "path": "organizer.emailAddress.address"
+    },
+    "isAllDay": {
+      "type": "direct",
+      "source": "isAllDay",
+      "default": false
+    },
+    "platform": {
+      "type": "constant",
+      "constantValue": "outlook_calendar"
+    },
+    "type": {
+      "type": "constant",
+      "constantValue": "calendar_event"
+    },
+    "onlineMeetingUrl": {
+      "type": "direct",
+      "source": "onlineMeetingUrl"
+    }
+  },
+  "transformers": [
+    "extractEventDuration",
+    "extractOutlookAttendees"
+  ],
+  "metadata": {
+    "author": "CI-Server ETL Team",
+    "version": "1.0.0",
+    "tags": ["microsoft", "outlook", "calendar", "event"],
+    "notes": "Handles Microsoft Graph event format with timezone support."
+  },
+  "enabled": true
+}
