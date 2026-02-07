@@ -1,6 +1,7 @@
 import type { LoggerService } from '@ci/common/logging';
 import { createMockConnection, createMockLogger } from '@ci/test/mocks';
 
+import { listProviderCatalog } from '../catalog';
 import { CatalogMockClient } from '../clients/CatalogMockClient';
 
 const GOOGLE_PROVIDER_ID = '0198779b-182c-716e-9275-b81d99a47fdb';
@@ -42,5 +43,19 @@ describe('CatalogMockClient', () => {
     const identifier = await client.getAccountIdentifier(connection);
 
     expect(identifier).toBe(`mock:${connection.providerId}:user-1`);
+  });
+
+  it('supports mock sync across every catalog provider', async () => {
+    for (const provider of listProviderCatalog()) {
+      const connection = createMockConnection(provider.providerId, {
+        activeEndpoints: [],
+      });
+
+      const responses = await client.sync(connection);
+
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.success).toBe(true);
+      expect((responses[0]?.data?.results?.length ?? 0) > 0).toBe(true);
+    }
   });
 });
