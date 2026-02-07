@@ -1,0 +1,229 @@
+name: CI-Server Fleet Tests
+on:
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - e2e
+      server:
+        description: 'Target server'
+        required: true
+        default: 'core-5'
+        type: choice
+        options:
+          - core-5
+          - core-6
+          - core-7
+  schedule:
+    # Run nightly at 4am Pacific (12pm UTC)
+    - cron: '0 12 * * *'
+
+env:
+  CORE_5_IP: 100.118.2.90
+  CORE_6_IP: 100.95.23.128
+  CORE_7_IP: 100.74.95.94
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'unit' || github.event_name == 'schedule' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run unit tests
+        run: yarn test:backend
+        env:
+          NODE_ENV: test
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: backend/apps/api/coverage/
+          retention-days: 7
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'integration' || github.event_name == 'schedule' }}
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run migrations
+        run: yarn db:migrate
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/ci_test
+
+      - name: Run integration tests
+        run: yarn test:integration
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/ci_test
+          NODE_ENV: test
+
+  e2e-fleet:
+    name: E2E Tests on Fleet
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'e2e' || github.event_name == 'schedule' }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Set server IP
+        id: server
+        run: |
+          SERVER="${{ github.event.inputs.server || 'core-5' }}"
+          case $SERVER in
+            core-5) echo "ip=${{ env.CORE_5_IP }}" >> $GITHUB_OUTPUT ;;
+            core-6) echo "ip=${{ env.CORE_6_IP }}" >> $GITHUB_OUTPUT ;;
+            core-7) echo "ip=${{ env.CORE_7_IP }}" >> $GITHUB_OUTPUT ;;
+          esac
+          echo "name=$SERVER" >> $GITHUB_OUTPUT
+
+      - name: Verify Tailscale connectivity
+        run: |
+          ping -c 3 ${{ steps.server.outputs.ip }} || exit 1
+          echo "Connected to ${{ steps.server.outputs.name }}"
+
+      - name: Deploy CI-Server to fleet server
+        run: |
+          ssh -o StrictHostKeyChecking=no ci@${{ steps.server.outputs.ip }} << 'EOF'
+            cd ~/devel/CI-Server
+            git pull origin develop
+            yarn install --immutable
+            make build
+            make restart-test || true
+          EOF
+
+      - name: Wait for server to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -s "http://${{ steps.server.outputs.ip }}:3000/health" > /dev/null; then
+              echo "Server is ready"
+              exit 0
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 10
+          done
+          echo "Server failed to start"
+          exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: yarn test:e2e
+        env:
+          SERVER_URL: http://${{ steps.server.outputs.ip }}:3000
+          TEST_SERVER: ${{ steps.server.outputs.name }}
+
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ steps.server.outputs.name }}
+          path: playwright-report/
+          retention-days: 14
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots-${{ steps.server.outputs.name }}
+          path: tests/e2e/screenshots/
+          retention-days: 14
+
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, e2e-fleet]
+    if: always()
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          if [[ "${{ needs.unit-tests.result }}" == "success" && \
+                "${{ needs.integration-tests.result }}" == "success" && \
+                "${{ needs.e2e-fleet.result }}" == "success" ]]; then
+            echo "overall=success" >> $GITHUB_OUTPUT
+            echo "color=3066993" >> $GITHUB_OUTPUT
+          else
+            echo "overall=failure" >> $GITHUB_OUTPUT
+            echo "color=15158332" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Discord notification
+        if: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "embeds": [{
+                "title": "CI-Server Tests - ${{ steps.status.outputs.overall }}",
+                "description": "CI-Server fleet tests completed.",
+                "color": ${{ steps.status.outputs.color }},
+                "fields": [
+                  {"name": "Unit Tests", "value": "${{ needs.unit-tests.result }}", "inline": true},
+                  {"name": "Integration", "value": "${{ needs.integration-tests.result }}", "inline": true},
+                  {"name": "E2E", "value": "${{ needs.e2e-fleet.result }}", "inline": true}
+                ],
+                "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }]
+            }'
