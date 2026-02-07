@@ -343,6 +343,22 @@ if (requestsThisSecond > spec.rateLimit.requestsPerSecond) {
 }
 ```
 
+## HTTP Method Compatibility
+
+**Note on WebDAV Methods**: The Nextcloud API spec defines PROPFIND methods (WebDAV extension). For simplicity in the mock implementation, these are exposed as GET endpoints in the controller. When integrating with the real Nextcloud API, ensure your HTTP client supports WebDAV methods:
+
+```typescript
+// Real Nextcloud client example
+await httpClient.request({
+  method: 'PROPFIND',
+  url: '/remote.php/dav/files/user',
+  headers: { 'Depth': '1' }
+});
+
+// Mock API (testing)
+await httpClient.get('http://localhost:3001/mock/nextcloud/remote.php/dav/files/user');
+```
+
 ## Data Customization
 
 To customize mock data for specific tests:
