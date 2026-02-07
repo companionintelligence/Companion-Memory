@@ -24,6 +24,7 @@ import { EventsModule } from '@ci/domains/events';
 
 import { EtlController } from './controllers/EtlController';
 import { ApiLogEntity } from './entities/ApiLogEntity';
+import { ConnectionPipelineOrchestrator } from './pipeline/ConnectionPipelineOrchestrator';
 import { EtlService } from './services/EtlService';
 
 /**
@@ -31,9 +32,9 @@ import { EtlService } from './services/EtlService';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([ApiLogEntity, ConnectionEntity]), ConnectionsModule, EventsModule],
-  providers: [EtlService],
+  providers: [EtlService, ConnectionPipelineOrchestrator],
   controllers: [EtlController],
-  exports: [EtlService],
+  exports: [EtlService, ConnectionPipelineOrchestrator],
 })
 export class EtlModule {}
 
@@ -42,6 +43,7 @@ export { ApiLogEntity };
 
 // Services
 export { EtlService };
+export { ConnectionPipelineOrchestrator };
 
 // Controllers
 export { EtlController };
@@ -64,3 +66,14 @@ export type {
   CalendarSyncResult,
   GmailSyncResult,
 } from './types/syncTypes';
+
+export type {
+  ConnectionEtlAdapter,
+  EtlCanonicalRecord,
+  EtlExtractRecord,
+  EtlPipelineContext,
+  EtlPipelineRunResult,
+  ExtractStageResult,
+  LoadStageResult,
+  TransformStageResult,
+} from './pipeline';

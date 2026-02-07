@@ -8,6 +8,7 @@ import { LoggerService } from '@ci/common/logging';
 import {
   ClientFactory,
   ConnectionService,
+  getProviderCatalogByProviderId,
   type Connection,
   type SyncResponse,
 } from '@ci/domains/connections';
@@ -49,6 +50,8 @@ export class EtlService {
 
       return;
     }
+
+    this.validateConnectionEndpointSelection(connection);
 
     // Validate connection
     if (!this.isConnectionValid(connection)) {
@@ -149,6 +152,24 @@ export class EtlService {
       !(connection.tokenExpiry && connection.tokenExpiry < new Date() && !connection.refreshToken) &&
       !!connection.provider?.id
     );
+  }
+
+  private validateConnectionEndpointSelection(connection: Connection): void {
+    const providerCatalog = getProviderCatalogByProviderId(connection.providerId);
+    if (!providerCatalog) {
+      return;
+    }
+
+    const knownStreamKeys = new Set(providerCatalog.streams.map((stream) => stream.key));
+    const unknownSelections = connection.activeEndpoints.filter((endpoint) => !knownStreamKeys.has(endpoint));
+
+    if (unknownSelections.length > 0) {
+      this.logger.warn('Connection has endpoint selections not present in provider catalog', {
+        connectionId: connection.id,
+        providerId: connection.providerId,
+        unknownSelections,
+      });
+    }
   }
 
   private async updateSyncState(

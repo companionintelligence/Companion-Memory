@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 
+import { resolveOAuthCredentials } from '../catalog';
 import { ClientFactory } from '../clients';
 import { ConnectionService } from '../services/ConnectionService';
 import { ProviderService } from '../services/ProviderService';
@@ -71,25 +72,26 @@ export class ProvidersController {
       throw new InternalServerErrorException();
     }
 
-    const clientIdVariable = `${provider.name?.toUpperCase()}_CLIENT_ID`;
-    const clientSecretVariable = `${provider.name?.toUpperCase()}_CLIENT_SECRET`;
-
     // TODO:
     //   These are stand-in variables for user settings with fallback defaults.
     //   We need to eventually replace this with a more robust system where we're
     //   POST-ing to a gateway with protected keys, or a local API endpoint with
     //   user-specified key overrides.
-    const clientId = process.env[clientIdVariable];
-    const clientSecret = process.env[clientSecretVariable];
+    const { clientId, clientSecret, clientIdVars, clientSecretVars } = resolveOAuthCredentials(
+      provider.id,
+      provider.name,
+    );
 
     if (!clientId) {
-      this.logger.error(`Expected environment variable ${clientIdVariable} not specified`);
+      this.logger.error(`Expected one of environment variables ${clientIdVars.join(', ')} to be specified`);
 
       throw new InternalServerErrorException('Client id not configured for provider');
     }
 
     if (!clientSecret) {
-      this.logger.error(`Expected environment variable ${clientSecretVariable} not specified`);
+      this.logger.error(
+        `Expected one of environment variables ${clientSecretVars.join(', ')} to be specified`,
+      );
 
       throw new InternalServerErrorException('Client secret not configured for provider');
     }

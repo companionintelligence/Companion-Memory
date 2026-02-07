@@ -24,6 +24,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
 
+import * as ProviderCatalog from './catalog';
 import { ClientFactory, FacebookClient, GoogleClient, MicrosoftClient } from './clients';
 import { ConnectionsController } from './controllers/ConnectionsController';
 import { ProvidersController } from './controllers/ProvidersController';
@@ -59,6 +60,23 @@ export { ClientFactory } from './clients';
 
 // Clients
 export { FacebookClient, GoogleClient, MicrosoftClient };
+
+// Provider Catalog
+export { ProviderCatalog };
+export {
+  getOAuthEnvVarNames,
+  getProviderCatalogByKey,
+  getProviderCatalogByProviderId,
+  listProviderCatalog,
+  resolveOAuthCredentials,
+} from './catalog';
+export type {
+  ProviderCatalogEntry,
+  ProviderAuthType,
+  ProviderLifecycle,
+  ProviderOrigin,
+  ProviderStreamDefinition,
+} from './catalog';
 
 // Types
 export type { Connection } from './entities/ConnectionEntity';

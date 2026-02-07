@@ -2,14 +2,11 @@
  * ETL Service Tests
  */
 
-import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import type { Repository } from 'typeorm';
 
-import { EtlService } from '../services/EtlService';
-import { ApiLogEntity } from '../entities/ApiLogEntity';
-import { ClientFactory } from '@ci/domains/connections/clients';
-import { ConnectionService } from '@ci/domains/connections';
-import { LoggerService } from '@ci/common/logging';
+import type { RequestContext } from '@ci/common/context';
+import type { LoggerService } from '@ci/common/logging';
+import type { ClientFactory, Connection, ConnectionService } from '@ci/domains/connections';
 import {
   createMockConnection,
   createMockContext,
@@ -17,68 +14,63 @@ import {
   createMockSyncResponse,
 } from '@ci/test/mocks';
 
+import type { ApiLogEntity } from '../entities/ApiLogEntity';
+import { EtlService } from '../services/EtlService';
+
 describe('EtlService', () => {
   let service: EtlService;
-  let mockClientFactory: jest.Mocked<ClientFactory>;
-  let mockConnectionService: jest.Mocked<ConnectionService>;
-  let mockApiLogRepository: jest.Mocked<any>;
+  let mockClientFactory: { getClientByProviderId: jest.Mock };
+  let mockConnectionService: {
+    findById: jest.Mock<Promise<Connection | null>, [RequestContext, string]>;
+    update: jest.Mock;
+  };
+  let mockApiLogRepository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    find: jest.Mock;
+  };
 
-  beforeEach(async () => {
+  beforeEach(() => {
     mockClientFactory = {
       getClientByProviderId: jest.fn(),
-    } as any;
+    };
 
     mockConnectionService = {
       findById: jest.fn(),
-      updateSyncState: jest.fn(),
-    } as any;
+      update: jest.fn(),
+    };
 
     mockApiLogRepository = {
+      create: jest.fn().mockImplementation((value) => value),
       save: jest.fn(),
       find: jest.fn(),
     };
 
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        EtlService,
-        {
-          provide: getRepositoryToken(ApiLogEntity),
-          useValue: mockApiLogRepository,
-        },
-        {
-          provide: ClientFactory,
-          useValue: mockClientFactory,
-        },
-        {
-          provide: ConnectionService,
-          useValue: mockConnectionService,
-        },
-        {
-          provide: LoggerService,
-          useValue: createMockLogger(),
-        },
-      ],
-    }).compile();
-
-    service = module.get<EtlService>(EtlService);
+    service = new EtlService(
+      mockApiLogRepository as unknown as Repository<ApiLogEntity>,
+      mockClientFactory as unknown as ClientFactory,
+      mockConnectionService as unknown as ConnectionService,
+      createMockLogger() as unknown as LoggerService,
+    );
   });
 
   describe('handleConnectionSync', () => {
     it('should sync a valid Google connection', async () => {
       const mockConnection = createMockConnection('google', {
+        active: true,
         activeEndpoints: ['Calendar', 'Gmail'],
+        provider: { id: 'google' } as unknown as Connection['provider'],
       });
       const context = createMockContext();
-      
+
       mockConnectionService.findById.mockResolvedValue(mockConnection);
-      
+
       const mockClient = {
-        sync: jest.fn().mockResolvedValue([
-          createMockSyncResponse('Calendar'),
-          createMockSyncResponse('Gmail'),
-        ]),
+        sync: jest
+          .fn()
+          .mockResolvedValue([createMockSyncResponse('Calendar'), createMockSyncResponse('Gmail')]),
       };
-      mockClientFactory.getClientByProviderId.mockReturnValue(mockClient as any);
+      mockClientFactory.getClientByProviderId.mockReturnValue(mockClient);
 
       await service.handleConnectionSync(context, mockConnection.id);
 
@@ -90,12 +82,9 @@ describe('EtlService', () => {
     });
 
     it('should throw UnauthorizedException when userId is missing', async () => {
-      const context = createMockContext();
-      context.userId = null as any;
+      const context: RequestContext = {};
 
-      await expect(
-        service.handleConnectionSync(context, 'connection-id'),
-      ).rejects.toThrow('Unauthorized');
+      await expect(service.handleConnectionSync(context, 'connection-id')).rejects.toThrow('Unauthorized');
     });
 
     it('should skip sync for non-existent connection', async () => {
@@ -109,20 +98,22 @@ describe('EtlService', () => {
     });
 
     it('should handle sync errors gracefully', async () => {
-      const mockConnection = createMockConnection('google');
+      const mockConnection = createMockConnection('google', {
+        active: true,
+        provider: { id: 'google' } as unknown as Connection['provider'],
+      });
       const context = createMockContext();
-      
+
       mockConnectionService.findById.mockResolvedValue(mockConnection);
-      
+
       const mockClient = {
         sync: jest.fn().mockRejectedValue(new Error('API rate limited')),
       };
-      mockClientFactory.getClientByProviderId.mockReturnValue(mockClient as any);
+      mockClientFactory.getClientByProviderId.mockReturnValue(mockClient);
 
-      // Should handle error without throwing
-      await expect(
-        service.handleConnectionSync(context, mockConnection.id),
-      ).resolves.not.toThrow();
+      await expect(service.handleConnectionSync(context, mockConnection.id)).rejects.toThrow(
+        'API rate limited',
+      );
     });
   });
 });
