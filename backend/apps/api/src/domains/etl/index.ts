@@ -24,27 +24,70 @@ import { EventsModule } from '@ci/domains/events';
 
 import { EtlController } from './controllers/EtlController';
 import { ApiLogEntity } from './entities/ApiLogEntity';
+import { ProviderConfigEntity } from './entities/ProviderConfigEntity';
+import { ApiSpecEntity } from './entities/ApiSpecEntity';
+import { TransformMapEntity } from './entities/TransformMapEntity';
 import { EtlService } from './services/EtlService';
+import { ProviderRegistry } from './services/ProviderRegistry';
+import { ApiClient } from './services/ApiClient';
+import { TransformEngine } from './services/TransformEngine';
+import { SyncEngine } from './services/SyncEngine';
+import { RateLimiter } from './services/RateLimiter';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([ApiLogEntity, ConnectionEntity]), ConnectionsModule, EventsModule],
-  providers: [EtlService],
+  imports: [
+    TypeOrmModule.forFeature([
+      ApiLogEntity,
+      ConnectionEntity,
+      ProviderConfigEntity,
+      ApiSpecEntity,
+      TransformMapEntity,
+    ]),
+    ConnectionsModule,
+    EventsModule,
+  ],
+  providers: [
+    EtlService,
+    ProviderRegistry,
+    ApiClient,
+    TransformEngine,
+    SyncEngine,
+    RateLimiter,
+  ],
   controllers: [EtlController],
-  exports: [EtlService],
+  exports: [
+    EtlService,
+    ProviderRegistry,
+    ApiClient,
+    TransformEngine,
+    SyncEngine,
+    RateLimiter,
+  ],
 })
 export class EtlModule {}
 
 // Entities
 export { ApiLogEntity };
+export { ProviderConfigEntity };
+export { ApiSpecEntity };
+export { TransformMapEntity };
 
 // Services
 export { EtlService };
+export { ProviderRegistry };
+export { ApiClient };
+export { TransformEngine };
+export { SyncEngine };
+export { RateLimiter };
 
 // Controllers
 export { EtlController };
+
+// Transformers
+export * from './transformers';
 
 // Types
 export type { ApiLog } from './types';
