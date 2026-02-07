@@ -13,15 +13,25 @@ import { MicrosoftClient } from './MicrosoftClient';
 export class ClientFactory {
   private readonly providers = new Map<string, Client>();
 
+  private resolveProviderId(key: 'google' | 'microsoft' | 'facebook'): string {
+    const configuredId = config.auth?.providers?.[key]?.id;
+
+    if (configuredId?.trim()) {
+      return configuredId;
+    }
+
+    return key;
+  }
+
   constructor(
     private readonly googleClient: GoogleClient,
     private readonly microsoftClient: MicrosoftClient,
     private readonly facebookClient: FacebookClient,
     private readonly catalogMockClient?: CatalogMockClient,
   ) {
-    this.providers.set(config.auth.providers.google.id, this.googleClient);
-    this.providers.set(config.auth.providers.microsoft.id, this.microsoftClient);
-    this.providers.set(config.auth.providers.facebook.id, this.facebookClient);
+    this.providers.set(this.resolveProviderId('google'), this.googleClient);
+    this.providers.set(this.resolveProviderId('microsoft'), this.microsoftClient);
+    this.providers.set(this.resolveProviderId('facebook'), this.facebookClient);
   }
 
   hasClientForProviderId(providerId: string | null | undefined): boolean {

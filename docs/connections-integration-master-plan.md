@@ -294,3 +294,24 @@ Complete and productionize Connections integrations for:
 3. Build Tier 2 connectors.
 4. Complete Tier 3 with fallback/export paths.
 5. Collect test API keys and run gated smoke tests.
+
+## Implementation Log (This Branch)
+
+1. Completed Wave 0 foundation:
+- Catalog-driven Connect page via `/api/providers/catalog`.
+- Provider catalog expanded to include all requested connectors.
+- Provider DB seed migration added for full catalog IDs.
+- `ClientFactory` extended with `hasClientForProviderId` and `getClientByProviderIdOrNull`.
+- Mock-mode runtime path added for catalog providers via `CatalogMockClient`.
+
+2. Testing currently in place:
+- Catalog integrity and connector presence tests.
+- Connect-catalog card coverage tests.
+- Catalog mock client behavior tests.
+- Full catalog mock-mode client factory coverage test.
+- ETL adapter classification tests for all catalog providers.
+
+3. Current completion status:
+- Active live connectors: Google, Microsoft, Facebook.
+- Mock-mode connector path: all catalog providers (including newly requested ones).
+- Live/sandbox verification of newly added providers: pending test API keys.
