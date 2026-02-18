@@ -13,14 +13,13 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
 
 import { ClientFactory } from '../clients';
-import { ConnectionService } from '../services/ConnectionService';
 import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
+import { ConnectionService } from '../services/ConnectionService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
-
-import config from '@ci/configuration';
 
 @Controller('providers')
 export class ProvidersController {
@@ -86,10 +85,15 @@ export class ProvidersController {
 
       const callbackUrl = `${config.auth.oauth.callbackUrl}?connectionId=${connection.id}`;
 
+      const scopes =
+        input.endpoints.length > 0
+          ? this.cloudOAuthProxyService.resolveEndpointsToScopes(providerName, input.endpoints)
+          : undefined;
+
       const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
         providerName,
         callbackUrl,
-        input.endpoints.length > 0 ? input.endpoints : undefined,
+        scopes,
       );
 
       return { authorizationUrl: authorization_url };
