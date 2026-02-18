@@ -18,14 +18,13 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
 import { EventService, Events } from '@ci/domains/events';
 
 import { ClientFactory } from '../clients';
-import { ConnectionService } from '../services/ConnectionService';
 import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
+import { ConnectionService } from '../services/ConnectionService';
 import type { CompleteConnectionDto, CreateConnectionDto, UpdateConnectionDto } from '../types';
-
-import config from '@ci/configuration';
 
 const createConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -65,7 +64,7 @@ const completeConnectionSchema = z.object({
 const completeProxyConnectionSchema = z.object({
   connectionId: z.string().uuid('Invalid connection ID'),
   accessToken: z.string().min(1, 'Access token is required'),
-  proxyRefreshToken: z.string().min(1, 'Proxy refresh token is required'),
+  proxyRefreshToken: z.string().min(1).optional(), // Optional for providers without refresh tokens (e.g. Facebook)
   expiresIn: z.number().int().positive().optional(),
   provider: z.string().min(1, 'Provider is required'),
   userProviderId: z.string().min(1, 'User provider ID is required'),
@@ -286,7 +285,7 @@ export class ConnectionsController {
     body: {
       connectionId: string;
       accessToken: string;
-      proxyRefreshToken: string;
+      proxyRefreshToken?: string;
       expiresIn?: number;
       provider: string;
       userProviderId: string;
@@ -308,9 +307,10 @@ export class ConnectionsController {
 
     // Save tokens — proxyRefreshToken is stored in the refreshToken column so
     // token-refresh logic can treat it as an opaque refresh credential.
+    // Providers without refresh tokens (e.g. Facebook) pass undefined.
     await this.update(context, connectionId, {
       accessToken,
-      refreshToken: proxyRefreshToken,
+      refreshToken: proxyRefreshToken ?? null,
       tokenExpiry,
       active: true,
       needsReauth: false,

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 
 import { LoadingPage, usePageTitle } from '@ci/common';
 import { useToast } from '@ci/shadcn';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
 
@@ -12,7 +12,7 @@ export function OAuthCallbackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
-  const [{ authToken }] = useAuth();
+  const [{ authToken, loading: authLoading }] = useAuth();
 
   const initialRequestRef = useRef<boolean>(false);
 
@@ -32,33 +32,59 @@ export function OAuthCallbackPage() {
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
-  // If we're not logged into the application we can't actually complete a connection.
-  // This is an unlikely state, but possible.
-  if (!authToken) {
-    throw new Error('Unauthenticated');
-  }
-
-  if (error) {
-    throw new Error(error);
-  }
-
-  if (errorDescription) {
-    throw new Error(errorDescription);
-  }
-
   // Determine flow: cloud proxy (access_token present) vs direct OAuth (code present)
   const isCloudProxyCallback = !!accessToken;
 
-  if (!isCloudProxyCallback && (!code || !state)) {
-    throw new Error('Missing OAuth credentials');
-  }
+  // Handle OAuth errors from provider (don't throw - show toast and redirect)
+  useEffect(() => {
+    if (error || errorDescription) {
+      toast.error(errorDescription || error || 'OAuth error');
+      navigate('/connections');
 
-  if (isCloudProxyCallback && (!connectionId || !provider || !userProviderId || !proxyRefreshToken)) {
-    throw new Error('Missing CI Cloud proxy OAuth credentials');
+      return;
+    }
+
+    if (!isCloudProxyCallback && (!code || !state)) {
+      toast.error('Missing OAuth credentials');
+      navigate('/connections');
+
+      return;
+    }
+
+    if (isCloudProxyCallback && (!connectionId || !provider || !userProviderId)) {
+      toast.error('Missing OAuth credentials from provider');
+      navigate('/connections');
+
+      return;
+    }
+  }, [
+    error,
+    errorDescription,
+    isCloudProxyCallback,
+    code,
+    state,
+    connectionId,
+    provider,
+    userProviderId,
+    toast,
+    navigate,
+  ]);
+
+  // Redirect to login if not authenticated (session may have been lost during OAuth redirect).
+  // Preserve current URL in state so user can return after login to complete the connection.
+  if (!authLoading && !authToken) {
+    return <Navigate to="/login" state={{ from: `/oauth/callback?${searchParams.toString()}` }} replace />;
   }
 
   useEffect(() => {
-    if (!authToken || initialRequestRef.current) {
+    if (
+      !authToken ||
+      initialRequestRef.current ||
+      error ||
+      errorDescription ||
+      (!isCloudProxyCallback && (!code || !state)) ||
+      (isCloudProxyCallback && (!connectionId || !provider || !userProviderId))
+    ) {
       return;
     }
 
@@ -79,7 +105,7 @@ export function OAuthCallbackPage() {
             body: JSON.stringify({
               connectionId,
               accessToken,
-              proxyRefreshToken,
+              proxyRefreshToken: proxyRefreshToken ?? undefined,
               expiresIn: expiresIn ? parseInt(expiresIn, 10) : undefined,
               provider,
               userProviderId,
@@ -116,7 +142,23 @@ export function OAuthCallbackPage() {
         navigate('/connections');
       }
     })();
-  }, [authToken]);
+  }, [
+    authToken,
+    error,
+    errorDescription,
+    isCloudProxyCallback,
+    code,
+    state,
+    connectionId,
+    accessToken,
+    proxyRefreshToken,
+    expiresIn,
+    provider,
+    userProviderId,
+    email,
+    toast,
+    navigate,
+  ]);
 
   return <LoadingPage />;
 }
