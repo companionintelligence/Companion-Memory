@@ -16,8 +16,19 @@ export function OAuthCallbackPage() {
 
   const initialRequestRef = useRef<boolean>(false);
 
+  // CI Cloud proxy callback params (when OAuth is proxied through CI Cloud)
+  const accessToken = searchParams.get('access_token');
+  const proxyRefreshToken = searchParams.get('proxy_refresh_token');
+  const connectionId = searchParams.get('connectionId');
+  const provider = searchParams.get('provider');
+  const userProviderId = searchParams.get('user_provider_id');
+  const expiresIn = searchParams.get('expires_in');
+  const email = searchParams.get('email');
+
+  // Direct OAuth callback params (legacy / when CI Cloud proxy is disabled)
   const code = searchParams.get('code');
   const state = searchParams.get('state');
+
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
@@ -27,21 +38,23 @@ export function OAuthCallbackPage() {
     throw new Error('Unauthenticated');
   }
 
-  // We should consider lifting this error into state so that whatever page we might redirect to
-  // can pick it up and render it. For now we'd just bubble to the nearest error boundary.
   if (error) {
     throw new Error(error);
   }
 
-  // Can we have an errorDescription without an error?
-  // Does this need to be a separate check?
   if (errorDescription) {
     throw new Error(errorDescription);
   }
 
-  // If don't have required OAuth credentials we can't proceed, so just error out.
-  if (!code || !state) {
+  // Determine flow: cloud proxy (access_token present) vs direct OAuth (code present)
+  const isCloudProxyCallback = !!accessToken;
+
+  if (!isCloudProxyCallback && (!code || !state)) {
     throw new Error('Missing OAuth credentials');
+  }
+
+  if (isCloudProxyCallback && (!connectionId || !provider || !userProviderId || !proxyRefreshToken)) {
+    throw new Error('Missing CI Cloud proxy OAuth credentials');
   }
 
   useEffect(() => {
@@ -53,17 +66,40 @@ export function OAuthCallbackPage() {
       initialRequestRef.current = true;
 
       try {
-        const response = await fetch(`/api/connections/complete`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({
-            state,
-            code,
-          }),
-        });
+        let response: Response;
+
+        if (isCloudProxyCallback) {
+          // CI Cloud proxy flow: tokens already exchanged by CI Cloud
+          response = await fetch(`/api/connections/complete-proxy`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              connectionId,
+              accessToken,
+              proxyRefreshToken,
+              expiresIn: expiresIn ? parseInt(expiresIn, 10) : undefined,
+              provider,
+              userProviderId,
+              email: email ?? undefined,
+            }),
+          });
+        } else {
+          // Direct OAuth flow: exchange code on the server
+          response = await fetch(`/api/connections/complete`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              state,
+              code,
+            }),
+          });
+        }
 
         if (response.ok) {
           toast.success('Created connection');

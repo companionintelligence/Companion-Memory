@@ -79,8 +79,13 @@
       "host": "http://tts-service:9002"
     }
   },
+  "ciCloud": {
+    "enabled": false,
+    "url": "",
+    "boxId": "",
+    "boxApiKey": ""
+  },
   "features": {
-    "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,
     "scheduled.entity.promotion": true,
     "pinned.demo.models": false,

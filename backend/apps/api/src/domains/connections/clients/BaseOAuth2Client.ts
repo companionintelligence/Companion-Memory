@@ -147,6 +147,45 @@ export abstract class BaseOAuth2Client extends BaseClient {
       throw new BadRequestException('No refresh token available');
     }
 
+    // When CI Cloud proxy is enabled, the stored refreshToken is a proxy_refresh_token
+    // issued by CI Cloud. Use CI Cloud's refresh endpoint instead of the provider directly.
+    if (config.ciCloud.enabled) {
+      const cloudUrl = config.ciCloud.url?.replace(/\/$/, '');
+      if (!cloudUrl) throw new Error('CI_CLOUD_URL is not configured');
+
+      const proxyResponse = await fetch(`${cloudUrl}/api/oauth/token/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proxy_refresh_token: connection.refreshToken }),
+      });
+
+      if (!proxyResponse.ok) {
+        const errorText = await proxyResponse.text();
+        this.logger.error('CI Cloud token refresh failed', {
+          status: proxyResponse.status,
+          body: errorText,
+        });
+        throw new Error('CI Cloud token refresh failed');
+      }
+
+      const proxyData = (await proxyResponse.json()) as {
+        access_token: string;
+        expires_in: number;
+        proxy_refresh_token: string;
+      };
+
+      const tokenExpiry = proxyData.expires_in
+        ? new Date(Date.now() + proxyData.expires_in * 1000)
+        : null;
+
+      return {
+        accessToken: proxyData.access_token,
+        // Return the rotated proxy refresh token so the caller can persist it.
+        refreshToken: proxyData.proxy_refresh_token,
+        tokenExpiry,
+      } satisfies TokenExchange;
+    }
+
     const tokenParams = new URLSearchParams({
       client_id: this.clientId,
       client_secret: this.clientSecret,

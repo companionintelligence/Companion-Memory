@@ -29,6 +29,7 @@ import { ConnectionsController } from './controllers/ConnectionsController';
 import { ProvidersController } from './controllers/ProvidersController';
 import { ConnectionEntity } from './entities/ConnectionEntity';
 import { ProviderEntity } from './entities/ProviderEntity';
+import { CloudOAuthProxyService } from './services/CloudOAuthProxyService';
 import { ProviderKeyEntity } from './entities/ProviderKeyEntity';
 import { ConnectionService } from './services/ConnectionService';
 import { ProviderKeyService } from './services/ProviderKeyService';
@@ -47,6 +48,7 @@ import { ProviderService } from './services/ProviderService';
     ProviderService,
     ProviderKeyService,
     MicrosoftClient,
+    CloudOAuthProxyService,
   ],
   controllers: [ConnectionsController, ProvidersController],
   exports: [
@@ -57,6 +59,7 @@ import { ProviderService } from './services/ProviderService';
     FacebookClient,
     GoogleClient,
     MicrosoftClient,
+    CloudOAuthProxyService,
   ],
 })
 export class ConnectionsModule {}
@@ -65,7 +68,7 @@ export class ConnectionsModule {}
 export { ConnectionEntity, ProviderEntity, ProviderKeyEntity };
 
 // Services
-export { ConnectionService, ProviderService, ProviderKeyService };
+export { ConnectionService, ProviderService, ProviderKeyService, CloudOAuthProxyService };
 export { ClientFactory } from './clients';
 
 // Clients

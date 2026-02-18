@@ -42,6 +42,12 @@
       "host": "TTS_HOST"
     }
   },
+  "ciCloud": {
+    "enabled": "CI_CLOUD_ENABLED",
+    "url": "CI_CLOUD_URL",
+    "boxId": "CI_CLOUD_BOX_ID",
+    "boxApiKey": "CI_CLOUD_BOX_API_KEY"
+  },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",

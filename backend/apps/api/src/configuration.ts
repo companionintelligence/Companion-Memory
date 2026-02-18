@@ -59,6 +59,16 @@ export const ConfigSchema = z.object({
       facebook: z.object({
         id: z.string(),
       }),
+      discord: z
+        .object({
+          id: z.string(),
+        })
+        .optional(),
+      instagram: z
+        .object({
+          id: z.string(),
+        })
+        .optional(),
     }),
     oauth: z.object({
       callbackUrl: z.string(),
@@ -96,6 +106,12 @@ export const ConfigSchema = z.object({
     tts: z.object({
       host: z.string(),
     }),
+  }),
+  ciCloud: z.object({
+    enabled: booleanStringSchema,
+    url: z.string().optional(),
+    boxId: z.string().optional(),
+    boxApiKey: z.string().optional(),
   }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
