@@ -80,7 +80,7 @@
     }
   },
   "ciCloud": {
-    "enabled": false,
+    "enabled": true,
     "url": "",
     "boxId": "",
     "boxApiKey": ""
