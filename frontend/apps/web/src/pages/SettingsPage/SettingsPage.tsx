@@ -14,12 +14,14 @@ import {
   CheckCircle,
   AlertCircle,
   Info,
+  Mic,
 } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { ModelSelector } from '@/components/ModelSelector';
 import { ColorPicker, TexturePicker } from '@/components/ThemePicker';
+import { VoiceCloningWizard } from '@/components/VoiceCloningWizard';
 
 interface SettingsState {
   // Data Storage
@@ -473,6 +475,22 @@ export function SettingsPage() {
             </Card.Content>
           </Card>
         </div>
+
+        {/* Voice Cloning Section - Full Width */}
+        <Card>
+          <Card.Header>
+            <Card.Title className="flex items-center gap-2">
+              <Mic className="h-5 w-5" />
+              Voice Cloning
+            </Card.Title>
+            <Card.Description>
+              Create custom voice profiles for personalized text-to-speech
+            </Card.Description>
+          </Card.Header>
+          <Card.Content>
+            <VoiceCloningWizard />
+          </Card.Content>
+        </Card>
 
         {/* System Preferences - Full Width */}
         <Card>
