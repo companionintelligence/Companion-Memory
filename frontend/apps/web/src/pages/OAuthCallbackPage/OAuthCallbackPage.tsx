@@ -85,13 +85,14 @@ export function OAuthCallbackPage() {
       try {
         const body = isCloudProxyCallback
           ? {
+              flow: 'proxy' as const,
               state: connectionId,
               accessToken,
               proxyRefreshToken: proxyRefreshToken ?? undefined,
               expiresIn: expiresIn ? parseInt(expiresIn, 10) : undefined,
               userProviderId,
             }
-          : { state, code };
+          : { flow: 'direct' as const, state, code };
 
         const response = await fetch(`/api/connections/complete`, {
           method: 'POST',

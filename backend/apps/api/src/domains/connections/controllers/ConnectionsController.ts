@@ -56,16 +56,21 @@ const updateConnectionSchema = z.object({
   endpoints: z.array(z.string()).optional(),
 });
 
-const completeConnectionSchema = z.object({
-  state: z.string(),
-  // Direct OAuth params
-  code: z.string().optional(),
-  // CI Cloud proxy params (tokens already exchanged by CI Cloud)
-  accessToken: z.string().optional(),
-  proxyRefreshToken: z.string().optional(),
-  expiresIn: z.number().int().positive().optional(),
-  userProviderId: z.string().optional(),
-});
+const completeConnectionSchema = z.discriminatedUnion('flow', [
+  z.object({
+    flow: z.literal('proxy'),
+    state: z.string(),
+    accessToken: z.string(),
+    proxyRefreshToken: z.string().optional(),
+    expiresIn: z.number().int().positive().optional(),
+    userProviderId: z.string().optional(),
+  }),
+  z.object({
+    flow: z.literal('direct'),
+    state: z.string(),
+    code: z.string(),
+  }),
+]);
 
 @Controller('connections')
 export class ConnectionsController {
@@ -233,19 +238,9 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    if (body.accessToken) {
-      // CI Cloud proxy flow: tokens already exchanged by CI Cloud, just store them.
-      const tokenExpiry = body.expiresIn ? new Date(Date.now() + body.expiresIn * 1000) : null;
-
-      await this.update(context, connectionId, {
-        accessToken: body.accessToken,
-        refreshToken: body.proxyRefreshToken ?? null,
-        tokenExpiry,
-        active: true,
-        needsReauth: false,
-        externalId: body.userProviderId,
-      });
-
+    if (body.flow === 'proxy') {
+      // CI Cloud proxy flow: tokens already exchanged by CI Cloud.
+      // Check for duplicate connection before storing tokens.
       const existingConnections = await this.connectionService.search(serviceContext, {
         providerId: connection.providerId,
         active: true,
@@ -256,6 +251,17 @@ export class ConnectionsController {
         await this.connectionService.remove(serviceContext, connectionId);
         throw new ConflictException('A connection to that account already exists');
       }
+
+      const tokenExpiry = body.expiresIn ? new Date(Date.now() + body.expiresIn * 1000) : null;
+
+      await this.update(context, connectionId, {
+        accessToken: body.accessToken,
+        refreshToken: body.proxyRefreshToken ?? null,
+        tokenExpiry,
+        active: true,
+        needsReauth: false,
+        externalId: body.userProviderId,
+      });
 
       return;
     }
@@ -269,7 +275,7 @@ export class ConnectionsController {
       throw new InternalServerErrorException();
     }
 
-    const tokenExchange = await client.exchangeAuthorizationCode(body.code!);
+    const tokenExchange = await client.exchangeAuthorizationCode(body.code);
 
     await this.update(context, connectionId, {
       ...tokenExchange,
