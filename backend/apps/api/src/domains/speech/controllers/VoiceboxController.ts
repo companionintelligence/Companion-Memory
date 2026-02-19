@@ -15,7 +15,6 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
-import FormData from 'form-data';
 
 import { Context, type RequestContext } from '@ci/common/context';
 import { JwtAuthGuard } from '@ci/common/guards';
@@ -83,24 +82,21 @@ export class VoiceboxController {
     }
 
     // Create FormData to forward to voicebox service
-    const formData = new FormData();
+    const formData = new (globalThis as any).FormData();
     formData.append('profile_id', profileId);
-    formData.append('audio_file', file.buffer, {
-      filename: file.originalname,
-      contentType: file.mimetype,
-    });
+    formData.append('audio_file', new Blob([file.buffer]), file.originalname);
 
     try {
       const response = await fetch(`${config.services.voicebox.host}/voicebox/sample/upload`, {
         method: 'POST',
         body: formData,
-        headers: formData.getHeaders(),
       });
 
       const data = await response.json();
       return res.status(response.status).json(data);
-    } catch (error) {
-      throw new BadRequestException(`Failed to upload sample: ${error.message}`);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException(`Failed to upload sample: ${errorMessage}`);
     }
   }
 

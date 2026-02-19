@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Button, Card, Input, Label, Textarea, Alert, Badge, Progress } from '@ci/shadcn';
-import { Mic, Upload, Trash2, CheckCircle, AlertCircle, Loader2, Play, Pause } from '@ci/shadcn/icons';
+import { Mic, Upload, CheckCircle, AlertCircle, Loader2, Pause } from '@ci/shadcn/icons';
 
 interface VoiceProfile {
   id: string;
@@ -409,7 +409,7 @@ export function VoiceCloningWizard() {
               <Label>Samples</Label>
               <p className="text-sm">{profile.sample_count} audio samples</p>
             </div>
-          </Card>
+          </Card.Content>
         </Card>
       )}
 
