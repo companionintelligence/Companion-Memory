@@ -20,25 +20,29 @@ export function OAuthCallbackPage() {
   const accessToken = searchParams.get('access_token');
   const proxyRefreshToken = searchParams.get('proxy_refresh_token');
   const connectionId = searchParams.get('connectionId');
-  const provider = searchParams.get('provider');
   const userProviderId = searchParams.get('user_provider_id');
   const expiresIn = searchParams.get('expires_in');
-  const email = searchParams.get('email');
 
-  // Direct OAuth callback params (legacy / when CI Cloud proxy is disabled)
+  // Direct OAuth callback params
   const code = searchParams.get('code');
   const state = searchParams.get('state');
 
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
-  // Determine flow: cloud proxy (access_token present) vs direct OAuth (code present)
   const isCloudProxyCallback = !!accessToken;
 
-  // Handle OAuth errors from provider (don't throw - show toast and redirect)
+  // Handle OAuth errors and missing params
   useEffect(() => {
     if (error || errorDescription) {
       toast.error(errorDescription || error || 'OAuth error');
+      navigate('/connections');
+
+      return;
+    }
+
+    if (isCloudProxyCallback && (!connectionId || !userProviderId)) {
+      toast.error('Missing OAuth credentials from provider');
       navigate('/connections');
 
       return;
@@ -50,41 +54,28 @@ export function OAuthCallbackPage() {
 
       return;
     }
-
-    if (isCloudProxyCallback && (!connectionId || !provider || !userProviderId)) {
-      toast.error('Missing OAuth credentials from provider');
-      navigate('/connections');
-
-      return;
-    }
   }, [
     error,
     errorDescription,
     isCloudProxyCallback,
+    connectionId,
+    userProviderId,
     code,
     state,
-    connectionId,
-    provider,
-    userProviderId,
     toast,
     navigate,
   ]);
 
-  // Redirect to login if not authenticated (session may have been lost during OAuth redirect).
-  // Preserve current URL in state so user can return after login to complete the connection.
+  // Redirect to login if session was lost during the OAuth redirect.
   if (!authLoading && !authToken) {
     return <Navigate to="/login" state={{ from: `/oauth/callback?${searchParams.toString()}` }} replace />;
   }
 
   useEffect(() => {
-    if (
-      !authToken ||
-      initialRequestRef.current ||
-      error ||
-      errorDescription ||
-      (!isCloudProxyCallback && (!code || !state)) ||
-      (isCloudProxyCallback && (!connectionId || !provider || !userProviderId))
-    ) {
+    const hasError = !!(error || errorDescription);
+    const missingParams = isCloudProxyCallback ? !connectionId || !userProviderId : !code || !state;
+
+    if (!authToken || initialRequestRef.current || hasError || missingParams) {
       return;
     }
 
@@ -92,40 +83,24 @@ export function OAuthCallbackPage() {
       initialRequestRef.current = true;
 
       try {
-        let response: Response;
-
-        if (isCloudProxyCallback) {
-          // CI Cloud proxy flow: tokens already exchanged by CI Cloud
-          response = await fetch(`/api/connections/complete-proxy`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              connectionId,
+        const body = isCloudProxyCallback
+          ? {
+              state: connectionId,
               accessToken,
               proxyRefreshToken: proxyRefreshToken ?? undefined,
               expiresIn: expiresIn ? parseInt(expiresIn, 10) : undefined,
-              provider,
               userProviderId,
-              email: email ?? undefined,
-            }),
-          });
-        } else {
-          // Direct OAuth flow: exchange code on the server
-          response = await fetch(`/api/connections/complete`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              state,
-              code,
-            }),
-          });
-        }
+            }
+          : { state, code };
+
+        const response = await fetch(`/api/connections/complete`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(body),
+        });
 
         if (response.ok) {
           toast.success('Created connection');
@@ -147,15 +122,13 @@ export function OAuthCallbackPage() {
     error,
     errorDescription,
     isCloudProxyCallback,
-    code,
-    state,
     connectionId,
     accessToken,
     proxyRefreshToken,
     expiresIn,
-    provider,
     userProviderId,
-    email,
+    code,
+    state,
     toast,
     navigate,
   ]);

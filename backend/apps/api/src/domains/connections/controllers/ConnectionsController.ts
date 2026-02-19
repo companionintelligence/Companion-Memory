@@ -58,17 +58,13 @@ const updateConnectionSchema = z.object({
 
 const completeConnectionSchema = z.object({
   state: z.string(),
-  code: z.string(),
-});
-
-const completeProxyConnectionSchema = z.object({
-  connectionId: z.string().uuid('Invalid connection ID'),
-  accessToken: z.string().min(1, 'Access token is required'),
-  proxyRefreshToken: z.string().min(1).optional(), // Optional for providers without refresh tokens (e.g. Facebook)
+  // Direct OAuth params
+  code: z.string().optional(),
+  // CI Cloud proxy params (tokens already exchanged by CI Cloud)
+  accessToken: z.string().optional(),
+  proxyRefreshToken: z.string().optional(),
   expiresIn: z.number().int().positive().optional(),
-  provider: z.string().min(1, 'Provider is required'),
-  userProviderId: z.string().min(1, 'User provider ID is required'),
-  email: z.string().email().optional(),
+  userProviderId: z.string().optional(),
 });
 
 @Controller('connections')
@@ -191,10 +187,15 @@ export class ConnectionsController {
       const baseCallbackUrl = config.auth.oauth.callbackUrl;
       const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
 
+      const scopes = this.cloudOAuthProxyService.resolveEndpointsToScopes(
+        provider,
+        connection.activeEndpoints,
+      );
+
       const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
         provider,
         callbackUrl,
-        connection.activeEndpoints.length > 0 ? connection.activeEndpoints : undefined,
+        scopes.length > 0 ? scopes : undefined,
       );
 
       return { url: authorization_url };
@@ -222,7 +223,7 @@ export class ConnectionsController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    const { state: connectionId, code } = body;
+    const { state: connectionId } = body;
 
     const connection = await this.connectionService.findById(serviceContext, connectionId);
 
@@ -232,6 +233,34 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
+    if (body.accessToken) {
+      // CI Cloud proxy flow: tokens already exchanged by CI Cloud, just store them.
+      const tokenExpiry = body.expiresIn ? new Date(Date.now() + body.expiresIn * 1000) : null;
+
+      await this.update(context, connectionId, {
+        accessToken: body.accessToken,
+        refreshToken: body.proxyRefreshToken ?? null,
+        tokenExpiry,
+        active: true,
+        needsReauth: false,
+        externalId: body.userProviderId,
+      });
+
+      const existingConnections = await this.connectionService.search(serviceContext, {
+        providerId: connection.providerId,
+        active: true,
+        externalId: body.userProviderId,
+      });
+
+      if (existingConnections.length > 0 && existingConnections.find((c) => c.id !== connectionId)) {
+        await this.connectionService.remove(serviceContext, connectionId);
+        throw new ConflictException('A connection to that account already exists');
+      }
+
+      return;
+    }
+
+    // Direct OAuth flow: exchange the authorization code with the provider.
     const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
 
     if (client == null) {
@@ -240,7 +269,7 @@ export class ConnectionsController {
       throw new InternalServerErrorException();
     }
 
-    const tokenExchange = await client.exchangeAuthorizationCode(code);
+    const tokenExchange = await client.exchangeAuthorizationCode(body.code!);
 
     await this.update(context, connectionId, {
       ...tokenExchange,
@@ -266,68 +295,6 @@ export class ConnectionsController {
     await this.update(context, connectionId, {
       externalId,
     });
-  }
-
-  /**
-   * POST /connections/complete-proxy
-   *
-   * Called by the frontend after CI Cloud redirects back with OAuth tokens.
-   * CI Cloud has already exchanged the authorization code and stored the
-   * encrypted refresh token — we receive an access token and an opaque
-   * proxy_refresh_token to use for future refreshes.
-   */
-  @UseGuards(JwtAuthGuard)
-  @Post('complete-proxy')
-  @HttpCode(204)
-  async completeProxyCallback(
-    @Context() context: RequestContext,
-    @Body(new ValidationPipe(completeProxyConnectionSchema))
-    body: {
-      connectionId: string;
-      accessToken: string;
-      proxyRefreshToken?: string;
-      expiresIn?: number;
-      provider: string;
-      userProviderId: string;
-      email?: string;
-    },
-  ) {
-    const serviceContext = toServiceContext(context);
-
-    const { connectionId, accessToken, proxyRefreshToken, expiresIn, userProviderId } = body;
-
-    const connection = await this.connectionService.findById(serviceContext, connectionId);
-
-    if (connection == null) {
-      this.logger.log('Performed a proxy callback on `null` connection');
-      throw new NotFoundException();
-    }
-
-    const tokenExpiry = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
-
-    // Save tokens — proxyRefreshToken is stored in the refreshToken column so
-    // token-refresh logic can treat it as an opaque refresh credential.
-    // Providers without refresh tokens (e.g. Facebook) pass undefined.
-    await this.update(context, connectionId, {
-      accessToken,
-      refreshToken: proxyRefreshToken ?? null,
-      tokenExpiry,
-      active: true,
-      needsReauth: false,
-      externalId: userProviderId,
-    });
-
-    // Check for duplicate connections on the same provider account.
-    const existingConnections = await this.connectionService.search(serviceContext, {
-      providerId: connection.providerId,
-      active: true,
-      externalId: userProviderId,
-    });
-
-    if (existingConnections.length > 0 && existingConnections.find((c) => c.id !== connectionId)) {
-      await this.connectionService.remove(serviceContext, connectionId);
-      throw new ConflictException('A connection to that account already exists');
-    }
   }
 
   @UseGuards(JwtAuthGuard)

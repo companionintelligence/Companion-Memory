@@ -22,7 +22,7 @@ export interface CloudTokenResponse {
  * OAuth calls so that client secrets never need to live on the box.
  *
  * Auth model (mirrors CI Cloud):
- *  - authorize: sends x-device-key header (box's API key)
+ *  - authorize: sends box_id + device_key in the request body
  *  - token/refresh: self-authenticating via proxy_refresh_token
  *  - token/revoke:  self-authenticating via proxy_refresh_token
  */
@@ -150,11 +150,11 @@ export class CloudOAuthProxyService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-device-key': this.boxApiKey,
       },
       body: JSON.stringify({
         provider,
         box_id: this.boxId,
+        device_key: this.boxApiKey,
         callback_url: callbackUrl,
         scopes,
       }),

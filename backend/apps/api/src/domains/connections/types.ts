@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 export interface CompleteConnectionDto {
   state: string;
-  code: string;
+  code?: string;
+  accessToken?: string;
+  proxyRefreshToken?: string;
+  expiresIn?: number;
+  userProviderId?: string;
 }
 
 export interface CreateConnectionDto {
