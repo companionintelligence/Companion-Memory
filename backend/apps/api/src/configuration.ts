@@ -84,6 +84,10 @@ export const ConfigSchema = z.object({
     tts: z.object({
       host: z.string(),
     }),
+    voicebox: z.object({
+      host: z.string(),
+      enabled: booleanStringSchema.optional().default(false),
+    }),
   }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,

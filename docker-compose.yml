@@ -103,6 +103,22 @@ services:
     restart: unless-stopped
     profiles: [ "local", "staging", "production" ]
 
+  voicebox-service:
+    build:
+      context: ./backend/apps/voicebox
+      dockerfile: Dockerfile
+    image: ci/voicebox-service
+    volumes:
+      - voicebox-service-models:/app/models
+      - voicebox-service-cache:/root/.cache
+    environment:
+      - PYTHONPATH=/app
+      - VOICEBOX_ENABLED=${VOICEBOX_ENABLED:-false}
+    networks:
+      - ci
+    restart: unless-stopped
+    profiles: [ "voicebox" ]
+
   summary-service:
     build:
       context: ./backend/apps/summary
@@ -150,6 +166,8 @@ volumes:
   stt-service-cache:
   tts-service-models:
   tts-service-cache:
+  voicebox-service-models:
+  voicebox-service-cache:
 
 networks:
   ci:

@@ -66,6 +66,10 @@
     },
     "tts": {
       "host": "http://localhost:9002"
+    },
+    "voicebox": {
+      "host": "http://localhost:9003",
+      "enabled": false
     }
   },
   "features": {

@@ -6,6 +6,7 @@
  * ### Key Components:
  * - **`STTController`**: Exposes an endpoint for converting spoken audio into text.
  * - **`TTSController`**: Exposes an endpoint for converting text into spoken audio.
+ * - **`VoiceboxController`**: Exposes endpoints for voice cloning and custom voice synthesis.
  * - **`ProxyService`**: A generic service used to forward requests to third-party APIs,
  *   in this case, the underlying speech service.
  *
@@ -18,6 +19,7 @@ import { ProxyService } from '@ci/common/services/ProxyService';
 
 import { STTController } from './controllers/STTController';
 import { TTSController } from './controllers/TTSController';
+import { VoiceboxController } from './controllers/VoiceboxController';
 
 /**
  * @internal
@@ -25,7 +27,7 @@ import { TTSController } from './controllers/TTSController';
 @Module({
   imports: [],
   providers: [ProxyService],
-  controllers: [STTController, TTSController],
+  controllers: [STTController, TTSController, VoiceboxController],
   exports: [],
 })
 export class SpeechModule {}
@@ -37,4 +39,4 @@ export {};
 export {};
 
 // Types
-export type { TTSConvertRequest, TTSConvertResponse } from './types';
+export type { TTSConvertRequest, TTSConvertResponse, VoiceProfile, VoiceProfileCreateRequest, VoiceSynthesizeRequest } from './types';
