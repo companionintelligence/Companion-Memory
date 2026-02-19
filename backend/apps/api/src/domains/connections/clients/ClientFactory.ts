@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import config from '@ci/configuration';
 
 import { BaseClient as Client } from './BaseClient';
+import { BlueBubblesClient } from './BlueBubblesClient';
 import { FacebookClient } from './FacebookClient';
 import { GoogleClient } from './GoogleClient';
 import { MicrosoftClient } from './MicrosoftClient';
@@ -15,10 +16,12 @@ export class ClientFactory {
     private readonly googleClient: GoogleClient,
     private readonly microsoftClient: MicrosoftClient,
     private readonly facebookClient: FacebookClient,
+    private readonly blueBubblesClient: BlueBubblesClient,
   ) {
     this.providers.set(config.auth.providers.google.id, this.googleClient);
     this.providers.set(config.auth.providers.microsoft.id, this.microsoftClient);
     this.providers.set(config.auth.providers.facebook.id, this.facebookClient);
+    this.providers.set(config.auth.providers.bluebubbles.id, this.blueBubblesClient);
   }
 
   getClientByProviderId(providerId: string | null | undefined): Client {

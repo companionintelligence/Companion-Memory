@@ -60,6 +60,7 @@ export type {
   OutlookCalendarSyncState,
   OneDriveSyncState,
   FacebookSyncState,
+  BlueBubblesSyncState,
   SyncResult,
   CalendarSyncResult,
   GmailSyncResult,

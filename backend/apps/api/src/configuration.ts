@@ -47,6 +47,9 @@ export const ConfigSchema = z.object({
       facebook: z.object({
         id: z.string(),
       }),
+      bluebubbles: z.object({
+        id: z.string(),
+      }),
     }),
     oauth: z.object({
       callbackUrl: z.string(),

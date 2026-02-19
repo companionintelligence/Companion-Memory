@@ -61,6 +61,13 @@ export interface FacebookSyncState {
   [key: string]: unknown;
 }
 
+export interface BlueBubblesSyncState {
+  lastSync?: number;
+  messageCount?: number;
+  chatCount?: number;
+  [key: string]: unknown;
+}
+
 export interface SyncResult {
   data: unknown;
   syncState:
