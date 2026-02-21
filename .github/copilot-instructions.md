@@ -169,7 +169,7 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 - Node.js (version in `.nvmrc`)
 - Docker & Docker Compose
 - Ollama with required models
-- Host entry: `dev.companionintelligence.com → 127.0.0.1`
+- Host entry: `portal.companionintelligence.com → 127.0.0.1`
 
 ### Services
 - PostgreSQL: Database and job queue
@@ -215,6 +215,6 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 - **Database connection**: Verify PostgreSQL is running in Docker
 - **Module resolution**: Yarn PnP may need `yarn dlx @yarnpkg/sdks vscode`
 - **Permission issues**: Ensure Docker has appropriate permissions
-- **Host resolution**: Verify `dev.companionintelligence.com` points to localhost
+- **Host resolution**: Verify `portal.companionintelligence.com` points to localhost
 
 This repository follows modern full-stack development practices with strong typing, comprehensive tooling, and AI integration capabilities.

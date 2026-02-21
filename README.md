@@ -118,7 +118,7 @@ ollama run nomic-embed-text "embed this"
 
 ### Hostfile
 
-Edit your hostfile so that `dev.companionintelligence.com` resolves to `127.0.0.1`.
+Edit your hostfile so that `portal.companionintelligence.com` resolves to `127.0.0.1`.
 
 ## Initialize development environment
 
@@ -132,14 +132,14 @@ This runs a variety of commands to do setup, including:
 
 * Ensure you have NodeJS installed and that the version matches what's expected
 * Ensure you have Ollama installed, that it is running, and that you've downloaded the minimum required models
-* Ensure you have a hostfile entry for dev.companionintelligence.com
+* Ensure you have a hostfile entry for portal.companionintelligence.com
 * Set up Yarn PnP with the SDKs relevant to our project and configure VSCode to work with them
 * Install Yarn dependencies
 * Boot local docker containers:
   * **PostgreSQL** Which we use as a primary database and job queue (via PGBoss)
   * **Minio** S3 static file bucket where we upload all static files
   * **Temporal** A durable orchestration engine that manages our more complex async workflows
-  * **NGINX** A reverse proxy that publishes our backend (NodeJS) and frontend (Vite) processes to dev.companionintelligence.com
+  * **NGINX** A reverse proxy that publishes our backend (NodeJS) and frontend (Vite) processes to portal.companionintelligence.com
 * Run data schema migrations
 
 Run our applications following the instructions in their respective READMEs.
@@ -153,7 +153,7 @@ Seed the database with development data:
 make seed
 ```
 
-You should now be able to view the application at [dev.companionintelligence.com](http://dev.companionintelligence.com) and login with the credentials:
+You should now be able to view the application at [portal.companionintelligence.com](http://portal.companionintelligence.com) and login with the credentials:
 
 ```
 Username: jsmith@example.com
@@ -177,7 +177,7 @@ Run `make` from the project root to see all available commands with descriptions
 | `make init` | Initialize repository after checkout (installs dependencies, sets up VS Code, prepares git hooks) |
 | `make install` | Install project dependencies only |
 | `make health` | Check prerequisites (Node.js version, Yarn version, Ollama, required models) |
-| `make dev-health` | Check prerequisites including development DNS resolution (dev.companionintelligence.com) |
+| `make dev-health` | Check prerequisites including development DNS resolution (portal.companionintelligence.com) |
 
 ### Development
 

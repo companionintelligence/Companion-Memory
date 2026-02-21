@@ -225,7 +225,7 @@ health: ## Check the repository for prerequisites
 
 .PHONY: dev-health
 dev-health: health ## Check the repository for prerequisites including development DNS resolutions
-	@HOST=dev.companionintelligence.com; \
+	@HOST=portal.companionintelligence.com; \
 	IP=$$(ping -c 1 -W 1 $$HOST | grep -oE '\(([0-9:.]+)\)' | head -n1 | tr -d '()'); \
 	if [ "$$IP" = "127.0.0.1" ] || [ "$$IP" = "::1" ]; then \
 		printf "$(GREEN)✓$(RESET) $$HOST resolves to localhost ($$IP)\n\n"; \

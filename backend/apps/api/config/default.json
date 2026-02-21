@@ -1,7 +1,7 @@
 {
   "host": "0.0.0.0",
   "port": 3030,
-  "hostname": "dev.companionintelligence.com",
+  "hostname": "portal.companionintelligence.com",
   "logging": {
     "level": "info"
   },
@@ -32,7 +32,7 @@
       }
     },
     "oauth": {
-      "callbackUrl": "https://dev.companionintelligence.com/oauth/callback"
+      "callbackUrl": "https://portal.companionintelligence.com/oauth/callback"
     }
   },
   "db": {
