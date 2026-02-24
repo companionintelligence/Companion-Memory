@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { json, urlencoded } from 'express';
+import { urlencoded } from 'express';
 
 import { App } from '@ci/application';
 import { LoggerService } from '@ci/common/logging';
@@ -19,7 +19,8 @@ import config from '@ci/configuration';
   express.set('trust proxy', true);
   express.disable('x-powered-by');
 
-  app.use(json({ limit: '100kb' }));
+  // Note: JSON body parsing is now handled by DynamicBodyParserMiddleware
+  // to allow per-route body size limits via @BodyLimit decorator
   app.use(urlencoded({ extended: true, limit: '100kb' }));
 
   app.enableShutdownHooks();

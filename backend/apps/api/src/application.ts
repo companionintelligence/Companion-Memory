@@ -18,6 +18,7 @@ import { FeatureModule } from '@ci/common/feature';
 import { GlobalExceptionsFilter } from '@ci/common/filters';
 import { IdFormatGuard } from '@ci/common/guards';
 import { LoggingModule, LoggerService, RequestLoggerMiddleware } from '@ci/common/logging';
+import { DynamicBodyParserMiddleware } from '@ci/common/middleware';
 import config from '@ci/configuration';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
@@ -104,6 +105,7 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
 
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(RequestContextMiddleware).forRoutes('*');
+    consumer.apply(DynamicBodyParserMiddleware).forRoutes('*');
     consumer.apply(RequestLoggerMiddleware).forRoutes('*');
   }
 
