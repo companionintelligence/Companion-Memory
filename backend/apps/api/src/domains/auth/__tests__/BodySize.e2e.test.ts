@@ -88,7 +88,7 @@ describe('Auth endpoint body size limits', () => {
         password: 'password123',
       };
 
-      const response = await request(app.getHttpServer()).post('/signup').send(largePayload).expect(413);
+      await request(app.getHttpServer()).post('/signup').send(largePayload).expect(413);
     });
 
     it('should accept requests with normal-sized body (< 100kb)', async () => {
@@ -114,7 +114,7 @@ describe('Auth endpoint body size limits', () => {
         token: largeString,
       };
 
-      const response = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .post('/authenticate/refresh')
         .send(largePayload)
         .expect(413);
