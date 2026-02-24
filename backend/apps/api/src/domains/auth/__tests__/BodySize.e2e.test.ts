@@ -58,7 +58,7 @@ describe('Auth endpoint body size limits', () => {
         password: largeString,
       };
 
-      const response = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .post('/authenticate')
         .send(largePayload)
         .expect(413);
