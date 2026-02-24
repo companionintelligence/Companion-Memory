@@ -19,8 +19,8 @@ import config from '@ci/configuration';
   express.set('trust proxy', true);
   express.disable('x-powered-by');
 
-  app.use(json({ limit: '50mb' }));
-  app.use(urlencoded({ extended: true, limit: '50mb' }));
+  app.use(json({ limit: '100kb' }));
+  app.use(urlencoded({ extended: true, limit: '100kb' }));
 
   app.enableShutdownHooks();
 

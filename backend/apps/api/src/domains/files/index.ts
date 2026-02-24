@@ -14,8 +14,9 @@
  * @module FilesModule
  */
 
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { json } from 'express';
 
 import { EventsModule } from '@ci/domains/events';
 
@@ -35,7 +36,14 @@ import { SavedSearchService } from './services/SavedSearchService';
   controllers: [FilesController],
   exports: [FileService, SavedSearchService],
 })
-export class FilesModule {}
+export class FilesModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    // Apply 50mb limit specifically to file upload endpoint
+    consumer
+      .apply(json({ limit: '50mb' }))
+      .forRoutes({ path: 'files/upload', method: RequestMethod.POST });
+  }
+}
 
 export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
 export type { File, SignedFile, SavedSearch };

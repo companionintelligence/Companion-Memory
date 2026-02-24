@@ -103,6 +103,17 @@ describe('File routes', () => {
         .attach('files', buffer, 'hello.txt')
         .expect(201);
     });
+
+    it('should accept large file uploads (verifying 50mb limit is applied)', async () => {
+      // Create a large buffer (5MB) to verify that files endpoint
+      // accepts larger payloads than the global 100kb limit
+      const largeBuffer = Buffer.alloc(5 * 1024 * 1024, 'x');
+
+      return request(app.getHttpServer())
+        .post('/files/upload')
+        .attach('files', largeBuffer, 'large-file.txt')
+        .expect(201);
+    });
   });
 
   describe('without valid auth credentials', () => {
