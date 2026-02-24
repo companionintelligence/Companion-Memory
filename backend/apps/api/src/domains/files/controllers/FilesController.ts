@@ -16,6 +16,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtAuthGuard } from '@ci/common/guards';
 
+import { LargeBodyInterceptor } from '../interceptors/LargeBodyInterceptor';
 import { FileService } from '../services/FileService';
 
 @Controller('files')
@@ -25,6 +26,7 @@ export class FilesController {
   @UseGuards(JwtAuthGuard)
   @Post('upload')
   @UseInterceptors(
+    LargeBodyInterceptor,
     FilesInterceptor('files', undefined, {
       dest: tmpdir(),
       limits: { fileSize: 10 * 1024 * 1024 * 1024 },
