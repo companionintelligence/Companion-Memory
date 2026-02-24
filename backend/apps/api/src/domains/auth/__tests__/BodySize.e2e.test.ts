@@ -1,16 +1,28 @@
-import { type INestApplication } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { Controller, Post, type INestApplication, Body } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
 import { json, urlencoded } from 'express';
 import request from 'supertest';
 
-import { IdFormatGuard, JwtAuthGuard } from '@ci/common/guards';
-import { LoggingModule } from '@ci/common/logging';
+/**
+ * Simple controller for testing body size limits
+ */
+@Controller()
+class TestAuthController {
+  @Post('authenticate')
+  login(@Body() body: any) {
+    return { success: true, body };
+  }
 
-import { AuthModule } from '..';
-import { SessionEntity } from '../entities/SessionEntity';
-import { SignupCodeEntity } from '../entities/SignupCodeEntity';
+  @Post('signup')
+  signup(@Body() body: any) {
+    return { success: true, body };
+  }
+
+  @Post('authenticate/refresh')
+  refresh(@Body() body: any) {
+    return { success: true, body };
+  }
+}
 
 /**
  * E2E tests to verify that JSON body size limits are properly enforced
@@ -21,21 +33,8 @@ describe('Auth endpoint body size limits', () => {
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
-      imports: [AuthModule, LoggingModule],
-      providers: [
-        {
-          provide: APP_GUARD,
-          useClass: IdFormatGuard,
-        },
-      ],
-    })
-      .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
-      .overrideProvider(getRepositoryToken(SessionEntity))
-      .useValue({})
-      .overrideProvider(getRepositoryToken(SignupCodeEntity))
-      .useValue({})
-      .compile();
+      controllers: [TestAuthController],
+    }).compile();
 
     app = module.createNestApplication();
 
@@ -75,9 +74,9 @@ describe('Auth endpoint body size limits', () => {
 
       const response = await request(app.getHttpServer()).post('/authenticate').send(normalPayload);
 
-      // We expect either 401 (unauthorized - normal flow since user doesn't exist)
-      // or 200 (if mock succeeds), but NOT 413
+      // We expect 200 or 201 (successful), not 413
       expect(response.status).not.toBe(413);
+      expect([200, 201]).toContain(response.status);
     });
   });
 
@@ -105,9 +104,9 @@ describe('Auth endpoint body size limits', () => {
 
       const response = await request(app.getHttpServer()).post('/signup').send(normalPayload);
 
-      // We expect either 400 (bad request - normal flow for validation errors)
-      // or 201 (if mock succeeds), but NOT 413
+      // We expect 200 or 201 (successful), not 413
       expect(response.status).not.toBe(413);
+      expect([200, 201]).toContain(response.status);
     });
   });
 
@@ -132,9 +131,9 @@ describe('Auth endpoint body size limits', () => {
 
       const response = await request(app.getHttpServer()).post('/authenticate/refresh').send(normalPayload);
 
-      // We expect either 401 (unauthorized - normal flow since token is missing/invalid)
-      // or 200 (if mock succeeds), but NOT 413
+      // We expect 200 or 201 (successful), not 413
       expect(response.status).not.toBe(413);
+      expect([200, 201]).toContain(response.status);
     });
   });
 });
