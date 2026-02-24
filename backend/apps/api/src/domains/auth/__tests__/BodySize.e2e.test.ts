@@ -62,8 +62,6 @@ describe('Auth endpoint body size limits', () => {
         .post('/authenticate')
         .send(largePayload)
         .expect(413);
-
-      expect(response.status).toBe(413);
     });
 
     it('should accept requests with normal-sized body (< 100kb)', async () => {
@@ -91,8 +89,6 @@ describe('Auth endpoint body size limits', () => {
       };
 
       const response = await request(app.getHttpServer()).post('/signup').send(largePayload).expect(413);
-
-      expect(response.status).toBe(413);
     });
 
     it('should accept requests with normal-sized body (< 100kb)', async () => {
@@ -122,8 +118,6 @@ describe('Auth endpoint body size limits', () => {
         .post('/authenticate/refresh')
         .send(largePayload)
         .expect(413);
-
-      expect(response.status).toBe(413);
     });
 
     it('should accept requests with normal-sized body (< 100kb)', async () => {
