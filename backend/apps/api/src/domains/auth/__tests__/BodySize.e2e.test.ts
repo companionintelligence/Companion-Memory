@@ -9,17 +9,17 @@ import request from 'supertest';
 @Controller()
 class TestAuthController {
   @Post('authenticate')
-  login(@Body() body: any) {
+  login(@Body() body: Record<string, unknown>) {
     return { success: true, body };
   }
 
   @Post('signup')
-  signup(@Body() body: any) {
+  signup(@Body() body: Record<string, unknown>) {
     return { success: true, body };
   }
 
   @Post('authenticate/refresh')
-  refresh(@Body() body: any) {
+  refresh(@Body() body: Record<string, unknown>) {
     return { success: true, body };
   }
 }

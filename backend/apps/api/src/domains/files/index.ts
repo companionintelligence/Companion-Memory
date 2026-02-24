@@ -39,9 +39,7 @@ import { SavedSearchService } from './services/SavedSearchService';
 export class FilesModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     // Apply 50mb limit specifically to file upload endpoint
-    consumer
-      .apply(json({ limit: '50mb' }))
-      .forRoutes({ path: 'files/upload', method: RequestMethod.POST });
+    consumer.apply(json({ limit: '50mb' })).forRoutes({ path: 'files/upload', method: RequestMethod.POST });
   }
 }
 
