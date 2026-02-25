@@ -166,8 +166,8 @@ export function FeedPage() {
       question,
     };
 
-    return [...cards.slice(0, safeInsertionIndex), questionCard, ...cards.slice(safeInsertionIndex)];
-  }, [question, questionCardInsertionIndex, visibleActions]);
+    return [...cards, questionCard];
+  }, [question, visibleActions]);
   const isActionsRowEmpty = actionCards.length === 0;
   const isInsightsRowEmpty = mixedInsightSummaryCards.length === 0;
   const showInsightsRowEmptyState = isInsightsRowEmpty && !summariesLoading && !summariesError;
@@ -411,7 +411,7 @@ export function FeedPage() {
           {showInsightsRowEmptyState ? (
             <div className="flex min-h-[220px] items-center justify-center">
               <p className="text-center text-lg font-medium text-muted-foreground opacity-70">
-                All Caught Up!
+                You've seen everything for now, let Companion learn and come back later
               </p>
             </div>
           ) : (
