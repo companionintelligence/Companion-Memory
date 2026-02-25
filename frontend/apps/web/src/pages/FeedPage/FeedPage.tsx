@@ -216,6 +216,10 @@ export function FeedPage() {
 
     return [...cards.slice(0, safeInsertionIndex), questionCard, ...cards.slice(safeInsertionIndex)];
   }, [question, questionCardInsertionIndex, visibleActions]);
+  const isActionsRowEmpty = actionCards.length === 0;
+  const isInsightsRowEmpty = mixedInsightSummaryCards.length === 0;
+  const showInsightsRowEmptyState = isInsightsRowEmpty && !summariesLoading && !summariesError;
+  const showMobileEmptyState = isActionsRowEmpty && showInsightsRowEmptyState;
 
   const [{ isOpen: isModalOpen }, { open: openModal, close: closeModal }] = useModalControls({
     open: selectedActionIndex >= 0,
@@ -311,54 +315,60 @@ export function FeedPage() {
 
     return (
       <PageContent>
-        <Carousel {...carouselProps}>
-          {!loading &&
-            !error &&
-            actionCards.map((card) =>
-              card.kind === 'question' ? (
-                <QuestionCard
+        {showMobileEmptyState ? (
+          <div className="flex min-h-[40vh] items-center justify-center py-10">
+            <p className="text-center text-xl font-medium text-muted-foreground opacity-70">All Caught Up!</p>
+          </div>
+        ) : (
+          <Carousel {...carouselProps}>
+            {!loading &&
+              !error &&
+              actionCards.map((card) =>
+                card.kind === 'question' ? (
+                  <QuestionCard
+                    key={card.id}
+                    question={card.question as FeedQuestion}
+                    submitting={questionSubmitting}
+                    onSubmit={handleQuestionSubmit}
+                  />
+                ) : (
+                  <BentoCard
+                    key={card.id}
+                    title={card.action.title}
+                    description={
+                      <div className="prose dark:prose-invert">
+                        <Markdown>{card.action.text}</Markdown>
+                      </div>
+                    }
+                    tags={card.action.tags}
+                    imageUrl={card.action.imageUrl}
+                    onClick={() => void handleCardClick(card.action.id)}
+                    onDismiss={() => void handleActionDismiss(card.action.id)}
+                    dismissLabel="Dismiss action"
+                    showUnseenIndicator={!card.action.seen}
+                  />
+                ),
+              )}
+
+            {mixedInsightSummaryCards.map((card) =>
+              card.kind === 'insight' ? (
+                <InsightCard
                   key={card.id}
-                  question={card.question as FeedQuestion}
-                  submitting={questionSubmitting}
-                  onSubmit={handleQuestionSubmit}
+                  insight={card.insight as FragmentType<typeof INSIGHT_CARD_FRAGMENT>}
+                  isSeen={card.isSeen}
+                  onDismiss={() => handleInsightDismiss(card.insightId)}
                 />
               ) : (
-                <BentoCard
+                <SummaryCard
                   key={card.id}
-                  title={card.action.title}
-                  description={
-                    <div className="prose dark:prose-invert">
-                      <Markdown>{card.action.text}</Markdown>
-                    </div>
-                  }
-                  tags={card.action.tags}
-                  imageUrl={card.action.imageUrl}
-                  onClick={() => void handleCardClick(card.action.id)}
-                  onDismiss={() => void handleActionDismiss(card.action.id)}
-                  dismissLabel="Dismiss action"
-                  showUnseenIndicator={!card.action.seen}
+                  summary={card.summary as FragmentType<typeof SUMMARY_CARD_FRAGMENT>}
+                  onClick={() => void handleSummaryClick(card.summary.id)}
+                  onDismiss={() => void handleSummaryDismiss(card.summary.id)}
                 />
               ),
             )}
-
-          {mixedInsightSummaryCards.map((card) =>
-            card.kind === 'insight' ? (
-              <InsightCard
-                key={card.id}
-                insight={card.insight as FragmentType<typeof INSIGHT_CARD_FRAGMENT>}
-                isSeen={card.isSeen}
-                onDismiss={() => handleInsightDismiss(card.insightId)}
-              />
-            ) : (
-              <SummaryCard
-                key={card.id}
-                summary={card.summary as FragmentType<typeof SUMMARY_CARD_FRAGMENT>}
-                onClick={() => void handleSummaryClick(card.summary.id)}
-                onDismiss={() => void handleSummaryDismiss(card.summary.id)}
-              />
-            ),
-          )}
-        </Carousel>
+          </Carousel>
+        )}
 
         {(summariesLoading || summariesError) && (
           <div className="py-4 text-center text-sm text-muted-foreground">
@@ -400,38 +410,44 @@ export function FeedPage() {
       <PageContent>
         <h2 className="text-2xl font-bold text-foreground">Actions</h2>
 
-        <Carousel {...carouselProps} initialIndex={selectedActionCardIndex}>
-          {!loading &&
-            !error &&
-            actionCards.map((card) =>
-              card.kind === 'question' ? (
-                <QuestionCard
-                  key={card.id}
-                  question={card.question as FeedQuestion}
-                  submitting={questionSubmitting}
-                  onSubmit={handleQuestionSubmit}
-                  className="hover:shadow-lg transition-shadow duration-200"
-                />
-              ) : (
-                <BentoCard
-                  key={card.id}
-                  title={card.action.title}
-                  description={
-                    <div className="prose dark:prose-invert">
-                      <Markdown>{card.action.text}</Markdown>
-                    </div>
-                  }
-                  tags={card.action.tags}
-                  imageUrl={card.action.imageUrl}
-                  onClick={() => void handleCardClick(card.action.id)}
-                  onDismiss={() => void handleActionDismiss(card.action.id)}
-                  dismissLabel="Dismiss action"
-                  showUnseenIndicator={!card.action.seen}
-                  className="hover:shadow-lg transition-shadow duration-200"
-                />
-              ),
-            )}
-        </Carousel>
+        {isActionsRowEmpty ? (
+          <div className="flex min-h-[220px] items-center justify-center">
+            <p className="text-center text-lg font-medium text-muted-foreground opacity-70">All Caught Up!</p>
+          </div>
+        ) : (
+          <Carousel {...carouselProps} initialIndex={selectedActionCardIndex}>
+            {!loading &&
+              !error &&
+              actionCards.map((card) =>
+                card.kind === 'question' ? (
+                  <QuestionCard
+                    key={card.id}
+                    question={card.question as FeedQuestion}
+                    submitting={questionSubmitting}
+                    onSubmit={handleQuestionSubmit}
+                    className="hover:shadow-lg transition-shadow duration-200"
+                  />
+                ) : (
+                  <BentoCard
+                    key={card.id}
+                    title={card.action.title}
+                    description={
+                      <div className="prose dark:prose-invert">
+                        <Markdown>{card.action.text}</Markdown>
+                      </div>
+                    }
+                    tags={card.action.tags}
+                    imageUrl={card.action.imageUrl}
+                    onClick={() => void handleCardClick(card.action.id)}
+                    onDismiss={() => void handleActionDismiss(card.action.id)}
+                    dismissLabel="Dismiss action"
+                    showUnseenIndicator={!card.action.seen}
+                    className="hover:shadow-lg transition-shadow duration-200"
+                  />
+                ),
+              )}
+          </Carousel>
+        )}
 
         <h2 className="text-2xl font-bold text-foreground">Insights & Summaries</h2>
 
@@ -444,27 +460,35 @@ export function FeedPage() {
             </div>
           )}
 
-          <Carousel {...carouselProps}>
-            {mixedInsightSummaryCards.map((card) =>
-              card.kind === 'insight' ? (
-                <InsightCard
-                  key={card.id}
-                  insight={card.insight as FragmentType<typeof INSIGHT_CARD_FRAGMENT>}
-                  isSeen={card.isSeen}
-                  onDismiss={() => handleInsightDismiss(card.insightId)}
-                  className="hover:shadow-lg transition-shadow duration-200 h-110"
-                />
-              ) : (
-                <SummaryCard
-                  key={card.id}
-                  summary={card.summary as FragmentType<typeof SUMMARY_CARD_FRAGMENT>}
-                  onClick={() => void handleSummaryClick(card.summary.id)}
-                  onDismiss={() => void handleSummaryDismiss(card.summary.id)}
-                  className="hover:shadow-lg transition-shadow duration-200 h-110"
-                />
-              ),
-            )}
-          </Carousel>
+          {showInsightsRowEmptyState ? (
+            <div className="flex min-h-[220px] items-center justify-center">
+              <p className="text-center text-lg font-medium text-muted-foreground opacity-70">
+                All Caught Up!
+              </p>
+            </div>
+          ) : (
+            <Carousel {...carouselProps}>
+              {mixedInsightSummaryCards.map((card) =>
+                card.kind === 'insight' ? (
+                  <InsightCard
+                    key={card.id}
+                    insight={card.insight as FragmentType<typeof INSIGHT_CARD_FRAGMENT>}
+                    isSeen={card.isSeen}
+                    onDismiss={() => handleInsightDismiss(card.insightId)}
+                    className="hover:shadow-lg transition-shadow duration-200 h-110"
+                  />
+                ) : (
+                  <SummaryCard
+                    key={card.id}
+                    summary={card.summary as FragmentType<typeof SUMMARY_CARD_FRAGMENT>}
+                    onClick={() => void handleSummaryClick(card.summary.id)}
+                    onDismiss={() => void handleSummaryDismiss(card.summary.id)}
+                    className="hover:shadow-lg transition-shadow duration-200 h-110"
+                  />
+                ),
+              )}
+            </Carousel>
+          )}
         </div>
       </PageContent>
 
