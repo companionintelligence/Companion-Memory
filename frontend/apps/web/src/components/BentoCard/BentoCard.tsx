@@ -92,7 +92,7 @@ export function BentoCard({
 
   const unseenIndicator = showUnseenIndicator ? (
     <span
-      className="absolute left-3 top-3 z-30 h-2.5 w-2.5 rounded-full bg-primary/35"
+      className="pointer-events-none absolute left-0 top-0 z-30 h-3 w-3 -translate-x-1/3 -translate-y-1/3 rounded-full bg-primary ring-2 ring-background"
       aria-label="New item"
       title="New item"
     />
