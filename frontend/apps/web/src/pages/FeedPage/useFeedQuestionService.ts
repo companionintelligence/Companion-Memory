@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
@@ -28,59 +28,11 @@ type ReturnType = [
 
 export function useFeedQuestionService(): ReturnType {
   const [{ authToken }] = useAuth();
-  const lastPresentedQuestionIdRef = useRef<string | null>(null);
 
   const [question, setQuestion] = useState<FeedQuestion | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
-
-  const createPresentationId = useCallback(() => {
-    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  }, []);
-
-  const pickRandomQuestion = useCallback(
-    (questions: Array<Omit<FeedQuestion, 'presentationId'>>): Omit<FeedQuestion, 'presentationId'> | null => {
-      if (questions.length === 0) {
-        return null;
-      }
-
-      let index = Math.floor(Math.random() * questions.length);
-
-      if (questions.length > 1 && lastPresentedQuestionIdRef.current) {
-        const previousIndex = questions.findIndex((item) => item.id === lastPresentedQuestionIdRef.current);
-
-        if (previousIndex >= 0 && index === previousIndex) {
-          index = (index + 1) % questions.length;
-        }
-      }
-
-      return questions[index] ?? null;
-    },
-    [],
-  );
-
-  const fetchRandomQuestion = useCallback(async (): Promise<FeedQuestion | null> => {
-    const questions = await fetchJson<Array<Omit<FeedQuestion, 'presentationId'>>>('/api/questions', {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const selected = pickRandomQuestion(questions);
-
-    if (!selected) {
-      return null;
-    }
-
-    lastPresentedQuestionIdRef.current = selected.id;
-
-    return {
-      ...selected,
-      presentationId: createPresentationId(),
-    };
-  }, [authToken, createPresentationId, pickRandomQuestion]);
 
   const fetchUnansweredQuestion = useCallback(async () => {
     if (!authToken) {
@@ -104,9 +56,7 @@ export function useFeedQuestionService(): ReturnType {
       });
 
       if (response.status === 204) {
-        const fallbackQuestion = await fetchRandomQuestion();
-
-        setQuestion(fallbackQuestion);
+        setQuestion(null);
 
         return;
       }
@@ -117,11 +67,9 @@ export function useFeedQuestionService(): ReturnType {
 
       const data = (await response.json()) as Omit<FeedQuestion, 'presentationId'>;
 
-      lastPresentedQuestionIdRef.current = data.id;
-
       setQuestion({
         ...data,
-        presentationId: createPresentationId(),
+        presentationId: data.id,
       });
     } catch (err) {
       setError(err);
@@ -129,7 +77,7 @@ export function useFeedQuestionService(): ReturnType {
     } finally {
       setLoading(false);
     }
-  }, [authToken, createPresentationId, fetchRandomQuestion]);
+  }, [authToken]);
 
   const submitAnswer = useCallback(
     async ({ questionId, text }: { questionId: string; text: string }): Promise<boolean> => {

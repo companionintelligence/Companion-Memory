@@ -10,12 +10,15 @@ import { AnswerCreatedEvent, AnswerUpdatedEvent, AnswerRemovedEvent } from '@ci/
 import { Answer, AnswerEntity } from '../entities/AnswerEntity';
 import type { CreateAnswerDto, UpdateAnswerDto } from '../types';
 
+import { QuestionService } from './QuestionService';
+
 @Injectable()
 export class AnswerService {
   constructor(
     @InjectRepository(AnswerEntity)
     private readonly answerRepository: Repository<AnswerEntity>,
     private readonly eventService: EventService,
+    private readonly questionService: QuestionService,
   ) {}
 
   async create(context: UserServiceContext, data: CreateAnswerDto): Promise<Answer> {
@@ -31,6 +34,8 @@ export class AnswerService {
     });
 
     const entity = await this.answerRepository.save(instance);
+
+    await this.questionService.removeFromFeedQueue(context.userId, data.question.id);
 
     await this.eventService.send(AnswerCreatedEvent, {
       answerId: entity.id,
