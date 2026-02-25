@@ -13,14 +13,16 @@ import {
 import { useFeatures } from '@/common/feature';
 
 import { NavLink } from './NavLink';
+import { useFeedBadgeCount } from './useFeedBadgeCount';
 
 export function SecondaryNavigation() {
   const { isFeatureEnabled } = useFeatures();
+  const feedBadgeCount = useFeedBadgeCount();
 
   return (
     <nav className="flex flex-col gap-2 p-2">
       <Tooltip.Provider>
-        <NavLink to="/feed" label="Feed">
+        <NavLink to="/feed" label="Feed" badgeCount={feedBadgeCount}>
           <Inbox className="h-6 w-6" strokeWidth={1.25} />
         </NavLink>
 
