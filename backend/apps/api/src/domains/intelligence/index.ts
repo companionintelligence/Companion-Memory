@@ -30,6 +30,7 @@ import { EventsModule } from '@ci/domains/events';
 import { ActionsController } from './controllers/ActionsController';
 import { AnswersController } from './controllers/AnswersController';
 import { QuestionsController } from './controllers/QuestionsController';
+import { FeedQuestionQueueCron } from './cron/FeedQuestionQueueCron';
 import { type Action, ActionEntity } from './entities/ActionEntity';
 import { type Answer, AnswerEntity } from './entities/AnswerEntity';
 import { type Question, QuestionEntity } from './entities/QuestionEntity';
@@ -42,7 +43,7 @@ import { QuestionService } from './services/QuestionService';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([ActionEntity, AnswerEntity, QuestionEntity]), EventsModule],
-  providers: [ActionService, AnswerService, QuestionService],
+  providers: [ActionService, AnswerService, QuestionService, FeedQuestionQueueCron],
   controllers: [ActionsController, AnswersController, QuestionsController],
   exports: [ActionService, AnswerService, QuestionService],
 })

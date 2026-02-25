@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
 
 import { GlobalUID, ErrorPage, LoadingPage, Portal, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Breadcrumb, cn, useToast } from '@ci/shadcn';
@@ -43,12 +43,6 @@ export function FeedPage() {
     { question, submitting: questionSubmitting, error: questionError },
     { submitAnswer: submitQuestionAnswer },
   ] = useFeedQuestionService();
-  const [questionCardInsertionIndex, setQuestionCardInsertionIndex] = useState(0);
-  const [questionPlacement, setQuestionPlacement] = useState<{
-    questionPresentationId: string;
-    slotCount: number;
-  } | null>(null);
-  const lastQuestionCardInsertionIndex = useRef<number | null>(null);
   const [dismissedActionIds, setDismissedActionIds] = useState<Set<string>>(new Set());
   const [dismissedSummaryIds, setDismissedSummaryIds] = useState<Set<string>>(new Set());
   const [dismissedInsightIds, setDismissedInsightIds] = useState<Set<string>>(new Set());
@@ -87,40 +81,6 @@ export function FeedPage() {
     () => actions.filter((action) => !action.dismissed && !dismissedActionIds.has(action.id)),
     [actions, dismissedActionIds],
   );
-  useEffect(() => {
-    if (!question) {
-      setQuestionCardInsertionIndex(0);
-      setQuestionPlacement(null);
-
-      return;
-    }
-
-    const slotCount = Math.max(1, visibleActions.length + 1);
-    const sameQuestion = questionPlacement?.questionPresentationId === question.presentationId;
-    const shouldRollForFirstVisibleQuestion = !sameQuestion;
-    const shouldRerollWhenActionsAppear =
-      sameQuestion && questionPlacement.slotCount === 1 && visibleActions.length > 0;
-
-    if (!shouldRollForFirstVisibleQuestion && !shouldRerollWhenActionsAppear) {
-      setQuestionCardInsertionIndex((previous) => Math.min(previous, visibleActions.length));
-
-      return;
-    }
-
-    let nextIndex = Math.floor(Math.random() * slotCount);
-    const previousIndex = lastQuestionCardInsertionIndex.current;
-
-    if (slotCount > 1 && previousIndex != null && nextIndex === Math.min(previousIndex, slotCount - 1)) {
-      nextIndex = (nextIndex + 1) % slotCount;
-    }
-
-    lastQuestionCardInsertionIndex.current = nextIndex;
-    setQuestionCardInsertionIndex(nextIndex);
-    setQuestionPlacement({
-      questionPresentationId: question.presentationId,
-      slotCount,
-    });
-  }, [question, questionPlacement, visibleActions.length]);
 
   const visibleSummaries = useMemo(
     () => summaries.filter((summary) => !summary.dismissed && !dismissedSummaryIds.has(summary.id)),
@@ -186,16 +146,8 @@ export function FeedPage() {
     [visibleActions, actionId],
   );
   const selectedActionCardIndex = useMemo(() => {
-    if (selectedActionIndex < 0) {
-      return selectedActionIndex;
-    }
-
-    if (!question) {
-      return selectedActionIndex;
-    }
-
-    return selectedActionIndex >= questionCardInsertionIndex ? selectedActionIndex + 1 : selectedActionIndex;
-  }, [question, questionCardInsertionIndex, selectedActionIndex]);
+    return selectedActionIndex;
+  }, [selectedActionIndex]);
   const actionCards = useMemo(() => {
     const cards = visibleActions.map((action) => ({
       kind: 'action' as const,
@@ -212,10 +164,9 @@ export function FeedPage() {
       id: `question:${question.presentationId}`,
       question,
     };
-    const safeInsertionIndex = Math.min(questionCardInsertionIndex, cards.length);
 
-    return [...cards.slice(0, safeInsertionIndex), questionCard, ...cards.slice(safeInsertionIndex)];
-  }, [question, questionCardInsertionIndex, visibleActions]);
+    return [...cards, questionCard];
+  }, [question, visibleActions]);
   const isActionsRowEmpty = actionCards.length === 0;
   const isInsightsRowEmpty = mixedInsightSummaryCards.length === 0;
   const showInsightsRowEmptyState = isInsightsRowEmpty && !summariesLoading && !summariesError;
@@ -463,7 +414,7 @@ export function FeedPage() {
           {showInsightsRowEmptyState ? (
             <div className="flex min-h-[220px] items-center justify-center">
               <p className="text-center text-lg font-medium text-muted-foreground opacity-70">
-                All Caught Up!
+                You've seen everything for now, let Companion learn and come back later
               </p>
             </div>
           ) : (
