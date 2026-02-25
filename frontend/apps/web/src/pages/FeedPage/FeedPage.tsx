@@ -24,6 +24,7 @@ import { useSummariesService } from './useSummariesService';
 
 type CarouselProps = Partial<ComponentProps<typeof Carousel>>;
 const DISMISSED_INSIGHTS_STORAGE_KEY = 'feed:dismissed-insights:v1';
+const MAX_INSIGHT_SUMMARY_CARDS = 20;
 
 export function FeedPage() {
   usePageTitle('Feed - Companion Intelligence');
@@ -138,7 +139,7 @@ export function FeedPage() {
       }
     }
 
-    return mixed;
+    return mixed.slice(0, MAX_INSIGHT_SUMMARY_CARDS);
   }, [visibleInsights, visibleSummaries]);
 
   const selectedActionIndex = useMemo(
@@ -321,11 +322,9 @@ export function FeedPage() {
           </Carousel>
         )}
 
-        {(summariesLoading || summariesError) && (
+        {summariesError && (
           <div className="py-4 text-center text-sm text-muted-foreground">
-            {summariesLoading
-              ? 'Fetching your personalized insights...'
-              : 'We could not load live insights. Preview cards are shown until the service recovers.'}
+            We could not load live insights. Preview cards are shown until the service recovers.
           </div>
         )}
 
@@ -403,11 +402,9 @@ export function FeedPage() {
         <h2 className="text-2xl font-bold text-foreground">Insights & Summaries</h2>
 
         <div className="space-y-3">
-          {(summariesLoading || summariesError) && (
+          {summariesError && (
             <div className={cn('text-sm', summariesError ? 'text-destructive' : 'text-muted-foreground')}>
-              {summariesLoading
-                ? 'Fetching your personalized insights...'
-                : 'We could not load live insights. Preview cards are shown until the service recovers.'}
+              We could not load live insights. Preview cards are shown until the service recovers.
             </div>
           )}
 

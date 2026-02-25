@@ -4,8 +4,10 @@ import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
+import { EventService } from '@ci/domains/events';
 
 import { type Action, ActionEntity } from '../entities/ActionEntity';
+import { ActionCreatedEvent } from '../events';
 import type { CreateActionDto } from '../types';
 
 @Injectable()
@@ -13,6 +15,7 @@ export class ActionService {
   constructor(
     @InjectRepository(ActionEntity)
     private readonly actionRepository: Repository<ActionEntity>,
+    private readonly eventService: EventService,
   ) {}
 
   async create(context: UserServiceContext, data: CreateActionDto): Promise<Action> {
@@ -35,6 +38,11 @@ export class ActionService {
     });
 
     const entity = await this.actionRepository.save(instance);
+
+    await this.eventService.send(ActionCreatedEvent, {
+      actionId: entity.id,
+      userId: context.userId,
+    });
 
     return ActionEntity.toEgressType(entity);
   }

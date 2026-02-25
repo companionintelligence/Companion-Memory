@@ -291,21 +291,21 @@ export class QuestionService {
       id: string;
     };
 
-    await this.cleanupFeedQuestionQueue(context.userId);
+    await this.cleanupFeedQueue(context.userId);
 
     const rows = (await this.dataSource.query(
       `
       SELECT
         q.question_id as id
       FROM
-        ci.feed_question_queue as fq
+        ci.feed_queue as fq
       JOIN ci.questions as q ON q.question_id = fq.question_id
       LEFT JOIN ci.answers as a ON a.question_id = fq.question_id
         AND a.user_id = fq.user_id
       WHERE fq.user_id = $1
         AND q.is_active = TRUE
         AND (a.answer_id IS NULL OR a.answer_text IS NULL)
-      ORDER BY fq.enqueued_at ASC, fq.feed_question_queue_id ASC
+      ORDER BY fq.enqueued_at ASC, fq.feed_queue_id ASC
       LIMIT 1;
     `,
       [context.userId],
@@ -339,7 +339,7 @@ export class QuestionService {
     userId: string,
     maxQueueSize = FEED_QUESTION_QUEUE_LIMIT,
   ): Promise<boolean> {
-    await this.cleanupFeedQuestionQueue(userId);
+    await this.cleanupFeedQueue(userId);
 
     type QueueCountRow = {
       count: string;
@@ -347,8 +347,9 @@ export class QuestionService {
     const countRows = (await this.dataSource.query(
       `
       SELECT COUNT(*)::text as count
-      FROM ci.feed_question_queue
-      WHERE user_id = $1;
+      FROM ci.feed_queue
+      WHERE user_id = $1
+        AND question_id IS NOT NULL;
       `,
       [userId],
     )) satisfies Array<QueueCountRow>;
@@ -376,7 +377,7 @@ export class QuestionService {
         )
         AND NOT EXISTS (
           SELECT 1
-          FROM ci.feed_question_queue as fq
+          FROM ci.feed_queue as fq
           WHERE fq.user_id = $1
             AND fq.question_id = q.question_id
         )
@@ -393,7 +394,7 @@ export class QuestionService {
 
     const insertedRows = (await this.dataSource.query(
       `
-      INSERT INTO ci.feed_question_queue (feed_question_queue_id, user_id, question_id, enqueued_at)
+      INSERT INTO ci.feed_queue (feed_queue_id, user_id, question_id, enqueued_at)
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (user_id, question_id) DO NOTHING
       RETURNING question_id;
@@ -407,7 +408,7 @@ export class QuestionService {
   async removeFromFeedQueue(userId: string, questionId: string): Promise<void> {
     await this.dataSource.query(
       `
-      DELETE FROM ci.feed_question_queue
+      DELETE FROM ci.feed_queue
       WHERE user_id = $1
         AND question_id = $2;
       `,
@@ -415,12 +416,13 @@ export class QuestionService {
     );
   }
 
-  private async cleanupFeedQuestionQueue(userId: string): Promise<void> {
+  private async cleanupFeedQueue(userId: string): Promise<void> {
     await this.dataSource.query(
       `
-      DELETE FROM ci.feed_question_queue as fq
+      DELETE FROM ci.feed_queue as fq
       USING ci.answers as a
       WHERE fq.user_id = $1
+        AND fq.question_id IS NOT NULL
         AND a.user_id = fq.user_id
         AND a.question_id = fq.question_id
         AND a.answer_text IS NOT NULL;
@@ -430,8 +432,9 @@ export class QuestionService {
 
     await this.dataSource.query(
       `
-      DELETE FROM ci.feed_question_queue as fq
+      DELETE FROM ci.feed_queue as fq
       WHERE fq.user_id = $1
+        AND fq.question_id IS NOT NULL
         AND NOT EXISTS (
           SELECT 1
           FROM ci.questions as q
