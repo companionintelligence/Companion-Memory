@@ -186,8 +186,9 @@ export function BentoCard({
           )}
         </div>
 
-        <div className="flex-1 overflow-hidden">
-          <div>{description}</div>
+        <div className="relative flex-1 overflow-hidden">
+          <div className="h-full overflow-hidden">{description}</div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-card" />
         </div>
 
         <div className="flex gap-4 justify-between">
@@ -229,8 +230,9 @@ export function BentoCard({
           <h1 className="text-2xl font-semibold">{title}</h1>
         </div>
 
-        <div className="flex-1 overflow-hidden">
-          <div>{description}</div>
+        <div className="relative flex-1 overflow-hidden">
+          <div className="h-full overflow-hidden">{description}</div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-card" />
         </div>
 
         <div>

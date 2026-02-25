@@ -38,7 +38,7 @@ export function FeedPage() {
   const [
     { data: summaries, loading: summariesLoading, error: summariesError },
     { markSummaryAsSeen, markSummaryAsDismissed },
-  ] = useSummariesService(10);
+  ] = useSummariesService();
   const [
     { question, submitting: questionSubmitting, error: questionError },
     { submitAnswer: submitQuestionAnswer },
