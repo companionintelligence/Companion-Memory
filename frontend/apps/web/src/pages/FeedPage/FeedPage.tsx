@@ -166,8 +166,8 @@ export function FeedPage() {
       question,
     };
 
-    return [...cards, questionCard];
-  }, [question, visibleActions]);
+    return [...cards.slice(0, safeInsertionIndex), questionCard, ...cards.slice(safeInsertionIndex)];
+  }, [question, questionCardInsertionIndex, visibleActions]);
   const isActionsRowEmpty = actionCards.length === 0;
   const isInsightsRowEmpty = mixedInsightSummaryCards.length === 0;
   const showInsightsRowEmptyState = isInsightsRowEmpty && !summariesLoading && !summariesError;
@@ -322,7 +322,7 @@ export function FeedPage() {
           </Carousel>
         )}
 
-        {summariesError && (
+        {(summariesLoading || summariesError) && (
           <div className="py-4 text-center text-sm text-muted-foreground">
             We could not load live insights. Preview cards are shown until the service recovers.
           </div>
@@ -411,7 +411,7 @@ export function FeedPage() {
           {showInsightsRowEmptyState ? (
             <div className="flex min-h-[220px] items-center justify-center">
               <p className="text-center text-lg font-medium text-muted-foreground opacity-70">
-                You've seen everything for now, let Companion learn and come back later
+                All Caught Up!
               </p>
             </div>
           ) : (
