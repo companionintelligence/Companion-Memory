@@ -28,9 +28,6 @@ const meta: Meta<Props> = {
     imageUrl:
       'https://hips.hearstapps.com/hmg-prod/images/crunchy-mandarin-orange-chicken-salad-lead-66677b295a6b5.jpg',
     onClick: fn(),
-    onLike: fn(),
-    onDislike: fn(),
-    onExpand: fn(),
   },
   decorators: [(Story) => <Story />],
 };

@@ -107,3 +107,31 @@ declare module '@ci/domains/events/registry' {
     [AnswerRemovedEvent]: AnswerDeletedPayload;
   }
 }
+
+/**
+ * Event emitted when creating a new action.
+ *
+ * @see {@link ActionService.create} - The method that emits this event
+ */
+export const ActionCreatedEvent = 'action.created';
+
+/**
+ * Event payload of the event {@link ActionCreatedEvent}.
+ *
+ * @see {@link ActionCreatedEvent} - The event this payload is associated with
+ * @see {@link ActionService.create} - The method that emits this event payload
+ */
+export type ActionCreatedPayload = {
+  /** The identifier of the newly created action */
+  actionId: string;
+  /** Owner of the created action */
+  userId: string;
+};
+
+defineEvent<ActionCreatedPayload>(ActionCreatedEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [ActionCreatedEvent]: ActionCreatedPayload;
+  }
+}
