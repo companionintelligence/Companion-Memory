@@ -14,6 +14,8 @@ import {
 import { Question, QuestionEntity } from '../entities/QuestionEntity';
 import type { CreateQuestionDto, UpdateQuestionDto } from '../types';
 
+const FEED_QUESTION_QUEUE_LIMIT = 3;
+
 @Injectable()
 export class QuestionService {
   constructor(
@@ -281,7 +283,7 @@ export class QuestionService {
   }
 
   async findOneUnanswered(context: ServiceContext): Promise<Question | null> {
-    if (!context.userId) {
+    if (!context.userId || context.userId === SYSTEM_USER) {
       return null;
     }
 
@@ -289,20 +291,21 @@ export class QuestionService {
       id: string;
     };
 
+    await this.cleanupFeedQuestionQueue(context.userId);
+
     const rows = (await this.dataSource.query(
       `
       SELECT
         q.question_id as id
       FROM
-        ci.questions as q
-      LEFT JOIN ci.answers as a ON a.question_id = q.question_id
-        AND a.user_id = $1
-      WHERE q.is_active = TRUE
+        ci.feed_question_queue as fq
+      JOIN ci.questions as q ON q.question_id = fq.question_id
+      LEFT JOIN ci.answers as a ON a.question_id = fq.question_id
+        AND a.user_id = fq.user_id
+      WHERE fq.user_id = $1
+        AND q.is_active = TRUE
         AND (a.answer_id IS NULL OR a.answer_text IS NULL)
-        AND (
-          q.is_private_to IS NULL
-          OR q.is_private_to = $1
-        )
+      ORDER BY fq.enqueued_at ASC, fq.feed_question_queue_id ASC
       LIMIT 1;
     `,
       [context.userId],
@@ -313,5 +316,130 @@ export class QuestionService {
     }
 
     return this.findById(context, rows[0].id);
+  }
+
+  async listFeedQueueUserIds(): Promise<string[]> {
+    type Row = {
+      id: string;
+    };
+
+    const rows = (await this.dataSource.query(
+      `
+      SELECT id
+      FROM ci.users
+      WHERE onboarded = TRUE
+      ORDER BY created_at ASC;
+      `,
+    )) satisfies Array<Row>;
+
+    return rows.map((row) => row.id);
+  }
+
+  async enqueueNextFeedQueueQuestion(
+    userId: string,
+    maxQueueSize = FEED_QUESTION_QUEUE_LIMIT,
+  ): Promise<boolean> {
+    await this.cleanupFeedQuestionQueue(userId);
+
+    type QueueCountRow = {
+      count: string;
+    };
+    const countRows = (await this.dataSource.query(
+      `
+      SELECT COUNT(*)::text as count
+      FROM ci.feed_question_queue
+      WHERE user_id = $1;
+      `,
+      [userId],
+    )) satisfies Array<QueueCountRow>;
+    const queueSize = Number.parseInt(countRows[0]?.count ?? '0', 10);
+
+    if (queueSize >= maxQueueSize) {
+      return false;
+    }
+
+    type CandidateRow = {
+      id: string;
+    };
+    const candidates = (await this.dataSource.query(
+      `
+      SELECT q.question_id as id
+      FROM ci.questions as q
+      WHERE q.is_active = TRUE
+        AND (q.is_private_to IS NULL OR q.is_private_to = $1)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ci.answers as a
+          WHERE a.question_id = q.question_id
+            AND a.user_id = $1
+            AND a.answer_text IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ci.feed_question_queue as fq
+          WHERE fq.user_id = $1
+            AND fq.question_id = q.question_id
+        )
+      ORDER BY q.created_at ASC, q.question_id ASC
+      LIMIT 1;
+      `,
+      [userId],
+    )) satisfies Array<CandidateRow>;
+
+    const candidate = candidates[0];
+    if (!candidate) {
+      return false;
+    }
+
+    const insertedRows = (await this.dataSource.query(
+      `
+      INSERT INTO ci.feed_question_queue (feed_question_queue_id, user_id, question_id, enqueued_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (user_id, question_id) DO NOTHING
+      RETURNING question_id;
+      `,
+      [uuidv7(), userId, candidate.id],
+    )) satisfies Array<{ question_id: string }>;
+
+    return insertedRows.length > 0;
+  }
+
+  async removeFromFeedQueue(userId: string, questionId: string): Promise<void> {
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_question_queue
+      WHERE user_id = $1
+        AND question_id = $2;
+      `,
+      [userId, questionId],
+    );
+  }
+
+  private async cleanupFeedQuestionQueue(userId: string): Promise<void> {
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_question_queue as fq
+      USING ci.answers as a
+      WHERE fq.user_id = $1
+        AND a.user_id = fq.user_id
+        AND a.question_id = fq.question_id
+        AND a.answer_text IS NOT NULL;
+      `,
+      [userId],
+    );
+
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_question_queue as fq
+      WHERE fq.user_id = $1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ci.questions as q
+          WHERE q.question_id = fq.question_id
+            AND q.is_active = TRUE
+        );
+      `,
+      [userId],
+    );
   }
 }
