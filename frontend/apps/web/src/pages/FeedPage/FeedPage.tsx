@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
 
 import { GlobalUID, ErrorPage, LoadingPage, Portal, useDeviceLayout, usePageTitle } from '@ci/common';
-import { Breadcrumb, cn, useToast } from '@ci/shadcn';
+import { Breadcrumb, useToast } from '@ci/shadcn';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 
 import { useActionListService } from '@/api';
@@ -146,9 +146,7 @@ export function FeedPage() {
     () => visibleActions.findIndex((item) => item.id === actionId),
     [visibleActions, actionId],
   );
-  const selectedActionCardIndex = useMemo(() => {
-    return selectedActionIndex;
-  }, [selectedActionIndex]);
+  const selectedActionCardIndex = selectedActionIndex;
   const actionCards = useMemo(() => {
     const cards = visibleActions.map((action) => ({
       kind: 'action' as const,
@@ -273,34 +271,32 @@ export function FeedPage() {
           </div>
         ) : (
           <Carousel {...carouselProps}>
-            {!loading &&
-              !error &&
-              actionCards.map((card) =>
-                card.kind === 'question' ? (
-                  <QuestionCard
-                    key={card.id}
-                    question={card.question as FeedQuestion}
-                    submitting={questionSubmitting}
-                    onSubmit={handleQuestionSubmit}
-                  />
-                ) : (
-                  <BentoCard
-                    key={card.id}
-                    title={card.action.title}
-                    description={
-                      <div className="prose dark:prose-invert">
-                        <Markdown>{card.action.text}</Markdown>
-                      </div>
-                    }
-                    tags={card.action.tags}
-                    imageUrl={card.action.imageUrl}
-                    onClick={() => void handleCardClick(card.action.id)}
-                    onDismiss={() => void handleActionDismiss(card.action.id)}
-                    dismissLabel="Dismiss action"
-                    showUnseenIndicator={!card.action.seen}
-                  />
-                ),
-              )}
+            {actionCards.map((card) =>
+              card.kind === 'question' ? (
+                <QuestionCard
+                  key={card.id}
+                  question={card.question as FeedQuestion}
+                  submitting={questionSubmitting}
+                  onSubmit={handleQuestionSubmit}
+                />
+              ) : (
+                <BentoCard
+                  key={card.id}
+                  title={card.action.title}
+                  description={
+                    <div className="prose dark:prose-invert">
+                      <Markdown>{card.action.text}</Markdown>
+                    </div>
+                  }
+                  tags={card.action.tags}
+                  imageUrl={card.action.imageUrl}
+                  onClick={() => void handleCardClick(card.action.id)}
+                  onDismiss={() => void handleActionDismiss(card.action.id)}
+                  dismissLabel="Dismiss action"
+                  showUnseenIndicator={!card.action.seen}
+                />
+              ),
+            )}
 
             {mixedInsightSummaryCards.map((card) =>
               card.kind === 'insight' ? (
@@ -366,36 +362,34 @@ export function FeedPage() {
           </div>
         ) : (
           <Carousel {...carouselProps} initialIndex={selectedActionCardIndex}>
-            {!loading &&
-              !error &&
-              actionCards.map((card) =>
-                card.kind === 'question' ? (
-                  <QuestionCard
-                    key={card.id}
-                    question={card.question as FeedQuestion}
-                    submitting={questionSubmitting}
-                    onSubmit={handleQuestionSubmit}
-                    className="hover:shadow-lg transition-shadow duration-200"
-                  />
-                ) : (
-                  <BentoCard
-                    key={card.id}
-                    title={card.action.title}
-                    description={
-                      <div className="prose dark:prose-invert">
-                        <Markdown>{card.action.text}</Markdown>
-                      </div>
-                    }
-                    tags={card.action.tags}
-                    imageUrl={card.action.imageUrl}
-                    onClick={() => void handleCardClick(card.action.id)}
-                    onDismiss={() => void handleActionDismiss(card.action.id)}
-                    dismissLabel="Dismiss action"
-                    showUnseenIndicator={!card.action.seen}
-                    className="hover:shadow-lg transition-shadow duration-200"
-                  />
-                ),
-              )}
+            {actionCards.map((card) =>
+              card.kind === 'question' ? (
+                <QuestionCard
+                  key={card.id}
+                  question={card.question as FeedQuestion}
+                  submitting={questionSubmitting}
+                  onSubmit={handleQuestionSubmit}
+                  className="hover:shadow-lg transition-shadow duration-200"
+                />
+              ) : (
+                <BentoCard
+                  key={card.id}
+                  title={card.action.title}
+                  description={
+                    <div className="prose dark:prose-invert">
+                      <Markdown>{card.action.text}</Markdown>
+                    </div>
+                  }
+                  tags={card.action.tags}
+                  imageUrl={card.action.imageUrl}
+                  onClick={() => void handleCardClick(card.action.id)}
+                  onDismiss={() => void handleActionDismiss(card.action.id)}
+                  dismissLabel="Dismiss action"
+                  showUnseenIndicator={!card.action.seen}
+                  className="hover:shadow-lg transition-shadow duration-200"
+                />
+              ),
+            )}
           </Carousel>
         )}
 
@@ -403,7 +397,7 @@ export function FeedPage() {
 
         <div className="space-y-3">
           {summariesError && (
-            <div className={cn('text-sm', summariesError ? 'text-destructive' : 'text-muted-foreground')}>
+            <div className="text-sm text-destructive">
               We could not load live insights. Preview cards are shown until the service recovers.
             </div>
           )}
