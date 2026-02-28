@@ -2,8 +2,8 @@ services:
   application:
     image: nginx:stable
     ports:
-      - 80:80
-      - 443:443
+      - 8080:80
+      - 8443:443
     volumes:
       - ./infrastructure/nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
       - ./infrastructure/nginx/ssl/:/etc/nginx/ssl/:ro
