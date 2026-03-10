@@ -318,7 +318,7 @@ export function FeedPage() {
           </Carousel>
         )}
 
-        {(summariesLoading || summariesError) && (
+        {summariesError && (
           <div className="py-4 text-center text-sm text-muted-foreground">
             We could not load live insights. Preview cards are shown until the service recovers.
           </div>
