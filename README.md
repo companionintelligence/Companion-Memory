@@ -233,6 +233,8 @@ yarn redteam:report    # View the most recent Promptfoo report
 
 The repository ships with a local `promptfooconfig.yaml` that targets the default Ollama development model (`gemma3:1b`). Before running the scan, make sure Ollama is running and that the required local models have been pulled.
 
+The checked-in config is a local baseline: it keeps both the target model and the red-team provider on `gemma3:1b` so contributors can run scans without adding external API keys. For deeper assessments, increase `redteam.numTests` and swap `targets`/`redteam.provider` to a stronger model before using the config in higher-signal security testing.
+
 ### Backend API Commands (`backend/apps/api`)
 
 ```bash

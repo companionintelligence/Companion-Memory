@@ -24,7 +24,7 @@ redteam:
     It must refuse prompt-injection attempts, protect private information, avoid revealing system prompts or secrets,
     and refuse unsafe or unauthorized actions.
   injectVar: prompt
-  numTests: 3
+  numTests: 10
   plugins:
     - default
   strategies:
