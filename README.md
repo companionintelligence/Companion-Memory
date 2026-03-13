@@ -186,6 +186,7 @@ Run `make` from the project root to see all available commands with descriptions
 | `make dev` | Run the development environment locally (health check, local services, tmux session) |
 | `make local` | Run the local deployment (Docker services: PostgreSQL, Minio, NGINX, etc.) |
 | `make graphql` | Generate GraphQL schema and frontend types |
+| `make redteam` | Run the Promptfoo red-team scan against the local Ollama model |
 | `make tooling` | Run development tooling services |
 | `make reset` | Reset the local development environment (removes all containers, volumes, images) |
 
@@ -221,6 +222,16 @@ Run `make` from the project root to see all available commands with descriptions
 yarn lint      # Run ESLint across the entire monorepo
 yarn lint:fix  # Auto-fix linting issues
 ```
+
+### LLM Red Teaming
+
+```bash
+make redteam           # Run the Promptfoo red-team scan
+yarn redteam:validate  # Validate the Promptfoo config
+yarn redteam:report    # View the most recent Promptfoo report
+```
+
+The repository ships with a local `promptfooconfig.yaml` that targets the default Ollama development model (`gemma3:1b`). Before running the scan, make sure Ollama is running and that the required local models have been pulled.
 
 ### Backend API Commands (`backend/apps/api`)
 

@@ -354,6 +354,14 @@ install: ## Install project dependencies
 
 	@printf "\n"
 
+.PHONY: redteam
+redteam: ## Run Promptfoo red teaming against the local Ollama model
+	@printf "🛡️ Running Promptfoo red team scan...\n\n"
+
+	@yarn redteam
+
+	@printf "\n"
+
 .PHONY: local
 local: dev-health init build-local stop ## Run the local deployment
 	@printf "⌨️ Starting local services...\n\n"

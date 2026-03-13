@@ -170,6 +170,35 @@ jobs:
       - name: Check backend imports
         run: yarn workspace @ci/be-api depcheck
 
+  redteam:
+    name: Validate LLM red-team config
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Validate Promptfoo config
+        run: yarn redteam:validate
+
   graphql:
     name: Check GraphQL schema and types
     needs: install

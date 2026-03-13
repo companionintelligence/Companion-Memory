@@ -35,6 +35,9 @@ AGENTS.md
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+/promptfoo-results*/
+/redteam.yaml
+/.promptfoo/
 
 .beads/
 
