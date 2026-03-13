@@ -5,7 +5,7 @@ import pino from 'pino';
 import { ContextService } from '@ci/common/context';
 import config from '@ci/configuration';
 
-import { createOpenTelemetryLogBridge } from '../OpenTelemetryLogger';
+import { createOpenTelemetryLogBridge, getOpenTelemetryLogInitializationError } from '../OpenTelemetryLogger';
 
 type LogData = string | Record<string, unknown>;
 type ErrorableLogData = Error | LogData;
@@ -63,6 +63,7 @@ export class LoggerService implements NestLoggerService {
     return {
       enabled: LoggerService.openTelemetryLogBridge?.enabled ?? false,
       endpoint: LoggerService.openTelemetryLogBridge?.endpoint,
+      initializationError: getOpenTelemetryLogInitializationError(),
     };
   }
 

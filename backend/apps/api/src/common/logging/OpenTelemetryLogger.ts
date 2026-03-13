@@ -36,6 +36,8 @@ export interface OpenTelemetryLogBridge {
   shutdown(): Promise<void>;
 }
 
+let openTelemetryLogInitializationError: string | undefined;
+
 const SEVERITY_NUMBER_BY_LEVEL: Record<LogLevel, SeverityNumber> = {
   debug: 5,
   info: 9,
@@ -82,7 +84,7 @@ const toBody = (params: OpenTelemetryLogParams) => {
     return stringifyAttribute(params.obj['err']);
   }
 
-  return 'log';
+  return stringifyAttribute(params.obj);
 };
 
 export const normalizeOpenTelemetryLogsEndpoint = ({
@@ -152,6 +154,8 @@ export const createOpenTelemetryLogRecord = (
 export const createOpenTelemetryLogBridge = (
   config: OpenTelemetryLoggerConfig,
 ): OpenTelemetryLogBridge | null => {
+  openTelemetryLogInitializationError = undefined;
+
   if (!config.enabled) {
     return null;
   }
@@ -185,8 +189,10 @@ export const createOpenTelemetryLogBridge = (
       },
     };
   } catch (error) {
-    console.error('Failed to initialize OpenTelemetry log export', error);
+    openTelemetryLogInitializationError = error instanceof Error ? error.message : String(error);
 
     return null;
   }
 };
+
+export const getOpenTelemetryLogInitializationError = () => openTelemetryLogInitializationError;

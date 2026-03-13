@@ -148,6 +148,9 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
           }
         : {
             enabled: false,
+            ...(openTelemetryLogStatus.initializationError && {
+              initializationError: openTelemetryLogStatus.initializationError,
+            }),
           },
     });
   }
