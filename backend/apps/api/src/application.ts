@@ -106,18 +106,20 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
   }
 
   onApplicationBootstrap() {
-    process.on('unhandledRejection', (reason: unknown) => {
+    process.on('unhandledRejection', async (reason: unknown) => {
       const error =
         reason instanceof Error ? reason : new Error(String(reason ?? 'Unknown unhandled rejection'));
 
       this.logger.error(error, 'Unhandled rejection');
 
+      await LoggerService.shutdown();
       process.exit(1);
     });
 
-    process.on('uncaughtException', (error: Error) => {
+    process.on('uncaughtException', async (error: Error) => {
       this.logger.error(error, 'Uncaught exception');
 
+      await LoggerService.shutdown();
       process.exit(1);
     });
 
@@ -135,14 +137,26 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
       bindings = [`http://${config.host}:${config.port}`];
     }
 
+    const openTelemetryLogStatus = LoggerService.getOpenTelemetryLogStatus();
+
     this.logger.log('Application started', {
       bindings,
+      openTelemetryLogs: openTelemetryLogStatus.enabled
+        ? {
+            enabled: true,
+            endpoint: openTelemetryLogStatus.endpoint,
+          }
+        : {
+            enabled: false,
+          },
     });
   }
 
-  onApplicationShutdown(signal?: string) {
+  async onApplicationShutdown(signal?: string) {
     this.logger.log('Application stopped', {
       signal: signal ?? 'EXIT',
     });
+
+    await LoggerService.shutdown();
   }
 }

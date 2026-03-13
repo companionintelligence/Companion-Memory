@@ -1,5 +1,14 @@
 {
   "hostname": "HOSTNAME",
+  "logging": {
+    "level": "LOG_LEVEL",
+    "opentelemetry": {
+      "enabled": "OTEL_LOGS_ENABLED",
+      "serviceName": "OTEL_SERVICE_NAME",
+      "endpoint": "OTEL_EXPORTER_OTLP_ENDPOINT",
+      "logsEndpoint": "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
+    }
+  },
   "auth": {
     "jwt": {
       "authTokenSecret": "AUTH_TOKEN_SECRET",

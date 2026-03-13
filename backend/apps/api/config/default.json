@@ -3,7 +3,12 @@
   "port": 3030,
   "hostname": "dev.companionintelligence.com",
   "logging": {
-    "level": "info"
+    "level": "info",
+    "opentelemetry": {
+      "enabled": false,
+      "serviceName": "ci-server-api",
+      "endpoint": "https://logs.ci.computer"
+    }
   },
   "auth": {
     "local": {

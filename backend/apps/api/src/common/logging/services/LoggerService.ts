@@ -5,6 +5,8 @@ import pino from 'pino';
 import { ContextService } from '@ci/common/context';
 import config from '@ci/configuration';
 
+import { createOpenTelemetryLogBridge } from '../OpenTelemetryLogger';
+
 type LogData = string | Record<string, unknown>;
 type ErrorableLogData = Error | LogData;
 
@@ -25,6 +27,8 @@ const NEST_CONTEXT_DOWNGRADES = new Set([
 @Injectable({ scope: Scope.TRANSIENT })
 export class LoggerService implements NestLoggerService {
   private logger: PinoLogger;
+
+  private static readonly openTelemetryLogBridge = createOpenTelemetryLogBridge(config.logging.opentelemetry);
 
   private static rootLogger: PinoLogger = (() => {
     const isDevelopment = process.env.NODE_ENV !== 'production';
@@ -55,6 +59,17 @@ export class LoggerService implements NestLoggerService {
     this.logger = LoggerService.rootLogger;
   }
 
+  static getOpenTelemetryLogStatus() {
+    return {
+      enabled: LoggerService.openTelemetryLogBridge?.enabled ?? false,
+      endpoint: LoggerService.openTelemetryLogBridge?.endpoint,
+    };
+  }
+
+  static async shutdown() {
+    await LoggerService.openTelemetryLogBridge?.shutdown();
+  }
+
   setContext(context: string) {
     this.logger = LoggerService.rootLogger.child({ context });
   }
@@ -66,24 +81,29 @@ export class LoggerService implements NestLoggerService {
 
     if (contextName && NEST_CONTEXT_DOWNGRADES.has(contextName)) {
       this.logger.debug(obj, msg);
+      LoggerService.openTelemetryLogBridge?.emit('debug', { obj, msg });
     } else {
       this.logger.info(obj, msg);
+      LoggerService.openTelemetryLogBridge?.emit('info', { obj, msg });
     }
   }
 
   error(message: ErrorableLogData, context: ErrorableLogData = {}) {
     const { obj, msg } = this.resolveArgs(message, context);
     this.logger.error(obj, msg);
+    LoggerService.openTelemetryLogBridge?.emit('error', { obj, msg });
   }
 
   warn(message: ErrorableLogData, context: ErrorableLogData = {}) {
     const { obj, msg } = this.resolveArgs(message, context);
     this.logger.warn(obj, msg);
+    LoggerService.openTelemetryLogBridge?.emit('warn', { obj, msg });
   }
 
   debug(message: LogData, context: LogData = {}) {
     const { obj, msg } = this.resolveArgs(message, context);
     this.logger.debug(obj, msg);
+    LoggerService.openTelemetryLogBridge?.emit('debug', { obj, msg });
   }
 
   private resolveArgs(message: ErrorableLogData, context: ErrorableLogData = {}): PinoParams {

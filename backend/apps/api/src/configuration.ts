@@ -21,6 +21,12 @@ export const ConfigSchema = z.object({
   hostname: z.string(),
   logging: z.object({
     level: z.string(),
+    opentelemetry: z.object({
+      enabled: booleanStringSchema,
+      serviceName: z.string(),
+      endpoint: z.optional(z.string()),
+      logsEndpoint: z.optional(z.string()),
+    }),
   }),
   auth: z.object({
     local: z.object({
