@@ -4,6 +4,7 @@ import pino from 'pino';
 
 import { ContextService } from '@ci/common/context';
 import config from '@ci/configuration';
+import { emitOtelLog, initOtelLogger } from '../opentelemetry';
 
 type LogData = string | Record<string, unknown>;
 type ErrorableLogData = Error | LogData;
@@ -28,6 +29,13 @@ export class LoggerService implements NestLoggerService {
 
   private static rootLogger: PinoLogger = (() => {
     const isDevelopment = process.env.NODE_ENV !== 'production';
+
+    initOtelLogger({
+      enabled: config.logging.otel.enabled,
+      endpoint: config.logging.otel.endpoint,
+      serviceName: config.logging.otel.serviceName ?? config.hostname,
+      environment: process.env.NODE_ENV,
+    });
 
     return pino({
       level: config.logging.level ?? 'debug',
@@ -69,21 +77,26 @@ export class LoggerService implements NestLoggerService {
     } else {
       this.logger.info(obj, msg);
     }
+
+    emitOtelLog('info', msg, obj);
   }
 
   error(message: ErrorableLogData, context: ErrorableLogData = {}) {
     const { obj, msg } = this.resolveArgs(message, context);
     this.logger.error(obj, msg);
+    emitOtelLog('error', msg, obj);
   }
 
   warn(message: ErrorableLogData, context: ErrorableLogData = {}) {
     const { obj, msg } = this.resolveArgs(message, context);
     this.logger.warn(obj, msg);
+    emitOtelLog('warn', msg, obj);
   }
 
   debug(message: LogData, context: LogData = {}) {
     const { obj, msg } = this.resolveArgs(message, context);
     this.logger.debug(obj, msg);
+    emitOtelLog('debug', msg, obj);
   }
 
   private resolveArgs(message: ErrorableLogData, context: ErrorableLogData = {}): PinoParams {

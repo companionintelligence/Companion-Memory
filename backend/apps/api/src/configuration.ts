@@ -21,6 +21,11 @@ export const ConfigSchema = z.object({
   hostname: z.string(),
   logging: z.object({
     level: z.string(),
+    otel: z.object({
+      enabled: booleanStringSchema,
+      endpoint: z.string(),
+      serviceName: z.string(),
+    }),
   }),
   auth: z.object({
     local: z.object({

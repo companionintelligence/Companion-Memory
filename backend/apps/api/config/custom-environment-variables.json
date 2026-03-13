@@ -1,5 +1,13 @@
 {
   "hostname": "HOSTNAME",
+  "logging": {
+    "level": "LOG_LEVEL",
+    "otel": {
+      "enabled": "OTEL_LOGS_ENABLED",
+      "endpoint": "OTEL_LOGS_ENDPOINT",
+      "serviceName": "OTEL_SERVICE_NAME"
+    }
+  },
   "auth": {
     "jwt": {
       "authTokenSecret": "AUTH_TOKEN_SECRET",
