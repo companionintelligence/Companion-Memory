@@ -1,0 +1,47 @@
+[project]
+name = "ci-hbpe"
+version = "0.1.0"
+description = "CI-HBPE: Hierarchical Behavioral Prediction Engine"
+requires-python = ">=3.11"
+dependencies = [
+    # ── LLM labeling (Qwen3.5-0.8B) ──────────────────────────────────────────
+    # NOTE: torch is installed separately in the Dockerfile with hardware-specific
+    # build flags. Do not add it here or pip will pull the CPU-only PyPI release.
+    "transformers>=4.45",            # Qwen3.5 support (qwen3_5 arch added post-4.48)
+    "accelerate>=0.26",              # device_map="auto" support for from_pretrained
+
+    # ── Model training & calibration ──────────────────────────────────────────
+    "scikit-learn>=1.4",             # ECE calibration in model/calibration.py
+    "onnx>=1.16",                    # Required by onnxruntime.quantization
+    "onnxruntime-gpu>=1.17",         # INT8 quantized inference (Phase 4)
+
+    # ── Data I/O ──────────────────────────────────────────────────────────────
+    "psycopg2-binary>=2.9",         # PostgreSQL / TimescaleDB access
+
+    # ── Workflow orchestration ────────────────────────────────────────────────
+    "temporalio",                    # nightly job Temporal workflows
+
+    # ── API & config ──────────────────────────────────────────────────────────
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings",
+    "python-dotenv",
+
+    # ── Utilities ────────────────────────────────────────────────────────────
+    "structlog",
+    "numpy<2",              # torch 2.2 compiled against NumPy 1.x
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.hatch.build.targets.wheel]
+sources = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

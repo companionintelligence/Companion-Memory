@@ -1,0 +1,54 @@
+FROM python:3.11-slim-bookworm
+
+# System dependencies — no CUDA, no cmake (llama-cpp CPU build uses clang/gcc)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    build-essential \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.18 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+RUN useradd -m -u 1000 hbpe
+
+# ── CPU-only PyTorch ───────────────────────────────────────────────────────────
+# Install torch before other deps so downstream packages (sentence-transformers,
+# bertopic) don't pull in the CUDA wheel from PyPI.
+RUN pip3 install --no-cache-dir \
+    torch==2.5.1 torchvision \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# llama-cpp-python is intentionally omitted here.
+# It requires a full CUDA/C++ toolchain and is only needed for the Phi-3-mini
+# primary L0 classifier — the kNN fallback (all-MiniLM-L6-v2) activates
+# automatically when llama-cpp-python is absent, so local dev works without it.
+
+# ── Remaining Python dependencies via uv ──────────────────────────────────────
+# Swap onnxruntime-gpu → onnxruntime (CPU runtime is sufficient locally).
+# flash-attn is CUDA-only and not needed for inference — skip it entirely.
+COPY pyproject.toml ./
+RUN sed -i 's/onnxruntime-gpu/onnxruntime/g' pyproject.toml \
+    && uv pip install --system --no-cache -r pyproject.toml
+
+# ── Application code ──────────────────────────────────────────────────────────
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY entrypoint.sh ./
+
+# Persistent volumes for model artifacts and token corpus
+RUN mkdir -p /app/models/phi3 \
+             /app/data/token_corpus \
+             /app/data/artifacts
+
+RUN chmod +x entrypoint.sh && chown -R hbpe:hbpe /app
+
+USER hbpe
+
+# HBPE histogram API
+EXPOSE 8002
+
+CMD ["./entrypoint.sh"]
