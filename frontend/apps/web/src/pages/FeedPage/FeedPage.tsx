@@ -4,7 +4,8 @@ import { GlobalUID, ErrorPage, LoadingPage, Portal, useDeviceLayout, usePageTitl
 import { Breadcrumb, cn, useToast } from '@ci/shadcn';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 
-import { useActionListService } from '@/api';
+import { useActionListService, useForecastService } from '@/api';
+import { ForecastStrip } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
 import { Markdown } from '@/components/Markdown';
 import { type FragmentType } from '@/graphql';
@@ -43,6 +44,7 @@ export function FeedPage() {
     { question, submitting: questionSubmitting, error: questionError },
     { submitAnswer: submitQuestionAnswer },
   ] = useFeedQuestionService();
+  const [{ data: forecast, loading: forecastLoading }] = useForecastService();
   const [questionCardInsertionIndex, setQuestionCardInsertionIndex] = useState(0);
   const [questionPlacement, setQuestionPlacement] = useState<{
     questionPresentationId: string;
@@ -368,6 +370,13 @@ export function FeedPage() {
           </div>
         )}
 
+        {(forecastLoading || forecast) && (
+          <div className="px-2 pb-4">
+            <h3 className="text-sm font-semibold text-foreground mb-2">Tomorrow's Forecast</h3>
+            {forecast && <ForecastStrip buckets={forecast.buckets} generatedAt={forecast.generatedAt} />}
+          </div>
+        )}
+
         {isModalOpen && <FeedModal onClose={handleModalClose} />}
       </PageContent>
     );
@@ -398,6 +407,16 @@ export function FeedPage() {
       </Portal.Slot>
 
       <PageContent>
+        {(forecastLoading || forecast) && (
+          <>
+            <h2 className="text-2xl font-bold text-foreground">Tomorrow's Forecast</h2>
+            {forecastLoading && (
+              <div className="text-sm text-muted-foreground">Loading behavioural forecast…</div>
+            )}
+            {forecast && <ForecastStrip buckets={forecast.buckets} generatedAt={forecast.generatedAt} />}
+          </>
+        )}
+
         <h2 className="text-2xl font-bold text-foreground">Actions</h2>
 
         <Carousel {...carouselProps} initialIndex={selectedActionCardIndex}>
