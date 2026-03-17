@@ -40,6 +40,9 @@
     },
     "tts": {
       "host": "TTS_HOST"
+    },
+    "hbpe": {
+      "host": "HBPE_HOST"
     }
   },
   "features": {

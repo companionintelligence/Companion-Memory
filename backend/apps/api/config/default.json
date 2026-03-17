@@ -77,6 +77,9 @@
     },
     "tts": {
       "host": "http://tts-service:9002"
+    },
+    "hbpe": {
+      "host": "http://hbpe-service:8002"
     }
   },
   "features": {

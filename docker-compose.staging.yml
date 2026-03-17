@@ -1,81 +1,82 @@
 services:
+  application:
+    image: ci/companion-server:latest
+    ports:
+      - 8642:8642
+    volumes:
+      - ./infrastructure/nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/ssl/:/etc/nginx/ssl/:ro
+    networks:
+      - ci
+    depends_on:
+      - api
+    restart: unless-stopped
+    profiles: [ "staging" ]
+
   api:
-    image: ci/api
+    image: ci/companion-api:latest
     env_file:
       - .env
     environment:
-      DATABASE_HOST: database
-      OBJECT_STORE_URL: http://object-store:9000
+      POSTGRES_HOST: postgres
+      S3_URL: http://minio:9000
       OLLAMA_HOST: http://host.docker.internal:11434
       STT_HOST: http://stt-service:9001
       TTS_HOST: http://tts-service:9002
+      HBPE_HOST: http://hbpe-service:8002
     networks:
       - ci
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
-      migrate-database:
+      database-migrations:
         condition: service_completed_successfully
-      database:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
     profiles: [ "staging" ]
 
-  database:
+  ##############
+  # MIGRATIONS #
+  ##############
+
+  database-migrations:
+    image: ci/companion-api:latest
     environment:
-      PASSWORD: ${DATABASE_ADMIN_PASSWORD}
-    ports:
-      - 5432:5432
-
-  gateway:
-    image: ci/gateway
-    ports:
-      - 8642:8642
-    volumes:
-      - ./infrastructure/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
-    networks:
-      - ci
-    restart: unless-stopped
-    profiles: [ "staging" ]
-
-  object-store:
-    environment:
-      USERNAME: ${OBJECT_STORE_USERNAME}
-      PASSWORD: ${OBJECT_STORE_PASSWORD}
-    ports:
-      - 9000:9000
-
-  orchestrator:
-    environment:
-      DATABASE_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
-
-  #############
-  # EPHEMERAL #
-  #############
-
-  migrate-database:
-    image: ci/api
-    env_file:
-      - .env
-    environment:
-      DATABASE_HOST: database
+      POSTGRES_HOST: postgres
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     networks:
       - ci
     command: ["yarn", "migrate"]
     restart: "no"
     depends_on:
-      setup-database:
-        condition: service_completed_successfully
-      database:
+      postgres:
         condition: service_healthy
     profiles: [ "staging" ]
 
-  setup-database:
-    environment:
-      ADMIN_PASSWORD: ${DATABASE_ADMIN_PASSWORD}
-      COMPANION_PASSWORD: ${DATABASE_PASSWORD}
-      ORCHESTRATOR_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+  #################
+  # PORT EXPOSURE #
+  #################
 
-  setup-orchestrator:
-    environment:
-      DATABASE_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+  # We expose the PostgreSQL port in the staging environment so that we can
+  # manipulate the database directly from the host machine. We likely want to
+  # add signup codes, seed data, etc. In a production environment we can close
+  # this port off.
+  postgres:
+    ports:
+      - 5432:5432
+
+  # We expose the MinIO port in the staging environment so that we can we can
+  # execute scripts that rely on the FileService from our host machine. In a
+  # production environment we can close this port off.
+  minio:
+    ports:
+      - 9000:9000
+
+  hbpe-service:
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video

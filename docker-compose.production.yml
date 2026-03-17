@@ -1,91 +1,63 @@
 services:
-  api:
-    image: ci/api
+  application:
+    image: ci/companion-server:latest
+    ports:
+      - 8642:8642
     volumes:
-      - secrets:/run/secrets:ro
+      - ./infrastructure/nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/ssl/:/etc/nginx/ssl/:ro
+    networks:
+      - ci
+    depends_on:
+      - api
+    restart: unless-stopped
+    profiles: [ "production" ]
+
+  api:
+    image: ci/companion-api:latest
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      S3_URL: http://minio:9000
+      OLLAMA_HOST: http://host.docker.internal:11434
+      STT_HOST: http://stt-service:9001
+      TTS_HOST: http://tts-service:9002
+      HBPE_HOST: http://hbpe-service:8002
     networks:
       - ci
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
-      generate-secrets:
+      database-migrations:
         condition: service_completed_successfully
-      migrate-database:
-        condition: service_completed_successfully
-      database:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
     profiles: [ "production" ]
 
-  database:
-    volumes:
-      - secrets:/run/secrets:ro
-    depends_on:
-      generate-secrets:
-        condition: service_completed_successfully
+  ##############
+  # MIGRATIONS #
+  ##############
 
-  gateway:
-    image: ci/gateway
-    ports:
-      - 8642:8642
-    volumes:
-      - ./infrastructure/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
-    networks:
-      - ci
-    restart: unless-stopped
-    profiles: [ "production" ]
-
-  object-store:
-    volumes:
-      - secrets:/run/secrets:ro
-    depends_on:
-      generate-secrets:
-        condition: service_completed_successfully
-
-  orchestrator:
-    volumes:
-      - secrets:/run/secrets:ro
-    depends_on:
-      generate-secrets:
-        condition: service_completed_successfully
-
-  summary-service:
-    volumes:
-      - secrets:/run/secrets:ro
-    depends_on:
-      generate-secrets:
-        condition: service_completed_successfully
-
-  #############
-  # EPHEMERAL #
-  #############
-
-  generate-secrets:
-    image: ci/setup-secrets
-    restart: "no"
-    volumes:
-      - secrets:/run/secrets
-    profiles: [ "production" ]
-
-  migrate-database:
-    image: ci/api
-    volumes:
-      - secrets:/run/secrets:ro
+  database-migrations:
+    image: ci/companion-api:latest
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     networks:
       - ci
     command: ["yarn", "migrate"]
     restart: "no"
     depends_on:
-      generate-secrets:
-        condition: service_completed_successfully
-      database:
+      postgres:
         condition: service_healthy
     profiles: [ "production" ]
 
-  setup-database:
-    volumes:
-      - secrets:/run/secrets:ro
-
-  setup-orchestrator:
-    volumes:
-      - secrets:/run/secrets:ro
+  hbpe-service:
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
