@@ -47,3 +47,7 @@ backend/apps/hbpe/src/ci/__pycache__/
 backend/apps/hbpe/src/ci/inference/__pycache__/
 
 *.pyc
+
+*.gguf
+
+.cache/
