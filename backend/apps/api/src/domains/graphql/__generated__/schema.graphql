@@ -364,12 +364,6 @@ input CreatePlaceInput {
   uploaded: Boolean
 }
 
-input CreateProviderKeyInput {
-  clientId: String!
-  clientSecret: String!
-  providerId: ID!
-}
-
 input CreateQuestionInput {
   category: String!
   text: String!
@@ -470,6 +464,21 @@ type EventType implements Node & Taggable {
   title: String
 }
 
+type FactConnection implements Connection {
+  edges: [FactEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type FactEdge implements Edge {
+  cursor: String!
+  node: FactType!
+}
+
+type FactType implements Node {
+  id: ID!
+}
+
 type FileConnection implements Connection {
   edges: [FileEdge!]!
   pageInfo: PageInfo!
@@ -495,6 +504,33 @@ type FileType implements Node & Taggable {
   tags: [EntityTagType!]!
   title: String
   updatedAt: DateTime!
+}
+
+"""One 30-minute forecast bucket from the HBPE histogram"""
+type ForecastBucketType {
+  bucketIndex: Int!
+  l0Probs: [ProbabilityEntryType!]!
+  l1Probs: [ProbabilityEntryType!]!
+  l2Probs: [ProbabilityEntryType!]
+  q10: Float!
+  q50: Float!
+  q90: Float!
+
+  """ISO-8601 start time for this bucket"""
+  startTime: String!
+}
+
+"""48-bucket HBPE day-ahead forecast"""
+type ForecastType {
+  buckets: [ForecastBucketType!]!
+
+  """ISO-8601 timestamp when this forecast was generated"""
+  generatedAt: String!
+
+  """
+  Forecast horizon, e.g. "48h"
+  """
+  horizon: String!
 }
 
 type InsightItemType {
@@ -580,7 +616,6 @@ type Mutation {
   createNote(input: CreateNoteInput!): CreateNotePayload!
   createPerson(input: CreatePersonInput!): CreatePersonPayload!
   createPlace(input: CreatePlaceInput!): PlaceType!
-  createProviderKey(input: CreateProviderKeyInput!): ProviderKeyType!
   createQuestion(input: CreateQuestionInput!): QuestionType!
   createRelationship(input: CreateRelationshipInput!): CreateRelationshipPayload!
   createSavedSearch(input: CreateSavedSearchInput!): CreateSavedSearchPayload!
@@ -590,7 +625,6 @@ type Mutation {
   deleteItem(input: DeleteByIdInput!): DeleteByIdPayload!
   deleteNote(input: DeleteByIdInput!): DeleteByIdPayload!
   deletePerson(input: DeleteByIdInput!): DeleteByIdPayload!
-  deleteProviderKey(id: ID!): Boolean!
   deleteRelationship(input: DeleteByIdInput!): DeleteByIdPayload!
   deleteSavedSearch(input: DeleteByIdInput!): DeleteByIdPayload!
 
@@ -622,7 +656,6 @@ type Mutation {
   updateNote(input: UpdateNoteInput!): UpdateNotePayload!
   updatePerson(input: UpdatePersonInput!): UpdatePersonPayload!
   updatePlace(input: UpdatePlaceInput!): PlaceType
-  updateProviderKey(id: ID!, input: UpdateProviderKeyInput!): ProviderKeyType
   updateQuestion(input: UpdateQuestionInput!): QuestionType
   updateRelationship(input: UpdateRelationshipInput!): UpdateRelationshipPayload!
   updateSavedSearch(input: UpdateSavedSearchInput!): UpdateSavedSearchPayload!
@@ -715,6 +748,12 @@ type PlaceType implements Node & Taggable {
   uploaded: Boolean
 }
 
+"""A single label→probability entry from the HBPE histogram"""
+type ProbabilityEntryType {
+  label: String!
+  probability: Float!
+}
+
 type ProviderConnection implements Connection {
   edges: [ProviderEdge!]!
   pageInfo: PageInfo!
@@ -733,16 +772,6 @@ type ProviderEndpointType {
   name: String!
 }
 
-type ProviderKeyType implements Node {
-  clientId: String!
-  clientSecret: String!
-  createdAt: DateTime!
-  id: ID!
-  providerId: ID!
-  updatedAt: DateTime!
-  userId: ID!
-}
-
 type ProviderThemeType {
   backgroundColor: String
   borderColor: String
@@ -754,7 +783,6 @@ type ProviderType implements Node {
   id: ID!
   logoUrl: String
   name: String
-  providerKeys: ProviderKeyType
   theme: ProviderThemeType
 }
 
@@ -777,11 +805,16 @@ type Query {
   contents(after: String, before: String, first: Int, last: Int): ContentConnection!
   event(id: ID!): EventType
   events(after: String, before: String, first: Int, last: Int): EventConnection!
+  fact(id: ID!): FactType
+  facts(after: String, before: String, first: Int, last: Int): FactConnection!
 
   """Get actions for the feed, prioritizing unseen actions"""
   feedActions(limit: Int! = 5): [ActionType!]!
   file(id: ID!): FileType
   files(after: String, before: String, first: Int, last: Int): FileConnection!
+
+  """Fetch the HBPE day-ahead forecast histogram"""
+  forecast(horizon: String = "24h"): ForecastType
   item(id: ID!): ItemType
   items(after: String, before: String, first: Int, last: Int): ItemConnection!
   me: UserType
@@ -1134,11 +1167,6 @@ input UpdatePlaceInput {
   tracked: Boolean
   type: String
   uploaded: Boolean
-}
-
-input UpdateProviderKeyInput {
-  clientId: String
-  clientSecret: String
 }
 
 input UpdateQuestionInput {

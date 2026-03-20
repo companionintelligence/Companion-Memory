@@ -41,3 +41,11 @@ AGENTS.md
 backend/apps/hbpe/src/ci/model/__pycache__/
 
 backend/apps/hbpe/src/ci/tokenizer/__pycache__/
+
+backend/apps/hbpe/src/ci/__pycache__/
+
+*.pyc
+
+*.gguf
+
+.cache/
