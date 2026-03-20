@@ -34,21 +34,33 @@ class Settings(BaseSettings):
     )
 
     # ── Model artifacts ───────────────────────────────────────────────────────
+    # In Docker: set MODELS_DIR=/app/models (backed by a named volume).
+    # Locally (dev/test): falls back to .cache/hbpe-models/ at the repo root
+    # so downloaded models persist across test runs without an env var.
     models_dir: str = Field(
-        default_factory=lambda: os.getenv("MODELS_DIR", "/app/models")
+        default_factory=lambda: os.getenv(
+            "MODELS_DIR",
+            os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "../../../../..", ".cache", "hbpe-models"
+            )),
+        )
     )
     token_corpus_dir: str = Field(
         default_factory=lambda: os.getenv("TOKEN_CORPUS_DIR", "/app/data/token_corpus")
     )
 
-    # ── Qwen labeler ─────────────────────────────────────────────────────────
-    # HuggingFace model ID for the on-device label generator.
-    # The model is downloaded on first use; ensure /app/models has enough space (~1.5 GB).
-    # Qwen3.5-0.8B is a hybrid DeltaNet/Attention instruct model. Without
-    # flash-linear-attention + causal-conv1d CUDA kernels it falls back to
-    # pure-torch (slow on CPU). Override with QWEN_MODEL_NAME if needed.
-    qwen_model_name: str = Field(
-        default_factory=lambda: os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen3.5-0.8B")
+    # ── Qwen labeler (GGUF via llama-cpp-python) ─────────────────────────────
+    # Set QWEN_GGUF_PATH to an absolute local path to skip the HF download.
+    # Otherwise the file is fetched from qwen_gguf_repo / qwen_gguf_file and
+    # cached under models_dir/qwen/ (~500 MB for Q4_K_M).
+    qwen_gguf_path: str = Field(
+        default_factory=lambda: os.getenv("QWEN_GGUF_PATH", "")
+    )
+    qwen_gguf_repo: str = Field(
+        default_factory=lambda: os.getenv("QWEN_GGUF_REPO", "unsloth/Qwen3.5-0.8B-GGUF")
+    )
+    qwen_gguf_file: str = Field(
+        default_factory=lambda: os.getenv("QWEN_GGUF_FILE", "Qwen3.5-0.8B-Q8_0.gguf")
     )
 
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────

@@ -14,6 +14,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.18 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
+ENV PYTHONPATH=/app/src
+
 RUN useradd -m -u 1000 hbpe
 
 # ── PyTorch with ROCm 6.1 support ─────────────────────────────────────────────
@@ -27,7 +29,7 @@ RUN pip3 install --no-cache-dir \
 # Requires ROCm SDK on the host (mounted via /dev/kfd, /dev/dri).
 # CMAKE_ARGS enables the GGML HIP backend for Phi-3-mini inference.
 RUN CMAKE_ARGS="-DGGML_HIPBLAS=ON" FORCE_CMAKE=1 \
-    pip3 install --no-cache-dir "llama-cpp-python>=0.2.56"
+    pip3 install --no-cache-dir "llama-cpp-python>=0.3.4"
 
 # ── Remaining Python dependencies via uv ──────────────────────────────────────
 # Swap onnxruntime-gpu → onnxruntime. The ROCm execution provider can be
@@ -42,7 +44,7 @@ COPY scripts/ ./scripts/
 COPY entrypoint.sh ./
 
 # Persistent volumes for model artifacts and token corpus
-RUN mkdir -p /app/models/phi3 \
+RUN mkdir -p /app/models/qwen \
              /app/data/token_corpus \
              /app/data/artifacts
 

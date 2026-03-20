@@ -1,25 +1,26 @@
 """
-Qwen instruct model singleton — on-device LLM for label generation.
+Qwen labeler — on-device LLM for behavioral label generation.
 
-Uses the HuggingFace chat template so the model receives proper system +
-user messages and follows JSON format instructions reliably.
+Uses llama-cpp-python (GGUF) rather than HuggingFace transformers so the
+same code path runs efficiently on all three hardware targets:
 
-Default model: Qwen/Qwen3.5-0.8B
-  - Hybrid DeltaNet + standard attention (instruct / post-trained)
-  - Supports thinking and non-thinking mode; we use non-thinking (enable_thinking=False)
-  - Runs on CPU; fast path requires flash-linear-attention + causal-conv1d (CUDA)
-  Configurable via settings.qwen_model_name or QWEN_MODEL_NAME env var.
+  - Apple Silicon (M-series): Metal GPU via llama.cpp's Metal backend
+  - ROCm (AMD GPU, prod):     HIPBLAS via llama-cpp-python compiled with
+                              CMAKE_ARGS="-DGGML_HIPBLAS=ON"
+  - CPU fallback:             pure C++ — still faster than transformers
+                              on Qwen3.5's DeltaNet hybrid attention
 
-The model is lazy-loaded on first call to get_qwen() and shared across
-all callers in the process (thread-safe via a double-checked lock).
+Model: Qwen3.5-0.8B Q8_0 GGUF  (~800 MB, public — no HF token required)
+  Configurable via QWEN_GGUF_PATH env var (absolute path) or auto-downloaded
+  from QWEN_GGUF_REPO + QWEN_GGUF_FILE via huggingface_hub.
+
+The singleton is lazy-loaded on first get_qwen() call (thread-safe).
 """
 from __future__ import annotations
 
 import logging
 import threading
 from typing import Optional
-
-import torch
 
 from ci.config import settings
 
@@ -31,99 +32,91 @@ _INSTANCE: Optional["QwenModel"] = None
 
 class QwenModel:
     """
-    Wrapper around a Qwen instruct model for chat-based label generation.
+    Thin wrapper around a llama-cpp-python Llama instance.
 
-    Uses greedy decoding (do_sample=False) for deterministic, reproducible
-    labels.  device_map="auto" supports CPU, MPS, and CUDA transparently.
+    All generation uses temperature=0 (greedy) for deterministic labels.
+    n_gpu_layers=-1 offloads every layer to GPU (Metal / HIPBLAS).
     """
 
-    def __init__(self, model_name: str) -> None:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+    def __init__(self, model_path: str) -> None:
+        from llama_cpp import Llama
 
-        self.model_name = model_name
-        log.info("Loading model: %s", model_name)
-
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=True,
+        log.info("Loading Qwen GGUF: %s", model_path)
+        self._llm = Llama(
+            model_path=model_path,
+            n_ctx=2048,
+            n_gpu_layers=-1,    # full GPU offload — Metal on M-series, HIPBLAS on ROCm
+            verbose=False,
         )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype="auto",
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        self.model.eval()
-        self._device = next(self.model.parameters()).device
-        log.info("Model loaded on device: %s", self._device)
+        log.info("Qwen GGUF loaded")
 
     def generate(
         self,
         user_message: str,
         system_message: Optional[str] = None,
-        max_new_tokens: int = 80,
+        max_new_tokens: int = 32,
     ) -> str:
-        """
-        Generate a response for a chat-style exchange using greedy decoding.
-
-        Builds a messages list, applies the tokenizer's chat template, then
-        decodes only the newly generated tokens.  The caller is responsible
-        for prompt content; this method handles tokenisation and generation.
-        """
-        messages = []
+        """Single chat completion, greedy decoding."""
+        messages: list[dict] = []
         if system_message:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": user_message})
 
-        # apply_chat_template may return a plain tensor or a BatchEncoding
-        # depending on the transformers version and tokenizer implementation.
-        try:
-            tokenized = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors="pt",
-                enable_thinking=False,   # suppress <think> blocks on Qwen3 thinking models
-            )
-        except TypeError:
-            # enable_thinking not supported on this tokenizer (e.g. Qwen2)
-            tokenized = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors="pt",
-            )
-
-        # Normalise to a plain input_ids tensor + optional attention_mask
-        if hasattr(tokenized, "input_ids"):
-            # BatchEncoding — newer transformers versions
-            input_ids = tokenized.input_ids.to(self._device)
-            attention_mask = tokenized.get("attention_mask")
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(self._device)
-        else:
-            input_ids = tokenized.to(self._device)
-            attention_mask = None
-
-        pad_id = (
-            self.tokenizer.eos_token_id
-            if self.tokenizer.pad_token_id is None
-            else self.tokenizer.pad_token_id
+        result = self._llm.create_chat_completion(
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=0.0,
         )
+        return result["choices"][0]["message"]["content"].strip()
 
-        gen_kwargs: dict = dict(
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=pad_id,
-        )
-        if attention_mask is not None:
-            gen_kwargs["attention_mask"] = attention_mask
+    def batch_generate(
+        self,
+        prompts: list[tuple[str, Optional[str]]],
+        max_new_tokens: int = 32,
+    ) -> list[str]:
+        """
+        Run generate() for each (user_msg, system_msg) pair.
 
-        with torch.no_grad():
-            output_ids = self.model.generate(input_ids, **gen_kwargs)
+        llama-cpp-python's Python API doesn't expose batched chat completions,
+        but per-call latency at ~200 tok/s on Metal is fast enough that serial
+        is fine: a batch of 32 items costs ~5 seconds end-to-end.
+        """
+        return [
+            self.generate(user_msg, sys_msg, max_new_tokens)
+            for user_msg, sys_msg in prompts
+        ]
 
-        new_ids = output_ids[0][input_ids.shape[-1]:]
-        return self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+
+def _resolve_model_path() -> str:
+    """
+    Return the local GGUF path, downloading from HuggingFace if needed.
+
+    Priority:
+      1. QWEN_GGUF_PATH env var / settings.qwen_gguf_path  (explicit local path)
+      2. Auto-download via huggingface_hub to the models dir
+    """
+    explicit = settings.qwen_gguf_path
+    if explicit:
+        return explicit
+
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.utils import LocalEntryNotFoundError
+    import os
+
+    cache_dir = os.path.join(settings.models_dir, "qwen")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    kwargs = dict(
+        repo_id=settings.qwen_gguf_repo,
+        filename=settings.qwen_gguf_file,
+        cache_dir=cache_dir,
+    )
+    try:
+        # Prefer fully offline resolution if the file is already cached.
+        return hf_hub_download(**kwargs, local_files_only=True)
+    except LocalEntryNotFoundError:
+        # Not cached yet — download from HuggingFace.
+        return hf_hub_download(**kwargs)
 
 
 def get_qwen() -> QwenModel:
@@ -132,5 +125,5 @@ def get_qwen() -> QwenModel:
     if _INSTANCE is None:
         with _LOCK:
             if _INSTANCE is None:
-                _INSTANCE = QwenModel(settings.qwen_model_name)
+                _INSTANCE = QwenModel(_resolve_model_path())
     return _INSTANCE

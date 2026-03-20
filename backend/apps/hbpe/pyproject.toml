@@ -4,15 +4,19 @@ version = "0.1.0"
 description = "CI-HBPE: Hierarchical Behavioral Prediction Engine"
 requires-python = ">=3.11"
 dependencies = [
-    # ── LLM labeling (Qwen3.5-0.8B) ──────────────────────────────────────────
-    # NOTE: torch is installed separately in the Dockerfile with hardware-specific
-    # build flags. Do not add it here or pip will pull the CPU-only PyPI release.
-    "transformers>=4.45",            # Qwen3.5 support (qwen3_5 arch added post-4.48)
-    "accelerate>=0.26",              # device_map="auto" support for from_pretrained
+    # ── LLM labeling (Qwen3-0.8B Q4_K_M GGUF via llama-cpp-python) ──────────
+    # llama-cpp-python is installed in the Dockerfile with hardware-specific
+    # build flags (Metal / HIPBLAS). Do not add it here or pip will pull the
+    # CPU-only release. huggingface_hub handles model download/caching.
+    "huggingface_hub>=0.22",
 
     # ── Model training & calibration ──────────────────────────────────────────
+    # torch is installed in the Dockerfile with hardware-specific index URLs
+    # (CPU for local, ROCm for prod). Listed here for dependency completeness.
+    "torch>=2.2",
     "scikit-learn>=1.4",             # ECE calibration in model/calibration.py
     "onnx>=1.16",                    # Required by onnxruntime.quantization
+    "onnxscript>=0.1",               # Required by torch.onnx.export (torch 2.x)
     "onnxruntime-gpu>=1.17",         # INT8 quantized inference (Phase 4)
 
     # ── Data I/O ──────────────────────────────────────────────────────────────
@@ -29,7 +33,7 @@ dependencies = [
 
     # ── Utilities ────────────────────────────────────────────────────────────
     "structlog",
-    "numpy<2",              # torch 2.2 compiled against NumPy 1.x
+    "numpy",
 ]
 
 [project.optional-dependencies]

@@ -217,13 +217,13 @@ def write_event_label(
     bumps the cluster's member_count + last_active_at.
     """
     sql_upsert = """
-        INSERT INTO ci.l1_event_cluster (event_id, cluster_id, user_id, similarity, created_at)
-        VALUES (%s::uuid, %s::uuid, %s::uuid, 1.0, NOW())
+        INSERT INTO ci.l1_event_cluster (event_id, cluster_id, similarity, assigned_at)
+        VALUES (%s::uuid, %s::uuid, 1.0, NOW())
         ON CONFLICT (event_id)
         DO UPDATE SET
-            cluster_id = EXCLUDED.cluster_id,
-            user_id    = EXCLUDED.user_id,
-            similarity = EXCLUDED.similarity
+            cluster_id  = EXCLUDED.cluster_id,
+            similarity  = EXCLUDED.similarity,
+            assigned_at = EXCLUDED.assigned_at
     """
     sql_bump = """
         UPDATE ci.l1_clusters
@@ -234,7 +234,7 @@ def write_event_label(
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql_upsert, (str(event_id), str(l1_cluster_id), str(user_id)))
+            cur.execute(sql_upsert, (str(event_id), str(l1_cluster_id)))
             cur.execute(sql_bump, (str(l1_cluster_id),))
 
 
@@ -252,16 +252,16 @@ def write_content_label(
     the L2 cluster's member_count.
     """
     sql_l2 = """
-        INSERT INTO ci.l2_content_cluster (content_id, cluster_id, user_id, similarity, created_at)
-        VALUES (%s::uuid, %s::uuid, %s::uuid, 1.0, NOW())
+        INSERT INTO ci.l2_content_cluster (content_id, cluster_id, similarity, assigned_at)
+        VALUES (%s::uuid, %s::uuid, 1.0, NOW())
         ON CONFLICT (content_id)
         DO UPDATE SET
-            cluster_id = EXCLUDED.cluster_id,
-            user_id    = EXCLUDED.user_id,
-            similarity = EXCLUDED.similarity
+            cluster_id  = EXCLUDED.cluster_id,
+            similarity  = EXCLUDED.similarity,
+            assigned_at = EXCLUDED.assigned_at
     """
     sql_ctx = """
-        INSERT INTO ci.content_context (content_id, user_id, l0_class, l1_cluster_id, created_at)
+        INSERT INTO ci.content_context (content_id, user_id, l0_class, l1_cluster_id, assigned_at)
         VALUES (%s::uuid, %s::uuid, %s, %s::uuid, NOW())
         ON CONFLICT (content_id)
         DO UPDATE SET
@@ -278,6 +278,6 @@ def write_content_label(
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql_l2, (str(content_id), str(l2_cluster_id), str(user_id)))
+            cur.execute(sql_l2, (str(content_id), str(l2_cluster_id)))
             cur.execute(sql_ctx, (str(content_id), str(user_id), l0_class, str(l1_cluster_id)))
             cur.execute(sql_bump, (str(l2_cluster_id),))

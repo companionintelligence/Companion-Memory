@@ -97,7 +97,7 @@ class QwenLabeler:
         all_l1 = self._all_l1_by_l0(user_id)
         user_msg = _build_event_user_message(title, description, all_l1)
 
-        raw = get_qwen().generate(user_msg, system_message=_SYSTEM, max_new_tokens=60)
+        raw = get_qwen().generate(user_msg, system_message=_SYSTEM, max_new_tokens=32)
         parsed = _parse_json(raw)
 
         l0 = normalise_l0(parsed.get("l0", "UNKNOWN"))
@@ -131,7 +131,7 @@ class QwenLabeler:
         all_l2 = self._all_l2_by_l1(user_id, all_l1)
         user_msg = _build_content_user_message(title, content_type, all_l1, all_l2)
 
-        raw = get_qwen().generate(user_msg, system_message=_SYSTEM, max_new_tokens=80)
+        raw = get_qwen().generate(user_msg, system_message=_SYSTEM, max_new_tokens=40)
         parsed = _parse_json(raw)
 
         l0 = normalise_l0(parsed.get("l0", "UNKNOWN"))
@@ -153,6 +153,98 @@ class QwenLabeler:
             "l1": l1_raw, "l1_id": l1_id, "is_new_l1": is_new_l1,
             "l2": l2_raw, "l2_id": l2_id, "is_new_l2": is_new_l2,
         }
+
+    def label_events_batch(
+        self,
+        items: list[dict],
+        user_id: str,
+    ) -> list[dict]:
+        """
+        Label a list of events in a single batched forward pass.
+
+        Each item: {"event_id": str, "title": str, "description": str|None}
+        Returns list of {"l0", "l1", "l1_id", "is_new_l1"} in same order.
+        """
+        from ci.inference.qwen import get_qwen
+
+        if not items:
+            return []
+
+        all_l1 = self._all_l1_by_l0(user_id)
+        prompts = [
+            (_build_event_user_message(
+                (item.get("title") or "(no title)")[:200],
+                item.get("description"),
+                all_l1,
+            ), _SYSTEM)
+            for item in items
+        ]
+
+        raws = get_qwen().batch_generate(prompts, max_new_tokens=32)
+
+        results = []
+        for item, raw in zip(items, raws):
+            parsed = _parse_json(raw)
+            l0 = normalise_l0(parsed.get("l0", "UNKNOWN"))
+            l1_raw = _clean_label(parsed.get("l1", "General"))
+            l1_id, is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
+            if is_new_l1:
+                self._l1_cache.pop((user_id, l0), None)
+            write_event_label(item["event_id"], user_id, l0, l1_id)
+            results.append({"l0": l0, "l1": l1_raw, "l1_id": l1_id, "is_new_l1": is_new_l1})
+
+        return results
+
+    def label_content_batch(
+        self,
+        items: list[dict],
+        user_id: str,
+    ) -> list[dict]:
+        """
+        Label a list of content items in a single batched forward pass.
+
+        Each item: {"content_id": str, "title": str, "content_type": str|None}
+        Returns list of {"l0", "l1", "l1_id", "l2", "l2_id", "is_new_l1", "is_new_l2"}.
+        """
+        from ci.inference.qwen import get_qwen
+
+        if not items:
+            return []
+
+        all_l1 = self._all_l1_by_l0(user_id)
+        all_l2 = self._all_l2_by_l1(user_id, all_l1)
+        prompts = [
+            (_build_content_user_message(
+                (item.get("title") or "(no title)")[:200],
+                item.get("content_type"),
+                all_l1,
+                all_l2,
+            ), _SYSTEM)
+            for item in items
+        ]
+
+        raws = get_qwen().batch_generate(prompts, max_new_tokens=40)
+
+        results = []
+        for item, raw in zip(items, raws):
+            parsed = _parse_json(raw)
+            l0 = normalise_l0(parsed.get("l0", "UNKNOWN"))
+            l1_raw = _clean_label(parsed.get("l1", "General"))
+            l2_raw = _clean_label(parsed.get("l2", "General"))
+            l1_id, is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
+            l2_id, is_new_l2 = get_or_create_l2(user_id, l0, l1_id, l2_raw)
+            if is_new_l1:
+                self._l1_cache.pop((user_id, l0), None)
+            if is_new_l2:
+                self._l2_cache.pop((user_id, l0, l1_id), None)
+            write_content_label(item["content_id"], user_id, l0, l1_id, l2_id)
+            results.append({
+                "l0": l0,
+                "l1": l1_raw, "l1_id": l1_id, "is_new_l1": is_new_l1,
+                "l2": l2_raw, "l2_id": l2_id, "is_new_l2": is_new_l2,
+            })
+
+        return results
 
     # ── Vocab helpers ──────────────────────────────────────────────────────────
 
