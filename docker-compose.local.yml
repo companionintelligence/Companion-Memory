@@ -1,18 +1,13 @@
 services:
-  database:
-    environment:
-      PASSWORD: ${DATABASE_ADMIN_PASSWORD}
-    ports:
-      - 5432:5432
-
-  gateway:
+  application:
     image: nginx:stable
     ports:
       - 80:80
       - 443:443
     volumes:
-      - ./infrastructure/dev-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./infrastructure/dev-gateway/ssl/:/etc/nginx/ssl/:ro
+      - ./infrastructure/nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/ssl/:/etc/nginx/ssl/:ro
+      - ./infrastructure/nginx/public:/usr/share/nginx/html:ro
     networks:
       - ci
     extra_hosts:
@@ -20,16 +15,23 @@ services:
     restart: unless-stopped
     profiles: [ "local" ]
 
-  object-store:
-    environment:
-      USERNAME: ${OBJECT_STORE_USERNAME}
-      PASSWORD: ${OBJECT_STORE_PASSWORD}
+  #################
+  # PORT EXPOSURE #
+  #################
+
+  iframely:
+    ports:
+      - 8061:8061
+
+  minio:
     ports:
       - 9000:9000
 
-  orchestrator:
-    environment:
-      DATABASE_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+  postgres:
+    ports:
+      - 5432:5432
+
+  temporal:
     ports:
       - 7233:7233
 
@@ -37,26 +39,40 @@ services:
     ports:
       - 9001:9001
 
-  summary-service:
-    ports:
-      - 8001:8001
-    environment:
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
-
   tts-service:
     ports:
       - 9002:9002
 
-  #############
-  # EPHEMERAL #
-  #############
+  summary-service:
+    ports:
+      - 8001:8001
 
-  setup-database:
+  hbpe-service:
+    build:
+      context: ./backend/apps/hbpe
+      dockerfile: Dockerfile.local
+    image: ci/hbpe-service-local
+    pull_policy: build
     environment:
-      ADMIN_PASSWORD: ${DATABASE_ADMIN_PASSWORD}
-      COMPANION_PASSWORD: ${DATABASE_PASSWORD}
-      ORCHESTRATOR_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
-
-  setup-orchestrator:
-    environment:
-      DATABASE_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+      - PYTHONPATH=/app/src
+      - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@postgres:5432/companion_intel
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+      - HBPE_TASK_QUEUE=hbpe
+      - MODELS_DIR=/app/models
+      - TOKEN_CORPUS_DIR=/app/data/token_corpus
+      - HF_HOME=/app/models/hf_cache
+      - API_URL=http://application:3000
+      - API_JWT_SECRET=${AUTH_JWT_AUTHTOKENSECRET}
+    volumes:
+      - hbpe-models:/app/models
+      - hbpe-corpus:/app/data
+    networks:
+      - ci
+    depends_on:
+      - postgres
+      - temporal
+    restart: unless-stopped
+    ports:
+      - 8002:8002
+    profiles: [ "local" ]

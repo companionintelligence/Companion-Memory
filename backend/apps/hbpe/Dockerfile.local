@@ -1,0 +1,65 @@
+FROM python:3.11-slim-bookworm
+
+# System dependencies — cmake required for llama-cpp-python Metal build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.18 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app/src
+
+RUN useradd -m -u 1000 hbpe
+
+# ── PyTorch CPU (HMT model training — steps 7+) ──────────────────────────────
+# CPU-only wheel; no CUDA needed for local dev/testing.
+# Install before llama-cpp-python so it doesn't pull the default PyPI release.
+RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# ── llama-cpp-python (JamePeng fork — required for Qwen3.5 support) ───────────
+# The official abetlen/llama-cpp-python on PyPI is frozen at llama.cpp Aug 2025
+# and cannot load Qwen3.5 GGUFs (architecture added in llama.cpp b7990, Feb 2026).
+# JamePeng's fork tracks llama.cpp HEAD and has confirmed Qwen3.5 support.
+#
+# There are no pre-built Linux aarch64 wheels — must build from source.
+# GGML_NATIVE=OFF disables -mcpu=native which probes for CPU features (DOTPROD,
+# FP16, SVE) that the Docker aarch64 VM doesn't expose — without it the build
+# enables those extensions but the assembler rejects them at compile time.
+# For native macOS dev (outside Docker) install with Metal instead:
+#   CMAKE_ARGS="-DGGML_METAL=ON" FORCE_CMAKE=1 pip install \
+#     "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git"
+RUN CMAKE_ARGS="-DGGML_NATIVE=OFF" FORCE_CMAKE=1 \
+    pip3 install --no-cache-dir \
+      "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git"
+
+# ── Remaining Python dependencies via uv ──────────────────────────────────────
+# Swap onnxruntime-gpu → onnxruntime (CPU runtime is sufficient locally).
+COPY pyproject.toml ./
+RUN sed -i 's/onnxruntime-gpu/onnxruntime/g' pyproject.toml \
+    && uv pip install --system --no-cache -r pyproject.toml
+
+# ── Application code ──────────────────────────────────────────────────────────
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY entrypoint.sh ./
+
+# Persistent volumes for model artifacts and token corpus
+RUN mkdir -p /app/models/qwen \
+             /app/data/token_corpus \
+             /app/data/artifacts
+
+RUN chmod +x entrypoint.sh && chown -R hbpe:hbpe /app
+
+USER hbpe
+
+# HBPE histogram API
+EXPOSE 8002
+
+CMD ["./entrypoint.sh"]

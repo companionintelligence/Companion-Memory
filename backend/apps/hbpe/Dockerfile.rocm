@@ -1,0 +1,58 @@
+FROM python:3.11-slim-bookworm
+
+# System dependencies — build tools needed for llama-cpp-python HIP compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.18 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app/src
+
+RUN useradd -m -u 1000 hbpe
+
+# ── PyTorch with ROCm 6.1 support ─────────────────────────────────────────────
+# Install before other deps so sentence-transformers / bertopic don't pull the
+# CPU-only PyPI release.
+RUN pip3 install --no-cache-dir \
+    torch torchvision \
+    --index-url https://download.pytorch.org/whl/rocm6.1
+
+# ── llama-cpp-python with HIP/ROCm (HIPBLAS) ──────────────────────────────────
+# Requires ROCm SDK on the host (mounted via /dev/kfd, /dev/dri).
+# CMAKE_ARGS enables the GGML HIP backend for Phi-3-mini inference.
+RUN CMAKE_ARGS="-DGGML_HIPBLAS=ON" FORCE_CMAKE=1 \
+    pip3 install --no-cache-dir "llama-cpp-python>=0.3.4"
+
+# ── Remaining Python dependencies via uv ──────────────────────────────────────
+# Swap onnxruntime-gpu → onnxruntime. The ROCm execution provider can be
+# enabled via onnxruntime-rocm once a matching package version is pinned.
+COPY pyproject.toml ./
+RUN sed -i 's/onnxruntime-gpu/onnxruntime/g' pyproject.toml \
+    && uv pip install --system --no-cache -r pyproject.toml
+
+# ── Application code ──────────────────────────────────────────────────────────
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY entrypoint.sh ./
+
+# Persistent volumes for model artifacts and token corpus
+RUN mkdir -p /app/models/qwen \
+             /app/data/token_corpus \
+             /app/data/artifacts
+
+RUN chmod +x entrypoint.sh && chown -R hbpe:hbpe /app
+
+USER hbpe
+
+# HBPE histogram API
+EXPOSE 8002
+
+CMD ["./entrypoint.sh"]

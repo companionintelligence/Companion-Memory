@@ -1,0 +1,49 @@
+{
+  "user_id": "b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b",
+  "passed": true,
+  "checks": {
+    "days_loaded": 90,
+    "l0_coverage": {
+      "passed": true,
+      "coverage": 1.0,
+      "l0_slots": 16,
+      "total_slots": 16
+    },
+    "l0_class_balance": {
+      "distribution": {
+        "WORK": 89,
+        "LEISURE": 39,
+        "SOCIAL": 38,
+        "EXERCISE": 31,
+        "TRANSIT": 23,
+        "ERRAND": 17,
+        "UNKNOWN": 1
+      },
+      "note": "imbalance is expected per spec \u00a77.1"
+    },
+    "l1_cluster_counts": {
+      "passed": true,
+      "counts": {
+        "TRANSIT": 6,
+        "SOCIAL": 17,
+        "EXERCISE": 16,
+        "UNKNOWN": 47,
+        "LEISURE": 9,
+        "WORK": 32,
+        "ERRAND": 8
+      },
+      "violations": {}
+    },
+    "l2_cluster_total": {
+      "passed": true,
+      "skipped": true,
+      "note": "no ci.content rows \u2014 L2 validation deferred to Phase 2",
+      "total": 0
+    },
+    "bucket_sanity": {
+      "passed": true,
+      "collision_dates": [],
+      "note": "flags days where all events share one bucket (start_time bug)"
+    }
+  }
+}

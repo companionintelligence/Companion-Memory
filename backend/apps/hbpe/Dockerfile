@@ -1,0 +1,59 @@
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+# Install Python 3.11 and system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    postgresql-client \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.18 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+RUN useradd -m -u 1000 hbpe
+
+# ── GPU-specific packages (must be installed before pyproject.toml deps) ──────
+
+RUN pip3 install --no-cache-dir \
+    torch==2.2.0 torchvision \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# 2. llama-cpp-python built with CUDA support for Phi-3-mini inference.
+#    CMAKE_ARGS enables the GGML CUDA backend.
+RUN CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 \
+    pip3 install --no-cache-dir "llama-cpp-python>=0.2.56"
+
+# 3. Flash Attention 2 — used during Phase 2 HMT training only.
+#    Requires torch to be pre-installed (hence the ordering).
+RUN pip3 install --no-cache-dir flash-attn --no-build-isolation
+
+# ── Remaining Python dependencies via uv ──────────────────────────────────────
+COPY pyproject.toml ./
+RUN uv pip install --system --no-cache -r pyproject.toml
+
+# ── Application code ──────────────────────────────────────────────────────────
+COPY src/ ./src/
+COPY entrypoint.sh ./
+
+# Persistent volumes for model artifacts and token corpus
+RUN mkdir -p /app/models/phi3 \
+             /app/data/token_corpus \
+             /app/data/artifacts
+
+RUN chmod +x entrypoint.sh && chown -R hbpe:hbpe /app
+
+USER hbpe
+
+# HBPE histogram API
+EXPOSE 8002
+
+CMD ["./entrypoint.sh"]
