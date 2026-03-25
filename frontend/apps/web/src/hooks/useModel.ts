@@ -50,7 +50,7 @@ function useModel(): Value {
   const [toolsPreferred, setToolsPreferred] = useState<boolean>(true);
   const [thinkingPreferred, setThinkingPreferred] = useState<boolean>(true);
 
-  const initialRequestRef = useRef<boolean>(false);
+  const hasInitializedRef = useRef<boolean>(false);
 
   const selectModel = useCallback(
     (model: string | null) => {
@@ -105,7 +105,10 @@ function useModel(): Value {
       setActiveModels(data);
 
       const persistedModel = localStorage.getItem(ACTIVE_MODEL_KEY);
-      const model = data.find((m) => m.model === persistedModel) ? persistedModel : (data[0].model ?? null);
+      const model =
+        data.length > 0
+          ? (data.find((m) => m.model === persistedModel)?.model ?? data[0].model ?? null)
+          : null;
 
       setSelectedModel(model);
 
@@ -115,9 +118,10 @@ function useModel(): Value {
 
       const visionModels = data.filter((m) => m.vision === true);
       const persistedVisionModel = localStorage.getItem(ACTIVE_VISION_MODEL_KEY);
-      const visionModel = visionModels.find((m) => m.model === persistedVisionModel)
-        ? persistedVisionModel
-        : (visionModels[0]?.model ?? null);
+      const visionModel =
+        visionModels.length > 0
+          ? (visionModels.find((m) => m.model === persistedVisionModel)?.model ?? visionModels[0].model ?? null)
+          : null;
 
       setSelectedVisionModel(visionModel);
 
@@ -137,13 +141,13 @@ function useModel(): Value {
         return;
       }
 
-      if (initialRequestRef.current === true) {
+      if (hasInitializedRef.current === true) {
         return;
       }
 
       await fetchModels();
 
-      initialRequestRef.current = true;
+      hasInitializedRef.current = true;
     })();
   }, [authToken, fetchModels, expired]);
 

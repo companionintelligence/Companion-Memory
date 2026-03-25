@@ -46,7 +46,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
   }
 
   getClientCredentials(connection: Connection): Promise<{ clientId: string; clientSecret: string }> {
-    console.log('getClientCredentials', connection);
+    this.logger.debug('getClientCredentials', { connection });
     const clientIdVariable = 'MICROSOFT_CLIENT_ID';
     const clientSecretVariable = 'MICROSOFT_CLIENT_SECRET';
     const clientIdFromEnv = process.env[clientIdVariable];
@@ -55,13 +55,16 @@ export class MicrosoftClient extends BaseOAuth2Client {
     return this.providerKeyService
       .findByProviderId({ userId: connection.userId }, connection.provider!.id)
       .then((keys) => {
-        console.log('custom provider keys for', connection.provider!.id, keys);
+        this.logger.debug('Custom provider keys resolved for Microsoft provider', {
+          providerId: connection.provider!.id,
+          hasKeys: !!keys,
+        });
         const clientId = keys ? keys.clientId : clientIdFromEnv;
         const clientSecret = keys ? keys.clientSecret : clientSecretFromEnv;
 
         if (!clientId) {
           this.logger.error(
-            `No custom providerKey for Google and expected environment variable ${clientIdVariable} not specified`,
+            `No custom providerKey for Microsoft and expected environment variable ${clientIdVariable} not specified`,
           );
 
           throw new Error('Client id not configured for provider');
@@ -69,7 +72,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
 
         if (!clientSecret) {
           this.logger.error(
-            `No custom providerKey for Google and expected environment variable ${clientSecretVariable} not specified`,
+            `No custom providerKey for Microsoft and expected environment variable ${clientSecretVariable} not specified`,
           );
 
           throw new Error('Client secret not configured for provider');
@@ -82,7 +85,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
   getAccountIdentifier(connection: Connection): Promise<string> {
     return new Promise((resolve) =>
       this.fetchProfile(connection).then((result) => {
-        console.log('Microsoft profile', result);
+        this.logger.debug('Microsoft profile fetched', { profile: result });
         resolve(result.id || '');
       }),
     );

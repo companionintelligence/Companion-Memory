@@ -37,11 +37,13 @@ export class ProviderKeyResolver {
       active: true,
     });
 
-    await existingConnections.forEach(async (connection) => {
-      await this.connectionService.update(serviceContext, connection.id, {
-        needsReauth: true,
-      });
-    });
+    await Promise.all(
+      existingConnections.map((connection) =>
+        this.connectionService.update(serviceContext, connection.id, {
+          needsReauth: true,
+        }),
+      ),
+    );
 
     return ProviderKeyType.toType(entity);
   }
@@ -57,18 +59,24 @@ export class ProviderKeyResolver {
 
     const entity = await this.providerKeyService.update(serviceContext, decodedId, input);
 
+    if (!entity) {
+      return null;
+    }
+
     const existingConnections = await this.connectionService.search(serviceContext, {
-      providerId: entity!.providerId,
+      providerId: entity.providerId,
       active: true,
     });
 
-    await existingConnections.forEach(async (connection) => {
-      await this.connectionService.update(serviceContext, connection.id, {
-        needsReauth: true,
-      });
-    });
+    await Promise.all(
+      existingConnections.map((connection) =>
+        this.connectionService.update(serviceContext, connection.id, {
+          needsReauth: true,
+        }),
+      ),
+    );
 
-    return entity ? ProviderKeyType.toType(entity) : null;
+    return ProviderKeyType.toType(entity);
   }
 
   @Mutation(() => Boolean)
@@ -81,16 +89,22 @@ export class ProviderKeyResolver {
 
     const entity = await this.providerKeyService.findById(serviceContext, decodedId);
 
+    if (!entity) {
+      return false;
+    }
+
     const existingConnections = await this.connectionService.search(serviceContext, {
-      providerId: entity!.providerId,
+      providerId: entity.providerId,
       active: true,
     });
 
-    await existingConnections.forEach(async (connection) => {
-      await this.connectionService.update(serviceContext, connection.id, {
-        needsReauth: true,
-      });
-    });
+    await Promise.all(
+      existingConnections.map((connection) =>
+        this.connectionService.update(serviceContext, connection.id, {
+          needsReauth: true,
+        }),
+      ),
+    );
 
     return this.providerKeyService.delete(serviceContext, decodedId);
   }
