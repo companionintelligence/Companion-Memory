@@ -252,17 +252,27 @@ export function ConnectPage() {
               }
             />
             <Card
+              logo="/branding/github/logo.svg"
+              background="bg-gray-800"
+              border="border-gray-700"
+              text="Link GitHub to track your code repositories, commits, and development activity."
+              onClick={() => navigate('/providers/019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04')}
+              subtext={
+                connectionsCount['019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04'] > 1
+                    ? `${connectionsCount['019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04'] > 0 ? 'bg-green-200' : undefined
+              }
+            />
+            <Card
               logo="/branding/discord/logo.svg"
               background="bg-indigo-500"
               border="border-indigo-400"
               text="Connect Discord to sync your server activity, messages, and community interactions. Coming soon."
-              disabled
-            />
-            <Card
-              logo="/branding/github/logo.svg"
-              background="bg-gray-800"
-              border="border-gray-700"
-              text="Link GitHub to track your code repositories, commits, and development activity. Coming soon."
               disabled
             />
             <Card

@@ -59,6 +59,9 @@ export const ConfigSchema = z.object({
       facebook: z.object({
         id: z.string(),
       }),
+      github: z.object({
+        id: z.string(),
+      }),
       spotify: z.object({
         id: z.string(),
       }),

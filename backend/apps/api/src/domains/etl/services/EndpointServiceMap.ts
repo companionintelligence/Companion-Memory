@@ -31,6 +31,8 @@ import { YouTubeActivitiesTransformService } from './Google/transform/TransformY
 import { YouTubeLikesTransformService } from './Google/transform/TransformYouTubeLikes';
 import { YouTubePlaylistsTransformService } from './Google/transform/TransformYouTubePlaylists';
 import { YouTubeSubscriptionsTransformService } from './Google/transform/TransformYouTubeSubscriptions';
+import { syncEvents as syncGitHubEvents } from './GitHub/sync/SyncEvents';
+import { GitHubEventsTransformService } from './GitHub/transform/TransformEvents';
 import { syncOneDrive } from './Microsoft/sync/SyncOneDrive';
 import { syncOutlookCalendar } from './Microsoft/sync/SyncOutlookCalendar';
 import { syncOutlookMail } from './Microsoft/sync/SyncOutlookMail';
@@ -91,6 +93,7 @@ export class EndpointServiceMap {
     private readonly steamOwnedGamesTransformService: SteamOwnedGamesTransformService,
     private readonly steamAchievementsTransformService: SteamAchievementsTransformService,
     private readonly steamFriendsTransformService: SteamFriendsTransformService,
+    private readonly gitHubEventsTransformService: GitHubEventsTransformService,
   ) {
     this.logger.setContext(EndpointServiceMap.name);
     this.endpointServiceMap = {
@@ -130,6 +133,9 @@ export class EndpointServiceMap {
           'Owned Games': syncOwnedGames,
           Achievements: syncSteamAchievements,
           Friends: syncSteamFriends,
+        },
+        GitHub: {
+          Events: syncGitHubEvents,
         },
       },
       transform: {
@@ -204,6 +210,9 @@ export class EndpointServiceMap {
             this.steamAchievementsTransformService,
           ),
           Friends: this.steamFriendsTransformService.transform.bind(this.steamFriendsTransformService),
+        },
+        GitHub: {
+          Events: this.gitHubEventsTransformService.transform.bind(this.gitHubEventsTransformService),
         },
       },
     };
