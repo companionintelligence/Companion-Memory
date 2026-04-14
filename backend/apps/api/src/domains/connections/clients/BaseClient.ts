@@ -15,5 +15,7 @@ export abstract class BaseClient {
 
   abstract request<T>(connection: Connection, endpoint: string, options?: RequestInit): Promise<T>;
 
+  abstract requestRaw(connection: Connection, endpoint: string, options?: RequestInit): Promise<Response>;
+
   abstract getAccountIdentifier(connection: Connection): Promise<string>;
 }

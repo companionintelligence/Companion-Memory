@@ -6,7 +6,7 @@ VALUES (
   'Connect your GitHub account to sync your activity and events.',
   '/branding/github/logo.svg',
   '[
-    { "name": "Events", "description": "Sync your GitHub activity events.", "iterationType": "historical", "TTL": 86400 }
+    { "name": "Events", "description": "Sync your GitHub activity events.", "iterationType": "historical,incremental", "TTL": 86400 }
   ]'::jsonb,
   'oauth2'
 )

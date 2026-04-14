@@ -42,7 +42,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
 
   abstract getAccountIdentifier(connection: Connection): Promise<string>;
 
-  async request<T>(connection: Connection, endpoint: string, options?: RequestInit): Promise<T> {
+  async requestRaw(connection: Connection, endpoint: string, options?: RequestInit): Promise<Response> {
     if (connection.accessToken == null) {
       throw new Error('Connection not authenticated');
     }
@@ -50,13 +50,17 @@ export abstract class BaseOAuth2Client extends BaseClient {
     const endpointSplitOnProtocol = /^(https:\/\/[^/]+)(\/.*)?$/.exec(endpoint);
     const baseUrl = endpointSplitOnProtocol ? endpointSplitOnProtocol[1] : this.baseUrl;
     const path = endpointSplitOnProtocol ? endpointSplitOnProtocol[2] || '' : endpoint;
-    const response = await fetch(`${baseUrl}${path}`, {
+    return fetch(`${baseUrl}${path}`, {
       ...options,
       headers: {
         ...options?.headers,
         Authorization: `Bearer ${connection.accessToken}`,
       },
     });
+  }
+
+  async request<T>(connection: Connection, endpoint: string, options?: RequestInit): Promise<T> {
+    const response = await this.requestRaw(connection, endpoint, options);
 
     if (!response.ok) {
       let errorMessage = `API request failed: ${response.statusText}`;

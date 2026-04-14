@@ -29,7 +29,7 @@ export abstract class BaseOpenIDClient extends BaseClient {
     return `${this.authorizationEndpoint}?${params.toString()}`;
   }
 
-  async request<T>(connection: Connection, endpoint: string, options?: RequestInit) {
+  async requestRaw(connection: Connection, endpoint: string, options?: RequestInit) {
     const apiKey = connection.accessToken;
 
     if (!apiKey) {
@@ -41,13 +41,17 @@ export abstract class BaseOpenIDClient extends BaseClient {
     const separator = url.includes('?') ? '&' : '?';
     const fullUrl = `${url}${separator}key=${apiKey}`;
 
-    const response = await fetch(fullUrl, {
+    return fetch(fullUrl, {
       ...options,
       headers: {
         ...options?.headers,
         Accept: 'application/json',
       },
     });
+  }
+
+  async request<T>(connection: Connection, endpoint: string, options?: RequestInit) {
+    const response = await this.requestRaw(connection, endpoint, options);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');

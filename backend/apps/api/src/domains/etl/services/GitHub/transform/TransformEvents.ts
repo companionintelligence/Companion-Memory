@@ -25,9 +25,11 @@ export class GitHubEventsTransformService {
       connectionId: connection.id,
     });
 
-    const events = (data?.events as unknown[]) || [];
+    const eventsMap = (data?.events as Record<string, unknown[]>) || {};
 
-    if (events.length === 0) {
+    const totalEvents = Object.values(eventsMap).reduce((sum, arr) => sum + arr.length, 0);
+
+    if (totalEvents === 0) {
       this.logger.log('No GitHub events found to transform', {
         userId,
         connectionId: connection.id,
@@ -40,7 +42,8 @@ export class GitHubEventsTransformService {
     this.logger.log('GitHub Events transformation stubbed — not yet implemented', {
       userId,
       connectionId: connection.id,
-      totalEvents: events.length,
+      repoCount: Object.keys(eventsMap).length,
+      totalEvents,
     });
   }
 }
