@@ -407,6 +407,28 @@ init: ## Initialize repository after checkout
 		printf "\n"; \
 	fi
 
+	@if ! grep -q '^CI_API_SERVICE_KEY=' .env || [ -z "$$(grep '^CI_API_SERVICE_KEY=' .env | cut -d= -f2-)" ]; then \
+		printf "Generating local CI_API_SERVICE_KEY... "; \
+		KEY=$$(openssl rand -base64 48 | tr -d '\n'); \
+		if grep -q '^CI_API_SERVICE_KEY=' .env; then \
+			sed -i.bak "s|^CI_API_SERVICE_KEY=.*|CI_API_SERVICE_KEY=$$KEY|" .env && rm -f .env.bak; \
+		else \
+			printf "\nCI_API_SERVICE_KEY=%s\n" "$$KEY" >> .env; \
+		fi; \
+		printf "done\n"; \
+	fi
+
+	@if ! grep -q '^CI_MCP_AUTH_TOKEN=' .env || [ -z "$$(grep '^CI_MCP_AUTH_TOKEN=' .env | cut -d= -f2-)" ]; then \
+		printf "Generating local CI_MCP_AUTH_TOKEN... "; \
+		TOKEN=$$(openssl rand -base64 48 | tr -d '\n'); \
+		if grep -q '^CI_MCP_AUTH_TOKEN=' .env; then \
+			sed -i.bak "s|^CI_MCP_AUTH_TOKEN=.*|CI_MCP_AUTH_TOKEN=$$TOKEN|" .env && rm -f .env.bak; \
+		else \
+			printf "CI_MCP_AUTH_TOKEN=%s\n" "$$TOKEN" >> .env; \
+		fi; \
+		printf "done\n"; \
+	fi
+
 .PHONY: install
 install: ## Install project dependencies
 	@printf "📦 Installing dependencies...\n\n"

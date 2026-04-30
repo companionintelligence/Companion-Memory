@@ -139,6 +139,7 @@ This runs a variety of commands to do setup, including:
 * Ensure you have Ollama installed, that it is running, and that you've downloaded the minimum required models
 * Set up Yarn PnP with the SDKs relevant to our project and configure VSCode to work with them
 * Install Yarn dependencies
+* Generate local MCP credentials in `.env` if they are missing
 * Boot local docker containers:
   * **PostgreSQL** Which we use as a primary database and job queue (via PGBoss)
   * **Minio** S3 static file bucket where we upload all static files
