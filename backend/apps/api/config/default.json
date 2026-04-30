@@ -71,6 +71,10 @@
   "graphql": {
     "maxQueryComplexity": 150
   },
+  "agent": {
+    "serviceKey": "",
+    "ownerUserId": ""
+  },
   "services": {
     "ollama": {
       "host": "http://host.docker.internal:11434"

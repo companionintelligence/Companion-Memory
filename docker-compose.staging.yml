@@ -78,6 +78,26 @@ services:
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
 
+  mcp:
+    image: ci/mcp
+    env_file:
+      - .env
+    environment:
+      CI_API_BASE_URL: http://api:3030
+    networks:
+      - ci
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    profiles: [ "staging" ]
+
   #############
   # EPHEMERAL #
   #############

@@ -38,11 +38,14 @@ get_secret() {
 : "${AUTH_SESSION_PEPPER:=$(get_secret AUTH_SESSION_PEPPER)}"
 : "${AUTH_FIELD_ENCRYPTION_KEY:=$(get_secret AUTH_FIELD_ENCRYPTION_KEY)}"
 : "${AUTH_CSRF_TOKEN_SECRET:=$(get_secret AUTH_CSRF_TOKEN_SECRET)}"
+: "${CI_API_SERVICE_KEY:=$(get_secret CI_API_SERVICE_KEY)}"
+: "${CI_OWNER_USER_ID:=$(get_secret CI_OWNER_USER_ID)}"
 
 export DATABASE_PASSWORD
 export OBJECT_STORE_USERNAME OBJECT_STORE_PASSWORD
 export AUTH_TOKEN_SECRET AUTH_REFRESH_TOKEN_SECRET
 export AUTH_SESSION_PEPPER AUTH_FIELD_ENCRYPTION_KEY AUTH_CSRF_TOKEN_SECRET
+export CI_API_SERVICE_KEY CI_OWNER_USER_ID
 
 # ── Validation ───────────────────────────────────
 
@@ -126,6 +129,10 @@ if [ -z "$OBJECT_STORE_USERNAME" ]; then
   echo "  1. Add OBJECT_STORE_USERNAME to the secrets file at $SECRETS_FILE, or"
   echo "  2. Set the OBJECT_STORE_USERNAME environment variable directly"
   fail=1
+fi
+
+if [ -z "$CI_API_SERVICE_KEY" ]; then
+  echo "Warning: CI_API_SERVICE_KEY is not set. /agent/v1 endpoints will be unavailable."
 fi
 
 [ "$fail" -eq 1 ] && exit 1

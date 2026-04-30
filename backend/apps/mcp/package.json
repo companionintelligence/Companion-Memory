@@ -1,0 +1,25 @@
+{
+  "name": "@ci/be-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "DOTENV_CONFIG_PATH=../../../.env ts-node src/main.ts",
+    "build": "yarn tsc --build --verbose",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "yarn build && node --test dist/tests/**/*.test.js"
+  },
+  "packageManager": "yarn@4.9.1",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^5.1.0",
+    "zod": "^3.25.34"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.15.21",
+    "rimraf": "^6.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}

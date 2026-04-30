@@ -55,6 +55,12 @@ services:
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
 
+  mcp:
+    env_file:
+      - .env
+    environment:
+      CI_API_BASE_URL: http://host.docker.internal:3030
+
   tts-service:
     ports:
       - 9002:9002

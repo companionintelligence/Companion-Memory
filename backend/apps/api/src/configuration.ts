@@ -89,6 +89,10 @@ export const ConfigSchema = z.object({
   graphql: z.object({
     maxQueryComplexity: z.number().int(),
   }),
+  agent: z.object({
+    serviceKey: z.string(),
+    ownerUserId: z.string(),
+  }),
   services: z.object({
     ollama: z.object({
       host: z.string(),

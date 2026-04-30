@@ -69,6 +69,7 @@ IMAGE_LOCAL=(
   ci/api
   ci/database
   ci/gateway
+  ci/mcp
   ci/object-store
   ci/orchestrator
   ci/stt-service
@@ -83,6 +84,7 @@ IMAGE_REMOTE=(
   companion/api
   companion/database
   companion/gateway
+  companion/mcp
   companion/object-store
   companion/orchestrator
   companion/stt-service
@@ -139,6 +141,20 @@ generate_compose() {
       "dependsOn": {
         "migrate-database": { "condition": "service_completed_successfully" },
         "database": { "condition": "service_healthy" }
+      }
+    },
+    {
+      "name": "mcp",
+      "image": "${reg}/companion/mcp:${ver}",
+      "restart": "unless-stopped",
+      "volumes": [
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+      ],
+      "environment": {
+        "CI_API_BASE_URL": "http://api:3030"
+      },
+      "dependsOn": {
+        "api": { "condition": "service_started" }
       }
     },
     {

@@ -79,6 +79,15 @@ services:
     restart: unless-stopped
     profiles: [ "local", "staging", "production" ]
 
+  mcp:
+    image: ci/mcp
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - ci
+    restart: unless-stopped
+    profiles: [ "local", "staging", "production" ]
+
   tts-service:
     image: ci/tts-service
     volumes:

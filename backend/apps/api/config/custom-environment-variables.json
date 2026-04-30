@@ -31,6 +31,10 @@
       "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }
   },
+  "agent": {
+    "serviceKey": "CI_API_SERVICE_KEY",
+    "ownerUserId": "CI_OWNER_USER_ID"
+  },
   "services": {
     "ollama": {
       "host": "OLLAMA_HOST"

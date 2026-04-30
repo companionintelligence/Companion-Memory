@@ -17,6 +17,7 @@ export STT_REPO ?= ci/stt-service
 export SUMMARY_REPO ?= ci/summary-service
 export TTS_REPO ?= ci/tts-service
 export HBPE_REPO ?= ci/hbpe-service
+export MCP_REPO ?= ci/mcp
 
 # Seed user UUID (John Smith) — must match backend/apps/api/scripts/seed-database/data/users.ts
 JOHN_SMITH_USER_ID := b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
@@ -35,6 +36,7 @@ LICENSE_DIRS := \
 	infrastructure/setup-secrets \
 	backend/apps/stt \
 	backend/apps/summary \
+	backend/apps/mcp \
 	backend/apps/tts \
 	backend/apps/hbpe
 
@@ -130,6 +132,12 @@ build-local: distribute-license ## Build Docker images for local development
 	@printf "\n➤ Building summary service image...\n\n"
 	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
 
+	@printf "\n➤ Compiling MCP service...\n\n"
+	@cd backend/apps/mcp && yarn clean && yarn build
+
+	@printf "\n➤ Building MCP service image...\n\n"
+	@docker build -f backend/apps/mcp/Dockerfile $(call versioned_tag,$(MCP_REPO)) -t $(MCP_REPO):latest .
+
 	@printf "\n➤ Building text-to-speech service image...\n\n"
 	@docker build -f backend/apps/tts/Dockerfile $(call versioned_tag,$(TTS_REPO)) -t $(TTS_REPO):latest backend/apps/tts
 
@@ -150,8 +158,14 @@ build-staging: distribute-license ## Build Docker images for staging deployment
 	@printf "\n➤ Compiling web frontend...\n\n"
 	@cd frontend/apps/web && yarn clean && yarn build
 
+	@printf "\n➤ Compiling MCP service...\n\n"
+	@cd backend/apps/mcp && yarn clean && yarn build
+
 	@printf "\n➤ Building API image...\n\n"
 	@docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest .
+
+	@printf "\n➤ Building MCP service image...\n\n"
+	@docker build -f backend/apps/mcp/Dockerfile $(call versioned_tag,$(MCP_REPO)) -t $(MCP_REPO):latest .
 
 	@printf "\n➤ Building database setup image...\n\n"
 	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database
@@ -197,8 +211,14 @@ build-production: distribute-license ## Build the application
 	@printf "\n➤ Compiling web frontend...\n\n"
 	@cd frontend/apps/web && yarn clean && yarn build
 
+	@printf "\n➤ Compiling MCP service...\n\n"
+	@cd backend/apps/mcp && yarn clean && yarn build
+
 	@printf "\n➤ Building API image...\n\n"
 	@docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest .
+
+	@printf "\n➤ Building MCP service image...\n\n"
+	@docker build -f backend/apps/mcp/Dockerfile $(call versioned_tag,$(MCP_REPO)) -t $(MCP_REPO):latest .
 
 	@printf "\n➤ Building database setup image...\n\n"
 	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database

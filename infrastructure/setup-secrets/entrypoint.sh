@@ -39,6 +39,8 @@ JWT_REFRESH_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
 SESSION_PEPPER=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 ENCRYPTION_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 CSRF_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+CI_API_SERVICE_KEY=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
+CI_MCP_AUTH_TOKEN=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
 
 # ── Write Secrets File ───────────────────────────
 
@@ -85,6 +87,12 @@ AUTH_REFRESH_TOKEN_SECRET=${JWT_REFRESH_SECRET}
 AUTH_SESSION_PEPPER=${SESSION_PEPPER}
 AUTH_FIELD_ENCRYPTION_KEY=${ENCRYPTION_KEY}
 AUTH_CSRF_TOKEN_SECRET=${CSRF_SECRET}
+
+# ──────────────────────────────
+# External MCP Surface
+# ──────────────────────────────
+CI_API_SERVICE_KEY=${CI_API_SERVICE_KEY}
+CI_MCP_AUTH_TOKEN=${CI_MCP_AUTH_TOKEN}
 EOF
 
 chmod 644 "$SECRETS_FILE"

@@ -82,6 +82,28 @@ services:
       generate-secrets:
         condition: service_completed_successfully
 
+  mcp:
+    image: ci/mcp
+    volumes:
+      - secrets:/run/secrets:ro
+    environment:
+      CI_API_BASE_URL: http://api:3030
+    networks:
+      - ci
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [ "production" ]
+
   #############
   # EPHEMERAL #
   #############
