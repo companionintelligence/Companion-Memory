@@ -86,6 +86,7 @@ services:
       CI_API_BASE_URL: http://api:3030
     networks:
       - ci
+      - agents
     depends_on:
       api:
         condition: service_healthy
