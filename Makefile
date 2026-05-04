@@ -437,18 +437,8 @@ install: ## Install project dependencies
 
 	@printf "\n"
 
-.PHONY: ensure-agents-network
-ensure-agents-network: ## Create the shared agents Docker network if it does not exist
-	@NETWORK_NAME="$${AGENTS_NETWORK_NAME:-agents}"; \
-	if docker network inspect "$$NETWORK_NAME" >/dev/null 2>&1; then \
-		printf "🔌 Shared agents network '$$NETWORK_NAME' already exists.\n\n"; \
-	else \
-		printf "🔌 Creating shared agents network '$$NETWORK_NAME'...\n\n"; \
-		docker network create "$$NETWORK_NAME" >/dev/null; \
-	fi
-
 .PHONY: local
-local: health init build-local stop ensure-agents-network ## Run the local deployment
+local: health init build-local stop ## Run the local deployment
 	@printf "⌨️ Starting local services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d --remove-orphans
@@ -466,7 +456,7 @@ migrate: ## Run database migrations
 	@printf "\nMigrations successfully run.\n\n"
 
 .PHONY: production
-production: health init build-production stop ensure-agents-network ## Run the production deployment
+production: health init build-production stop ## Run the production deployment
 	@printf "🚀 Starting production services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.production.yml --profile production up -d --remove-orphans
@@ -528,7 +518,7 @@ seed-production: ## Seed production database via ephemeral proxy
 	@printf "\nDatabase successfully seeded. 🌳\n\n"
 
 .PHONY: staging
-staging: health init build-staging stop ensure-agents-network ## Run the staging deployment
+staging: health init build-staging stop ## Run the staging deployment
 	@printf "🎭 Starting staging services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile staging up -d --remove-orphans

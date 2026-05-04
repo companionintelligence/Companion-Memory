@@ -90,7 +90,6 @@ services:
       CI_API_BASE_URL: http://api:3030
     networks:
       - ci
-      - agents
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3091/healthz"]
       interval: 10s

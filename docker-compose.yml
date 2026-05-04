@@ -85,7 +85,6 @@ services:
       - host.docker.internal:host-gateway
     networks:
       - ci
-      - agents
     restart: unless-stopped
     profiles: [ "local", "staging", "production" ]
 
@@ -180,6 +179,3 @@ volumes:
 
 networks:
   ci:
-  agents:
-    name: ${AGENTS_NETWORK_NAME:-agents}
-    external: true

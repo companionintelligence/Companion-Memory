@@ -2,21 +2,19 @@
 
 ## `ci-mcp`
 
-`ci-mcp` is the external, read-only MCP surface for CI-Server. It is designed for agents running outside the main API process, such as Hub-managed agents on the same Docker network.
+`ci-mcp` is the external, read-only MCP surface for CI-Server. It is designed for agents running outside the main API process, such as Hub-managed agents that are granted network access to the CI stack.
 
 ### Connection
 
 - Internal URL on the CI network: `http://mcp:3091/mcp`
-- Shared agent network: `agents` by default, or `${AGENTS_NETWORK_NAME}` if overridden
 - Auth: `Authorization: Bearer <CI_MCP_AUTH_TOKEN>`
 - Health: `GET http://mcp:3091/healthz`
 
-`ci-mcp` joins two Docker networks:
+`ci-mcp` joins the private `ci` Docker network managed by this repository:
 
 - `ci`: private CI-Server service network
-- `agents`: shared external network for Hub-managed agent containers
 
-The `agents` network is created automatically by `make local`, `make staging`, and `make production` if it does not already exist.
+If Hub needs to reach `ci-mcp` from a separate stack, that cross-stack attachment should be managed from the `ci-os-hub` side by connecting the running `ci-mcp` container or service to `ci-os-hub_network`. CI-Server does not create or own that shared network.
 
 ### Discovery
 
@@ -89,18 +87,12 @@ This fallback exists because the current Hub packaging path does not yet provide
 }
 ```
 
-### Hub Network Example
+### Hub Network Note
 
-The Hub-side agent container should join the same external `agents` network as `ci-mcp`. For example:
+Hub-side networking is intentionally out of scope for this repository. The expected deployment model is:
 
-```yaml
-services:
-  hub-agent:
-    networks:
-      - agents
+- CI-Server starts `ci-mcp` on its normal `ci` network
+- `ci-os-hub` attaches `ci-mcp` to `ci-os-hub_network`
+- Hub-managed agent containers join `ci-os-hub_network`
 
-networks:
-  agents:
-    external: true
-    name: agents
-```
+Once that attachment exists, Hub can register `ci-mcp` at the URL that is resolvable from the Hub side, for example `http://mcp:3091/mcp` if the service name is preserved on the shared network.
