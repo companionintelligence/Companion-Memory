@@ -16,6 +16,7 @@ get_secret() {
 
 : "${CI_API_SERVICE_KEY:=$(get_secret CI_API_SERVICE_KEY)}"
 : "${CI_MCP_AUTH_TOKEN:=$(get_secret CI_MCP_AUTH_TOKEN)}"
+: "${CI_OWNER_USER_ID:=$(get_secret CI_OWNER_USER_ID)}"
 : "${CI_API_BASE_URL:=http://api:3030}"
 : "${CI_MCP_PORT:=3091}"
 
@@ -28,6 +29,11 @@ fi
 
 if [ -z "$CI_MCP_AUTH_TOKEN" ]; then
   echo "Error: CI_MCP_AUTH_TOKEN is not set."
+  exit 1
+fi
+
+if [ -z "$CI_OWNER_USER_ID" ]; then
+  echo "Error: CI_OWNER_USER_ID is not set."
   exit 1
 fi
 

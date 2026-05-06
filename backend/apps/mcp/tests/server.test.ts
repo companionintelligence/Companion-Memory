@@ -13,6 +13,7 @@ import {
   ReadResourceResultSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
+import { readMcpConfig } from '../src/config';
 import { authMatches, createMcpServer } from '../src/server';
 
 class LoopbackTransport implements Transport {
@@ -66,6 +67,23 @@ test('rejects invalid bearer tokens', () => {
   assert.equal(authMatches('expected-token', undefined), false);
   assert.equal(authMatches('expected-token', 'Bearer wrong-token'), false);
   assert.equal(authMatches('expected-token', 'Bearer expected-token'), true);
+});
+
+test('requires CI_OWNER_USER_ID in MCP config', () => {
+  const originalEnv = process.env;
+  try {
+    process.env = {
+      ...originalEnv,
+      CI_API_BASE_URL: 'http://api:3030',
+      CI_API_SERVICE_KEY: 'service-key',
+      CI_MCP_AUTH_TOKEN: 'auth-token',
+      CI_OWNER_USER_ID: '',
+    };
+
+    assert.throws(() => readMcpConfig());
+  } finally {
+    process.env = originalEnv;
+  }
 });
 
 test('supports MCP discovery and tool execution', async () => {

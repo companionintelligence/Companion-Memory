@@ -167,6 +167,7 @@ You should now be able to view the application and log in with the credentials b
 * **Without CI-Gateway** (Docker nginx only): **http://localhost:8642** — one port for Vite + API (`/api` → API on 3030).
 * **Vite only** (**http://localhost:5173**): the dev server proxies `/api` to the API on 3030 so login works the same as through :8642.
 * **MCP endpoint**: `https://memory.ci.localhost/mcp` through CI-Gateway, or `http://localhost:8642/mcp` through the local CI-Server gateway.
+* **MCP owner binding**: set `CI_OWNER_USER_ID` to the CI user id that this MCP instance is allowed to read as. MCP now fails closed if this is unset.
 
 ```
 Username: jsmith@example.com

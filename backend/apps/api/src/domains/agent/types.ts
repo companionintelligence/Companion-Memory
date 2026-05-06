@@ -110,7 +110,7 @@ export interface AgentDocumentPayload {
 export interface AgentCapabilities {
   owner: {
     userId: string | null;
-    selection: 'configured' | 'auto' | 'unavailable';
+    selection: 'configured' | 'unavailable';
   };
   tools: Array<{
     name: string;

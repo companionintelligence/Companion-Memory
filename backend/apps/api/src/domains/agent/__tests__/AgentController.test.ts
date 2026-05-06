@@ -146,4 +146,26 @@ describe('Agent routes', () => {
       userId: 'owner-user-id',
     });
   });
+
+  it('fails closed when the owner is unavailable', async () => {
+    const { AgentServiceAuthGuard } = await import('../guards/AgentServiceAuthGuard');
+    const ownerService = {
+      resolveOwner: jest.fn().mockResolvedValue({
+        userId: null,
+        selection: 'unavailable',
+      }),
+    } as unknown as ConstructorParameters<typeof AgentServiceAuthGuard>[0];
+    const loggerService = {
+      setContext: jest.fn(),
+      warn: jest.fn(),
+    } as unknown as ConstructorParameters<typeof AgentServiceAuthGuard>[1];
+    const guard = new AgentServiceAuthGuard(ownerService, loggerService);
+    const { executionContext } = createExecutionContext('test-agent-service-key');
+
+    await ContextService.run({ traceId: 'test-trace-id' }, async () => {
+      await expect(guard.canActivate(executionContext)).rejects.toMatchObject({
+        message: 'CI_OWNER_USER_ID is not configured',
+      });
+    });
+  });
 });

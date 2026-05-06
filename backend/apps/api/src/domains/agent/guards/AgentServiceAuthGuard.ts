@@ -49,7 +49,7 @@ export class AgentServiceAuthGuard implements CanActivate {
     const owner = await this.ownerService.resolveOwner();
 
     if (!owner.userId) {
-      throw new ServiceUnavailableException('CI owner user is not configured and no onboarded user exists');
+      throw new ServiceUnavailableException('CI_OWNER_USER_ID is not configured');
     }
 
     request.user = {

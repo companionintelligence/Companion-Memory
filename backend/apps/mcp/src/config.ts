@@ -5,14 +5,7 @@ const envSchema = z.object({
   CI_API_SERVICE_KEY: z.string().min(1),
   CI_MCP_AUTH_TOKEN: z.string().min(1),
   CI_MCP_PORT: z.coerce.number().int().positive().default(3091),
-  CI_OWNER_USER_ID: z
-    .string()
-    .optional()
-    .transform((value) => {
-      const trimmed = value?.trim();
-
-      return trimmed && trimmed.length > 0 ? trimmed : null;
-    }),
+  CI_OWNER_USER_ID: z.string().trim().min(1),
 });
 
 export type McpConfig = z.infer<typeof envSchema>;
