@@ -33,6 +33,7 @@ import { GraphModule } from '@ci/domains/graph';
 import { GraphQLModule } from '@ci/domains/graphql';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
+import { McpModule } from '@ci/domains/mcp';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
@@ -72,6 +73,7 @@ import { UserModule } from '@ci/domains/user';
     GraphQLModule,
     IntelligenceModule,
     LLMModule,
+    McpModule,
     OnboardingModule,
     PositionModule,
     PredictionsModule,
