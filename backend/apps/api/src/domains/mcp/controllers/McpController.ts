@@ -6,6 +6,7 @@ import { Controller, Delete, Get, Post, Req, Res, UseGuards } from '@nestjs/comm
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Request, Response } from 'express';
 
+import { Context, type RequestContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 
@@ -17,6 +18,7 @@ const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
   lastActivity: number;
+  userId: string;
 }
 
 @Controller('mcp')
@@ -37,7 +39,7 @@ export class McpController {
    * Subsequent requests must include the Mcp-Session-Id header.
    */
   @Post()
-  async handlePost(@Req() req: Request, @Res() res: Response) {
+  async handlePost(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     let transport: StreamableHTTPServerTransport | undefined;
@@ -47,6 +49,12 @@ export class McpController {
 
       if (!entry) {
         res.status(404).json({ error: 'Session not found' });
+
+        return;
+      }
+
+      if (entry.userId !== context.userId) {
+        res.status(403).json({ error: 'Session belongs to a different user' });
 
         return;
       }
@@ -79,8 +87,9 @@ export class McpController {
 
     // After handling an initialize request, the transport now has its sessionId assigned
     if (!sessionId && transport.sessionId) {
-      this.sessions.set(transport.sessionId, { transport, lastActivity: Date.now() });
-      this.logger.log('MCP session created', { sessionId: transport.sessionId });
+      const userId = context.userId ?? 'unknown';
+      this.sessions.set(transport.sessionId, { transport, lastActivity: Date.now(), userId });
+      this.logger.log('MCP session created', { sessionId: transport.sessionId, userId });
     }
   }
 
@@ -89,7 +98,7 @@ export class McpController {
    * The client must include the Mcp-Session-Id header from a prior initialize.
    */
   @Get()
-  async handleGet(@Req() req: Request, @Res() res: Response) {
+  async handleGet(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     if (!sessionId) {
@@ -102,6 +111,12 @@ export class McpController {
 
     if (!entry) {
       res.status(404).json({ error: 'Session not found' });
+
+      return;
+    }
+
+    if (entry.userId !== context.userId) {
+      res.status(403).json({ error: 'Session belongs to a different user' });
 
       return;
     }
@@ -115,7 +130,7 @@ export class McpController {
    * DELETE /mcp – terminates the session and cleans up the transport.
    */
   @Delete()
-  async handleDelete(@Req() req: Request, @Res() res: Response) {
+  async handleDelete(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     if (!sessionId) {
@@ -128,6 +143,12 @@ export class McpController {
 
     if (!entry) {
       res.status(404).json({ error: 'Session not found' });
+
+      return;
+    }
+
+    if (entry.userId !== context.userId) {
+      res.status(403).json({ error: 'Session belongs to a different user' });
 
       return;
     }
