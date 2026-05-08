@@ -127,6 +127,6 @@ import { UserResolver } from './resolvers/UserResolver';
     UserResolver,
   ],
   controllers: [GraphQLController],
-  exports: [],
+  exports: [NestGraphQLModule],
 })
 export class GraphQLModule {}
