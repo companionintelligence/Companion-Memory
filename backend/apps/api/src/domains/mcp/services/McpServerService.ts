@@ -4,14 +4,12 @@ import type { Request } from 'express';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { McpExecutorService } from './McpExecutorService';
-import { McpSchemaService } from './McpSchemaService';
+import { McpToolService } from './McpToolService';
 
 @Injectable()
 export class McpServerService {
   constructor(
-    private readonly schemaService: McpSchemaService,
-    private readonly executorService: McpExecutorService,
+    private readonly toolService: McpToolService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext('McpServerService');
@@ -41,7 +39,7 @@ export class McpServerService {
           {
             uri: uri.href,
             mimeType: 'text/plain',
-            text: this.schemaService.getSchemaSDL(),
+            text: this.toolService.getSchemaSDL(),
           },
         ],
       }),
@@ -49,14 +47,12 @@ export class McpServerService {
   }
 
   private registerTools(server: McpServer, req: Request) {
-    const tools = this.schemaService.getTools();
+    const tools = this.toolService.getTools();
 
     for (const tool of tools) {
       const handler = async (args: Record<string, unknown>) => {
         try {
-          const contextValue = { req };
-
-          const result = await this.executorService.executeTool(tool, args, contextValue);
+          const result = await this.toolService.executeTool(tool.name, args, { req });
 
           return {
             content: [

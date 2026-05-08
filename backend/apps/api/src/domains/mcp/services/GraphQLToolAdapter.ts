@@ -26,14 +26,14 @@ import { LoggerService } from '@ci/common/logging';
 import type { McpToolDefinition } from '../types';
 
 @Injectable()
-export class McpSchemaService implements OnModuleInit {
+export class GraphQLToolAdapter implements OnModuleInit {
   private tools: McpToolDefinition[] = [];
 
   constructor(
     private readonly schemaHost: GraphQLSchemaHost,
     private readonly logger: LoggerService,
   ) {
-    this.logger.setContext('McpSchemaService');
+    this.logger.setContext('GraphQLToolAdapter');
   }
 
   onModuleInit() {

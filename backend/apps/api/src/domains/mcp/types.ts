@@ -10,3 +10,12 @@ export interface McpToolDefinition {
   graphqlArgs: readonly GraphQLArgument[];
   returnType: GraphQLOutputType;
 }
+
+export type McpToolSource = 'graphql' | 'native';
+
+export interface McpRegisteredTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, ZodTypeAny>;
+  source: McpToolSource;
+}
