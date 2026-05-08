@@ -96,15 +96,96 @@ export class McpSchemaService implements OnModuleInit {
     field: GraphQLField<unknown, unknown>,
     operation: 'query' | 'mutation',
   ): string {
+    const parts: string[] = [];
+
+    // Lead with the author-provided description if available
     if (field.description) {
-      return field.description;
+      parts.push(field.description);
+    } else {
+      const verb = operation === 'query' ? 'Query' : 'Mutation';
+      parts.push(`${verb}: ${name}`);
     }
 
-    const returnTypeName = this.getNamedTypeName(field.type);
+    // Describe arguments
+    if (field.args.length > 0) {
+      const argSummaries = field.args.map((arg) => {
+        const typeName = this.getNamedInputTypeName(arg.type);
+        const required = isNonNullType(arg.type);
+        const desc = arg.description ? ` – ${arg.description}` : '';
 
-    return operation === 'query'
-      ? `Query ${name} → ${returnTypeName}`
-      : `Mutation ${name} → ${returnTypeName}`;
+        return `  ${arg.name} (${typeName}${required ? ', required' : ''})${desc}`;
+      });
+
+      parts.push(`\nArgs:\n${argSummaries.join('\n')}`);
+    }
+
+    // Describe return type
+    const returnDescription = this.describeOutputType(field.type, new Set());
+    parts.push(`\nReturns: ${returnDescription}`);
+
+    return parts.join('');
+  }
+
+  /**
+   * Produce a human-readable description of a GraphQL output type,
+   * expanding object types into their fields recursively.
+   * Uses a visited set to avoid circular references.
+   */
+  private describeOutputType(type: GraphQLOutputType, visited: Set<string>): string {
+    if (type instanceof GraphQLNonNull) {
+      return this.describeOutputType(type.ofType, visited);
+    }
+
+    if (type instanceof GraphQLList) {
+      return `[${this.describeOutputType(type.ofType, visited)}]`;
+    }
+
+    if (type instanceof GraphQLScalarType || type instanceof GraphQLEnumType) {
+      return type.name;
+    }
+
+    if (type instanceof GraphQLUnionType) {
+      return type
+        .getTypes()
+        .map((t) => this.describeOutputType(t, visited))
+        .join(' | ');
+    }
+
+    if (type instanceof GraphQLObjectType) {
+      if (visited.has(type.name)) {
+        return `{ ${Object.keys(type.getFields()).join(', ')} }`;
+      }
+
+      visited.add(type.name);
+
+      const fields = type.getFields();
+      const fieldLines = Object.entries(fields).map(([fieldName, f]) => {
+        const fieldType = this.describeOutputType(f.type, visited);
+        const desc = f.description ? ` – ${f.description}` : '';
+
+        return `  ${fieldName}: ${fieldType}${desc}`;
+      });
+
+      return `{\n${fieldLines.join('\n')}\n}`;
+    }
+
+    return 'Unknown';
+  }
+
+  private getNamedInputTypeName(type: GraphQLInputType): string {
+    if (isNonNullType(type)) {
+      return this.getNamedInputTypeName(type.ofType as GraphQLInputType);
+    }
+
+    if (isListType(type)) {
+      return `[${this.getNamedInputTypeName(type.ofType as GraphQLInputType)}]`;
+    }
+
+    if (isScalarType(type) || isEnumType(type) || isInputObjectType(type)) {
+      return type.name;
+    }
+
+    return 'Unknown';
   }
 
   private buildZodShape(args: readonly GraphQLArgument[]): Record<string, ZodTypeAny> {
