@@ -17,6 +17,7 @@ import {
   isNonNullType,
   isScalarType,
   isEnumType,
+  printSchema,
 } from 'graphql';
 import { z, type ZodTypeAny } from 'zod';
 
@@ -41,6 +42,10 @@ export class McpSchemaService implements OnModuleInit {
 
   getTools(): McpToolDefinition[] {
     return this.tools;
+  }
+
+  getSchemaSDL(): string {
+    return printSchema(this.schemaHost.schema);
   }
 
   private buildToolsFromSchema() {

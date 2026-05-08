@@ -23,8 +23,28 @@ export class McpServerService {
     });
 
     this.registerTools(server);
+    this.registerResources(server);
 
     return server;
+  }
+
+  private registerResources(server: McpServer) {
+    server.registerResource(
+      'graphql-schema',
+      'schema://graphql',
+      {
+        description: 'The full GraphQL SDL schema describing all available types, queries, and mutations',
+      },
+      (uri) => ({
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'text/plain',
+            text: this.schemaService.getSchemaSDL(),
+          },
+        ],
+      }),
+    );
   }
 
   private registerTools(server: McpServer) {
