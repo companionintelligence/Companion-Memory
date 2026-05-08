@@ -17,8 +17,8 @@ export class McpServerService {
 
   createServer(req: Request): McpServer {
     const server = new McpServer({
-      name: 'companion-intelligence',
-      version: '1.0.0',
+      name: 'companion-memory',
+      version: '0.1.0',
     });
 
     this.registerTools(server, req);
@@ -90,6 +90,8 @@ export class McpServerService {
       );
     }
 
-    this.logger.log('MCP tools registered', { count: tools.length });
+    this.logger.log('MCP tools registered', {
+      count: tools.length,
+    });
   }
 }

@@ -1,10 +1,19 @@
-import { randomUUID } from 'node:crypto';
-
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { Controller, Delete, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  NotFoundException,
+  Post,
+  Req,
+  Res,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 
 import { Context, type RequestContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -48,25 +57,22 @@ export class McpController {
       const entry = this.sessions.get(sessionId);
 
       if (!entry) {
-        res.status(404).json({ error: 'Session not found' });
-
-        return;
+        throw new NotFoundException();
       }
 
       if (entry.userId !== context.userId) {
-        res.status(403).json({ error: 'Session belongs to a different user' });
-
-        return;
+        throw new UnauthorizedException();
       }
 
       transport = entry.transport;
       entry.lastActivity = Date.now();
     } else if (this.isInitializeBody(req.body)) {
       transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
+        sessionIdGenerator: () => uuidv4(),
       });
 
       const server = this.mcpServerService.createServer(req);
+
       await server.connect(transport);
 
       transport.onclose = () => {
@@ -74,11 +80,16 @@ export class McpController {
 
         if (sid) {
           this.sessions.delete(sid);
-          this.logger.log('MCP session closed', { sessionId: sid });
+
+          this.logger.log('MCP session closed', {
+            sessionId: sid,
+          });
         }
       };
     } else {
-      res.status(400).json({ error: 'Missing Mcp-Session-Id header. Send an initialize request first.' });
+      res.status(400).json({
+        error: 'Missing Mcp-Session-Id header. Send an initialize request first.',
+      });
 
       return;
     }
@@ -88,8 +99,17 @@ export class McpController {
     // After handling an initialize request, the transport now has its sessionId assigned
     if (!sessionId && transport.sessionId) {
       const userId = context.userId ?? 'unknown';
-      this.sessions.set(transport.sessionId, { transport, lastActivity: Date.now(), userId });
-      this.logger.log('MCP session created', { sessionId: transport.sessionId, userId });
+
+      this.sessions.set(transport.sessionId, {
+        transport,
+        lastActivity: Date.now(),
+        userId,
+      });
+
+      this.logger.log('MCP session created', {
+        sessionId: transport.sessionId,
+        userId,
+      });
     }
   }
 
@@ -158,7 +178,9 @@ export class McpController {
 
     this.logger.log('MCP session terminated by client', { sessionId });
 
-    res.status(200).json({ success: true });
+    return {
+      success: true,
+    };
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -169,7 +191,9 @@ export class McpController {
       if (now - entry.lastActivity > SESSION_TTL_MS) {
         entry.transport.close().catch(() => {});
         this.sessions.delete(sessionId);
-        this.logger.log('MCP session reaped (idle timeout)', { sessionId });
+        this.logger.log('MCP session reaped (idle timeout)', {
+          sessionId,
+        });
       }
     }
   }

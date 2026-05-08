@@ -54,6 +54,7 @@ export class McpToolService implements OnModuleInit {
 
     if (tool.source === 'graphql') {
       const graphqlTool = this.graphqlAdapter.getTools().find((t) => t.name === name);
+
       if (!graphqlTool) {
         throw new Error(`GraphQL tool not found: ${name}`);
       }
@@ -91,6 +92,7 @@ export class McpToolService implements OnModuleInit {
       // Skip if a GraphQL tool with the same name already exists
       if (this.tools.has(schema.name)) {
         this.logger.debug(`Skipping native tool "${schema.name}" — name conflict with GraphQL tool`);
+
         continue;
       }
 

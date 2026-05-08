@@ -46,11 +46,14 @@ export class McpExecutorService {
       : `${operationKeyword} McpOp { ${tool.operationName}${selectionSet} }`;
 
     let document: DocumentNode;
+
     try {
       document = parse(queryString);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+
       this.logger.error(error, `Failed to parse generated query for tool ${tool.name}`);
+
       throw new Error(`Internal error building query for tool ${tool.name}`);
     }
 
@@ -133,9 +136,11 @@ export class McpExecutorService {
         parts.push(name);
       } else if (isObjectType(inner) || isUnionType(inner)) {
         const nested = this.buildSelectionSet(field.type, depth - 1);
+
         if (nested) {
           // If the field requires arguments (like connection fields), pass reasonable defaults
           const requiredArgs = field.args.filter((a) => isNonNullType(a.type));
+
           if (requiredArgs.length > 0) {
             // Skip fields that require arguments we can't provide automatically
             continue;

@@ -103,11 +103,12 @@ export class GraphQLToolAdapter implements OnModuleInit {
   ): string {
     const parts: string[] = [];
 
-    // Lead with the author-provided description if available
+    // Lead with the documented description if available
     if (field.description) {
       parts.push(field.description);
     } else {
       const verb = operation === 'query' ? 'Query' : 'Mutation';
+
       parts.push(`${verb}: ${name}`);
     }
 
@@ -126,15 +127,16 @@ export class GraphQLToolAdapter implements OnModuleInit {
 
     // Describe return type
     const returnDescription = this.describeOutputType(field.type, new Set());
+
     parts.push(`\nReturns: ${returnDescription}`);
 
     return parts.join('');
   }
 
   /**
-   * Produce a human-readable description of a GraphQL output type,
-   * expanding object types into their fields recursively.
-   * Uses a visited set to avoid circular references.
+   * Produce a human-readable description of a GraphQL output type, expanding
+   * object types into their fields recursively. Uses a visited set to avoid
+   * circular references.
    */
   private describeOutputType(type: GraphQLOutputType, visited: Set<string>): string {
     if (type instanceof GraphQLNonNull) {
@@ -290,26 +292,5 @@ export class GraphQLToolAdapter implements OnModuleInit {
     }
 
     return z.object(shape);
-  }
-
-  private getNamedTypeName(type: GraphQLOutputType): string {
-    if (type instanceof GraphQLNonNull) {
-      return this.getNamedTypeName(type.ofType);
-    }
-
-    if (type instanceof GraphQLList) {
-      return `[${this.getNamedTypeName(type.ofType)}]`;
-    }
-
-    if (
-      type instanceof GraphQLObjectType ||
-      type instanceof GraphQLScalarType ||
-      type instanceof GraphQLEnumType ||
-      type instanceof GraphQLUnionType
-    ) {
-      return type.name;
-    }
-
-    return 'Unknown';
   }
 }
