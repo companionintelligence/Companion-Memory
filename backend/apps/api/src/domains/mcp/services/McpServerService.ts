@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Injectable } from '@nestjs/common';
+import type { Request } from 'express';
 
 import { LoggerService } from '@ci/common/logging';
 
@@ -16,13 +17,13 @@ export class McpServerService {
     this.logger.setContext('McpServerService');
   }
 
-  createServer(): McpServer {
+  createServer(req: Request): McpServer {
     const server = new McpServer({
       name: 'companion-intelligence',
       version: '1.0.0',
     });
 
-    this.registerTools(server);
+    this.registerTools(server, req);
     this.registerResources(server);
 
     return server;
@@ -47,15 +48,13 @@ export class McpServerService {
     );
   }
 
-  private registerTools(server: McpServer) {
+  private registerTools(server: McpServer, req: Request) {
     const tools = this.schemaService.getTools();
 
     for (const tool of tools) {
-      const handler = async (args: Record<string, unknown>, extra: { sessionId?: string }) => {
+      const handler = async (args: Record<string, unknown>) => {
         try {
-          const contextValue = {
-            req: { sessionId: extra?.sessionId },
-          };
+          const contextValue = { req };
 
           const result = await this.executorService.executeTool(tool, args, contextValue);
 

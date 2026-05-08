@@ -58,7 +58,7 @@ export class McpController {
         sessionIdGenerator: () => randomUUID(),
       });
 
-      const server = this.mcpServerService.createServer();
+      const server = this.mcpServerService.createServer(req);
       await server.connect(transport);
 
       transport.onclose = () => {
