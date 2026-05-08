@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 
@@ -7,30 +7,27 @@ import { McpExecutorService } from './McpExecutorService';
 import { McpSchemaService } from './McpSchemaService';
 
 @Injectable()
-export class McpServerService implements OnModuleInit {
-  private server: McpServer;
-
+export class McpServerService {
   constructor(
     private readonly schemaService: McpSchemaService,
     private readonly executorService: McpExecutorService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext('McpServerService');
-    this.server = new McpServer({
+  }
+
+  createServer(): McpServer {
+    const server = new McpServer({
       name: 'companion-intelligence',
       version: '1.0.0',
     });
+
+    this.registerTools(server);
+
+    return server;
   }
 
-  onModuleInit() {
-    this.registerTools();
-  }
-
-  getServer(): McpServer {
-    return this.server;
-  }
-
-  private registerTools() {
+  private registerTools(server: McpServer) {
     const tools = this.schemaService.getTools();
 
     for (const tool of tools) {
@@ -68,7 +65,7 @@ export class McpServerService implements OnModuleInit {
       };
 
       // @ts-expect-error -- dynamic Zod shapes cause excessive type depth in registerTool generics
-      this.server.registerTool(
+      server.registerTool(
         tool.name,
         {
           description: tool.description,

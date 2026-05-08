@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { Controller, Delete, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Request, Response } from 'express';
 
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -10,10 +11,18 @@ import { LoggerService } from '@ci/common/logging';
 
 import { McpServerService } from '../services/McpServerService';
 
+/** How long a session can be idle before it is reaped (ms). */
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+interface SessionEntry {
+  transport: StreamableHTTPServerTransport;
+  lastActivity: number;
+}
+
 @Controller('mcp')
 @UseGuards(JwtOrApiKeyAuthGuard)
 export class McpController {
-  private transports = new Map<string, StreamableHTTPServerTransport>();
+  private sessions = new Map<string, SessionEntry>();
 
   constructor(
     private readonly mcpServerService: McpServerService,
@@ -34,32 +43,30 @@ export class McpController {
     let transport: StreamableHTTPServerTransport | undefined;
 
     if (sessionId) {
-      transport = this.transports.get(sessionId);
+      const entry = this.sessions.get(sessionId);
 
-      if (!transport) {
+      if (!entry) {
         res.status(404).json({ error: 'Session not found' });
 
         return;
       }
+
+      transport = entry.transport;
+      entry.lastActivity = Date.now();
     } else if (this.isInitializeBody(req.body)) {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
 
-      const server = this.mcpServerService.getServer();
+      const server = this.mcpServerService.createServer();
       await server.connect(transport);
 
-      const newSessionId = transport.sessionId;
-
-      if (newSessionId) {
-        this.transports.set(newSessionId, transport);
-        this.logger.log('MCP session created', { sessionId: newSessionId });
-      }
-
       transport.onclose = () => {
-        if (newSessionId) {
-          this.transports.delete(newSessionId);
-          this.logger.log('MCP session closed', { sessionId: newSessionId });
+        const sid = transport?.sessionId;
+
+        if (sid) {
+          this.sessions.delete(sid);
+          this.logger.log('MCP session closed', { sessionId: sid });
         }
       };
     } else {
@@ -69,6 +76,12 @@ export class McpController {
     }
 
     await transport.handleRequest(req, res, req.body);
+
+    // After handling an initialize request, the transport now has its sessionId assigned
+    if (!sessionId && transport.sessionId) {
+      this.sessions.set(transport.sessionId, { transport, lastActivity: Date.now() });
+      this.logger.log('MCP session created', { sessionId: transport.sessionId });
+    }
   }
 
   /**
@@ -85,15 +98,17 @@ export class McpController {
       return;
     }
 
-    const transport = this.transports.get(sessionId);
+    const entry = this.sessions.get(sessionId);
 
-    if (!transport) {
+    if (!entry) {
       res.status(404).json({ error: 'Session not found' });
 
       return;
     }
 
-    await transport.handleRequest(req, res);
+    entry.lastActivity = Date.now();
+
+    await entry.transport.handleRequest(req, res);
   }
 
   /**
@@ -109,20 +124,33 @@ export class McpController {
       return;
     }
 
-    const transport = this.transports.get(sessionId);
+    const entry = this.sessions.get(sessionId);
 
-    if (!transport) {
+    if (!entry) {
       res.status(404).json({ error: 'Session not found' });
 
       return;
     }
 
-    await transport.close();
-    this.transports.delete(sessionId);
+    await entry.transport.close();
+    this.sessions.delete(sessionId);
 
     this.logger.log('MCP session terminated by client', { sessionId });
 
     res.status(200).json({ success: true });
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  private reapStaleSessions() {
+    const now = Date.now();
+
+    for (const [sessionId, entry] of this.sessions) {
+      if (now - entry.lastActivity > SESSION_TTL_MS) {
+        entry.transport.close().catch(() => {});
+        this.sessions.delete(sessionId);
+        this.logger.log('MCP session reaped (idle timeout)', { sessionId });
+      }
+    }
   }
 
   private isInitializeBody(body: unknown): boolean {
