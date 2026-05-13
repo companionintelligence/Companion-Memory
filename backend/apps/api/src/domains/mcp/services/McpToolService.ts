@@ -138,8 +138,21 @@ export class McpToolService implements OnModuleInit {
       case 'string':
         return z.string();
       case 'number':
-      case 'integer':
         return z.number();
+      case 'integer': {
+        let schema = z.number().int();
+
+        if (typeof prop.minimum === 'number') {
+          schema = schema.min(prop.minimum);
+        }
+
+        if (typeof prop.maximum === 'number') {
+          schema = schema.max(prop.maximum);
+        }
+
+        return schema;
+      }
+
       case 'boolean':
         return z.boolean();
       case 'array':
