@@ -1,9 +1,12 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import {
+  BadRequestException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
+  Headers,
   NotFoundException,
   Post,
   Req,
@@ -150,27 +153,22 @@ export class McpController {
    * DELETE /mcp – terminates the session and cleans up the transport.
    */
   @Delete()
-  async handleDelete(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
+  async handleDelete(
+    @Context() context: RequestContext,
+    @Headers('mcp-session-id') sessionId: string | undefined,
+  ) {
     if (!sessionId) {
-      res.status(400).json({ error: 'Missing Mcp-Session-Id header' });
-
-      return;
+      throw new BadRequestException('Missing Mcp-Session-Id header');
     }
 
     const entry = this.sessions.get(sessionId);
 
     if (!entry) {
-      res.status(404).json({ error: 'Session not found' });
-
-      return;
+      throw new NotFoundException('Session not found');
     }
 
     if (entry.userId !== context.userId) {
-      res.status(403).json({ error: 'Session belongs to a different user' });
-
-      return;
+      throw new ForbiddenException('Session belongs to a different user');
     }
 
     await entry.transport.close();
@@ -178,9 +176,7 @@ export class McpController {
 
     this.logger.log('MCP session terminated by client', { sessionId });
 
-    return {
-      success: true,
-    };
+    return { success: true };
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
