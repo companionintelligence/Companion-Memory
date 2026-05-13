@@ -213,13 +213,10 @@ export class GraphQLToolAdapter implements OnModuleInit {
 
   private graphqlTypeToZod(type: GraphQLInputType): ZodTypeAny {
     if (isNonNullType(type)) {
-      return this.graphqlTypeToZod(type.ofType);
+      return this.graphqlTypeToZodInner(type.ofType);
     }
 
-    // Non-null types are handled by wrapping above; everything else is optional
-    const inner = this.graphqlTypeToZodInner(type);
-
-    return inner.optional();
+    return this.graphqlTypeToZodInner(type).optional();
   }
 
   private graphqlTypeToZodInner(type: GraphQLInputType): ZodTypeAny {
