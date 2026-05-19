@@ -2,13 +2,16 @@ import {
   CanActivate,
   type ExecutionContext,
   ForbiddenException,
+  Inject,
   Injectable,
   InternalServerErrorException,
+  Optional,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { GqlExecutionContext } from '@nestjs/graphql';
 import type { Request } from 'express';
 
+import { AuthDenialLogger } from './AuthDenialLogger';
 import { SCOPES_METADATA_KEY } from './decorator';
 import { matchScopes, missingScopes, type Scope } from './taxonomy';
 
@@ -18,6 +21,7 @@ import { matchScopes, missingScopes, type Scope } from './taxonomy';
 interface ApiKeyAuthMarker {
   scopes: string[];
   keyId: string;
+  actorId?: string;
 }
 
 type RequestWithAuth = Request & { apiKeyAuth?: ApiKeyAuthMarker };
@@ -42,7 +46,10 @@ type RequestWithAuth = Request & { apiKeyAuth?: ApiKeyAuthMarker };
  */
 @Injectable()
 export class ScopesGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  constructor(
+    private readonly reflector: Reflector,
+    @Optional() @Inject(AuthDenialLogger) private readonly denialLogger?: AuthDenialLogger,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
     const required = this.reflector.getAllAndOverride<Scope[] | undefined>(SCOPES_METADATA_KEY, [
@@ -66,11 +73,43 @@ export class ScopesGuard implements CanActivate {
       return true;
     }
 
+    const missing = missingScopes(apiKeyAuth.scopes, required);
+
+    this.denialLogger?.record({
+      actorId: apiKeyAuth.actorId,
+      apiKeyId: apiKeyAuth.keyId,
+      reason: 'insufficient_scope',
+      requiredScopes: required,
+      grantedScopes: apiKeyAuth.scopes,
+      route: this.routeOf(context),
+      extra: { missing },
+    });
+
     throw new ForbiddenException({
       error: 'insufficient_scope',
-      missing: missingScopes(apiKeyAuth.scopes, required),
+      missing,
       required,
     });
+  }
+
+  private routeOf(context: ExecutionContext): string | undefined {
+    const kind = context.getType<string>();
+
+    if (kind === 'http') {
+      const http = context.switchToHttp().getRequest<Request>();
+
+      return `${http.method} ${http.path}`;
+    }
+
+    if (kind === 'graphql') {
+      const ctx = GqlExecutionContext.create(context);
+      const info = ctx.getInfo<{ fieldName?: string; operation?: { operation?: string } }>();
+      const op = info.operation?.operation ?? 'query';
+
+      return `${op}:${info.fieldName ?? 'unknown'}`;
+    }
+
+    return undefined;
   }
 
   private extractRequest(context: ExecutionContext): RequestWithAuth {

@@ -7,7 +7,9 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  Inject,
   NotFoundException,
+  Optional,
   Post,
   Req,
   Res,
@@ -21,33 +23,19 @@ import { v4 as uuidv4 } from 'uuid';
 import { Context, type RequestContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import { AuthDenialLogger } from '@ci/common/scopes';
 import config from '@ci/configuration';
 
 import { McpServerService } from '../services/McpServerService';
 
+interface ApiKeyAuthMarker {
+  scopes: string[];
+  keyId: string;
+  actorId: string;
+}
+
 /** How long a session can be idle before it is reaped (ms). */
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
-/**
- * Plan 01 §4.2 — owner-binding. When `config.mcp.ownerUserId` is set, the
- * controller refuses every request whose authenticated `userId` does not
- * match. Used when MCP is exposed remotely and a single human owner is
- * required (independent of API-key scoping). Empty string disables the
- * check; that's the default for local single-tenant Hubs.
- */
-function assertOwnerBinding(userId: string | undefined) {
-  const owner = config.mcp.ownerUserId;
-  if (!owner) {
-    return;
-  }
-
-  if (userId !== owner) {
-    throw new ForbiddenException({
-      error: 'owner_mismatch',
-      message: 'MCP is bound to a specific owner and this caller is not it.',
-    });
-  }
-}
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
@@ -63,8 +51,38 @@ export class McpController {
   constructor(
     private readonly mcpServerService: McpServerService,
     private readonly logger: LoggerService,
+    @Optional() @Inject(AuthDenialLogger) private readonly denialLogger?: AuthDenialLogger,
   ) {
     this.logger.setContext('McpController');
+  }
+
+  /**
+   * Plan 01 §4.2 — owner-binding. When `config.mcp.ownerUserId` is set, the
+   * controller refuses every request whose authenticated `userId` does not
+   * match. Records a denial row so the SPA can show the refusal.
+   */
+  private assertOwnerBinding(req: Request, userId: string | undefined, route: string) {
+    const owner = config.mcp.ownerUserId;
+    if (!owner) {
+      return;
+    }
+
+    if (userId !== owner) {
+      const apiKeyAuth = (req as { apiKeyAuth?: ApiKeyAuthMarker }).apiKeyAuth;
+
+      this.denialLogger?.record({
+        actorId: apiKeyAuth?.actorId ?? userId,
+        apiKeyId: apiKeyAuth?.keyId,
+        reason: 'owner_mismatch',
+        route,
+        extra: { boundOwner: owner, callerUserId: userId },
+      });
+
+      throw new ForbiddenException({
+        error: 'owner_mismatch',
+        message: 'MCP is bound to a specific owner and this caller is not it.',
+      });
+    }
   }
 
   /**
@@ -74,7 +92,7 @@ export class McpController {
    */
   @Post()
   async handlePost(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
-    assertOwnerBinding(context.userId);
+    this.assertOwnerBinding(req, context.userId, 'POST /mcp');
 
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -146,7 +164,7 @@ export class McpController {
    */
   @Get()
   async handleGet(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
-    assertOwnerBinding(context.userId);
+    this.assertOwnerBinding(req, context.userId, 'GET /mcp');
 
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -181,9 +199,10 @@ export class McpController {
   @Delete()
   async handleDelete(
     @Context() context: RequestContext,
+    @Req() req: Request,
     @Headers('mcp-session-id') sessionId: string | undefined,
   ) {
-    assertOwnerBinding(context.userId);
+    this.assertOwnerBinding(req, context.userId, 'DELETE /mcp');
 
     if (!sessionId) {
       throw new BadRequestException('Missing Mcp-Session-Id header');

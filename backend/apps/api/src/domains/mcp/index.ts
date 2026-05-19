@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { AuthScopesModule } from '@ci/common/scopes';
 import { GraphQLModule } from '@ci/domains/graphql';
 import { ToolsModule } from '@ci/domains/tools';
 
@@ -10,7 +11,7 @@ import { McpServerService } from './services/McpServerService';
 import { McpToolService } from './services/McpToolService';
 
 @Module({
-  imports: [GraphQLModule, ToolsModule],
+  imports: [GraphQLModule, ToolsModule, AuthScopesModule],
   controllers: [McpController],
   providers: [GraphQLToolAdapter, McpExecutorService, McpToolService, McpServerService],
   exports: [McpServerService],

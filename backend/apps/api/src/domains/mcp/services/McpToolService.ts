@@ -1,9 +1,9 @@
-import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Optional, type OnModuleInit } from '@nestjs/common';
 import { z, type ZodTypeAny } from 'zod';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { matchScopes, missingScopes, SCOPES } from '@ci/common/scopes';
+import { AuthDenialLogger, matchScopes, missingScopes, SCOPES } from '@ci/common/scopes';
 import { type JSONSchema, ToolRegistry } from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
@@ -26,6 +26,7 @@ export class McpToolService implements OnModuleInit {
     private readonly toolRegistry: ToolRegistry,
     private readonly executorService: McpExecutorService,
     private readonly logger: LoggerService,
+    @Optional() @Inject(AuthDenialLogger) private readonly denialLogger?: AuthDenialLogger,
   ) {
     this.logger.setContext('McpToolService');
   }
@@ -103,10 +104,23 @@ export class McpToolService implements OnModuleInit {
       return;
     }
 
+    const missing = missingScopes(apiKeyAuth.scopes, tool.requiredScopes);
+
+    this.denialLogger?.record({
+      actorId: apiKeyAuth.actorId,
+      apiKeyId: apiKeyAuth.keyId,
+      reason: 'insufficient_scope',
+      requiredScopes: tool.requiredScopes,
+      grantedScopes: apiKeyAuth.scopes,
+      route: 'mcp:tools/call',
+      toolName: tool.name,
+      extra: { missing },
+    });
+
     throw new ForbiddenException({
       error: 'insufficient_scope',
       tool: tool.name,
-      missing: missingScopes(apiKeyAuth.scopes, tool.requiredScopes),
+      missing,
       required: tool.requiredScopes,
     });
   }

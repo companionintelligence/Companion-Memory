@@ -21,6 +21,7 @@ import { GlobalExceptionsFilter } from '@ci/common/filters';
 import { IdFormatGuard } from '@ci/common/guards';
 import { LoggingModule, LoggerService, RequestLoggerMiddleware } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
+import { AuthScopesModule } from '@ci/common/scopes';
 import { ActorThrottlerGuard } from '@ci/common/throttling';
 import config from '@ci/configuration';
 import { ActorsModule } from '@ci/domains/actors';
@@ -75,6 +76,7 @@ import { UserModule } from '@ci/domains/user';
     ]),
     ActorsModule,
     AuditModule,
+    AuthScopesModule,
     AuthModule,
     BrowserActivityModule,
     ConnectionsModule,
