@@ -40,6 +40,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     ContextService.set({
       userId: user.id,
+      // Session JWT = the human owner. The owner's user-kind actor shares the
+      // user's UUID (migration 20260518171322 backfill). See plan 10.
+      actorId: user.id,
+      actorKind: 'user',
     });
 
     return user;

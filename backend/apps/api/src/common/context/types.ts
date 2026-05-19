@@ -19,6 +19,23 @@ export interface RequestContext {
    * Identifier for the authenticated user making the request.
    */
   userId?: string;
+
+  /**
+   * Identifier for the acting principal (see plan 10): the user, agent, or
+   * device that initiated the request. For session JWT (the human owner)
+   * this equals `userId`. For an API-key request issued to an agent, it
+   * is the agent's actor id.
+   *
+   * Optional during the migration window — services may fall back to
+   * `userId` when this is unset.
+   */
+  actorId?: string;
+
+  /**
+   * Kind of the actor (`user`, `agent`, `device`, `household`). Useful for
+   * audit and policy decisions without requiring a join.
+   */
+  actorKind?: 'user' | 'agent' | 'device' | 'household';
 }
 
 /**

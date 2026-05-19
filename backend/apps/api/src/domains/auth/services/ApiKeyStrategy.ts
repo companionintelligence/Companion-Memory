@@ -68,13 +68,20 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
 
     ContextService.set({
       userId: user.id,
+      actorId: result.actorId,
+      // The actor backfill (migration 20260518171322) uses the same UUID for
+      // user-kind actor and user. When agent/device actors are introduced
+      // and the controller starts issuing keys against them, this will
+      // need to query ci.actors for the kind.
+      actorKind: result.actorId === user.id ? 'user' : 'agent',
     });
 
     // Attach the validated key's scopes to the request so downstream guards
     // (ScopesGuard) can read them via `req.apiKeyAuth`.
-    (req as Request & { apiKeyAuth?: { scopes: string[]; keyId: string } }).apiKeyAuth = {
+    (req as Request & { apiKeyAuth?: { scopes: string[]; keyId: string; actorId: string } }).apiKeyAuth = {
       scopes: result.scopes,
       keyId: result.keyId,
+      actorId: result.actorId,
     };
 
     return user;

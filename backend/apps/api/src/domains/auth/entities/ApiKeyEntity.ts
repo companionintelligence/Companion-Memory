@@ -26,6 +26,9 @@ export class ApiKeyEntity {
   @Column({ type: 'uuid' })
   user_id!: string;
 
+  @Column({ type: 'uuid' })
+  actor_id!: string;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;
 
@@ -46,4 +49,4 @@ export class ApiKeyEntity {
   }
 }
 
-export type ApiKey = Readonly<Omit<ApiKeyEntity, 'user' | 'user_id' | 'hashed_key'>>;
+export type ApiKey = Readonly<Omit<ApiKeyEntity, 'user' | 'user_id' | 'actor_id' | 'hashed_key'>>;

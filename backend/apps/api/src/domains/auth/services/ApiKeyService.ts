@@ -35,6 +35,10 @@ export class ApiKeyService {
       scopes: data.scopes ?? [],
       expires_at: data.expires_at ? new Date(data.expires_at) : null,
       user_id: context.userId,
+      // For now the actor IS the user (single-tenant Hub). When agent-kind
+      // actors are introduced, the controller should accept an explicit
+      // actor_id and validate ownership; see plan 10.
+      actor_id: context.userId,
     });
 
     const saved = await this.apiKeyRepository.save(entity);
@@ -101,7 +105,9 @@ export class ApiKeyService {
     return (result.affected ?? 0) > 0;
   }
 
-  async validateKey(rawKey: string): Promise<{ userId: string; scopes: string[]; keyId: string } | null> {
+  async validateKey(
+    rawKey: string,
+  ): Promise<{ userId: string; actorId: string; scopes: string[]; keyId: string } | null> {
     if (rawKey.length !== API_KEY_HEX_LENGTH || !API_KEY_HEX_REGEX.test(rawKey)) {
       return null;
     }
@@ -110,7 +116,7 @@ export class ApiKeyService {
 
     const key = await this.apiKeyRepository.findOne({
       where: { hashed_key: hashed },
-      select: ['id', 'user_id', 'expires_at', 'scopes'],
+      select: ['id', 'user_id', 'actor_id', 'expires_at', 'scopes'],
     });
 
     if (!key) {
@@ -123,7 +129,11 @@ export class ApiKeyService {
 
     await this.apiKeyRepository.update(key.id, { last_used_at: new Date() });
 
-    return { userId: key.user_id, scopes: key.scopes ?? [], keyId: key.id };
+    // actor_id is NOT NULL in the schema, but during the migration window
+    // fall back to user_id (the user-kind actor backfill uses the same UUID).
+    const actorId = key.actor_id ?? key.user_id;
+
+    return { userId: key.user_id, actorId, scopes: key.scopes ?? [], keyId: key.id };
   }
 
   private hash(key: string): string {
