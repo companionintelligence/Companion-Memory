@@ -11,6 +11,8 @@ export interface JSONSchema {
   items?: JSONSchema;
   enum?: any[];
   description?: string;
+  minimum?: number;
+  maximum?: number;
 }
 
 /**
