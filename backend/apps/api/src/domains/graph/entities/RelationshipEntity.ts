@@ -35,6 +35,10 @@ export class RelationshipEntity {
   @Column({ name: 'owner_user_id', type: 'uuid' })
   userId!: string;
 
+  /** Actor (user/agent/device) that created this relationship — plan 10. */
+  @Column({ name: 'created_by_actor', type: 'uuid', nullable: true })
+  createdByActor!: string | null;
+
   @Column({ type: 'jsonb', default: '{}' })
   properties!: Record<string, unknown>;
 
@@ -57,6 +61,7 @@ export class RelationshipEntity {
       startDate: entity.startDate,
       endDate: entity.endDate,
       userId: entity.userId,
+      createdByActor: entity.createdByActor,
       properties: entity.properties,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

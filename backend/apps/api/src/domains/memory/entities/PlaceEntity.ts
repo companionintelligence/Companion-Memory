@@ -89,6 +89,10 @@ export class PlaceEntity {
   @JoinColumn({ name: 'owner_user_id' })
   user?: UserEntity;
 
+  /** Actor (user/agent/device) that created this entity — plan 10. */
+  @Column({ name: 'created_by_actor', type: 'uuid', nullable: true })
+  createdByActor!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -110,6 +114,7 @@ export class PlaceEntity {
       properties: entity.properties || {},
       uploaded: entity.uploaded || null,
       userId: entity.user?.id || null,
+      createdByActor: entity.createdByActor ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,

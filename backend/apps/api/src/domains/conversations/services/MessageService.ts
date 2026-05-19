@@ -3,7 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
-import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
+import {
+  ContextService,
+  type ServiceContext,
+  type UserServiceContext,
+  SYSTEM_USER,
+} from '@ci/common/context';
 import { EventService } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 
@@ -39,6 +44,7 @@ export class MessageService {
       promptMessage: {
         id: promptMessageId,
       },
+      createdByActor: ContextService.getActorId(),
     });
 
     const entity = await this.messageRepository.save(instance);

@@ -28,6 +28,17 @@ export class ContextService {
     return context?.userId ?? null;
   }
 
+  /**
+   * Returns the acting principal (user, agent, device, household) for the
+   * current request. Falls back to `userId` when `actorId` is not set so
+   * caller code always gets a usable value during the migration window.
+   */
+  static getActorId(): string | null {
+    const context = this.getContext();
+
+    return context?.actorId ?? context?.userId ?? null;
+  }
+
   static run<T>(context: RequestContextRequiredTrace, fn: () => T): T {
     return this.storage.run(context, fn);
   }

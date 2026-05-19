@@ -62,6 +62,10 @@ export class MessageEntity {
   })
   files?: FileEntity[];
 
+  /** Actor (user/agent/device) that created this message — plan 10. */
+  @Column({ name: 'created_by_actor', type: 'uuid', nullable: true })
+  createdByActor!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -77,6 +81,7 @@ export class MessageEntity {
       mimetype: entity.mimetype ?? null,
       toolCalls: entity.toolCalls ?? null,
       canceled: entity.canceled ?? null,
+      createdByActor: entity.createdByActor ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
 

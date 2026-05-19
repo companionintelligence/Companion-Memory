@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { SummaryService } from '@ci/domains/summaries';
 
 import { GlobalUID } from '../types/GlobalUID';
@@ -12,11 +13,12 @@ import { SummaryEdge } from '../types/SummaryEdge';
 import { SummaryType } from '../types/SummaryType';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => SummaryType)
 export class SummaryResolver {
   constructor(private readonly summaryService: SummaryService) {}
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => SummaryConnection)
   async summaries(
     @Context() context: RequestContext,
@@ -46,6 +48,7 @@ export class SummaryResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => SummaryType, { nullable: true })
   async summary(
     @Context() context: RequestContext,
@@ -58,6 +61,7 @@ export class SummaryResolver {
     return entity ? SummaryType.toType(entity) : null;
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => SummaryType, { nullable: true, description: 'Mark a summary as seen' })
   async markSummaryAsSeen(
     @Context() context: RequestContext,
@@ -70,6 +74,7 @@ export class SummaryResolver {
     return updated ? SummaryType.toType(updated) : null;
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => SummaryType, { nullable: true, description: 'Mark a summary as dismissed' })
   async markSummaryAsDismissed(
     @Context() context: RequestContext,

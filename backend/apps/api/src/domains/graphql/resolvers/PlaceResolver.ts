@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { PlaceService } from '@ci/domains/memory';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -16,7 +17,7 @@ import { PlaceType } from '../types/PlaceType';
 import { UpdatePlaceInput } from '../types/UpdatePlaceInput';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => PlaceType)
 export class PlaceResolver {
   constructor(
@@ -24,6 +25,7 @@ export class PlaceResolver {
     private readonly tagLoader: TagLoader,
   ) {}
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => PlaceType)
   async createPlace(
     @Context() context: RequestContext,
@@ -71,6 +73,7 @@ export class PlaceResolver {
     return PlaceType.toType(entity[0]);
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => PlaceType, { nullable: true })
   async updatePlace(
     @Context() context: RequestContext,
@@ -117,6 +120,7 @@ export class PlaceResolver {
     return entity ? PlaceType.toType(entity) : entity;
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => Boolean)
   async removePlace(@Context() context: RequestContext, @Args('id') id: string): Promise<boolean> {
     const serviceContext = toServiceContext(context);
@@ -124,6 +128,7 @@ export class PlaceResolver {
     return this.placeService.remove(serviceContext, id);
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => PlaceConnection)
   async places(
     @Context() context: RequestContext,
@@ -154,6 +159,7 @@ export class PlaceResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => PlaceType, { nullable: true })
   async place(
     @Context() context: RequestContext,

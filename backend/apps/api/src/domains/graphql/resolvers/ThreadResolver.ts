@@ -3,6 +3,7 @@ import { Query, Resolver, Args, Parent, ResolveField, ID } from '@nestjs/graphql
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { ThreadService } from '@ci/domains/conversations';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -18,7 +19,7 @@ import { ThreadEdge } from '../types/ThreadEdge';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => ThreadType)
 export class ThreadResolver {
   constructor(
@@ -27,6 +28,7 @@ export class ThreadResolver {
     private readonly threadService: ThreadService,
   ) {}
 
+  @Scopes(SCOPES.CHAT_READ)
   @Query(() => ThreadConnection)
   async threads(
     @Context() context: RequestContext,
@@ -57,6 +59,7 @@ export class ThreadResolver {
     };
   }
 
+  @Scopes(SCOPES.CHAT_READ)
   @Query(() => ThreadType, { nullable: true })
   async thread(
     @Context() context: RequestContext,

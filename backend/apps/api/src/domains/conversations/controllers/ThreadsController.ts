@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { CreateThreadDto } from '@ci/domains/conversations/types';
 
 import { MessageService } from '../services/MessageService';
@@ -39,7 +40,8 @@ export class ThreadsController {
     private readonly threadService: ThreadService,
   ) {}
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
+  @Scopes(SCOPES.CHAT_WRITE)
   @Post()
   async post(
     @Context() context: RequestContext,
@@ -50,7 +52,8 @@ export class ThreadsController {
     return this.threadService.create(serviceContext, input);
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
+  @Scopes(SCOPES.CHAT_READ)
   @Get()
   async findAll(@Context() context: RequestContext) {
     const serviceContext = toServiceContext(context);
@@ -60,7 +63,8 @@ export class ThreadsController {
     return threads;
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
+  @Scopes(SCOPES.CHAT_READ)
   @Get(':id')
   async findOne(
     @Context() context: RequestContext,
@@ -87,7 +91,8 @@ export class ThreadsController {
     };
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
+  @Scopes(SCOPES.CHAT_WRITE)
   @Delete(':id')
   @HttpCode(204)
   async delete(@Context() context: RequestContext, @Param('id') id: string) {

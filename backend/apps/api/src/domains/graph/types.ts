@@ -41,7 +41,7 @@ export enum RelationshipType {
 
 export type CreateRelationshipDto = Optional<
   Omit<Relationship, 'userId' | 'createdAt' | 'updatedAt' | 'type'>,
-  'id' | 'strength' | 'isBidirectional' | 'properties' | 'startDate' | 'endDate'
+  'id' | 'strength' | 'isBidirectional' | 'properties' | 'startDate' | 'endDate' | 'createdByActor'
 > & {
   type: keyof typeof RelationshipType;
 };

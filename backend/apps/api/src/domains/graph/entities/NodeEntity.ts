@@ -20,6 +20,10 @@ export class NodeEntity {
   @Column({ name: 'owner_user_id', type: 'uuid' })
   userId!: string;
 
+  /** Actor (user/agent/device) that created this entity — plan 10. */
+  @Column({ name: 'created_by_actor', type: 'uuid', nullable: true })
+  createdByActor!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -34,6 +38,7 @@ export class NodeEntity {
       description: entity.description,
       properties: entity.properties,
       userId: entity.userId,
+      createdByActor: entity.createdByActor,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };

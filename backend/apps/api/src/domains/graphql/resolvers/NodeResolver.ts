@@ -3,6 +3,7 @@ import { Query, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
 import { ConnectionService } from '@ci/domains/connections';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
@@ -40,7 +41,7 @@ import { TagType } from '../types/TagType';
 import { ThreadType } from '../types/ThreadType';
 import { UserType } from '../types/UserType';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => Node)
 export class NodeResolver {
   constructor(
@@ -63,6 +64,7 @@ export class NodeResolver {
     private readonly userService: UserService,
   ) {}
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => Node, { nullable: true })
   async node(
     @Context() context: RequestContext,

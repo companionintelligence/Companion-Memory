@@ -94,6 +94,10 @@ export class PersonEntity {
     this.sourceData = (this.properties?.source_data as Record<string, unknown>) || null;
   }
 
+  /** Actor (user/agent/device) that created this entity — plan 10. */
+  @Column({ name: 'created_by_actor', type: 'uuid', nullable: true })
+  createdByActor!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -129,6 +133,7 @@ export class PersonEntity {
       linkedId: entity.linkedId,
       linkedTable: entity.linkedTable,
       userId: entity.userId || null,
+      createdByActor: entity.createdByActor ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       lastAccessed: entity.lastAccessed,

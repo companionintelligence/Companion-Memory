@@ -15,6 +15,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 
 import { FileService } from '../services/FileService';
 
@@ -22,7 +23,8 @@ import { FileService } from '../services/FileService';
 export class FilesController {
   constructor(private readonly fileService: FileService) {}
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
+  @Scopes(SCOPES.FILES_WRITE)
   @Post('upload')
   @UseInterceptors(
     FilesInterceptor('files', undefined, {

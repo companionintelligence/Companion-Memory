@@ -3,6 +3,7 @@ import { Mutation, Query, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { RelationshipService } from '@ci/domains/graph';
 import { CreateRelationshipPayload } from '@ci/domains/graphql/types/CreateRelationshipPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
@@ -18,11 +19,12 @@ import { GlobalUID } from '../types/GlobalUID';
 import { RelationshipType } from '../types/RelationshipType';
 import { UpdateRelationshipInput } from '../types/UpdateRelationshipInput';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => RelationshipType)
 export class RelationshipResolver {
   constructor(private readonly relationshipService: RelationshipService) {}
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => CreateRelationshipPayload)
   async createRelationship(
     @Context() context: RequestContext,
@@ -55,6 +57,7 @@ export class RelationshipResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => UpdateRelationshipPayload)
   async updateRelationship(
     @Context() context: RequestContext,
@@ -84,6 +87,7 @@ export class RelationshipResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => DeleteByIdPayload)
   async deleteRelationship(
     @Context() context: RequestContext,
@@ -107,6 +111,7 @@ export class RelationshipResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => RelationshipConnection)
   async relationships(
     @Context() context: RequestContext,
@@ -137,6 +142,7 @@ export class RelationshipResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => RelationshipType, { nullable: true })
   async relationship(
     @Context() context: RequestContext,

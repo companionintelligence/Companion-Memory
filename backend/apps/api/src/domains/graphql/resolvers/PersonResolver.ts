@@ -3,6 +3,7 @@ import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
@@ -20,7 +21,7 @@ import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => PersonType)
 export class PersonResolver {
   constructor(
@@ -28,6 +29,7 @@ export class PersonResolver {
     private readonly tagLoader: TagLoader,
   ) {}
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => CreatePersonPayload)
   async createPerson(
     @Context() context: RequestContext,
@@ -52,6 +54,7 @@ export class PersonResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => UpdatePersonPayload)
   async updatePerson(
     @Context() context: RequestContext,
@@ -76,6 +79,7 @@ export class PersonResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => DeleteByIdPayload)
   async deletePerson(
     @Context() context: RequestContext,
@@ -99,6 +103,7 @@ export class PersonResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => PersonConnection)
   async people(
     @Context() context: RequestContext,
@@ -129,6 +134,7 @@ export class PersonResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => PersonType, { nullable: true })
   async person(
     @Context() context: RequestContext,

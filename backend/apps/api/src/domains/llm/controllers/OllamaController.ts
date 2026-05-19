@@ -295,6 +295,7 @@ export class OllamaController {
       mimetype: 'text/markdown',
       toolCalls: null,
       canceled: false,
+      createdByActor: null,
       thread,
       createdAt: new Date(),
       updatedAt: new Date(),

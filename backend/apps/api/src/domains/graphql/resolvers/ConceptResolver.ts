@@ -3,6 +3,7 @@ import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { ConceptService } from '@ci/domains/memory';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -20,7 +21,7 @@ import { UpdateConceptInput } from '../types/UpdateConceptInput';
 import { UpdateConceptPayload } from '../types/UpdateConceptPayload';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => ConceptType)
 export class ConceptResolver {
   constructor(
@@ -28,6 +29,7 @@ export class ConceptResolver {
     private readonly tagLoader: TagLoader,
   ) {}
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => ConceptConnection)
   async concepts(
     @Context() context: RequestContext,
@@ -58,6 +60,7 @@ export class ConceptResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => ConceptType, { nullable: true })
   async concept(
     @Context() context: RequestContext,
@@ -72,6 +75,7 @@ export class ConceptResolver {
     return entity ? ConceptType.toType(entity) : null;
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => CreateConceptPayload)
   async createConcept(
     @Context() context: RequestContext,
@@ -96,6 +100,7 @@ export class ConceptResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => UpdateConceptPayload)
   async updateConcept(
     @Context() context: RequestContext,
@@ -120,6 +125,7 @@ export class ConceptResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => DeleteByIdPayload)
   async deleteConcept(
     @Context() context: RequestContext,

@@ -4,7 +4,7 @@ import { In, Repository, QueryFailedError } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { PgErrorCode } from '@ci/common/constants';
-import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
+import { ContextService, SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { ThreadService } from '@ci/domains/conversations';
 import {
@@ -109,6 +109,7 @@ export class RelationshipService {
       id: uuidv7(),
       ...data,
       userId: context.userId,
+      createdByActor: ContextService.getActorId(),
     });
 
     try {
@@ -184,6 +185,7 @@ export class RelationshipService {
         id: uuidv7(),
         ...data,
         userId: context.userId,
+        createdByActor: ContextService.getActorId(),
       });
     } else {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars

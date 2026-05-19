@@ -3,6 +3,7 @@ import { ID, Args, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { Scopes, ScopesGuard, SCOPES } from '@ci/common/scopes';
 import { NoteService } from '@ci/domains/notes';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -20,7 +21,7 @@ import { UpdateNoteInput } from '../types/UpdateNoteInput';
 import { UpdateNotePayload } from '../types/UpdateNotePayload';
 import { Paginator } from '../utils/Paginator';
 
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(JwtOrApiKeyAuthGuard, ScopesGuard)
 @Resolver(() => NoteType)
 export class NoteResolver {
   constructor(
@@ -28,6 +29,7 @@ export class NoteResolver {
     private readonly tagLoader: TagLoader,
   ) {}
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => CreateNotePayload)
   async createNote(
     @Context() context: RequestContext,
@@ -52,6 +54,7 @@ export class NoteResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => UpdateNotePayload)
   async updateNote(
     @Context() context: RequestContext,
@@ -78,6 +81,7 @@ export class NoteResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_WRITE)
   @Mutation(() => DeleteByIdPayload)
   async deleteNote(
     @Context() context: RequestContext,
@@ -101,6 +105,7 @@ export class NoteResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => NoteConnection)
   async notes(
     @Context() context: RequestContext,
@@ -131,6 +136,7 @@ export class NoteResolver {
     };
   }
 
+  @Scopes(SCOPES.MEMORY_READ)
   @Query(() => NoteType, { nullable: true })
   async note(
     @Context() context: RequestContext,
