@@ -2821,6 +2821,7 @@ __metadata:
     "@types/passport-local": "npm:^1.0.38"
     "@types/pg": "npm:^8.15.2"
     "@types/supertest": "npm:^6.0.3"
+    "@types/ws": "npm:^8"
     "@yarnpkg/pnpify": "npm:^4.1.4"
     bcrypt: "npm:^6.0.0"
     cli-progress: "npm:^3.12.0"
@@ -2845,6 +2846,7 @@ __metadata:
     graphql: "npm:^16.12.0"
     graphql-query-complexity: "npm:^1.1.0"
     graphql-type-json: "npm:^0.3.2"
+    graphql-ws: "npm:^6.0.8"
     jest: "npm:^30.0.4"
     jest-util: "npm:^30.0.2"
     knip: "npm:^5.66.0"
@@ -2875,6 +2877,7 @@ __metadata:
     typescript: "npm:^5.8.3"
     typescript-eslint: "npm:^8.32.1"
     uuid: "npm:^11.1.0"
+    ws: "npm:^8.20.1"
     zod: "npm:^3.25.34"
   languageName: unknown
   linkType: soft
@@ -11094,7 +11097,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8.0.0":
+"@types/ws@npm:^8, @types/ws@npm:^8.0.0":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
   dependencies:
@@ -16581,6 +16584,25 @@ __metadata:
     ws:
       optional: true
   checksum: 10c0/4d1f18245fd2c56670156d910bc45a6fd456291b6e9b96d98e3d7fd464e1b406cfb4e68b4aafeb875c366d63d8f204b488b57729d622cd8d97e0387d0cd38dcf
+  languageName: node
+  linkType: hard
+
+"graphql-ws@npm:^6.0.8":
+  version: 6.0.8
+  resolution: "graphql-ws@npm:6.0.8"
+  peerDependencies:
+    "@fastify/websocket": ^10 || ^11
+    crossws: ~0.3
+    graphql: ^15.10.1 || ^16
+    ws: ^8
+  peerDependenciesMeta:
+    "@fastify/websocket":
+      optional: true
+    crossws:
+      optional: true
+    ws:
+      optional: true
+  checksum: 10c0/df3672448de0ba77052697ad4285330cde49d3fef29a283974b47ce9cf9de46aa7f9c1ea9fe084877aeeab817a0264d65c987e58cb866fcf1beac9ac70368df7
   languageName: node
   linkType: hard
 
@@ -26043,6 +26065,21 @@ __metadata:
     utf-8-validate:
       optional: true
   checksum: 10c0/4b50f67931b8c6943c893f59c524f0e4905bbd183016cfb0f2b8653aa7f28dad4e456b9d99d285bbb67cca4fedd9ce90dfdfaa82b898a11414ebd66ee99141e4
+  languageName: node
+  linkType: hard
+
+"ws@npm:^8.20.1":
+  version: 8.20.1
+  resolution: "ws@npm:8.20.1"
+  peerDependencies:
+    bufferutil: ^4.0.1
+    utf-8-validate: ">=5.0.2"
+  peerDependenciesMeta:
+    bufferutil:
+      optional: true
+    utf-8-validate:
+      optional: true
+  checksum: 10c0/ce162433218399cdedeb76fd33363d4d86a7d910058d4e3c679dce08cea65d6da6b39f11baa4d7808d024cf46ed88f6a05c17611621aaad8fc5e62edacc30c5d
   languageName: node
   linkType: hard
 

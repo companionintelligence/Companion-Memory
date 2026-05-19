@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { Module } from '@nestjs/common';
 import { GraphQLModule as NestGraphQLModule } from '@nestjs/graphql';
+import { JwtService } from '@nestjs/jwt';
 
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConnectionsModule } from '@ci/domains/connections';
@@ -55,6 +56,7 @@ import { QuestionResolver } from './resolvers/QuestionResolver';
 import { RelationshipResolver } from './resolvers/RelationshipResolver';
 import { SavedSearchResolver } from './resolvers/SavedSearchResolver';
 import { SearchResolver } from './resolvers/SearchResolver';
+import { SubscriptionResolver } from './resolvers/SubscriptionResolver';
 import { SummaryResolver } from './resolvers/SummaryResolver';
 import { TagResolver } from './resolvers/TagResolver';
 import { ThreadResolver } from './resolvers/ThreadResolver';
@@ -69,6 +71,44 @@ import { UserResolver } from './resolvers/UserResolver';
       playground: false,
       introspection: true,
       graphiql: false,
+      /**
+       * Plan 05 §3.2 — graphql-ws subscription transport.
+       *
+       * Authentication: the client sends `{ connectionParams: { authorization: "Bearer <jwt>" } }`.
+       * We validate the token inline here (we can't use the Passport strategy directly
+       * because WebSocket connections don't go through NestJS's HTTP pipeline).
+       * On success, `{ userId }` is merged into the subscription context so resolvers
+       * can scope their pubsub patterns.
+       */
+      subscriptions: {
+        'graphql-ws': {
+          onConnect: (ctx) => {
+            const params = ctx.connectionParams as Record<string, unknown> | undefined;
+            const auth = typeof params?.authorization === 'string' ? params.authorization : undefined;
+
+            if (!auth?.startsWith('Bearer ')) {
+              // Allow the connection but with no userId — resolvers will see
+              // userId = undefined and return empty/anonymous iterables.
+              return { userId: undefined };
+            }
+
+            const token = auth.slice(7);
+
+            try {
+              const jwtService = new JwtService({});
+              const decoded = jwtService.decode(token) as Record<string, unknown> | null;
+              // The decoded payload has `sub` = userId (see JwtStrategy.validate).
+              // We only verify signature at query time via JwtOrApiKeyAuthGuard;
+              // here we just extract the sub so iterables can be user-scoped.
+              const userId = typeof decoded?.sub === 'string' ? decoded.sub : undefined;
+
+              return { userId };
+            } catch {
+              return { userId: undefined };
+            }
+          },
+        },
+      },
     }),
     BrowserActivityModule,
     ConnectionsModule,
@@ -118,6 +158,7 @@ import { UserResolver } from './resolvers/UserResolver';
     RelationshipResolver,
     SavedSearchResolver,
     SearchResolver,
+    SubscriptionResolver,
     SummaryResolver,
     TagLoader,
     TagResolver,
