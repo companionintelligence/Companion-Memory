@@ -4,12 +4,14 @@ import type { Request } from 'express';
 
 import { LoggerService } from '@ci/common/logging';
 
+import { McpPromptService } from './McpPromptService';
 import { McpToolService } from './McpToolService';
 
 @Injectable()
 export class McpServerService {
   constructor(
     private readonly toolService: McpToolService,
+    private readonly promptService: McpPromptService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext('McpServerService');
@@ -23,6 +25,7 @@ export class McpServerService {
 
     this.registerTools(server, req);
     this.registerResources(server);
+    this.promptService.register(server, req);
 
     return server;
   }
