@@ -9,13 +9,21 @@ import { McpController } from './controllers/McpController';
 import { GraphQLToolAdapter } from './services/GraphQLToolAdapter';
 import { McpExecutorService } from './services/McpExecutorService';
 import { McpPromptService } from './services/McpPromptService';
+import { McpResourceSubscriber } from './services/McpResourceSubscriber';
 import { McpServerService } from './services/McpServerService';
 import { McpToolService } from './services/McpToolService';
 
 @Module({
   imports: [GraphQLModule, ToolsModule, AuthScopesModule, MemoryModule],
   controllers: [McpController],
-  providers: [GraphQLToolAdapter, McpExecutorService, McpToolService, McpPromptService, McpServerService],
+  providers: [
+    GraphQLToolAdapter,
+    McpExecutorService,
+    McpToolService,
+    McpPromptService,
+    McpResourceSubscriber,
+    McpServerService,
+  ],
   exports: [McpServerService],
 })
 export class McpModule {}

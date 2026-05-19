@@ -41,6 +41,7 @@ interface SessionEntry {
   transport: StreamableHTTPServerTransport;
   lastActivity: number;
   userId: string;
+  cleanup: () => void;
 }
 
 @Controller('mcp')
@@ -97,6 +98,7 @@ export class McpController {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     let transport: StreamableHTTPServerTransport | undefined;
+    let pendingCleanup: (() => void) | undefined;
 
     if (sessionId) {
       const entry = this.sessions.get(sessionId);
@@ -116,15 +118,21 @@ export class McpController {
         sessionIdGenerator: () => uuidv4(),
       });
 
-      const server = this.mcpServerService.createServer(req);
+      const created = this.mcpServerService.createServer(req);
 
-      await server.connect(transport);
+      await created.server.connect(transport);
+
+      // Hold the cleanup closure on the SessionEntry below so resource
+      // subscriptions tear down when the transport closes (or is reaped).
+      pendingCleanup = created.cleanup;
 
       transport.onclose = () => {
         const sid = transport?.sessionId;
 
         if (sid) {
+          const removed = this.sessions.get(sid);
           this.sessions.delete(sid);
+          removed?.cleanup();
 
           this.logger.log('MCP session closed', {
             sessionId: sid,
@@ -149,6 +157,9 @@ export class McpController {
         transport,
         lastActivity: Date.now(),
         userId,
+        // No-op when this branch did not create a fresh server (shouldn't
+        // happen given the !sessionId guard, but keeps the type honest).
+        cleanup: pendingCleanup ?? (() => undefined),
       });
 
       this.logger.log('MCP session created', {
@@ -219,6 +230,7 @@ export class McpController {
     }
 
     await entry.transport.close();
+    entry.cleanup();
     this.sessions.delete(sessionId);
 
     this.logger.log('MCP session terminated by client', { sessionId });
@@ -233,6 +245,7 @@ export class McpController {
     for (const [sessionId, entry] of this.sessions) {
       if (now - entry.lastActivity > SESSION_TTL_MS) {
         entry.transport.close().catch(() => {});
+        entry.cleanup();
         this.sessions.delete(sessionId);
         this.logger.log('MCP session reaped (idle timeout)', {
           sessionId,

@@ -5,19 +5,32 @@ import type { Request } from 'express';
 import { LoggerService } from '@ci/common/logging';
 
 import { McpPromptService } from './McpPromptService';
+import { McpResourceSubscriber } from './McpResourceSubscriber';
 import { McpToolService } from './McpToolService';
+
+export interface CreatedMcpServer {
+  server: McpServer;
+  /** Call when the underlying transport closes to unsubscribe from pubsub. */
+  cleanup(): void;
+}
 
 @Injectable()
 export class McpServerService {
   constructor(
     private readonly toolService: McpToolService,
     private readonly promptService: McpPromptService,
+    private readonly resourceSubscriber: McpResourceSubscriber,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext('McpServerService');
   }
 
-  createServer(req: Request): McpServer {
+  /**
+   * Build a per-session MCP server. The caller (McpController) must invoke
+   * the returned `cleanup` on transport close so resource-subscription
+   * listeners don't leak.
+   */
+  createServer(req: Request): CreatedMcpServer {
     const server = new McpServer({
       name: 'companion-memory',
       version: '0.1.0',
@@ -26,8 +39,9 @@ export class McpServerService {
     this.registerTools(server, req);
     this.registerResources(server);
     this.promptService.register(server, req);
+    const unsubscribe = this.resourceSubscriber.register(server, req);
 
-    return server;
+    return { server, cleanup: unsubscribe };
   }
 
   private registerResources(server: McpServer) {
