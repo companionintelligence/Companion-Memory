@@ -5,7 +5,8 @@
   "scripts": {
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "prepare": "husky"
+    "prepare": "husky",
+    "memory-evals": "yarn workspace @ci/be-api exec ts-node ../../../tests/memory-evals/run.ts"
   },
   "packageManager": "yarn@4.9.1",
   "workspaces": [

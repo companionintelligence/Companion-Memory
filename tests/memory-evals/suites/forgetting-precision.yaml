@@ -1,0 +1,21 @@
+suite: forgetting-precision
+description: |
+  When the user asks about something NOT in the graph, the twin must
+  decline rather than hallucinate. This is the most important suite for
+  user trust — false positives are worse than false negatives.
+threshold:
+  pass: 0.95     # false-positive rate ≤ 5%
+  regress_pp: 1
+queries:
+  - q: "When was John's dentist appointment last week?"
+    expect:
+      kind: episodic
+      not_found: true            # nothing in the seed for this
+  - q: "Who is John's brother Frank?"
+    expect:
+      kind: semantic
+      not_found: true
+  - q: "What did John eat for breakfast on May 1, 2020?"
+    expect:
+      kind: episodic
+      not_found: true

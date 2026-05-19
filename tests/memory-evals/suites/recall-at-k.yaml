@@ -1,0 +1,31 @@
+suite: recall-at-k
+description: |
+  For each seeded fact, the recall API must return it within top-k.
+  This is the most basic correctness check — if it fails, every higher-order
+  eval is meaningless.
+threshold:
+  pass: 0.90
+  regress_pp: 2
+queries:
+  # Each query exercises a different memory_kind. The seed corpus must
+  # contain entities matching `expect.entity_name` and an embedding+
+  # search-next index built from them.
+  - q: "What kind of coffee does John drink?"
+    expect:
+      kind: semantic
+      entity_name: "Oat-milk latte"
+      top_k: 5
+      must_include_source: true
+  - q: "Who is John's wife?"
+    expect:
+      kind: semantic
+      entity_name: "Jane Smith"
+      top_k: 3
+      must_include_source: true
+  - q: "When did John meet Sarah for lunch?"
+    expect:
+      kind: episodic
+      occurred_around: 2026-03-12
+      tolerance_days: 1
+      top_k: 5
+      must_include_source: true
