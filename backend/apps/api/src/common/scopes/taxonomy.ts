@@ -46,6 +46,10 @@ export const SCOPES = {
   DEVICES_INGEST: 'devices:ingest',
   DEVICES_ADMIN: 'devices:admin',
 
+  // privacy / consent (plan 09)
+  PRIVACY_READ: 'privacy:read',
+  PRIVACY_WRITE: 'privacy:write',
+
   // admin
   ADMIN_READ: 'admin:read',
   ADMIN_WRITE: 'admin:write',
