@@ -18,6 +18,7 @@
  */
 
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
@@ -28,23 +29,56 @@ import { ToolsModule } from '@ci/domains/tools';
 
 import { OllamaController } from './controllers/OllamaController';
 import { AnswerInferenceCron } from './cron/AnswerInferenceCron';
+import { LlmInvocationEntity } from './entities/LlmInvocationEntity';
 import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { InventoryListener } from './listeners/InventoryListener';
+import { OllamaProvider } from './providers/OllamaProvider';
+import { LlmInvocationLogger } from './services/LlmInvocationLogger';
+import { LlmRouter } from './services/LlmRouter';
 import { OllamaService } from './services/OllamaService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [ConversationModule, EventsModule, FilesModule, IntelligenceModule, MemoryModule, ToolsModule],
+  imports: [
+    ConversationModule,
+    EventsModule,
+    FilesModule,
+    IntelligenceModule,
+    MemoryModule,
+    ToolsModule,
+    TypeOrmModule.forFeature([LlmInvocationEntity]),
+  ],
   providers: [
     AnswerInferenceCron,
     AnswerInferenceCron,
     ImageDescriptionListener,
     InventoryListener,
     OllamaService,
+    // Plan 04 — provider-agnostic LLM seam. OllamaProvider wraps the same
+    // `ollama` SDK the legacy OllamaService uses; LlmRouter dispatches by
+    // task/policy. Future providers (Anthropic, OpenAI, OpenRouter) register
+    // themselves here when the user has provider_keys configured.
+    OllamaProvider,
+    LlmInvocationLogger,
+    LlmRouter,
   ],
   controllers: [OllamaController],
-  exports: [],
+  exports: [LlmRouter],
 })
 export class LLMModule {}
+
+export { LlmRouter } from './services/LlmRouter';
+export type {
+  LlmProvider,
+  LlmTask,
+  ChatMessage,
+  ChatOptions,
+  ChatResponse,
+  ChatResponseChunk,
+  EmbedOptions,
+} from './providers/LlmProvider';
+export { OllamaProvider } from './providers/OllamaProvider';
+export { DEFAULT_MODEL_POLICIES } from './policy/ModelPolicy';
+export type { ModelPolicy, ModelPreference, PiiEgress } from './policy/ModelPolicy';
