@@ -11,6 +11,7 @@ import {
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule, seconds } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { RequestContextMiddleware } from '@ci/common/context';
@@ -20,6 +21,7 @@ import { GlobalExceptionsFilter } from '@ci/common/filters';
 import { IdFormatGuard } from '@ci/common/guards';
 import { LoggingModule, LoggerService, RequestLoggerMiddleware } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
+import { ActorThrottlerGuard } from '@ci/common/throttling';
 import config from '@ci/configuration';
 import { ActorsModule } from '@ci/domains/actors';
 import { AuditModule } from '@ci/domains/audit';
@@ -63,6 +65,14 @@ import { UserModule } from '@ci/domains/user';
     LoggingModule,
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
+    // Plan 07 — global per-actor throttling.
+    // Two layers: short burst window + sustained per-minute. Routes can
+    // override with @Throttle({...}) on the handler. ApiKeyStrategy stashes
+    // actorId on the request so ActorThrottlerGuard keys on actor, not IP.
+    ThrottlerModule.forRoot([
+      { name: 'burst', ttl: seconds(10), limit: 60 },
+      { name: 'sustained', ttl: seconds(60), limit: 600 },
+    ]),
     ActorsModule,
     AuditModule,
     AuthModule,
@@ -94,6 +104,10 @@ import { UserModule } from '@ci/domains/user';
     {
       provide: APP_GUARD,
       useClass: IdFormatGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ActorThrottlerGuard,
     },
     {
       provide: APP_FILTER,
