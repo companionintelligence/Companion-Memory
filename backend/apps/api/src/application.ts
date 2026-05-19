@@ -33,6 +33,7 @@ import { ConnectionsModule } from '@ci/domains/connections';
 import { DeviceModule } from '@ci/domains/devices';
 import { EtlModule } from '@ci/domains/etl';
 import { EventsModule } from '@ci/domains/events';
+import { ExportModule } from '@ci/domains/export';
 import { FilesModule } from '@ci/domains/files';
 import { GraphModule } from '@ci/domains/graph';
 import { GraphQLModule } from '@ci/domains/graphql';
@@ -87,6 +88,7 @@ import { UserModule } from '@ci/domains/user';
     DeviceModule,
     EtlModule,
     EventsModule,
+    ExportModule,
     FilesModule,
     GraphModule,
     GraphQLModule,
