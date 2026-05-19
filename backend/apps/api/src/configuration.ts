@@ -97,6 +97,17 @@ export const ConfigSchema = z.object({
       host: z.string(),
     }),
   }),
+  mcp: z.object({
+    /**
+     * Plan 01 §4.2 — when set, the MCP controller refuses every request whose
+     * authenticated `userId` does not match this value. Used when MCP is
+     * exposed remotely (through CI-Portal / Gateway) and we want a hard
+     * single-owner guarantee independent of API-key scoping.
+     *
+     * Empty string disables the check (default for single-tenant local Hubs).
+     */
+    ownerUserId: z.string(),
+  }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     'scheduled.connection.sync': booleanStringSchema,

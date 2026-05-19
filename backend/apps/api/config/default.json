@@ -79,6 +79,9 @@
       "host": "http://hbpe-service:8002"
     }
   },
+  "mcp": {
+    "ownerUserId": ""
+  },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,

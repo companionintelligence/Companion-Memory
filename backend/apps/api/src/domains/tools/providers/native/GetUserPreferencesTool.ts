@@ -86,6 +86,7 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
       'Can query preferences for the current user or family members (e.g., "my wife", "John"). ' +
       'Returns detailed information about each preference including strength and rich context.',
     category: 'database',
+    requiredScopes: ['profile:read'],
     parameters: {
       type: 'object',
       properties: {

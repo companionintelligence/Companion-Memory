@@ -1,14 +1,21 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
 import { z, type ZodTypeAny } from 'zod';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { matchScopes, missingScopes, SCOPES } from '@ci/common/scopes';
 import { type JSONSchema, ToolRegistry } from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
 
 import { GraphQLToolAdapter } from './GraphQLToolAdapter';
 import { McpExecutorService } from './McpExecutorService';
+
+interface ApiKeyAuthMarker {
+  scopes: string[];
+  keyId: string;
+  actorId: string;
+}
 
 @Injectable()
 export class McpToolService implements OnModuleInit {
@@ -52,6 +59,8 @@ export class McpToolService implements OnModuleInit {
       throw new Error(`Tool not found: ${name}`);
     }
 
+    this.assertScopesSatisfied(tool, context.req);
+
     if (tool.source === 'graphql') {
       const graphqlTool = this.graphqlAdapter.getTools().find((t) => t.name === name);
 
@@ -64,7 +73,8 @@ export class McpToolService implements OnModuleInit {
 
     // Native tool execution
     const userId = (context.req.user as { id?: string })?.id;
-    const requestContext: RequestContext = { userId };
+    const apiKeyAuth = (context.req as { apiKeyAuth?: ApiKeyAuthMarker }).apiKeyAuth;
+    const requestContext: RequestContext = { userId, actorId: apiKeyAuth?.actorId ?? userId };
     const result = await this.toolRegistry.executeTool(name, requestContext, args);
 
     if (!result.success) {
@@ -74,13 +84,46 @@ export class McpToolService implements OnModuleInit {
     return result.data;
   }
 
+  /**
+   * Throw 403 if the calling API key lacks any of the tool's required scopes.
+   * Session-JWT callers (no `apiKeyAuth` marker) are not checked — the human
+   * owner browsing their own twin always has full access.
+   */
+  private assertScopesSatisfied(tool: McpRegisteredTool, req: import('express').Request) {
+    if (tool.requiredScopes.length === 0) {
+      return;
+    }
+
+    const apiKeyAuth = (req as { apiKeyAuth?: ApiKeyAuthMarker }).apiKeyAuth;
+    if (!apiKeyAuth) {
+      return;
+    }
+
+    if (matchScopes(apiKeyAuth.scopes, tool.requiredScopes)) {
+      return;
+    }
+
+    throw new ForbiddenException({
+      error: 'insufficient_scope',
+      tool: tool.name,
+      missing: missingScopes(apiKeyAuth.scopes, tool.requiredScopes),
+      required: tool.requiredScopes,
+    });
+  }
+
   private registerGraphQLTools() {
     for (const tool of this.graphqlAdapter.getTools()) {
+      // Query → read scope. Mutation → write scope. Per-resolver overrides
+      // via an @AuthScope GraphQL directive land in a follow-up; until then
+      // mutations require memory:write as a conservative default.
+      const requiredScopes = tool.operationType === 'mutation' ? [SCOPES.MEMORY_WRITE] : [SCOPES.MEMORY_READ];
+
       this.tools.set(tool.name, {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
         source: 'graphql',
+        requiredScopes,
       });
     }
   }
@@ -96,11 +139,17 @@ export class McpToolService implements OnModuleInit {
         continue;
       }
 
+      // Native tools self-declare via ToolSchema.requiredScopes. If they don't,
+      // default to tools:invoke:<name> so the MCP layer always knows what's
+      // being asked of the caller.
+      const requiredScopes = schema.requiredScopes ?? [`${SCOPES.TOOLS_INVOKE}:${schema.name}`];
+
       this.tools.set(schema.name, {
         name: schema.name,
         description: schema.description,
         inputSchema: this.jsonSchemaToZodShape(schema.parameters),
         source: 'native',
+        requiredScopes,
       });
     }
   }

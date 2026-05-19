@@ -33,6 +33,18 @@ export interface ToolSchema {
   parameters: JSONSchema;
   examples?: ToolExample[];
   category?: string;
+  /**
+   * Scopes (plan 07) a caller must hold to invoke this tool when accessed
+   * over MCP / API-key paths. Session JWT (the human owner) is never
+   * checked. Omit or empty to leave the tool ungated.
+   */
+  requiredScopes?: string[];
+  /**
+   * Whether the tool requires explicit user confirmation before each
+   * invocation (plan 06). The MCP layer responds with a one-shot token the
+   * caller must echo back to actually execute. Defaults to false.
+   */
+  requiresConfirmation?: boolean;
 }
 
 /**

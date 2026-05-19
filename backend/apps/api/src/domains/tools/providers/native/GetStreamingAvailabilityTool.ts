@@ -78,6 +78,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     description:
       'Get currently trending movies and TV shows with real streaming availability data. Can filter by genre and content type. Shows which platforms (Netflix, Hulu, Disney+, etc.) currently have each title available. Use this when users ask about what to watch, want specific genres, or need streaming recommendations.',
     category: 'external_api',
+    requiredScopes: ['tools:invoke:getStreamingAvailability'],
     parameters: {
       type: 'object',
       properties: {

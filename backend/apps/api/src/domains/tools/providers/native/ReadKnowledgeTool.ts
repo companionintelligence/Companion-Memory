@@ -105,6 +105,7 @@ export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledg
       "This is the most flexible knowledge retrieval tool - use it when specialized tools like getEntertainmentPreferences don't fit your needs. " +
       'Common use cases: finding user preferences, exploring social connections, discovering hobbies and interests, querying locations, and understanding relationships between entities.',
     category: 'database',
+    requiredScopes: ['memory:read'],
     parameters: {
       type: 'object',
       properties: {

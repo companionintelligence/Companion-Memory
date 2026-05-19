@@ -104,6 +104,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
     name: 'writeKnowledge',
     description: 'Create or update entities and relationships in the personal knowledge graph.',
     category: 'database',
+    requiredScopes: ['memory:write'],
     parameters: {
       type: 'object',
       properties: {

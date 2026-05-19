@@ -66,6 +66,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
       'For specific graph queries like "my family members", use readKnowledge instead. ' +
       'For precise entity lookups, use readKnowledge with filters.',
     category: 'database',
+    requiredScopes: ['memory:read'],
     parameters: {
       type: 'object',
       properties: {

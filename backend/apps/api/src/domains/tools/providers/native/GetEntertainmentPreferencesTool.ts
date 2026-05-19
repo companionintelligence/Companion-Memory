@@ -83,6 +83,7 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
       'Returns both likes and dislikes with detailed context. ' +
       'Can query for current user or family members (e.g., "my wife").',
     category: 'database',
+    requiredScopes: ['profile:read'],
     parameters: {
       type: 'object',
       properties: {

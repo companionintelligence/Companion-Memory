@@ -36,6 +36,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     name: 'forgetKnowledge',
     description: 'Archive or remove entities and relationships from the knowledge graph.',
     category: 'database',
+    requiredScopes: ['memory:delete'],
     parameters: {
       type: 'object',
       properties: {

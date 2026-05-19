@@ -39,6 +39,9 @@
       "host": "HBPE_HOST"
     }
   },
+  "mcp": {
+    "ownerUserId": "MCP_OWNER_USER_ID"
+  },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",

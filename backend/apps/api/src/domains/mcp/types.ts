@@ -18,4 +18,10 @@ export interface McpRegisteredTool {
   description: string;
   inputSchema: Record<string, ZodTypeAny>;
   source: McpToolSource;
+  /**
+   * Scopes a calling API key must hold to invoke this tool (plan 07).
+   * Session JWT callers (the human owner) are not checked.
+   * Empty array = no scope gating beyond the controller's `JwtOrApiKeyAuthGuard`.
+   */
+  requiredScopes: string[];
 }

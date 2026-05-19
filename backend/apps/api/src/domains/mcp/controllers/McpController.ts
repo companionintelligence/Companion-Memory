@@ -21,11 +21,33 @@ import { v4 as uuidv4 } from 'uuid';
 import { Context, type RequestContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 
 import { McpServerService } from '../services/McpServerService';
 
 /** How long a session can be idle before it is reaped (ms). */
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Plan 01 §4.2 — owner-binding. When `config.mcp.ownerUserId` is set, the
+ * controller refuses every request whose authenticated `userId` does not
+ * match. Used when MCP is exposed remotely and a single human owner is
+ * required (independent of API-key scoping). Empty string disables the
+ * check; that's the default for local single-tenant Hubs.
+ */
+function assertOwnerBinding(userId: string | undefined) {
+  const owner = config.mcp.ownerUserId;
+  if (!owner) {
+    return;
+  }
+
+  if (userId !== owner) {
+    throw new ForbiddenException({
+      error: 'owner_mismatch',
+      message: 'MCP is bound to a specific owner and this caller is not it.',
+    });
+  }
+}
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
@@ -52,6 +74,8 @@ export class McpController {
    */
   @Post()
   async handlePost(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
+    assertOwnerBinding(context.userId);
+
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     let transport: StreamableHTTPServerTransport | undefined;
@@ -122,6 +146,8 @@ export class McpController {
    */
   @Get()
   async handleGet(@Context() context: RequestContext, @Req() req: Request, @Res() res: Response) {
+    assertOwnerBinding(context.userId);
+
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     if (!sessionId) {
@@ -157,6 +183,8 @@ export class McpController {
     @Context() context: RequestContext,
     @Headers('mcp-session-id') sessionId: string | undefined,
   ) {
+    assertOwnerBinding(context.userId);
+
     if (!sessionId) {
       throw new BadRequestException('Missing Mcp-Session-Id header');
     }

@@ -55,6 +55,7 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
       'Returns relationship details including closeness scores and interaction frequency. ' +
       'Can optionally include their preferences (likes/dislikes) for planning activities.',
     category: 'database',
+    requiredScopes: ['memory:read'],
     parameters: {
       type: 'object',
       properties: {
