@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { RelationshipService } from '@ci/domains/graph';
 import { PersonService } from '@ci/domains/memory';
+import { ProvenanceService } from '@ci/domains/provenance';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -65,6 +66,7 @@ export class GoogleContactsTransformService {
     private readonly connectionService: ConnectionService,
     private readonly promoteService: PromoteService,
     private readonly relationshipService: RelationshipService,
+    private readonly provenanceService: ProvenanceService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GoogleContactsTransformService.name);
@@ -285,6 +287,13 @@ export class GoogleContactsTransformService {
           },
         );
 
+        // Plan 08 — record provenance for newly created contact. Best-effort.
+        await this.provenanceService.recordEntity(contactEntityId, {
+          kind: 'etl',
+          sourceProvider: `google_contacts:${connectionId}`,
+          sourceId: contact.resourceName ?? contactEntityId,
+        });
+
         this.logger.log('Created new contact entity', {
           contactEntityId,
           name: displayName,
@@ -313,7 +322,7 @@ export class GoogleContactsTransformService {
 
       // Create KNOWS relationship (ensuring every entity has at least one relationship)
       const context = toServiceContext({ userId });
-      await this.relationshipService.upsert(context, {
+      const relationship = await this.relationshipService.upsert(context, {
         fromNodeId: userEntityId,
         fromNodeType: 'person',
         toNodeId: contactEntityId,
@@ -324,6 +333,13 @@ export class GoogleContactsTransformService {
           connection_id: connectionId,
           synced_at: new Date().toISOString(),
         },
+      });
+
+      // Plan 08 — record provenance for the KNOWS relationship. Best-effort.
+      await this.provenanceService.recordRelationship(relationship.id, {
+        kind: 'etl',
+        sourceProvider: `google_contacts:${connectionId}`,
+        sourceId: `${connectionId}:${contactEntityId}`,
       });
 
       this.logger.log('Google Contact saved successfully', {

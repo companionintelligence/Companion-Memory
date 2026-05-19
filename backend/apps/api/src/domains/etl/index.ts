@@ -24,6 +24,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { GraphModule } from '@ci/domains/graph';
 import { MemoryModule } from '@ci/domains/memory';
+import { ProvenanceModule } from '@ci/domains/provenance';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule } from '@ci/domains/user';
 
@@ -68,6 +69,7 @@ import { SpotifyTopArtistsTransformService } from './services/Spotify/transform/
     FilesModule,
     GraphModule,
     MemoryModule,
+    ProvenanceModule,
     SearchNextModule,
     UserModule,
   ],

@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { RelationshipService } from '@ci/domains/graph';
 import { PersonService } from '@ci/domains/memory';
+import { ProvenanceService } from '@ci/domains/provenance';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -26,6 +27,7 @@ export class FacebookProfileTransformService {
     private readonly personService: PersonService,
     private readonly promoteService: PromoteService,
     private readonly relationshipService: RelationshipService,
+    private readonly provenanceService: ProvenanceService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookProfileTransformService.name);
@@ -163,6 +165,14 @@ export class FacebookProfileTransformService {
           properties: mergedProperties,
           lastAccessed: new Date(),
         });
+
+        // Plan 08 — refresh provenance row for the updated person. Best-effort.
+        await this.provenanceService.recordEntity(existingEntity.id, {
+          kind: 'etl',
+          sourceProvider: `facebook:${connection.id}`,
+          sourceId: profile.id,
+        });
+
         this.logger.log('Updated existing person with Facebook profile', {
           userId,
           entityId: existingEntity.id,
@@ -179,9 +189,17 @@ export class FacebookProfileTransformService {
           description: `Facebook profile: ${profile.name}`,
           properties,
         });
+
+        // Plan 08 — record provenance for the newly created person. Best-effort.
+        await this.provenanceService.recordEntity(entityId, {
+          kind: 'etl',
+          sourceProvider: `facebook:${connection.id}`,
+          sourceId: profile.id,
+        });
+
         const { userNode } = await this.promoteService.getUserAndEntity(context, userId);
         // Create relationship to user
-        await this.relationshipService.upsert(context, {
+        const relationship = await this.relationshipService.upsert(context, {
           fromNodeId: userNode.entityId,
           fromNodeType: 'person',
           toNodeId: entityId,
@@ -192,6 +210,14 @@ export class FacebookProfileTransformService {
             connection_id: connection.id,
           },
         });
+
+        // Plan 08 — record provenance for the IS relationship. Best-effort.
+        await this.provenanceService.recordRelationship(relationship.id, {
+          kind: 'etl',
+          sourceProvider: `facebook:${connection.id}`,
+          sourceId: `${connection.id}:${entityId}`,
+        });
+
         this.logger.log('Created new person from Facebook profile', {
           userId,
           entityId,
