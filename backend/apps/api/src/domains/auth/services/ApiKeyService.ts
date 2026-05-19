@@ -101,7 +101,7 @@ export class ApiKeyService {
     return (result.affected ?? 0) > 0;
   }
 
-  async validateKey(rawKey: string): Promise<{ userId: string } | null> {
+  async validateKey(rawKey: string): Promise<{ userId: string; scopes: string[]; keyId: string } | null> {
     if (rawKey.length !== API_KEY_HEX_LENGTH || !API_KEY_HEX_REGEX.test(rawKey)) {
       return null;
     }
@@ -110,7 +110,7 @@ export class ApiKeyService {
 
     const key = await this.apiKeyRepository.findOne({
       where: { hashed_key: hashed },
-      select: ['id', 'user_id', 'expires_at'],
+      select: ['id', 'user_id', 'expires_at', 'scopes'],
     });
 
     if (!key) {
@@ -123,7 +123,7 @@ export class ApiKeyService {
 
     await this.apiKeyRepository.update(key.id, { last_used_at: new Date() });
 
-    return { userId: key.user_id };
+    return { userId: key.user_id, scopes: key.scopes ?? [], keyId: key.id };
   }
 
   private hash(key: string): string {

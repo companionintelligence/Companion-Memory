@@ -70,6 +70,13 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
       userId: user.id,
     });
 
+    // Attach the validated key's scopes to the request so downstream guards
+    // (ScopesGuard) can read them via `req.apiKeyAuth`.
+    (req as Request & { apiKeyAuth?: { scopes: string[]; keyId: string } }).apiKeyAuth = {
+      scopes: result.scopes,
+      keyId: result.keyId,
+    };
+
     return user;
   }
 }
