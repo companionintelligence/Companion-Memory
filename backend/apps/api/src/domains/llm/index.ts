@@ -20,6 +20,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ConnectionsModule } from '@ci/domains/connections';
 import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
@@ -32,7 +33,9 @@ import { AnswerInferenceCron } from './cron/AnswerInferenceCron';
 import { LlmInvocationEntity } from './entities/LlmInvocationEntity';
 import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { InventoryListener } from './listeners/InventoryListener';
+import { AnthropicProvider } from './providers/AnthropicProvider';
 import { OllamaProvider } from './providers/OllamaProvider';
+import { OpenAiProvider } from './providers/OpenAiProvider';
 import { LlmInvocationLogger } from './services/LlmInvocationLogger';
 import { LlmRouter } from './services/LlmRouter';
 import { OllamaService } from './services/OllamaService';
@@ -42,6 +45,7 @@ import { OllamaService } from './services/OllamaService';
  */
 @Module({
   imports: [
+    ConnectionsModule,
     ConversationModule,
     EventsModule,
     FilesModule,
@@ -58,9 +62,11 @@ import { OllamaService } from './services/OllamaService';
     OllamaService,
     // Plan 04 — provider-agnostic LLM seam. OllamaProvider wraps the same
     // `ollama` SDK the legacy OllamaService uses; LlmRouter dispatches by
-    // task/policy. Future providers (Anthropic, OpenAI, OpenRouter) register
-    // themselves here when the user has provider_keys configured.
+    // task/policy. AnthropicProvider and OpenAiProvider read keys from
+    // provider_keys at call time using ContextService.getUserId().
     OllamaProvider,
+    AnthropicProvider,
+    OpenAiProvider,
     LlmInvocationLogger,
     LlmRouter,
   ],
@@ -80,5 +86,7 @@ export type {
   EmbedOptions,
 } from './providers/LlmProvider';
 export { OllamaProvider } from './providers/OllamaProvider';
+export { AnthropicProvider } from './providers/AnthropicProvider';
+export { OpenAiProvider } from './providers/OpenAiProvider';
 export { DEFAULT_MODEL_POLICIES } from './policy/ModelPolicy';
 export type { ModelPolicy, ModelPreference, PiiEgress } from './policy/ModelPolicy';

@@ -4,6 +4,7 @@ import { ContextService } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { DEFAULT_MODEL_POLICIES, type ModelPolicy } from '../policy/ModelPolicy';
+import { AnthropicProvider } from '../providers/AnthropicProvider';
 import type {
   ChatMessage,
   ChatOptions,
@@ -14,6 +15,7 @@ import type {
   LlmTask,
 } from '../providers/LlmProvider';
 import { OllamaProvider } from '../providers/OllamaProvider';
+import { OpenAiProvider } from '../providers/OpenAiProvider';
 
 import { LlmInvocationLogger } from './LlmInvocationLogger';
 
@@ -35,12 +37,25 @@ export class LlmRouter {
   constructor(
     private readonly ollama: OllamaProvider,
     private readonly logger: LoggerService,
+    // External providers are optional — they only work when the user has a
+    // provider_key configured. The router picks the best available provider
+    // at call time using pickProvider().
+    @Optional() @Inject(AnthropicProvider) private readonly anthropic?: AnthropicProvider,
+    @Optional() @Inject(OpenAiProvider) private readonly openai?: OpenAiProvider,
     // Optional so the unit test (which instantiates LlmRouter directly) keeps
     // working. Production wires the logger via Nest DI.
     @Optional() @Inject(LlmInvocationLogger) private readonly invocationLogger?: LlmInvocationLogger,
   ) {
     this.logger.setContext(LlmRouter.name);
     this.register(ollama);
+
+    if (anthropic) {
+      this.register(anthropic);
+    }
+
+    if (openai) {
+      this.register(openai);
+    }
   }
 
   register(provider: LlmProvider): void {

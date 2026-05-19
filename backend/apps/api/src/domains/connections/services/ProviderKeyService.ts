@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 
+import { ProviderEntity } from '../entities/ProviderEntity';
 import { ProviderKeyEntity, type ProviderKey } from '../entities/ProviderKeyEntity';
 
 export interface CreateProviderKeyDto {
@@ -23,6 +24,8 @@ export class ProviderKeyService {
   constructor(
     @InjectRepository(ProviderKeyEntity)
     private readonly providerKeyRepository: Repository<ProviderKeyEntity>,
+    @InjectRepository(ProviderEntity)
+    private readonly providerRepository: Repository<ProviderEntity>,
   ) {}
 
   async findAll(context: ServiceContext): Promise<ProviderKey[]> {
@@ -57,6 +60,23 @@ export class ProviderKeyService {
     const entity = await this.providerKeyRepository.findOne({ where });
 
     return entity ? ProviderKeyEntity.toEgressType(entity) : null;
+  }
+
+  /**
+   * Look up a provider key by the provider's human-readable name (e.g.
+   * 'anthropic', 'openai'). Used by LLM providers that don't know the
+   * provider UUID in advance.
+   */
+  async findByProviderName(context: UserServiceContext, providerName: string): Promise<ProviderKey | null> {
+    const provider = await this.providerRepository.findOne({
+      where: { name: providerName },
+    });
+
+    if (!provider) {
+      return null;
+    }
+
+    return this.findByProviderId(context, provider.id);
   }
 
   async create(context: ServiceContext, data: CreateProviderKeyDto): Promise<ProviderKey> {

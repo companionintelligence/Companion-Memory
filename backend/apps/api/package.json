@@ -32,6 +32,7 @@
   },
   "packageManager": "yarn@4.9.1",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "@apollo/server": "^5.1.0",
     "@as-integrations/express5": "^1.1.2",
     "@aws-sdk/client-s3": "^3.823.0",
@@ -66,6 +67,7 @@
     "graphql-query-complexity": "^1.1.0",
     "graphql-type-json": "^0.3.2",
     "ollama": "^0.5.17",
+    "openai": "^6.38.0",
     "p-limit": "^7.1.1",
     "parse-duration": "^2.1.4",
     "passport": "^0.7.0",
