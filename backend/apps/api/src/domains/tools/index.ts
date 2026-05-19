@@ -21,6 +21,7 @@
  */
 
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { ConversationModule } from '@ci/domains/conversations';
@@ -30,6 +31,7 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 
+import { ToolInvocationEntity } from './entities/ToolInvocationEntity';
 import { DatabaseSearchTool } from './providers/native/DatabaseSearchTool';
 import { ForgetKnowledgeTool } from './providers/native/ForgetKnowledgeTool';
 import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
@@ -40,6 +42,7 @@ import { NativeToolProvider } from './providers/native/NativeToolProvider';
 import { ReadKnowledgeTool } from './providers/native/ReadKnowledgeTool';
 import { WriteKnowledgeTool } from './providers/native/WriteKnowledgeTool';
 import { ToolRegistry } from './registry/ToolRegistry';
+import { ToolInvocationLogger } from './services/ToolInvocationLogger';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 
 // Instantiate native tools
@@ -65,9 +68,11 @@ const nativeToolInstances = [
     MemoryModule,
     IntelligenceModule,
     SearchNextModule,
+    TypeOrmModule.forFeature([ToolInvocationEntity]),
   ],
   providers: [
     ToolRegistry,
+    ToolInvocationLogger,
     // Native tools
     ...nativeToolInstances,
     // Native tool provider with injected tools

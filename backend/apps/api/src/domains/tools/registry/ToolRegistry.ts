@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, Optional, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import type { BaseTool } from '../core/BaseTool';
 import type { ToolSchema, ToolResult } from '../core/types';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
+import { ToolInvocationLogger } from '../services/ToolInvocationLogger';
 
 /**
  * Centralized registry for managing all tools from various providers
@@ -18,7 +19,12 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
   private readonly toolToProvider = new Map<string, string>();
 
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    private readonly logger: LoggerService,
+    // Optional so existing tests that build ToolRegistry standalone keep
+    // working. The audit/eval pipeline depends on the logger when wired up.
+    @Optional() @Inject(ToolInvocationLogger) private readonly invocationLogger?: ToolInvocationLogger,
+  ) {
     this.logger.setContext(ToolRegistry.name);
   }
 
@@ -150,6 +156,8 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
    */
   async executeTool(name: string, context: RequestContext, input: unknown): Promise<ToolResult> {
     const tool = this.tools.get(name);
+    const provider = this.toolToProvider.get(name);
+    const actorId = context.actorId ?? context.userId;
 
     if (!tool) {
       this.logger.warn(`Attempted to execute unknown tool: ${name}`, {
@@ -158,6 +166,8 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
         availableTools: Array.from(this.tools.keys()),
       });
 
+      // Don't write tool_invocations rows for not-found names — they're
+      // typo-prone and would let any caller flood the audit log.
       return {
         success: false,
         error: {
@@ -171,10 +181,26 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`Executing tool: ${name}`, {
       toolName: name,
       userId: context.userId,
-      provider: this.toolToProvider.get(name),
+      provider,
     });
 
-    return await tool.execute(context, input);
+    const startedAt = Date.now();
+    const result = await tool.execute(context, input);
+    const latencyMs = Date.now() - startedAt;
+
+    this.invocationLogger?.record({
+      actorId,
+      toolName: name,
+      provider,
+      args: input,
+      result: result.success ? result.data : undefined,
+      status: result.success ? 'ok' : 'error',
+      latencyMs,
+      errorCode: result.error?.code,
+      errorMessage: result.error?.message,
+    });
+
+    return result;
   }
 
   /**
