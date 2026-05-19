@@ -9,6 +9,7 @@ import { ConnectionEntity } from '@ci/domains/connections';
 import { EventService } from '@ci/domains/events';
 import { NodeService, RelationshipService } from '@ci/domains/graph';
 import { Person, PersonService } from '@ci/domains/memory';
+import { ProvenanceService } from '@ci/domains/provenance';
 import { UserService } from '@ci/domains/user';
 
 interface ParticipantInfo {
@@ -28,6 +29,7 @@ export class PromoteService {
     private readonly userService: UserService,
     private readonly nodeService: NodeService,
     private readonly relationshipService: RelationshipService,
+    private readonly provenanceService: ProvenanceService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PromoteService.name);
@@ -154,11 +156,25 @@ export class PromoteService {
       participants,
     });
 
+    // Plan 08 — record provenance for each upserted person so retrievals can
+    // cite their source (which provider, which connection). Best-effort; a
+    // failure here never blocks the graph write.
+    const sourceProvider = `${source}:${connectionId}`;
     await Promise.all(
-      entities.map((entity) => {
+      entities.map((entity) =>
+        this.provenanceService.recordEntity(entity.id, {
+          kind: 'etl',
+          sourceProvider,
+          sourceId: entity.id,
+        }),
+      ),
+    );
+
+    await Promise.all(
+      entities.map(async (entity) => {
         try {
           if (userNode.entityId !== entity.id) {
-            this.relationshipService.create(context, {
+            const created = await this.relationshipService.create(context, {
               fromNodeId: userNode.entityId,
               fromNodeType: 'person',
               toNodeId: entity.id,
@@ -173,6 +189,15 @@ export class PromoteService {
                 last_interaction: new Date().toISOString(),
               },
             });
+
+            const relationshipId = (created as { id?: string } | undefined)?.id;
+            if (relationshipId) {
+              await this.provenanceService.recordRelationship(relationshipId, {
+                kind: 'etl',
+                sourceProvider,
+                sourceId: `${connectionId}:${entity.id}`,
+              });
+            }
           }
         } catch (err) {
           this.logger.error('Error creating relationship', {

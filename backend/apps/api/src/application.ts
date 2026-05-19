@@ -44,6 +44,7 @@ import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
 import { PositionModule } from '@ci/domains/position';
 import { PredictionsModule } from '@ci/domains/predictions';
+import { ProvenanceModule } from '@ci/domains/provenance';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SkillsModule } from '@ci/domains/skills';
@@ -94,6 +95,7 @@ import { UserModule } from '@ci/domains/user';
     OnboardingModule,
     PositionModule,
     PredictionsModule,
+    ProvenanceModule,
     ToolsModule,
     MemoryModule,
     NotesModule,
