@@ -11,6 +11,7 @@ import { LoggingModule } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 
 import { FilesModule } from '..';
+import { DocumentChunkEntity } from '../entities/DocumentChunkEntity';
 import { FileEntity } from '../entities/FileEntity';
 import { SavedSearchEntity } from '../entities/SavedSearchEntity';
 import { FileService } from '../services/FileService';
@@ -30,6 +31,7 @@ describe('File routes', () => {
     const repositoryTokensToMock = [
       getRepositoryToken(FileEntity),
       getRepositoryToken(SavedSearchEntity),
+      getRepositoryToken(DocumentChunkEntity),
       'PgBossJobEntityRepository',
       'PgBossArchiveEntityRepository',
       'PgBossScheduleEntityRepository',

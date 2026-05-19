@@ -17,12 +17,16 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { EmbeddingModule } from '@ci/common/embeddings';
 import { EventsModule } from '@ci/domains/events';
 
 import { FilesController } from './controllers/FilesController';
+import { DocumentChunkEntity } from './entities/DocumentChunkEntity';
 import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
 import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
+import { DocumentParseJobListener } from './listeners/DocumentParseJobListener';
 import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
+import { DocumentParserService } from './services/DocumentParserService';
 import { FileService } from './services/FileService';
 import { SavedSearchService } from './services/SavedSearchService';
 
@@ -30,14 +34,25 @@ import { SavedSearchService } from './services/SavedSearchService';
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([FileEntity, SavedSearchEntity]), EventsModule],
-  providers: [FileService, SavedSearchService, FilePreviewGenerationListener],
+  imports: [
+    TypeOrmModule.forFeature([FileEntity, SavedSearchEntity, DocumentChunkEntity]),
+    EmbeddingModule,
+    EventsModule,
+  ],
+  providers: [
+    FileService,
+    SavedSearchService,
+    DocumentParserService,
+    DocumentParseJobListener,
+    FilePreviewGenerationListener,
+  ],
   controllers: [FilesController],
-  exports: [FileService, SavedSearchService],
+  exports: [FileService, SavedSearchService, DocumentParserService],
 })
 export class FilesModule {}
 
-export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { FileEntity, FileService, SavedSearchEntity, SavedSearchService, DocumentParserService };
+export { DocumentChunkEntity };
 export type { File, SignedFile, SavedSearch };
 export {
   FileCreatedEvent,
