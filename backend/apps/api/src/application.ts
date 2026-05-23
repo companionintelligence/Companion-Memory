@@ -26,6 +26,7 @@ import { AuthScopesModule } from '@ci/common/scopes';
 import { ActorThrottlerGuard } from '@ci/common/throttling';
 import config from '@ci/configuration';
 import { ActorsModule } from '@ci/domains/actors';
+import { AgentMemoryModule } from '@ci/domains/agent-memory';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
@@ -79,6 +80,7 @@ import { UserModule } from '@ci/domains/user';
       { name: 'burst', ttl: seconds(10), limit: 60 },
       { name: 'sustained', ttl: seconds(60), limit: 600 },
     ]),
+    AgentMemoryModule,
     ActorsModule,
     AuditModule,
     AuthScopesModule,

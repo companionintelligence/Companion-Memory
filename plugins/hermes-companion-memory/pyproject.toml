@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "hermes-companion-memory"
+version = "0.1.0"
+description = "Companion Intelligence memory provider for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.entry-points."hermes_agent.plugins"]
+companion = "hermes_companion_memory:register"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hermes_companion_memory*"]

@@ -1,0 +1,8 @@
+name: companion
+version: 0.1.0
+description: "Companion Intelligence local-first personal memory. Predictive, graph-native, uncloud."
+hooks:
+  - prefetch
+  - sync_turn
+  - on_session_end
+  - on_pre_compress

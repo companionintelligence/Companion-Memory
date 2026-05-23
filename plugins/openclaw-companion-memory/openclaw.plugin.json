@@ -1,0 +1,8 @@
+{
+  "name": "@companion-intelligence/openclaw-memory",
+  "version": "0.1.0",
+  "type": "memory",
+  "slot": "memory",
+  "hooks": ["agent_end", "before_inference"],
+  "tools": ["memory_search", "memory_get", "companion_remember"]
+}

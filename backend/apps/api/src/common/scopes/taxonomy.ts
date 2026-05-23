@@ -50,6 +50,10 @@ export const SCOPES = {
   PRIVACY_READ: 'privacy:read',
   PRIVACY_WRITE: 'privacy:write',
 
+  // agent memory provider — Hermes / OpenClaw external integration (ci-memory-plan)
+  AGENT_MEMORY_WRITE: 'agent_memory:write',
+  AGENT_MEMORY_READ: 'agent_memory:read',
+
   // admin
   ADMIN_READ: 'admin:read',
   ADMIN_WRITE: 'admin:write',

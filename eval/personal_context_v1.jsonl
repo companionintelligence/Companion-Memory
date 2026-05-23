@@ -1,0 +1,50 @@
+{"id": "pc_001", "prompt": "What does Sarah usually order when we go to brunch?", "expected_entities": ["person", "preference"], "notes": "First-name only disambiguation; tests preference recall for a named person"}
+{"id": "pc_002", "prompt": "Where does my sister live now?", "expected_entities": ["person", "place"], "notes": "Relationship-based person reference; should resolve sister to a known contact"}
+{"id": "pc_003", "prompt": "What time do I usually wake up on weekdays?", "expected_entities": ["preference", "event"], "notes": "Personal routine / preference recall"}
+{"id": "pc_004", "prompt": "Who did I sit next to at the last team offsite?", "expected_entities": ["person", "event"], "notes": "Episodic memory of a recent professional event"}
+{"id": "pc_005", "prompt": "What is my go-to coffee order at Blue Bottle?", "expected_entities": ["preference", "place"], "notes": "Place-anchored preference recall"}
+{"id": "pc_006", "prompt": "Who is my main contact at Acme Corp?", "expected_entities": ["person", "organization"], "notes": "Professional context; should surface a known colleague at a named org"}
+{"id": "pc_007", "prompt": "When did I last see Mike?", "expected_entities": ["person", "event"], "notes": "Time-anchored recall for a first-name-only contact"}
+{"id": "pc_008", "prompt": "What did he think about the Barcelona trip?", "expected_entities": ["person", "place", "event"], "notes": "Pronoun resolution — 'he' must be resolved from context"}
+{"id": "pc_009", "prompt": "Who do I usually see when I visit Boston?", "expected_entities": ["person", "place"], "notes": "Cross-entity: people + place co-occurrence"}
+{"id": "pc_010", "prompt": "What should I do this weekend?", "expected_entities": ["event", "preference"], "notes": "Predictive question based on past weekend patterns and stated preferences"}
+{"id": "pc_011", "prompt": "Does Alex have any dietary restrictions?", "expected_entities": ["person", "preference"], "notes": "Person attribute lookup; first name could be ambiguous"}
+{"id": "pc_012", "prompt": "What was the name of the coffee shop near my old apartment?", "expected_entities": ["place"], "notes": "Place recall anchored to a prior home address"}
+{"id": "pc_013", "prompt": "Who introduced me to Jordan?", "expected_entities": ["person"], "notes": "Relationship provenance recall"}
+{"id": "pc_014", "prompt": "What was the book my mom recommended last month?", "expected_entities": ["person", "concept"], "notes": "Relationship-based reference (mom) + recent event recall"}
+{"id": "pc_015", "prompt": "What gym do I go to?", "expected_entities": ["place", "preference"], "notes": "Routine place preference"}
+{"id": "pc_016", "prompt": "What did I do last Wednesday?", "expected_entities": ["event"], "notes": "Time-anchored episodic memory, specific weekday"}
+{"id": "pc_017", "prompt": "Who was at dinner on Friday?", "expected_entities": ["person", "event"], "notes": "Group event recall, people disambiguation"}
+{"id": "pc_018", "prompt": "What does Jamie's partner do for work?", "expected_entities": ["person", "concept"], "notes": "Relationship graph traversal: Jamie → partner → occupation"}
+{"id": "pc_019", "prompt": "Where do I usually go running?", "expected_entities": ["place", "preference"], "notes": "Habitual location for a recurring activity"}
+{"id": "pc_020", "prompt": "What is my favorite restaurant in New York?", "expected_entities": ["place", "preference"], "notes": "City-scoped preference recall"}
+{"id": "pc_021", "prompt": "Does my colleague Tom have kids?", "expected_entities": ["person", "concept"], "notes": "Personal attribute of a named colleague"}
+{"id": "pc_022", "prompt": "When is my next dentist appointment?", "expected_entities": ["event", "place"], "notes": "Upcoming scheduled event retrieval"}
+{"id": "pc_023", "prompt": "What is the name of my landlord?", "expected_entities": ["person", "concept"], "notes": "Role-based contact lookup"}
+{"id": "pc_024", "prompt": "Who recommended that Thai restaurant in the Mission?", "expected_entities": ["person", "place"], "notes": "Recommendation provenance + place recall"}
+{"id": "pc_025", "prompt": "What projects am I working on right now at work?", "expected_entities": ["concept", "organization"], "notes": "Professional context: current work items"}
+{"id": "pc_026", "prompt": "Who is the friend I usually travel with?", "expected_entities": ["person", "event"], "notes": "Pattern-based person recall from travel history"}
+{"id": "pc_027", "prompt": "What allergies do I have?", "expected_entities": ["preference", "concept"], "notes": "Personal health attribute recall"}
+{"id": "pc_028", "prompt": "What did we talk about last time I met with David?", "expected_entities": ["person", "event", "concept"], "notes": "Conversation content recall for a named meeting"}
+{"id": "pc_029", "prompt": "Where did I park my car yesterday?", "expected_entities": ["place", "event"], "notes": "Short-term episodic recall, physical location"}
+{"id": "pc_030", "prompt": "Which of my friends lives closest to downtown?", "expected_entities": ["person", "place"], "notes": "Comparative geographic query across multiple contacts"}
+{"id": "pc_031", "prompt": "What is the name of my nephew?", "expected_entities": ["person"], "notes": "Family relationship traversal"}
+{"id": "pc_032", "prompt": "What streaming services do I subscribe to?", "expected_entities": ["preference", "concept"], "notes": "Subscription preference recall"}
+{"id": "pc_033", "prompt": "Who is my go-to plumber?", "expected_entities": ["person", "concept"], "notes": "Service provider recall by role"}
+{"id": "pc_034", "prompt": "What languages do I speak?", "expected_entities": ["concept", "preference"], "notes": "Personal skill / attribute recall"}
+{"id": "pc_035", "prompt": "Where did I go on vacation two summers ago?", "expected_entities": ["place", "event"], "notes": "Time-relative episodic place recall"}
+{"id": "pc_036", "prompt": "Who from college do I still keep in touch with?", "expected_entities": ["person", "concept"], "notes": "Social graph filtered by relationship origin"}
+{"id": "pc_037", "prompt": "What did she say about the promotion?", "expected_entities": ["person", "concept", "event"], "notes": "Pronoun resolution in professional context — 'she' must resolve from recency"}
+{"id": "pc_038", "prompt": "What is my usual order at the sushi place on Valencia?", "expected_entities": ["preference", "place"], "notes": "Place + preference recall, street-level location"}
+{"id": "pc_039", "prompt": "When is my brother's birthday?", "expected_entities": ["person", "event"], "notes": "Relationship-based date recall"}
+{"id": "pc_040", "prompt": "What is the name of the startup my friend Rachel is building?", "expected_entities": ["person", "organization"], "notes": "Contact attribute: associated organization"}
+{"id": "pc_041", "prompt": "What medication do I take in the morning?", "expected_entities": ["preference", "concept"], "notes": "Sensitive health attribute recall"}
+{"id": "pc_042", "prompt": "Who do I usually call when I'm stressed?", "expected_entities": ["person", "event"], "notes": "Behavioral pattern recall: emotional context → contact"}
+{"id": "pc_043", "prompt": "What is the address of my parents' house?", "expected_entities": ["person", "place"], "notes": "Relationship-anchored place lookup"}
+{"id": "pc_044", "prompt": "Which coffee shop did we discover on the last trip to Portland?", "expected_entities": ["place", "event"], "notes": "Trip-scoped place discovery recall"}
+{"id": "pc_045", "prompt": "Who was the speaker at the conference I attended last fall?", "expected_entities": ["person", "event"], "notes": "Event-scoped person recall with time range"}
+{"id": "pc_046", "prompt": "What is my wifi password?", "expected_entities": ["concept", "preference"], "notes": "Stored credential/preference recall"}
+{"id": "pc_047", "prompt": "What car do I drive?", "expected_entities": ["concept", "preference"], "notes": "Owned item recall"}
+{"id": "pc_048", "prompt": "Who should I reach out to about the design contract?", "expected_entities": ["person", "concept", "organization"], "notes": "Predictive: surfaces best contact for a professional task"}
+{"id": "pc_049", "prompt": "What neighborhood do my in-laws live in?", "expected_entities": ["person", "place"], "notes": "Relationship traversal: in-laws → location"}
+{"id": "pc_050", "prompt": "What kind of music do I like?", "expected_entities": ["preference", "concept"], "notes": "Broad personal taste recall; may aggregate from multiple past interactions"}

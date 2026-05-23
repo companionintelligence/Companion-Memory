@@ -1,0 +1,17 @@
+{
+  "name": "@companion-intelligence/openclaw-memory",
+  "version": "0.1.0",
+  "description": "Companion Intelligence memory provider for OpenClaw",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.4",
+    "@types/node": "^20"
+  }
+}
