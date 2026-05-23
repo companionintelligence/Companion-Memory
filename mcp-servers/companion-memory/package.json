@@ -1,0 +1,34 @@
+{
+  "name": "@companionintelligence/companion-memory-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server that exposes the Companion Intelligence memory graph as remember/recall/forget tools",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "type": "module",
+  "bin": {
+    "companion-memory-mcp": "bin/companion-memory-mcp.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "smoke": "node dist/smoke-test.js",
+    "lint": "eslint 'src/**/*.ts'",
+    "test": "node --test --enable-source-maps dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "undici": "^6.20.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

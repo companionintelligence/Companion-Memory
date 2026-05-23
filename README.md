@@ -21,11 +21,31 @@ This is a Yarn workspace monorepo with the following structure:
 ├── frontend/apps/
 │   ├── web/                    # Main web application (React + Vite)
 │   └── native/                 # Future native app
-└── frontend/packages/
-    ├── capture/                # Camera capture components
-    ├── common/                 # Shared utilities and components
-    ├── shadcn/                 # ShadCN components (these typically shouldn't be modified directly, they're just local copies of our component library)
-    └── template/               # A starter package to copy and paste when you need to create a new package in frontend/packages/
+├── frontend/packages/
+│   ├── capture/                # Camera capture components
+│   ├── common/                 # Shared utilities and components
+│   ├── shadcn/                 # ShadCN components (these typically shouldn't be modified directly, they're just local copies of our component library)
+│   └── template/               # A starter package to copy and paste when you need to create a new package in frontend/packages/
+├── mcp-servers/
+│   └── companion-memory/       # MCP server that exposes /api/memory/* to Claude Code, Claude Desktop, Cursor, OpenClaw
+└── plugins/
+    ├── hermes-companion-memory/    # Hermes Agent memory-provider plugin (Python)
+    └── openclaw-companion-memory/  # OpenClaw skill bundle
+```
+
+## Companion Memory adapters
+
+The same CI-Server memory graph is exposed to outside agents through three adapters
+that all share a `/api/memory/*` REST surface. See [docs/memory/README.md](docs/memory/README.md)
+for a tour, [docs/memory/architecture.md](docs/memory/architecture.md) for the data
+model, and [docs/memory/providers-comparison.md](docs/memory/providers-comparison.md)
+for how this stacks up against honcho, mem0, supermemory, and the other Hermes
+memory providers.
+
+One-shot install:
+
+```bash
+COMPANION_MEMORY_API_KEY=ci_xxx ./scripts/install-companion-memory.sh
 ```
 
 ## Getting started

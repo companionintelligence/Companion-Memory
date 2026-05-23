@@ -1,0 +1,14 @@
+name: companion-memory
+version: 0.1.0
+description: |
+  Persists Hermes Agent memory to the Companion Intelligence personal memory
+  server. Hooks into turn-by-turn sync, session-end fact extraction, and
+  exposes search/store tools to the agent.
+
+hooks:
+  - prefetch
+  - sync_turn
+  - on_session_end
+  - on_memory_write
+  - system_prompt_block
+  - shutdown

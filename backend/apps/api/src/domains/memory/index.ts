@@ -27,6 +27,7 @@ import { FilesModule } from '@ci/domains/files';
 import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { GraphController } from './controllers/GraphController';
+import { MemoryController } from './controllers/MemoryController';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
@@ -95,7 +96,7 @@ import { UserContextService } from './services/UserContextService';
     FileService,
     PlaceService,
   ],
-  controllers: [GraphController],
+  controllers: [GraphController, MemoryController],
   exports: [
     CommunicationService,
     ContentService,

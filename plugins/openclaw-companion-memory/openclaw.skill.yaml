@@ -1,0 +1,48 @@
+name: companion-memory
+version: 0.1.0
+description: >-
+  Persistent memory across OpenClaw sessions, backed by the Companion
+  Intelligence personal memory graph.
+license: Proprietary
+homepage: https://github.com/companionintelligence/CI-Server
+authors:
+  - Companion Intelligence
+
+# How OpenClaw should attach this skill.
+attachment:
+  triggers:
+    - keyword: remember
+    - keyword: don't forget
+    - keyword: what do I like
+    - keyword: who is
+    - keyword: save this
+    - keyword: keep this in mind
+  always_active: false
+
+# Tools the skill exposes — all routed through the companion-memory MCP server.
+tools:
+  source: mcp
+  server: companion-memory
+  expose:
+    - companion_remember
+    - companion_recall
+    - companion_list
+    - companion_forget
+    - companion_context
+    - companion_health
+
+# The MCP server descriptor that OpenClaw should add to its `mcp_servers.json`.
+mcp_server:
+  command: node
+  args:
+    - "${SKILL_HOME}/../../mcp-servers/companion-memory/dist/index.js"
+  env:
+    COMPANION_MEMORY_URL: "${COMPANION_MEMORY_URL:-http://localhost:3030}"
+    COMPANION_MEMORY_API_KEY: "${COMPANION_MEMORY_API_KEY}"
+
+# Reference docs surfaced in the OpenClaw skill catalogue.
+references:
+  - title: CI-Server memory architecture
+    url: https://github.com/companionintelligence/CI-Server/blob/main/docs/memory/architecture.md
+  - title: OpenClaw memory concepts
+    url: https://docs.openclaw.ai/concepts/memory
