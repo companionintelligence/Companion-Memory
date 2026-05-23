@@ -30,14 +30,16 @@ Claude Code is visible to Hermes and to OpenClaw, and vice-versa.
 
 ## Documents
 
-| File                                         | What it covers                                                          |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| [architecture.md](./architecture.md)         | The memory data model, REST surface, and how the adapters compose.      |
-| [providers-comparison.md](./providers-comparison.md) | Companion-memory vs honcho, mem0, openviking, supermemory, etc.  |
-| [mcp-integration.md](./mcp-integration.md)   | Wiring the MCP server into Claude Code, Claude Desktop, Cursor.         |
-| [hermes-integration.md](./hermes-integration.md) | Installing the Hermes plugin and the `MemoryProvider` contract.     |
-| [openclaw-integration.md](./openclaw-integration.md) | Installing the OpenClaw skill and using it from a workspace.    |
-| [troubleshooting.md](./troubleshooting.md)   | Common failures and how to debug them.                                  |
+| File                                                 | What it covers                                                                |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [architecture.md](./architecture.md)                 | The memory data model, REST surface, and how the adapters compose.            |
+| [context-engineering.md](./context-engineering.md)   | Deep dive — Hermes + OpenClaw memory internals, CI-Server as a personal database, and the four-layer context-engineering thesis. |
+| [benchmarking.md](./benchmarking.md)                 | Concrete plan for proving the system is more accurate, secure, performant, and tractable. Datasets (LongMemEval / LoCoMo / a new CI-DOSSIER personal-data set), metrics, and provider matrix. |
+| [providers-comparison.md](./providers-comparison.md) | Companion-memory vs honcho, mem0, openviking, supermemory, etc.               |
+| [mcp-integration.md](./mcp-integration.md)           | Wiring the MCP server into Claude Code, Claude Desktop, Cursor.               |
+| [hermes-integration.md](./hermes-integration.md)     | Installing the Hermes plugin and the `MemoryProvider` contract.               |
+| [openclaw-integration.md](./openclaw-integration.md) | Installing the OpenClaw skill and using it from a workspace.                  |
+| [troubleshooting.md](./troubleshooting.md)            | Common failures and how to debug them.                                        |
 
 ## Quick start
 
