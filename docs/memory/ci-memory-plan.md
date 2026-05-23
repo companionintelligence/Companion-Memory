@@ -1,23 +1,16 @@
 # Companion Memory as a Memory Provider, MCP Server, and Skills Layer for Hermes & OpenClaw
-**A Strategic Technical Plan for CI-Server / LifeScope INC**
-**Date:** May 23, 2026 | **Author:** Lead Research, for Liam + CI team (Max, Steve, Bennett, Kyle, Anselm, Lex)
-
----
-
-## Executive Summary (One-Page)
 
 **The bet.** Personal AI memory is the next infrastructure layer of the agent stack. Mem0 raised $24M (Basis Set, Kindred, YC) at a reported ~$150M valuation; Letta raised a $10M seed led by Felicis at a $70M post-money valuation; Plastic Labs (Honcho) raised $5.35M pre-seed (Variant, White Star, Betaworks); Supermemory raised $3M (Susa, Browder, SF1.vc + Jeff Dean angels); Zep has SOTA temporal-graph memory (per arXiv:2501.13956: "In the DMR benchmark, which the MemGPT team established as their primary evaluation metric, Zep demonstrates superior performance (94.8% vs 93.4%)" — and 98.2% with GPT-4o Mini); Cognee raised a $7.5M seed for graph-based AI memory. Meta acquired Limitless in December 2025, ending the pendant category and signaling that personal context is now a strategic concern for hyperscalers. Apple delayed personal-context Siri on March 7, 2025, to "the coming year" — the on-device personal-context graph is **the unsolved hard problem of AI right now.**
 
 **CI's position.** CI already has what every competitor is trying to build: (1) a graph database of entities, (2) vector embeddings + semantic search, (3) HBPE and Personal Forecast predictive layers, (4) GraphQL→MCP auto-conversion, (5) local-first/uncloud architecture. Honcho's "dialectic" is a non-predictive shadow of HBPE. Mem0/Supermemory/Cognee are cloud-first and don't own the device. **CI's wedge is the personal black box: the only architecture that is local, graph-native, predictive, and ships as a consumer appliance.**
 
-**The bottleneck.** Companion Hub installation. Agentic memory work is **PAUSED** until Hub clears 1,000 downloads. Every plugin spec below is gated on that.
+**The bottleneck.** Companion Hub installation.  
 
 **The plan (steel thread, MVP v1 → v3).**
 - **MVP v1 (steel thread):** REST endpoint on `agents.ci-domain`, API-key auth, receives paused-agent context, logs it, returns nothing. Hermes memory provider plugin + OpenClaw plugin wire it up. Post-install script in Ermy embeds the API key. Goal: prove the round trip without breaking the agent.
 - **MVP v2 (functional retrieval):** Embed incoming context → semantic search on entity index → return top-K entities as plain text. Persist context as new memories (replaces deprecated in-app chat). K-hop=1–2 graph traversal with relationship typing. Hardware-tier auto-config for parallel small memory-side LLM (Qwen3-4B class on a secondary 8GB card).
 - **v3 (differentiated / VC-ready):** Pre-warmed in-memory Postgres of Dunbar-120 contacts + top-1000 places. Two-shot inference (pre-LLM entity resolution → main LLM reasoning → post-LLM verification). Entity-ID tagging in prompts ("Steve Barry [id:p_182]" not "Steve Harvey"). Assumption vectorization for pronouns. HBPE/Personal Forecast predictive injection. Hyperlinked output cards. Parallel non-blocking vLLM. Sub-agent orchestration. Memory consolidation / "dream" jobs.
-
-**The 7-day move.** Ship Hub install. Do NOT write plugin code yet. Stand up the `agents.ci-domain` skeleton, scaffold the Hermes plugin repo (private), and run the post-install script design exercise — these unblock day-1 of plugin work the moment Hub clears its installer milestone.
+  Stand up the `agents.ci-domain` skeleton, scaffold the Hermes plugin repo (private), and run the post-install script design exercise — these unblock day-1 of plugin work the moment Hub clears its installer milestone.
 
 ---
 
@@ -156,7 +149,7 @@ Per benchmarks (localllm.in, BSWEN RTX 4060 benchmarks, arsturn.com): an **RTX 4
    - `openclaw.plugin.json` manifest + TypeScript stub
    - Implements `memory_search` (returns `[]` in v1) and `memory_get` (no-op)
    - Hooks into `agent_end` to POST session messages to the same endpoint
-4. **Ermy post-install script** — When the user installs Ermy (CI's Hermes-based desktop app), the installer:
+4. **Ermy post-install script** — When the user installs CI Hub Hermes (CI's Hermes-based desktop app launcher), the installer:
    - Calls CI's API for a per-user API key
    - Writes `COMPANION_API_KEY=<key>` to `~/.hermes/.env`
    - Sets `memory.provider: companion` in `~/.hermes/config.yaml`
@@ -521,16 +514,7 @@ echo "✓ Companion Memory active. Open Ermy to start; memories will persist loc
 
 ## Recommendations
 
-### Stage 1 — Now through 1,000 Hub installs (Active: Hub ship; Paused: everything memory-plugin)
-1. **Ship Companion Hub installation.** This is the only thing that matters this month. Every plugin spec below is gated on it.
-2. **Pre-build dormant assets that don't blocking Hub:**
-   - Provision the `agents.ci-domain` subdomain + TLS
-   - Stand up a FastAPI skeleton for `/v1/memory/context` (logs only, no DB writes yet)
-   - Create the private GitHub repos `hermes-companion-memory` and `openclaw-companion-memory`
-   - Draft the post-install script
-3. **Trigger for Stage 2:** Hub crosses 1,000 downloads OR 90 days from today, whichever is first.
-
-### Stage 2 — Steel thread (MVP v1) — Active when Hub clears trigger
+### Stage 1 — 2 — Steel thread (MVP v1) — Active when Hub clears trigger
 1. Build and ship the v1 REST endpoint (1.5 weeks)
 2. Build and ship the Hermes plugin (2 weeks)
 3. Build and ship the OpenClaw plugin (1 week)
@@ -574,20 +558,12 @@ echo "✓ Companion Memory active. Open Ermy to start; memories will persist loc
 
 ---
 
-## Next 7 Days — Concrete Action List
+##  Concrete Action List
 
-| Day | Owner | Action |
-|---|---|---|
-| Day 1 (Mon) | Liam | Confirm Hub-install priority order with the team. Communicate "memory plugin work is PAUSED until 1,000 Hub installs OR 90 days." |
-| Day 1 | Max / Kyle | Take ownership of the Hub installer milestone. Define the exact "1,000 downloads" instrumentation. |
-| Day 2 | Steve / Bennett | Provision `agents.ci-domain` (DNS, TLS via Caddy or Cloudflare). Stand up a FastAPI hello-world behind CI's existing auth middleware. |
-| Day 3 | Anselm | Draft the Hermes plugin file structure in a private repo (`hermes-companion-memory`) — `plugin.yaml`, `__init__.py` skeleton, no behavior yet. Do NOT publish. |
-| Day 3 | Anselm | Draft the OpenClaw plugin scaffold in `openclaw-companion-memory` — `openclaw.plugin.json`, `package.json`, TypeScript skeleton. |
-| Day 4 | Liam | Draft the Ermy post-install script (the bash above is a starting point). Decide on API-key scoping (recommend per-device, revocable, rate-limited). |
-| Day 5 | Lex (CI's internal agent) | Generate the internal eval set — 50 personal-context prompts based on Liam's, Max's, Steve's actual lives, with ground-truth entity sets. Store in `eval/personal_context_v1.jsonl`. |
-| Day 6 | Liam + Max | Decide open-source license: recommend MIT for plugins, AGPL-3.0 for any CI-Server-lite reference. Add LICENSE files to private repos in anticipation of public launch. |
-| Day 7 | All | Brief retrospective: are we on track for Hub install? If yes, plugin work stays parked. If Hub is slipping, replan. |
-
-**One thing to keep in front of the team every standup:** the memory plugin work is paused, but the *unblocking work* (subdomain, eval set, plugin scaffolds, post-install script) is not paused. When Hub clears 1,000 installs, plugin v1 should ship in 2 weeks — not 6.
-
-— End of document —
+ | Draft the Hermes plugin file structure in a private repo (`hermes-companion-memory`) — `plugin.yaml`, `__init__.py` skeleton, no behavior yet. Do NOT publish. |
+ | Draft the OpenClaw plugin scaffold in `openclaw-companion-memory` — `openclaw.plugin.json`, `package.json`, TypeScript skeleton. |
+  Draft the Ermy post-install script (the bash above is a starting point). Decide on API-key scoping (recommend per-device, revocable, rate-limited). |
+  Generate the internal eval set — 50 personal-context prompts based on Liam's, Max's, Steve's actual lives, with ground-truth entity sets. Store in `eval/personal_context_v1.jsonl`. |
+  Decide open-source license: recommend MIT for plugins, AGPL-3.0 for any CI-Server-lite reference. Add LICENSE files to private repos in anticipation of public launch. |
+ Brief retrospective: are we on track for Hub install? If yes, plugin work stays parked. If Hub is slipping, replan. |
+ 
