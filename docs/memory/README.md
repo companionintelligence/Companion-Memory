@@ -32,6 +32,8 @@ Claude Code is visible to Hermes and to OpenClaw, and vice-versa.
 
 | File                                                 | What it covers                                                                |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [ci-memory-plan.md](./ci-memory-plan.md)             | **Strategic roadmap** — v1 / v2 / v3 stages, market landscape, hardware tiers, VC framing. Read this first. |
+| [status-and-gaps.md](./status-and-gaps.md)           | **Where we are vs the plan** — what this PR delivers (✅ / 🟡 / ❌) stage by stage, plus next concrete actions. |
 | [architecture.md](./architecture.md)                 | The memory data model, REST surface, and how the adapters compose.            |
 | [context-engineering.md](./context-engineering.md)   | Deep dive — Hermes + OpenClaw memory internals, CI-Server as a personal database, and the four-layer context-engineering thesis. |
 | [benchmarking.md](./benchmarking.md)                 | Concrete plan for proving the system is more accurate, secure, performant, and tractable. Datasets (LongMemEval / LoCoMo / a new CI-DOSSIER personal-data set), metrics, and provider matrix. |
