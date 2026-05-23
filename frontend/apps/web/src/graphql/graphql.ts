@@ -480,6 +480,18 @@ export type Edge = {
   node: Node;
 };
 
+export type EntityChangedPayload = {
+  __typename?: 'EntityChangedPayload';
+  /** ISO-8601 timestamp when the event was emitted */
+  at: Scalars['String']['output'];
+  /** Event-specific payload data */
+  data?: Maybe<Scalars['JSON']['output']>;
+  /** Kind of the changed entity (e.g. "Person") */
+  entityType?: Maybe<Scalars['String']['output']>;
+  /** Internal event name, e.g. "message.created", "person.updated" */
+  event: Scalars['String']['output'];
+};
+
 export type EntityTagType = Node & {
   __typename?: 'EntityTagType';
   id: Scalars['ID']['output'];
@@ -651,6 +663,20 @@ export type ItemType = Node & Taggable & {
   subcategory?: Maybe<Scalars['String']['output']>;
   tags: Array<EntityTagType>;
   updatedAt: Scalars['DateTime']['output'];
+};
+
+export type MessageChangedPayload = {
+  __typename?: 'MessageChangedPayload';
+  /** ISO-8601 timestamp when the event was emitted */
+  at: Scalars['String']['output'];
+  /** Event-specific payload data */
+  data?: Maybe<Scalars['JSON']['output']>;
+  /** Internal event name, e.g. "message.created", "person.updated" */
+  event: Scalars['String']['output'];
+  /** ID of the changed message, if known */
+  messageId?: Maybe<Scalars['String']['output']>;
+  /** Thread scope. Today always the userId (threadId enrichment is a follow-up) */
+  threadId?: Maybe<Scalars['String']['output']>;
 };
 
 export type MessageConnection = Connection & {
@@ -1574,6 +1600,26 @@ export type SearchResultEdge = {
 };
 
 export type SearchResultType = AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType;
+
+export type Subscription = {
+  __typename?: 'Subscription';
+  /** Emitted whenever a memory entity (Person, Place, Concept) is created, updated, or deleted for the authenticated user. */
+  entityChanged: EntityChangedPayload;
+  /** Emitted whenever a message is created, updated, or deleted in any of the authenticated user threads. */
+  messageStreamed: MessageChangedPayload;
+  /** Emitted whenever a daily or weekly summary is written or updated for the authenticated user. */
+  summaryReady: SummaryChangedPayload;
+};
+
+export type SummaryChangedPayload = {
+  __typename?: 'SummaryChangedPayload';
+  /** ISO-8601 timestamp when the event was emitted */
+  at: Scalars['String']['output'];
+  /** Event-specific payload data */
+  data?: Maybe<Scalars['JSON']['output']>;
+  /** Internal event name, e.g. "message.created", "person.updated" */
+  event: Scalars['String']['output'];
+};
 
 export type SummaryConnection = Connection & {
   __typename?: 'SummaryConnection';

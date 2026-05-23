@@ -425,6 +425,22 @@ interface Edge {
   node: Node!
 }
 
+type EntityChangedPayload {
+  """ISO-8601 timestamp when the event was emitted"""
+  at: String!
+
+  """Event-specific payload data"""
+  data: JSON
+
+  """Kind of the changed entity (e.g. "Person")"""
+  entityType: String
+
+  """
+  Internal event name, e.g. "message.created", "person.updated"
+  """
+  event: String!
+}
+
 type EntityTagType implements Node {
   id: ID!
   label: String!
@@ -580,6 +596,27 @@ type ItemType implements Node & Taggable {
 The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
 """
 scalar JSON
+
+type MessageChangedPayload {
+  """ISO-8601 timestamp when the event was emitted"""
+  at: String!
+
+  """Event-specific payload data"""
+  data: JSON
+
+  """
+  Internal event name, e.g. "message.created", "person.updated"
+  """
+  event: String!
+
+  """ID of the changed message, if known"""
+  messageId: String
+
+  """
+  Thread scope. Today always the userId (threadId enrichment is a follow-up)
+  """
+  threadId: String
+}
 
 type MessageConnection implements Connection {
   edges: [MessageEdge!]!
@@ -939,6 +976,36 @@ type SearchResultEdge {
 }
 
 union SearchResultType = AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+type Subscription {
+  """
+  Emitted whenever a memory entity (Person, Place, Concept) is created, updated, or deleted for the authenticated user.
+  """
+  entityChanged: EntityChangedPayload!
+
+  """
+  Emitted whenever a message is created, updated, or deleted in any of the authenticated user threads.
+  """
+  messageStreamed: MessageChangedPayload!
+
+  """
+  Emitted whenever a daily or weekly summary is written or updated for the authenticated user.
+  """
+  summaryReady: SummaryChangedPayload!
+}
+
+type SummaryChangedPayload {
+  """ISO-8601 timestamp when the event was emitted"""
+  at: String!
+
+  """Event-specific payload data"""
+  data: JSON
+
+  """
+  Internal event name, e.g. "message.created", "person.updated"
+  """
+  event: String!
+}
 
 type SummaryConnection implements Connection {
   edges: [SummaryEdge!]!
