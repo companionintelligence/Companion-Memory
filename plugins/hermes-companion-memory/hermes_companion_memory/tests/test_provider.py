@@ -5,7 +5,6 @@ Run with: python -m pytest plugins/hermes-companion-memory/
 from __future__ import annotations
 
 import threading
-import time
 import unittest
 from unittest.mock import MagicMock, patch
 

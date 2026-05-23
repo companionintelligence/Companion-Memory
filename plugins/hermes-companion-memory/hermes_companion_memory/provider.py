@@ -24,31 +24,40 @@ except ImportError:
         """Stub ABC used when hermes_agent is not installed."""
 
         @abc.abstractmethod
-        def is_available(self) -> bool: ...
+        def is_available(self) -> bool:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def initialize(self) -> None: ...
+        def initialize(self) -> None:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def prefetch(self, query: str) -> str: ...
+        def prefetch(self, query: str) -> str:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def sync_turn(self, user_content: str, assistant_content: str) -> None: ...
+        def sync_turn(self, user_content: str, assistant_content: str) -> None:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def on_session_end(self) -> None: ...
+        def on_session_end(self) -> None:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def on_pre_compress(self) -> None: ...
+        def on_pre_compress(self) -> None:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def get_config_schema(self) -> dict[str, Any]: ...
+        def get_config_schema(self) -> dict[str, Any]:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def get_tool_schemas(self) -> list[dict[str, Any]]: ...
+        def get_tool_schemas(self) -> list[dict[str, Any]]:
+            raise NotImplementedError
 
         @abc.abstractmethod
-        def handle_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
+        def handle_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            raise NotImplementedError
 
 
 _DEFAULT_BASE_URL = "https://api.companion.intelligence"
