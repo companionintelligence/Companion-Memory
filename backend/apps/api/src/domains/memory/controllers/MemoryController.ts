@@ -8,7 +8,6 @@ import {
   HttpStatus,
   NotFoundException,
   Param,
-  ParseUUIDPipe,
   Post,
   Query,
   UseGuards,
@@ -51,6 +50,12 @@ const forgetBodySchema = z
     hardDelete: z.boolean().optional(),
   })
   .default({});
+
+// Matches any RFC 4122 UUID (v1–v8). We accept all versions because the
+// underlying graph services mint v7 IDs via `uuidv7()`, while legacy rows
+// may still carry v4 ids. Nest's built-in `ParseUUIDPipe` defaults to v4
+// only and would 400 the remember→forget round-trip for newly minted ids.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type RememberDto = z.infer<typeof rememberSchema>;
 type RecallDto = z.infer<typeof recallSchema>;
@@ -224,10 +229,14 @@ export class MemoryController {
   @HttpCode(HttpStatus.OK)
   async forget(
     @Context() ctx: RequestContext,
-    @Param('id', new ParseUUIDPipe()) entityId: string,
+    @Param('id') entityId: string,
     @Body(new ValidationPipe(forgetBodySchema)) body: ForgetDto,
   ) {
     const ownerId = this.ensureUserId(ctx);
+
+    if (!UUID_PATTERN.test(entityId)) {
+      throw new BadRequestException('id must be a UUID');
+    }
 
     const node = await this.graphQuery.getNode(ownerId, entityId);
     if (!node) {
