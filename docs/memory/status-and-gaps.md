@@ -39,35 +39,47 @@ the mapping is partial.
 
 | Plan item                                                                  | This PR                                                                            | Status |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------ |
-| **REST endpoint** at `agents.ci-domain/v1/memory/context` (paused-agent ingest, returns 204) | `backend/apps/api/src/domains/memory/controllers/MemoryController.ts` at `/api/memory/{remember,recall,list,forget,context,health}` — full CRUD on the existing CI-Server | 🟡     |
-| `context_log` table for raw paused-agent context                           | Writes land directly in the existing graph via `GraphEventService.upsertNode`       | 🟡     |
-| **Hermes plugin** with `is_available`, `initialize`, `sync_turn` (no-op `prefetch` in v1) | `plugins/hermes-companion-memory/` — implements **all** of v1 *and* parts of v2/v3 (`prefetch`, `on_session_end`, `on_pre_compress`-adjacent `on_memory_write`, tool handlers) | ✅ (++) |
+| **REST endpoint** at `agents.ci-domain/v1/memory/context` (paused-agent ingest, returns ack) | Two endpoints now live: `POST /api/agent/absorb` (paused-agent ingest, `{ok}` response) and `POST /api/memory/remember` (deliberate CRUD). Domain path differs from the plan's literal URL, but the role is filled by `AgentModule` (cherry-picked from `feature/agent-memory`). | ✅      |
+| `context_log` table for raw paused-agent context                           | `AbsorbService` upserts into the existing `Communication` entity keyed by `sessionId` (one row per session, grows as conversation grows). No new table needed; the existing graph model carries it cleanly. | ✅      |
+| **Hermes plugin** with `is_available`, `initialize`, `sync_turn` (no-op `prefetch` in v1) | `plugins/hermes-companion-memory/` — implements **all** of v1 *and* parts of v2/v3 (`prefetch`, `on_session_end`, `on_memory_write`, tool handlers). Now prefers `/api/agent/*` with fallback to `/api/memory/*`. | ✅ (++) |
 | **OpenClaw plugin** stub (`memory_search`, `memory_get` return empty)      | `plugins/openclaw-companion-memory/` — SKILL.md + manifest + installer that wires the MCP server into OpenClaw's `mcp_servers.json` | ✅      |
 | **Ermy post-install script** — mint per-device API key, write `~/.hermes/.env` + `config.yaml`, `pip install hermes-companion-memory`, enable provider | `scripts/install-companion-memory.sh` + `scripts/companion-memory/mint-api-key.sh` — manual, requires a JWT and explicit user steps. No Ermy hook. | 🟡     |
-| `agents.ci-domain` DNS + TLS (Caddy/Cloudflare) — Steve / Bennett, Day 2   | Endpoint lives on the existing CI-Server (`memory.ci.localhost` / port 3030)        | ❌      |
+| `agents.ci-domain` DNS + TLS (Caddy/Cloudflare) — Steve / Bennett, Day 2   | Endpoints live on the existing CI-Server (`memory.ci.localhost` / port 3030)        | ❌      |
 | Private repos: `hermes-companion-memory`, `openclaw-companion-memory`      | Both live in this monorepo under `plugins/`. License + repo split not decided.     | ❌      |
-| FastAPI skeleton behind existing auth middleware (Day 2)                   | NestJS controller behind existing `JwtOrApiKeyAuthGuard` — same auth posture, different stack | 🟡 |
+| FastAPI skeleton behind existing auth middleware (Day 2)                   | NestJS controller behind existing `JwtOrApiKeyAuthGuard` (memory) and `ApiKeyGuard` (agent) — same auth posture, different stack | 🟡 |
 | Internal eval set (`eval/personal_context_v1.jsonl`, Lex / Day 5)          | Described in `benchmarking.md` as **CI-DOSSIER** but no `.jsonl` file generated yet | ❌      |
 | 50-prompt baseline (Liam / Max / Steve scenarios)                          | Not started                                                                        | ❌      |
 | Success metric: **p99 round-trip < 200ms** on Ermy installs                | Untested — no live Ermy install yet                                                | ❌      |
 | Success metric: 100% of Ermy installs route a full session                 | Not measurable until Ermy + Hub ship                                               | ❌      |
 
-### Reconciling the endpoint-shape difference
+### Reconciling the endpoint-shape difference — resolved
 
-The plan's `POST /v1/memory/context` and this PR's `/api/memory/remember`
-**should both exist**. They serve different roles:
+The original gap analysis flagged that the plan's `POST /v1/memory/context`
+ingest path and this PR's `/api/memory/remember` CRUD path needed to
+coexist. That's done — by pulling `AgentModule` over from
+`feature/agent-memory`:
 
 | Surface                              | Purpose                                                       | Caller                                        |
 | ------------------------------------ | ------------------------------------------------------------- | --------------------------------------------- |
-| `POST /v1/memory/context`            | Paused-agent ingest, idempotent, raw-context fire-and-forget. | Hermes/OpenClaw `sync_turn` hook.             |
+| `POST /api/agent/absorb`             | Paused-agent ingest. Upserts a Communication row by `sessionId`. | Hermes `sync_turn`, OpenClaw `agent_end`.     |
+| `GET /api/agent/context`             | L0 user dossier as a ready-to-inject Markdown block.          | Hermes `system_prompt_block`.                 |
+| `POST /api/agent/recall`             | L1 semantic recall as Markdown, capped at ~3k chars.          | Hermes `prefetch`.                            |
+| `POST /api/agent/tools`              | Dispatch `ci_search` / `ci_query` / `ci_remember`.            | Hermes tool calls.                            |
 | `POST /api/memory/remember`          | Deliberate fact storage with name/tags/metadata.              | MCP `companion_remember`, manual UI, scripts. |
-| `GET /api/memory/recall`             | Hybrid query, returns shaped results.                         | MCP `companion_recall`, Hermes `prefetch`.    |
+| `GET /api/memory/recall`             | Hybrid query, returns structured JSON.                        | MCP `companion_recall`.                       |
 
-**Next action**: add a thin `POST /v1/memory/context` controller that
-writes to a new `context_log` table (raw inbox), and keep the existing
-`/api/memory/*` controller as the curated surface. The two reconcile in
-v2 when context_log rows get promoted into the graph by a background job
-(the "Deriver" pattern — see Honcho).
+Why not just one surface? Because they answer different questions. The
+`/agent/*` endpoints know they're talking to an agent loop and return
+Markdown blocks pre-shaped for prompt injection (with the token cap
+already applied). The `/memory/*` endpoints know they're talking to a
+UI or a script and return structured JSON the caller will format
+themselves.
+
+The Hermes plugin **prefers `/api/agent/*`** for its three hooks and
+**falls back to `/api/memory/*`** on 404, so it keeps working against
+older CI-Servers. The MCP server exposes **both** toolsets so MCP hosts
+get both shapes (`ci_*` + `agent_*` for prompt-injection-style flows,
+`companion_*` for explicit CRUD).
 
 ---
 
@@ -75,15 +87,15 @@ v2 when context_log rows get promoted into the graph by a background job
 
 | Plan item                                                                   | This PR                                                                          | Status |
 | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------ |
-| `prefetch(query)` returns the structured `{ injection, memory_id, entities_used }` shape | Hermes plugin's `prefetch` returns a flat newline-joined snippet block      | 🟡     |
-| Embed incoming context → semantic search on entity index                    | `recall` runs CI-Server's hybrid (FTS + prefix) `searchNodesByText` + `searchNodesByPrefix`. Embedding-only and full GraphRAG paths not exposed via `/memory/*` yet | 🟡     |
-| Persist incoming context as memories with edges to referenced entities      | `remember` creates a flat `Concept` node. No automatic entity extraction or edge creation from `description` text. | ❌      |
-| **K-hop graph traversal** (K=1, K=2 above threshold) with relationship typing | `readKnowledge` native tool does this, but the `/memory/recall` endpoint does not. | 🟡  |
+| `prefetch(query)` returns a ready-to-inject Markdown block                  | `/api/agent/recall` returns `{ block, resultCount }`, used by the Hermes plugin's `prefetch`. Plan also wanted `entities_used` — not yet, see [next action 1](#51-unblocking-work-the-plan-wants-done-now-no-hub-dependency). | ✅ (mostly) |
+| Embed incoming context → semantic search on entity index                    | `/api/agent/recall` runs `SearchService.search` with `mode: 'auto'` (hybrid keyword + embedding) on the existing entity index | ✅      |
+| Persist incoming context as memories with edges to referenced entities      | `AbsorbService` persists as a `Communication` row. Edge creation to referenced entities (entity extraction from message text) is not yet automatic | 🟡     |
+| **K-hop graph traversal** (K=1, K=2 above threshold) with relationship typing | `readKnowledge` native tool exposes this; `ci_query` (`/agent/tools`) surfaces it at the agent boundary. Inline K-hop expansion in `recall` itself is still TODO. | 🟡 |
 | **Relevance threshold** (default cosine 0.65) to suppress token vomit       | Not implemented; recall returns top-N unconditionally.                          | ❌      |
 | **Hardware-tier auto-config** (Workstation / Hobbyist / Single-24GB / Mid / Min / Cloud) | Not implemented; nothing inspects local GPUs.                          | ❌      |
 | Small memory-side model on secondary GPU (Qwen3-4B class)                   | Not implemented.                                                                 | ❌      |
-| Token budget cap (≤ 1,200 tokens per injection)                             | Not enforced.                                                                    | ❌      |
-| `companion_search` + `companion_remember` explicit tools                    | Shipped as `companion_recall` / `companion_remember` (same idea, different names) | ✅      |
+| Token budget cap (≤ 1,200 tokens per injection)                             | `MAX_BLOCK_CHARS = 3000` cap in `RecallService` (~750–900 tokens — below the plan's 1,200 ceiling) | ✅      |
+| `companion_search` + `companion_remember` explicit tools                    | Shipped as both `companion_*` (CRUD shape) and `ci_search/ci_query/ci_remember` (agent shape) via the MCP server | ✅ (++) |
 | Migrate deprecated in-app chat → memories                                   | Not addressed.                                                                   | ❌      |
 | 30-type default relationship-type ontology                                  | The existing graph already has **48** relationship types; the recall surface doesn't expose them yet for filtering | 🟡 |
 | Success: precision ≥ 70% on internal eval                                   | No eval run yet                                                                  | ❌      |
@@ -184,27 +196,30 @@ In priority order, organized by who's blocked on whom:
 
 ### 5.1 Unblocking work the plan wants done *now* (no Hub dependency)
 
-1. **Add `POST /v1/memory/context` paused-agent ingest endpoint** to the existing
-   `MemoryController` (or a sibling controller). Returns `204 No Content`,
-   writes to a new `context_log` table. Keep `/api/memory/*` as the curated
-   surface. **Owner**: backend. **Effort**: ~1 day.
-2. **Add `context_log` TypeORM entity + migration**. Simple: `id`,
-   `owner_user_id`, `session_id`, `agent_id`, `turn_index`, `messages JSONB`,
-   `received_at`. Indexed on `(owner_user_id, received_at)`.
-   **Owner**: backend. **Effort**: ~half day.
-3. **Switch Hermes `sync_turn` to call `/v1/memory/context`** instead of
-   `/api/memory/remember`. Keep `companion_remember` tool pointed at the
-   curated surface. **Owner**: plugin author. **Effort**: ~2 hours.
-4. **Generate the 50-prompt internal eval set** at
+1. **Surface `entities_used` from `/api/agent/recall`.** The plan's v2
+   payload includes the list of entity ids that contributed to the
+   injection so callers can hyperlink them. `RecallService.recall`
+   already has these (`searchResults.map(r => r.id)`) — just return them
+   alongside `block`. **Owner**: backend. **Effort**: ~1 hour.
+2. **Lift entity-edge extraction out of `AbsorbService`.** Today every
+   absorb writes a single Communication row with the messages as opaque
+   JSON. Add an async post-write step that resolves mentioned people /
+   places against the graph and creates `MENTIONS_PERSON`,
+   `MENTIONS_PLACE` edges. **Owner**: backend. **Effort**: 1–2 days.
+3. **Generate the 50-prompt internal eval set** at
    `eval/personal_context_v1.jsonl`. Three users × ~17 prompts each.
    **Owner**: Lex / agent. **Effort**: ~1 day for the dataset, longer if
    ground truth is hand-validated.
-5. **Stand up `agents.ci-domain`** (DNS + TLS). Could point at the same
-   NestJS backend for now, no FastAPI rewrite needed. **Owner**: Steve /
-   Bennett. **Effort**: ~half day.
-6. **Decide license** before any repo split. Recommendation in the plan:
+4. **Stand up `agents.ci-domain`** (DNS + TLS). Could point at the same
+   NestJS backend for now, no rewrite needed. **Owner**: Steve / Bennett.
+   **Effort**: ~half day.
+5. **Decide license** before any repo split. Recommendation in the plan:
    MIT for both plugins. **Owner**: Liam + Max. **Effort**: a 30-minute
    call.
+6. **Wire MCP server smoke test to cover both surfaces.** Today the
+   smoke script exercises `/memory/*` only; extend it to call
+   `/agent/{context,recall,absorb}` end-to-end. **Owner**: plugin author.
+   **Effort**: ~1 hour.
 
 ### 5.2 Hub-gated work (paused until 1,000 installs)
 

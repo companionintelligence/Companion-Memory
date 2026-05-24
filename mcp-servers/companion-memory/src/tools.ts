@@ -51,13 +51,62 @@ const ContextSchema = z.object({});
 
 const HealthSchema = z.object({});
 
+const CiSearchSchema = z.object({
+  query: z.string().min(1).describe('What to search for in the knowledge graph.'),
+  maxResults: z.number().int().min(1).max(20).optional().describe('Max results (default 5).'),
+});
+
+const CiQuerySchema = z.object({
+  query: z.string().min(1).describe('Deep query against the knowledge graph (richer than ci_search).'),
+  entityType: z
+    .enum(['person', 'place', 'event', 'concept', 'content', 'communication', 'item', 'note', 'file'])
+    .optional()
+    .describe('Optional — restrict to a single entity type.'),
+  maxResults: z.number().int().min(1).max(20).optional().describe('Max results (default 10).'),
+});
+
+const CiRememberSchema = z.object({
+  content: z.string().min(1).describe('Fact or observation to store.'),
+  name: z.string().min(1).max(255).optional().describe('Short label for the entry.'),
+});
+
+const AgentRecallSchema = z.object({
+  query: z.string().min(1).describe('Text to recall on. Returns a Markdown block capped at ~3k chars.'),
+  maxResults: z.number().int().min(1).max(20).optional().describe('Max results (default 5).'),
+});
+
+const AgentAbsorbSchema = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system']),
+        content: z.string(),
+      }),
+    )
+    .min(1)
+    .describe('Conversation turns to ingest into the knowledge graph.'),
+  sessionId: z
+    .string()
+    .optional()
+    .describe('Stable id for upsert dedup (one Communication row per session).'),
+  platform: z.string().optional().describe('Originating platform (e.g. "hermes", "claude-code").'),
+});
+
+const AgentContextSchema = z.object({});
+
 export type ToolName =
   | 'companion_remember'
   | 'companion_recall'
   | 'companion_list'
   | 'companion_forget'
   | 'companion_context'
-  | 'companion_health';
+  | 'companion_health'
+  | 'ci_search'
+  | 'ci_query'
+  | 'ci_remember'
+  | 'agent_context'
+  | 'agent_recall'
+  | 'agent_absorb';
 
 export interface ToolDescriptor {
   name: ToolName;
@@ -134,6 +183,77 @@ export function buildToolset(): ToolDescriptor[] {
       description: 'Health-check the companion-memory backend.',
       inputSchema: zodToJsonSchema(HealthSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
       handler: async (client) => client.health(),
+    },
+    // -------------------------------------------------------------------------
+    // Agent-surface tools — bridge to /api/agent/* on the backend (added by the
+    // feature/agent-memory branch). These return Markdown blocks pre-formatted
+    // for prompt injection, with a built-in token-budget cap.
+    // -------------------------------------------------------------------------
+    {
+      name: 'ci_search',
+      description:
+        'Quick semantic lookup against the Companion Intelligence knowledge graph. ' +
+        'Returns a Markdown-formatted block of relevant entities.',
+      inputSchema: zodToJsonSchema(CiSearchSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+      handler: async (client, args) => {
+        const input = CiSearchSchema.parse(args);
+
+        return client.agentTool({ tool: 'ci_search', args: input });
+      },
+    },
+    {
+      name: 'ci_query',
+      description:
+        'Deep query against the knowledge graph. Traverses relationships and returns structured detail. ' +
+        'Use when ci_search results are insufficient.',
+      inputSchema: zodToJsonSchema(CiQuerySchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+      handler: async (client, args) => {
+        const input = CiQuerySchema.parse(args);
+
+        return client.agentTool({ tool: 'ci_query', args: input });
+      },
+    },
+    {
+      name: 'ci_remember',
+      description: 'Store a new fact or observation about the user in the knowledge graph.',
+      inputSchema: zodToJsonSchema(CiRememberSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+      handler: async (client, args) => {
+        const input = CiRememberSchema.parse(args);
+
+        return client.agentTool({ tool: 'ci_remember', args: input });
+      },
+    },
+    {
+      name: 'agent_context',
+      description:
+        'Return the L0 static user dossier as a pre-formatted Markdown block ready for prompt injection. ' +
+        'Cheaper than companion_context (which returns structured JSON) when you only need the block.',
+      inputSchema: zodToJsonSchema(AgentContextSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+      handler: async (client) => ({ block: await client.agentContext() }),
+    },
+    {
+      name: 'agent_recall',
+      description:
+        'Run an L1 semantic recall and return a Markdown block (capped at ~3k chars) ready for prompt ' +
+        'injection. Intended for Hermes `prefetch`-style flows.',
+      inputSchema: zodToJsonSchema(AgentRecallSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+      handler: async (client, args) => {
+        const input = AgentRecallSchema.parse(args);
+
+        return client.agentRecall(input);
+      },
+    },
+    {
+      name: 'agent_absorb',
+      description:
+        'Ingest conversation turns into the knowledge graph as a Communication row (upsert by sessionId). ' +
+        'Intended for Hermes `sync_turn`-style flows. Returns {ok: true} on success.',
+      inputSchema: zodToJsonSchema(AgentAbsorbSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+      handler: async (client, args) => {
+        const input = AgentAbsorbSchema.parse(args);
+
+        return client.agentAbsorb(input);
+      },
     },
   ];
 }

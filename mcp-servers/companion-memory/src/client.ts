@@ -141,6 +141,40 @@ export class CompanionMemoryClient {
     return this.request('GET', '/memory/health');
   }
 
+  // ---------------------------------------------------------------------------
+  // Agent surface (`/api/agent/*`) — added in concert with the AgentModule
+  // landed by the feature/agent-memory branch. Returns Markdown blocks
+  // pre-formatted for direct prompt injection, with a built-in token cap.
+  // ---------------------------------------------------------------------------
+
+  async agentContext(): Promise<string> {
+    const response = await this.request<{ block: string }>('GET', '/agent/context');
+
+    return response.block ?? '';
+  }
+
+  async agentRecall(input: {
+    query: string;
+    maxResults?: number;
+  }): Promise<{ block: string; resultCount: number }> {
+    return this.request('POST', '/agent/recall', { body: input });
+  }
+
+  async agentAbsorb(input: {
+    messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+    sessionId?: string;
+    platform?: string;
+  }): Promise<{ ok: boolean }> {
+    return this.request('POST', '/agent/absorb', { body: input });
+  }
+
+  async agentTool(input: {
+    tool: 'ci_search' | 'ci_query' | 'ci_remember';
+    args: Record<string, unknown>;
+  }): Promise<{ result: unknown }> {
+    return this.request('POST', '/agent/tools', { body: input });
+  }
+
   private augmentMetadata(
     metadata: Record<string, unknown> | undefined,
   ): Record<string, unknown> | undefined {

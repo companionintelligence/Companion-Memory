@@ -5,11 +5,19 @@ HTTP, MCP, or a Hermes/OpenClaw plugin. This directory documents that surface.
 
 ## What you get
 
+Two complementary REST surfaces on CI-Server, both auth'd with `x-api-key`:
+
+| Surface                    | Purpose                                                            |
+| -------------------------- | ------------------------------------------------------------------ |
+| `/api/agent/{context,recall,absorb,tools}` | **Agent-shaped** — returns Markdown blocks ready for prompt injection, with a built-in ~3k-char token cap. `absorb` upserts a Communication row by `sessionId` so a long conversation is one growing row, not N nodes. |
+| `/api/memory/{remember,recall,list,forget,context,health}` | **CRUD-shaped** — returns structured JSON. The fine-grained surface MCP tools and the web UI consume. |
+
 ```
-            ┌────────────────────────────────────────────────────┐
-            │              CI-Server (this repo)                 │
-            │  /api/memory/{remember,recall,list,forget,context} │
-            └────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────┐
+            │                CI-Server (this repo)                 │
+            │  /api/agent/{context,recall,absorb,tools}            │
+            │  /api/memory/{remember,recall,list,forget,context}   │
+            └──────────────────────────────────────────────────────┘
                 │                  │                   │
                 │                  │                   │
         ┌───────┴────────┐ ┌───────┴────────┐ ┌────────┴─────────┐
@@ -24,6 +32,14 @@ HTTP, MCP, or a Hermes/OpenClaw plugin. This directory documents that surface.
         │ Cursor, ...    │ │                │ │                  │
         └────────────────┘ └────────────────┘ └──────────────────┘
 ```
+
+The Hermes plugin prefers `/api/agent/*` for the three hook-driven paths
+(`system_prompt_block`, `prefetch`, `sync_turn`) because the Markdown
+blocks slot directly into Hermes' prompt assembly. It falls back to
+`/api/memory/*` on 404 so it keeps working against older CI-Servers.
+The MCP server exposes both toolsets — `ci_*` + `agent_*` from the
+agent surface, `companion_*` from the memory surface — so MCP hosts get
+both shapes.
 
 All three surfaces talk to the same REST API — so a memory you store via
 Claude Code is visible to Hermes and to OpenClaw, and vice-versa.

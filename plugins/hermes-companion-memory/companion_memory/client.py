@@ -140,6 +140,66 @@ class CompanionMemoryClient:
 
         return data.get("context")
 
+    # ---- agent surface (`/api/agent/*`) ---------------------------------
+    # Added in concert with the AgentModule landed by feature/agent-memory.
+    # Returns Markdown blocks pre-formatted for prompt injection. Each
+    # method returns None on failure (the caller decides whether to fall
+    # back to the older `/memory/*` surface).
+
+    def agent_context(self) -> str | None:
+        try:
+            data = self._request("GET", "/api/agent/context")
+        except CompanionMemoryError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+        return data.get("block") or ""
+
+    def agent_recall(self, query: str, *, max_results: int = 5) -> Mapping[str, Any] | None:
+        try:
+            return self._request(
+                "POST",
+                "/api/agent/recall",
+                json={"query": query, "maxResults": max_results},
+            )
+        except CompanionMemoryError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def agent_absorb(
+        self,
+        messages: list[Mapping[str, Any]],
+        *,
+        session_id: str | None = None,
+        platform: str | None = None,
+    ) -> Mapping[str, Any] | None:
+        try:
+            return self._request(
+                "POST",
+                "/api/agent/absorb",
+                json=_strip_none(
+                    {"messages": messages, "sessionId": session_id, "platform": platform}
+                ),
+            )
+        except CompanionMemoryError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def agent_tool(self, tool: str, args: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        try:
+            return self._request(
+                "POST",
+                "/api/agent/tools",
+                json={"tool": tool, "args": dict(args)},
+            )
+        except CompanionMemoryError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
     # ---- internals -------------------------------------------------------
 
     def _request(

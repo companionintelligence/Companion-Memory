@@ -157,6 +157,20 @@ class CompanionMemoryProvider(MemoryProvider):
         if client is None:
             return ""
 
+        # Prefer the agent surface — it returns a Markdown block already
+        # formatted for direct injection, with the same shape (`# About You`,
+        # `## Close Relationships`, `## Preferences`, `## Knowledge Graph`)
+        # the backend assembles uniformly. Fall back to the JSON `/memory/context`
+        # endpoint and format client-side if the agent module isn't deployed.
+        try:
+            block = client.agent_context()
+        except CompanionMemoryError as exc:
+            LOG.warning("companion-memory agent_context failed: %s", exc)
+            block = None
+
+        if block:
+            return block
+
         try:
             context = client.context() or {}
         except CompanionMemoryError as exc:
@@ -190,6 +204,21 @@ class CompanionMemoryProvider(MemoryProvider):
     def prefetch(self, query: str) -> str:
         if not query.strip() or self._client is None:
             return ""
+
+        # Prefer /agent/recall — returns a Markdown block capped at ~3k chars,
+        # built on the backend's SearchService.search auto-mode. Falls back to
+        # /memory/recall when the agent module isn't deployed.
+        try:
+            agent_result = self._client.agent_recall(query=query, max_results=5)
+        except CompanionMemoryError as exc:
+            LOG.warning("companion-memory agent_recall failed: %s", exc)
+            agent_result = None
+
+        if agent_result and isinstance(agent_result, Mapping):
+            block = str(agent_result.get("block") or "")
+            if block:
+                return block
+
         try:
             results = self._client.recall(query=query, limit=5)
         except CompanionMemoryError as exc:
@@ -212,7 +241,30 @@ class CompanionMemoryProvider(MemoryProvider):
         if self._client is None or not user_content.strip():
             return
 
-        def _persist() -> None:
+        # Prefer /agent/absorb — upserts a single Communication row keyed by
+        # sessionId, so a long conversation becomes one growing row rather than
+        # N concept nodes. Falls back to /memory/remember if /agent/absorb is
+        # unavailable.
+        messages = [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": assistant_content},
+        ]
+
+        def _persist_agent() -> bool:
+            assert self._client is not None
+            try:
+                result = self._client.agent_absorb(
+                    messages,
+                    session_id=self._session_id,
+                    platform="hermes",
+                )
+            except CompanionMemoryError as exc:
+                LOG.warning("companion-memory agent_absorb failed: %s", exc)
+                return False
+
+            return bool(result and result.get("ok"))
+
+        def _persist_fallback() -> None:
             try:
                 self._client and self._client.remember(  # type: ignore[union-attr]
                     content=f"USER: {user_content}\nASSISTANT: {assistant_content}",
@@ -223,6 +275,10 @@ class CompanionMemoryProvider(MemoryProvider):
                 )
             except CompanionMemoryError as exc:
                 LOG.warning("companion-memory sync_turn failed: %s", exc)
+
+        def _persist() -> None:
+            if not _persist_agent():
+                _persist_fallback()
 
         threading.Thread(target=_persist, name="companion-memory-sync", daemon=True).start()
 

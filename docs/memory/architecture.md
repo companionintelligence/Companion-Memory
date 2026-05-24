@@ -26,10 +26,35 @@ This is the same store the existing `readKnowledge` / `writeKnowledge` /
 `forgetKnowledge` native tools use, so anything written via the memory API is
 visible in the existing graph UI and is queryable by every existing tool.
 
-## REST surface — `/api/memory/*`
+## Two REST surfaces
 
-Added by [MemoryController](../../backend/apps/api/src/domains/memory/controllers/MemoryController.ts).
-Auth: `x-api-key` header (or session JWT). Every endpoint scopes by the
+There are **two** complementary REST surfaces that adapters can consume.
+Both auth via `x-api-key` (or session JWT) and scope every request to the
+authenticated user.
+
+| Surface                  | Auth                       | Shape                                       | Best for                                              |
+| ------------------------ | -------------------------- | ------------------------------------------- | ----------------------------------------------------- |
+| `/api/agent/*`           | `ApiKeyGuard` (API key only) | Markdown blocks ready for prompt injection. | Hermes hooks (`system_prompt_block`, `prefetch`, `sync_turn`). |
+| `/api/memory/*`          | `JwtOrApiKeyAuthGuard`     | Structured JSON.                            | MCP tools, web UI, scripts, explicit CRUD.            |
+
+### `/api/agent/*` — added by [AgentModule](../../backend/apps/api/src/domains/agent/index.ts)
+
+Four endpoints aimed at the *agent loop*:
+
+- `GET /api/agent/context` — L0 static user dossier as Markdown.
+- `POST /api/agent/recall` — L1 semantic recall as Markdown (capped at ~3,000 chars).
+- `POST /api/agent/absorb` — ingest a conversation turn (upserts a single `Communication` row keyed by `sessionId`).
+- `POST /api/agent/tools` — dispatch one of `ci_search`, `ci_query`, `ci_remember`.
+
+These return Markdown blocks (`block: string`) that paste directly into a
+system prompt. The Hermes plugin uses them in preference to the CRUD
+surface because they collapse retrieval + formatting + budget capping
+into one call.
+
+### `/api/memory/*` — added by [MemoryController](../../backend/apps/api/src/domains/memory/controllers/MemoryController.ts)
+
+The fine-grained CRUD surface MCP tools and the web UI consume. Auth via
+`x-api-key` header (or session JWT). Every endpoint scopes by the
 authenticated user.
 
 ### `POST /api/memory/remember`

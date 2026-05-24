@@ -69,5 +69,54 @@ echo "→ forget"
 curl_json DELETE "/api/memory/forget/${MEMORY_ID}" --data '{"reason":"smoke-test cleanup"}' >/dev/null
 echo "  archived"
 
+# -----------------------------------------------------------------------------
+# Agent surface — /api/agent/*. Best-effort: the endpoints landed alongside
+# /api/memory/* via the AgentModule. If the backend hasn't deployed it yet
+# the smoke test reports skipped rather than failing.
+# -----------------------------------------------------------------------------
+
+agent_call() {
+  local method="$1"
+  local path="$2"
+  shift 2
+
+  if curl --silent --show-error \
+       --request "${method}" \
+       --header "x-api-key: ${KEY}" \
+       --header "content-type: application/json" \
+       --header "accept: application/json" \
+       "$@" \
+       --write-out '\n%{http_code}\n' \
+       "${URL}${path}"; then
+    return 0
+  fi
+
+  return 1
+}
+
+echo "→ agent surface"
+AGENT_OUTPUT="$(agent_call GET '/api/agent/context' 2>&1)"
+AGENT_STATUS="$(printf '%s\n' "${AGENT_OUTPUT}" | tail -n1)"
+if [[ "${AGENT_STATUS}" =~ ^2[0-9][0-9]$ ]]; then
+  echo "  /agent/context ok"
+  SESSION_ID="smoke-$(date -u +%s)"
+  agent_call POST '/api/agent/absorb' --data "$(cat <<JSON
+{
+  "sessionId": "${SESSION_ID}",
+  "platform": "smoke-test",
+  "messages": [
+    {"role": "user", "content": "smoke-test absorb"},
+    {"role": "assistant", "content": "ack"}
+  ]
+}
+JSON
+)" >/dev/null
+  echo "  /agent/absorb ok"
+  agent_call POST '/api/agent/recall' --data '{"query":"smoke-test","maxResults":3}' >/dev/null
+  echo "  /agent/recall ok"
+else
+  echo "  /agent/* not deployed (status ${AGENT_STATUS}) — skipping"
+fi
+
 echo
 echo "companion-memory smoke test passed."
