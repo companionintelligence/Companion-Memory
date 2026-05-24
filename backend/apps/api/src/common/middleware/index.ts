@@ -1,2 +1,1 @@
-export { RequestContextMiddleware } from './RequestContextMiddleware';
-export { RequestLoggerMiddleware } from './RequestLoggerMiddleware';
+export { BodyParserMiddleware } from './BodyParserMiddleware';

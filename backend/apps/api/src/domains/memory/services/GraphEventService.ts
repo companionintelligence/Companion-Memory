@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 
-import { LoggerService } from '@ci/common/services';
+import { LoggerService } from '@ci/common/logging';
 import { Events, EventService } from '@ci/domains/events';
 
 import { GraphQueryService } from './GraphQueryService';
@@ -91,12 +91,13 @@ interface UpdateNodeInput {
 
 @Injectable()
 export class GraphEventService {
-  private readonly logger = new LoggerService(GraphEventService.name);
-
   constructor(
     private readonly eventService: EventService,
     private readonly graphQuery: GraphQueryService,
-  ) {}
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(GraphEventService.name);
+  }
 
   async addPerson(ownerId: string, input: AddPersonInput) {
     const entityId = uuidv7();

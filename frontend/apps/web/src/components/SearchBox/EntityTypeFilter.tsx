@@ -1,64 +1,20 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 
-import { Checkbox } from '@ci/shadcn';
+import { Button, DropdownMenu } from '@ci/shadcn';
 import { ChevronDown } from '@ci/shadcn/icons';
-import { createPortal } from 'react-dom';
 
-import { AVAILABLE_ENTITY_TYPES, useFilters } from './useFilters';
+import { AVAILABLE_ENTITY_TYPES, useDropdown } from './useDropdown';
 
-export function EntityTypeFilter() {
+interface Props {
+  modal?: boolean;
+}
+
+export function EntityTypeFilter({ modal = true }: Props) {
   const [isOpen, setIsOpen] = useState(false);
-  const [buttonRect, setButtonRect] = useState<DOMRect | null>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
   const [{ selectedEntityTypes }, { clearEntityTypes, selectAllEntityTypes, toggleEntityType }] =
-    useFilters();
+    useDropdown();
 
-  const handleButtonClick = useCallback(() => {
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setButtonRect(rect);
-    }
-
-    setIsOpen(!isOpen);
-  }, [isOpen]);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-
-      // Check if click is on button
-      const isButtonClick = buttonRef.current?.contains(target);
-
-      // Check if click is on dropdown content
-      const isDropdownClick = dropdownRef.current?.contains(target);
-
-      // Check if click is on any form element (checkbox, button, label)
-      const isFormElement =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLButtonElement ||
-        target instanceof HTMLLabelElement;
-
-      // Only close if clicking outside both button and dropdown, and not on form elements
-      if (!isButtonClick && !isDropdownClick && !isFormElement) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      // Use a slight delay to avoid immediate closure
-      const timeoutId = setTimeout(() => {
-        document.addEventListener('mousedown', handleClickOutside);
-      }, 100);
-
-      return () => {
-        clearTimeout(timeoutId);
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }
-  }, [isOpen]);
+  const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
 
   const selectedCount = selectedEntityTypes.length;
   const totalCount = AVAILABLE_ENTITY_TYPES.length;
@@ -82,73 +38,53 @@ export function EntityTypeFilter() {
   };
 
   return (
-    <div className="relative">
-      <button
-        ref={buttonRef}
-        onClick={handleButtonClick}
-        className="flex items-center gap-2 px-3 py-3 text-sm rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground min-w-[160px] justify-between"
-        aria-expanded={isOpen}
-        aria-haspopup="listbox"
-        aria-label="Select entity types to filter"
+    <DropdownMenu modal={modal} onOpenChange={() => setIsOpen(!isOpen)}>
+      <Trigger>
+        <Button variant="outline">
+          {getDisplayText()}
+          <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </Button>
+      </Trigger>
+
+      <Content
+        id="entity-type-filters"
+        className="fixed bg-background border border-border rounded-md shadow-lg z-[9999] max-h-80 overflow-y-auto w-64"
       >
-        <span>{getDisplayText()}</span>
-        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
+        <div className="flex gap-2">
+          <Label className="p-2 font-medium">Entity Types</Label>
+          <div className="flex gap-2">
+            <Button
+              onClick={clearEntityTypes}
+              className="text-xs px-4 py-1 bg-background text-primary hover:text-background"
+            >
+              All
+            </Button>
+            <Button
+              onClick={selectAllEntityTypes}
+              className="text-xs px-4 py-1 bg-background text-primary hover:text-background"
+            >
+              None
+            </Button>
+          </div>
+        </div>
+        <Separator />
+        {AVAILABLE_ENTITY_TYPES.map((entityType) => {
+          const isChecked = selectedEntityTypes.includes(entityType);
 
-      {isOpen &&
-        buttonRect &&
-        createPortal(
-          <div
-            ref={dropdownRef}
-            className="fixed bg-background border border-border rounded-md shadow-lg z-[9999] max-h-80 overflow-y-auto w-64"
-            style={{
-              top: buttonRect.bottom + 4,
-              left: buttonRect.left,
-            }}
-            role="listbox"
-            aria-label="Entity type options"
-          >
-            <div className="p-2">
-              <div className="flex items-center justify-between p-2 border-b border-border mb-2">
-                <span className="text-sm font-medium">Entity Types</span>
-                <div className="flex gap-2">
-                  <button onClick={clearEntityTypes} className="text-xs px-2 py-1 rounded hover:bg-accent">
-                    All
-                  </button>
-                  <button
-                    onClick={selectAllEntityTypes}
-                    className="text-xs px-2 py-1 rounded hover:bg-accent"
-                  >
-                    None
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                {AVAILABLE_ENTITY_TYPES.map((entityType) => (
-                  <label
-                    key={entityType}
-                    className="flex items-center gap-2 p-2 rounded hover:bg-accent cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleEntityType(entityType);
-                    }}
-                  >
-                    <Checkbox
-                      checked={selectedEntityTypes.includes(entityType)}
-                      onChange={(e) => {
-                        e.stopPropagation();
-                        toggleEntityType(entityType);
-                      }}
-                    />
-                    <span className="text-sm">{entityType}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
-    </div>
+          return (
+            <CheckboxItem
+              checked={isChecked}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                toggleEntityType(entityType);
+              }}
+            >
+              {entityType}
+            </CheckboxItem>
+          );
+        })}
+      </Content>
+    </DropdownMenu>
   );
 }

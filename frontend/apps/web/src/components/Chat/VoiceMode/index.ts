@@ -1,1 +1,0 @@
-export { VoiceMode } from './VoiceMode';

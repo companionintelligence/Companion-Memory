@@ -8,8 +8,9 @@ import {
   Ollama,
 } from 'ollama';
 
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
+import type { RequestContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
+import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
 
@@ -18,13 +19,14 @@ import type { OllamaModel } from '../types';
 const PROMPT_MODEL = 'gemma3:1b';
 const DEMO_VISION_MODEL = 'gemma3:27b';
 const DEMO_TEXT_MODEL = 'qwen3:14b';
-const INTERNAL_MODELS = new Set(['nomic-embed-text']);
+const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);
 
 interface PromptOptions {
   model: string;
   signal?: AbortSignal;
   enableTools?: boolean;
   enableThinking?: boolean;
+  format?: string;
 }
 
 interface ValidateModelOptions {
@@ -42,20 +44,45 @@ interface ValidateModelResult {
 
 @Injectable()
 export class OllamaService {
-  private readonly logger = new LoggerService(OllamaService.name);
-
   private readonly ollama = new Ollama({
     host: config.services.ollama.host,
   });
 
-  constructor(private readonly toolRegistry: ToolRegistry) {}
+  constructor(
+    private readonly toolRegistry: ToolRegistry,
+    private readonly logger: LoggerService,
+    private readonly featureService: FeatureService,
+  ) {
+    this.logger.setContext(OllamaService.name);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
     const result = await this.ollama.list();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));
+    const visibleModels = models.filter((model) => !INTERNAL_MODELS.has(model.name));
 
-    return models.filter((model) => !INTERNAL_MODELS.has(model.name));
+    return await Promise.all(
+      visibleModels.map(async (model) => {
+        const capabilities = await this.fetchModelCapabilities(model.model, {
+          throwOnError: false,
+        });
+
+        return {
+          ...model,
+          capabilities,
+          vision: capabilities.includes('vision'),
+          tools: capabilities.includes('tools'),
+          thinking: capabilities.includes('thinking'),
+        };
+      }),
+    );
+  }
+
+  async getModelCapabilities(context: RequestContext, requestedModel: string): Promise<string[]> {
+    await this.validateModel(context, requestedModel);
+
+    return await this.fetchModelCapabilities(requestedModel);
   }
 
   async generateStream(
@@ -245,7 +272,7 @@ export class OllamaService {
   async chat(
     context: RequestContext,
     messages: OllamaMessage[],
-    { model, enableTools = false }: Omit<PromptOptions, 'signal'>,
+    { model, enableTools = false, format }: Omit<PromptOptions, 'signal'>,
   ): Promise<ChatResponse> {
     await this.validateModel(context, model);
 
@@ -258,6 +285,7 @@ export class OllamaService {
     const response = await this.ollama.chat({
       model: model,
       messages: inputMessages,
+      ...(format && { format }),
       ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
     });
 
@@ -291,8 +319,10 @@ export class OllamaService {
     let resolvedThinking = enableThinking;
     let resolvedTools = enableTools;
 
+    const pinnedDemoModelsEnabled = await this.featureService.isFeatureEnabled('pinned.demo.models');
+
     // If pinned demo models feature is enabled, always use demo models
-    if (config.features['pinned.demo.models']) {
+    if (pinnedDemoModelsEnabled) {
       // Check if any message contains image content
       const hasVisualContent = messages.some((message) => message.images && message.images.length > 0);
 
@@ -406,13 +436,44 @@ export class OllamaService {
     };
   }
 
-  private async validateModel(context: RequestContext, requestedModel: string) {
-    const availableModels = await this.getAvailableModels(context);
-
-    const validModel = availableModels.find((availableModel) => availableModel.model === requestedModel);
+  private async validateModel(_context: RequestContext, requestedModel: string) {
+    const result = await this.ollama.list();
+    const validModel = result.models.find((model) => model.name === requestedModel);
 
     if (!validModel) {
       throw new Error(`Invalid model specified: ${requestedModel}`);
+    }
+  }
+
+  private async fetchModelCapabilities(
+    requestedModel: string,
+    options: { throwOnError?: boolean } = {},
+  ): Promise<string[]> {
+    const { throwOnError = true } = options;
+
+    try {
+      const response = (await this.ollama.show({ model: requestedModel })) as {
+        capabilities?: unknown;
+      };
+
+      if (!Array.isArray(response.capabilities)) {
+        return [];
+      }
+
+      return response.capabilities
+        .filter((capability): capability is string => typeof capability === 'string')
+        .map((capability) => capability.toLowerCase());
+    } catch (error) {
+      if (throwOnError) {
+        throw error;
+      }
+
+      this.logger.warn('Failed to fetch Ollama model capabilities while listing models', {
+        model: requestedModel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return [];
     }
   }
 }

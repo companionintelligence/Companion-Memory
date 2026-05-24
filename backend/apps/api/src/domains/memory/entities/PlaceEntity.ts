@@ -4,25 +4,22 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToMany,
   ManyToOne,
   JoinColumn,
-  JoinTable,
   AfterLoad,
   Repository,
   SelectQueryBuilder,
 } from 'typeorm';
 
-import { TagEntity } from '@ci/domains/search';
-import { UserEntity } from '@ci/domains/user';
+import { UserEntity, type User } from '@ci/domains/user';
 
-@Entity({ name: 'entities' })
+@Entity({ schema: 'ci', name: 'entities' })
 export class PlaceEntity {
   @PrimaryColumn('uuid', { name: 'entity_id' })
   id!: string;
 
   @Column({ type: 'text', name: 'entity_type', default: 'Location' })
-  entity_type!: string;
+  entityType!: string;
 
   @Column({ type: 'text', nullable: true })
   name!: string | null;
@@ -36,11 +33,11 @@ export class PlaceEntity {
   // Backward compatibility fields - populated from properties JSONB after load
   type!: string | null;
 
-  geo_format!: string | null;
+  geoFormat!: string | null;
 
   geolocation!: Record<string, unknown> | null;
 
-  location_boundary!: Record<string, unknown> | null;
+  locationBoundary!: Record<string, unknown> | null;
 
   estimated!: boolean | null;
 
@@ -50,13 +47,32 @@ export class PlaceEntity {
 
   @AfterLoad()
   loadPropertiesFromJsonb() {
-    this.type = (this.properties?.type as string) || null;
-    this.geo_format = (this.properties?.geo_format as string) || null;
-    this.geolocation = (this.properties?.geolocation as Record<string, unknown>) || null;
-    this.location_boundary = (this.properties?.location_boundary as Record<string, unknown>) || null;
-    this.estimated = (this.properties?.estimated as boolean) || null;
-    this.tracked = (this.properties?.tracked as boolean) || null;
-    this.uploaded = (this.properties?.uploaded as boolean) || null;
+    if (!this.properties) {
+      return;
+    }
+
+    this.type = (this.properties.type as string) || null;
+    this.geoFormat = (this.properties.geo_format as string) || null;
+    this.geolocation = (this.properties.geolocation as Record<string, unknown>) || null;
+    this.locationBoundary = (this.properties.location_boundary as Record<string, unknown>) || null;
+    this.estimated =
+      typeof this.properties.estimated === 'boolean'
+        ? this.properties.estimated
+        : typeof this.properties.estimated === 'string'
+          ? this.properties.estimated.toLowerCase() === 'true'
+          : null;
+    this.tracked =
+      typeof this.properties.tracked === 'boolean'
+        ? this.properties.tracked
+        : typeof this.properties.tracked === 'string'
+          ? this.properties.tracked.toLowerCase() === 'true'
+          : null;
+    this.uploaded =
+      typeof this.properties.uploaded === 'boolean'
+        ? this.properties.uploaded
+        : typeof this.properties.uploaded === 'string'
+          ? this.properties.uploaded.toLowerCase() === 'true'
+          : null;
   }
 
   // Helper method for creating filtered queries
@@ -70,24 +86,37 @@ export class PlaceEntity {
   }
 
   @ManyToOne(() => UserEntity, { nullable: true })
-  @JoinColumn({ name: 'user_id' })
+  @JoinColumn({ name: 'owner_user_id' })
   user?: UserEntity;
 
-  @ManyToOne(() => PlaceEntity, { nullable: true })
-  @JoinColumn({ name: 'parent_id' })
-  parent?: PlaceEntity;
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @ManyToMany(() => TagEntity, { nullable: true })
-  @JoinTable({
-    name: 'place_tag',
-    joinColumn: { name: 'place_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'tag_id', referencedColumnName: 'id' },
-  })
-  tags?: TagEntity[];
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
-
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  static toEgressType(entity: PlaceEntity) {
+    return {
+      id: entity.id,
+      name: entity.name || null,
+      entityType: entity.entityType,
+      description: entity.description || null,
+      type: entity.type || null,
+      geoFormat: entity.geoFormat || null,
+      geolocation: entity.geolocation || null,
+      locationBoundary: entity.locationBoundary || null,
+      estimated: entity.estimated || null,
+      tracked: entity.tracked || null,
+      properties: entity.properties || {},
+      uploaded: entity.uploaded || null,
+      userId: entity.user?.id || null,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+    };
+  }
 }
+
+export type Place = Readonly<Omit<PlaceEntity, 'user' | 'loadPropertiesFromJsonb'>> & {
+  user?: User;
+};

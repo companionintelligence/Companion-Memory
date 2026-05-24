@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
+import type { RequestContext } from '@ci/common/context';
+import { LoggerService } from '@ci/common/logging';
 
 import type { BaseTool } from '../core/BaseTool';
 import type { ToolSchema, ToolResult } from '../core/types';
@@ -12,20 +12,22 @@ import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvid
  */
 @Injectable()
 export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new LoggerService(ToolRegistry.name);
-
   private readonly providers = new Map<string, ToolProvider>();
 
   private readonly tools = new Map<string, BaseTool>();
 
   private readonly toolToProvider = new Map<string, string>();
 
+  constructor(private readonly logger: LoggerService) {
+    this.logger.setContext(ToolRegistry.name);
+  }
+
   async onModuleInit() {
-    this.logger.log('Initializing ToolRegistry');
+    this.logger.debug('Initializing ToolRegistry');
   }
 
   async onModuleDestroy() {
-    this.logger.log('Shutting down ToolRegistry');
+    this.logger.debug('Shutting down ToolRegistry');
     await this.shutdownProviders();
   }
 
@@ -53,7 +55,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
       await provider.initialize();
       await this.loadToolsFromProvider(provider);
 
-      this.logger.log(`Initialized provider: ${provider.name}`);
+      this.logger.debug(`Initialized provider: ${provider.name}`);
     } catch (error) {
       this.logger.error(`Failed to initialize provider: ${provider.name}`, error as Error);
     }

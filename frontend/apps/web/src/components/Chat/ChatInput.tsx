@@ -18,7 +18,7 @@ import {
   formDataResolver,
   formDataSchema as s,
 } from '@ci/shadcn';
-import { Send, Square, Speech } from '@ci/shadcn/icons';
+import { Send, Square } from '@ci/shadcn/icons';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -45,21 +45,10 @@ interface Props {
   placeholder?: string;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
-  onVoiceModeToggle?: () => void;
-  isVoiceModeActive?: boolean;
 }
 
 function ChatInput(
-  {
-    disabled = false,
-    loading = false,
-    streaming = false,
-    placeholder,
-    onSubmit,
-    onStop,
-    onVoiceModeToggle,
-    isVoiceModeActive = false,
-  }: Props,
+  { disabled = false, loading = false, streaming = false, placeholder, onSubmit, onStop }: Props,
   forwardedRef: ForwardedRef<HTMLTextAreaElement>,
 ) {
   const SendIcon = streaming ? Square : Send;
@@ -92,14 +81,6 @@ function ChatInput(
       }
     },
     [form, onSubmit],
-  );
-
-  const handleVoiceModeToggle = useCallback(
-    (e: MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      onVoiceModeToggle?.();
-    },
-    [onVoiceModeToggle],
   );
 
   return (
@@ -180,27 +161,6 @@ function ChatInput(
                   />
                 )}
               />
-
-              <Tooltip>
-                <Tooltip.Content side="bottom">
-                  {isVoiceModeActive ? 'Exit Voice Mode' : 'Voice Mode'}
-                </Tooltip.Content>
-                <Tooltip.Trigger asChild>
-                  <Button
-                    type="button"
-                    disabled={loading || streaming || disabled}
-                    size="sm"
-                    variant={isVoiceModeActive ? 'default' : 'ghost'}
-                    className={cn(
-                      'cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform',
-                      isVoiceModeActive && 'bg-blue-500 hover:bg-blue-600 text-white',
-                    )}
-                    onClick={handleVoiceModeToggle}
-                  >
-                    <Speech className="h-4 w-4" />
-                  </Button>
-                </Tooltip.Trigger>
-              </Tooltip>
 
               <Tooltip>
                 <Tooltip.Content side="bottom">{streaming ? 'Stop' : 'Send'}</Tooltip.Content>

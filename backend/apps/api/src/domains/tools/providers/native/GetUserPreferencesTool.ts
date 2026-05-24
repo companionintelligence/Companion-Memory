@@ -2,6 +2,7 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphReadService, GraphNodeEntity } from '@ci/domains/memory';
 
 import { BaseTool } from '../../core/BaseTool';
@@ -152,8 +153,10 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
   constructor(
     private readonly graphQuery: GraphQueryService,
     private readonly graphRead: GraphReadService,
+    protected readonly logger: LoggerService,
   ) {
     super();
+    this.logger.setContext(GetUserPreferencesTool.name);
   }
 
   protected validateInput(input: unknown): GetUserPreferencesInput {

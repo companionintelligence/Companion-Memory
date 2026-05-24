@@ -1,0 +1,1228 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type ActionConnection implements Connection {
+  edges: [ActionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ActionEdge implements Edge {
+  cursor: String!
+  node: ActionType!
+}
+
+"""Metadata associated with an action"""
+type ActionMetadataType {
+  """Context explaining why this action is relevant"""
+  context: String
+
+  """Name of related person if applicable"""
+  relatedPerson: String
+
+  """Whether the user has seen/interacted with this action"""
+  seen: Boolean!
+
+  """Type of action: conversation_starter or time_suggestion"""
+  type: String
+}
+
+type ActionType implements Node & Taggable {
+  createdAt: DateTime!
+  dismissed: Boolean!
+  id: ID!
+  imageUrl: String
+
+  """Action metadata including seen status"""
+  metadata: ActionMetadataType!
+
+  """Priority/relevance level 1-10"""
+  priority: Int
+  seen: Boolean!
+  tags: [EntityTagType!]!
+  text: String!
+  thread: ThreadType
+  title: String!
+  updatedAt: DateTime!
+}
+
+type ActivityCountsType {
+  activities: Int
+  apiLogs: Int
+  browserActivity: Int
+  communications: Int
+  events: Int
+  files: Int
+  measurements: Int
+  messages: Int
+  positions: Int
+  screenCaptures: Int
+  total: Int!
+}
+
+type AnswerConnection implements Connection {
+  edges: [AnswerEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type AnswerEdge implements Edge {
+  cursor: String!
+  node: AnswerType!
+}
+
+type AnswerType implements Node {
+  answer: String!
+  answerMethod: String!
+  answerSource: String
+  answeredAt: DateTime!
+  id: ID!
+  question: QuestionType!
+}
+
+type BrowserActivityConnection implements Connection {
+  edges: [BrowserActivityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type BrowserActivityEdge implements Edge {
+  cursor: String!
+  node: BrowserActivityType!
+}
+
+type BrowserActivityType implements Node & Taggable {
+  actionType: String
+  duration: Float
+  id: ID!
+  scrollDepth: Float
+  tags: [EntityTagType!]!
+  time: DateTime!
+  title: String
+  url: String!
+}
+
+type CommunicationConnection implements Connection {
+  edges: [CommunicationEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CommunicationEdge implements Edge {
+  cursor: String!
+  node: CommunicationType!
+}
+
+type CommunicationType implements Node & Taggable {
+  content: String!
+  direction: String!
+  from: PersonType
+  id: ID!
+  preview: String
+  subject: String
+  tags: [EntityTagType!]!
+  time: DateTime!
+  to(after: String, before: String, first: Int, last: Int): PersonConnection!
+  type: String!
+}
+
+type ConceptConnection implements Connection {
+  edges: [ConceptEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ConceptEdge implements Edge {
+  cursor: String!
+  node: ConceptType!
+}
+
+type ConceptType implements Node & Taggable {
+  description: String
+  id: ID!
+  name: String
+  tags: [EntityTagType!]!
+}
+
+interface Connection {
+  edges: [Edge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ConnectionConnection implements Connection {
+  edges: [ConnectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ConnectionEdge implements Edge {
+  cursor: String!
+  node: ConnectionType!
+}
+
+type ConnectionSyncJobConnection implements Connection {
+  edges: [ConnectionSyncJobEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ConnectionSyncJobEdge implements Edge {
+  cursor: String!
+  node: ConnectionSyncJobType!
+}
+
+type ConnectionSyncJobType implements Node {
+  completedAt: DateTime
+  connection: ConnectionType
+  connectionId: ID!
+  createdAt: DateTime!
+  cursor: JSON
+  data: JSON!
+  endpointName: String!
+  error: JSON
+  id: ID!
+  jobId: ID
+  nextCursor: JSON
+  properties: JSON
+  status: String!
+  type: String!
+  updatedAt: DateTime!
+  userId: ID!
+}
+
+type ConnectionType implements Node {
+  active: Boolean!
+  activeEndpoints: [String!]!
+  externalId: String
+  id: ID!
+  name: String
+  needsReauth: Boolean!
+  provider: ProviderType!
+  providerId: ID!
+  schedule: String
+  syncState: JSON
+  tokenExpiry: DateTime
+}
+
+type ContentConnection implements Connection {
+  edges: [ContentEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ContentEdge implements Edge {
+  cursor: String!
+  node: ContentType!
+}
+
+type ContentType implements Node & Taggable {
+  event: EventType
+  externalId: String
+  id: ID!
+  mimetype: String
+  sourceData: JSON
+  sourceUrl: String
+  tags: [EntityTagType!]!
+  text: String
+  title: String
+  type: String
+  url: String
+}
+
+input CreateAnswerInput {
+  answer: String!
+  questionId: String!
+}
+
+input CreateConceptInput {
+  description: String
+  name: String!
+}
+
+type CreateConceptPayload {
+  concept: ConceptType
+  success: Boolean!
+}
+
+input CreateConnectionInput {
+  accessToken: String
+  activeEndpoints: [String!]!
+  name: String
+  needsReauth: Boolean
+  providerId: ID!
+  refreshToken: String
+  schedule: String
+  syncState: JSON
+  tokenExpiry: DateTime
+}
+
+type CreateConnectionPayload {
+  connection: ConnectionType
+  success: Boolean!
+}
+
+input CreateConnectionSyncJobInput {
+  connectionId: ID!
+  cursor: JSON
+  data: JSON
+  endpointName: String!
+  error: JSON
+  id: ID
+  jobId: ID
+  nextCursor: JSON
+  properties: JSON
+  status: String
+  type: String!
+  userId: ID!
+}
+
+type CreateConnectionSyncJobPayload {
+  connectionSyncJob: ConnectionSyncJobType
+  success: Boolean!
+}
+
+input CreateContentInput {
+  externalId: String
+  mimetype: String
+  sourceData: JSON
+  sourceUrl: String
+  text: String
+  title: String
+  type: String
+  url: String
+}
+
+input CreateEventInput {
+  category: String
+  confidenceScore: Float
+  description: String
+  durationMinutes: Int
+  endTime: DateTime
+  eventType: String
+  isAllDay: Boolean
+  isRecurring: Boolean
+  locationCoordinates: JSON
+  locationEntityId: ID
+  locationName: String
+  metadata: JSON
+  organizerEntityId: ID
+  participantEntityIds: [ID!]
+  sourceId: ID
+  sourceSystem: String
+  sourceType: String
+  startTime: DateTime!
+  status: String
+  title: String
+}
+
+input CreateItemInput {
+  brand: String
+  category: String
+  currentValue: Float
+  description: String
+  model: String
+  name: String!
+}
+
+type CreateItemPayload {
+  item: ItemType
+  success: Boolean!
+}
+
+input CreateNoteInput {
+  content: String
+  title: String
+}
+
+type CreateNotePayload {
+  note: NoteType
+  success: Boolean!
+}
+
+input CreatePersonInput {
+  description: String
+  name: String!
+}
+
+type CreatePersonPayload {
+  person: PersonType
+  success: Boolean!
+}
+
+input CreatePlaceInput {
+  description: String
+  estimated: Boolean
+  geoFormat: String
+  geolocation: JSON
+  locationBoundary: JSON
+  name: String!
+  properties: JSON
+  tracked: Boolean
+  type: String
+  uploaded: Boolean
+}
+
+input CreateProviderKeyInput {
+  clientId: String!
+  clientSecret: String!
+  providerId: ID!
+}
+
+input CreateQuestionInput {
+  category: String!
+  text: String!
+}
+
+input CreateRelationshipInput {
+  endDate: DateTime
+  fromNodeId: ID!
+  fromNodeType: String!
+  isBidirectional: Boolean
+  properties: JSON
+  startDate: DateTime
+  strength: Float
+  toNodeId: String!
+  toNodeType: String!
+  type: String!
+}
+
+type CreateRelationshipPayload {
+  relationship: RelationshipType
+  success: Boolean!
+}
+
+input CreateSavedSearchInput {
+  description: String
+  entityTypes: [String!]
+  name: String
+  query: String
+  tags: [String!]
+}
+
+type CreateSavedSearchPayload {
+  savedSearch: SavedSearchType
+  success: Boolean!
+}
+
+"""
+A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
+"""
+scalar DateTime
+
+input DeleteByIdInput {
+  id: String!
+}
+
+type DeleteByIdPayload {
+  deletedId: ID
+  success: Boolean!
+}
+
+interface Edge {
+  cursor: String!
+  node: Node!
+}
+
+type EntityTagType implements Node {
+  id: ID!
+  label: String!
+  taggedAt: DateTime!
+}
+
+type EventConnection implements Connection {
+  edges: [EventEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type EventEdge implements Edge {
+  cursor: String!
+  node: EventType!
+}
+
+type EventType implements Node & Taggable {
+  category: String
+  confidenceScore: Float
+  description: String
+  durationMinutes: Int
+  endTime: DateTime
+  eventType: String
+  id: ID!
+  isAllDay: Boolean
+  isRecurring: Boolean
+  location: PlaceType
+  locationCoordinates: JSON
+  locationEntityId: ID
+  locationName: String
+  metadata: JSON
+  organizer: PersonType
+  organizerEntityId: ID
+  participantEntityIds: [ID!]
+  participants(after: String, before: String, first: Int, last: Int): PersonConnection!
+  sourceId: ID
+  sourceSystem: String
+  sourceType: String
+  startTime: DateTime!
+  status: String
+  tags: [EntityTagType!]!
+  title: String
+}
+
+type FileConnection implements Connection {
+  edges: [FileEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type FileEdge implements Edge {
+  cursor: String!
+  node: FileType!
+}
+
+type FileType implements Node & Taggable {
+  contentType: String!
+  createdAt: DateTime!
+  description: String
+  externalId: String
+  filename: String
+  id: ID!
+  items(after: String, before: String, first: Int, last: Int): ItemConnection
+  previewUrl: String
+  size: Float
+  sourceUrl: String
+  tags: [EntityTagType!]!
+  title: String
+  updatedAt: DateTime!
+}
+
+"""One 30-minute forecast bucket from the HBPE histogram"""
+type ForecastBucketType {
+  bucketIndex: Int!
+  l0Probs: [ProbabilityEntryType!]!
+  l1Probs: [ProbabilityEntryType!]!
+  l2Probs: [ProbabilityEntryType!]
+  q10: Float!
+  q50: Float!
+  q90: Float!
+
+  """ISO-8601 start time for this bucket"""
+  startTime: String!
+}
+
+"""48-bucket HBPE day-ahead forecast"""
+type ForecastType {
+  buckets: [ForecastBucketType!]!
+
+  """ISO-8601 timestamp when this forecast was generated"""
+  generatedAt: String!
+
+  """
+  Forecast horizon, e.g. "48h"
+  """
+  horizon: String!
+
+  """System status of the HBPE engine (COLD_START, TRAINING, READY)"""
+  systemStatus: String!
+}
+
+type InsightItemType {
+  keyActions: [String!]!
+  relatedEntityIds: [String!]
+  relevanceScore: Float!
+  summaryText: String!
+  tags: [String!]!
+  title: String!
+}
+
+enum ItemCondition {
+  BROKEN
+  FAIR
+  GOOD
+  LIKE_NEW
+  NA
+  NEW
+  POOR
+}
+
+type ItemConnection implements Connection {
+  edges: [ItemEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ItemEdge implements Edge {
+  cursor: String!
+  node: ItemType!
+}
+
+type ItemType implements Node & Taggable {
+  acquiredAt: DateTime
+  brand: String
+  category: String
+  condition: ItemCondition
+  createdAt: DateTime!
+  currency: String!
+  currentValue: Float
+  description: String
+  file: FileType
+  id: ID!
+  metadata: JSON
+  model: String
+  name: String
+  subcategory: String
+  tags: [EntityTagType!]!
+  updatedAt: DateTime!
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+"""
+scalar JSON
+
+type MessageConnection implements Connection {
+  edges: [MessageEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type MessageEdge implements Edge {
+  cursor: String!
+  node: MessageType!
+}
+
+type MessageType implements Node {
+  content: String!
+  id: ID!
+  role: String
+  threadId: ID!
+}
+
+type Mutation {
+  createAnswer(input: CreateAnswerInput!): AnswerType!
+  createConcept(input: CreateConceptInput!): CreateConceptPayload!
+  createConnection(input: CreateConnectionInput!): CreateConnectionPayload!
+  createConnectionSyncJob(input: CreateConnectionSyncJobInput!): CreateConnectionSyncJobPayload!
+  createContent(input: CreateContentInput!): ContentType!
+  createEvent(input: CreateEventInput!): EventType!
+  createItem(input: CreateItemInput!): CreateItemPayload!
+  createNote(input: CreateNoteInput!): CreateNotePayload!
+  createPerson(input: CreatePersonInput!): CreatePersonPayload!
+  createPlace(input: CreatePlaceInput!): PlaceType!
+  createProviderKey(input: CreateProviderKeyInput!): ProviderKeyType!
+  createQuestion(input: CreateQuestionInput!): QuestionType!
+  createRelationship(input: CreateRelationshipInput!): CreateRelationshipPayload!
+  createSavedSearch(input: CreateSavedSearchInput!): CreateSavedSearchPayload!
+  deleteConcept(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteConnection(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteConnectionSyncJob(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteItem(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteNote(input: DeleteByIdInput!): DeleteByIdPayload!
+  deletePerson(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteProviderKey(id: ID!): Boolean!
+  deleteRelationship(input: DeleteByIdInput!): DeleteByIdPayload!
+  deleteSavedSearch(input: DeleteByIdInput!): DeleteByIdPayload!
+
+  """Mark an action as dismissed"""
+  markActionAsDismissed(id: ID!): ActionType
+
+  """Mark an action as seen"""
+  markActionAsSeen(id: ID!): ActionType
+
+  """Mark a summary as dismissed"""
+  markSummaryAsDismissed(id: ID!): SummaryType
+
+  """Mark a summary as seen"""
+  markSummaryAsSeen(id: ID!): SummaryType
+  removeAnswer(id: String!): Boolean!
+  removeContent(id: String!): Boolean!
+  removeEvent(id: String!): Boolean!
+  removePlace(id: String!): Boolean!
+  removeQuestion(id: String!): Boolean!
+  tagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
+
+  """Manually trigger the HBPE pipeline for the current user"""
+  triggerHbpe: String!
+  untagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
+  updateAnswer(input: UpdateAnswerInput!): AnswerType
+  updateConcept(input: UpdateConceptInput!): UpdateConceptPayload!
+  updateConnection(input: UpdateConnectionInput!): UpdateConnectionPayload!
+  updateConnectionSyncJob(input: UpdateConnectionSyncJobInput!): UpdateConnectionSyncJobPayload!
+  updateContent(input: UpdateContentInput!): ContentType
+  updateEvent(input: UpdateEventInput!): EventType
+  updateItem(input: UpdateItemInput!): UpdateItemPayload!
+  updateNote(input: UpdateNoteInput!): UpdateNotePayload!
+  updatePerson(input: UpdatePersonInput!): UpdatePersonPayload!
+  updatePlace(input: UpdatePlaceInput!): PlaceType
+  updateProviderKey(id: ID!, input: UpdateProviderKeyInput!): ProviderKeyType
+  updateQuestion(input: UpdateQuestionInput!): QuestionType
+  updateRelationship(input: UpdateRelationshipInput!): UpdateRelationshipPayload!
+  updateSavedSearch(input: UpdateSavedSearchInput!): UpdateSavedSearchPayload!
+}
+
+interface Node {
+  id: ID!
+}
+
+type NoteConnection implements Connection {
+  edges: [NoteEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type NoteEdge implements Edge {
+  cursor: String!
+  node: NoteType!
+}
+
+type NoteType implements Node & Taggable {
+  content: String
+  createdAt: DateTime!
+  id: ID!
+  tags: [EntityTagType!]!
+  title: String
+  updatedAt: DateTime!
+}
+
+type PageInfo {
+  endCursor: String
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+}
+
+type PersonConnection implements Connection {
+  edges: [PersonEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PersonEdge implements Edge {
+  cursor: String!
+  node: PersonType!
+}
+
+type PersonType implements Node & Taggable {
+  address: String
+  avatarUrl: String
+  city: String
+  country: String
+  description: String
+  firstName: String
+  gender: String
+  id: ID!
+  lastName: String
+  name: String
+  postalCode: String
+  region: String
+  streetAddress: String
+  streetAddress2: String
+  tags: [EntityTagType!]!
+}
+
+type PlaceConnection implements Connection {
+  edges: [PlaceEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PlaceEdge implements Edge {
+  cursor: String!
+  node: PlaceType!
+}
+
+type PlaceType implements Node & Taggable {
+  description: String
+  entityType: String!
+  estimated: Boolean
+  geoFormat: String
+  geolocation: JSON
+  id: ID!
+  locationBoundary: JSON
+  name: String
+  properties: JSON!
+  tags: [EntityTagType!]!
+  tracked: Boolean
+  type: String
+  uploaded: Boolean
+}
+
+"""A single label→probability entry from the HBPE histogram"""
+type ProbabilityEntryType {
+  label: String!
+  probability: Float!
+}
+
+type ProviderConnection implements Connection {
+  edges: [ProviderEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ProviderEdge implements Edge {
+  cursor: String!
+  node: ProviderType!
+}
+
+type ProviderEndpointType {
+  TTL: Float
+  description: String!
+  iterationType: String!
+  name: String!
+}
+
+type ProviderKeyType implements Node {
+  clientId: String!
+  clientSecret: String!
+  createdAt: DateTime!
+  id: ID!
+  providerId: ID!
+  updatedAt: DateTime!
+  userId: ID!
+}
+
+type ProviderThemeType {
+  backgroundColor: String
+  borderColor: String
+}
+
+type ProviderType implements Node {
+  authType: String
+  description: String
+  endpoints: [ProviderEndpointType!]!
+  id: ID!
+  logoUrl: String
+  name: String
+  openidKeyLink: String
+  providerKeys: ProviderKeyType
+  theme: ProviderThemeType
+}
+
+type Query {
+  action(id: ID!): ActionType
+  actions(after: String, before: String, first: Int, last: Int): ActionConnection!
+  answer(id: ID!): AnswerType
+  answers(after: String, before: String, first: Int, last: Int): AnswerConnection!
+  browserActivities(after: String, before: String, first: Int, last: Int): BrowserActivityConnection!
+  browserActivity(id: ID!): BrowserActivityType
+  communication(id: ID!): CommunicationType
+  communications(after: String, before: String, first: Int, last: Int): CommunicationConnection!
+  concept(id: ID!): ConceptType
+  concepts(after: String, before: String, first: Int, last: Int): ConceptConnection!
+  connection(id: ID!): ConnectionType
+  connectionSyncJob(id: ID!): ConnectionSyncJobType
+  connectionSyncJobs(after: String, before: String, connectionId: ID, endpointName: String, first: Int, last: Int, type: String): ConnectionSyncJobConnection!
+  connections(after: String, before: String, first: Int, last: Int): ConnectionConnection!
+  content(id: ID!): ContentType
+  contents(after: String, before: String, first: Int, last: Int): ContentConnection!
+  event(id: ID!): EventType
+  events(after: String, before: String, first: Int, last: Int): EventConnection!
+
+  """Get actions for the feed, prioritizing unseen actions"""
+  feedActions(limit: Int! = 5): [ActionType!]!
+  file(id: ID!): FileType
+  files(after: String, before: String, first: Int, last: Int): FileConnection!
+
+  """Fetch the HBPE day-ahead forecast histogram"""
+  forecast(horizon: String = "24h"): ForecastType
+  item(id: ID!): ItemType
+  items(after: String, before: String, first: Int, last: Int): ItemConnection!
+  me: UserType
+  node(id: ID!): Node
+  note(id: ID!): NoteType
+  notes(after: String, before: String, first: Int, last: Int): NoteConnection!
+  people(after: String, before: String, first: Int, last: Int): PersonConnection!
+  person(id: ID!): PersonType
+  place(id: ID!): PlaceType
+  places(after: String, before: String, first: Int, last: Int): PlaceConnection!
+  provider(id: ID!): ProviderType
+  providers(after: String, before: String, first: Int, last: Int): ProviderConnection!
+  question(id: ID!): QuestionType
+  questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
+  relationship(id: ID!): RelationshipType
+  relationships(after: String, before: String, first: Int, last: Int): RelationshipConnection!
+  savedSearch(id: ID!): SavedSearchType
+  savedSearches(after: String, before: String, first: Int, last: Int): SavedSearchConnection!
+  search(input: SearchInput!): SearchResultConnection!
+  summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
+  summary(id: ID!): SummaryType
+  tag(id: ID!): TagType
+  tags(after: String, before: String, first: Int, last: Int): TagConnection!
+  thread(id: ID!): ThreadType
+  threads(after: String, before: String, first: Int, last: Int): ThreadConnection!
+}
+
+type QuestionConnection implements Connection {
+  edges: [QuestionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type QuestionEdge implements Edge {
+  cursor: String!
+  node: QuestionType!
+}
+
+type QuestionType implements Node {
+  category: String!
+  createdByLlm: Boolean
+  id: ID!
+  isSeedQuestion: Boolean
+  questionType: String
+  text: String!
+}
+
+type RelationshipConnection implements Connection {
+  edges: [RelationshipEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RelationshipEdge implements Edge {
+  cursor: String!
+  node: RelationshipType!
+}
+
+type RelationshipType implements Node {
+  endDate: DateTime
+  fromNodeId: ID!
+  fromNodeType: String!
+  id: ID!
+  isBidirectional: Boolean!
+  properties: JSON
+  startDate: DateTime
+  strength: Float
+  toNodeId: ID!
+  toNodeType: String!
+  type: String!
+}
+
+type SavedSearchConnection implements Connection {
+  edges: [SavedSearchEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SavedSearchEdge implements Edge {
+  cursor: String!
+  node: SavedSearchType!
+}
+
+type SavedSearchType implements Node {
+  createdAt: DateTime!
+  description: String
+  entityTypes: [String!]
+  id: ID!
+  name: String
+  query: String
+  tags: [String!]
+  updatedAt: DateTime!
+}
+
+input SearchInput {
+  endTime: String
+  excludeTypes: [String!]
+  includeTypes: [String!]
+  query: String
+  startTime: String
+  tags: [String!]
+}
+
+type SearchResultConnection {
+  edges: [SearchResultEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SearchResultEdge {
+  cursor: String!
+  node: SearchResultType!
+}
+
+union SearchResultType = AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+type SummaryConnection implements Connection {
+  edges: [SummaryEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SummaryEdge implements Edge {
+  cursor: String!
+  node: SummaryType!
+}
+
+type SummaryType implements Node {
+  activityCounts: ActivityCountsType!
+  anomalies: [String!]!
+  confidenceScore: Float
+  createdAt: DateTime!
+  dailyRhythm: [String!]
+  dismissed: Boolean!
+  id: ID!
+  insights: [InsightItemType!]!
+  keyAccomplishments: [String!]
+  keyInsights: [String!]!
+  moodIndicators: [String!]
+  notableEvents: [String!]!
+  periodEnd: DateTime!
+  periodStart: DateTime!
+  periodType: String!
+  productivityPatterns: [String!]
+  seen: Boolean!
+  socialInteractions: [String!]
+  sourceTypes: [String!]!
+  summaryText: String!
+  tags: [String!]!
+  timezone: String!
+  title: String
+  updatedAt: DateTime!
+}
+
+type TagConnection implements Connection {
+  edges: [TagEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type TagEdge implements Edge {
+  cursor: String!
+  node: TagType!
+}
+
+input TagEntitiesInput {
+  ids: [ID!]!
+  labels: [String!]!
+}
+
+type TagType implements Node {
+  description: String
+  entities(after: String, before: String, first: Int, last: Int): TaggableEntityConnection!
+  id: ID!
+  label: String!
+}
+
+interface Taggable {
+  tags: [EntityTagType!]!
+}
+
+type TaggableEntityConnection {
+  edges: [TaggableEntityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type TaggableEntityEdge {
+  cursor: String!
+  node: TaggableEntityType!
+}
+
+union TaggableEntityType = ActionType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+type ThreadConnection implements Connection {
+  edges: [ThreadEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ThreadEdge implements Edge {
+  cursor: String!
+  node: ThreadType!
+}
+
+type ThreadType implements Node & Taggable {
+  description: String
+  id: ID!
+  messages(after: String, before: String, first: Int, last: Int): MessageConnection!
+  name: String
+  tags: [EntityTagType!]!
+}
+
+input UpdateAnswerInput {
+  answer: String!
+  id: String!
+}
+
+input UpdateConceptInput {
+  description: String
+  id: String!
+  name: String!
+}
+
+type UpdateConceptPayload {
+  concept: ConceptType
+  success: Boolean!
+}
+
+input UpdateConnectionInput {
+  accessToken: String
+  active: Boolean
+  activeEndpoints: [String!]
+  externalId: String
+  id: ID!
+  name: String
+  needsReauth: Boolean
+  refreshToken: String
+  schedule: String
+  syncState: JSON
+  tokenExpiry: DateTime
+}
+
+type UpdateConnectionPayload {
+  connection: ConnectionType
+  success: Boolean!
+}
+
+input UpdateConnectionSyncJobInput {
+  completedAt: DateTime
+  cursor: JSON
+  data: JSON
+  endpointName: String
+  error: JSON
+  id: ID!
+  jobId: ID
+  nextCursor: JSON
+  properties: JSON
+  status: String
+  type: String
+}
+
+type UpdateConnectionSyncJobPayload {
+  connectionSyncJob: ConnectionSyncJobType
+  success: Boolean!
+}
+
+input UpdateContentInput {
+  externalId: String
+  id: ID!
+  mimetype: String
+  sourceData: JSON
+  sourceUrl: String
+  text: String
+  title: String
+  type: String
+  url: String
+}
+
+input UpdateEventInput {
+  category: String
+  confidenceScore: Float
+  description: String
+  durationMinutes: Int
+  endTime: DateTime
+  eventType: String
+  id: ID!
+  isAllDay: Boolean
+  isRecurring: Boolean
+  locationCoordinates: JSON
+  locationEntityId: ID
+  locationName: String
+  metadata: JSON
+  organizerEntityId: ID
+  participantEntityIds: [ID!]
+  sourceId: ID
+  sourceSystem: String
+  sourceType: String
+  startTime: DateTime
+  status: String
+  title: String
+}
+
+input UpdateItemInput {
+  brand: String
+  category: String
+  currentValue: Float
+  description: String
+  id: ID!
+  model: String
+  name: String!
+}
+
+type UpdateItemPayload {
+  item: ItemType
+  success: Boolean!
+}
+
+input UpdateNoteInput {
+  content: String
+  id: String!
+  title: String
+}
+
+type UpdateNotePayload {
+  note: NoteType
+  success: Boolean!
+}
+
+input UpdatePersonInput {
+  description: String
+  id: String!
+  name: String!
+}
+
+type UpdatePersonPayload {
+  person: PersonType
+  success: Boolean!
+}
+
+input UpdatePlaceInput {
+  description: String
+  estimated: Boolean
+  geoFormat: String
+  geolocation: JSON
+  id: String!
+  locationBoundary: JSON
+  name: String!
+  properties: JSON
+  tracked: Boolean
+  type: String
+  uploaded: Boolean
+}
+
+input UpdateProviderKeyInput {
+  clientId: String
+  clientSecret: String
+}
+
+input UpdateQuestionInput {
+  category: String!
+  id: String!
+  text: String!
+}
+
+input UpdateRelationshipInput {
+  endDate: DateTime
+  id: ID!
+  isBidirectional: Boolean
+  properties: JSON
+  startDate: DateTime
+  strength: Float
+}
+
+type UpdateRelationshipPayload {
+  relationship: RelationshipType
+  success: Boolean!
+}
+
+input UpdateSavedSearchInput {
+  description: String
+  entityTypes: [String!]
+  id: ID!
+  name: String
+  query: String
+  tags: [String!]
+}
+
+type UpdateSavedSearchPayload {
+  savedSearch: SavedSearchType
+  success: Boolean!
+}
+
+type UserType implements Node {
+  email: String!
+  entity: PersonType
+  id: ID!
+  name: String!
+  onboarded: Boolean!
+}

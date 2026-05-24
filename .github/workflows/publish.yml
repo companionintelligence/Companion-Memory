@@ -1,0 +1,89 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - '*'
+
+# Only one publish run at a time per tag.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to CI-Portal
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      REGISTRY: ${{ vars.REGISTRY || 'ghcr.io/companionintelligence' }}
+      PORTAL_API: ${{ vars.DEV_PORTAL_API }}
+      STORE_ADMIN_API_KEY: ${{ secrets.DEV_STORE_ADMIN_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Free disk space on runner
+        run: |
+          # GitHub-hosted runners ship with ~14 GB free, which is not enough
+          # for `make production` to build every CI service image. Drop the
+          # large pre-installed toolchains we don't need so the build doesn't
+          # run out of space.
+          echo "Disk space before cleanup:"
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af --volumes || true
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Resolve VERSION from tag
+        run: |
+          # github.ref looks like 'refs/tags/v1.2.3' or 'refs/tags/1.2.3'.
+          # Strip the refs/tags/ prefix and any leading 'v'.
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#v}"
+          echo "Resolved VERSION=${version} from tag ${tag}"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Enable Corepack (installs yarn from package.json packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+          yarn --version
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install jq
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      - name: Run publish script
+        run: make publish
+

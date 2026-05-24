@@ -1,5 +1,5 @@
 -- migrate:up
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Extension is now provisioned by ci/setup-database (superuser init container)
 
 -- migrate:down
-DROP EXTENSION vector;
+-- No-op: extension lifecycle managed by ci/setup-database

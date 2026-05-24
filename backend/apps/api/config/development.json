@@ -1,1 +1,16 @@
-{}
+{
+  "db": {
+    "host": "localhost"
+  },
+  "staticfiles": {
+    "storageUrl": "http://localhost:9000"
+  },
+  "services": {
+    "ollama": {
+      "host": "http://localhost:11434"
+    },
+    "hbpe": {
+      "host": "http://localhost:8002"
+    }
+  }
+}

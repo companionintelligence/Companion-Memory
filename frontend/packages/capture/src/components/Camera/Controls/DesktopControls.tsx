@@ -6,6 +6,7 @@ import {
   CircleStop,
   Mic,
   MicOff,
+  Package,
   Settings,
   SwitchCamera,
   Video,
@@ -19,11 +20,17 @@ import { useFacingMode } from '../useFacingMode';
 import { useInputDevices } from '../useInputDevices';
 import { useMuteControls } from '../useMuteControls';
 import { useRecorder } from '../useRecorder';
+import { useRecordingMode } from '../useRecordingMode';
 
-export function DesktopControls() {
+interface Props {
+  onRecordingModeChange?: (mode: 'photo' | 'video' | 'inventory') => void;
+}
+
+export function DesktopControls({ onRecordingModeChange }: Props) {
   const [{ isRecording }, { captureFrame, toggleRecording }] = useRecorder();
   const [{ microphoneEnabled, cameraEnabled }, { toggleMicrophone, toggleCamera }] = useMuteControls();
   const [{ facingMode }, { swapFacingMode }] = useFacingMode();
+  const [{ recordingMode }, { setPhotoMode, setVideoMode, setInventoryMode }] = useRecordingMode();
   const [{ cameras, selectedCamera, setSelectedCamera }] = useInputDevices();
 
   const RecordingIcon = isRecording ? CircleStop : Circle;
@@ -35,17 +42,49 @@ export function DesktopControls() {
     setSelectedCamera(cameras.filter((camera) => camera.id !== selectedCamera?.id)[0] || selectedCamera);
   }
 
+  function handleToggleRecording() {
+    setVideoMode();
+    onRecordingModeChange?.('video');
+    toggleRecording();
+  }
+
+  function handlePhotoCapture() {
+    setPhotoMode();
+    onRecordingModeChange?.('photo');
+    captureFrame();
+  }
+
+  function handleInventoryCapture() {
+    setInventoryMode();
+    onRecordingModeChange?.('inventory');
+    captureFrame();
+  }
+
   return (
     <Tooltip.Provider>
       <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex p-1 gap-1 rounded-lg bg-black/60 backdrop-blur-sm">
         <Icon
-          className={isRecording ? 'text-red-500' : 'text-white'}
+          className={
+            isRecording ? 'text-red-500' : recordingMode === 'video' ? 'text-yellow-300' : 'text-white'
+          }
           icon={RecordingIcon}
           tooltip={isRecording ? 'Stop recording' : 'Record video'}
-          onClick={toggleRecording}
+          onClick={handleToggleRecording}
         />
 
-        <Icon icon={CameraIcon} tooltip="Capture picture" onClick={captureFrame} />
+        <Icon
+          icon={CameraIcon}
+          tooltip="Capture picture"
+          className={recordingMode === 'photo' ? 'text-yellow-300' : 'text-white'}
+          onClick={handlePhotoCapture}
+        />
+
+        <Icon
+          icon={Package}
+          tooltip="Capture inventory image"
+          className={recordingMode === 'inventory' ? 'text-yellow-300' : 'text-white'}
+          onClick={handleInventoryCapture}
+        />
 
         <Divider />
 

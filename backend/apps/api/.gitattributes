@@ -1,0 +1,2 @@
+# GraphQL schema generation files
+src/domains/graphql/__generated__/schema.graphql linguist-generated=true

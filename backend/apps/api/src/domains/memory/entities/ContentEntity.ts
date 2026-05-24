@@ -4,18 +4,15 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToMany,
   ManyToOne,
   JoinColumn,
-  JoinTable,
 } from 'typeorm';
 
-import { TagEntity } from '@ci/domains/search';
-import { UserEntity } from '@ci/domains/user';
+import { UserEntity, type User } from '@ci/domains/user';
 
-import { EventEntity } from './EventEntity';
+import { EventEntity, Event } from './EventEntity';
 
-@Entity({ name: 'content' })
+@Entity({ schema: 'ci', name: 'content' })
 export class ContentEntity {
   @PrimaryColumn('uuid')
   id!: string;
@@ -35,16 +32,16 @@ export class ContentEntity {
   @Column({ type: 'text', nullable: true })
   mimetype!: string | null;
 
-  @Column({ type: 'text', nullable: true })
-  external_id!: string | null;
+  @Column({ type: 'text', nullable: true, name: 'external_id' })
+  externalId!: string | null;
 
-  @Column({ type: 'text', nullable: true })
-  source_url!: string | null;
+  @Column({ type: 'text', nullable: true, name: 'source_url' })
+  sourceUrl!: string | null;
 
-  @Column({ type: 'jsonb', nullable: true })
-  source_data!: Record<string, unknown> | null;
+  @Column({ type: 'jsonb', nullable: true, name: 'source_data' })
+  sourceData!: Record<string, unknown> | null;
 
-  @ManyToOne(() => UserEntity, { nullable: true })
+  @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
 
@@ -52,34 +49,35 @@ export class ContentEntity {
   @JoinColumn({ name: 'event_id' })
   event?: EventEntity;
 
-  @ManyToMany(() => TagEntity, { nullable: true })
-  @JoinTable({
-    name: 'content_tag',
-    joinColumn: { name: 'content_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'tag_id', referencedColumnName: 'id' },
-  })
-  tags?: TagEntity[];
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
-
-  toContent() {
+  static toEgressType(entity: ContentEntity) {
     return {
-      id: this.id,
-      type: this.type,
-      title: this.title || null,
-      text: this.text || null,
-      url: this.url || null,
-      mimetype: this.mimetype || null,
-      external_id: this.external_id || null,
-      source_url: this.source_url || null,
-      source_data: this.source_data || null,
-      user_id: this.user?.id || null,
-      event_id: this.event?.id || null,
-      tags: this.tags?.map((tag) => tag.id) || [],
+      id: entity.id,
+      type: entity.type,
+      title: entity.title || null,
+      text: entity.text || null,
+      url: entity.url || null,
+      mimetype: entity.mimetype || null,
+      externalId: entity.externalId || null,
+      sourceUrl: entity.sourceUrl || null,
+      sourceData: entity.sourceData || null,
+      userId: entity.user?.id || null,
+      eventId: entity.event?.id || null,
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+      event: entity.event ? EventEntity.toEgressType(entity.event) : undefined,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
     };
   }
 }
+
+export type Content = Readonly<Omit<ContentEntity, 'user' | 'event' | 'tags'>> & {
+  user?: User;
+  event?: Event;
+  tags?: string[];
+};

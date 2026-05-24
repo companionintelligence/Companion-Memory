@@ -29,3 +29,21 @@ AGENTS.md
 
 .idea/
 
+# LICENSE copies distributed to build contexts during docker build
+infrastructure/*/LICENSE
+backend/apps/*/LICENSE
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+
+.beads/
+
+backend/apps/hbpe/src/ci/model/__pycache__/
+
+backend/apps/hbpe/src/ci/tokenizer/__pycache__/
+
+*.pyc

@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { v4 as uuidv4 } from 'uuid';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
+import type { RequestContext } from '@ci/common/context';
+import type { LoggerService } from '@ci/common/logging';
 
 import type { ToolSchema, ToolResult, ToolExecutionContext, ToolError } from './types';
 
@@ -10,11 +11,7 @@ import type { ToolSchema, ToolResult, ToolExecutionContext, ToolError } from './
  * Base class for all tools with built-in error handling and observability
  */
 export abstract class BaseTool<TInput = any, TOutput = any> {
-  protected readonly logger: LoggerService;
-
-  constructor() {
-    this.logger = new LoggerService(this.constructor.name);
-  }
+  protected abstract logger: LoggerService;
 
   /**
    * Tool schema definition - must be implemented by subclasses

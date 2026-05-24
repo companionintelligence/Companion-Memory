@@ -33,9 +33,21 @@ export const ConfigSchema = z.object({
       refreshTokenExpiration: z.string(),
     }),
     session: z.object({
-      saltRounds: z.number(),
       fieldPepper: z.string(),
       duration: z.string(),
+      refreshGracePeriod: z.string(),
+    }),
+    csrf: z.object({
+      secret: z.string(),
+    }),
+    encryption: z.object({
+      fieldKey: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/, 'fieldKey must be a 64-character hex string (256 bits)'),
+    }),
+    cookies: z.object({
+      sessionTokenName: z.string(),
+      csrfTokenName: z.string(),
     }),
     providers: z.object({
       google: z.object({
@@ -47,6 +59,18 @@ export const ConfigSchema = z.object({
       discord: z.object({
         id: z.string(),
       }),
+      facebook: z.object({
+        id: z.string(),
+      }),
+      spotify: z.object({
+        id: z.string(),
+      }),
+      steam: z.object({
+        id: z.string(),
+      }),
+    }),
+    openid: z.object({
+      callbackUrl: z.string(),
     }),
     oauth: z.object({
       callbackUrl: z.string(),
@@ -71,14 +95,14 @@ export const ConfigSchema = z.object({
       secretAccessKey: z.string(),
     }),
   }),
+  graphql: z.object({
+    maxQueryComplexity: z.number().int(),
+  }),
   services: z.object({
     ollama: z.object({
       host: z.string(),
     }),
-    stt: z.object({
-      host: z.string(),
-    }),
-    tts: z.object({
+    hbpe: z.object({
       host: z.string(),
     }),
   }),
@@ -88,6 +112,12 @@ export const ConfigSchema = z.object({
     'scheduled.entity.promotion': booleanStringSchema,
     'pinned.demo.models': booleanStringSchema,
     'enable.system.prompt': booleanStringSchema,
+    'enable.inventory.page': booleanStringSchema,
+    'advanced.theme.tab': booleanStringSchema,
+    'new.insights.page': booleanStringSchema,
+    'require.signup.codes': booleanStringSchema,
+    'files.page': booleanStringSchema,
+    hbpe: booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

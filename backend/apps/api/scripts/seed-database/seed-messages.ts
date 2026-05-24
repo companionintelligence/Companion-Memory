@@ -1,52 +1,42 @@
-import path from 'path';
+import { type TestingModule } from '@nestjs/testing';
+import { type MultiBar } from 'cli-progress';
 
-import { Logger } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { MessageService } from '@ci/domains/conversations';
 
-import { MessageEntity } from '@ci/domains/conversations';
+import { MESSAGES } from './data/messages';
 
-import { readCsv } from './utils';
+export async function seedMessages(module: TestingModule, multibar: MultiBar) {
+  const messageService = module.get(MessageService);
 
-const logger = new Logger(path.basename(__filename));
+  const bar = multibar.create(MESSAGES.length, 0, { task: 'Messages' });
 
-export async function seedMessages(db: DataSource, filePath: string) {
-  type CsvRecord = {
-    id: string;
-    model: string;
-    text: string;
-    mimetype: string;
-    canceled: boolean;
-    user_id: string;
-    thread_id: string;
-    role: string;
-  };
+  for (const record of MESSAGES) {
+    const existingMessage = await messageService.findById(
+      {
+        userId: record.userId,
+      },
+      record.id,
+    );
 
-  const records = readCsv<CsvRecord>(filePath);
-
-  await db.transaction(async (manager) => {
-    for (const record of records) {
-      const message = manager.create(MessageEntity, {
-        id: record.id,
-        model: record.model ?? null,
-        role: record.role,
-        content: record.text ?? '',
-        mimetype: record.mimetype ?? null,
-        canceled: Boolean(record.canceled),
-        user: record.user_id
-          ? {
-              id: record.user_id,
-            }
-          : undefined,
-        thread: record.thread_id
-          ? {
-              id: record.thread_id,
-            }
-          : undefined,
-      });
-
-      await manager.save(MessageEntity, message);
+    if (existingMessage == null) {
+      await messageService.create(
+        {
+          userId: record.userId,
+        },
+        {
+          id: record.id,
+          model: record.model,
+          role: record.role,
+          content: record.content,
+          mimetype: record.mimetype,
+          canceled: Boolean(record.canceled),
+          threadId: record.threadId,
+        },
+      );
     }
-  });
 
-  logger.log(`Seeded ${records.length} message records`);
+    bar.increment();
+  }
+
+  bar.stop();
 }

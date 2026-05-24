@@ -14,8 +14,9 @@ export default [
     files: ['**/*.ts'],
 
     languageOptions: {
+      // Using projectService for better performance - shares TS project with IDE
       parserOptions: {
-        project: './tsconfig.json',
+        projectService: true,
         tsconfigRootDir: new URL('.', import.meta.url),
       },
       globals: globals.node,

@@ -1,0 +1,6 @@
+# GraphQL codegen files
+src/graphql/fragment-masking.ts linguist-generated=true
+src/graphql/gql.ts linguist-generated=true
+src/graphql/graphql.ts linguist-generated=true
+src/graphql/index.ts linguist-generated=true
+src/graphql/possibleTypes.ts linguist-generated=true

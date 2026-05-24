@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
-import { ProviderEntity } from '../entities/ProviderEntity';
-import type { Provider } from '../types';
+import { type ServiceContext } from '@ci/common/context';
+
+import { ProviderEntity, type Provider } from '../entities/ProviderEntity';
 
 @Injectable()
 export class ProviderService {
@@ -12,23 +13,32 @@ export class ProviderService {
     private readonly providerRepository: Repository<ProviderEntity>,
   ) {}
 
-  async findAll(): Promise<Provider[]> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async findAll(context: ServiceContext): Promise<Provider[]> {
     const entities = await this.providerRepository.find();
 
-    return entities.map((entity) => entity.toProvider());
+    return entities.map((entity) => ProviderEntity.toEgressType(entity));
   }
 
-  async findOne(id: string): Promise<Provider> {
+  async findById(context: ServiceContext, id: string): Promise<Provider | null> {
     const entity = await this.providerRepository.findOne({
       where: {
         id,
       },
     });
 
-    if (entity == null) {
-      throw new NotFoundException();
-    }
+    return entity ? ProviderEntity.toEgressType(entity) : null;
+  }
 
-    return entity.toProvider();
+  async findByIds(context: ServiceContext, ids: string[]): Promise<(Provider | null)[]> {
+    const entities = await this.providerRepository.find({
+      where: {
+        id: In(ids),
+      },
+    });
+
+    const map = new Map(entities.map((entity) => [entity.id, ProviderEntity.toEgressType(entity)]));
+
+    return ids.map((id) => map.get(id) ?? null);
   }
 }

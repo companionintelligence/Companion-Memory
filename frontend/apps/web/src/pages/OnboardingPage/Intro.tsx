@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-import { useAuth } from '@/hooks';
+import { useCurrentUser } from '@/hooks';
 
 interface TypingEffectProps {
   text: string;
@@ -73,7 +73,7 @@ function TypingEffect({
 }
 
 export function Intro() {
-  const [{ user }] = useAuth();
+  const { user } = useCurrentUser();
 
   const messages = [
     {

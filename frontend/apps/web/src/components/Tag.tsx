@@ -1,15 +1,24 @@
 import { useMemo } from 'react';
 
-import { Badge } from '@ci/shadcn';
+import { Badge, cn } from '@ci/shadcn';
 
 interface Props {
+  icon?: React.ReactNode;
   text: string;
+  children?: React.ReactNode;
+  className?: string;
 }
 
-export function Tag({ text }: Props) {
+export function Tag({ icon, text, children, className }: Props) {
   const color = useMemo(() => getColorFromPalette(text), [text]);
 
-  return <Badge className={color}>{text}</Badge>;
+  return (
+    <Badge className={cn(className, color, 'flex items-center border-0 text-white')}>
+      {icon}
+      <span>{text}</span>
+      {children}
+    </Badge>
+  );
 }
 
 const FNV_PRIME = 16777619;

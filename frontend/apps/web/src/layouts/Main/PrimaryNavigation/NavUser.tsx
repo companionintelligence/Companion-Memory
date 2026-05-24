@@ -1,14 +1,30 @@
 import { useMemo } from 'react';
 
+import { GlobalUID } from '@ci/common';
 import { Avatar, DropdownMenu } from '@ci/shadcn';
-import { ListTodo, LogOut, SunMoon, Settings2, Cable, Blocks } from '@ci/shadcn/icons';
-import { Link } from 'react-router-dom';
+import {
+  BadgeQuestionMark,
+  ListTodo,
+  LogOut,
+  SunMoon,
+  Settings2,
+  Cable,
+  Palette,
+  ChartPie,
+} from '@ci/shadcn/icons';
+import { Link, useLocation } from 'react-router-dom';
 
-import { useAuth, useTheme } from '@/hooks';
+import { useFeatures } from '@/common/feature';
+import { useTheme, ColorPicker } from '@/components/ThemePicker';
+import { useAuth, useCurrentUser } from '@/hooks';
 
 export function NavUser() {
-  const [{ user }, { logout }] = useAuth();
+  const [, { logout }] = useAuth();
+  const { user } = useCurrentUser();
   const { themeState, setTheme } = useTheme();
+  const location = useLocation();
+
+  const { isFeatureEnabled } = useFeatures();
 
   const currentUser = useMemo(
     () => ({
@@ -57,23 +73,39 @@ export function NavUser() {
 
         <DropdownMenu.Group>
           <DropdownMenu.Item asChild>
-            <Link to="/settings">
+            <Link to={`/people/${user?.entity?.id ? GlobalUID.parse('person', user.entity.id) : ''}`}>
+              <ChartPie />
+              Knowledge
+            </Link>
+          </DropdownMenu.Item>
+
+          {isFeatureEnabled('new.insights.page') && (
+            <DropdownMenu.Item asChild>
+              <Link to="/prompts">
+                <BadgeQuestionMark />
+                Prompts
+              </Link>
+            </DropdownMenu.Item>
+          )}
+        </DropdownMenu.Group>
+
+        <DropdownMenu.Separator />
+
+        <DropdownMenu.Group>
+          <DropdownMenu.Item asChild>
+            <Link to="/settings/appearance" state={{ backgroundLocation: location }}>
               <Settings2 />
               Settings
             </Link>
           </DropdownMenu.Item>
-          <DropdownMenu.Item asChild>
-            <Link to="/plugins">
-              <Blocks />
-              Plugins
-            </Link>
-          </DropdownMenu.Item>
+
           <DropdownMenu.Item asChild>
             <Link to="/connections">
               <Cable />
               Connections
             </Link>
           </DropdownMenu.Item>
+
           <DropdownMenu.Item asChild>
             <Link to="/jobs">
               <ListTodo />
@@ -99,6 +131,16 @@ export function NavUser() {
                 <DropdownMenu.RadioItem value="dark">Dark</DropdownMenu.RadioItem>
                 <DropdownMenu.RadioItem value="system">System</DropdownMenu.RadioItem>
               </DropdownMenu.RadioGroup>
+            </DropdownMenu.SubContent>
+          </DropdownMenu.Sub>
+
+          <DropdownMenu.Sub>
+            <DropdownMenu.SubTrigger>
+              <Palette />
+              Colors
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.SubContent className="w-[400px] p-2 pb-0">
+              <ColorPicker />
             </DropdownMenu.SubContent>
           </DropdownMenu.Sub>
         </DropdownMenu.Group>

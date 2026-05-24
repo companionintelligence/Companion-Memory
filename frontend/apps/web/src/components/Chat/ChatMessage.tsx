@@ -7,15 +7,16 @@ import { parseChatContent } from './parser';
 interface Props {
   role: string;
   content: string;
+  createdAt?: string;
 }
 
-export function ChatMessage({ role, content }: Props) {
+export function ChatMessage({ role, content, createdAt }: Props) {
   if (role === 'tool') {
     return null;
   }
 
   if (role === 'user') {
-    return <UserMessage content={content} />;
+    return <UserMessage content={content} createdAt={createdAt} />;
   }
 
   const segments = parseChatContent(content);
@@ -29,7 +30,7 @@ export function ChatMessage({ role, content }: Props) {
       {segments.map((segment) => {
         switch (segment.type) {
           case 'text':
-            return <AssistantMessage content={segment.content} />;
+            return <AssistantMessage content={segment.content} createdAt={createdAt} />;
           case 'think':
             return <ThinkBlock content={segment.content} defaultExpanded={false} />;
           case 'tool':

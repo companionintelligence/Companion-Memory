@@ -2,25 +2,32 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Delete,
   Query,
   Body,
   UseGuards,
+  Param,
   ConflictException,
   BadRequestException,
+  HttpStatus,
+  HttpCode,
+  NotFoundException,
 } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 
 import { PgErrorCode } from '@ci/common/constants';
-import { Context } from '@ci/common/decorators';
-import { JwtAuthGuard } from '@ci/common/guards';
+import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
-import { RequestContext } from '@ci/common/types';
 
 import { PositionService } from '../services/PositionService';
 import {
   CreatePositionDto,
+  UpdatePositionDto,
   Position,
   createPositionSchema,
+  updatePositionSchema,
   Geofence,
   GeofenceRadius,
   GeofencePolygon,
@@ -30,17 +37,19 @@ import {
 export class PositionController {
   constructor(private readonly positionService: PositionService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Post()
   async create(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(createPositionSchema))
     input: CreatePositionDto[],
   ): Promise<Position[]> {
+    const serviceContext = toServiceContext(context);
+
     this.validateContentArray(input);
 
     try {
-      return await this.positionService.create(context, input);
+      return await this.positionService.create(serviceContext, input);
     } catch (error) {
       if (this.isUniqueViolation(error)) {
         throw new ConflictException('One or more position records already exist for this time and user');
@@ -50,19 +59,72 @@ export class PositionController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get(':id')
+  async findById(@Context() context: RequestContext, @Param('id') id: string) {
+    const serviceContext = toServiceContext(context);
+
+    const position = await this.positionService.findById(serviceContext, id);
+
+    if (!position) {
+      throw new NotFoundException('Position not found');
+    }
+
+    return position;
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Patch(':id')
+  async update(
+    @Context() context: RequestContext,
+    @Param('id') id: string,
+    @Body(new ValidationPipe(updatePositionSchema)) data: UpdatePositionDto,
+  ) {
+    const serviceContext = toServiceContext(context);
+
+    const result = await this.positionService.update(serviceContext, id, data);
+
+    if (!result) {
+      throw new NotFoundException();
+    }
+
+    return result;
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(@Context() context: RequestContext, @Param('id') positionId: string): Promise<void> {
+    const serviceContext = toServiceContext(context);
+
+    const question = await this.positionService.findById(serviceContext, positionId);
+
+    if (!question) {
+      throw new NotFoundException('Position not found');
+    }
+
+    const removal = this.positionService.remove(serviceContext, positionId);
+
+    if (!removal) {
+      throw new NotFoundException();
+    }
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('range')
   async findByDateRange(
     @Context() context: RequestContext,
     @Query('start') start: string,
     @Query('end') end: string,
   ): Promise<Position[]> {
+    const serviceContext = toServiceContext(context);
+
     const { startDate, endDate } = this.parseAndValidateDateRange(start, end);
 
-    return this.positionService.findByDateRange(context, startDate, endDate);
+    return this.positionService.findByDateRange(serviceContext, startDate, endDate);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('geofence')
   async findByGeofence(
     @Context() context: RequestContext,
@@ -74,10 +136,12 @@ export class PositionController {
     @Query('start') start?: string,
     @Query('end') end?: string,
   ): Promise<Position[]> {
+    const serviceContext = toServiceContext(context);
+
     const geofence = this.parseGeofence(type, centerLon, centerLat, radius, coordinates);
     const { startDate, endDate } = this.parseOptionalDateRange(start, end);
 
-    return this.positionService.findByGeofence(context, geofence, startDate, endDate);
+    return this.positionService.findByGeofence(serviceContext, geofence, startDate, endDate);
   }
 
   private validateContentArray(content?: CreatePositionDto[]): void {

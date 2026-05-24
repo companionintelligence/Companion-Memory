@@ -29,6 +29,8 @@ import { PgBossQueueEntity } from './entities/PgBossQueueEntity';
 import { PgBossScheduleEntity } from './entities/PgBossScheduleEntity';
 import { EventService } from './services/EventService';
 import { JobMonitorService } from './services/JobMonitorService';
+import { LocalEventService } from './services/LocalEventService';
+import { PGBossEventService } from './services/PGBossEventService';
 
 /**
  * @internal
@@ -37,21 +39,19 @@ import { JobMonitorService } from './services/JobMonitorService';
   imports: [
     TypeOrmModule.forFeature([PgBossJobEntity, PgBossArchiveEntity, PgBossScheduleEntity, PgBossQueueEntity]),
   ],
-  providers: [EventService, JobMonitorService],
+  providers: [
+    {
+      provide: EventService,
+      useClass: PGBossEventService,
+    },
+    JobMonitorService,
+  ],
   controllers: [JobsController],
   exports: [EventService],
 })
 export class EventsModule {}
 
-// Entities
-export {};
-
-// Services
-export { EventService };
-
-// Types
-export type { EventPayload, Acknowledgement } from './types';
-export { Events, type EventPayloads } from './event-registry';
-
-// Misc
+export { EventService, LocalEventService };
 export { OnEvent } from './decorators/OnEvent';
+export { Events, type EventPayloads } from './event-registry';
+export { defineEvent } from './event-registration';

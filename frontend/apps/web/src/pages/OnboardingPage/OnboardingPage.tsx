@@ -4,7 +4,7 @@ import { usePageTitle } from '@ci/common';
 import { Button, Form, formDataResolver, cn, formDataSchema as s, useForm } from '@ci/shadcn';
 
 import logo from '@/assets/logo.png';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { ThemeToggle } from '@/components/ThemePicker';
 
 import { ActivityPreferences } from './ActivityPreferences';
 import focusAreasImage from './assets/focus-areas.png';

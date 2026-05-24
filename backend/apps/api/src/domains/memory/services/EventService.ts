@@ -1,85 +1,390 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DeleteResult, Repository } from 'typeorm';
+import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { RequestContext } from '@ci/common/types';
+import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
-import { EventEntity } from '../entities/EventEntity';
-import { CreateEventDto, UpdateEventDto, Event, SearchEventDto } from '../types';
+import { EventEntity, Event } from '../entities/EventEntity';
+import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
+
+interface Options {
+  limit?: number;
+  order?: FindOptionsOrder<EventEntity>;
+  startTime?: Date;
+  endTime?: Date;
+}
 
 @Injectable()
 export class EventService {
   constructor(
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
+    private readonly signallingEventService: SignallingEventService,
+    private readonly dataSource: DataSource,
   ) {}
 
-  async create(context: RequestContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
+  async create(context: UserServiceContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
     const isSingle = !Array.isArray(data);
     const dataArray: CreateEventDto[] = isSingle ? [data] : data;
 
-    const returned = await Promise.all(
+    return await Promise.all(
       dataArray.map(async (item) => {
+        const toCreate = { ...item } as Partial<EventEntity>;
+
+        if (item.start_time) {
+          toCreate.startTime = item.start_time;
+        }
+
+        if (item.end_time) {
+          toCreate.endTime = item.end_time;
+        }
+
+        if (item.source_system) {
+          toCreate.sourceSystem = item.source_system;
+        }
+
+        if (item.event_type) {
+          toCreate.eventType = item.event_type;
+        }
+
+        if (item.source_type) {
+          toCreate.sourceType = item.source_type;
+        }
+
+        if (item.participant_entity_ids) {
+          toCreate.participantEntityIds = item.participant_entity_ids;
+        }
+
+        if (item.organizer_entity_id) {
+          toCreate.organizerEntityId = item.organizer_entity_id;
+        }
+
+        if (item.location_entity_id) {
+          toCreate.locationEntityId = item.location_entity_id;
+        }
+
+        if (item.location_coordinates) {
+          toCreate.locationCoordinates = item.location_coordinates;
+        }
+
+        if (item.location_name) {
+          toCreate.locationName = item.location_name;
+        }
+
+        const id = item.id ?? uuidv7();
+
         const event = await this.eventRepository.create({
-          ...item,
-          id: uuidv7(),
+          ...toCreate,
+          id,
           user: {
             id: context.userId,
           },
         });
+
         const eventResult = await this.eventRepository.save(event);
 
-        return eventResult.toEvent();
+        await this.signallingEventService.send(EventCreatedEvent, {
+          eventId: eventResult.id,
+        });
+
+        return EventEntity.toEgressType(eventResult);
       }),
     );
-
-    return returned;
   }
 
-  async findAll(context: RequestContext): Promise<Event[]> {
+  async findAll(context: ServiceContext): Promise<Event[]> {
     const result = await this.eventRepository.find({
       where: {
-        user: {
-          id: context.userId,
-        },
+        ...(context.userId !== SYSTEM_USER && {
+          user: { id: context.userId },
+        }),
       },
     });
 
-    return result.map((entity) => entity.toEvent());
+    return result.map((entity) => EventEntity.toEgressType(entity));
   }
 
-  async findOne(context: RequestContext, id: string): Promise<Event | null> {
+  async findByIds(context: ServiceContext, ids: string[]): Promise<(Event | null)[]> {
+    const result = await this.eventRepository.find({
+      where: {
+        id: In(ids),
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+    });
+
+    const map = new Map(result.map((entity) => [entity.id, EventEntity.toEgressType(entity)]));
+
+    return ids.map((id) => map.get(id) ?? null);
+  }
+
+  async findById(context: ServiceContext, id: string): Promise<Event | null> {
     const result = await this.eventRepository.findOne({
       where: {
         id,
-        user: {
-          id: context.userId,
-        },
+        ...(context.userId !== SYSTEM_USER && {
+          user: { id: context.userId },
+        }),
       },
     });
 
-    return result?.toEvent() ?? null;
+    return result ? EventEntity.toEgressType(result) : null;
   }
 
-  async update(context: RequestContext, id: string, data: UpdateEventDto): Promise<Event | null> {
-    await this.eventRepository.update(id, data);
+  async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
+    const updateData: Partial<EventEntity> = {};
 
-    return this.findOne(context, id);
+    if (data.title) {
+      updateData.title = data.title;
+    }
+
+    if (data.description) {
+      updateData.description = data.description;
+    }
+
+    if (data.event_type) {
+      updateData.eventType = data.event_type;
+    }
+
+    if (data.category) {
+      updateData.category = data.category;
+    }
+
+    if (data.start_time) {
+      updateData.startTime = data.start_time;
+    }
+
+    if (data.end_time) {
+      updateData.endTime = data.end_time;
+    }
+
+    if (data.duration_minutes) {
+      updateData.durationMinutes = data.duration_minutes;
+    }
+
+    if (data.location_name) {
+      updateData.locationName = data.location_name;
+    }
+
+    if (data.event_entity_id) {
+      updateData.eventEntityId = data.event_entity_id;
+    }
+
+    if (data.location_coordinates) {
+      updateData.locationCoordinates = data.location_coordinates;
+    }
+
+    if (data.location_entity_id) {
+      updateData.locationEntityId = data.location_entity_id;
+    }
+
+    if (data.participant_entity_ids) {
+      updateData.participantEntityIds = data.participant_entity_ids;
+    }
+
+    if (data.organizer_entity_id) {
+      updateData.organizerEntityId = data.organizer_entity_id;
+    }
+
+    if (data.source_type) {
+      updateData.sourceType = data.source_type;
+    }
+
+    if (data.source_system) {
+      updateData.sourceSystem = data.source_system;
+    }
+
+    if (data.source_id) {
+      updateData.sourceId = data.source_id;
+    }
+
+    if (data.confidence_score) {
+      updateData.confidenceScore = data.confidence_score;
+    }
+
+    if (data.is_recurring) {
+      updateData.isRecurring = data.is_recurring;
+    }
+
+    if (data.recurrence_pattern) {
+      updateData.recurrencePattern = data.recurrence_pattern;
+    }
+
+    if (data.is_all_day) {
+      updateData.isAllDay = data.is_all_day;
+    }
+
+    if (data.is_private) {
+      updateData.isPrivate = data.is_private;
+    }
+
+    if (data.priority) {
+      updateData.priority = data.priority;
+    }
+
+    if (data.metadata) {
+      updateData.metadata = data.metadata;
+    }
+
+    if (data.is_predicted) {
+      updateData.isPredicted = data.is_predicted;
+    }
+
+    if (data.is_inferred) {
+      updateData.isInferred = data.is_inferred;
+    }
+
+    if (data.prediction_model) {
+      updateData.predictionModel = data.prediction_model;
+    }
+
+    if (data.inference_sources) {
+      updateData.inferenceSources = data.inference_sources;
+    }
+
+    if (data.tags) {
+      updateData.tags = data.tags;
+    }
+
+    if (data.sentiment_score) {
+      updateData.sentimentScore = data.sentiment_score;
+    }
+
+    if (data.energy_level) {
+      updateData.energyLevel = data.energy_level;
+    }
+
+    if (data.productivity_impact) {
+      updateData.productivityImpact = data.productivity_impact;
+    }
+
+    if (data.status) {
+      updateData.status = data.status;
+    }
+
+    if (data.is_deleted) {
+      updateData.isDeleted = data.is_deleted;
+    }
+
+    if (data.external_sync_status) {
+      updateData.externalSyncStatus = data.external_sync_status;
+    }
+
+    if (data.last_synced_at) {
+      updateData.lastSyncedAt = data.last_synced_at;
+    }
+
+    if (data.parent_event_id) {
+      updateData.parentEventId = data.parent_event_id;
+    }
+
+    if (data.related_event_ids) {
+      updateData.relatedEventIds = data.related_event_ids;
+    }
+
+    if (data.supersedes_event_id) {
+      updateData.supersedesEventId = data.supersedes_event_id;
+    }
+
+    if (data.created_by) {
+      updateData.createdBy = data.created_by;
+    }
+
+    const event = await this.eventRepository.findOne({
+      where: {
+        id: id,
+        ...(context.userId !== SYSTEM_USER && {
+          user: { id: context.userId },
+        }),
+      },
+    });
+
+    if (event) {
+      Object.assign(event, updateData);
+      await this.eventRepository.save(event);
+
+      await this.signallingEventService.send(EventUpdatedEvent, {
+        eventId: event.id,
+      });
+    } else {
+      return null;
+    }
+
+    return this.findById(context, id);
   }
 
-  remove(id: string): Promise<DeleteResult> {
-    return this.eventRepository.delete(id);
+  async remove(context: ServiceContext, id: string): Promise<boolean> {
+    const event = await this.findById(context, id);
+
+    if (!event) {
+      return false;
+    }
+
+    await this.eventRepository.delete({
+      id,
+      ...(context.userId !== SYSTEM_USER && {
+        user: { id: context.userId },
+      }),
+    });
+
+    await this.signallingEventService.send(EventRemovedEvent, {
+      eventId: id,
+    });
+
+    return true;
   }
 
-  async search(context: RequestContext, query: SearchEventDto): Promise<EventEntity[]> {
+  async search(context: ServiceContext, query: SearchEventDto): Promise<EventEntity[]> {
     return this.eventRepository.find({
       where: {
-        user: {
-          id: context.userId,
-        },
         ...query,
+        ...(context.userId !== SYSTEM_USER && {
+          user: { id: context.userId },
+        }),
       },
     });
+  }
+
+  async getEntitiesForEvents(
+    context: ServiceContext,
+    options: Options,
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.dataSource
+      .getRepository(EventEntity)
+      .createQueryBuilder('event')
+      .select(['event.event_id'])
+      .where('event.user_id = :userId', { userId: context.userId });
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    if (options.order) {
+      for (const [field, direction] of Object.entries(options.order)) {
+        query = query.orderBy(`event.${field}`, direction as 'ASC' | 'DESC');
+      }
+    }
+
+    if (options.startTime) {
+      query = query.andWhere('event.start_time >= :startTime', { startDate: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('event.end_time >= :endTime', { endTime: options.endTime });
+    }
+
+    const results = await query.getRawMany();
+
+    return results.map((row: { event_id: string; type: IndexableEntity }) => ({
+      id: row.event_id,
+      type: 'event' as IndexableEntity,
+    }));
   }
 }

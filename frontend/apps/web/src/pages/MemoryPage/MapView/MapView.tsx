@@ -2,27 +2,57 @@ import { useMemo } from 'react';
 
 import { Map } from '@/components/Map';
 
+import { useEntityService } from '../../MemoryPage/useEntityService';
 import { TimelineView } from '../TimelineView';
-import { useMemoryService } from '../useMemoryService';
+
+type LOCATION_TYPE = { properties: { latitude: number; longitude: number } };
 
 export function DesktopMapView() {
-  const { memories, setActiveMemory } = useMemoryService();
+  const [{ data }, { setActiveEntity }] = useEntityService();
 
-  const memoriesWithLocation = useMemo(() => {
-    const filteredMemories = memories.filter(
-      (memory) =>
-        memory.location &&
-        typeof memory.location.lat === 'number' &&
-        typeof memory.location.lng === 'number' &&
-        !isNaN(memory.location.lat) &&
-        !isNaN(memory.location.lng) &&
-        !(memory.location.lat === 0 && memory.location.lng === 0),
-    );
+  const entitiesWithLocation = useMemo(() => {
+    const filteredEntities = data.filter((entity) => {
+      if (!('location' in entity)) {
+        return false;
+      }
 
-    filteredMemories.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const location = entity.location as LOCATION_TYPE;
 
-    return filteredMemories;
-  }, [memories]);
+      if (!location) {
+        return false;
+      }
+
+      return (
+        location.properties.latitude != null &&
+        location.properties.longitude != null &&
+        !isNaN(location.properties.latitude) &&
+        !isNaN(location.properties.longitude) &&
+        !(location.properties.latitude === 0 && location.properties.longitude === 0)
+      );
+    });
+
+    filteredEntities.sort((a, b) => {
+      const dateA =
+        'time' in a
+          ? new Date(a.time as string)
+          : 'startTime' in a
+            ? new Date(a.startTime as string)
+            : new Date();
+      const dateB =
+        'time' in b
+          ? new Date(b.time as string)
+          : 'startTime' in b
+            ? new Date(b.startTime as string)
+            : new Date();
+      if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
+        return 0;
+      }
+
+      return dateA.getTime() - dateB.getTime();
+    });
+
+    return filteredEntities;
+  }, [data]);
 
   return (
     // TODO: This default leads to some map jittering. It's OK for now, but let's think about tracking the user's last location and use that for the default center.
@@ -34,13 +64,18 @@ export function DesktopMapView() {
       </Map.Panel>
 
       <Map.RouteLayer />
-      {memoriesWithLocation.map((memory) => (
-        <Map.Marker
-          key={memory.id}
-          position={[memory.location!.lat, memory.location!.lng]}
-          onClick={() => setActiveMemory(memory)}
-        />
-      ))}
+      {entitiesWithLocation.map((entity) => {
+        return 'location' in entity ? (
+          <Map.Marker
+            key={entity.id}
+            position={[
+              (entity.location as LOCATION_TYPE).properties.latitude,
+              (entity.location as LOCATION_TYPE).properties.longitude,
+            ]}
+            onClick={() => setActiveEntity(entity)}
+          />
+        ) : null;
+      })}
     </Map>
   );
 }

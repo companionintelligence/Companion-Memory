@@ -1,9 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { v7 as uuidv7 } from 'uuid';
 
-import { RequestContext } from '@ci/common/types';
+import { type UserServiceContext } from '@ci/common/context';
+import { LoggerService } from '@ci/common/logging';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
+import { RelationshipService, RelationshipType } from '@ci/domains/graph';
 import { ActionService, AnswerService, QuestionService } from '@ci/domains/intelligence';
-import { GraphEventService, GraphQueryService } from '@ci/domains/memory';
+import { ConceptService, PersonService } from '@ci/domains/memory';
 import { UserService } from '@ci/domains/user';
 
 import { OnboardingInput } from '../types';
@@ -52,14 +55,20 @@ const FOCUS_AREAS: Record<string, FocusAreaMetadata> = {
   },
 };
 
-const RELATIONSHIP_MAP: Record<string, { type: string; bidirectional?: boolean }> = {
-  partner: { type: 'SPOUSE', bidirectional: true },
-  parent: { type: 'PARENT_OF' },
-  child: { type: 'CHILD_OF' },
-  roommate: { type: 'LIVES_WITH', bidirectional: true },
-  friend: { type: 'FRIEND', bidirectional: true },
-  coworker: { type: 'COLLEAGUE', bidirectional: true },
-  complicated: { type: 'RELATIONSHIP_COMPLEX', bidirectional: true },
+const RELATIONSHIP_MAP: Record<
+  string,
+  {
+    type: RelationshipType;
+    bidirectional?: boolean;
+  }
+> = {
+  partner: { type: RelationshipType.SPOUSE, bidirectional: true },
+  parent: { type: RelationshipType.PARENT_OF },
+  child: { type: RelationshipType.CHILD_OF },
+  roommate: { type: RelationshipType.LIVES_WITH, bidirectional: true },
+  friend: { type: RelationshipType.FRIENDS_WITH, bidirectional: true },
+  coworker: { type: RelationshipType.WORKS_WITH, bidirectional: true },
+  complicated: { type: RelationshipType.KNOWS, bidirectional: true },
 };
 
 @Injectable()
@@ -71,33 +80,33 @@ export class OnboardingService {
     private readonly actionService: ActionService,
     private readonly questionService: QuestionService,
     private readonly answerService: AnswerService,
-    private readonly graphEvents: GraphEventService,
-    private readonly graphQuery: GraphQueryService,
-  ) {}
+    private readonly conceptService: ConceptService,
+    private readonly personService: PersonService,
+    private readonly relationshipService: RelationshipService,
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(OnboardingService.name);
+  }
 
-  async onboard(context: RequestContext, input: OnboardingInput) {
-    const userId = this.ensureUserId(context);
-    const user = await this.userService.findOne(userId);
+  async onboard(context: UserServiceContext, input: OnboardingInput) {
+    const user = await this.userService.findById(context, context.userId);
 
     if (!user) {
       throw new NotFoundException();
     }
 
-    const userEntityId = await this.ensureUserEntity(userId, user.name, user.email);
-
     if (!user.onboarded) {
-      await this.bootstrapUserExperience(context);
-    }
+      const person = await this.createPersonForUser(context);
 
-    await Promise.all([
-      this.captureFocusAreas(userId, userEntityId, input.focus_areas),
-      this.captureConnections(userId, userEntityId, input.people),
-      this.capturePreferences(userId, userEntityId, input),
-      this.captureSurveyResponses(context, input),
-    ]);
+      await Promise.all([
+        this.captureFocusAreas(context, person.id, input.focus_areas),
+        this.captureConnections(context, person.id, input.people),
+        this.capturePreferences(context, person.id, input),
+        this.createInitialActions(context),
+        this.captureSurveyResponses(context, input),
+      ]);
 
-    if (!user.onboarded) {
-      await this.userService.onboard(userId);
+      await this.userService.onboard(context.userId);
     }
 
     return {
@@ -105,189 +114,178 @@ export class OnboardingService {
     };
   }
 
-  private ensureUserId(context: RequestContext): string {
-    if (!context.userId) {
-      throw new NotFoundException();
+  async createPersonForUser(context: UserServiceContext) {
+    const user = await this.userService.findById(context, context.userId);
+
+    if (user == null) {
+      throw new Error('User could not be retrieved');
     }
 
-    return context.userId;
-  }
+    const id = uuidv7();
+    const name = user.name ?? user.email;
+    const [firstName, ...restName] = (user.name ?? '').trim().split(/\s+/).filter(Boolean);
+    const lastName = restName.join(' ');
 
-  private async ensureUserEntity(userId: string, name: string | null, email: string) {
-    const existing = await this.graphQuery.getUserEntity(userId);
-
-    if (existing?.entity_id) {
-      return existing.entity_id;
-    }
-
-    const fallbackName = name?.trim() || email;
     const properties: Record<string, unknown> = {
-      email,
+      email: user.email,
     };
 
-    const nameParts = (name ?? '').trim().split(/\s+/).filter(Boolean);
-
-    if (nameParts.length > 0) {
-      properties.first_name = nameParts[0];
+    if (firstName.length > 0) {
+      properties.first_name = firstName;
     }
 
-    if (nameParts.length > 1) {
-      properties.last_name = nameParts.slice(1).join(' ');
+    if (restName.length > 0) {
+      properties.last_name = lastName;
     }
 
-    const { entityId } = await this.graphEvents.upsertNode(userId, {
-      entityId: existing?.entity_id ?? undefined,
-      entityType: 'Person',
-      name: fallbackName,
-      description: fallbackName,
+    const person = await this.personService.create(context, {
+      id,
+      name,
       properties,
-      linkedTable: 'users',
-      linkedId: userId,
-      mergeProperties: true,
+      description: 'This is you!',
     });
 
-    await this.userService.update(userId, { entityId });
+    await this.userService.update(context, user.id, {
+      entityId: person.id,
+    });
 
-    return entityId;
+    return person;
   }
 
-  private async captureFocusAreas(ownerId: string, userEntityId: string, focusAreas: string[] | null) {
+  private async captureFocusAreas(
+    context: UserServiceContext,
+    userEntityId: string,
+    focusAreas: string[] | null,
+  ) {
     if (!focusAreas || focusAreas.length === 0) {
       return;
     }
 
-    const preferences = focusAreas
-      .map((id) => FOCUS_AREAS[id])
-      .filter((meta): meta is FocusAreaMetadata => !!meta)
-      .map((meta) => ({
-        name: meta.name,
-        type: 'FocusArea',
-        strength: 0.9,
-        properties: {
-          focusAreaId: meta.id,
-          description: meta.description,
-          source: 'onboarding',
-        },
-      }));
+    return Promise.all(
+      focusAreas
+        .map((focusAreaId) => FOCUS_AREAS[focusAreaId])
+        .filter(Boolean)
+        .map(async (focusArea) => {
+          const concept = await this.conceptService.create(context, {
+            name: focusArea.name,
+            description: focusArea.description,
+            properties: {
+              source: 'onboarding',
+            },
+          });
 
-    if (preferences.length === 0) {
-      return;
-    }
-
-    await this.graphEvents.addPreferences(ownerId, {
-      personEntityId: userEntityId,
-      preferences,
-    });
+          await this.relationshipService.create(context, {
+            fromNodeId: userEntityId,
+            fromNodeType: 'person',
+            toNodeId: concept.id,
+            toNodeType: 'concept',
+            type: 'PREFERS',
+            strength: 0.9,
+            properties: {
+              source: 'onboarding',
+            },
+          });
+        }),
+    );
   }
 
-  private async captureConnections(ownerId: string, userEntityId: string, people: OnboardingInput['people']) {
+  private async captureConnections(
+    context: UserServiceContext,
+    userEntityId: string,
+    people: OnboardingInput['people'],
+  ) {
     if (!people || people.length === 0) {
       return;
     }
 
     const entries = people
       .map((person) => this.normalizePerson(person))
-      .filter((value): value is NormalizedPerson => value !== null);
+      .filter((value): value is NormalizedPerson => value != null);
 
     if (entries.length === 0) {
       return;
     }
 
-    await Promise.all(
-      entries.map((person) => {
-        const relationship = this.mapRelationship(person.relationship);
-
-        return this.graphEvents.addPerson(ownerId, {
-          name: person.displayName,
-          firstName: person.firstName,
-          lastName: person.lastName,
+    return Promise.all([
+      entries.map(async (entry) => {
+        const person = await this.personService.create(context, {
+          name: entry.displayName,
           properties: {
             source: 'onboarding',
-            relationshipInput: person.relationship,
+            firstName: entry.firstName,
+            lastName: entry.lastName,
           },
-          relationships: [
-            {
-              toPersonEntityId: userEntityId,
-              type: relationship.type,
-              strength: relationship.type === 'FRIEND' ? 0.8 : 0.7,
-              bidirectional: relationship.bidirectional,
-              properties: {
-                source: 'onboarding',
-                label: person.relationship,
-              },
-            },
-          ],
+        });
+
+        await this.relationshipService.create(context, {
+          fromNodeId: userEntityId,
+          fromNodeType: 'person',
+          toNodeId: person.id,
+          toNodeType: 'person',
+          ...this.mapRelationship(entry.relationship),
+          strength: entry.relationship.toLowerCase() === 'friend' ? 0.8 : 0.7,
+          properties: {
+            source: 'onboarding',
+          },
+        });
+      }),
+    ]);
+  }
+
+  private async capturePreferences(
+    context: UserServiceContext,
+    userEntityId: string,
+    input: OnboardingInput,
+  ) {
+    const preferences = [
+      { value: input.food_preference, category: 'food' },
+      { value: input.movie_preference, category: 'entertainment' },
+      { value: input.activity_preference, category: 'activity' },
+    ];
+
+    return Promise.all(
+      preferences.map(async ({ value, category }) => {
+        if (!value) {
+          return;
+        }
+
+        const concept = await this.conceptService.create(context, {
+          name: value,
+          properties: {
+            category,
+            source: 'onboarding',
+          },
+        });
+
+        await this.relationshipService.create(context, {
+          fromNodeId: userEntityId,
+          fromNodeType: 'person',
+          toNodeId: concept.id,
+          toNodeType: 'concept',
+          type: 'PREFERS',
+          strength: 0.85,
+          properties: {
+            category,
+            source: 'onboarding',
+          },
         });
       }),
     );
   }
 
-  private async capturePreferences(ownerId: string, userEntityId: string, input: OnboardingInput) {
-    const tasks: Array<Promise<unknown>> = [];
-
-    if (input.food_preference) {
-      tasks.push(
-        this.graphEvents.addPreference(ownerId, {
-          personEntityId: userEntityId,
-          name: input.food_preference,
-          type: 'Cuisine',
-          strength: 0.85,
-          properties: {
-            category: 'food',
-            source: 'onboarding',
-          },
-        }),
-      );
-    }
-
-    if (input.movie_preference) {
-      tasks.push(
-        this.graphEvents.addPreference(ownerId, {
-          personEntityId: userEntityId,
-          name: input.movie_preference,
-          type: 'MovieGenre',
-          strength: 0.85,
-          properties: {
-            category: 'entertainment',
-            source: 'onboarding',
-          },
-        }),
-      );
-    }
-
-    if (input.activity_preference) {
-      tasks.push(
-        this.graphEvents.addPreference(ownerId, {
-          personEntityId: userEntityId,
-          name: input.activity_preference,
-          type: 'Activity',
-          strength: 0.85,
-          properties: {
-            category: 'activity',
-            source: 'onboarding',
-          },
-        }),
-      );
-    }
-
-    if (tasks.length === 0) {
-      return;
-    }
-
-    await Promise.all(tasks);
-  }
-
-  private async captureSurveyResponses(context: RequestContext, input: OnboardingInput) {
+  private async captureSurveyResponses(context: UserServiceContext, input: OnboardingInput) {
     await Promise.all([
       this.createPreferenceAnswer(context, input.food_preference, {
         question: 'Choosing a food between pasta, burgers, salads, or tacos, which would be your favorite?',
         subcategory: 'Food',
       }),
+
       this.createPreferenceAnswer(context, input.movie_preference, {
         question:
           'Choosing a movie genre between comedies, dramas, documentaries, or horror, which would be your favorite?',
         subcategory: 'Entertainment',
       }),
+
       this.createPreferenceAnswer(context, input.activity_preference, {
         question:
           'Choosing an activity between hiking, bowling, ice skating, or going arcading, which would be your favorite?',
@@ -297,7 +295,7 @@ export class OnboardingService {
   }
 
   private async createPreferenceAnswer(
-    context: RequestContext,
+    context: UserServiceContext,
     value: string | null,
     options: { question: string; subcategory: string },
   ) {
@@ -307,8 +305,8 @@ export class OnboardingService {
 
     const question = await this.questionService.create(context, {
       text: options.question,
-      subcategory: options.subcategory,
-      isPrivateTo: context.userId ?? null,
+      category: options.subcategory,
+      isPrivateTo: context.userId,
     });
 
     await this.answerService.create(context, {
@@ -317,54 +315,77 @@ export class OnboardingService {
     });
   }
 
-  private async bootstrapUserExperience(context: RequestContext) {
-    const [mealThread, movieThread, activityThread] = await Promise.all([
-      this.threadService.create(context, { name: 'Plan a meal' }),
-      this.threadService.create(context, { name: 'Plan a movie' }),
-      this.threadService.create(context, { name: 'Plan an activity' }),
-    ]);
+  private async createInitialActions(context: UserServiceContext) {
+    const createMealAction = async () => {
+      const thread = await this.threadService.create(context, {
+        name: 'Plan a meal',
+      });
 
-    await Promise.all([
-      this.messageService.create(context, {
-        role: 'assistant',
-        model: 'qwen3:8b',
-        content: 'Would you like me to help you plan a meal that you will enjoy?',
-        threadId: mealThread.id,
-      }),
-      this.messageService.create(context, {
-        role: 'assistant',
-        model: 'qwen3:8b',
-        content: 'Would you like me to help you find a movie that you will enjoy?',
-        threadId: movieThread.id,
-      }),
-      this.messageService.create(context, {
-        role: 'assistant',
-        model: 'qwen3:8b',
-        content: 'Would you like me to help you find an activity that you will enjoy?',
-        threadId: activityThread.id,
-      }),
-      this.actionService.create(context, {
-        title: 'Make dinner tonight',
-        text: "Because you haven't cooked a meal yet this week, I am recommending you plan something.",
-        imageUrl: '/actions/dinner.jpg',
-        priority: 0,
-        threadId: mealThread.id,
-      }),
-      this.actionService.create(context, {
-        title: 'Watch a movie',
-        text: "Why don't you watch a movie tonight? It's a simple way for you to relax and unwind.",
-        imageUrl: '/actions/movie_night.jpg',
-        priority: 1,
-        threadId: movieThread.id,
-      }),
-      this.actionService.create(context, {
-        title: 'Take a break this weekend',
-        text: 'The weekend is a perfect opportunity to step away from routine and recharge in a different environment. Taking time outside the usual surroundings can bring a refreshing change of pace and perspective.',
-        imageUrl: '/actions/woods.jpg',
-        priority: 2,
-        threadId: activityThread.id,
-      }),
-    ]);
+      await Promise.all([
+        this.messageService.create(context, {
+          role: 'assistant',
+          model: 'qwen3:8b',
+          content: 'Would you like me to help you plan a meal that you will enjoy?',
+          threadId: thread.id,
+        }),
+
+        this.actionService.create(context, {
+          title: 'Make dinner tonight',
+          text: "Because you haven't cooked a meal yet this week, I am recommending you plan something.",
+          imageUrl: '/actions/dinner.jpg',
+          priority: 0,
+          threadId: thread.id,
+        }),
+      ]);
+    };
+
+    const createMovieAction = async () => {
+      const thread = await this.threadService.create(context, {
+        name: 'Plan a movie',
+      });
+
+      await Promise.all([
+        this.actionService.create(context, {
+          title: 'Watch a movie',
+          text: "Why don't you watch a movie tonight? It's a simple way for you to relax and unwind.",
+          imageUrl: '/actions/movie_night.jpg',
+          priority: 1,
+          threadId: thread.id,
+        }),
+
+        this.messageService.create(context, {
+          role: 'assistant',
+          model: 'qwen3:8b',
+          content: 'Would you like me to help you find a movie that you will enjoy?',
+          threadId: thread.id,
+        }),
+      ]);
+    };
+
+    const createActivityAction = async () => {
+      const thread = await this.threadService.create(context, {
+        name: 'Plan an activity',
+      });
+
+      await Promise.all([
+        this.actionService.create(context, {
+          title: 'Take a break this weekend',
+          text: 'The weekend is a perfect opportunity to step away from routine and recharge in a different environment. Taking time outside the usual surroundings can bring a refreshing change of pace and perspective.',
+          imageUrl: '/actions/woods.jpg',
+          priority: 2,
+          threadId: thread.id,
+        }),
+
+        this.messageService.create(context, {
+          role: 'assistant',
+          model: 'qwen3:8b',
+          content: 'Would you like me to help you find an activity that you will enjoy?',
+          threadId: thread.id,
+        }),
+      ]);
+    };
+
+    return Promise.all([createMealAction(), createMovieAction(), createActivityAction()]);
   }
 
   private normalizePerson(person: PersonInput): NormalizedPerson | null {
@@ -390,7 +411,10 @@ export class OnboardingService {
     };
   }
 
-  private mapRelationship(input: string | undefined | null) {
+  private mapRelationship(input: string | undefined | null): {
+    type: RelationshipType;
+    bidirectional?: boolean;
+  } {
     const key = (input ?? '').toLowerCase();
     const mapping = RELATIONSHIP_MAP[key];
 
@@ -399,7 +423,7 @@ export class OnboardingService {
     }
 
     return {
-      type: 'ASSOCIATED_WITH',
+      type: RelationshipType.ASSOCIATED_WITH,
       bidirectional: true,
     };
   }

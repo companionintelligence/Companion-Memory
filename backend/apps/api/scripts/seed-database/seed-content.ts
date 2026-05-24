@@ -1,60 +1,62 @@
-import path from 'path';
+import { type TestingModule } from '@nestjs/testing';
+import { type MultiBar } from 'cli-progress';
 
-import { Logger } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { ContentService } from '@ci/domains/memory';
+import { TagService } from '@ci/domains/search-next';
 
-import { ContentEntity } from '@ci/domains/memory';
+import { CONTENT } from './data/content';
+import { JOHN_SMITH } from './data/users';
 
-import { getOrCreateTags, parseTags, readCsv } from './utils';
+export async function seedContent(module: TestingModule, multibar: MultiBar) {
+  const contentService = module.get(ContentService);
+  const tagService = module.get(TagService);
 
-const logger = new Logger(path.basename(__filename));
+  const bar = multibar.create(CONTENT.length, 0, { task: 'Content' });
 
-export async function seedContent(db: DataSource, filePath: string) {
-  type CsvRecord = {
-    id: string;
-    type: string;
-    title: string;
-    text: string;
-    url: string;
-    mimetype: string;
-    embed_content: string;
-    embed_format: string;
-    embed_thumnail: string;
-    hidden: boolean;
-    price: number;
-    remote_id: string;
-    provider_name: string;
-    user_id: string;
-    connection_id: string;
-    provider_id: string;
-    tags: string;
-    created_at: Date;
-    udpated_at: Date;
-  };
+  for (const content of CONTENT) {
+    const existingContent = await contentService.findById(
+      {
+        userId: JOHN_SMITH.id,
+      },
+      content.id,
+    );
 
-  const records = readCsv<CsvRecord>(filePath);
-
-  await db.transaction(async (manager) => {
-    for (const record of records) {
-      const tagNames = parseTags(record.tags);
-      const tags = await getOrCreateTags(manager, record.user_id, tagNames);
-
-      await manager.save(ContentEntity, {
-        id: record.id,
-        type: record.type,
-        title: record.title,
-        text: record.text,
-        url: record.url,
-        mimetype: record.mimetype,
-        user: {
-          id: record.user_id,
+    if (existingContent == null) {
+      await contentService.create(
+        {
+          userId: JOHN_SMITH.id,
         },
-        tags,
-        created_at: record.created_at,
-        updated_at: record.created_at,
-      });
-    }
-  });
+        {
+          id: content.id,
+          type: content.type,
+          title: content.title,
+          text: content.text,
+          url: content.url,
+          mimetype: content.mimetype,
+          ...(content.source_data && { source_data: content.source_data }),
+        },
+      );
 
-  logger.log(`Seeded ${records.length} content records`);
+      if (Array.isArray(content.source_data?.tags)) {
+        await tagService.tagEntities(
+          {
+            userId: JOHN_SMITH.id,
+          },
+          {
+            labels: content.source_data.tags.map((tag) => String(tag)),
+            entities: [
+              {
+                type: 'content',
+                id: content.id,
+              },
+            ],
+          },
+        );
+      }
+    }
+
+    bar.increment();
+  }
+
+  bar.stop();
 }

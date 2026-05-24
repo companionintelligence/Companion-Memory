@@ -4,23 +4,20 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "strict": true,
+    "jsx": "react-jsx",
+
+    "noEmit": true,
 
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
-    "noEmit": true,
 
     "esModuleInterop": true,
     "skipLibCheck": true,
-
     "forceConsistentCasingInFileNames": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-
-    "jsx": "react-jsx"
+    "isolatedModules": true
   },
-  "include": ["src", "index.ts"]
+  "include": ["src", "index.ts"],
+  "exclude": ["node_modules", "dist"]
 }

@@ -88,7 +88,7 @@ export function useJobsDashboard(refreshIntervalMs = 15000) {
     }
 
     try {
-      const response = await fetchJson<JobsDashboardResponse>('/api/events/jobs/dashboard', {
+      const response = await fetchJson<JobsDashboardResponse>('/api/jobs/dashboard', {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },

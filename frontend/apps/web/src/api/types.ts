@@ -1,10 +1,21 @@
+export interface ActionMetadata {
+  seen: boolean;
+  type?: string;
+  context?: string;
+  relatedPerson?: string;
+}
+
 export interface Action {
   id: string;
   title: string;
   text: string;
   imageUrl?: string;
-  threadId: string;
+  threadId?: string;
   tags: string[];
+  priority?: number;
+  seen?: boolean;
+  dismissed?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface File {

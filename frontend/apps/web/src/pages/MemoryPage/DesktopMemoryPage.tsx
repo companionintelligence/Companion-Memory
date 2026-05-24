@@ -1,41 +1,123 @@
 import { useState, useEffect, useCallback } from 'react';
 
-import { Portal } from '@ci/common';
+import { useMutation, useQuery } from '@apollo/client';
+import { GlobalUID, Portal } from '@ci/common';
+import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { Breadcrumb, Tabs, Sheet, Tooltip } from '@ci/shadcn';
 import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { SearchBox } from '@/components/SearchBox';
-import { MemoryDetails } from '@/pages/MemoryPage/Components/MemoryDetails';
+import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
+import { gql } from '@/graphql';
 
+import { useEntityService } from '../MemoryPage/useEntityService';
+
+import { EntityDetails } from './Components/EntityDetails';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
 import { DesktopMapView } from './MapView';
-import { useMemoryService } from './useMemoryService';
+
+const CREATE_SAVED_SEARCH = gql(`
+  mutation CreateSavedSearch($input: CreateSavedSearchInput!) {
+    createSavedSearch(input: $input) {
+      savedSearch {
+        id
+        name
+        description
+        query
+        entityTypes
+        tags
+      }
+    }
+  }
+`);
+
+const GET_SAVED_SEARCH = gql(`
+  query GetSavedSearch($id: ID!) {
+    savedSearch(id: $id) {
+      id
+      name
+      description
+      query
+      entityTypes
+      tags
+    }
+  }
+`);
 
 export default function DesktopMemoryPage() {
-  const { setSearchQuery, activeMemory, setActiveMemory } = useMemoryService();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [{ activeEntity }, { setActiveEntity }] = useEntityService();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [searchId, setSearchId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState('map');
 
-  useEffect(() => {
-    setDetailsOpen(activeMemory != null);
-  }, [activeMemory]);
+  const { data: savedSearchData } = useQuery(GET_SAVED_SEARCH, {
+    variables: { id: GlobalUID.encode('saved-search', searchId!) },
+    skip: !searchId,
+  });
 
-  const toggleActiveMemory = (active: boolean) => {
+  useEffect(() => {
+    if (savedSearchData?.savedSearch) {
+      const currentParams = new URLSearchParams(searchParams);
+      const { entityTypes, query, tags } = savedSearchData.savedSearch;
+
+      currentParams.delete('search');
+      currentParams.delete('excludedEntityTypes');
+      currentParams.delete('includedEntityTypes');
+      currentParams.delete('saved_search');
+      currentParams.delete('tags');
+
+      if (query?.trim()) {
+        currentParams.set('search', query.trim());
+      }
+
+      if (entityTypes?.length && entityTypes.length > 0) {
+        const reverseMapped = entityTypes.map(
+          (type) => ENTITY_TYPE_REVERSE_MAP[type as keyof typeof ENTITY_TYPE_REVERSE_MAP],
+        );
+        const inverseEntityTypes = AVAILABLE_ENTITY_TYPES.filter(
+          (entity) => reverseMapped.indexOf(entity) === -1,
+        );
+        const mappedEntityTypes = inverseEntityTypes.join(',');
+        currentParams.set('excludedEntityTypes', mappedEntityTypes);
+      }
+
+      //Updating included entities is handled in SearchBox.tsx
+
+      if (tags?.length && tags.length > 0) {
+        currentParams.set('tags', tags.join(','));
+      }
+
+      setSearchParams(currentParams);
+    }
+  }, [searchId, savedSearchData]);
+
+  useEffect(() => {
+    setDetailsOpen(activeEntity != null);
+  }, [activeEntity]);
+
+  const toggleactiveEntity = (active: boolean) => {
     if (!active) {
-      setActiveMemory(null);
+      setActiveEntity(null);
     }
   };
 
+  useEffect(() => {
+    const savedSearchId = searchParams.get('saved_search') || '';
+    if (savedSearchId?.length > 0) {
+      setSearchId(savedSearchId);
+    }
+  }, []);
+
+  const [createSavedSearch] = useMutation(CREATE_SAVED_SEARCH);
+
   const handleSearch = useCallback(
     (data: { query: string; entityFilters?: string[] }) => {
-      setSearchQuery(data.query);
-
       const currentParams = new URLSearchParams(searchParams);
 
       if (data.query.trim()) {
@@ -46,18 +128,30 @@ export default function DesktopMemoryPage() {
 
       setSearchParams(currentParams);
     },
-    [setSearchQuery, searchParams, setSearchParams],
+    [searchParams, setSearchParams],
   );
 
   const handleClear = useCallback(() => {
-    setSearchQuery('');
-
     const currentParams = new URLSearchParams(searchParams);
 
     currentParams.delete('search');
 
     setSearchParams(currentParams);
-  }, [setSearchQuery, searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams]);
+
+  const handleSaveSearch = useCallback(async (query: string, entityTypes: string[]) => {
+    await createSavedSearch({
+      variables: {
+        input: {
+          name: '',
+          description: '',
+          query,
+          entityTypes,
+          tags: [],
+        },
+      },
+    });
+  }, []);
 
   return (
     <>
@@ -65,7 +159,9 @@ export default function DesktopMemoryPage() {
         <Breadcrumb>
           <Breadcrumb.List>
             <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link href="/">Companion</Breadcrumb.Link>
+              <Breadcrumb.Link asChild>
+                <Link to="/feed">Companion</Link>
+              </Breadcrumb.Link>
             </Breadcrumb.Item>
             <Breadcrumb.Separator className="hidden md:block" />
             <Breadcrumb.Item>
@@ -78,7 +174,13 @@ export default function DesktopMemoryPage() {
       <PageContent className="p-0 gap-0">
         <div className="flex items-center gap-2 p-4">
           <div className="flex-1">
-            <SearchBox onSearch={handleSearch} onClear={handleClear} autoSubmit displayFilters />
+            <SearchBox
+              onSearch={handleSearch}
+              onClear={handleClear}
+              onSave={handleSaveSearch}
+              autoSubmit
+              displayDropdown
+            />
           </div>
 
           {/* View Toggle */}
@@ -128,9 +230,9 @@ export default function DesktopMemoryPage() {
         {activeTab === 'graph' && <GraphView variant="desktop" />}
       </PageContent>
 
-      {activeMemory && (
-        <Sheet open={detailsOpen} onOpenChange={toggleActiveMemory}>
-          <MemoryDetails memory={activeMemory} />
+      {activeEntity && (
+        <Sheet open={detailsOpen} onOpenChange={toggleactiveEntity}>
+          <EntityDetails entity={activeEntity} />
         </Sheet>
       )}
     </>

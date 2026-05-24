@@ -4,20 +4,15 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToMany,
   ManyToOne,
   JoinColumn,
-  JoinTable,
   OneToOne,
 } from 'typeorm';
 
-import { ThreadEntity } from '@ci/domains/conversations';
-import { TagEntity } from '@ci/domains/search';
-import { UserEntity } from '@ci/domains/user';
+import { type Thread, ThreadEntity } from '@ci/domains/conversations';
+import { type User, UserEntity } from '@ci/domains/user';
 
-import { Action } from '../types';
-
-@Entity({ name: 'actions' })
+@Entity({ schema: 'ci', name: 'actions' })
 export class ActionEntity {
   @PrimaryColumn('uuid')
   id!: string;
@@ -34,6 +29,15 @@ export class ActionEntity {
   @Column({ type: 'int', name: 'priority', nullable: true })
   priority!: number | null;
 
+  @Column({ type: 'jsonb', name: 'metadata', default: '{}' })
+  metadata!: Record<string, unknown>;
+
+  @Column({ type: 'boolean', default: false })
+  seen!: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  dismissed!: boolean;
+
   @Column({ type: 'text', name: 'thread_id', nullable: true })
   threadId!: string;
 
@@ -45,30 +49,33 @@ export class ActionEntity {
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
 
-  @ManyToMany(() => TagEntity, { nullable: true })
-  @JoinTable({
-    name: 'action_tag',
-    joinColumn: { name: 'action_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'tag_id', referencedColumnName: 'id' },
-  })
-  tags?: TagEntity[];
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
-
-  toAction(): Action {
+  static toEgressType(entity: ActionEntity): Action {
     return {
-      id: this.id,
-      title: this.title,
-      text: this.text,
-      imageUrl: this.imageUrl,
-      threadId: this.threadId,
-      thread: this.thread?.toThread(),
-      user: this.user?.toUser(),
-      tags: this.tags?.map((tag) => tag.toTag()).filter((tag) => !!tag) as string[],
-    } satisfies Action;
+      id: entity.id,
+      title: entity.title,
+      text: entity.text,
+      imageUrl: entity.imageUrl,
+      priority: entity.priority,
+      metadata: entity.metadata,
+      seen: entity.seen ?? false,
+      dismissed: entity.dismissed ?? false,
+      threadId: entity.threadId,
+      thread: entity.thread ? ThreadEntity.toEgressType(entity.thread) : undefined,
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    };
   }
 }
+
+export type Action = Readonly<Omit<ActionEntity, 'user' | 'thread' | 'tags'>> & {
+  user?: User;
+  thread?: Thread;
+  tags?: string[];
+};

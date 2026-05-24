@@ -1,1 +1,0 @@
-export { MemoryDetails } from './MemoryDetails';

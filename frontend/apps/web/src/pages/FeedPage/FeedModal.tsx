@@ -7,7 +7,6 @@ import { useParams } from 'react-router-dom';
 
 import { useActionService, useThreadService } from '@/api';
 import { Chat } from '@/components/Chat';
-import { VoiceModeProvider } from '@/components/Chat/VoiceModeProvider';
 import { InlineModal } from '@/components/InlineModal';
 import { Markdown } from '@/components/Markdown';
 import { ModelSelector } from '@/components/ModelSelector';
@@ -38,6 +37,18 @@ export function FeedModal({ onClose }: Props) {
       onClose?.();
     }
   }, []);
+
+  const actionContext = useMemo(() => {
+    if (!action?.metadata || typeof action.metadata !== 'object') {
+      return undefined;
+    }
+
+    const context = (action.metadata as { context?: string }).context;
+
+    return context && context.trim().length > 0 ? context : undefined;
+  }, [action?.metadata]);
+
+  const rationaleText = actionContext ?? 'No rationale available yet.';
 
   const messages = useMemo(() => {
     const baseMessages = thread?.messages ?? [];
@@ -99,20 +110,18 @@ export function FeedModal({ onClose }: Props) {
           </div>
         </div>
 
-        <VoiceModeProvider>
-          <Chat
-            placeholder={renderTitle ? 'Continue the conversation...' : ''}
-            disabled={!renderTitle}
-            loading={chatRequestLoading}
-            streaming={chatRequestStreaming}
-            hasStartedReceiving={hasStartedReceiving}
-            messages={messages}
-            readable={stream ?? undefined}
-            onSubmit={submitChatRequest}
-            onStop={stopChatRequest}
-            emptyState={emptyState}
-          />
-        </VoiceModeProvider>
+        <Chat
+          placeholder={renderTitle ? 'Continue the conversation...' : ''}
+          disabled={!renderTitle}
+          loading={chatRequestLoading}
+          streaming={chatRequestStreaming}
+          hasStartedReceiving={hasStartedReceiving}
+          messages={messages}
+          readable={stream ?? undefined}
+          onSubmit={submitChatRequest}
+          onStop={stopChatRequest}
+          emptyState={emptyState}
+        />
       </InlineModal>
     );
   }
@@ -134,7 +143,7 @@ export function FeedModal({ onClose }: Props) {
           </Dialog.Description>
 
           <div className="flex items-center justify-between flex-1">
-            {(action?.tags.length ?? 0) > 0 && (
+            {(action?.tags?.length ?? 0) > 0 && (
               <div className="flex flex-wrap gap-2">
                 {action?.tags.map((tag) => <Tag key={tag} text={tag} />)}
               </div>
@@ -159,24 +168,25 @@ export function FeedModal({ onClose }: Props) {
             )}
 
             <div className="flex-1 prose dark:prose-invert">
-              <Markdown>{action?.text}</Markdown>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Why this suggestion
+              </div>
+              <Markdown>{rationaleText}</Markdown>
             </div>
           </div>
 
-          <VoiceModeProvider>
-            <Chat
-              placeholder={renderTitle ? 'Continue the conversation...' : ''}
-              disabled={!renderTitle}
-              loading={chatRequestLoading}
-              streaming={chatRequestStreaming}
-              hasStartedReceiving={hasStartedReceiving}
-              messages={messages}
-              readable={stream ?? undefined}
-              onSubmit={submitChatRequest}
-              onStop={stopChatRequest}
-              emptyState={emptyState}
-            />
-          </VoiceModeProvider>
+          <Chat
+            placeholder={renderTitle ? 'Continue the conversation...' : ''}
+            disabled={!renderTitle}
+            loading={chatRequestLoading}
+            streaming={chatRequestStreaming}
+            hasStartedReceiving={hasStartedReceiving}
+            messages={messages}
+            readable={stream ?? undefined}
+            onSubmit={submitChatRequest}
+            onStop={stopChatRequest}
+            emptyState={emptyState}
+          />
         </div>
       </Dialog.Content>
     </Dialog>

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import { LoggerService } from '@ci/common/services';
+import { LoggerService } from '@ci/common/logging';
 
 import type { BaseTool } from '../../core/BaseTool';
 import type { ToolSchema } from '../../core/types';
@@ -13,13 +13,16 @@ import type { ToolProvider, ProviderHealthStatus } from '../ToolProvider';
 export class NativeToolProvider implements ToolProvider {
   readonly name = 'native';
 
-  private readonly logger = new LoggerService(NativeToolProvider.name);
-
   private readonly tools = new Map<string, BaseTool>();
 
   private isInitialized = false;
 
-  constructor(private readonly nativeTools: BaseTool[]) {}
+  constructor(
+    private readonly nativeTools: BaseTool[],
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(NativeToolProvider.name);
+  }
 
   async initialize(): Promise<void> {
     if (this.isInitialized) {
@@ -32,7 +35,7 @@ export class NativeToolProvider implements ToolProvider {
 
     this.isInitialized = true;
 
-    this.logger.log(`Initialized native tool provider with ${this.tools.size} tools`, {
+    this.logger.debug(`Initialized native tool provider with ${this.tools.size} tools`, {
       toolNames: Array.from(this.tools.keys()),
     });
   }
@@ -40,7 +43,7 @@ export class NativeToolProvider implements ToolProvider {
   async shutdown(): Promise<void> {
     this.tools.clear();
     this.isInitialized = false;
-    this.logger.log('Native tool provider shut down');
+    this.logger.debug('Native tool provider shut down');
   }
 
   async getAvailableTools(): Promise<ToolSchema[]> {

@@ -1,10 +1,11 @@
 import { Button, Card } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
-import { useAuth } from '@/hooks';
+import { useAuth, useCurrentUser } from '@/hooks';
 
 export default function NotFoundPage() {
-  const [{ user, expired }] = useAuth();
+  const [{ expired }] = useAuth();
+  const { user } = useCurrentUser();
 
   const homePath = !expired && user ? '/feed' : '/';
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Badge, Button, Input, Separator, cn } from '@ci/shadcn';
 import { AlertCircle, Anchor, Loader2, Sparkles, Users } from '@ci/shadcn/icons';
+import { useSearchParams } from 'react-router-dom';
 
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { ForceGraph, ForceGraph3D } from '@/components/ForceGraph';
@@ -22,6 +23,9 @@ const TYPE_COLOR_PALETTE = [
 ];
 
 const DEFAULT_SPAWN_LIMIT = 10;
+const DEFAULT_HOP_DEPTH = 2;
+const MIN_HOP_DEPTH = 1;
+const MAX_HOP_DEPTH = 5;
 
 function getTypeColor(entityType: string): string {
   if (!entityType) {
@@ -87,11 +91,12 @@ const resolveEndpointId = (endpoint: unknown): string | undefined => {
   return undefined;
 };
 
-export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
+export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
   const [spawnLimitInput, setSpawnLimitInput] = useState(String(DEFAULT_SPAWN_LIMIT));
+  const [hopDepth, setHopDepth] = useState(DEFAULT_HOP_DEPTH);
   const [nodeClickCounts, setNodeClickCounts] = useState<Record<string, number>>({});
   const [anchoringEnabled, setAnchoringEnabled] = useState(false);
   const [traversalEnabled, setTraversalEnabled] = useState(false);
@@ -101,7 +106,9 @@ export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
   const entityTypesKeyRef = useRef<string | null>(null);
   const relationshipTypesKeyRef = useRef<string | null>(null);
 
-  const trimmedSearchQuery = searchQuery?.trim() ?? '';
+  const [searchParams] = useSearchParams();
+
+  const trimmedSearchQuery = searchParams?.get('search')?.trim() ?? '';
   const isSearchMode = trimmedSearchQuery.length > 0;
 
   const [searchLoading, setSearchLoading] = useState(false);
@@ -129,6 +136,14 @@ export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
       setSpawnLimitInput(String(DEFAULT_SPAWN_LIMIT));
     }
   }, [spawnLimitInput]);
+
+  const increaseHopDepth = useCallback(() => {
+    setHopDepth((prev) => Math.min(MAX_HOP_DEPTH, prev + 1));
+  }, []);
+
+  const decreaseHopDepth = useCallback(() => {
+    setHopDepth((prev) => Math.max(MIN_HOP_DEPTH, prev - 1));
+  }, []);
 
   const baseNodes = subgraph?.nodes ?? [];
   const baseLinks = subgraph?.links ?? [];
@@ -505,6 +520,21 @@ export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
     [getOrderedNeighbors, nodeClickCounts, spawnLimit],
   );
 
+  const getBoundedNeighbors = useCallback(
+    (nodeId: string) => {
+      const orderedNeighbors = getOrderedNeighbors(nodeId);
+
+      if (orderedNeighbors.length === 0) {
+        return [] as string[];
+      }
+
+      const effectiveLimit = Math.max(spawnLimit, 1);
+
+      return orderedNeighbors.slice(0, effectiveLimit);
+    },
+    [getOrderedNeighbors, spawnLimit],
+  );
+
   useEffect(() => {
     if (isSearchMode) {
       previousVisibleRef.current = new Set(rawNodes.map((node) => node.id));
@@ -566,24 +596,62 @@ export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
 
   const visibility = useMemo(() => {
     const set = new Set<string>();
-
-    for (const nodeId of expandedNodes) {
-      set.add(nodeId);
-      getSpawnedNeighbors(nodeId).forEach((neighborId) => set.add(neighborId));
-    }
+    const seedNodeIds = new Set(expandedNodes);
 
     if (selectedNodeId) {
-      set.add(selectedNodeId);
+      seedNodeIds.add(selectedNodeId);
     }
 
     if (effectiveUserEntityId) {
-      set.add(effectiveUserEntityId);
+      seedNodeIds.add(effectiveUserEntityId);
+    }
+
+    const effectiveHopDepth = Math.max(MIN_HOP_DEPTH, hopDepth);
+
+    for (const seedNodeId of seedNodeIds) {
+      set.add(seedNodeId);
+
+      const traversed = new Set<string>([seedNodeId]);
+      let frontier = [seedNodeId];
+
+      for (let depth = 1; depth <= effectiveHopDepth; depth += 1) {
+        if (frontier.length === 0) {
+          break;
+        }
+
+        const nextFrontier: string[] = [];
+
+        for (const currentNodeId of frontier) {
+          const neighbors =
+            depth === 1 ? getSpawnedNeighbors(currentNodeId) : getBoundedNeighbors(currentNodeId);
+
+          for (const neighborId of neighbors) {
+            set.add(neighborId);
+
+            if (traversed.has(neighborId)) {
+              continue;
+            }
+
+            traversed.add(neighborId);
+            nextFrontier.push(neighborId);
+          }
+        }
+
+        frontier = nextFrontier;
+      }
     }
 
     const ids = Array.from(set);
 
     return { ids, set };
-  }, [expandedNodes, getSpawnedNeighbors, selectedNodeId, effectiveUserEntityId]);
+  }, [
+    effectiveUserEntityId,
+    expandedNodes,
+    getBoundedNeighbors,
+    getSpawnedNeighbors,
+    hopDepth,
+    selectedNodeId,
+  ]);
 
   const anchoredNodeIds = useMemo(() => {
     const previous = previousVisibleRef.current;
@@ -831,7 +899,7 @@ export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
         <h2 className="text-lg font-semibold">Knowledge Graph</h2>
         <p className="text-sm text-muted-foreground">
           Explore how memories, people, places, and events interconnect. Click nodes to reveal additional{' '}
-          neighbors, or adjust the batch size to control how many load per click.
+          neighbors, adjust the batch size, and increase hop depth for wider context.
         </p>
       </div>
 
@@ -949,6 +1017,35 @@ export function GraphTabPanel({ variant, searchQuery }: GraphTabPanelProps) {
                 onBlur={handleSpawnLimitBlur}
               />
               <span className="text-sm text-muted-foreground">nodes</span>
+            </div>
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Hop depth</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Increase or decrease how many relationship hops are visible from expanded nodes.
+              </p>
+              <div className="mt-2 inline-flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={decreaseHopDepth}
+                  disabled={hopDepth <= MIN_HOP_DEPTH}
+                  aria-label="Decrease hop depth"
+                >
+                  -
+                </Button>
+                <span className="w-10 text-center text-sm font-medium">{hopDepth}</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={increaseHopDepth}
+                  disabled={hopDepth >= MAX_HOP_DEPTH}
+                  aria-label="Increase hop depth"
+                >
+                  +
+                </Button>
+              </div>
             </div>
             <div className="mt-3 flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">

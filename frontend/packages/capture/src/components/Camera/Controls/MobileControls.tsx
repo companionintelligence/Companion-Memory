@@ -11,41 +11,68 @@ import { MediaBackground } from './MediaBackground';
 
 interface Props {
   onSelectLastCapture?: () => void;
+  onRecordingModeChange?: (mode: 'photo' | 'video' | 'inventory') => void;
 }
 
-export function MobileControls({ onSelectLastCapture }: Props) {
+export function MobileControls({ onSelectLastCapture, onRecordingModeChange }: Props) {
   const [{ isRecording, lastCapture }, { captureFrame, toggleRecording }] = useRecorder();
   const [{ facingMode }, { swapFacingMode }] = useFacingMode();
-  const [{ recordingMode }, { setPhotoMode, setVideoMode }] = useRecordingMode();
+  const [{ recordingMode }, { setPhotoMode, setVideoMode, setInventoryMode }] = useRecordingMode();
 
   const handleRecordClick = useCallback(() => {
-    if (recordingMode === 'photo') {
-      captureFrame();
-    } else {
+    if (recordingMode === 'video') {
       toggleRecording();
+
+      return;
     }
-  }, [captureFrame, toggleRecording, recordingMode, isRecording]);
+
+    captureFrame();
+  }, [captureFrame, toggleRecording, recordingMode]);
+
+  const handleSetPhotoMode = useCallback(() => {
+    setPhotoMode();
+    onRecordingModeChange?.('photo');
+  }, [setPhotoMode, onRecordingModeChange]);
+
+  const handleSetVideoMode = useCallback(() => {
+    setVideoMode();
+    onRecordingModeChange?.('video');
+  }, [setVideoMode, onRecordingModeChange]);
+
+  const handleSetInventoryMode = useCallback(() => {
+    setInventoryMode();
+    onRecordingModeChange?.('inventory');
+  }, [setInventoryMode, onRecordingModeChange]);
 
   return (
     <div>
       <div className="flex flex-row items-center justify-center w-75 mx-auto pb-0.5">
         <div
           className={cn(
-            'py-4 text-center text-sm basis-1/2',
+            'py-4 text-center text-sm basis-1/3',
             recordingMode === 'photo' ? 'text-yellow-300' : 'text-white',
           )}
-          onClick={setPhotoMode}
+          onClick={handleSetPhotoMode}
         >
           PHOTO
         </div>
         <div
           className={cn(
-            'py-4 text-center text-sm basis-1/2',
+            'py-4 text-center text-sm basis-1/3',
             recordingMode === 'video' ? 'text-yellow-300' : 'text-white',
           )}
-          onClick={setVideoMode}
+          onClick={handleSetVideoMode}
         >
           VIDEO
+        </div>
+        <div
+          className={cn(
+            'py-4 text-center text-sm basis-1/3',
+            recordingMode === 'inventory' ? 'text-yellow-300' : 'text-white',
+          )}
+          onClick={handleSetInventoryMode}
+        >
+          INVENTORY
         </div>
       </div>
 
@@ -69,7 +96,7 @@ export function MobileControls({ onSelectLastCapture }: Props) {
           <div
             className={cn(
               'absolute inset-1.5 rounded-2xl transform transition-radius transition-transform duration-100 ease-in-out group-active:scale-[.95] will-change-transform',
-              recordingMode === 'photo' ? 'bg-white' : 'bg-red-500',
+              recordingMode === 'video' ? 'bg-red-500' : 'bg-white',
               recordingMode === 'video' && isRecording ? 'rounded-xl scale-[0.5]' : 'rounded-full',
             )}
           ></div>

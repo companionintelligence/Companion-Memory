@@ -8,8 +8,8 @@ import { Link } from 'react-router-dom';
 import { PageContent } from '@/components/layout';
 import { ModelSelector } from '@/components/ModelSelector';
 import NotFoundPage from '@/components/NotFound';
-import { ThemeToggle } from '@/components/ThemeToggle';
-import { useAuth } from '@/hooks';
+import { ThemeToggle } from '@/components/ThemePicker';
+import { useAuth, useCurrentUser } from '@/hooks';
 
 export function SystemPage() {
   usePageTitle('System - Companion Intelligence');
@@ -44,7 +44,7 @@ function Header() {
 }
 
 function Profile() {
-  const [{ user }] = useAuth();
+  const { user } = useCurrentUser();
 
   if (!user) {
     return null;

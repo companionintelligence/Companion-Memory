@@ -1,18 +1,10 @@
 import { useEffect, useRef } from 'react';
 
-import { fetchJson, LoadingPage, usePageTitle } from '@ci/common';
+import { LoadingPage, usePageTitle } from '@ci/common';
 import { useToast } from '@ci/shadcn';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
-
-interface CompleteResponse {
-  success: boolean;
-  connection?: {
-    name: string;
-  };
-  error?: string;
-}
 
 export function OAuthCallbackPage() {
   usePageTitle('Complete Connection - Companion Intelligence');
@@ -61,7 +53,7 @@ export function OAuthCallbackPage() {
       initialRequestRef.current = true;
 
       try {
-        const response = await fetchJson<CompleteResponse>(`/api/connections/complete`, {
+        const response = await fetch(`/api/connections/complete`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -73,10 +65,14 @@ export function OAuthCallbackPage() {
           }),
         });
 
-        if (response.connection) {
-          toast.success(`Created connection`);
-        } else if (response.error) {
-          toast.error(response.error);
+        if (response.ok) {
+          toast.success('Created connection');
+        } else {
+          if (response.status === 409) {
+            toast.error('A connection to that account already exists');
+          } else {
+            toast.error('Failed to create connection');
+          }
         }
       } catch (err: unknown) {
         toast.error(String(err));

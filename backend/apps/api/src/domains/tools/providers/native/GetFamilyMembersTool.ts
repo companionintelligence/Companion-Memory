@@ -2,6 +2,7 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphReadService } from '@ci/domains/memory';
 
 import { BaseTool } from '../../core/BaseTool';
@@ -100,8 +101,10 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
   constructor(
     private readonly graphQuery: GraphQueryService,
     private readonly graphRead: GraphReadService,
+    protected readonly logger: LoggerService,
   ) {
     super();
+    this.logger.setContext(GetFamilyMembersTool.name);
   }
 
   protected validateInput(input: unknown): GetFamilyMembersInput {

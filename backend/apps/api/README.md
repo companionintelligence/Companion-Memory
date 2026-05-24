@@ -12,12 +12,6 @@ You can boot the backend development server with:
 yarn dev
 ```
 
-If you prefer, you can enable prettified logs with:
-
-```bash
-yarn dev:pretty
-```
-
 ## Migrations
 
 You can create a new database migration with:

@@ -1,64 +1,67 @@
 import { Entity, Column, CreateDateColumn, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
-import type { Question } from '../types';
-
-@Entity('questions')
+@Entity({ schema: 'ci', name: 'questions' })
 export class QuestionEntity {
-  @PrimaryColumn('uuid')
-  question_id!: string;
+  @PrimaryColumn({ type: 'uuid', name: 'question_id' })
+  id!: string;
 
-  @Column({ nullable: true })
-  question_category!: string;
+  @Column({ nullable: true, name: 'question_category' })
+  category!: string;
 
-  @Column()
-  question_text!: string;
+  @Column({ name: 'question_text' })
+  text!: string;
 
-  @Column({ type: 'text', array: true, nullable: true })
-  context_tags!: string[];
+  @Column({ type: 'text', array: true, nullable: true, name: 'context_tags' })
+  contextTags!: string[];
 
-  @Column({ nullable: true })
-  question_type!: string;
+  @Column({ nullable: true, name: 'question_type' })
+  questionType!: string;
 
-  @Column({ default: false })
-  is_seed_question!: boolean;
+  @Column({ default: false, name: 'is_seed_question' })
+  isSeedQuestion!: boolean;
 
-  @Column({ default: true })
-  is_active!: boolean;
+  @Column({ default: true, name: 'is_active' })
+  isActive!: boolean;
 
-  @Column({ default: false })
-  created_by_llm!: boolean;
+  @Column({ default: false, name: 'created_by_llm' })
+  createdByLlm!: boolean;
 
-  @Column({ nullable: true })
-  frequency_recommendation!: string;
+  @Column({ nullable: true, name: 'frequency_recommendation' })
+  frequencyRecommendation!: string;
 
-  @Column({ type: 'integer', default: 0 })
-  times_asked!: number;
+  @Column({ type: 'integer', default: 0, name: 'times_asked' })
+  timesAsked!: number;
 
-  @Column({ type: 'integer', default: 0 })
-  times_answered!: number;
+  @Column({ type: 'integer', default: 0, name: 'times_answered' })
+  timesAnswered!: number;
 
   @Column({ type: 'uuid', nullable: true, name: 'is_private_to' })
-  is_private_to?: string | null;
+  isPrivateTo?: string | null;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
-  toQuestion() {
+  static toEgressType(entity: QuestionEntity) {
     return {
-      id: this.question_id,
-      category: this.question_category,
-      text: this.question_text,
-      contextTags: this.context_tags,
-      questionType: this.question_type,
-      isSeedQuestion: this.is_seed_question,
-      isActive: this.is_active,
-      createdByLlm: this.created_by_llm,
-      frequencyRecommendation: this.frequency_recommendation,
-      timesAsked: this.times_asked,
-      timesAnswered: this.times_answered,
-    } satisfies Question;
+      id: entity.id,
+      category: entity.category,
+      text: entity.text,
+      contextTags: entity.contextTags,
+      questionType: entity.questionType,
+      isSeedQuestion: entity.isSeedQuestion,
+      isActive: entity.isActive,
+      createdByLlm: entity.createdByLlm,
+      frequencyRecommendation: entity.frequencyRecommendation,
+      timesAsked: entity.timesAsked,
+      timesAnswered: entity.timesAnswered,
+      isPrivateTo: entity.isPrivateTo,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    };
   }
 }
+
+export type Question = Readonly<QuestionEntity>;

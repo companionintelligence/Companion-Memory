@@ -8,14 +8,13 @@ import {
   Body,
   Query,
   UseGuards,
-  UnauthorizedException,
+  NotFoundException,
 } from '@nestjs/common';
 import { z } from 'zod';
 
-import { Context } from '@ci/common/decorators';
-import { JwtAuthGuard } from '@ci/common/guards';
+import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
-import type { RequestContext } from '@ci/common/types';
 import { CreateThreadDto } from '@ci/domains/conversations/types';
 
 import { MessageService } from '../services/MessageService';
@@ -40,41 +39,47 @@ export class ThreadsController {
     private readonly threadService: ThreadService,
   ) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Post()
   async post(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(createThreadSchema)) input: CreateThreadDto,
   ) {
-    if (!context.userId) {
-      throw new UnauthorizedException('User must be authenticated to create a thread');
-    }
+    const serviceContext = toServiceContext(context);
 
-    return this.threadService.create(context, input);
+    return this.threadService.create(serviceContext, input);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get()
   async findAll(@Context() context: RequestContext) {
-    const threads = await this.threadService.findAll(context);
+    const serviceContext = toServiceContext(context);
+
+    const threads = await this.threadService.findAll(serviceContext);
 
     return threads;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id')
   async findOne(
     @Context() context: RequestContext,
     @Param('id') id: string,
     @Query('includeMessages', new ValidationPipe(includeMessagesSchema)) includeMessages: boolean,
   ) {
-    const thread = await this.threadService.findOne(context, id);
+    const serviceContext = toServiceContext(context);
+
+    const thread = await this.threadService.findById(serviceContext, id);
+
+    if (thread == null) {
+      throw new NotFoundException();
+    }
 
     if (!includeMessages) {
       return thread;
     }
 
-    const messages = await this.messageService.findByThread(context, thread.id);
+    const messages = await this.messageService.findByThreadId(serviceContext, thread.id);
 
     return {
       ...thread,
@@ -82,10 +87,12 @@ export class ThreadsController {
     };
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Delete(':id')
   @HttpCode(204)
   async delete(@Context() context: RequestContext, @Param('id') id: string) {
-    await this.threadService.softDelete(context, id);
+    const serviceContext = toServiceContext(context);
+
+    await this.threadService.softRemove(serviceContext, id);
   }
 }

@@ -1,25 +1,53 @@
-import * as crypto from 'node:crypto';
-
 import { input } from '@inquirer/prompts';
-import { DataSource } from 'typeorm';
+import { Test } from '@nestjs/testing';
 
-import config from '@ci/configuration';
-import { SignupCodeEntity } from '@ci/domains/user';
+import { LoggerService } from '@ci/common/logging';
+import { SignupCodeService } from '@ci/domains/auth';
+import { EtlModule } from '@ci/domains/etl';
+import { EventService, LocalEventService } from '@ci/domains/events';
+import { GraphQLModule } from '@ci/domains/graphql';
+import { LLMModule } from '@ci/domains/llm';
+import { ToolsModule } from '@ci/domains/tools';
 
-(async () => {
-  const db = new DataSource({
-    type: config.db.type,
-    host: config.db.host,
-    port: config.db.port,
-    database: config.db.database,
-    username: config.db.username,
-    password: config.db.password,
-    entities: [SignupCodeEntity],
-    synchronize: false,
-    logging: ['error'],
-  });
+import { App } from '../src/application';
 
-  await db.initialize();
+(async function () {
+  const createFilteredLogger = () => {
+    const logger = new LoggerService();
+
+    logger.error = () => {};
+
+    logger.warn = () => {};
+
+    logger.log = () => {};
+
+    logger.debug = () => {};
+
+    return logger;
+  };
+
+  const module = await Test.createTestingModule({
+    imports: [App],
+  })
+    .overrideProvider(LoggerService)
+    .useFactory({
+      factory: createFilteredLogger,
+    })
+    .overrideProvider(EventService)
+    .useClass(LocalEventService)
+    .overrideModule(EtlModule)
+    .useModule(class {})
+    .overrideModule(GraphQLModule)
+    .useModule(class {})
+    .overrideModule(LLMModule)
+    .useModule(class {})
+    .overrideModule(ToolsModule)
+    .useModule(class {})
+    .compile();
+
+  await module.init();
+
+  const signupCodeService = module.get(SignupCodeService);
 
   const numCodes = await input({
     message: 'Number of signup codes to generate:',
@@ -33,20 +61,15 @@ import { SignupCodeEntity } from '@ci/domains/user';
 
   try {
     for (let i = 0; i < parseInt(numCodes); i++) {
-      await db.transaction(async (manager) => {
-        const code = crypto.randomBytes(6).toString('hex');
+      const signupCode = await signupCodeService.create();
 
-        await manager.save(SignupCodeEntity, {
-          signup_code: code,
-        });
-
-        codes.push(code);
-      });
+      codes.push(signupCode.signup_code);
     }
 
-    console.log(`\nSuccessfully created codes:\n${codes.join('\n')}\n`);
+    console.log(`\nSuccessfully created codes:\n\n${codes.join('\n')}\n`);
   } catch (err) {
     console.error('\nFailed to create some codes:', (err as Error).message);
+
     if (codes.length > 0) {
       console.log('\nBut did create these codes', codes);
     }
@@ -54,7 +77,7 @@ import { SignupCodeEntity } from '@ci/domains/user';
     exitCode = 1;
   }
 
-  await db.destroy();
+  await module.close();
 
   process.exit(exitCode);
 })();

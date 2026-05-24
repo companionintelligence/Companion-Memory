@@ -1,38 +1,39 @@
-import path from 'path';
+import { type TestingModule } from '@nestjs/testing';
+import { type MultiBar } from 'cli-progress';
 
-import { Logger } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { ThreadService } from '@ci/domains/conversations';
 
-import { ThreadEntity } from '@ci/domains/conversations';
+import { THREADS } from './data/threads';
 
-import { readCsv } from './utils';
+export async function seedThreads(module: TestingModule, multibar: MultiBar) {
+  const threadService = module.get(ThreadService);
 
-const logger = new Logger(path.basename(__filename));
+  const bar = multibar.create(THREADS.length, 0, { task: 'Threads' });
 
-export async function seedThreads(db: DataSource, filePath: string) {
-  type CsvRecord = {
-    id: string;
-    name: string;
-    model: string;
-    description: string;
-    user_id: string;
-  };
+  for (const record of THREADS) {
+    const existingThread = await threadService.findById(
+      {
+        userId: record.userId,
+      },
+      record.id,
+    );
 
-  const records = readCsv<CsvRecord>(filePath);
-
-  await db.transaction(async (manager) => {
-    for (const record of records) {
-      await manager.save(ThreadEntity, {
-        id: record.id,
-        name: record.name,
-        model: record.model,
-        description: record.description,
-        user: {
-          id: record.user_id,
+    if (existingThread == null) {
+      await threadService.create(
+        {
+          userId: record.userId,
         },
-      });
+        {
+          id: record.id,
+          name: record.name,
+          model: record.model,
+          description: record.description,
+        },
+      );
     }
-  });
 
-  logger.log(`Seeded ${records.length} thread records`);
+    bar.increment();
+  }
+
+  bar.stop();
 }

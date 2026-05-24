@@ -1,0 +1,27 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+
+  "entry": [
+    "src/main.tsx",
+    "scripts/**/*.{ts,tsx}"
+  ],
+
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "scripts/**/*.{ts,tsx}"
+  ],
+
+  "ignore": [
+    "vite.config.ts",
+    "tailwind.config.mjs",
+    "src/graphql/**/*"
+  ],
+
+  "ignoreDependencies": [
+    "@tailwindcss/vite",
+    "@vitejs/plugin-react-swc",
+    "vite-plugin-pwa"
+  ],
+
+  "vite": false
+}

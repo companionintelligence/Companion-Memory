@@ -10,13 +10,19 @@ import {
 
 import { UserEntity } from '@ci/domains/user';
 
-@Entity({ schema: 'ci_core', name: 'sessions' })
+@Entity({ schema: 'ci', name: 'sessions' })
 export class SessionEntity {
   @PrimaryColumn('uuid')
   id!: string;
 
   @Column({ type: 'text' })
   token!: string;
+
+  @Column({ type: 'text', nullable: true })
+  previous_token!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  rotated_at!: Date | null;
 
   @Column({ type: 'text' })
   ip!: string;

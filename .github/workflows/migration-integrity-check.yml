@@ -1,0 +1,68 @@
+name: Migrations
+
+on:
+  pull_request:
+    paths:
+      - 'backend/apps/api/db/postgres/migrations/**'
+
+jobs:
+  check-migrations:
+    name: Check migration integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for modified migrations
+        run: |
+          # Fetch the base branch to ensure we can compare against it
+          git fetch origin ${{ github.base_ref }}
+
+          # Check for changes in the migrations directory
+          ALL_CHANGES=$(git diff --name-status origin/${{ github.base_ref }} HEAD -- backend/apps/api/db/postgres/migrations)
+
+          # Check if PR is marked for migration squashing
+          SQUASH_MODE=false
+
+          if [[ "${{ github.event.pull_request.title }}" == *"[squash-migrations]"* ]]; then
+            SQUASH_MODE=true
+            echo "Migration squashing mode detected."
+          fi
+
+          if [ "$SQUASH_MODE" = true ]; then
+            # In squash mode: only allow Deletions (D) and Additions (A)
+            # Modifications (M) and Renames (R) are still forbidden
+            FORBIDDEN_CHANGES=$(echo "$ALL_CHANGES" | grep -E '^[MR]') || true
+
+            if [ -n "$FORBIDDEN_CHANGES" ]; then
+              echo "FAILURE: Modified or renamed migrations detected in squash mode."
+              echo "When squashing migrations, you can only DELETE old migrations and ADD new ones."
+              echo "Modifying existing migrations is never allowed."
+              echo ""
+              echo "Detected forbidden changes:"
+              echo "$FORBIDDEN_CHANGES"
+              exit 1
+            fi
+
+            echo "Migration squashing check passed. Only deletions and additions detected."
+          else
+            # Normal mode: only allow Additions (A)
+            # Modifications (M), Renames (R), and Deletions (D) are forbidden
+            FORBIDDEN_CHANGES=$(echo "$ALL_CHANGES" | grep -E '^[MRD]') || true
+
+            if [ -n "$FORBIDDEN_CHANGES" ]; then
+              echo "FAILURE: Existing migration files have been modified, renamed, or deleted."
+              echo "It is forbidden to modify migrations that have already been committed."
+              echo "Please revert changes to existing files and create a new migration file instead."
+              echo ""
+              echo "To squash migrations, add [squash-migrations] to your PR title."
+              echo ""
+              echo "Detected forbidden changes:"
+              echo "$FORBIDDEN_CHANGES"
+              exit 1
+            fi
+
+            echo "Migration integrity check passed. No existing migrations were modified."
+          fi

@@ -8,11 +8,9 @@ import {
   JoinColumn,
 } from 'typeorm';
 
-import { UserEntity } from '@ci/domains/user';
+import { UserEntity, type User } from '@ci/domains/user';
 
-import type { Thread } from '../types';
-
-@Entity({ name: 'threads' })
+@Entity({ schema: 'ci', name: 'threads' })
 export class ThreadEntity {
   @PrimaryColumn({ type: 'uuid', name: 'thread_id' })
   id!: string;
@@ -27,23 +25,28 @@ export class ThreadEntity {
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
   @Column({ type: 'boolean', default: false, name: 'is_archived' })
-  is_archived!: boolean;
+  isArchived!: boolean;
 
-  toThread() {
+  static toEgressType(entity: ThreadEntity): Thread {
     return {
-      id: this.id,
-      name: this.name ?? null,
-      model: null, // Model is now per-message, not per-thread
-      description: this.description ?? null,
-
-      user: this.user?.toUser(),
-    } satisfies Thread;
+      id: entity.id,
+      name: entity.name ?? null,
+      description: entity.description ?? null,
+      isArchived: entity.isArchived,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+    };
   }
 }
+
+export type Thread = Readonly<Omit<ThreadEntity, 'user'>> & {
+  user?: User;
+};

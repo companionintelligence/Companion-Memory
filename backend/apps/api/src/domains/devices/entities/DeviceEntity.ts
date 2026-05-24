@@ -10,7 +10,7 @@ import {
 
 import { UserEntity } from '@ci/domains/user';
 
-@Entity('devices')
+@Entity({ schema: 'ci', name: 'devices' })
 export class DeviceEntity {
   @PrimaryColumn({ type: 'uuid' })
   device_id!: string;
@@ -75,49 +75,29 @@ export class DeviceEntity {
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity | null;
 
-  toDevice(): Device {
+  static toEgressType(entity: DeviceEntity): Device {
     return {
-      device_id: this.device_id,
-      user_id: this.user_id,
-      device_entity_id: this.device_entity_id,
-      device_name: this.device_name,
-      device_type: this.device_type,
-      platform: this.platform,
-      model: this.model,
-      manufacturer: this.manufacturer,
-      os_version: this.os_version,
-      app_version: this.app_version,
-      last_seen: this.last_seen,
-      is_active: this.is_active,
-      is_primary: this.is_primary,
-      push_token: this.push_token,
-      capabilities: this.capabilities,
-      privacy_settings: this.privacy_settings,
-      created_at: this.created_at,
-      updated_at: this.updated_at,
-      user: this.user?.toUser(),
+      device_id: entity.device_id,
+      user_id: entity.user_id,
+      device_entity_id: entity.device_entity_id,
+      device_name: entity.device_name,
+      device_type: entity.device_type,
+      platform: entity.platform,
+      model: entity.model,
+      manufacturer: entity.manufacturer,
+      os_version: entity.os_version,
+      app_version: entity.app_version,
+      last_seen: entity.last_seen,
+      is_active: entity.is_active,
+      is_primary: entity.is_primary,
+      push_token: entity.push_token,
+      capabilities: entity.capabilities,
+      privacy_settings: entity.privacy_settings,
+      created_at: entity.created_at,
+      updated_at: entity.updated_at,
+      user: entity.user == null ? undefined : entity.user,
     };
   }
 }
 
-export interface Device {
-  readonly device_id: string;
-  readonly user_id: string;
-  readonly device_entity_id?: string;
-  readonly device_name: string;
-  readonly device_type: string;
-  readonly platform?: string;
-  readonly model?: string;
-  readonly manufacturer?: string;
-  readonly os_version?: string;
-  readonly app_version?: string;
-  readonly last_seen: Date;
-  readonly is_active: boolean;
-  readonly is_primary: boolean;
-  readonly push_token?: string;
-  readonly capabilities: Record<string, unknown>;
-  readonly privacy_settings: Record<string, unknown>;
-  readonly created_at: Date;
-  readonly updated_at: Date;
-  readonly user?: import('@ci/domains/user').User;
-}
+export type Device = Readonly<DeviceEntity>;

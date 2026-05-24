@@ -1,120 +1,59 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery } from '@apollo/client';
+import { Portal } from '@ci/common';
+import { Breadcrumb } from '@ci/shadcn';
+import { useNavigate, Link } from 'react-router-dom';
 
-import { fetchJson, LoadingPage, Portal } from '@ci/common';
-import { Breadcrumb, cn, useToast } from '@ci/shadcn';
-import { useNavigate } from 'react-router-dom';
-
-import { InlineModal } from '@/components/InlineModal';
 import { PageContent } from '@/components/layout';
-import { useAuth } from '@/hooks';
+import { gql } from '@/graphql';
 
-interface ConnectResponse {
-  authorizationUrl: string;
-}
+import { Card } from './Card';
 
-type ReturnType = [
-  {
-    authorizationUrl: string | null;
-    loading: boolean;
-    error: unknown | null;
-  },
-  {
-    connect: (providerId: string) => Promise<void>;
-  },
-];
-
-function useConnectService(): ReturnType {
-  const [{ authToken }] = useAuth();
-
-  const [authorizationUrl, setAuthorizationUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<unknown | null>(null);
-
-  const connect = useCallback(
-    async (providerId: string) => {
-      setAuthorizationUrl(null);
-      setLoading(true);
-      setError(null);
-
-      try {
-        if (providerId === '0198779b-4d44-84eb-a35f-93e1f0a56b71') {
-          const discordScopes = ['identify', 'guilds', 'email', 'connections', 'openid'];
-          const scopeString = discordScopes.join(' ');
-          const redirectUri = encodeURIComponent('https://dev.companionintelligence.com/oauth/callback');
-          const encodedScope = encodeURIComponent(scopeString);
-          const encodedState = encodeURIComponent(providerId);
-
-          const discordAuthUrl = `https://discord.com/oauth2/authorize?client_id=1427223844636065853&response_type=code&redirect_uri=${redirectUri}&scope=${encodedScope}&state=${encodedState}`;
-
-          setAuthorizationUrl(discordAuthUrl);
-        } else {
-          // For other providers (Google, Microsoft), use existing flow
-          const response = await fetchJson<ConnectResponse>(`/api/providers/${providerId}`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          setAuthorizationUrl(response.authorizationUrl);
+const GET_CONNECTIONS = gql(`
+  query GetConnectionsLight {
+    connections {
+      edges {
+        cursor
+        node {
+          id
+          providerId
         }
-      } catch (err: unknown) {
-        setError(err);
-      } finally {
-        setLoading(false);
       }
-    },
-    [authToken],
-  );
-
-  return [
-    {
-      authorizationUrl,
-      loading,
-      error,
-    },
-    {
-      connect,
-    },
-  ];
-}
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      totalCount
+    }
+  }
+`);
 
 export function ConnectPage() {
   const navigate = useNavigate();
-  const { toast } = useToast();
+  const connectionsCount: Record<string, number> = {};
 
-  const [{ authorizationUrl, loading, error }, { connect }] = useConnectService();
+  const { data: getConnections } = useQuery(GET_CONNECTIONS);
 
-  useEffect(() => {
-    if (!authorizationUrl) {
-      return;
+  const connections = getConnections?.connections.edges.map((edge) => edge.node) || [];
+
+  connections.forEach((c) => {
+    if (connectionsCount[c.providerId]) {
+      connectionsCount[c.providerId] += 1;
+    } else {
+      connectionsCount[c.providerId] = 1;
     }
-
-    // We have to do `window.location` since this is an external URL.
-    window.location.href = authorizationUrl;
-  }, [authorizationUrl]);
-
-  useEffect(() => {
-    if (!error) {
-      return;
-    }
-
-    toast.error('Error connecting to API');
-    navigate(-1);
-  }, [error]);
+  });
 
   return (
     <>
-      <InlineModal open={loading || !!authorizationUrl}>
-        <LoadingPage />
-      </InlineModal>
-
       <Portal.Slot id="breadcrumbs">
         <Breadcrumb>
           <Breadcrumb.List>
             <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link href="/">Companion</Breadcrumb.Link>
+              <Breadcrumb.Link asChild>
+                <Link to="/feed">Companion</Link>
+              </Breadcrumb.Link>
             </Breadcrumb.Item>
             <Breadcrumb.Separator className="hidden md:block" />
             <Breadcrumb.Item>
@@ -137,7 +76,12 @@ export function ConnectPage() {
               background="bg-blue-500"
               border="border-blue-400"
               text="Install the Chrome extension to automatically track your browsing history, bookmarks, and web activity."
-              disabled
+              onClick={() => {
+                window.open(
+                  'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih?authuser=3&hl=en',
+                  '_blank',
+                );
+              }}
             />
             <Card
               logo="/branding/firefox/logo.svg"
@@ -227,28 +171,92 @@ export function ConnectPage() {
               background="bg-sky-400"
               border="border-sky-300"
               text="Bring your Microsoft account into the mix for email and scheduling. Keep track of what matters without extra steps."
-              onClick={() => connect('0198779b-3c33-73da-84e5-82e0df145260')}
+              onClick={() => navigate('/providers/0198779b-3c33-73da-84e5-82e0df145260')}
+              subtext={
+                connectionsCount['0198779b-3c33-73da-84e5-82e0df145260'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['0198779b-3c33-73da-84e5-82e0df145260'] > 1
+                    ? `${connectionsCount['0198779b-3c33-73da-84e5-82e0df145260']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['0198779b-3c33-73da-84e5-82e0df145260'] > 0 ? 'bg-green-200' : undefined
+              }
             />
             <Card
               logo="/branding/google/logo.svg"
               background="bg-violet-400"
               border="border-violet-300"
               text="Link your Google account for quick access to Gmail, Calendar, Drive, Photos, and Youtube. Everything you need, always in sync."
-              onClick={() => connect('0198779b-182c-716e-9275-b81d99a47fdb')}
+              onClick={() => navigate('/providers/0198779b-182c-716e-9275-b81d99a47fdb')}
+              subtext={
+                connectionsCount['0198779b-182c-716e-9275-b81d99a47fdb'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['0198779b-182c-716e-9275-b81d99a47fdb'] > 1
+                    ? `${connectionsCount['0198779b-182c-716e-9275-b81d99a47fdb']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['0198779b-182c-716e-9275-b81d99a47fdb'] > 0 ? 'bg-green-200' : undefined
+              }
             />
             <Card
               logo="/branding/meta/logo.svg"
               background="bg-blue-500"
               border="border-blue-400"
-              text="Sync with Meta to stay connected with your community, manage Marketplace items, and track your Quest activity. Coming Soon."
-              disabled
+              text="Connect your Meta account to sync your Facebook posts, photos, videos, friends, and likes. Stay connected with your community."
+              onClick={() => navigate('/providers/dbb8002f-12da-4cd9-b02b-37db7791a900')}
+              subtext={
+                connectionsCount['dbb8002f-12da-4cd9-b02b-37db7791a900'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['dbb8002f-12da-4cd9-b02b-37db7791a900'] > 1
+                    ? `${connectionsCount['dbb8002f-12da-4cd9-b02b-37db7791a900']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['dbb8002f-12da-4cd9-b02b-37db7791a900'] > 0 ? 'bg-green-200' : undefined
+              }
+            />
+            <Card
+              logo="/branding/spotify/logo.svg"
+              background="bg-green-500"
+              border="border-green-400"
+              text="Connect Spotify to track your music listening habits, playlists, and audio memories."
+              onClick={() => navigate('/providers/019cbaf2-d789-7723-aada-7e3d709663f5')}
+              subtext={
+                connectionsCount['019cbaf2-d789-7723-aada-7e3d709663f5'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['019cbaf2-d789-7723-aada-7e3d709663f5'] > 1
+                    ? `${connectionsCount['019cbaf2-d789-7723-aada-7e3d709663f5']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['019cbaf2-d789-7723-aada-7e3d709663f5'] > 0 ? 'bg-green-200' : undefined
+              }
+            />
+            <Card
+              logo="/branding/steam/logo.svg"
+              background="bg-slate-700"
+              border="border-slate-600"
+              text="Connect Steam to track your game library and achievements."
+              onClick={() => navigate('/providers/019d6470-f9e1-720f-a3ce-299842abaece')}
+              subtext={
+                connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece'] > 1
+                    ? `${connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece'] > 0 ? 'bg-green-200' : undefined
+              }
             />
             <Card
               logo="/branding/discord/logo.svg"
               background="bg-indigo-500"
               border="border-indigo-400"
-              text="Connect Discord to sync your server activity, messages, and community interactions."
-              onClick={() => connect('0198779b-4d44-84eb-a35f-93e1f0a56b71')}
+              text="Connect Discord to sync your server activity, messages, and community interactions. Coming soon."
+              disabled
             />
             <Card
               logo="/branding/github/logo.svg"
@@ -283,20 +291,6 @@ export function ConnectPage() {
               background="bg-purple-600"
               border="border-purple-500"
               text="Sync Slack to capture your team communications, channels, and workspace activity. Coming soon."
-              disabled
-            />
-            <Card
-              logo="/branding/spotify/logo.svg"
-              background="bg-green-500"
-              border="border-green-400"
-              text="Connect Spotify to track your music listening habits, playlists, and audio memories. Coming soon."
-              disabled
-            />
-            <Card
-              logo="/branding/steam/logo.svg"
-              background="bg-slate-700"
-              border="border-slate-600"
-              text="Connect Steam to track your gaming activity, achievements, and game library. Coming soon."
               disabled
             />
             <Card
@@ -345,40 +339,5 @@ export function ConnectPage() {
         </div>
       </PageContent>
     </>
-  );
-}
-
-interface CardProps {
-  background: string;
-  border: string;
-  logo: string;
-  text: string;
-  disabled?: boolean;
-  onClick?: () => void;
-  className?: string;
-}
-
-function Card({ background, border, logo, text, disabled = false, onClick, className }: CardProps) {
-  return (
-    <div
-      className={cn(
-        'text-gray-700 dark:text-gray-200 rounded-lg bg-white shadow-md dark:bg-gray-800 dark:text-gray-200 select-none',
-        onClick && !disabled ? 'cursor-pointer' : 'opacity-50',
-        className,
-      )}
-      onClick={!disabled ? onClick : undefined}
-    >
-      <div className={cn('flex items-center justify-center p-10 rounded-t-lg', background)}>
-        <div
-          className={cn(
-            'flex items-center justify-center p-6 rounded-full bg-white aspect-square border-6',
-            border,
-          )}
-        >
-          <img src={logo} className="w-12 h-12" />
-        </div>
-      </div>
-      <div className="font-semibold text-sm p-6">{text}</div>
-    </div>
   );
 }

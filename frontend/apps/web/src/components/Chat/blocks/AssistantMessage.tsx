@@ -7,10 +7,11 @@ import { Markdown } from '@/components/Markdown';
 interface Props {
   content?: string;
   renderEmptyContent?: boolean;
+  createdAt?: string;
   streamingRef?: RefObject<HTMLDivElement | null> | ((el: HTMLDivElement | null) => void);
 }
 
-function AssistantMessage({ content, renderEmptyContent = false, streamingRef }: Props) {
+function AssistantMessage({ content, renderEmptyContent = false, streamingRef, createdAt }: Props) {
   const trimmedContent = useMemo(() => content?.trim(), [content]);
 
   if (!trimmedContent && !renderEmptyContent) {
@@ -26,6 +27,11 @@ function AssistantMessage({ content, renderEmptyContent = false, streamingRef }:
     >
       <div className="streaming-content prose dark:prose-invert max-w-none" ref={streamingRef}>
         {trimmedContent && <Markdown>{trimmedContent}</Markdown>}
+        {createdAt && (
+          <div className={cn('pt-1 text-xs text-foreground text-right')}>
+            {new Date(createdAt).toLocaleString()}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -3,14 +3,12 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useStat
 import { Portal, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, Card } from '@ci/shadcn';
 import { RefreshCw, Send, X } from '@ci/shadcn/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 
 import { useThreadService } from '@/api';
 import { Chat, type FormData } from '@/components/Chat';
-import { VoiceModeProvider, useVoiceModeContext } from '@/components/Chat/VoiceModeProvider';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useChatRequester, useCounter, useModel } from '@/hooks';
-import { useCompanionAudioPlayback } from '@/hooks/useCompanionAudioPlayback';
 
 import { ChatSidebar } from './ChatSidebar';
 import { type Message } from './types';
@@ -18,7 +16,6 @@ import { useThreadListService } from './useThreadListService';
 
 function ChatPageContent() {
   const { isMobile } = useDeviceLayout();
-  const { isVoiceModeActive } = useVoiceModeContext();
 
   const resolvedThreadId = useRef<string | null>(null);
   const hasSetInitialMessages = useRef(false);
@@ -29,14 +26,6 @@ function ChatPageContent() {
   const { id: initialThreadId } = useParams<{ id?: string }>();
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [{ selectedModel }] = useModel();
-
-  // Voice state management
-  const [selectedVoice, setSelectedVoice] = useState('ryan');
-
-  // Audio playback for voice mode
-  const { playCompanionResponse, stopAudioPlayback } = useCompanionAudioPlayback({
-    voice: selectedVoice,
-  });
 
   const [
     { threads, loading: threadsLoading, error: threadsError },
@@ -117,23 +106,14 @@ function ChatPageContent() {
     [submitChatRequest],
   );
 
-  // Handle response finished for TTS
-  const handleResponseFinished = useCallback(
-    (text: string) => {
-      if (text.trim()) {
-        // Only process new responses
-        if (text !== lastProcessedResponseRef.current) {
-          lastProcessedResponseRef.current = text;
-
-          // Handle TTS if voice mode is active
-          if (isVoiceModeActive) {
-            playCompanionResponse(text);
-          }
-        }
+  const handleResponseFinished = useCallback((text: string) => {
+    if (text.trim()) {
+      // Only process new responses
+      if (text !== lastProcessedResponseRef.current) {
+        lastProcessedResponseRef.current = text;
       }
-    },
-    [isVoiceModeActive, playCompanionResponse],
-  );
+    }
+  }, []);
 
   const loading = threadsLoading || threadLoading || chatRequestLoading;
   const isSubmitDisabled = selectedModel == null;
@@ -185,11 +165,15 @@ function ChatPageContent() {
         <Breadcrumb>
           <Breadcrumb.List>
             <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link href="/">Companion</Breadcrumb.Link>
+              <Breadcrumb.Link asChild>
+                <Link to="/feed">Companion</Link>
+              </Breadcrumb.Link>
             </Breadcrumb.Item>
             <Breadcrumb.Separator className="hidden md:block" />
             <Breadcrumb.Item>
-              <Breadcrumb.Link href="/chat">Chat</Breadcrumb.Link>
+              <Breadcrumb.Link asChild>
+                <Link to="/chat">Chat</Link>
+              </Breadcrumb.Link>
             </Breadcrumb.Item>
             {thread && (
               <>
@@ -240,9 +224,6 @@ function ChatPageContent() {
           onStop={stopChatRequest}
           autoFocus={true}
           onResponseFinished={handleResponseFinished}
-          selectedVoice={selectedVoice}
-          onVoiceChange={setSelectedVoice}
-          onStopAudio={stopAudioPlayback}
         />
       </div>
     </>
@@ -252,9 +233,5 @@ function ChatPageContent() {
 export default function ChatPage() {
   usePageTitle('Chat - Companion Intelligence');
 
-  return (
-    <VoiceModeProvider>
-      <ChatPageContent />
-    </VoiceModeProvider>
-  );
+  return <ChatPageContent />;
 }

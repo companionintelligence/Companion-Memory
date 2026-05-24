@@ -1,0 +1,55 @@
+[project]
+name = "ci-hbpe"
+version = "0.1.0"
+description = "CI-HBPE: Hierarchical Behavioral Prediction Engine"
+requires-python = ">=3.11"
+dependencies = [
+    # ── LLM labeling (Qwen3-0.8B Q4_K_M GGUF via llama-cpp-python) ──────────
+    # llama-cpp-python is installed in the Dockerfile with hardware-specific
+    # build flags (Metal / HIPBLAS). Do not add it here or pip will pull the
+    # CPU-only release. huggingface_hub handles model download/caching.
+    "huggingface_hub>=0.22",
+
+    # ── Model training & calibration ──────────────────────────────────────────
+    # torch is installed in the Dockerfile with hardware-specific index URLs
+    # (CPU for local, ROCm for prod). Listed here for dependency completeness.
+    "torch>=2.2",
+    "scikit-learn>=1.4",             # ECE calibration in model/calibration.py
+    "onnx>=1.16",                    # Required by onnxruntime.quantization
+    "onnxscript>=0.1",               # Required by torch.onnx.export (torch 2.x)
+    "onnxruntime-gpu>=1.17",         # INT8 quantized inference (Phase 4)
+
+    # ── Data I/O ──────────────────────────────────────────────────────────────
+    "psycopg2-binary>=2.9",         # PostgreSQL / TimescaleDB access
+
+    # ── Workflow orchestration ────────────────────────────────────────────────
+    "temporalio",                    # nightly job Temporal workflows
+
+    # ── App GraphQL client ────────────────────────────────────────────────────
+    "requests>=2.31",               # HTTP for GraphQL calls to application service
+    "PyJWT>=2.8",                   # self-sign service JWTs with shared secret
+
+    # ── API & config ──────────────────────────────────────────────────────────
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings",
+    "python-dotenv",
+
+    # ── Utilities ────────────────────────────────────────────────────────────
+    "structlog",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.hatch.build.targets.wheel]
+sources = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,8 +1,8 @@
-export { AuthProvider, useAuth } from './use-auth';
-export { CaptureModalProvider, useCaptureModal } from './use-capture-modal';
-export { useChatRequester } from './use-chat-requester';
-export { useCounter } from './use-counter';
-export { useModalControls } from './use-modal-controls';
-export { ModelProvider, useModel } from './use-model';
-export { ThemeProvider, useTheme } from './use-theme';
-export { usePreventOverscroll } from './use-prevent-overscroll';
+export { AuthProvider, useAuth } from './useAuth';
+export { CaptureModalProvider, useCaptureModal } from './useCaptureModal';
+export { useChatRequester } from './useChatRequester';
+export { useCounter } from './useCounter';
+export { useCurrentUser } from './useCurrentUser';
+export { useModalControls } from './useModalControls';
+export { ModelProvider, useModel } from './useModel';
+export { usePreventOverscroll } from './usePreventOverscroll';

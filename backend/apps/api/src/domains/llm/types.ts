@@ -12,4 +12,8 @@ export interface OllamaModel {
   namespace: string | null;
   name: string;
   tag: string | null;
+  capabilities?: string[];
+  vision?: boolean;
+  tools?: boolean;
+  thinking?: boolean;
 }

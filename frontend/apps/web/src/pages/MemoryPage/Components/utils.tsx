@@ -1,6 +1,6 @@
 import { Calendar, User, MapPin, Package, FileText, Contact, Lightbulb, Target } from '@ci/shadcn/icons';
 
-import type { MemoryItem } from '../types';
+import type { EntityItem } from '../../MemoryPage/useEntityService';
 
 export function formatDuration(minutes: number): string {
   const days = Math.floor(minutes / (24 * 60));
@@ -66,13 +66,13 @@ export function formatDateForDisplay(dateStr: string): string {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
-  const memoryDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const entityDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
-  if (memoryDate.getTime() === today.getTime()) {
+  if (entityDate.getTime() === today.getTime()) {
     return 'Today';
   }
 
-  if (memoryDate.getTime() === yesterday.getTime()) {
+  if (entityDate.getTime() === yesterday.getTime()) {
     return 'Yesterday';
   }
 
@@ -84,10 +84,20 @@ export function formatDateForDisplay(dateStr: string): string {
   });
 }
 
-export function sortMemoriesByTime(memories: MemoryItem[]): MemoryItem[] {
-  return [...memories].sort((a, b) => {
-    const dateA = new Date(a.timestamp);
-    const dateB = new Date(b.timestamp);
+export function sortEntitiesByTime(entities: EntityItem[][]): EntityItem[][] {
+  return [...entities].sort((a, b) => {
+    const dateA =
+      'time' in a
+        ? new Date(a.time as string)
+        : 'startTime' in a
+          ? new Date(a.startTime as string)
+          : new Date();
+    const dateB =
+      'time' in b
+        ? new Date(b.time as string)
+        : 'startTime' in b
+          ? new Date(b.startTime as string)
+          : new Date();
     if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
       return 0;
     }
@@ -96,32 +106,41 @@ export function sortMemoriesByTime(memories: MemoryItem[]): MemoryItem[] {
   });
 }
 
-export function groupMemoriesByDate(memories: MemoryItem[]): Array<{
+export function groupEntitiesByDate(entities: EntityItem[]): Array<{
   date: string;
-  memories: MemoryItem[];
+  entities: EntityItem[];
 }> {
-  const groups: Record<string, MemoryItem[]> = {};
+  const groups: Record<string, EntityItem[]> = {};
 
-  memories.forEach((memory) => {
-    const memoryDate = new Date(memory.timestamp);
-    if (!isNaN(memoryDate.getTime())) {
+  entities.forEach((entity) => {
+    if (!('time' in entity) && !('startTime' in entity)) {
+      return;
+    }
+
+    const entityDate =
+      'time' in entity
+        ? new Date(entity.time as string)
+        : 'startTime' in entity
+          ? new Date(entity.startTime as string)
+          : new Date();
+    if (!isNaN(entityDate.getTime())) {
       // Use local date instead of UTC to match user's timezone
-      const year = memoryDate.getFullYear();
-      const month = String(memoryDate.getMonth() + 1).padStart(2, '0');
-      const day = String(memoryDate.getDate()).padStart(2, '0');
+      const year = entityDate.getFullYear();
+      const month = String(entityDate.getMonth() + 1).padStart(2, '0');
+      const day = String(entityDate.getDate()).padStart(2, '0');
       const dateKey = `${year}-${month}-${day}`;
 
       if (!groups[dateKey]) {
         groups[dateKey] = [];
       }
 
-      groups[dateKey].push(memory);
+      groups[dateKey].push(entity);
     }
   });
 
   return Object.entries(groups)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, memories]) => ({ date, memories }));
+    .map(([date, entities]) => ({ date, entities }));
 }
 
 export function getEntityTypeIcon(type: string) {
@@ -145,17 +164,6 @@ export function getEntityTypeIcon(type: string) {
     default:
       return <Target className="h-4 w-4" />;
   }
-}
-
-export function hasValidLocation(memory: MemoryItem): boolean {
-  return !!(
-    memory.location &&
-    typeof memory.location.lat === 'number' &&
-    typeof memory.location.lng === 'number' &&
-    !isNaN(memory.location.lat) &&
-    !isNaN(memory.location.lng) &&
-    !(memory.location.lat === 0 && memory.location.lng === 0)
-  );
 }
 
 // Got from the top answer here: https://stackoverflow.com/questions/15900485/correct-way-to-convert-size-in-bytes-to-kb-mb-gb-in-javascript

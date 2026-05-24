@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { LoggerService } from '@ci/common/logging';
 import { GraphUtilityService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
 
 import { BaseTool } from '../../core/BaseTool';
@@ -25,8 +26,6 @@ export type ForgetKnowledgeInput = z.infer<typeof ForgetKnowledgeInputSchema>;
 export interface ForgetKnowledgeOutput {
   archivedEntityIds: string[];
   archivedRelationshipIds: string[];
-  entityFactIds: string[];
-  relationshipFactIds: string[];
   mode: 'archive' | 'archive_and_delete';
   warnings?: string[];
 }
@@ -55,7 +54,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            'Archive keeps data available in the facts table while leaving nodes inactive; archive_and_delete also removes from the active graph.',
+            'Archive marks nodes/relationships inactive; archive_and_delete also removes them from the active graph.',
         },
         reason: {
           type: 'string',
@@ -74,17 +73,19 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         output: {
           archivedEntityIds: ['11111111-1111-1111-1111-111111111111'],
           archivedRelationshipIds: [],
-          entityFactIds: ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'],
-          relationshipFactIds: [],
           mode: 'archive',
         },
-        description: 'Archive an entity and its outgoing relationships into the facts table',
+        description: 'Archive an entity and its outgoing relationships (soft-deactivate)',
       },
     ],
   };
 
-  constructor(private readonly graphUtility: GraphUtilityService) {
+  constructor(
+    private readonly graphUtility: GraphUtilityService,
+    protected readonly logger: LoggerService,
+  ) {
     super();
+    this.logger.setContext(ForgetKnowledgeTool.name);
   }
 
   protected validateInput(input: unknown): ForgetKnowledgeInput {
@@ -101,7 +102,6 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     const ownerId = context.userId;
     const mode = input.mode ?? 'archive';
-    const reason = input.reason ?? 'forgetKnowledge.tool';
 
     const entityIds = Array.from(new Set(input.entityIds ?? []));
     const relationshipIds = Array.from(new Set(input.relationshipIds ?? []));
@@ -134,17 +134,6 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     const uniqueEntitySnapshots = entitySnapshots;
 
-    const entityFactIds = uniqueEntitySnapshots.length
-      ? await this.graphUtility.archiveEntities(
-          ownerId,
-          uniqueEntitySnapshots.map((entry) => ({
-            node: entry.node,
-            relationships: entry.relationships,
-            reason,
-          })),
-        )
-      : [];
-
     const explicitRelationships = relationshipIds.length
       ? await this.graphUtility.getRelationships(ownerId, {
           relationshipIds,
@@ -153,10 +142,6 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       : [];
 
     explicitRelationships.forEach((rel) => relationshipIdsToDisable.add(rel.relationship_id));
-
-    const relationshipFactIds = explicitRelationships.length
-      ? await this.graphUtility.archiveRelationships(ownerId, explicitRelationships, reason)
-      : [];
 
     // Deactivate or delete entities and relationships according to mode
     const hardDelete = mode === 'archive_and_delete';
@@ -180,8 +165,6 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     return {
       archivedEntityIds: uniqueEntitySnapshots.map((entry) => entry.node.entity_id),
       archivedRelationshipIds: Array.from(new Set(explicitRelationships.map((rel) => rel.relationship_id))),
-      entityFactIds,
-      relationshipFactIds,
       mode,
       warnings: warnings.length ? warnings : undefined,
     };

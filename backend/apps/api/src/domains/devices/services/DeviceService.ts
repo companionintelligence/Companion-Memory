@@ -1,40 +1,38 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
+import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
+import { EventService } from '@ci/domains/events';
 
 import { DeviceEntity } from '../entities/DeviceEntity';
+import { DeviceCreatedEvent, DeviceUpdatedEvent, DeviceRemovedEvent } from '../events';
 import type { CreateDeviceDto, UpdateDeviceDto, Device } from '../types';
 
 @Injectable()
 export class DeviceService {
-  private logger = new LoggerService(DeviceService.name);
-
   constructor(
     @InjectRepository(DeviceEntity)
     private readonly deviceRepository: Repository<DeviceEntity>,
+    private readonly eventService: EventService,
   ) {}
 
   async create(
-    context: RequestContext,
+    context: UserServiceContext,
     data: CreateDeviceDto | CreateDeviceDto[],
   ): Promise<Device | Device[]> {
+    // Required for TypeScript type narrowing to work within the closure.
+    const userId = context.userId;
+
     const isSingle = !Array.isArray(data);
     const dataArray: CreateDeviceDto[] = isSingle ? [data] : data;
-
-    this.logger.log('Creating device records', {
-      userId: context.userId,
-      count: dataArray.length,
-    });
 
     const returned = await Promise.all(
       dataArray.map(async (item) => {
         const device = await this.deviceRepository.create({
           device_id: uuid7(),
-          user_id: context.userId!,
+          user_id: userId,
           device_entity_id: item.device_entity_id,
           device_name: item.device_name ?? `${item.device_type} Device`,
           device_type: item.device_type,
@@ -52,48 +50,65 @@ export class DeviceService {
 
         const result = await this.deviceRepository.save(device);
 
-        return result.toDevice();
+        await this.eventService.send(DeviceCreatedEvent, {
+          deviceId: result.device_id,
+        });
+
+        return DeviceEntity.toEgressType(result);
       }),
     );
-
-    this.logger.log('Successfully created device records', {
-      userId: context.userId,
-      count: returned.length,
-    });
 
     return isSingle ? returned[0] : returned;
   }
 
-  async findAll(context: RequestContext): Promise<Device[]> {
-    this.logger.log('Fetching all devices for user', {
-      userId: context.userId,
-    });
-
+  async findAll(context: ServiceContext): Promise<Device[]> {
     const results = await this.deviceRepository.find({
-      where: { user_id: context.userId! },
-      order: { created_at: 'DESC' },
-    });
-
-    return results.map((entity) => entity.toDevice());
-  }
-
-  async findOne(context: RequestContext, deviceId: string): Promise<Device | null> {
-    const result = await this.deviceRepository.findOne({
       where: {
-        device_id: deviceId,
-        user_id: context.userId!,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+      order: {
+        created_at: 'DESC',
       },
     });
 
-    return result?.toDevice() ?? null;
+    return results.map((entity) => DeviceEntity.toEgressType(entity));
   }
 
-  async update(context: RequestContext, deviceId: string, data: UpdateDeviceDto): Promise<Device | null> {
-    this.logger.log('Updating device record', {
-      userId: context.userId,
-      deviceId,
+  async findByIds(context: ServiceContext, ids: string[]): Promise<(Device | null)[]> {
+    const results = await this.deviceRepository.find({
+      where: {
+        device_id: In(ids),
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
+      },
     });
 
+    const map = new Map(results.map((entity) => [entity.device_id, DeviceEntity.toEgressType(entity)]));
+
+    return ids.map((id) => map.get(id) ?? null);
+  }
+
+  async findById(context: ServiceContext, deviceId: string): Promise<Device | null> {
+    const result = await this.deviceRepository.findOne({
+      where: {
+        device_id: deviceId,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+    });
+
+    return result ? DeviceEntity.toEgressType(result) : null;
+  }
+
+  async update(context: ServiceContext, deviceId: string, data: UpdateDeviceDto): Promise<Device | null> {
     const updateData: Partial<DeviceEntity> = {};
 
     if (data.device_entity_id !== undefined) {
@@ -152,7 +167,11 @@ export class DeviceService {
     const device = await this.deviceRepository.findOne({
       where: {
         device_id: deviceId,
-        user_id: context.userId!,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
       },
     });
 
@@ -161,56 +180,83 @@ export class DeviceService {
       await this.deviceRepository.save(device);
     }
 
-    return this.findOne(context, deviceId);
+    await this.eventService.send(DeviceUpdatedEvent, {
+      deviceId: deviceId,
+    });
+
+    return this.findById(context, deviceId);
   }
 
-  async remove(context: RequestContext, deviceId: string): Promise<void> {
-    this.logger.log('Removing device record', {
-      userId: context.userId,
-      deviceId,
+  async remove(context: ServiceContext, deviceId: string): Promise<boolean> {
+    const device = await this.deviceRepository.findOne({
+      where: {
+        device_id: deviceId,
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
+      },
     });
+
+    if (!device) {
+      return false;
+    }
 
     await this.deviceRepository.delete({
       device_id: deviceId,
-      user_id: context.userId!,
+      ...(context.userId !== SYSTEM_USER && {
+        user: {
+          id: context.userId,
+        },
+      }),
     });
+
+    await this.eventService.send(DeviceRemovedEvent, {
+      deviceId: deviceId,
+    });
+
+    return true;
   }
 
-  async setPrimary(context: RequestContext, deviceId: string): Promise<Device | null> {
-    this.logger.log('Setting device as primary', {
-      userId: context.userId,
-      deviceId,
-    });
-
+  async setPrimary(context: UserServiceContext, deviceId: string): Promise<Device | null> {
     // First, unset all other devices as primary
-    await this.deviceRepository.update({ user_id: context.userId! }, { is_primary: false });
+    await this.deviceRepository.update(
+      {
+        user_id: context.userId,
+      },
+      {
+        is_primary: false,
+      },
+    );
 
     // Then set this device as primary
     await this.deviceRepository.update(
       {
         device_id: deviceId,
-        user_id: context.userId!,
+        user_id: context.userId,
       },
-      { is_primary: true },
+      {
+        is_primary: true,
+      },
     );
 
-    return this.findOne(context, deviceId);
+    return this.findById(context, deviceId);
   }
 
-  async updateLastSeen(context: RequestContext, deviceId: string): Promise<Device | null> {
-    this.logger.log('Updating device last seen', {
-      userId: context.userId,
-      deviceId,
-    });
-
+  async updateLastSeen(context: ServiceContext, deviceId: string): Promise<Device | null> {
     await this.deviceRepository.update(
       {
         device_id: deviceId,
-        user_id: context.userId!,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
       },
-      { last_seen: new Date() },
+      {
+        last_seen: new Date(),
+      },
     );
 
-    return this.findOne(context, deviceId);
+    return this.findById(context, deviceId);
   }
 }

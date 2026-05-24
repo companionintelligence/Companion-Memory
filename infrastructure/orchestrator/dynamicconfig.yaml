@@ -1,0 +1,16 @@
+# Temporal dynamic configuration for local single-host development.
+#
+# The production Temporal server (temporalio/server) defaults to 4 task-queue
+# partitions. In a single-host Docker setup, Ringpop's membership ring has
+# exactly 1 member. Under load (e.g. when a workflow is triggered), a missed
+# Ringpop heartbeat briefly empties the ring, and the matching service returns
+# "Not enough hosts to serve the request" for every poll — once per partition.
+#
+# Setting both counts to 1 eliminates the multi-partition ring lookup entirely,
+# making poll routing reliable on a single host.
+matching.numTaskqueueWritePartitions:
+  - value: 1
+    constraints: {}
+matching.numTaskqueueReadPartitions:
+  - value: 1
+    constraints: {}

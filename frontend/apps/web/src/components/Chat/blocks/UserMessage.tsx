@@ -7,9 +7,10 @@ import { Markdown } from '@/components/Markdown';
 
 interface Props {
   content: string;
+  createdAt?: string;
 }
 
-export function UserMessage({ content }: Props) {
+export function UserMessage({ content, createdAt }: Props) {
   const { isMobile } = useDeviceLayout();
 
   const maxWidth = useMemo(() => (isMobile ? 'max-w-[60%]' : 'max-w-[40%]'), [isMobile]);
@@ -22,6 +23,11 @@ export function UserMessage({ content }: Props) {
       )}
     >
       <Markdown>{content}</Markdown>
+      {createdAt && (
+        <div className={cn('pt-1 text-xs text-primary-foreground text-right')}>
+          {new Date(createdAt).toLocaleString()}
+        </div>
+      )}
     </div>
   );
 }

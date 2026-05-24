@@ -1,6 +1,0 @@
-{
-  "name": "@ci/native-app",
-  "version": "0.0.0",
-  "private": true,
-  "packageManager": "yarn@4.9.1"
-}

@@ -1,12 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Repository, type FindOptionsWhere } from 'typeorm';
+import { DataSource, type FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import type { RequestContext } from '@ci/common/types';
+import { type ServiceContext, SYSTEM_USER } from '@ci/common/context';
+import { EventService } from '@ci/domains/events';
+import {
+  QuestionCreatedEvent,
+  QuestionUpdatedEvent,
+  QuestionRemovedEvent,
+} from '@ci/domains/intelligence/events';
 
-import { QuestionEntity } from '../entities/QuestionEntity';
-import type { CreateQuestionDto, Question } from '../types';
+import { Question, QuestionEntity } from '../entities/QuestionEntity';
+import type { CreateQuestionDto, UpdateQuestionDto } from '../types';
+
+const FEED_QUESTION_QUEUE_LIMIT = 3;
 
 @Injectable()
 export class QuestionService {
@@ -14,32 +22,49 @@ export class QuestionService {
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(QuestionEntity)
     private readonly questionRepository: Repository<QuestionEntity>,
+    private readonly eventService: EventService,
   ) {}
 
-  async create(context: RequestContext, data: CreateQuestionDto): Promise<Question> {
-    const isPrivateTo = data.isPrivateTo !== undefined ? data.isPrivateTo : (context.userId ?? null);
-    const instance = this.questionRepository.create({
-      question_id: data.id ?? uuidv7(),
-      question_text: data.text,
-      question_category: data.subcategory,
-      is_private_to: isPrivateTo,
+  async create(context: ServiceContext, data: CreateQuestionDto): Promise<Question> {
+    const id = data.id ?? uuidv7();
+
+    const isPrivateTo =
+      data.isPrivateTo !== undefined
+        ? data.isPrivateTo
+        : context.userId && context.userId !== SYSTEM_USER
+          ? context.userId
+          : null;
+
+    const instance = await this.questionRepository.create({
+      id,
+      text: data.text,
+      category: data.category,
+      isSeedQuestion: data.isSeedQuestion ?? false,
+      createdByLlm: data.createdByLlm ?? false,
+      frequencyRecommendation: data.frequencyRecommendation,
+      isActive: data.isActive ?? true,
+      isPrivateTo: isPrivateTo,
     });
 
     const entity = await this.questionRepository.save(instance);
 
-    return entity.toQuestion();
+    await this.eventService.send(QuestionCreatedEvent, {
+      questionId: id,
+    });
+
+    return QuestionEntity.toEgressType(entity);
   }
 
-  async findAll(context: RequestContext): Promise<Question[]> {
+  async findAll(context: ServiceContext): Promise<Question[]> {
     const whereClauses: FindOptionsWhere<QuestionEntity>[] = [
       {
-        is_active: true,
-        is_private_to: IsNull(),
+        isActive: true,
+        isPrivateTo: IsNull(),
       },
     ];
 
-    if (context.userId) {
-      whereClauses.push({ is_active: true, is_private_to: context.userId });
+    if (context?.userId !== SYSTEM_USER) {
+      whereClauses.push({ isActive: true, isPrivateTo: context.userId });
     }
 
     const result = await this.questionRepository.find({
@@ -49,38 +74,156 @@ export class QuestionService {
     const unique = new Map<string, QuestionEntity>();
 
     for (const entity of result) {
-      unique.set(entity.question_id, entity);
+      unique.set(entity.id, entity);
     }
 
-    return Array.from(unique.values()).map((entity) => entity.toQuestion());
+    return Array.from(unique.values()).map((entity) => QuestionEntity.toEgressType(entity));
   }
 
-  async findOne(context: RequestContext | null, id: string): Promise<Question | null> {
-    // TODO: This is a footgun that we shouldn't leave here for long.
-    //
-    // What we're actually interested in doing is returning questions owned by the user in
-    // addition to those that are unowned (user_id IS NULL). There isn't a clean way to
-    // do this with the TypeORM query API, so we'd have to write raw SQL. Not inherently
-    // a problem, but out of scope when this change was made.
-    //
-    // In the short term we're assuming that `findUnansweredByUserId` is sufficiently
-    // secure and that no events are spawned manually that would undermine that security.
+  async findById(context: ServiceContext, id: string): Promise<Question | null> {
     const whereClauses: FindOptionsWhere<QuestionEntity>[] = [
       {
-        question_id: id,
-        is_private_to: IsNull(),
+        id: id,
+        isPrivateTo: IsNull(),
       },
     ];
 
-    if (context?.userId) {
-      whereClauses.push({ question_id: id, is_private_to: context.userId });
+    if (context?.userId && context.userId !== SYSTEM_USER) {
+      whereClauses.push({ id: id, isPrivateTo: context.userId });
     }
 
     const result = await this.questionRepository.findOne({
       where: whereClauses,
     });
 
-    return result?.toQuestion() ?? null;
+    return result ? QuestionEntity.toEgressType(result) : null;
+  }
+
+  async findByIds(context: ServiceContext, ids: string[]): Promise<Question[]> {
+    const whereClauses: FindOptionsWhere<QuestionEntity>[] = [
+      {
+        id: In(ids),
+        isPrivateTo: IsNull(),
+      },
+    ];
+
+    if (context?.userId && context.userId !== SYSTEM_USER) {
+      whereClauses.push({ id: In(ids), isPrivateTo: context.userId });
+    }
+
+    const results = await this.questionRepository.find({
+      where: whereClauses,
+    });
+
+    const unique = new Map<string, QuestionEntity>();
+
+    for (const entity of results) {
+      unique.set(entity.id, entity);
+    }
+
+    return Array.from(unique.values()).map((entity) => QuestionEntity.toEgressType(entity));
+  }
+
+  async update(
+    context: ServiceContext,
+    questionId: string,
+    data: UpdateQuestionDto,
+  ): Promise<Question | null> {
+    const updateData: Partial<QuestionEntity> = {};
+
+    if (data.subcategory !== undefined) {
+      updateData.category = data.subcategory;
+    }
+
+    if (data.text !== undefined) {
+      updateData.text = data.text;
+    }
+
+    if (data.contextTags !== undefined) {
+      updateData.contextTags = data.contextTags;
+    }
+
+    if (data.questionType !== undefined) {
+      updateData.questionType = data.questionType;
+    }
+
+    if (data.isSeedQuestion !== undefined) {
+      updateData.isSeedQuestion = data.isSeedQuestion;
+    }
+
+    if (data.isActive !== undefined) {
+      updateData.isActive = data.isActive;
+    }
+
+    if (data.createdByLlm !== undefined) {
+      updateData.createdByLlm = data.createdByLlm;
+    }
+
+    if (data.frequencyRecommendation !== undefined) {
+      updateData.frequencyRecommendation = data.frequencyRecommendation;
+    }
+
+    if (data.timesAsked !== undefined) {
+      updateData.timesAsked = data.timesAsked;
+    }
+
+    if (data.timesAnswered !== undefined) {
+      updateData.timesAnswered = data.timesAnswered;
+    }
+
+    if (data.isPrivateTo !== undefined) {
+      updateData.isPrivateTo = data.isPrivateTo;
+    }
+
+    const question = await this.questionRepository.findOne({
+      where: {
+        id: questionId,
+        ...(context.userId !== SYSTEM_USER && {
+          isPrivateTo: context.userId,
+        }),
+      },
+    });
+
+    if (question) {
+      Object.assign(question, updateData);
+      await this.questionRepository.save(question);
+    } else {
+      return null;
+    }
+
+    await this.eventService.send(QuestionUpdatedEvent, {
+      questionId: questionId,
+    });
+
+    return this.findById(context, questionId);
+  }
+
+  async remove(context: ServiceContext, id: string): Promise<boolean> {
+    const question = await this.questionRepository.findOne({
+      where: {
+        id: id,
+        ...(context.userId !== SYSTEM_USER && {
+          isPrivateTo: context.userId,
+        }),
+      },
+    });
+
+    if (!question) {
+      return false;
+    }
+
+    await this.questionRepository.delete({
+      id,
+      ...(context.userId !== SYSTEM_USER && {
+        isPrivateTo: context.userId,
+      }),
+    });
+
+    await this.eventService.send(QuestionRemovedEvent, {
+      questionId: id,
+    });
+
+    return true;
   }
 
   async findUnansweredByUserId(): Promise<Map<string | null, string[]>> {
@@ -109,17 +252,17 @@ export class QuestionService {
 
     const rows = (await this.dataSource.query(`
       SELECT
-        questions.question_id as id,
-        COALESCE(questions.is_private_to, answers.user_id) as user_id
+        q.question_id as id,
+        COALESCE(q.is_private_to, a.user_id) as user_id
       FROM
-        questions
-      LEFT JOIN answers ON answers.question_id = questions.question_id
-      WHERE questions.is_active = TRUE
-        AND (answers.answer_id IS NULL OR answers.answer_text IS NULL)
+        ci.questions as q
+      LEFT JOIN ci.answers as a ON a.question_id = q.question_id
+      WHERE q.is_active = TRUE
+        AND (a.answer_id IS NULL OR a.answer_text IS NULL)
         AND (
-          questions.is_private_to IS NULL
-          OR answers.user_id IS NULL
-          OR answers.user_id = questions.is_private_to
+          q.is_private_to IS NULL
+          OR a.user_id IS NULL
+          OR a.user_id = q.is_private_to
         )
       LIMIT 5;
     `)) satisfies Array<Row>;
@@ -137,5 +280,169 @@ export class QuestionService {
     }
 
     return groupedByUserId;
+  }
+
+  async findOneUnanswered(context: ServiceContext): Promise<Question | null> {
+    if (!context.userId || context.userId === SYSTEM_USER) {
+      return null;
+    }
+
+    type Row = {
+      id: string;
+    };
+
+    await this.cleanupFeedQueue(context.userId);
+
+    const rows = (await this.dataSource.query(
+      `
+      SELECT
+        q.question_id as id
+      FROM
+        ci.feed_queue as fq
+      JOIN ci.questions as q ON q.question_id = fq.question_id
+      LEFT JOIN ci.answers as a ON a.question_id = fq.question_id
+        AND a.user_id = fq.user_id
+      WHERE fq.user_id = $1
+        AND q.is_active = TRUE
+        AND (a.answer_id IS NULL OR a.answer_text IS NULL)
+      ORDER BY fq.enqueued_at ASC, fq.feed_queue_id ASC
+      LIMIT 1;
+    `,
+      [context.userId],
+    )) satisfies Array<Row>;
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    return this.findById(context, rows[0].id);
+  }
+
+  async listFeedQueueUserIds(): Promise<string[]> {
+    type Row = {
+      id: string;
+    };
+
+    const rows = (await this.dataSource.query(
+      `
+      SELECT id
+      FROM ci.users
+      WHERE onboarded = TRUE
+      ORDER BY created_at ASC;
+      `,
+    )) satisfies Array<Row>;
+
+    return rows.map((row) => row.id);
+  }
+
+  async enqueueNextFeedQueueQuestion(
+    userId: string,
+    maxQueueSize = FEED_QUESTION_QUEUE_LIMIT,
+  ): Promise<boolean> {
+    await this.cleanupFeedQueue(userId);
+
+    type QueueCountRow = {
+      count: string;
+    };
+    const countRows = (await this.dataSource.query(
+      `
+      SELECT COUNT(*)::text as count
+      FROM ci.feed_queue
+      WHERE user_id = $1
+        AND question_id IS NOT NULL;
+      `,
+      [userId],
+    )) satisfies Array<QueueCountRow>;
+    const queueSize = Number.parseInt(countRows[0]?.count ?? '0', 10);
+
+    if (queueSize >= maxQueueSize) {
+      return false;
+    }
+
+    type CandidateRow = {
+      id: string;
+    };
+    const candidates = (await this.dataSource.query(
+      `
+      SELECT q.question_id as id
+      FROM ci.questions as q
+      WHERE q.is_active = TRUE
+        AND (q.is_private_to IS NULL OR q.is_private_to = $1)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ci.answers as a
+          WHERE a.question_id = q.question_id
+            AND a.user_id = $1
+            AND a.answer_text IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ci.feed_queue as fq
+          WHERE fq.user_id = $1
+            AND fq.question_id = q.question_id
+        )
+      ORDER BY q.created_at ASC, q.question_id ASC
+      LIMIT 1;
+      `,
+      [userId],
+    )) satisfies Array<CandidateRow>;
+
+    const candidate = candidates[0];
+    if (!candidate) {
+      return false;
+    }
+
+    const insertedRows = (await this.dataSource.query(
+      `
+      INSERT INTO ci.feed_queue (feed_queue_id, user_id, question_id, enqueued_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (user_id, question_id) DO NOTHING
+      RETURNING question_id;
+      `,
+      [uuidv7(), userId, candidate.id],
+    )) satisfies Array<{ question_id: string }>;
+
+    return insertedRows.length > 0;
+  }
+
+  async removeFromFeedQueue(userId: string, questionId: string): Promise<void> {
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_queue
+      WHERE user_id = $1
+        AND question_id = $2;
+      `,
+      [userId, questionId],
+    );
+  }
+
+  private async cleanupFeedQueue(userId: string): Promise<void> {
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_queue as fq
+      USING ci.answers as a
+      WHERE fq.user_id = $1
+        AND fq.question_id IS NOT NULL
+        AND a.user_id = fq.user_id
+        AND a.question_id = fq.question_id
+        AND a.answer_text IS NOT NULL;
+      `,
+      [userId],
+    );
+
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_queue as fq
+      WHERE fq.user_id = $1
+        AND fq.question_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ci.questions as q
+          WHERE q.question_id = fq.question_id
+            AND q.is_active = TRUE
+        );
+      `,
+      [userId],
+    );
   }
 }

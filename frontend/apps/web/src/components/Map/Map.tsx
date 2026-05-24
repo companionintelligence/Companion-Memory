@@ -14,16 +14,20 @@ import { MapProvider } from './useMap';
 interface Props {
   center?: LatLngExpression;
   children?: ReactNode;
+  zoom?: number;
+  zoomEnabled?: boolean;
+  draggingEnabled?: boolean;
 }
 
-export function Map({ center, children }: Props) {
+export function Map({ center, children, zoom = 13, zoomEnabled = true, draggingEnabled = true }: Props) {
   return (
     <div className="relative w-full h-full" style={{ zIndex: 1 }}>
       <MapContainer
         center={center}
-        zoom={13}
+        zoom={zoom}
         style={{ height: '100%', width: '100%' }} // map must have size
-        scrollWheelZoom={true}
+        scrollWheelZoom={zoomEnabled}
+        dragging={draggingEnabled}
         attributionControl={false}
         zoomControl={false}
       >

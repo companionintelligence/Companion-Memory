@@ -1,0 +1,213 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  install:
+    name: Install dependencies
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache node modules
+        id: cache-modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        run: yarn install --immutable
+
+  test:
+    name: Run backend tests
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run backend API tests
+        run: yarn workspace @ci/be-api test
+
+  typecheck:
+    name: Type check ${{ matrix.name }}
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            command: yarn workspace @ci/be-api typecheck
+          - name: frontend
+            command: yarn workspace @ci/fe-web typecheck
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Type check ${{ matrix.name }}
+        run: ${{ matrix.command }}
+
+  lint:
+    name: Lint ${{ matrix.name }}
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: root
+            command: yarn lint
+          - name: backend
+            command: yarn workspace @ci/be-api lint
+          - name: frontend
+            command: yarn workspace @ci/fe-web lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Lint ${{ matrix.name }}
+        run: ${{ matrix.command }}
+
+  imports:
+    name: Check backend imports
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Check backend imports
+        run: yarn workspace @ci/be-api depcheck
+
+  graphql:
+    name: Check GraphQL schema and types
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Generate GraphQL schema
+        run: yarn workspace @ci/be-api graphql:generate
+
+      - name: Generate GraphQL frontend types
+        run: yarn workspace @ci/fe-web graphql:generate
+
+      - name: Check for changes
+        run: |
+          git config --global --add safe.directory '*'
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Error: GraphQL schema or types are out of sync."
+            echo "Please run 'make graphql' locally and commit the changes."
+            git diff
+            exit 1
+          fi

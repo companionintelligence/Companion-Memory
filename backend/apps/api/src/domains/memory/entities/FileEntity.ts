@@ -12,7 +12,7 @@ import {
 
 import { UserEntity } from '@ci/domains/user';
 
-@Entity({ name: 'entities' })
+@Entity({ schema: 'ci', name: 'entities' })
 export class FileEntity {
   @PrimaryColumn('uuid', { name: 'entity_id' })
   id!: string;

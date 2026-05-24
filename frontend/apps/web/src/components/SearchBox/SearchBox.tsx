@@ -9,6 +9,7 @@ import {
   useRef,
 } from 'react';
 
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import {
   Button,
   ScrollArea,
@@ -21,10 +22,10 @@ import {
   formDataSchema as s,
   cn,
 } from '@ci/shadcn';
-import { Funnel, Search, X } from '@ci/shadcn/icons';
+import { ArrowDown, Search, X } from '@ci/shadcn/icons';
 
-import { FilterContent } from './FilterContent';
-import { FiltersProvider, useFilters } from './useFilters';
+import { DropdownContent } from './DropdownContent';
+import { DropdownProvider, useDropdown } from './useDropdown';
 
 const FormSchema = s.object({
   query: s.string(),
@@ -60,10 +61,13 @@ interface Props {
   autoSubmit?: boolean;
   autoSubmitDelay?: number;
   displayResults?: boolean;
-  displayFilters?: boolean;
-  onSearch?: (data: FormData & { entityFilters?: string[] }) => boolean | void | Promise<boolean | void>;
+  displayDropdown?: boolean;
+  saveSupported?: boolean;
+  onSearch?: (data: FormData & { entityDropdowns?: string[] }) => boolean | void | Promise<boolean | void>;
+  onKeyDown?: (query: string, e: React.KeyboardEvent<HTMLInputElement>) => void;
   onClear?: () => void;
   onResultSelect?: (result: SearchResultItem) => void;
+  onSave?: (query: string, entityTypes: string[]) => void;
 }
 
 function SearchBox(
@@ -77,10 +81,13 @@ function SearchBox(
     autoSubmit = false,
     autoSubmitDelay = 300,
     displayResults = false,
-    displayFilters = false,
+    displayDropdown = false,
+    saveSupported = true,
     onSearch,
+    onKeyDown,
     onClear,
     onResultSelect,
+    onSave,
   }: Props,
   forwardedRef: ForwardedRef<HTMLInputElement>,
 ) {
@@ -89,7 +96,7 @@ function SearchBox(
     defaultValues: EMPTY,
   });
 
-  const [{ isFiltersPanelVisible }, { toggleFilterPanel }] = useFilters();
+  const [{ isDropdownPanelVisible }, { toggleDropdownPanel }] = useDropdown();
 
   const queryValue = form.watch('query');
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
@@ -169,6 +176,7 @@ function SearchBox(
       switch (e.key) {
         case Keys.ESCAPE:
           e.preventDefault();
+          e.stopPropagation();
 
           if (selectedIndex !== -1) {
             setSelectedIndex(-1);
@@ -181,6 +189,8 @@ function SearchBox(
         case Keys.ARROW_UP:
           if (results.length > 0) {
             e.preventDefault();
+            e.stopPropagation();
+
             setSelectedIndex((prev) =>
               prev === -1 ? results.length - 1 : (prev - 1 + results.length) % results.length,
             );
@@ -191,6 +201,8 @@ function SearchBox(
         case Keys.ARROW_DOWN:
           if (results.length > 0) {
             e.preventDefault();
+            e.stopPropagation();
+
             setSelectedIndex((prev) => (prev === -1 ? 0 : (prev + 1) % results.length));
           }
 
@@ -199,6 +211,8 @@ function SearchBox(
         case Keys.ENTER:
           if (selectedIndex >= 0 && selectedIndex < results.length) {
             e.preventDefault();
+            e.stopPropagation();
+
             onResultSelect?.(results[selectedIndex]);
           }
 
@@ -211,8 +225,23 @@ function SearchBox(
 
           break;
       }
+
+      // Use timeout to get the updated value after the key press
+      setTimeout(() => {
+        onKeyDown?.((e.target as HTMLInputElement).value, e);
+      }, 0);
     },
-    [disabled, form, results, selectedIndex, onResultSelect, handleClear],
+    [disabled, form, results, selectedIndex, onResultSelect, handleClear, onKeyDown],
+  );
+
+  const handleSaveSearch = useCallback(
+    async (entityTypes: string[]) => {
+      await onSave?.(
+        queryValue,
+        entityTypes.map((type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP]),
+      );
+    },
+    [onSave, queryValue],
   );
 
   // Auto-submit with debounce
@@ -269,7 +298,7 @@ function SearchBox(
 
   // Close filters panel on outside click
   useEffect(() => {
-    if (!isFiltersPanelVisible) {
+    if (!isDropdownPanelVisible) {
       return;
     }
 
@@ -278,39 +307,46 @@ function SearchBox(
         return;
       }
 
-      if (wrapperRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const entityTypeFilter = document.getElementById('entity-type-filters');
+
+      if (entityTypeFilter && entityTypeFilter.contains(target)) {
         return;
       }
 
-      toggleFilterPanel();
+      if (wrapperRef.current.contains(target)) {
+        return;
+      }
+
+      toggleDropdownPanel();
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
 
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [isFiltersPanelVisible, toggleFilterPanel]);
+  }, [isDropdownPanelVisible, toggleDropdownPanel]);
 
   let resultsNode: ReactNode | null = null;
 
-  if (displayFilters && isFiltersPanelVisible) {
-    resultsNode = <FilterContent />;
+  if (displayDropdown && isDropdownPanelVisible) {
+    resultsNode = <DropdownContent onSave={handleSaveSearch} saveSupported={saveSupported} />;
   } else if (queryValue.length > 0 && !disabled && displayResults) {
     if (isLoading) {
       resultsNode = (
-        <div className="flex items-center justify-center border-t p-8">
+        <div className="flex items-center justify-center p-8">
           <Spinner size={32} variant="circle" color="rgb(6,108,128)" />
         </div>
       );
     } else if (error) {
       resultsNode = (
-        <div className="flex flex-col items-center justify-center border-t p-8">
+        <div className="flex flex-col items-center justify-center p-8">
           <p className="text-muted-foreground font-medium">Something went wrong.</p>
           <p className="text-sm text-muted-foreground">Please try your search again.</p>
         </div>
       );
     } else if (results.length > 0) {
       resultsNode = (
-        <div className="flex border-t max-h-[60vh]">
+        <div className="flex max-h-[60vh]">
           {selectedResult && selectedResult.preview && (
             <div className="flex-1 p-4 overflow-hidden">{selectedResult.preview}</div>
           )}
@@ -338,7 +374,7 @@ function SearchBox(
       );
     } else {
       resultsNode = (
-        <div className="flex flex-col items-center justify-center border-t p-8">
+        <div className="flex flex-col items-center justify-center p-8">
           <p className="text-muted-foreground font-medium">No results found.</p>
           <p className="text-sm text-muted-foreground">Try a different search.</p>
         </div>
@@ -353,18 +389,19 @@ function SearchBox(
           <div
             className={cn(
               'w-full flex flex-col',
-              'placeholder:text-muted-foreground/60 dark:bg-input/30 field-sizing-content',
-              'outline-none border shadow-xs rounded-md bg-transparent text-base md:text-sm',
+              'placeholder:text-muted-foreground/60',
+              'outline-none border shadow-xs rounded-md bg-background text-base',
               'aria-[invalid=true]:ring-destructive/20 dark:aria-[invalid=true]:ring-destructive/40 aria-[invalid=true]:border-destructive',
               'transition-[color,box-shadow]',
               disabled ? 'cursor-not-allowed opacity-50 pointer-events-none' : '',
               resultsNode ? 'rounded-b-none' : '',
+              variant === 'compact' ? 'py-0.5 pr-0.5' : '',
             )}
           >
             <div className={cn('flex items-center justify-center', variant === 'compact' ? '' : 'pl-3')}>
               {variant === 'compact' && (
                 <div className={`p-2 ${disabled ? 'text-muted-foreground' : ''}`}>
-                  <Search className="h-4 w-4" />
+                  <Search className="h-5 w-5" strokeWidth={1.75} />
                 </div>
               )}
 
@@ -407,13 +444,16 @@ function SearchBox(
 
                       resize-none
                       text-base
+                      md:text-base
                       leading-none
                     "
                   />
                 )}
               />
 
-              <div className="flex items-center gap-1 my-1.5 mr-1.5">
+              <div
+                className={cn('flex items-center gap-1 mr-1.5', variant === 'compact' ? 'h-full' : 'my-1.5')}
+              >
                 {queryValue.length > 0 && (
                   <Button
                     type="button"
@@ -428,16 +468,21 @@ function SearchBox(
                   </Button>
                 )}
 
-                {displayFilters && (
+                {displayDropdown && (
                   <Button
                     type="button"
                     disabled={disabled}
-                    variant={isFiltersPanelVisible ? 'secondary' : 'ghost'}
+                    variant={isDropdownPanelVisible ? 'secondary' : 'ghost'}
                     size="sm"
                     className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-                    onClick={toggleFilterPanel}
+                    onClick={toggleDropdownPanel}
                   >
-                    <Funnel className="h-4 w-4" />
+                    <ArrowDown
+                      className={cn(
+                        'h-4 w-4 transition-transform duration-200',
+                        isDropdownPanelVisible && 'rotate-180',
+                      )}
+                    />
                   </Button>
                 )}
 
@@ -469,9 +514,9 @@ function SearchBox(
 const SearchBoxForwarded = forwardRef(SearchBox);
 
 const SearchBoxWithContext = forwardRef<HTMLInputElement, Props>((props, ref) => (
-  <FiltersProvider args={[]}>
+  <DropdownProvider args={[{ changeSearchParams: true }]}>
     <SearchBoxForwarded {...props} ref={ref} />
-  </FiltersProvider>
+  </DropdownProvider>
 ));
 
-export { SearchBoxWithContext as SearchBox };
+export { SearchBoxWithContext as SearchBox, type SearchResultItem };

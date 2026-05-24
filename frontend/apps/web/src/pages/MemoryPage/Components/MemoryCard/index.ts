@@ -1,1 +1,0 @@
-export { MemoryCard } from './MemoryCard';

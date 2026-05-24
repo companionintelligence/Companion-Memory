@@ -1,70 +1,54 @@
-import path from 'path';
+import { type TestingModule } from '@nestjs/testing';
+import { type MultiBar } from 'cli-progress';
 
-import { Logger } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { PersonService } from '@ci/domains/memory';
+import { UserService } from '@ci/domains/user';
 
-import { PersonEntity } from '@ci/domains/memory';
+import { JOHN_SMITH, PEOPLE } from './data/people';
+import { JOHN_SMITH as JOHN_SMITH_USER } from './data/users';
 
-import { getOrCreateTags, parseTags, readCsv } from './utils';
+export async function seedPeople(module: TestingModule, multibar: MultiBar) {
+  const userService = module.get(UserService);
+  const personService = module.get(PersonService);
 
-const logger = new Logger(path.basename(__filename));
+  const bar = multibar.create(PEOPLE.length, 0, { task: 'People' });
 
-export async function seedPeople(db: DataSource, filePath: string) {
-  type CsvRecord = {
-    id: string;
-    type: string;
-    first_name: string;
-    last_name: string;
-    middle_name: string;
-    gender: string;
-    address: string;
-    street_address: string;
-    street_address_2: string;
-    city: string;
-    region: string;
-    country: string;
-    postal_code: string;
-    avatar_url: string;
-    external_avatar_url: string;
-    hidden: boolean;
-    user_id: string;
-    connection_id: string;
-    contact_ids: unknown;
-    tags: string;
-    created_at: Date;
-    udpated_at: Date;
-  };
+  for (const person of PEOPLE) {
+    const existingPerson = await personService.findById(
+      {
+        userId: JOHN_SMITH.id,
+      },
+      person.id,
+    );
 
-  const records = readCsv<CsvRecord>(filePath);
-
-  await db.transaction(async (manager) => {
-    for (const record of records) {
-      const tagNames = parseTags(record.tags);
-      const tags = await getOrCreateTags(manager, record.user_id, tagNames);
-
-      await manager.save(PersonEntity, {
-        id: record.id,
-        type: record.type,
-        first_name: record.first_name,
-        last_name: record.last_name,
-        gender: record.gender,
-        address: record.address,
-        street_address: record.street_address,
-        street_address_2: record.street_address_2,
-        city: record.city,
-        region: record.region,
-        country: record.country,
-        postal_code: record.postal_code,
-        avatar_url: record.avatar_url,
-        user: {
-          id: record.user_id,
+    if (existingPerson == null) {
+      await personService.create(
+        {
+          userId: JOHN_SMITH_USER.id,
         },
-        tags,
-        created_at: record.created_at,
-        updated_at: record.created_at,
-      });
+        {
+          id: person.id,
+          name: person.name,
+          description: person.description,
+          ...(person.properties && {
+            properties: person.properties,
+          }),
+        },
+      );
     }
-  });
 
-  logger.log(`Seeded ${records.length} person records`);
+    bar.increment();
+  }
+
+  await userService.update(
+    {
+      userId: JOHN_SMITH_USER.id,
+    },
+    JOHN_SMITH_USER.id,
+    {
+      entityId: JOHN_SMITH.id,
+    },
+  );
+
+  bar.stop();
 }

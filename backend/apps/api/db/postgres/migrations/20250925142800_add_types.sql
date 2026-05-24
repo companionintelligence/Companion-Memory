@@ -3,8 +3,7 @@
 -- ENUM TYPES AND DOMAINS
 -- =================================================================
 
--- Ensure vector extension is available in this context
-CREATE EXTENSION IF NOT EXISTS vector;
+-- vector extension is provisioned by ci/setup-database
 
 
 -- Communication types
@@ -55,7 +54,7 @@ CREATE TYPE agent_status AS ENUM (
 CREATE TYPE location_source AS ENUM (
     'gps',
     'wifi',
-    'cell_tower', 
+    'cell_tower',
     'manual',
     'inferred',
     'other'

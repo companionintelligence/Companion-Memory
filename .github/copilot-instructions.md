@@ -11,7 +11,7 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 ├── frontend/apps/web/         # React + Vite SPA with Tailwind CSS
 ├── frontend/apps/native/      # Future React Native app
 └── frontend/packages/         # Shared packages:
-    ├── capture/              # Camera capture components  
+    ├── capture/              # Camera capture components
     ├── common/               # Shared utilities and components
     ├── shadcn/               # UI components (avoid modifying directly)
     └── template/             # Package template for new packages
@@ -46,7 +46,7 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 
 ### Getting Started
 1. Run `make init` to set up the environment
-2. Run `make local` to start Docker services  
+2. Run `make local` to start Docker services
 3. Run `make migrate && make seed` for database setup
 4. Run `make dev` to start development servers in tmux
 
@@ -58,11 +58,11 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 
 ### Backend Development
 - Entry point: `backend/apps/api/src/main.ts`
-- Use `yarn dev:pretty` for pretty-printed logs
+- Use `yarn dev` to start NestJS API server
 - Database migrations: `yarn migrate:make <name>`, `yarn migrate`
 - LLM tools are in `src/domains/llm/tools/`
 
-### Frontend Development  
+### Frontend Development
 - Entry point: `frontend/apps/web/src/main.tsx`
 - Use `yarn dev` to start Vite development server
 - Components in `src/components/`, pages in `src/pages/`
@@ -116,7 +116,7 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 
 ### Backend
 - Controllers: `src/domains/{domain}/controllers/`
-- Services: `src/domains/{domain}/services/`  
+- Services: `src/domains/{domain}/services/`
 - Entities: `src/domains/{domain}/entities/`
 - DTOs: `src/domains/{domain}/dto/`
 - Migrations: `db/migrations/`
@@ -169,11 +169,10 @@ This is the CI Server repository for Companion Intelligence, a Yarn workspace mo
 - Node.js (version in `.nvmrc`)
 - Docker & Docker Compose
 - Ollama with required models
-- Host entry: `dev.companionintelligence.com → 127.0.0.1`
 
 ### Services
 - PostgreSQL: Database and job queue
-- Minio: S3-compatible file storage  
+- Minio: S3-compatible file storage
 - NGINX: Reverse proxy
 - Backend API: Port varies (check docker-compose)
 - Frontend: Port varies (check docker-compose)

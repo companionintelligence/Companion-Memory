@@ -6,7 +6,6 @@
  * ### Key Components:
  * - **`UserService` & `UserEntity`**: Core components for managing user data and business logic.
  * - **`SignupCodeService` & `SignupCodeEntity`**: Handle the logic for user invitation and signup codes.
- * - **`UserController`**: Exposes REST API endpoints for user-related operations.
  *
  * ### Module Integration:
  * - **`EventsModule`**: Publishes events, such as when a new user is created, to allow other
@@ -20,28 +19,26 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
 
-import { UserController } from './controllers/UserController';
-import { SignupCodeEntity } from './entities/SignupCodeEntity';
-import { UserEntity } from './entities/UserEntity';
-import { SignupCodeService } from './services/SignupCodeService';
+import { UserEntity, type User } from './entities/UserEntity';
 import { UserService } from './services/UserService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([UserEntity, SignupCodeEntity]), EventsModule],
-  providers: [UserService, SignupCodeService],
-  controllers: [UserController],
-  exports: [UserService, SignupCodeService],
+  imports: [TypeOrmModule.forFeature([UserEntity]), EventsModule],
+  providers: [UserService],
+  exports: [UserService],
 })
 export class UserModule {}
 
 // Entities
-export { UserEntity, SignupCodeEntity };
+export { UserEntity };
 
 // Services
-export { SignupCodeService, UserService };
+export { UserService };
 
 // Types
-export type { CreateUserDto, UpdateUserDto, User, SignupCode, SignupDto, UpdateSignupCodeDto } from './types';
+export type { User };
+export type { CreateUserDto, UpdateUserDto } from './types';
+export { UserCreatedEvent, type UserCreatedPayload } from './events';

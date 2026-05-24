@@ -1,106 +1,151 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
-import { LoggerService } from '@ci/common/services';
-import { RequestContext } from '@ci/common/types';
+import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
-import { UserService } from '@ci/domains/user';
+import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
 
-import { PersonEntity } from '../entities/PersonEntity';
+import { type Person, PersonEntity } from '../entities/PersonEntity';
 import { CreatePersonDto, UpdatePersonDto } from '../types';
 
 @Injectable()
 export class PersonService {
-  private logger = new LoggerService(PersonService.name);
-
   constructor(
     @InjectRepository(PersonEntity)
     private readonly personRepository: Repository<PersonEntity>,
-    private readonly userService: UserService,
+    private readonly logger: LoggerService,
     private readonly eventService: EventService,
-  ) {}
+  ) {
+    this.logger.setContext(PersonService.name);
+  }
 
-  async create(context: RequestContext, data: CreatePersonDto): Promise<PersonEntity> {
-    const entity = await this.personRepository.create({
+  async create(context: UserServiceContext, data: CreatePersonDto): Promise<Person> {
+    const instance = await this.personRepository.create({
       id: data.id || uuid7(),
       name: data.name,
       description: data.description,
-      linked_table: data.linkedTable,
-      linked_id: data.linkedId,
-      entity_type: 'Person',
-      search_content: data.searchContent,
-      last_accessed: data.lastAccessed,
+      linkedTable: data.linkedTable,
+      linkedId: data.linkedId,
+      entityType: 'Person',
+      searchContent: data.searchContent,
+      lastAccessed: data.lastAccessed,
       user: {
         id: context.userId,
       },
-      properties: data.properties || [],
+      properties: data.properties || {},
     });
 
-    return this.personRepository.save(entity);
+    const entity = await this.personRepository.save(instance);
+
+    await this.eventService.send(PersonCreatedEvent, {
+      personId: instance.id,
+    });
+
+    return PersonEntity.toEgressType(entity);
   }
 
-  async findOne(context: RequestContext, id: string): Promise<PersonEntity | null> {
-    return this.personRepository.findOne({
+  async findAll(context: ServiceContext): Promise<Person[]> {
+    const entities = await this.personRepository.find({
+      where: {
+        entityType: 'Person',
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+    });
+
+    return entities.map((entity) => PersonEntity.toEgressType(entity));
+  }
+
+  async findByIds(context: ServiceContext, ids: string[]): Promise<(Person | null)[]> {
+    const entities = await this.personRepository.find({
+      where: {
+        id: In(ids),
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+    });
+
+    const map = new Map(entities.map((entity) => [entity.id, PersonEntity.toEgressType(entity)]));
+
+    return ids.map((id) => map.get(id) ?? null);
+  }
+
+  async findById(context: ServiceContext, id: string): Promise<Person | null> {
+    const entity = await this.personRepository.findOne({
       where: {
         id,
-        user: {
-          id: context.userId,
-        },
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
       },
     });
+
+    return entity ? PersonEntity.toEgressType(entity) : null;
   }
 
-  async findAll(context: RequestContext): Promise<PersonEntity[]> {
-    return this.personRepository.find({
-      where: {
-        user: {
-          id: context.userId,
-        },
+  async update(context: ServiceContext, id: string, data: UpdatePersonDto): Promise<Person | null> {
+    const { properties, ...rest } = data;
+
+    const result = await this.personRepository.update(
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
       },
-    });
-  }
+      {
+        ...rest,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        properties: properties as any, // TypeORM will handle JSON serialization
+      },
+    );
 
-  async update(context: RequestContext, id: string, data: UpdatePersonDto): Promise<PersonEntity> {
-    const existingEntity = await this.findOne(context, id);
-    if (!existingEntity) {
-      throw new NotFoundException();
+    if (result.affected === 0) {
+      return null;
     }
 
-    const updatedEntity = {
-      ...existingEntity,
-      name: data.name,
-      description: data.description,
-      search_content: data.searchContent,
-      linked_id: data.linkedId,
-      linked_table: data.linkedTable,
-      last_accessed: data.lastAccessed,
-      properties: data.properties,
-      user: {
-        id: context.userId,
-      },
-    };
+    await this.eventService.send(PersonUpdatedEvent, {
+      personId: id,
+    });
 
-    return this.personRepository.save(updatedEntity!);
+    return this.findById(context, id);
   }
 
-  async delete(context: RequestContext, id: string): Promise<boolean> {
+  async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.personRepository.delete({
       id,
-      user: {
-        id: context.userId,
-      },
+      ...(context.userId !== SYSTEM_USER && {
+        user: {
+          id: context.userId,
+        },
+      }),
     });
 
     if (result.affected === 0) {
-      throw new NotFoundException();
+      return false;
     }
+
+    await this.eventService.send(PersonRemovedEvent, {
+      personId: id,
+    });
 
     return true;
   }
 
-  async search(context: RequestContext, query: UpdatePersonDto): Promise<PersonEntity[]> {
+  async search(context: ServiceContext, query: UpdatePersonDto): Promise<PersonEntity[]> {
     let executable = this.personRepository
       .createQueryBuilder('entity')
       .where('owner_user_id = :userId', { userId: context.userId });

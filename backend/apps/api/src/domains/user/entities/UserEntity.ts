@@ -1,8 +1,6 @@
 import { Entity, Column, PrimaryColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
-import { User } from '../types';
-
-@Entity({ schema: 'ci_core', name: 'users' })
+@Entity({ schema: 'ci', name: 'users' })
 export class UserEntity {
   @PrimaryColumn()
   id!: string;
@@ -28,12 +26,17 @@ export class UserEntity {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 
-  toUser() {
+  static toEgressType(entity: UserEntity): User {
     return {
-      id: this.id,
-      name: this.name,
-      email: this.email,
-      onboarded: this.onboarded,
-    } satisfies User;
+      id: entity.id,
+      name: entity.name,
+      email: entity.email,
+      entityId: entity.entityId,
+      onboarded: entity.onboarded,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    };
   }
 }
+
+export type User = Readonly<Omit<UserEntity, 'password'>>;

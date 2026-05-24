@@ -1,21 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 
-import { LoggerService } from '@ci/common/services';
-import { EventService, Events, type EventPayloads, OnEvent } from '@ci/domains/events';
-import { UserService } from '@ci/domains/user';
+import { LoggerService } from '@ci/common/logging';
+import { type EventPayloads, Events, EventService, OnEvent } from '@ci/domains/events';
 
 import { GraphUtilityService } from '../services/GraphUtilityService';
 
 @Injectable()
 export class GraphEventListener {
-  private readonly logger = new LoggerService(GraphEventListener.name);
-
   constructor(
     private readonly graphUtility: GraphUtilityService,
-    private readonly userService: UserService,
     private readonly eventService: EventService,
-  ) {}
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(GraphEventListener.name);
+  }
 
   @OnEvent(Events.GRAPH_PERSON_CREATED)
   async handlePersonCreated(payload: EventPayloads[Events.GRAPH_PERSON_CREATED]) {
@@ -297,55 +296,6 @@ export class GraphEventListener {
       this.logger.error('Failed to handle GRAPH_RELATIONSHIP_UPSERTED', {
         ownerId: payload.ownerId,
         relationshipId: payload.relationship.relationshipId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.USER_CREATED)
-  async handleUserCreated(payload: EventPayloads[Events.USER_CREATED]) {
-    const user = await this.userService.findOne(payload.userId);
-
-    if (!user) {
-      this.logger.warn('User not found when handling USER_CREATED graph hook', {
-        userId: payload.userId,
-      });
-
-      return;
-    }
-
-    const entityId = uuidv7();
-    const nameForEntity = user.name ?? user.email;
-    const nameParts = (user.name ?? '').trim().split(/\s+/).filter(Boolean);
-    const [firstName, ...restName] = nameParts;
-
-    const properties: Record<string, unknown> = {
-      email: user.email,
-    };
-
-    if (firstName) {
-      properties.first_name = firstName;
-    }
-
-    if (restName.length > 0) {
-      properties.last_name = restName.join(' ');
-    }
-
-    try {
-      await this.graphUtility.createOrUpdateNode(user.id, {
-        entityId,
-        entityType: 'Person',
-        name: nameForEntity,
-        description: nameForEntity,
-        properties,
-        linkedTable: 'users',
-        linkedId: user.id,
-      });
-
-      await this.userService.update(user.id, { entityId });
-    } catch (error) {
-      this.logger.error('Failed to create graph node for new user', {
-        userId: user.id,
         error: error instanceof Error ? error.message : String(error),
       });
     }

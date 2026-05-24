@@ -41,6 +41,8 @@ export const RELATIONSHIP_TYPES = [
   'LOCATED_AT',
   'HAPPENED_AT',
   'AT_LOCATION',
+  'SENT',
+  'RECEIVED',
 ] as const;
 
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];

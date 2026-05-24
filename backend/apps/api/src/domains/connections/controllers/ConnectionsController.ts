@@ -1,13 +1,27 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  InternalServerErrorException,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 
-import { Context } from '@ci/common/decorators';
-import { JwtAuthGuard } from '@ci/common/guards';
+import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
-import { EventService, Events } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
+import { ClientFactory } from '../clients';
 import { ConnectionService } from '../services/ConnectionService';
 import type { CompleteConnectionDto, CreateConnectionDto, UpdateConnectionDto } from '../types';
 
@@ -18,6 +32,7 @@ const createConnectionSchema = z.object({
   clientkey: z.string().optional(),
   clientsecret: z.string().optional(),
   schedule: z.string().optional(),
+  endpoints: z.array(z.string()).default([]),
 });
 
 const updateConnectionSchema = z.object({
@@ -37,6 +52,7 @@ const updateConnectionSchema = z.object({
       },
     )
     .optional(),
+  endpoints: z.array(z.string()).optional(),
 });
 
 const completeConnectionSchema = z.object({
@@ -44,34 +60,47 @@ const completeConnectionSchema = z.object({
   code: z.string(),
 });
 
+const completeOpenIDSchema = z.object({
+  params: z.record(z.string()),
+});
+
+interface CompleteOpenIDDto {
+  params: Record<string, string>;
+}
+
 @Controller('connections')
 export class ConnectionsController {
-  private logger = new LoggerService(ConnectionsController.name);
-
   constructor(
+    private readonly clientFactory: ClientFactory,
     private readonly connectionService: ConnectionService,
     private readonly eventService: EventService,
-  ) {}
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(ConnectionsController.name);
+  }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Post()
   async create(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(createConnectionSchema)) input: CreateConnectionDto,
   ) {
+    const serviceContext = toServiceContext(context);
+
+    const connection = await this.connectionService.create(serviceContext, input);
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { accessToken, refreshToken, ...returnedConnection } = await this.connectionService.create(
-      context,
-      input,
-    );
+    const { accessToken, refreshToken, ...returnedConnection } = connection;
 
     return returnedConnection;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get()
   async findAll(@Context() context: RequestContext) {
-    const connections = await this.connectionService.findAll(context);
+    const serviceContext = toServiceContext(context);
+
+    const connections = await this.connectionService.findAll(serviceContext);
 
     return connections.map((connection) => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -81,117 +110,229 @@ export class ConnectionsController {
     });
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id')
   async findOne(@Context() context: RequestContext, @Param('id') id: string) {
+    const serviceContext = toServiceContext(context);
+
+    const connection = await this.connectionService.findById(serviceContext, id);
+
+    if (connection == null) {
+      throw new NotFoundException();
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { accessToken, refreshToken, ...returnedConnection } = await this.connectionService.findOne(
-      context,
-      id,
-    );
+    const { accessToken, refreshToken, ...returnedConnection } = connection;
 
     return returnedConnection;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Patch(':id')
   async update(
     @Context() context: RequestContext,
     @Param('id') id: string,
     @Body(new ValidationPipe(updateConnectionSchema)) input: UpdateConnectionDto,
   ) {
+    const serviceContext = toServiceContext(context);
+
+    const connection = await this.connectionService.update(serviceContext, id, input);
+
+    if (connection == null) {
+      throw new NotFoundException();
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { accessToken, refreshToken, ...returnedConnection } = await this.connectionService.update(
-      context,
-      id,
-      input,
-    );
+    const { accessToken, refreshToken, ...returnedConnection } = connection;
 
     return returnedConnection;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Delete(':id')
   @HttpCode(204)
   async delete(@Context() context: RequestContext, @Param('id') id: string) {
-    await this.connectionService.delete(context, id);
+    const serviceContext = toServiceContext(context);
+
+    await this.connectionService.remove(serviceContext, id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id/connect')
   async connect(@Context() context: RequestContext, @Param('id') id: string) {
-    try {
-      return this.connectionService.connect(context, id);
-    } catch (error) {
-      this.logger.error('Connect endpoint error', {
-        connectionId: id,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+    const serviceContext = toServiceContext(context);
 
-      throw error;
+    const connection = await this.connectionService.findById(serviceContext, id);
+
+    if (connection == null) {
+      this.logger.log('Attempted to connect a `null` connection');
+
+      throw new NotFoundException();
     }
+
+    const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+
+    if (client == null) {
+      this.logger.log('Attmpted to connect without an associated client');
+
+      throw new InternalServerErrorException();
+    }
+
+    return {
+      url: await client.getAuthorizationUrl(connection),
+    };
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('complete')
-  @HttpCode(200)
+  @HttpCode(204)
   async completeCallback(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(completeConnectionSchema)) body: CompleteConnectionDto,
   ) {
-    const { state, code } = body;
+    const serviceContext = toServiceContext(context);
 
-    try {
-      const result = await this.connectionService.callback(context, state, code);
+    const { state: connectionId, code } = body;
 
-      return {
-        success: true,
-        connection: result,
-      };
-    } catch (error) {
-      this.logger.error('Error completing OAuth callback', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        connectionId: state,
-        userId: context.userId,
-      });
+    const connection = await this.connectionService.findById(serviceContext, connectionId);
 
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
+    if (connection == null) {
+      this.logger.log('Performed a callback on `null` connection');
+
+      throw new NotFoundException();
     }
-  }
 
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/sync')
-  @HttpCode(200)
-  async sync(@Context() context: RequestContext, @Param('id') id: string) {
-    this.logger.log('Manual sync requested', {
-      connectionId: id,
-      userId: context.userId,
+    const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+
+    if (client == null) {
+      this.logger.log('Performed a callback without an associated client');
+
+      throw new InternalServerErrorException();
+    }
+
+    const tokenExchange = await client.exchangeAuthorizationCode(connection, code);
+
+    await this.update(context, connectionId, {
+      ...tokenExchange,
+      active: true,
+      needsReauth: false,
     });
 
-    try {
-      await this.eventService.send(Events.SYNC_CONNECTION, {
-        connectionId: id,
-        userId: context.userId!,
-      });
+    const conn = await this.connectionService.findById(serviceContext, connectionId);
 
-      return {
-        success: true,
-        message: 'Sync queued successfully',
-      };
-    } catch (error) {
-      this.logger.error('Manual sync failed', {
-        connectionId: id,
-        userId: context.userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+    const externalId = await client.getAccountIdentifier(conn!);
 
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
+    const existingConnection = await this.connectionService.search(serviceContext, {
+      providerId: conn!.providerId,
+      active: true,
+      externalId: externalId,
+    });
+
+    if (existingConnection.length > 0 && existingConnection.find((c) => c.id !== connectionId)) {
+      await this.connectionService.remove(serviceContext, connectionId);
+      throw new ConflictException('A connection to that account already exists');
     }
+
+    await this.update(context, connectionId, {
+      externalId,
+    });
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Post('openid/complete')
+  @HttpCode(204)
+  async completeOpenIDCallback(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(completeOpenIDSchema)) body: CompleteOpenIDDto,
+  ) {
+    const serviceContext = toServiceContext(context);
+    const { params } = body;
+
+    const claimedId = params['openid.claimed_id'];
+    const identity = params['openid.identity'];
+    const opEndpoint = params['openid.op_endpoint'];
+    const connectionId = params['connection_id'];
+
+    const connection = await this.connectionService.findById(serviceContext, connectionId);
+
+    if (connection == null) {
+      this.logger.log('Performed a callback on `null` connection');
+
+      throw new NotFoundException();
+    }
+
+    const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+
+    if (client == null) {
+      this.logger.log('Performed a callback without an associated client');
+
+      throw new InternalServerErrorException();
+    }
+
+    if (!claimedId || !identity || !opEndpoint) {
+      this.logger.log('Missing required OpenID parameters');
+      throw new InternalServerErrorException('Missing required OpenID parameters');
+    }
+
+    // Validate that the claimed_id is from a trusted Steam OpenID endpoint
+    if (!claimedId.startsWith('https://steamcommunity.com/openid/id/')) {
+      this.logger.log('Invalid OpenID claimed_id', { claimedId });
+      throw new UnauthorizedException('Invalid OpenID claimed_id');
+    }
+
+    // --- Direct Verification (Section 11.4.2) ---
+    // Send all params back to the OP with openid.mode changed to check_authentication
+    const verifyParams = new URLSearchParams();
+
+    for (const [key, value] of Object.entries(params)) {
+      if (key === 'openid.mode') {
+        verifyParams.set(key, 'check_authentication');
+      } else {
+        verifyParams.set(key, value);
+      }
+    }
+
+    const verifyResponse = await fetch(opEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: verifyParams.toString(),
+    });
+
+    const verifyBody = await verifyResponse.text();
+    const isValid = verifyBody.includes('is_valid:true');
+
+    if (!isValid) {
+      this.logger.log('OpenID signature verification failed', { verifyBody });
+      throw new UnauthorizedException('OpenID signature verification failed');
+    }
+
+    // Extract the Steam ID from the claimed_id URL
+    const steamId = claimedId.split('/').pop();
+
+    if (!steamId) {
+      throw new InternalServerErrorException('Could not extract Steam ID from claimed_id');
+    }
+
+    // Find the pending connection for this user.
+    // The connection was already created by ProvidersController.connect() when the user
+    // initiated the OpenID flow — find it by looking for an inactive connection with
+    // the Steam provider for this user.
+    const existingConnection = await this.connectionService.search(serviceContext, {
+      providerId: connection!.providerId,
+      active: true,
+      externalId: steamId,
+    });
+
+    if (existingConnection.length > 0 && existingConnection.find((c) => c.id !== connectionId)) {
+      await this.connectionService.remove(serviceContext, connectionId);
+      throw new ConflictException('A connection to that account already exists');
+    }
+
+    // Activate the connection and set the external ID to the Steam ID
+    await this.connectionService.update(serviceContext, connectionId, {
+      active: true,
+      needsReauth: false,
+      externalId: steamId,
+    });
   }
 }

@@ -1,4 +1,4 @@
 export { Empty } from './Empty';
-export { MemoryCard } from './MemoryCard';
-export { MemoryDetails } from './MemoryDetails';
+export { EntityCard } from './EntityCard';
+export { EntityDetails } from './EntityDetails';
 export * from './utils';

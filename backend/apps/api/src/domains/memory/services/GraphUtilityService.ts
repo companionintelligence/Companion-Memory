@@ -3,9 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { LoggerService } from '@ci/common/services';
+import { LoggerService } from '@ci/common/logging';
 
-import { FactEntity } from '../entities/FactEntity';
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 
@@ -24,16 +23,15 @@ import { RelationshipEntity } from '../entities/RelationshipEntity';
  */
 @Injectable()
 export class GraphUtilityService {
-  private logger = new LoggerService(GraphUtilityService.name);
-
   constructor(
     @InjectRepository(GraphNodeEntity)
     private readonly entityRepo: Repository<GraphNodeEntity>,
     @InjectRepository(RelationshipEntity)
     private readonly relationshipRepo: Repository<RelationshipEntity>,
-    @InjectRepository(FactEntity)
-    private readonly factRepo: Repository<FactEntity>,
-  ) {}
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(GraphUtilityService.name);
+  }
 
   /**
    * ========================================================================
@@ -118,6 +116,61 @@ export class GraphUtilityService {
     }
 
     return query.getMany();
+  }
+
+  async searchNodesByText(
+    ownerUserId: string,
+    queryText: string,
+    options: { limit?: number } = {},
+  ): Promise<Array<{ node: GraphNodeEntity; rank: number }>> {
+    const limit = Math.min(options.limit ?? 10, 50);
+    if (!queryText.trim()) {
+      return [];
+    }
+
+    const tsquery = `plainto_tsquery('english', :search)`;
+
+    const qb = this.entityRepo
+      .createQueryBuilder('entity')
+      .where('entity.owner_user_id = :ownerUserId', { ownerUserId })
+      .andWhere('entity.is_active = true')
+      .andWhere(`entity.search_vector @@ ${tsquery}`, { search: queryText })
+      .addSelect(`ts_rank_cd(entity.search_vector, ${tsquery})`, 'rank')
+      .orderBy('rank', 'DESC')
+      .addOrderBy('entity.updated_at', 'DESC')
+      .limit(limit);
+
+    const result = await qb.getRawAndEntities();
+
+    return result.entities.map((node, index) => ({
+      node,
+      rank: Number(result.raw[index]?.rank ?? 0),
+    }));
+  }
+
+  async searchNodesByPrefix(
+    ownerUserId: string,
+    queryText: string,
+    options: { limit?: number } = {},
+  ): Promise<GraphNodeEntity[]> {
+    const limit = Math.min(options.limit ?? 10, 50);
+    if (!queryText.trim()) {
+      return [];
+    }
+
+    const like = `${queryText.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+
+    return this.entityRepo
+      .createQueryBuilder('entity')
+      .where('entity.owner_user_id = :ownerUserId', { ownerUserId })
+      .andWhere('entity.is_active = true')
+      .andWhere(
+        `(entity.name ILIKE :like OR entity.entity_type ILIKE :like OR entity.entity_id::text ILIKE :like)`,
+        { like },
+      )
+      .orderBy('entity.name', 'ASC')
+      .limit(limit)
+      .getMany();
   }
 
   async createOrUpdateNode(
@@ -574,142 +627,6 @@ export class GraphUtilityService {
     });
 
     return { node, relationships };
-  }
-
-  private serializeNodeForArchive(node: GraphNodeEntity): Record<string, unknown> {
-    const {
-      entity_id,
-      entity_type,
-      name,
-      description,
-      properties,
-      embedding,
-      search_content,
-      linked_table,
-      linked_id,
-      is_active,
-      is_archived,
-      created_at,
-      updated_at,
-      owner_user_id,
-    } = node;
-
-    return {
-      entity_id,
-      entity_type,
-      name,
-      description,
-      properties,
-      embedding,
-      search_content,
-      linked_table,
-      linked_id,
-      is_active,
-      is_archived,
-      created_at,
-      updated_at,
-      owner_user_id,
-    };
-  }
-
-  private serializeRelationshipForArchive(rel: RelationshipEntity): Record<string, unknown> {
-    const {
-      relationship_id,
-      from_entity_id,
-      to_entity_id,
-      relationship_type,
-      strength,
-      properties,
-      is_bidirectional,
-      is_active,
-      start_date,
-      end_date,
-      created_at,
-      updated_at,
-      owner_user_id,
-    } = rel;
-
-    return {
-      relationship_id,
-      from_entity_id,
-      to_entity_id,
-      relationship_type,
-      strength,
-      properties,
-      is_bidirectional,
-      is_active,
-      start_date,
-      end_date,
-      created_at,
-      updated_at,
-      owner_user_id,
-    };
-  }
-
-  async archiveEntities(
-    ownerUserId: string,
-    entries: Array<{
-      node: GraphNodeEntity;
-      relationships: RelationshipEntity[];
-      reason?: string;
-    }>,
-  ): Promise<string[]> {
-    if (entries.length === 0) {
-      return [];
-    }
-
-    const now = new Date();
-    const facts = entries.map((entry) =>
-      this.factRepo.create({
-        fact_id: uuidv7(),
-        fact_owner_id: ownerUserId,
-        fact_type: 'entity',
-        fact_statement: {
-          entity: this.serializeNodeForArchive(entry.node),
-          relationships: entry.relationships.map((rel) => this.serializeRelationshipForArchive(rel)),
-        },
-        original_entity_id: entry.node.entity_id,
-        preserved_relationships: {
-          relationships: entry.relationships.map((rel) => rel.relationship_id),
-        },
-        source: entry.reason ?? 'knowledge.graph',
-        confidence_score: 1,
-        archived_at: now,
-      }),
-    );
-
-    const saved = await this.factRepo.save(facts);
-
-    return saved.map((fact) => fact.fact_id);
-  }
-
-  async archiveRelationships(
-    ownerUserId: string,
-    relationships: RelationshipEntity[],
-    reason = 'knowledge.graph',
-  ): Promise<string[]> {
-    if (relationships.length === 0) {
-      return [];
-    }
-
-    const now = new Date();
-    const facts = relationships.map((relationship) =>
-      this.factRepo.create({
-        fact_id: uuidv7(),
-        fact_owner_id: ownerUserId,
-        fact_type: 'relationship',
-        fact_statement: this.serializeRelationshipForArchive(relationship),
-        original_entity_id: null,
-        preserved_relationships: {},
-        source: reason,
-        confidence_score: 1,
-        archived_at: now,
-      }),
-    );
-
-    const saved = await this.factRepo.save(facts);
-
-    return saved.map((fact) => fact.fact_id);
   }
 
   /**

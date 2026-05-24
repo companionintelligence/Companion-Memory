@@ -24,41 +24,86 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
 
-import { ClientFactory, DiscordClient, GoogleClient, MicrosoftClient } from './clients';
+import {
+  ClientFactory,
+  DiscordClient,
+  FacebookClient,
+  GoogleClient,
+  MicrosoftClient,
+  SpotifyClient,
+  SteamClient,
+} from './clients';
 import { ConnectionsController } from './controllers/ConnectionsController';
 import { ProvidersController } from './controllers/ProvidersController';
 import { ConnectionEntity } from './entities/ConnectionEntity';
 import { ProviderEntity } from './entities/ProviderEntity';
+import { ProviderKeyEntity } from './entities/ProviderKeyEntity';
 import { ConnectionService } from './services/ConnectionService';
+import { ProviderKeyService } from './services/ProviderKeyService';
 import { ProviderService } from './services/ProviderService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([ConnectionEntity, ProviderEntity]), EventsModule],
+  imports: [TypeOrmModule.forFeature([ConnectionEntity, ProviderEntity, ProviderKeyEntity]), EventsModule],
   providers: [
     ClientFactory,
+    DiscordClient,
+    FacebookClient,
     GoogleClient,
     ConnectionService,
     ProviderService,
+    ProviderKeyService,
     MicrosoftClient,
-    DiscordClient,
+    SpotifyClient,
+    SteamClient,
   ],
   controllers: [ConnectionsController, ProvidersController],
-  exports: [ConnectionService, ProviderService, GoogleClient, MicrosoftClient, DiscordClient],
+  exports: [
+    ClientFactory,
+    DiscordClient,
+    ConnectionService,
+    ProviderService,
+    ProviderKeyService,
+    FacebookClient,
+    GoogleClient,
+    MicrosoftClient,
+    SpotifyClient,
+    SteamClient,
+  ],
 })
 export class ConnectionsModule {}
 
 // Entities
-export { ConnectionEntity, ProviderEntity };
+export { ConnectionEntity, ProviderEntity, ProviderKeyEntity };
 
 // Services
-export { ConnectionService, ProviderService };
+export { ConnectionService, ProviderService, ProviderKeyService };
+export { ClientFactory } from './clients';
 
 // Clients
-export { DiscordClient, GoogleClient, MicrosoftClient };
+export { DiscordClient, FacebookClient, GoogleClient, MicrosoftClient, SpotifyClient, SteamClient };
 
 // Types
-export type { Connection } from './types';
-export type { SyncResponse } from './clients/types';
+export type { BaseClient } from './clients/BaseClient';
+export type { Connection } from './entities/ConnectionEntity';
+export type { Provider } from './entities/ProviderEntity';
+export type { ProviderKey } from './entities/ProviderKeyEntity';
+export type {
+  Calendar,
+  CalendarEvent,
+  OneDrivePageEntity,
+  OneDriveFileEntity,
+  OutlookMailMessageEntity,
+  OutlookAttachment,
+  FacebookFriend,
+  FacebookLike,
+  FacebookPhoto,
+  FacebookPost,
+  FacebookVideo,
+  GmailMessage,
+  EmailParticipant,
+} from './clients/types';
+
+export { OUTLOOK_SKIP_REGEX, ONEDRIVE_ETAG_REGEX } from './clients/constants';

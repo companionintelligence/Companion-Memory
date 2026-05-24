@@ -11,6 +11,8 @@ import {
 } from '@ci/shadcn';
 import { AlertCircleIcon } from '@ci/shadcn/icons';
 
+import { useFeatures } from '@/common/feature';
+
 import { useAuth } from '../../hooks';
 
 const SignupFormSchema = s.object({
@@ -19,7 +21,7 @@ const SignupFormSchema = s.object({
     message: 'Invalid email.',
   }),
   password: s.string(),
-  signup_code: s.string(),
+  signup_code: s.string().optional(),
 });
 
 export type SignupFormData = s.infer<typeof SignupFormSchema>;
@@ -30,6 +32,8 @@ interface SignupFormProps {
 
 export function SignupForm({ onSubmit }: SignupFormProps) {
   const [{ loading, error }] = useAuth();
+
+  const { isFeatureEnabled } = useFeatures();
 
   const form = useForm<SignupFormData>({
     resolver: formDataResolver(SignupFormSchema),
@@ -82,19 +86,21 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
           )}
         />
 
-        <Form.Field
-          control={form.control}
-          name="signup_code"
-          render={({ field }) => (
-            <Form.Item>
-              <Form.Label>Signup Code</Form.Label>
-              <Form.Control>
-                <Input {...field} />
-              </Form.Control>
-              <Form.Message />
-            </Form.Item>
-          )}
-        />
+        {isFeatureEnabled('require.signup.codes') && (
+          <Form.Field
+            control={form.control}
+            name="signup_code"
+            render={({ field }) => (
+              <Form.Item>
+                <Form.Label>Signup Code</Form.Label>
+                <Form.Control>
+                  <Input {...field} />
+                </Form.Control>
+                <Form.Message />
+              </Form.Item>
+            )}
+          />
+        )}
 
         {error != null && (
           <Alert variant={'destructive'}>

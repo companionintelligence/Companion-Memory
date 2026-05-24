@@ -2,11 +2,23 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
-import { LoggerService } from '@ci/common/services';
+import { LoggerService } from '@ci/common/logging';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 
 import { GraphQueryService } from './GraphQueryService';
+
+export interface UserDossier {
+  summary: string;
+  tone?: string | null;
+  personalityTraits?: string[] | null;
+  interactionGuidelines?: string[] | null;
+  preferences?: string[] | null;
+  challenges?: string[] | null;
+  metadata?: Record<string, unknown> | null;
+  lastUpdatedAt?: string | null;
+  sourceWindow?: Record<string, unknown> | null;
+}
 
 /**
  * User context data structure for LLM system prompts
@@ -17,6 +29,7 @@ export interface UserContext {
     name: string;
     username: string | null;
     properties?: Record<string, unknown>;
+    dossier?: UserDossier | null;
   };
   familyMembers: Array<{
     entityId: string;
@@ -62,13 +75,14 @@ type PreferenceRelationshipResult = {
  */
 @Injectable()
 export class UserContextService {
-  private logger = new LoggerService(UserContextService.name);
-
   constructor(
     private readonly graphQuery: GraphQueryService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
-  ) {}
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(UserContextService.name);
+  }
 
   /**
    * Get comprehensive user context for LLM system prompt injection
@@ -103,6 +117,7 @@ export class UserContextService {
           name: userEntity.name ?? 'User',
           username: await this.getUsernameFromUsersTable(userId),
           properties: this.pickImportantProperties(userEntity.properties ?? {}),
+          dossier: this.normalizeDossier(userEntity.dossier),
         },
         familyMembers: familyMembers.map((member) => ({
           entityId: member.entityId,
@@ -182,6 +197,20 @@ export class UserContextService {
     lines.push(`- Total dislikes: ${context.quickStats.totalDislikes}`);
     lines.push(`- Family members: ${context.quickStats.familySize}`);
 
+    if (context.currentUser.dossier) {
+      lines.push('', '## User Dossier Snapshot');
+      const dossier = context.currentUser.dossier;
+      lines.push(`- Summary: ${dossier.summary}`);
+      if (dossier.tone) {
+        lines.push(`- Tone: ${dossier.tone}`);
+      }
+
+      this.renderList(lines, 'Personality Traits', dossier.personalityTraits);
+      this.renderList(lines, 'Interaction Guidelines', dossier.interactionGuidelines, 5);
+      this.renderList(lines, 'Preferences', dossier.preferences, 5);
+      this.renderList(lines, 'Challenges', dossier.challenges, 5);
+    }
+
     lines.push('', '---');
     lines.push(
       'Use this context to make informed decisions about tool usage. ' +
@@ -199,7 +228,7 @@ export class UserContextService {
     // Try to get entity_id from users table first
     const userQuery = `
       SELECT entity_id
-      FROM ci_core.users
+      FROM ci.users
       WHERE id = $1
     `;
     const userResult = await this.dataSource.query(userQuery, [userId]);
@@ -217,7 +246,7 @@ export class UserContextService {
     if (nodes.length > 0) {
       const [node] = nodes;
       if (userResult.length > 0 && !userResult[0].entity_id) {
-        await this.dataSource.query(`UPDATE ci_core.users SET entity_id = $2 WHERE id = $1`, [
+        await this.dataSource.query(`UPDATE ci.users SET entity_id = $2 WHERE id = $1`, [
           userId,
           node.entity_id,
         ]);
@@ -233,7 +262,7 @@ export class UserContextService {
    * Get username from users table
    */
   private async getUsernameFromUsersTable(userId: string): Promise<string | null> {
-    const query = `SELECT username, name FROM ci_core.users WHERE id = $1`;
+    const query = `SELECT username, name FROM ci.users WHERE id = $1`;
     const result = await this.dataSource.query(query, [userId]);
 
     if (result.length > 0) {
@@ -395,7 +424,7 @@ export class UserContextService {
   }> {
     const query = `
       SELECT COUNT(*) as count
-      FROM entities
+      FROM ci.entities
       WHERE owner_user_id = $1
         AND is_active = TRUE
     `;
@@ -430,5 +459,58 @@ export class UserContextService {
     }
 
     return picked;
+  }
+
+  private normalizeDossier(raw: unknown): UserDossier | null {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    const dossier = raw as Record<string, unknown>;
+    const summary =
+      typeof dossier.summary === 'string' && dossier.summary.trim().length > 0 ? dossier.summary : null;
+    if (!summary) {
+      return null;
+    }
+
+    return {
+      summary,
+      tone: this.coerceOptionalString(dossier.tone),
+      personalityTraits: this.coerceOptionalStringArray(dossier.personalityTraits),
+      interactionGuidelines: this.coerceOptionalStringArray(dossier.interactionGuidelines),
+      preferences: this.coerceOptionalStringArray(dossier.preferences),
+      challenges: this.coerceOptionalStringArray(dossier.challenges),
+      metadata: typeof dossier.metadata === 'object' ? (dossier.metadata as Record<string, unknown>) : null,
+      lastUpdatedAt: this.coerceOptionalString(dossier.lastUpdatedAt),
+      sourceWindow:
+        typeof dossier.sourceWindow === 'object' ? (dossier.sourceWindow as Record<string, unknown>) : null,
+    };
+  }
+
+  private coerceOptionalString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim().length > 0 ? value : null;
+  }
+
+  private coerceOptionalStringArray(value: unknown): string[] | null {
+    if (!Array.isArray(value)) {
+      return null;
+    }
+
+    const normalized = value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0);
+
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private renderList(lines: string[], heading: string, values: string[] | null | undefined, limit = 3): void {
+    if (!values || values.length === 0) {
+      return;
+    }
+
+    lines.push(`- ${heading}:`);
+    values.slice(0, limit).forEach((value) => {
+      lines.push(`  - ${value}`);
+    });
   }
 }

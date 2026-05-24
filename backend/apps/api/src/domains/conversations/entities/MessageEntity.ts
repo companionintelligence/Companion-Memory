@@ -10,14 +10,12 @@ import {
   JoinTable,
 } from 'typeorm';
 
-import { FileEntity } from '@ci/domains/files';
-import { UserEntity } from '@ci/domains/user';
+import { FileEntity, type File } from '@ci/domains/files';
+import { UserEntity, type User } from '@ci/domains/user';
 
-import type { Message } from '../types';
+import { ThreadEntity, type Thread } from './ThreadEntity';
 
-import { ThreadEntity } from './ThreadEntity';
-
-@Entity({ name: 'messages' })
+@Entity({ schema: 'ci', name: 'messages' })
 export class MessageEntity {
   @PrimaryColumn({ type: 'uuid', name: 'message_id' })
   id!: string;
@@ -34,8 +32,8 @@ export class MessageEntity {
   @Column({ type: 'text', nullable: true, name: 'content_type' })
   mimetype!: string | null;
 
-  @Column({ type: 'jsonb', nullable: true, default: '[]' })
-  tool_calls!: Record<string, unknown>[] | null;
+  @Column({ type: 'jsonb', nullable: true, name: 'tool_calls', default: '[]' })
+  toolCalls!: Record<string, unknown>[] | null;
 
   // Direct boolean field for canceled - maps to is_deleted in database
   @Column({ type: 'boolean', default: false, name: 'is_deleted' })
@@ -44,6 +42,9 @@ export class MessageEntity {
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
+
+  @Column({ type: 'text', nullable: true, name: 'thread_id' })
+  threadId?: string;
 
   @ManyToOne(() => ThreadEntity)
   @JoinColumn({ name: 'thread_id' })
@@ -61,26 +62,37 @@ export class MessageEntity {
   })
   files?: FileEntity[];
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
-  toMessage(): Message {
+  static toEgressType(entity: MessageEntity): Message {
     return {
-      id: this.id,
-      model: this.model ?? null,
-      role: this.role,
-      content: this.content ?? '',
-      mimetype: this.mimetype ?? null,
-      toolCalls: this.tool_calls ?? null,
-      canceled: this.canceled ?? null,
+      id: entity.id,
+      model: entity.model ?? null,
+      role: entity.role,
+      content: entity.content ?? '',
+      mimetype: entity.mimetype ?? null,
+      toolCalls: entity.toolCalls ?? null,
+      canceled: entity.canceled ?? null,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
 
-      user: this.user?.toUser(),
-      thread: this.thread?.toThread(),
-      promptMessage: this.promptMessage?.toMessage() ?? null,
-      files: this.files?.map((file) => file.toFile()),
-    } satisfies Message;
+      threadId: entity.threadId,
+
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+      thread: entity.thread ? ThreadEntity.toEgressType(entity.thread) : undefined,
+      promptMessage: entity.promptMessage ? MessageEntity.toEgressType(entity.promptMessage) : undefined,
+      files: entity.files?.map((file) => FileEntity.toEgressType(file)),
+    };
   }
 }
+
+export type Message = Readonly<Omit<MessageEntity, 'user' | 'thread' | 'files' | 'promptMessage'>> & {
+  user?: User;
+  thread?: Thread;
+  promptMessage?: Message;
+  files?: File[];
+};

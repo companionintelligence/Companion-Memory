@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { RequestContext } from '@ci/common/types';
+import type { RequestContext } from '@ci/common/context';
 
 /**
  * JSON Schema definition for tool parameters

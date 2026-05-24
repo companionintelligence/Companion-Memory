@@ -2,6 +2,8 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { LoggerService } from '@ci/common/logging';
+
 import { BaseTool } from '../../core/BaseTool';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -125,8 +127,9 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     ],
   };
 
-  constructor() {
+  constructor(protected readonly logger: LoggerService) {
     super();
+    this.logger.setContext(GetStreamingAvailabilityTool.name);
   }
 
   protected validateInput(input: unknown): GetStreamingAvailabilityInput {

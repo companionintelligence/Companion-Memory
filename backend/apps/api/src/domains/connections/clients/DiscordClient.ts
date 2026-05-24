@@ -1,14 +1,10 @@
-import type {
-  DiscordGuildSyncState,
-  DiscordDMSyncState,
-  DiscordRelationshipsSyncState,
-  DiscordConnectionsSyncState,
-} from '@ci/domains/etl';
+import { Injectable } from '@nestjs/common';
 
-import type { Connection } from '../types';
+import { LoggerService } from '@ci/common/logging';
+
+import type { Connection } from '../entities/ConnectionEntity';
 
 import { BaseOAuth2Client } from './BaseOAuth2Client';
-import type { SyncResponse } from './types';
 
 const MESSAGE_PAGE_SIZE = 100; // Discord API max limit
 const MEMBER_PAGE_SIZE = 1000; // Discord API max limit for members
@@ -115,12 +111,56 @@ interface DiscordConnection {
   visibility: number;
 }
 
+interface DiscordGuildSyncState {
+  lastGuildId?: string;
+  channels?: Record<string, { lastMessageId?: string }>;
+  members?: Record<string, { lastMemberId?: string }>;
+}
+
+interface DiscordDMSyncState {
+  channels?: Record<string, { lastMessageId?: string }>;
+}
+
+interface DiscordRelationshipsSyncState {
+  lastRelationshipId?: string;
+}
+
+interface DiscordConnectionsSyncState {
+  lastSyncAt?: string;
+}
+
+interface SyncResponse {
+  success: boolean;
+  message: string;
+  data: {
+    results: unknown[];
+    errors: string[];
+  };
+  cursor?: Record<string, unknown>;
+}
+
+@Injectable()
 export class DiscordClient extends BaseOAuth2Client {
+  constructor(readonly logger: LoggerService) {
+    super();
+    this.logger.setContext(DiscordClient.name);
+  }
+
   protected readonly baseUrl = 'https://discord.com/api/v10';
 
   protected readonly authorizationEndpoint = 'https://discord.com/oauth2/authorize';
 
   protected readonly tokenEndpoint = 'https://discord.com/api/v10/oauth2/token';
+
+  protected readonly endpointScopeMap = {
+    Guilds: ['guilds'],
+    DMs: ['dm_channels.messages.read'],
+    Relationships: ['relationships.read'],
+    Connections: ['connections'],
+    default: ['identify', 'email', 'guilds', 'connections', 'openid'],
+  };
+
+  protected readonly extraAuthParams = {};
 
   // Valid Discord OAuth2 scopes
   // Starting with ONLY core scopes to avoid malformed URL errors
@@ -132,6 +172,17 @@ export class DiscordClient extends BaseOAuth2Client {
     'connections', // Connected accounts (Spotify, Steam, etc.) - DEFINITELY VALID
     'openid', // OpenID Connect - DEFINITELY VALID
   ];
+
+  protected getScopesFromActiveEndpoints(activeEndpoints: string[]): string {
+    const scopesSet = new Set<string>(this.endpointScopeMap.default);
+
+    activeEndpoints.forEach((endpoint) => {
+      const scopes = this.endpointScopeMap[endpoint as keyof typeof this.endpointScopeMap] || [];
+      scopes.forEach((scope) => scopesSet.add(scope));
+    });
+
+    return scopesSet.size > 0 ? Array.from(scopesSet).join(' ') : '';
+  }
 
   protected get clientId() {
     const clientIdVariable = 'DISCORD_CLIENT_ID';
@@ -157,6 +208,18 @@ export class DiscordClient extends BaseOAuth2Client {
     }
 
     return clientSecret;
+  }
+
+  getClientCredentials(_connection: Connection): Promise<{ clientId: string; clientSecret: string }> {
+    return Promise.resolve({
+      clientId: this.clientId,
+      clientSecret: this.clientSecret,
+    });
+  }
+
+  async getAccountIdentifier(connection: Connection): Promise<string> {
+    const profile = (await this.fetchProfile(connection)) as { id?: string };
+    return profile.id || '';
   }
 
   async sync(connection: Connection): Promise<SyncResponse[]> {

@@ -8,7 +8,11 @@ export default {
     '^.+\\.[tj]s$': ['@swc/jest'],
   },
 
-  transformIgnorePatterns: ['/.pnp.cjs$'],
+  transformIgnorePatterns: [
+    // Ignore .yarn/cache packages EXCEPT ESM-only ones that require transformation
+    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration)-npm-)',
+    '\\.pnp\\.cjs$',
+  ],
 
   moduleNameMapper: {
     '^@ci/(.*)$': '<rootDir>/src/$1',

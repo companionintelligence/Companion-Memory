@@ -1,8 +1,18 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
-import type { Provider } from '../types';
+export interface ProviderEndpoint {
+  name: string;
+  description: string;
+  iterationType: string;
+  TTL?: number;
+}
 
-@Entity({ schema: 'ci_core', name: 'providers' })
+export interface ProviderTheme {
+  backgroundColor: string | null;
+  borderColor: string | null;
+}
+
+@Entity({ schema: 'ci', name: 'providers' })
 export class ProviderEntity {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
@@ -10,16 +20,47 @@ export class ProviderEntity {
   @Column({ type: 'text', nullable: true })
   name!: string | null;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @Column({ type: 'text', nullable: true })
+  description!: string | null;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  @Column({ type: 'jsonb', default: [] })
+  endpoints!: ProviderEndpoint[];
 
-  toProvider(): Provider {
+  @Column({ type: 'text', name: 'logo_url', nullable: true })
+  logoUrl!: string | null;
+
+  @Column({ type: 'text', name: 'auth_type', nullable: true })
+  authType!: string | null;
+
+  @Column({ type: 'text', name: 'openid_key_link', nullable: true })
+  openidKeyLink!: string | null;
+
+  @Column({ type: 'jsonb', default: '{}' })
+  theme!: ProviderTheme;
+
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
+
+  static toEgressType(entity: ProviderEntity): Provider {
     return {
-      id: this.id,
-      name: this.name ?? null,
-    } satisfies Provider;
+      id: entity.id,
+      name: entity.name ?? null,
+      description: entity.description ?? null,
+      endpoints: entity.endpoints,
+      logoUrl: entity.logoUrl ?? null,
+      theme: {
+        backgroundColor: entity.theme.backgroundColor ?? null,
+        borderColor: entity.theme.borderColor ?? null,
+      },
+      authType: entity.authType ?? null,
+      openidKeyLink: entity.openidKeyLink ?? null,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    };
   }
 }
+
+export type Provider = Readonly<ProviderEntity>;

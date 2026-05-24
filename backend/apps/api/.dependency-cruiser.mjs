@@ -31,7 +31,7 @@ export default {
       comment: 'Application code must not import non-production dependencies',
       from: {
         path: '^src',
-        pathNot: ['\\.test\\.ts$'],
+        pathNot: ['\\.test\\.ts$', '__tests__/'],
       },
       to: {
         dependencyTypes: ['npm-dev', 'npm-optional', 'npm-peer'],
@@ -47,7 +47,7 @@ export default {
       },
       to: {
         path: '^src/domains/',
-        pathNot: ['^src/domains/$1/', '^src/domains/[^/]+/index\\.ts$'],
+        pathNot: ['^src/domains/$1/', '^src/domains/[^/]+/index\\.ts$', '^src/domains/[^/]+/events\\.ts$'],
       },
     },
 

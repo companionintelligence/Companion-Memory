@@ -3,7 +3,7 @@ import { createHmac } from 'crypto';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import bcrypt from 'bcrypt';
+import type { Request } from 'express';
 import parseDuration from 'parse-duration';
 import { MoreThan, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -11,9 +11,10 @@ import { v7 as uuidv7 } from 'uuid';
 import config from '@ci/configuration';
 
 import { SessionEntity } from '../entities/SessionEntity';
-import type { JwtPayload, SessionMetadata } from '../types';
+import type { JwtPayload, RotationResult, SessionMetadata } from '../types';
 
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
+const REFRESH_GRACE_PERIOD = parseDuration(config.auth.session.refreshGracePeriod) ?? 0;
 
 @Injectable()
 export class AuthService {
@@ -29,7 +30,7 @@ export class AuthService {
     const token = this.generateSessionToken(userId);
     const expiresAt = new Date(now + SESSION_EXPIRES_IN);
 
-    const hashedToken = await bcrypt.hash(token, config.auth.session.saltRounds);
+    const hashedToken = this.digest(token);
     const hashedIp = this.digest(meta.ip);
     const hashedUserAgent = this.digest(meta.userAgent);
 
@@ -55,20 +56,34 @@ export class AuthService {
     });
   }
 
-  async rotateSessionToken(userId: string, token: string, meta: SessionMetadata): Promise<string> {
-    const session = await this.findSession(userId, token, meta);
+  async rotateSessionToken(userId: string, token: string, meta: SessionMetadata): Promise<RotationResult> {
+    const { session, graceMatch } = await this.findSession(userId, token, meta);
+
+    // Token matched the previous (pre-rotation) hash within the grace window.
+    // Don't rotate again, just signal the caller to issue an access token
+    // without setting a new session cookie. This handles N concurrent
+    // refreshes.
+    if (graceMatch) {
+      return {
+        sessionToken: null,
+      };
+    }
 
     const nextToken = this.generateSessionToken(userId);
 
-    session.token = await bcrypt.hash(nextToken, config.auth.session.saltRounds);
+    session.previous_token = session.token;
+    session.token = this.digest(nextToken);
+    session.rotated_at = new Date();
 
     await this.sessionRepository.save(session);
 
-    return nextToken;
+    return {
+      sessionToken: nextToken,
+    };
   }
 
   async invalidateSession(userId: string, token: string, meta: SessionMetadata): Promise<void> {
-    const session = await this.findSession(userId, token, meta);
+    const { session } = await this.findSession(userId, token, meta);
 
     await this.sessionRepository.delete({
       id: session.id,
@@ -85,13 +100,26 @@ export class AuthService {
     return accessToken;
   }
 
-  private async findSession(userId: string, token: string, data: SessionMetadata): Promise<SessionEntity> {
+  getSessionMetadata(request: Request): SessionMetadata {
+    return {
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    };
+  }
+
+  private async findSession(
+    userId: string,
+    token: string,
+    data: SessionMetadata,
+  ): Promise<{ session: SessionEntity; graceMatch: boolean }> {
     const now = new Date();
     const hashedIp = this.digest(data.ip);
     const hashedUserAgent = this.digest(data.userAgent);
+    const hashedToken = this.digest(token);
 
-    const existingSessions = await this.sessionRepository.find({
+    const match = await this.sessionRepository.findOne({
       where: {
+        token: hashedToken,
         ip: hashedIp,
         user_agent: hashedUserAgent,
         expires_at: MoreThan(now),
@@ -101,13 +129,40 @@ export class AuthService {
       },
     });
 
-    const session = existingSessions.find((session) => bcrypt.compareSync(token, session.token));
-
-    if (!session) {
-      throw new UnauthorizedException('Invalid session');
+    if (match) {
+      return {
+        session: match,
+        graceMatch: false,
+      };
     }
 
-    return session;
+    // Check for a grace-period match where the token matches the previous hash
+    // and the rotation happened within the configurable grace window.
+    if (REFRESH_GRACE_PERIOD > 0) {
+      const graceDeadline = new Date(now.getTime() - REFRESH_GRACE_PERIOD);
+
+      const graceMatch = await this.sessionRepository.findOne({
+        where: {
+          previous_token: hashedToken,
+          rotated_at: MoreThan(graceDeadline),
+          ip: hashedIp,
+          user_agent: hashedUserAgent,
+          expires_at: MoreThan(now),
+          user: {
+            id: userId,
+          },
+        },
+      });
+
+      if (graceMatch) {
+        return {
+          session: graceMatch,
+          graceMatch: true,
+        };
+      }
+    }
+
+    throw new UnauthorizedException('Invalid session');
   }
 
   private generateSessionToken(userId: string) {
@@ -121,11 +176,20 @@ export class AuthService {
     });
   }
 
-  private digest(value?: string) {
+  private digest(value: string): string;
+
+  private digest(value: string | null | undefined): string | undefined;
+
+  private digest(value?: string | null) {
     if (value == null) {
-      return value;
+      return undefined;
     }
 
+    // Keyed HMAC mitigates pre-computation attacks against low-entropy fields
+    // (IP addresses, user agents). For high-entropy session tokens, the pepper
+    // is defense-in-depth; plain SHA-256 would suffice but peppering adds
+    // marginal cost so we're simplifying code by using the same digest function
+    // for all fields.
     return createHmac('sha256', config.auth.session.fieldPepper).update(value).digest('hex');
   }
 }

@@ -1,14 +1,22 @@
+/*
+ * --------------- IMPORTANT NOTE ---------------
+ *
+ * This file is now considered a legacy implementation and should
+ * no longer be modified. For an example of the new implementation
+ * please refer to:
+ *
+ *   backend/apps/api/domains/user/events.ts
+ *
+ * --------------- IMPORTANT NOTE ---------------
+ */
+
 interface EventPayload {
   name?: never;
 }
 
 export const enum Events {
-  FILE_UPLOAD = 'file.upload',
   CHAT_SUMMARIZATION = 'chat.summarization',
   INFER_QUESTION_ANSWER = 'infer.question.answer',
-  SYNC_CONNECTION = 'sync.connection',
-  MCP_TOOL_CALL = 'mcp.tool.call',
-  USER_CREATED = 'user.created',
   PROMOTE_CONTACTS = 'PROMOTE_CONTACTS',
   PROMOTE_DRIVE_DATA = 'PROMOTE_DRIVE_DATA',
   PROMOTE_YOUTUBE_DATA = 'PROMOTE_YOUTUBE_DATA',
@@ -27,17 +35,15 @@ export const enum Events {
   GRAPH_NODE_UPSERTED = 'graph.node.upserted',
   GRAPH_RELATIONSHIP_UPSERTED = 'graph.relationship.upserted',
   SEARCH_EMBED_ENTITY = 'search.embed.entity',
-  SEARCH_EMBED_CONTENT = 'search.embed.content',
-  SEARCH_EMBED_EVENT = 'search.embed.event',
-  SEARCH_EMBED_COMMUNICATION = 'search.embed.communication',
   PROMOTE_OUTLOOK_MAIL_MESSAGES = 'PROMOTE_OUTLOOK_MAIL_MESSAGES',
   PROMOTE_OUTLOOK_CALENDAR_EVENTS = 'PROMOTE_OUTLOOK_CALENDAR_EVENTS',
   PROMOTE_ONEDRIVE_FILES = 'PROMOTE_ONEDRIVE_FILES',
-}
-
-interface FileUploadPayload extends EventPayload {
-  fileId: string;
-  userId?: string;
+  PROMOTE_FACEBOOK_PROFILE = 'PROMOTE_FACEBOOK_PROFILE',
+  PROMOTE_FACEBOOK_POSTS = 'PROMOTE_FACEBOOK_POSTS',
+  PROMOTE_FACEBOOK_PHOTOS = 'PROMOTE_FACEBOOK_PHOTOS',
+  PROMOTE_FACEBOOK_VIDEOS = 'PROMOTE_FACEBOOK_VIDEOS',
+  PROMOTE_FACEBOOK_FRIENDS = 'PROMOTE_FACEBOOK_FRIENDS',
+  PROMOTE_FACEBOOK_LIKES = 'PROMOTE_FACEBOOK_LIKES',
 }
 
 interface ChatSummarizationPayload extends EventPayload {
@@ -48,21 +54,6 @@ interface ChatSummarizationPayload extends EventPayload {
 interface InferQuestionAnswerPayload extends EventPayload {
   ownerId: string | null;
   questionId: string;
-}
-
-interface SyncConnectionPayload extends EventPayload {
-  connectionId: string;
-  userId: string;
-}
-
-interface McpToolCallPayload extends EventPayload {
-  userId: string;
-  toolName: string;
-  arguments: unknown;
-}
-
-interface UserCreatedPayload extends EventPayload {
-  userId: string;
 }
 
 interface PromoteGmailMessagesPayload extends EventPayload {
@@ -220,29 +211,6 @@ interface SearchEmbedEntityPayload extends EventPayload {
   entityType?: string;
 }
 
-interface SearchEmbedContentPayload extends EventPayload {
-  ownerId: string;
-  contentId: string;
-  text: string;
-}
-
-interface SearchEmbedEventPayload extends EventPayload {
-  ownerId: string;
-  eventId: string;
-  searchContent: string;
-}
-
-interface SearchEmbedCommunicationPayload extends EventPayload {
-  ownerId: string;
-  communication: {
-    userId: string;
-    communicationType: string;
-    occurredAt: string;
-    subject?: string | null;
-    content: string;
-  };
-}
-
 interface PromoteOutlookMessagesPayload extends EventPayload {
   apiLogId: string;
   userId: string;
@@ -264,13 +232,51 @@ interface PromoteOneDriveFilePayload extends EventPayload {
   content: unknown;
 }
 
+interface PromoteFacebookProfilePayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookPostsPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookPhotosPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookVideosPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookFriendsPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
+interface PromoteFacebookLikesPayload extends EventPayload {
+  apiLogId: string;
+  userId: string;
+  connectionId: string;
+  content: unknown;
+}
+
 export type EventPayloads = {
-  [Events.FILE_UPLOAD]: FileUploadPayload;
   [Events.CHAT_SUMMARIZATION]: ChatSummarizationPayload;
   [Events.INFER_QUESTION_ANSWER]: InferQuestionAnswerPayload;
-  [Events.SYNC_CONNECTION]: SyncConnectionPayload;
-  [Events.MCP_TOOL_CALL]: McpToolCallPayload;
-  [Events.USER_CREATED]: UserCreatedPayload;
   [Events.PROMOTE_GMAIL_MESSAGES]: PromoteGmailMessagesPayload;
   [Events.PROMOTE_CALENDAR_EVENTS]: PromoteCalendarEventsPayload;
   [Events.PROMOTE_YOUTUBE_DATA]: PromoteYouTubeDataPayload;
@@ -289,10 +295,13 @@ export type EventPayloads = {
   [Events.GRAPH_NODE_UPSERTED]: GraphNodeUpsertedPayload;
   [Events.GRAPH_RELATIONSHIP_UPSERTED]: GraphRelationshipUpsertedPayload;
   [Events.SEARCH_EMBED_ENTITY]: SearchEmbedEntityPayload;
-  [Events.SEARCH_EMBED_CONTENT]: SearchEmbedContentPayload;
-  [Events.SEARCH_EMBED_EVENT]: SearchEmbedEventPayload;
-  [Events.SEARCH_EMBED_COMMUNICATION]: SearchEmbedCommunicationPayload;
   [Events.PROMOTE_OUTLOOK_MAIL_MESSAGES]: PromoteOutlookMessagesPayload;
   [Events.PROMOTE_OUTLOOK_CALENDAR_EVENTS]: PromoteOutlookCalendarEventsPayload;
   [Events.PROMOTE_ONEDRIVE_FILES]: PromoteOneDriveFilePayload;
+  [Events.PROMOTE_FACEBOOK_PROFILE]: PromoteFacebookProfilePayload;
+  [Events.PROMOTE_FACEBOOK_POSTS]: PromoteFacebookPostsPayload;
+  [Events.PROMOTE_FACEBOOK_PHOTOS]: PromoteFacebookPhotosPayload;
+  [Events.PROMOTE_FACEBOOK_VIDEOS]: PromoteFacebookVideosPayload;
+  [Events.PROMOTE_FACEBOOK_FRIENDS]: PromoteFacebookFriendsPayload;
+  [Events.PROMOTE_FACEBOOK_LIKES]: PromoteFacebookLikesPayload;
 };

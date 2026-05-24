@@ -1,7 +1,7 @@
 {
   "host": "0.0.0.0",
   "port": 3030,
-  "hostname": "dev.companionintelligence.com",
+  "hostname": "memory.ci.localhost",
   "logging": {
     "level": "info"
   },
@@ -16,9 +16,19 @@
       "refreshTokenExpiration": "7d"
     },
     "session": {
-      "saltRounds": 4,
       "fieldPepper": "AUTH_SESSION_PEPPER",
-      "duration": "7d"
+      "duration": "7d",
+      "refreshGracePeriod": "30s"
+    },
+    "csrf": {
+      "secret": "AUTH_CSRF_TOKEN_SECRET"
+    },
+    "encryption": {
+      "fieldKey": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "cookies": {
+      "sessionTokenName": "sessionToken",
+      "csrfTokenName": "csrfToken"
     },
     "providers": {
       "google": {
@@ -29,40 +39,53 @@
       },
       "discord": {
         "id": "0198779b-4d44-84eb-a35f-93e1f0a56b71"
+      },
+      "facebook": {
+        "id": "dbb8002f-12da-4cd9-b02b-37db7791a900"
+      },
+      "spotify": {
+        "id": "019cbaf2-d789-7723-aada-7e3d709663f5"
+      },
+      "steam": {
+        "id": "019d6470-f9e1-720f-a3ce-299842abaece"
       }
     },
     "oauth": {
-      "callbackUrl": "https://dev.companionintelligence.com/oauth/callback"
+      "callbackUrl": "https://memory.ci.localhost/oauth/callback"
+    },
+    "openid": {
+      "callbackUrl": "https://memory.ci.localhost/openid/callback"
     }
   },
   "db": {
     "type": "postgres",
-    "host": "127.0.0.1",
+    "host": "database",
     "port": 5432,
-    "database": "companion_intel",
-    "username": "POSTGRES_USERNAME",
-    "password": "POSTGRES_PASSWORD"
+    "database": "companion",
+    "username": "companion",
+    "password": "DATABASE_PASSWORD",
+    "logging": false
   },
   "staticfiles": {
-    "storageUrl": "http://localhost:9000",
+    "storageUrl": "http://object-store:9000",
     "region": "us-east-1",
     "bucket": "companion",
     "auth": {
-      "signatureUrl": "http://minio:9000",
-      "signatureTTL": 60,
-      "accessKeyId": "S3_ACCESS_KEY_ID",
-      "secretAccessKey": "S3_SECRET_ACCESS_KEY"
+      "signatureUrl": "http://object-store:9000",
+      "signatureTTL": 3600,
+      "accessKeyId": "OBJECT_STORE_USERNAME",
+      "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }
+  },
+  "graphql": {
+    "maxQueryComplexity": 150
   },
   "services": {
     "ollama": {
-      "host": "http://localhost:11434"
+      "host": "http://host.docker.internal:11434"
     },
-    "stt": {
-      "host": "http://localhost:9001"
-    },
-    "tts": {
-      "host": "http://localhost:9002"
+    "hbpe": {
+      "host": "http://hbpe-service:8002"
     }
   },
   "features": {
@@ -70,7 +93,13 @@
     "scheduled.connection.sync": true,
     "scheduled.entity.promotion": true,
     "pinned.demo.models": false,
-    "enable.system.prompt": false
+    "enable.system.prompt": true,
+    "enable.inventory.page": false,
+    "advanced.theme.tab": false,
+    "new.insights.page": false,
+    "require.signup.codes": true,
+    "files.page": false,
+    "hbpe": false
   },
   "environment": {
     "database.query.logging": false

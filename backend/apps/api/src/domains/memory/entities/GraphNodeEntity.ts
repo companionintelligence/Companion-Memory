@@ -1,6 +1,6 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
-@Entity({ name: 'entities' })
+@Entity({ schema: 'ci', name: 'entities' })
 export class GraphNodeEntity {
   @PrimaryColumn('uuid')
   entity_id!: string;
@@ -20,18 +20,14 @@ export class GraphNodeEntity {
   @Column({ type: 'jsonb', default: '{}' })
   properties!: Record<string, unknown>;
 
-  @Column({
-    type: 'text',
-    nullable: true,
-    transformer: {
-      to: (v: number[] | null) => (v ? `[${v.join(',')}]` : null),
-      from: (v: string | null) => (v ? v.slice(1, -1).split(',').map(Number) : null),
-    },
-  })
-  embedding!: number[] | null;
+  @Column({ type: 'jsonb', nullable: true })
+  dossier!: Record<string, unknown> | null;
 
   @Column({ type: 'text', nullable: true })
   search_content!: string | null;
+
+  @Column({ type: 'tsvector', nullable: true, select: false })
+  search_vector?: string | null;
 
   @Column({ type: 'text', nullable: true })
   linked_table!: string | null;

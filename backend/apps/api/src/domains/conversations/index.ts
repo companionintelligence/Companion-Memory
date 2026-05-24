@@ -26,8 +26,8 @@ import { EventsModule } from '@ci/domains/events';
 import { FileEntity, FilesModule } from '@ci/domains/files';
 
 import { ThreadsController } from './controllers/ThreadsController';
-import { MessageEntity } from './entities/MessageEntity';
-import { ThreadEntity } from './entities/ThreadEntity';
+import { MessageEntity, type Message } from './entities/MessageEntity';
+import { ThreadEntity, type Thread } from './entities/ThreadEntity';
 import { MessageService } from './services/MessageService';
 import { ThreadService } from './services/ThreadService';
 
@@ -42,11 +42,5 @@ import { ThreadService } from './services/ThreadService';
 })
 export class ConversationModule {}
 
-// Entities
-export { MessageEntity, ThreadEntity };
-
-// Services
-export { MessageService, ThreadService };
-
-// Types
-export type { Message, Thread } from './types';
+export { MessageEntity, MessageService, ThreadEntity, ThreadService };
+export type { Message, Thread };

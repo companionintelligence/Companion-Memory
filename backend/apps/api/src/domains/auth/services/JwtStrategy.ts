@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
+import type { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { z } from 'zod';
 
-import { RequestWithContext } from '@ci/common/types';
+import { ContextService, SYSTEM_USER } from '@ci/common/context';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
@@ -24,26 +25,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(req: RequestWithContext, payload: JwtPayload) {
+  async validate(req: Request, payload: JwtPayload) {
     const result = jwtPayloadSchema.safeParse(payload);
 
     if (!result.success) {
-      throw new BadRequestException({
-        message: 'Validation failed',
-        errors: result.error.issues,
-      });
+      return null;
     }
 
-    const user = await this.userService.findOne(payload.sub);
+    const user = await this.userService.findById({ userId: SYSTEM_USER }, payload.sub);
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      return null;
     }
 
-    req.context = {
-      ...req.context,
+    ContextService.set({
       userId: user.id,
-    };
+    });
 
     return user;
   }

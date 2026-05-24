@@ -1,8 +1,7 @@
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 
-import { Context } from '@ci/common/decorators';
-import { JwtAuthGuard } from '@ci/common/guards';
-import type { RequestContext } from '@ci/common/types';
+import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { ActionService } from '../services/ActionService';
 
@@ -10,15 +9,19 @@ import { ActionService } from '../services/ActionService';
 export class ActionsController {
   constructor(private readonly actionService: ActionService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get()
   findAll(@Context() context: RequestContext) {
-    return this.actionService.findAll(context);
+    const serviceContext = toServiceContext(context);
+
+    return this.actionService.findAll(serviceContext);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id')
   findOne(@Context() context: RequestContext, @Param('id') id: string) {
-    return this.actionService.findOne(context, id);
+    const serviceContext = toServiceContext(context);
+
+    return this.actionService.findById(serviceContext, id);
   }
 }

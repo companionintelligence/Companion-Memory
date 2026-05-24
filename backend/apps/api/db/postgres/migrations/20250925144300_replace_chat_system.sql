@@ -23,101 +23,101 @@ DROP TABLE IF EXISTS threads;
 CREATE TABLE threads (
     thread_id UUID PRIMARY KEY DEFAULT gen_uuid_v7(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    
+
     -- thread metadata
     title TEXT, -- Auto-generated or user-set thread title
     summary TEXT, -- AI-generated summary of thread topics
-    
+
     -- Temporal tracking
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     last_message_at TIMESTAMPTZ,
-    
+
     -- thread state
     status thread_status DEFAULT 'active',
     is_archived BOOLEAN DEFAULT FALSE,
-    
+
     -- Context and intelligence - this should be all AI generated, provides better history
     main_topics TEXT[], -- Extracted main discussion topics
     mentioned_entities TEXT[], -- People, places, concepts mentioned
     context_embedding vector(768), -- Vector embedding of thread context
-    
+
     -- thread settings
     model_config JSONB DEFAULT '{}', -- Model settings for this thread
     temperature DOUBLE PRECISION,
     max_tokens INTEGER,
     system_prompt TEXT,
-    
+
     -- thread statistics
     message_count INTEGER DEFAULT 0,
     total_tokens_used INTEGER DEFAULT 0,
     avg_response_time_ms INTEGER,
-    
+
     -- Branching and forking
     parent_thread_id UUID REFERENCES threads(thread_id),
     fork_point_message_id UUID, -- Which message this thread forked from
-    
+
     -- Privacy and sharing
     is_private BOOLEAN DEFAULT TRUE,
     sharing_permissions JSONB DEFAULT '{}'
 );
 
--- Step 5: Create comprehensive messages table from CI-Database  
+-- Step 5: Create comprehensive messages table from CI-Database
 CREATE TABLE messages (
     message_id UUID PRIMARY KEY DEFAULT gen_uuid_v7(),
     thread_id UUID NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    
+
     -- Message ordering and hierarchy
     parent_message_id UUID REFERENCES messages(message_id), -- For branching threads
     depth INTEGER DEFAULT 0, -- Depth in thread tree
     sequence_number INTEGER,
-    
+
     -- Message content and type
     role message_role NOT NULL,
     content TEXT,--  NOT NULL,
     content_type TEXT DEFAULT 'text/plain', -- text/plain, text/markdown, application/json, etc.
-    
+
     -- AI model information (for assistant messages)
     model_name TEXT, -- gpt-4, claude-3, etc.
     model_version TEXT,
     temperature DOUBLE PRECISION,
-    
+
     -- Token and cost tracking
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     total_tokens INTEGER GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
     estimated_cost DECIMAL(10,6), -- Estimated API cost for this message
-    
+
     -- Processing metadata
     processing_time_ms INTEGER, -- How long the model took to respond
     finish_reason TEXT, -- stop, length, content_filter, etc.
-    
+
     -- Message state
     is_edited BOOLEAN DEFAULT FALSE,
     is_deleted BOOLEAN DEFAULT FALSE,
     edit_history JSONB DEFAULT '[]', -- Previous versions of edited content
-    
+
     -- Tool usage (for assistant messages with function calls)
     tool_calls JSONB DEFAULT '[]', -- Function calls made by the assistant
     tool_call_results JSONB DEFAULT '[]', -- Results from tool calls
-    
+
     -- Semantic analysis
     message_embedding vector(768), -- Vector representation for similarity search
     extracted_entities TEXT[], -- People, places, concepts mentioned
     sentiment_score DOUBLE PRECISION CHECK (sentiment_score >= -1 AND sentiment_score <= 1),
     intent_categories TEXT[], -- Categorized user intents
-    
+
     -- User feedback and ratings
     user_rating INTEGER CHECK (user_rating >= 1 AND user_rating <= 5),
     user_feedback TEXT,
     flagged_for_review BOOLEAN DEFAULT FALSE,
     flag_reason TEXT,
-    
+
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
-    
+
     -- Constraints
    -- CONSTRAINT valid_sequence_per_thread UNIQUE (thread_id, sequence_number),
    -- CONSTRAINT content_not_empty CHECK (LENGTH(TRIM(content)) > 0)
@@ -125,7 +125,7 @@ CREATE TABLE messages (
 
 -- Step 6: Add thread_id column back to actions table and create FK constraint
 ALTER TABLE actions ADD COLUMN thread_id UUID;
-ALTER TABLE actions ADD CONSTRAINT actions_thread_fk 
+ALTER TABLE actions ADD CONSTRAINT actions_thread_fk
     FOREIGN KEY (thread_id) REFERENCES threads(thread_id);
 
 -- migrate:down

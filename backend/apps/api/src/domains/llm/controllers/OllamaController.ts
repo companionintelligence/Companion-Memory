@@ -1,15 +1,26 @@
-import { Body, Controller, Get, HttpCode, Inject, Post, Res, UseGuards, forwardRef } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  NotFoundException,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+  forwardRef,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { ToolCall, Message as OllamaMessage } from 'ollama';
 import { z } from 'zod';
 
-import { Context } from '@ci/common/decorators';
-import { JwtAuthGuard } from '@ci/common/guards';
+import { Context, type RequestContext, type ServiceContext, toServiceContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { Channel, FrameEncoder } from '@ci/common/rpc';
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
-import config from '@ci/configuration';
 import { MessageService, ThreadService, type Thread, type Message } from '@ci/domains/conversations';
 import { Events, type EventPayloads, EventService, OnEvent } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
@@ -27,6 +38,9 @@ const promptSchema = z.object({
   enableThinking: z.boolean().default(true),
   fileIds: z.array(z.string()).optional(), // File IDs to attach to this message
 });
+const modelCapabilitiesSchema = z.object({
+  model: z.string().min(1),
+});
 
 interface SystemPromptOptions {
   leadingAssistantMessages?: OllamaMessage[];
@@ -34,8 +48,6 @@ interface SystemPromptOptions {
 
 @Controller('llm')
 export class OllamaController {
-  private readonly logger = new LoggerService(OllamaController.name);
-
   private readonly frameEncoder = new FrameEncoder();
 
   constructor(
@@ -47,15 +59,34 @@ export class OllamaController {
     private readonly threadService: ThreadService,
     private readonly fileService: FileService,
     private readonly userContextService: UserContextService,
-  ) {}
+    private readonly logger: LoggerService,
+    private readonly featureService: FeatureService,
+  ) {
+    this.logger.setContext(OllamaController.name);
+  }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('models')
   async listModels(@Context() context: RequestContext) {
     return await this.ollamaService.getAvailableModels(context);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('models/capabilities')
+  async getModelCapabilities(
+    @Context() context: RequestContext,
+    @Query(new ValidationPipe(modelCapabilitiesSchema)) query: z.infer<typeof modelCapabilitiesSchema>,
+  ) {
+    const capabilities = await this.ollamaService.getModelCapabilities(context, query.model);
+
+    return {
+      model: query.model,
+      capabilities,
+      vision: capabilities.includes('vision'),
+    };
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('generate')
   @HttpCode(200)
   async generate(
@@ -63,6 +94,8 @@ export class OllamaController {
     @Body(new ValidationPipe(promptSchema)) input: PromptInput,
     @Res() res: Response,
   ) {
+    const serviceContext = toServiceContext(context);
+
     const { model: initialModel } = await this.ollamaService.resolveModel(context, {
       requestedModel: input.model,
     });
@@ -70,9 +103,15 @@ export class OllamaController {
     let thread: Thread;
 
     if (input.threadId != null) {
-      thread = await this.threadService.findOne(context, input.threadId);
+      const maybeThread = await this.threadService.findById(serviceContext, input.threadId);
+
+      if (maybeThread == null) {
+        throw new NotFoundException();
+      }
+
+      thread = maybeThread;
     } else {
-      thread = await this.threadService.create(context, {
+      thread = await this.threadService.create(serviceContext, {
         model: initialModel,
       });
 
@@ -83,7 +122,7 @@ export class OllamaController {
     }
 
     // Create a message for the user prompt
-    const promptMessage = await this.messageService.create(context, {
+    const promptMessage = await this.messageService.create(serviceContext, {
       model: initialModel,
       role: 'user',
       content: input.prompt,
@@ -93,8 +132,8 @@ export class OllamaController {
       fileIds: input.fileIds, // Link files to this message
     });
 
-    const messages = await this.messageService.findByThread(context, thread.id);
-    const seededMessages = await this.ensureActionPrompt(context, thread, messages);
+    const messages = await this.messageService.findByThreadId(serviceContext, thread.id);
+    const seededMessages = await this.ensureActionPrompt(serviceContext, thread, messages);
 
     // Build input messages with files attached to their respective messages
     const inputMessages: OllamaMessage[] = await Promise.all(
@@ -103,7 +142,7 @@ export class OllamaController {
 
     const { model, enableThinking, enableTools } = await this.ollamaService.resolveModel(context, {
       messages: inputMessages,
-      requestedModel: input.model ?? thread.model,
+      requestedModel: input.model,
       enableThinking: input.enableThinking,
       enableTools: input.enableTools,
     });
@@ -126,7 +165,8 @@ export class OllamaController {
       }
     });
 
-    const systemPromptEnabled = config.features['enable.system.prompt'];
+    const systemPromptEnabled = await this.featureService.isFeatureEnabled('enable.system.prompt');
+
     let leadingAssistantMessages: OllamaMessage[] = [];
     let conversationMessages = inputMessages;
 
@@ -190,7 +230,7 @@ export class OllamaController {
       for (let i = 0; i < stream.messages.length; i++) {
         const message = stream.messages[i];
 
-        await this.messageService.create(context, {
+        await this.messageService.create(serviceContext, {
           model,
           role: message.role,
           content: message.content,
@@ -208,10 +248,12 @@ export class OllamaController {
   }
 
   private async resolveMessage(context: RequestContext, message: Message): Promise<OllamaMessage> {
+    const serviceContext = toServiceContext(context);
+
     const images = message.files
       ? await Promise.all(
           message.files
-            .map((file) => (file.key ? this.fileService.getFileContent(context, file.key) : null))
+            .map((file) => (file.key ? this.fileService.getFileContent(serviceContext, file.key) : null))
             .filter((value): value is Promise<Uint8Array> => value !== null),
         )
       : [];
@@ -229,7 +271,7 @@ export class OllamaController {
   }
 
   private async ensureActionPrompt(
-    context: RequestContext,
+    context: ServiceContext,
     thread: Thread,
     messages: Message[],
   ): Promise<Message[]> {
@@ -247,13 +289,15 @@ export class OllamaController {
 
     const syntheticActionMessage: Message = {
       id: `action:${action.id}`,
-      model: thread.model ?? null,
+      model: null,
       role: 'assistant',
       content: action.text,
       mimetype: 'text/markdown',
       toolCalls: null,
       canceled: false,
       thread,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     };
 
     return [syntheticActionMessage, ...messages];
@@ -261,49 +305,53 @@ export class OllamaController {
 
   @OnEvent(Events.CHAT_SUMMARIZATION)
   async handleChatSummarizationEvent(payload: EventPayloads[Events.CHAT_SUMMARIZATION]) {
-    const context: RequestContext = {
+    const context = toServiceContext({
       userId: payload.ownerId,
-    };
-
-    const thread = await this.threadService.findOne(context, payload.threadId);
-    const messages = await this.messageService.findByThread(context, thread.id);
-
-    const messagesInput = [
-      {
-        role: 'system',
-        content:
-          'Please summarize all of the following messages I will send you in 10 words or less. Please ONLY give me your summary. Please do not use punctuation.',
-      },
-      ...messages
-        .filter((message) => message.role !== 'tool' && message.content)
-        .map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-    ];
-
-    const result = await this.ollamaService.chat(context, messagesInput, {
-      model: 'gemma3:1b',
     });
 
-    const summary = result.message.content;
+    const thread = await this.threadService.findById(context, payload.threadId);
 
-    await this.threadService.update(context, thread.id, {
-      name: summary,
-    });
+    if (thread) {
+      const messages = await this.messageService.findByThreadId(context, thread.id);
 
-    this.logger.log('Processed chat summarization event', {
-      payload,
-      summary: result.message.content,
-    });
+      const messagesInput = [
+        {
+          role: 'system',
+          content:
+            'Please summarize all of the following messages I will send you in 10 words or less. Please ONLY give me your summary. Please do not use punctuation.',
+        },
+        ...messages
+          .filter((message) => message.role !== 'tool' && message.content)
+          .map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+      ];
+
+      const result = await this.ollamaService.chat(context, messagesInput, {
+        model: 'gemma3:1b',
+      });
+
+      const summary = result.message.content;
+
+      await this.threadService.update(context, thread.id, {
+        name: summary,
+      });
+
+      this.logger.log('Processed chat summarization event', {
+        payload,
+        summary: result.message.content,
+      });
+    }
   }
 
   /**
    * Build system prompt with pre-hydrated user context
    */
   private async buildSystemPrompt(context: RequestContext, options?: SystemPromptOptions): Promise<string> {
-    const basePrompt = `You are a helpful AI assistant with access to various tools and information about the user.
-
+    const basePrompt = `You are Companion, a helpful AI assistant with access to various tools and information about the user.
+    You are designed to take in various data sources that the user connects you to (via connections) and help the user with not just everyday tasks, but with their pursuit of happiness.
+    
 Your capabilities:
 - You can query the user's knowledge graph to find information about their preferences, family, and relationships
 - You can compose multiple tool calls in sequence to answer complex questions

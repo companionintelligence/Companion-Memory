@@ -15,7 +15,7 @@ import {
 } from 'three';
 
 import type { GraphLink, GraphNode } from '@/api/useGraphOverview';
-import { useTheme } from '@/hooks/use-theme';
+import { useTheme } from '@/components/ThemePicker';
 
 export interface ForceGraph3DProps {
   nodes: GraphNode[];
@@ -71,6 +71,12 @@ const TYPE_COLOR_PALETTE = [
   '#c084fc',
 ];
 
+const MIN_LINK_DISTANCE = 20;
+const MAX_LINK_DISTANCE = 320;
+const MIN_LINK_STRENGTH = 0.015;
+const MAX_LINK_STRENGTH = 0.2;
+const STRENGTH_CURVE_EXPONENT = 2.2;
+
 function getTypeColor(entityType: string): string {
   if (!entityType) {
     return TYPE_COLOR_PALETTE[0];
@@ -90,6 +96,28 @@ function getTypeColor(entityType: string): string {
   const index = Math.abs(hash) % TYPE_COLOR_PALETTE.length;
 
   return TYPE_COLOR_PALETTE[index];
+}
+
+function clampRelationshipStrength(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function getLinkDistanceFromStrength(value: number): number {
+  const normalized = clampRelationshipStrength(value);
+  const curved = Math.pow(normalized, STRENGTH_CURVE_EXPONENT);
+
+  return MAX_LINK_DISTANCE - curved * (MAX_LINK_DISTANCE - MIN_LINK_DISTANCE);
+}
+
+function getLinkForceStrength(value: number): number {
+  const normalized = clampRelationshipStrength(value);
+  const curved = Math.pow(normalized, STRENGTH_CURVE_EXPONENT);
+
+  return MIN_LINK_STRENGTH + curved * (MAX_LINK_STRENGTH - MIN_LINK_STRENGTH);
 }
 
 export function ForceGraph3D({
@@ -253,14 +281,21 @@ export function ForceGraph3D({
       canvas.width = 256;
       canvas.height = 64;
       // Use white text in dark mode, black text in light mode
-      const textColor =
-        themeState.mode === 'light'
-          ? isCenter
-            ? '#000000'
-            : 'rgba(0, 0, 0, 0.9)'
-          : isCenter
-            ? '#ffffff'
-            : 'rgba(255, 255, 255, 0.9)';
+      // For system mode, check the actual system preference
+      const effectiveMode =
+        themeState.mode === 'system'
+          ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light'
+          : themeState.mode;
+      const isLightMode = effectiveMode === 'light';
+      const textColor = isLightMode
+        ? isCenter
+          ? '#000000'
+          : 'rgba(0, 0, 0, 0.9)'
+        : isCenter
+          ? '#ffffff'
+          : 'rgba(255, 255, 255, 0.9)';
       context.fillStyle = textColor;
       context.font = isCenter ? 'bold 28px Arial' : '20px Arial';
       context.textAlign = 'center';
@@ -329,6 +364,35 @@ export function ForceGraph3D({
   };
 
   const graphWidth = containerWidth > 0 ? containerWidth : 600;
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || graphData.nodes.length === 0) {
+      return;
+    }
+
+    let rafId = 0;
+
+    rafId = window.requestAnimationFrame(() => {
+      const linkForce = graph.d3Force('link') as
+        | {
+            distance: (distanceAccessor: (link: GraphLinkObject) => number) => void;
+            strength: (strengthAccessor: (link: GraphLinkObject) => number) => void;
+          }
+        | undefined;
+
+      if (!linkForce) {
+        return;
+      }
+
+      linkForce.distance((link) => getLinkDistanceFromStrength(link.strength ?? 0.5));
+      linkForce.strength((link) => getLinkForceStrength(link.strength ?? 0.5));
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [graphData.links, graphData.nodes.length]);
 
   useEffect(() => {
     if (graphData.nodes.length === 0) {

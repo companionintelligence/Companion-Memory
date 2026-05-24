@@ -1,32 +1,25 @@
 {
+  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2020",
+    "noEmit": true,
+
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "strict": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedSideEffectImports": true,
 
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
-    "noEmit": true,
 
     "allowImportingTsExtensions": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "verbatimModuleSyntax": true,
-
-    "forceConsistentCasingInFileNames": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
 
     "jsx": "react-jsx",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "resolveJsonModule": true,
-    "types": ["vite/client", "google.maps"]
+    "types": ["vite/client", "google.maps", "node"]
   },
-  "include": [".", ".storybook/**/*", "src"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src", "scripts", "stories", "*.config.ts", "codegen.ts", ".storybook/**/*"],
+  "exclude": ["node_modules", "dev-dist", "dist"]
 }

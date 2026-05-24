@@ -101,6 +101,7 @@ function buildSubgraph(
 
 export interface GraphOverviewOptions {
   maxDepth?: number;
+  refreshKey?: number | string;
 }
 
 export function useGraphOverview(
@@ -108,6 +109,7 @@ export function useGraphOverview(
   options: GraphOverviewOptions = {},
 ): GraphOverviewState {
   const maxDepth = options.maxDepth ?? 1;
+  const refreshKey = options.refreshKey ?? 0;
 
   const [state, setState] = useState<GraphOverviewState>({
     loading: true,
@@ -187,7 +189,7 @@ export function useGraphOverview(
     return () => {
       cancelled = true;
     };
-  }, [authToken, maxDepth]);
+  }, [authToken, maxDepth, refreshKey]);
 
   return useMemo(() => state, [state]);
 }

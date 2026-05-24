@@ -1,0 +1,123 @@
+services:
+  api:
+    image: ci/api
+    volumes:
+      - secrets:/run/secrets:ro
+    environment:
+      ENABLE_HBPE: ${ENABLE_HBPE:-false}
+    networks:
+      - ci
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+      migrate-database:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [ "production" ]
+
+  database:
+    volumes:
+      - secrets:/run/secrets:ro
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+
+  gateway:
+    image: ci/gateway
+    ports:
+      - 8642:8642
+    networks:
+      - ci
+    depends_on:
+      api:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [ "production" ]
+
+  hbpe-service:
+    volumes:
+      - secrets:/run/secrets:ro
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+
+  object-store:
+    volumes:
+      - secrets:/run/secrets:ro
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+
+  orchestrator:
+    environment:
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/local.yaml
+    volumes:
+      - secrets:/run/secrets:ro
+      - ./infrastructure/orchestrator/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/local.yaml:ro
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+
+  summary-service:
+    volumes:
+      - secrets:/run/secrets:ro
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+
+  #############
+  # EPHEMERAL #
+  #############
+
+  generate-secrets:
+    image: ci/setup-secrets
+    restart: "no"
+    volumes:
+      - secrets:/run/secrets
+    profiles: [ "production" ]
+
+  migrate-database:
+    image: ci/api
+    volumes:
+      - secrets:/run/secrets:ro
+    networks:
+      - ci
+    command: ["yarn", "migrate"]
+    restart: "no"
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+    profiles: [ "production" ]
+
+  setup-database:
+    volumes:
+      - secrets:/run/secrets:ro
+
+  setup-orchestrator:
+    volumes:
+      - secrets:/run/secrets:ro
+
+volumes:
+  db-data:
+    name: ci-server-production-db-data
+  object-data:
+    name: ci-server-production-object-data

@@ -1,25 +1,11 @@
 -- =================================================================
 -- POSTGRESQL EXTENSIONS SETUP
 -- =================================================================
--- This file must be run first to enable all required extensions
+-- Extensions are now provisioned by ci/setup-database (superuser init container).
+-- This migration is kept as a no-op so dbmate doesn't re-run it.
 
--- Core extensions for the multi-modal database
 -- migrate:up
-CREATE EXTENSION IF NOT EXISTS pg_uuidv7;            -- UUID v7 with timestamps
-CREATE EXTENSION IF NOT EXISTS timescaledb;          -- Time-series optimization
-CREATE EXTENSION IF NOT EXISTS postgis;              -- Geospatial operations  
-CREATE EXTENSION IF NOT EXISTS vector;               -- Vector similarity search
-
--- Optional but recommended extensions
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;   -- Query performance monitoring
-CREATE EXTENSION IF NOT EXISTS btree_gist;          -- Better indexing for exclusion constraints
-
+-- No-op: see infrastructure/setup-database/entrypoint.sh
 
 -- migrate:down
--- Drop all extensions in reverse order of creation
-DROP EXTENSION IF EXISTS btree_gist;
-DROP EXTENSION IF EXISTS pg_stat_statements;
-DROP EXTENSION IF EXISTS vector;
-DROP EXTENSION IF EXISTS postgis;
-DROP EXTENSION IF EXISTS timescaledb;
-DROP EXTENSION IF EXISTS pg_uuidv7;
+-- No-op: extension lifecycle managed by ci/setup-database

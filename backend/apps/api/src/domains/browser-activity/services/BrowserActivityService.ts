@@ -1,63 +1,58 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
+import { v7 as uuidv7 } from 'uuid';
 
-import { LoggerService } from '@ci/common/services';
-import type { RequestContext } from '@ci/common/types';
-import { DeviceService } from '@ci/domains/devices';
+import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
+import { LoggerService } from '@ci/common/logging';
+import { EventService } from '@ci/domains/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
-import { BrowserActivityEntity } from '../entities/BrowserActivityEntity';
-import type { CreateBrowserActivityDto, UpdateBrowserActivityDto, BrowserActivity } from '../types';
+import { BrowserActivity, BrowserActivityEntity } from '../entities/BrowserActivityEntity';
+import {
+  BrowserActivityCreatedEvent,
+  BrowserActivityUpdatedEvent,
+  BrowserActivityRemovedEvent,
+} from '../events';
+import type { CreateBrowserActivityDto, UpdateBrowserActivityDto } from '../types';
+
+interface Options {
+  limit?: number;
+  order?: FindOptionsOrder<BrowserActivityEntity>;
+  startTime?: Date;
+  endTime?: Date;
+}
 
 @Injectable()
 export class BrowserActivityService {
-  private logger = new LoggerService(BrowserActivityService.name);
-
   constructor(
     @InjectRepository(BrowserActivityEntity)
     private readonly browserActivityRepository: Repository<BrowserActivityEntity>,
-    private readonly deviceService: DeviceService,
-  ) {}
-
-  private async ensureDeviceExists(deviceId: string, context: RequestContext): Promise<void> {
-    // Check if device exists
-    const device = await this.deviceService.findOne(context, deviceId);
-
-    if (!device) {
-      // Create device if it doesn't exist
-      await this.deviceService.create(context, {
-        device_type: 'browser',
-        platform: 'web',
-      });
-
-      this.logger.log('Created new device for browser activity', {
-        deviceId,
-        userId: context.userId,
-      });
-    }
+    private readonly eventService: EventService,
+    private readonly logger: LoggerService,
+    private readonly dataSource: DataSource,
+  ) {
+    this.logger.setContext(BrowserActivityService.name);
   }
 
   async create(
-    context: RequestContext,
+    context: UserServiceContext,
     data: CreateBrowserActivityDto | CreateBrowserActivityDto[],
   ): Promise<BrowserActivity | BrowserActivity[]> {
+    // Required for TypeScript type narrowing to work within the closure.
+    const userId = context.userId;
+
     const isSingle = !Array.isArray(data);
     const dataArray: CreateBrowserActivityDto[] = isSingle ? [data] : data;
 
-    this.logger.log('Creating browser activity records', {
-      userId: context.userId,
-      count: dataArray.length,
-    });
-
     const returned = await Promise.all(
       dataArray.map(async (item) => {
-        // Ensure device exists before creating browser activity
-        await this.ensureDeviceExists(item.device_id, context);
+        const id = item.id ?? uuidv7();
 
         const browserActivity = await this.browserActivityRepository.create({
+          id,
           time: new Date(item.time),
-          user_id: context.userId!,
-          device_id: item.device_id,
+          user_id: userId,
           url: item.url,
           title: item.title,
           action_type: item.action_type,
@@ -65,7 +60,6 @@ export class BrowserActivityService {
           duration_seconds: item.duration_seconds,
           scroll_depth_percent: item.scroll_depth_percent,
           page_summary: item.page_summary,
-          page_embedding: item.page_embedding,
           category: item.category,
           productivity_score: item.productivity_score,
           is_incognito: item.is_incognito ?? false,
@@ -74,107 +68,165 @@ export class BrowserActivityService {
 
         const result = await this.browserActivityRepository.save(browserActivity);
 
-        return result.toBrowserActivity();
+        await this.eventService.send(BrowserActivityCreatedEvent, {
+          browserActivityId: result.id,
+        });
+
+        return BrowserActivityEntity.toEgressType(result);
       }),
     );
-
-    this.logger.log('Successfully created browser activity records', {
-      userId: context.userId,
-      count: returned.length,
-    });
 
     return isSingle ? returned[0] : returned;
   }
 
-  async findAll(context: RequestContext): Promise<BrowserActivity[]> {
-    this.logger.log('Fetching all browser activity for user', {
-      userId: context.userId,
-    });
-
-    const results = await this.browserActivityRepository.find({
-      where: { user_id: context.userId! },
-      order: { time: 'DESC' },
-    });
-
-    return results.map((entity) => entity.toBrowserActivity());
-  }
-
-  async findByTimeRange(
-    context: RequestContext,
-    startTime: string,
-    endTime: string,
-  ): Promise<BrowserActivity[]> {
-    this.logger.log('Fetching browser activity for time range', {
-      userId: context.userId,
-      startTime,
-      endTime,
-    });
-
+  async findAll(context: ServiceContext): Promise<BrowserActivity[]> {
     const results = await this.browserActivityRepository.find({
       where: {
-        user_id: context.userId!,
-        time: Between(new Date(startTime), new Date(endTime)),
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
       },
-      order: { time: 'DESC' },
+      order: {
+        time: 'DESC',
+      },
+      relations: ['user'],
     });
 
-    return results.map((entity) => entity.toBrowserActivity());
+    return results.map((entity) => BrowserActivityEntity.toEgressType(entity));
   }
 
-  async findOne(context: RequestContext, time: string, deviceId: string): Promise<BrowserActivity | null> {
-    const result = await this.browserActivityRepository.findOne({
+  async findByIds(context: ServiceContext, ids: string[]): Promise<(BrowserActivity | null)[]> {
+    const results = await this.browserActivityRepository.find({
       where: {
-        time: new Date(time),
-        user_id: context.userId!,
-        device_id: deviceId,
+        id: In(ids),
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
       },
+      order: { time: 'DESC' },
+      relations: ['user'],
     });
 
-    return result?.toBrowserActivity() ?? null;
+    const map = new Map(results.map((entity) => [entity.id, BrowserActivityEntity.toEgressType(entity)]));
+
+    return ids.map((id) => map.get(id) ?? null);
+  }
+
+  async findById(context: ServiceContext, id: string): Promise<BrowserActivity | null> {
+    return this.browserActivityRepository.findOne({
+      where: {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
+      },
+      relations: ['user'],
+    });
   }
 
   async update(
-    context: RequestContext,
-    time: string,
-    deviceId: string,
+    context: ServiceContext,
+    id: string,
     data: UpdateBrowserActivityDto,
   ): Promise<BrowserActivity | null> {
-    this.logger.log('Updating browser activity record', {
-      userId: context.userId,
-      time,
-      deviceId,
-    });
-
-    // Handle time field conversion if present
     const { time: timeString, ...restData } = data;
     const updateData: Record<string, unknown> = { ...restData };
+
     if (timeString !== undefined) {
       updateData.time = new Date(timeString);
     }
 
+    const browserActivity = await this.browserActivityRepository.findOne({
+      where: {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
+      },
+    });
+
+    if (!browserActivity) {
+      return null;
+    }
+
     await this.browserActivityRepository.update(
       {
-        time: new Date(time),
-        user_id: context.userId!,
-        device_id: deviceId,
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
       },
       updateData,
     );
 
-    return this.findOne(context, time, deviceId);
+    await this.eventService.send(BrowserActivityUpdatedEvent, {
+      browserActivityId: browserActivity.id,
+    });
+
+    return this.findById(context, browserActivity.id);
   }
 
-  async remove(context: RequestContext, time: string, deviceId: string): Promise<void> {
-    this.logger.log('Removing browser activity record', {
-      userId: context.userId,
-      time,
-      deviceId,
+  async remove(context: ServiceContext, id: string): Promise<boolean> {
+    const browserActivity = await this.browserActivityRepository.findOne({
+      where: {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user_id: context.userId,
+        }),
+      },
     });
 
+    if (!browserActivity) {
+      return false;
+    }
+
     await this.browserActivityRepository.delete({
-      time: new Date(time),
-      user_id: context.userId!,
-      device_id: deviceId,
+      id,
+      ...(context.userId !== SYSTEM_USER && {
+        user_id: context.userId,
+      }),
     });
+
+    await this.eventService.send(BrowserActivityRemovedEvent, {
+      browserActivityId: id,
+    });
+
+    return true;
+  }
+
+  async getEntitiesForBrowserActivities(
+    context: ServiceContext,
+    options: Options,
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.dataSource
+      .getRepository(BrowserActivityEntity)
+      .createQueryBuilder('browser-activity')
+      .select(['browser-activity.id'])
+      .where('browser-activity.user_id = :userId', { userId: context.userId });
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    if (options.order) {
+      for (const [field, direction] of Object.entries(options.order)) {
+        query = query.orderBy(`browser-activity.${field}`, direction as 'ASC' | 'DESC');
+      }
+    }
+
+    if (options.startTime) {
+      query = query.andWhere('browser-activity.time >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('browser-activity.time >= :endTime', { endTime: options.endTime });
+    }
+
+    const results = await query.getRawMany();
+
+    return results.map((row: { 'browser-activity_id': string; type: IndexableEntity }) => ({
+      id: row['browser-activity_id'],
+      type: 'browser-activity' as IndexableEntity,
+    }));
   }
 }

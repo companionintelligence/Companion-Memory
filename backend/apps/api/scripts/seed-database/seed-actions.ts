@@ -1,47 +1,57 @@
-import path from 'path';
+import { type TestingModule } from '@nestjs/testing';
+import { type MultiBar } from 'cli-progress';
 
-import { Logger } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { ActionService } from '@ci/domains/intelligence';
+import { TagService } from '@ci/domains/search-next';
 
-import { ActionEntity } from '@ci/domains/intelligence';
+import { ACTIONS } from './data/actions';
 
-import { getOrCreateTags, parseTags, readCsv } from './utils';
+export async function seedActions(module: TestingModule, multibar: MultiBar) {
+  const actionService = module.get(ActionService);
+  const tagService = module.get(TagService);
 
-const logger = new Logger(path.basename(__filename));
+  const bar = multibar.create(ACTIONS.length, 0, { task: 'Actions' });
 
-export async function seedActions(db: DataSource, filePath: string) {
-  type CsvRecord = {
-    id: string;
-    title: string;
-    text: string;
-    image_url: string;
-    thread_id: string;
-    user_id: string;
-    tags: string;
-  };
+  for (const record of ACTIONS) {
+    const existingAction = await actionService.findById(
+      {
+        userId: record.userId,
+      },
+      record.id,
+    );
 
-  const records = readCsv<CsvRecord>(filePath);
-
-  await db.transaction(async (manager) => {
-    for (const record of records) {
-      const tagNames = parseTags(record.tags);
-      const tags = await getOrCreateTags(manager, record.user_id, tagNames);
-
-      await manager.save(ActionEntity, {
-        id: record.id,
-        title: record.title,
-        text: record.text,
-        imageUrl: record.image_url,
-        thread: {
-          id: record.thread_id,
+    if (existingAction == null) {
+      await actionService.create(
+        {
+          userId: record.userId,
         },
-        user: {
-          id: record.user_id,
+        {
+          id: record.id,
+          title: record.title,
+          text: record.text,
+          imageUrl: record.imageUrl,
+          threadId: record.threadId,
         },
-        tags,
-      });
+      );
+
+      await tagService.tagEntities(
+        {
+          userId: record.userId,
+        },
+        {
+          labels: record.tags,
+          entities: [
+            {
+              type: 'action',
+              id: record.id,
+            },
+          ],
+        },
+      );
     }
-  });
 
-  logger.log(`Seeded ${records.length} action records`);
+    bar.increment();
+  }
+
+  bar.stop();
 }

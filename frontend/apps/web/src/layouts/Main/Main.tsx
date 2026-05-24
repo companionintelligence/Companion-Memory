@@ -24,6 +24,7 @@ export function Main() {
           </Suspense>
         </main>
         <MobileNavigation />
+        <Portal id="overlay-modal" className="fixed inset-0 z-50 empty:hidden" />
       </div>
     );
   }
@@ -56,6 +57,7 @@ export function Main() {
           </div>
         </Suspense>
       </div>
+      <Portal id="overlay-modal" className="fixed inset-0 z-50 empty:hidden" />
     </div>
   );
 }

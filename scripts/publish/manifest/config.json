@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schemas.runtipi.io/v2/app-info.json",
+  "id": "companion",
+  "name": "Companion",
+  "version": "0.0.0",
+  "short_desc": "Your private AI companion — on your own hardware.",
+  "author": "Companion Intelligence",
+  "source": "https://github.com/companionintelligence/CI-Server",
+  "port": 8642,
+  "categories": ["ai"],
+  "available": true,
+  "supported_architectures": ["amd64", "arm64"],
+  "tipi_version": 1,
+  "description": "Companion Intelligence server with speech-to-text, text-to-speech, LLM summarization, and a full API backend — all running locally.",
+  "website": "https://companionintelligence.com",
+  "exposable": true,
+  "pricing": {
+    "type": "free"
+  }
+}

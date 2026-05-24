@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not } from 'typeorm';
 
-import { RequestContext } from '@ci/common/types';
+import { RequestContext } from '@ci/common/context';
 
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../entities/PgBossJobEntity';

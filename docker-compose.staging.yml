@@ -1,0 +1,114 @@
+services:
+  api:
+    image: ci/api
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: database
+      OBJECT_STORE_URL: http://object-store:9000
+      OLLAMA_HOST: http://host.docker.internal:11434
+      HBPE_HOST: http://hbpe-service:8002
+    networks:
+      - ci
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      migrate-database:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [ "staging" ]
+
+  database:
+    environment:
+      PASSWORD: ${DATABASE_ADMIN_PASSWORD}
+    ports:
+      - 5432:5432
+
+  gateway:
+    image: ci/gateway
+    ports:
+      - 8642:8642
+    volumes:
+      - ./infrastructure/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - ci
+    depends_on:
+      api:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [ "staging" ]
+
+  hbpe-service:
+    environment:
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+
+  object-store:
+    environment:
+      USERNAME: ${OBJECT_STORE_USERNAME}
+      PASSWORD: ${OBJECT_STORE_PASSWORD}
+    ports:
+      - 9000:9000
+
+  orchestrator:
+    environment:
+      DATABASE_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/local.yaml
+    volumes:
+      - ./infrastructure/orchestrator/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/local.yaml:ro
+
+  summary-service:
+    environment:
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+
+  #############
+  # EPHEMERAL #
+  #############
+
+  migrate-database:
+    image: ci/api
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: database
+    networks:
+      - ci
+    command: ["yarn", "migrate"]
+    restart: "no"
+    depends_on:
+      setup-database:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+    profiles: [ "staging" ]
+
+  setup-database:
+    environment:
+      ADMIN_PASSWORD: ${DATABASE_ADMIN_PASSWORD}
+      COMPANION_PASSWORD: ${DATABASE_PASSWORD}
+      ORCHESTRATOR_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+
+  setup-orchestrator:
+    environment:
+      DATABASE_PASSWORD: ${ORCHESTRATOR_DATABASE_PASSWORD}
+
+volumes:
+  db-data:
+    name: ci-server-staging-db-data
+  object-data:
+    name: ci-server-staging-object-data

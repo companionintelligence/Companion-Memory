@@ -1,96 +1,54 @@
-import path from 'path';
+import { type TestingModule } from '@nestjs/testing';
+import { type MultiBar } from 'cli-progress';
 
-import { Logger } from '@nestjs/common';
-import type { DataSource } from 'typeorm';
+import { EventService } from '@ci/domains/memory';
 
-import { EventEntity } from '@ci/domains/memory';
+import { EVENTS } from './data/events';
+import { JOHN_SMITH } from './data/users';
 
-import { readCsv } from './utils';
+export async function seedEvents(module: TestingModule, multibar: MultiBar) {
+  const eventService = module.get(EventService);
 
-const logger = new Logger(path.basename(__filename));
+  const bar = multibar.create(EVENTS.length, 0, { task: 'Events' });
 
-export async function seedEvents(db: DataSource, filePath: string) {
-  type CsvRecord = {
-    id: string;
-    type: string;
-    name: string;
-    description: string;
-    start_time: string;
-    end_time: string;
-    related_objects: string;
-    data_source: string;
-    user_id: string;
-    connection_id: string;
-    provider_id: string;
-    created_at: string;
-    updated_at: string;
-  };
+  for (const event of EVENTS) {
+    const existingEvent = await eventService.findById(
+      {
+        userId: JOHN_SMITH.id,
+      },
+      event.id,
+    );
 
-  const records = readCsv<CsvRecord>(filePath);
-
-  await db.transaction(async (manager) => {
-    for (const record of records) {
-      // Parse dates, handling empty strings
-      const startTime = record.start_time ? new Date(record.start_time) : null;
-      const endTime = record.end_time ? new Date(record.end_time) : null;
-      const createdAt = record.created_at ? new Date(record.created_at) : new Date();
-      const updatedAt = record.updated_at ? new Date(record.updated_at) : new Date();
-
-      // Parse related_objects if it's a JSON array string
-      let sourceData = null;
-      if (record.related_objects) {
-        try {
-          // Handle different formats of related_objects
-          let parsed;
-          if (record.related_objects.startsWith('[') && record.related_objects.endsWith(']')) {
-            // Remove brackets and split by comma, handling quoted strings
-            const items = record.related_objects
-              .slice(1, -1)
-              .split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/) // Split by comma not inside quotes
-              .map((item) => item.trim().replace(/^["']|["']$/g, '')); // Remove quotes
-            parsed = items;
-          } else {
-            // Try parsing as JSON
-            parsed = JSON.parse(record.related_objects.replace(/'/g, '"'));
-          }
-
-          sourceData = { related_objects: parsed };
-        } catch {
-          // If parsing fails, store as-is
-          sourceData = { related_objects: record.related_objects };
-        }
-      }
-
-      // Add data_source to source_data if present
-      if (record.data_source) {
-        sourceData = sourceData || {};
-        (sourceData as Record<string, unknown>).data_source = record.data_source;
-      }
-
-      // Skip events without start_time (required field)
-      if (!startTime) {
-        logger.warn(`Skipping event ${record.id} - missing start_time`);
-        continue;
-      }
-
-      await manager.save(EventEntity, {
-        id: record.id,
-        type: record.type || null,
-        name: record.name || null,
-        description: record.description || null,
-        start_time: startTime,
-        end_time: endTime || undefined,
-        source_data: sourceData,
-        external_id: record.provider_id || null,
-        source_url: record.data_source || null,
-        user: {
-          id: record.user_id,
+    if (existingEvent == null) {
+      await eventService.create(
+        {
+          userId: JOHN_SMITH.id,
         },
-        created_at: createdAt,
-        updated_at: updatedAt,
+        {
+          id: event.id,
+          title: event.title,
+          description: event.description,
+          start_time: event.start_time,
+          end_time: event.end_time,
+          location_entity_id: event.location_entity_id,
+          participant_entity_ids: event.participant_entity_ids,
+          organizer_entity_id: event.organizer_entity_id,
+          user: {
+            id: JOHN_SMITH.id,
+          },
+        },
+      );
+    } else {
+      await eventService.update({ userId: JOHN_SMITH.id }, event.id, {
+        title: event.title,
+        description: event.description,
+        start_time: event.start_time,
+        end_time: event.end_time,
       });
     }
-  });
 
-  logger.log(`Seeded ${records.length} event records`);
+    bar.increment();
+  }
+
+  bar.stop();
 }

@@ -8,13 +8,12 @@ import {
   JoinColumn,
 } from 'typeorm';
 
-import { UserEntity } from '@ci/domains/user';
+import { encryptedColumnTransformer } from '@ci/common/crypto/field-encryption';
+import { UserEntity, type User } from '@ci/domains/user';
 
-import type { Connection } from '../types';
+import { ProviderEntity, type Provider } from './ProviderEntity';
 
-import { ProviderEntity } from './ProviderEntity';
-
-@Entity({ schema: 'ci_core', name: 'connections' })
+@Entity({ schema: 'ci', name: 'connections' })
 export class ConnectionEntity {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
@@ -22,16 +21,16 @@ export class ConnectionEntity {
   @Column({ type: 'text', nullable: true })
   name!: string | null;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ type: 'boolean', default: false })
   active!: boolean;
 
   @Column({ type: 'text', nullable: true })
   schedule!: string | null;
 
-  @Column({ type: 'text', nullable: true, name: 'access_token' })
+  @Column({ type: 'text', nullable: true, name: 'access_token', transformer: encryptedColumnTransformer })
   accessToken!: string | null;
 
-  @Column({ type: 'text', nullable: true, name: 'refresh_token' })
+  @Column({ type: 'text', nullable: true, name: 'refresh_token', transformer: encryptedColumnTransformer })
   refreshToken!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true, name: 'token_expiry' })
@@ -39,6 +38,18 @@ export class ConnectionEntity {
 
   @Column({ type: 'jsonb', nullable: true, name: 'sync_state' })
   syncState!: Record<string, unknown> | null;
+
+  @Column({ type: 'uuid', name: 'user_id' })
+  userId!: string;
+
+  @Column({ type: 'uuid', name: 'provider_id' })
+  providerId!: string;
+
+  @Column({ type: 'jsonb', default: [], name: 'active_endpoints' })
+  activeEndpoints!: string[];
+
+  @Column({ type: 'boolean', default: true, name: 'needs_reauth' })
+  needsReauth!: boolean;
 
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
@@ -48,23 +59,39 @@ export class ConnectionEntity {
   @JoinColumn({ name: 'provider_id' })
   provider?: ProviderEntity;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @Column({ type: 'text', nullable: true, name: 'external_id' })
+  externalId!: string | null;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  toConnection(): Connection {
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
+
+  static toEgressType(entity: ConnectionEntity): Connection {
     return {
-      id: this.id,
-      name: this.name ?? null,
-      active: this.active,
-      schedule: this.schedule ?? null,
-      accessToken: this.accessToken ?? null,
-      refreshToken: this.refreshToken ?? null,
-      tokenExpiry: this.tokenExpiry ?? null,
-      syncState: this.syncState ?? null,
-      provider: this.provider?.toProvider(),
-    } satisfies Connection;
+      id: entity.id,
+      name: entity.name,
+      active: entity.active,
+      schedule: entity.schedule,
+      accessToken: entity.accessToken,
+      refreshToken: entity.refreshToken,
+      tokenExpiry: entity.tokenExpiry,
+      syncState: entity.syncState,
+      userId: entity.userId,
+      providerId: entity.providerId,
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+      provider: entity.provider ? ProviderEntity.toEgressType(entity.provider) : undefined,
+      activeEndpoints: entity.activeEndpoints,
+      needsReauth: entity.needsReauth,
+      externalId: entity.externalId,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    };
   }
 }
+
+export type Connection = Readonly<Omit<ConnectionEntity, 'user' | 'provider'>> & {
+  user?: User;
+  provider?: Provider;
+};

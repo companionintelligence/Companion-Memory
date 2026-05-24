@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { LoggerService } from '@ci/common/logging';
 import { GraphEventService, GraphQueryService } from '@ci/domains/memory';
 
 import { BaseTool } from '../../core/BaseTool';
@@ -157,8 +158,10 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
   constructor(
     private readonly graphEvents: GraphEventService,
     private readonly graphQuery: GraphQueryService,
+    protected readonly logger: LoggerService,
   ) {
     super();
+    this.logger.setContext(WriteKnowledgeTool.name);
   }
 
   protected validateInput(input: unknown): WriteKnowledgeInput {

@@ -13,7 +13,6 @@ export const createBrowserActivitySchemaRoot = z.object({
   duration_seconds: z.number().int().min(0).optional(),
   scroll_depth_percent: z.number().min(0).max(100).optional(),
   page_summary: z.string().optional(),
-  page_embedding: z.array(z.number()).optional(),
   category: z.string().optional(),
   productivity_score: z.number().min(0).max(1).optional(),
   is_incognito: z.boolean().optional(),
@@ -21,14 +20,15 @@ export const createBrowserActivitySchemaRoot = z.object({
 });
 
 export const createBrowserActivitySchema = z.union([
-  createBrowserActivitySchemaRoot.partial(),
-  z.array(createBrowserActivitySchemaRoot.partial()),
+  createBrowserActivitySchemaRoot,
+  z.array(createBrowserActivitySchemaRoot),
 ]);
 
 export const updateBrowserActivitySchema = createBrowserActivitySchemaRoot.partial();
 
 // DTOs
 export interface CreateBrowserActivityDto {
+  id?: string;
   time: string;
   device_id: string;
   url: string;
@@ -38,7 +38,6 @@ export interface CreateBrowserActivityDto {
   duration_seconds?: number;
   scroll_depth_percent?: number;
   page_summary?: string;
-  page_embedding?: number[];
   category?: string;
   productivity_score?: number;
   is_incognito?: boolean;
@@ -55,7 +54,6 @@ export interface UpdateBrowserActivityDto {
   duration_seconds?: number;
   scroll_depth_percent?: number;
   page_summary?: string;
-  page_embedding?: number[];
   category?: string;
   productivity_score?: number;
   is_incognito?: boolean;

@@ -22,19 +22,19 @@
  * @module IntelligenceModule
  */
 
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
-import { LLMModule } from '@ci/domains/llm';
-import { EmbeddingModule } from '@ci/domains/search';
 
 import { ActionsController } from './controllers/ActionsController';
 import { AnswersController } from './controllers/AnswersController';
 import { QuestionsController } from './controllers/QuestionsController';
-import { ActionEntity } from './entities/ActionEntity';
-import { AnswerEntity } from './entities/AnswerEntity';
-import { QuestionEntity } from './entities/QuestionEntity';
+import { FeedQueueCron } from './cron/FeedQueueCron';
+import { type Action, ActionEntity } from './entities/ActionEntity';
+import { type Answer, AnswerEntity } from './entities/AnswerEntity';
+import { type Question, QuestionEntity } from './entities/QuestionEntity';
+import { FeedQueuePopulationListener } from './listeners/FeedQueuePopulationListener';
 import { ActionService } from './services/ActionService';
 import { AnswerService } from './services/AnswerService';
 import { QuestionService } from './services/QuestionService';
@@ -43,13 +43,8 @@ import { QuestionService } from './services/QuestionService';
  * @internal
  */
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([ActionEntity, AnswerEntity, QuestionEntity]),
-    EventsModule,
-    forwardRef(() => LLMModule),
-    EmbeddingModule,
-  ],
-  providers: [ActionService, AnswerService, QuestionService],
+  imports: [TypeOrmModule.forFeature([ActionEntity, AnswerEntity, QuestionEntity]), EventsModule],
+  providers: [ActionService, AnswerService, QuestionService, FeedQueueCron, FeedQueuePopulationListener],
   controllers: [ActionsController, AnswersController, QuestionsController],
   exports: [ActionService, AnswerService, QuestionService],
 })
@@ -61,5 +56,4 @@ export { ActionEntity, AnswerEntity, QuestionEntity };
 // Services
 export { ActionService, AnswerService, QuestionService };
 
-// Types
-export type { Answer, Question } from './types';
+export type { Action, Answer, Question };

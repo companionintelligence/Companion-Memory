@@ -20,25 +20,41 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventsModule } from '@ci/domains/events';
 
 import { FilesController } from './controllers/FilesController';
-import { FileEntity } from './entities/FileEntity';
+import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
+import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
+import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
 import { FileService } from './services/FileService';
+import { SavedSearchService } from './services/SavedSearchService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([FileEntity]), EventsModule],
-  providers: [FileService],
+  imports: [TypeOrmModule.forFeature([FileEntity, SavedSearchEntity]), EventsModule],
+  providers: [FileService, SavedSearchService, FilePreviewGenerationListener],
   controllers: [FilesController],
-  exports: [FileService],
+  exports: [FileService, SavedSearchService],
 })
 export class FilesModule {}
 
-// Entities
-export { FileEntity };
-
-// Services
-export { FileService };
-
-// Types
-export type { File } from './types';
+export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export type { File, SignedFile, SavedSearch };
+export {
+  FileCreatedEvent,
+  FileUpdatedEvent,
+  FileUploadedEvent,
+  FileRemovedEvent,
+  PreviewGeneratedEvent,
+  SavedSearchCreatedEvent,
+  SavedSearchUpdatedEvent,
+  SavedSearchDeletedEvent,
+  type FileCreatedPayload,
+  type FileUpdatedPayload,
+  type FileUploadedPayload,
+  type FileDeletedPayload,
+  type PreviewGeneratedPayload,
+  type SavedSearchCreatedPayload,
+  type SavedSearchUpdatedPayload,
+  type SavedSearchDeletedPayload,
+} from './events';
+export { FileVariant } from './types';

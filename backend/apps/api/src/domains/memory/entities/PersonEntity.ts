@@ -4,25 +4,20 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToMany,
   ManyToOne,
-  JoinTable,
   JoinColumn,
   AfterLoad,
-  Repository,
-  SelectQueryBuilder,
 } from 'typeorm';
 
-import { TagEntity } from '@ci/domains/search';
 import { UserEntity } from '@ci/domains/user';
 
-@Entity({ name: 'entities' })
+@Entity({ schema: 'ci', name: 'entities' })
 export class PersonEntity {
   @PrimaryColumn('uuid', { name: 'entity_id' })
   id!: string;
 
   @Column({ type: 'text', name: 'entity_type', default: 'Person' })
-  entity_type!: string;
+  entityType!: string;
 
   @Column({ type: 'text', nullable: true })
   name!: string | null;
@@ -33,14 +28,17 @@ export class PersonEntity {
   @Column({ type: 'jsonb', default: '{}' })
   properties!: Record<string, unknown>;
 
-  @Column({ type: 'text', nullable: true })
-  search_content!: string | null;
+  @Column({ type: 'text', name: 'search_content', nullable: true })
+  searchContent!: string | null;
 
-  @Column({ type: 'text', nullable: false })
-  linked_id!: string;
+  @Column({ type: 'text', name: 'linked_id', nullable: false })
+  linkedId!: string;
 
-  @Column({ type: 'text', nullable: false })
-  linked_table!: string;
+  @Column({ type: 'text', name: 'linked_table', nullable: false })
+  linkedTable!: string;
+
+  @Column({ type: 'uuid', name: 'owner_user_id', nullable: true })
+  userId?: string | null;
 
   @ManyToOne(() => UserEntity, { nullable: true })
   @JoinColumn({ name: 'owner_user_id' })
@@ -49,17 +47,17 @@ export class PersonEntity {
   // Backward compatibility fields - populated from properties JSONB after load
   type!: string | null;
 
-  first_name!: string | null;
+  firstName!: string | null;
 
-  last_name!: string | null;
+  lastName!: string | null;
 
   gender!: string | null;
 
   address!: string | null;
 
-  street_address!: string | null;
+  streetAddress!: string | null;
 
-  street_address_2!: string | null;
+  streetAddress2!: string | null;
 
   city!: string | null;
 
@@ -67,59 +65,75 @@ export class PersonEntity {
 
   country!: string | null;
 
-  postal_code!: string | null;
+  postalCode!: string | null;
 
-  avatar_url!: string | null;
+  avatarUrl!: string | null;
 
-  external_id!: string | null;
+  externalId!: string | null;
 
-  source_url!: string | null;
+  sourceUrl!: string | null;
 
-  source_data!: Record<string, unknown> | null;
+  sourceData!: Record<string, unknown> | null;
 
   @AfterLoad()
   loadPropertiesFromJsonb() {
     this.type = (this.properties?.type as string) || null;
-    this.first_name = (this.properties?.first_name as string) || null;
-    this.last_name = (this.properties?.last_name as string) || null;
+    this.firstName = (this.properties?.first_name as string) || null;
+    this.lastName = (this.properties?.last_name as string) || null;
     this.gender = (this.properties?.gender as string) || null;
     this.address = (this.properties?.address as string) || null;
-    this.street_address = (this.properties?.street_address as string) || null;
-    this.street_address_2 = (this.properties?.street_address_2 as string) || null;
+    this.streetAddress = (this.properties?.street_address as string) || null;
+    this.streetAddress2 = (this.properties?.street_address_2 as string) || null;
     this.city = (this.properties?.city as string) || null;
     this.region = (this.properties?.region as string) || null;
     this.country = (this.properties?.country as string) || null;
-    this.postal_code = (this.properties?.postal_code as string) || null;
-    this.avatar_url = (this.properties?.avatar_url as string) || null;
-    this.external_id = (this.properties?.external_id as string) || null;
-    this.source_url = (this.properties?.source_url as string) || null;
-    this.source_data = (this.properties?.source_data as Record<string, unknown>) || null;
+    this.postalCode = (this.properties?.postal_code as string) || null;
+    this.avatarUrl = (this.properties?.avatar_url as string) || null;
+    this.externalId = (this.properties?.external_id as string) || null;
+    this.sourceUrl = (this.properties?.source_url as string) || null;
+    this.sourceData = (this.properties?.source_data as Record<string, unknown>) || null;
   }
 
-  // Helper method for creating filtered queries
-  static createPersonQuery(
-    repository: Repository<PersonEntity>,
-    alias: string = 'person',
-  ): SelectQueryBuilder<PersonEntity> {
-    return repository
-      .createQueryBuilder(alias)
-      .where(`${alias}.entity_type = :entityType`, { entityType: 'Person' });
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
+
+  @Column({ type: 'timestamptz', name: 'last_accessed', default: () => 'NOW()' })
+  lastAccessed!: Date;
+
+  static toEgressType(entity: PersonEntity): Person {
+    return {
+      id: entity.id,
+      entityType: entity.entityType,
+      name: entity.name,
+      description: entity.description,
+      properties: entity.properties,
+      firstName: entity.firstName,
+      lastName: entity.lastName,
+      type: entity.type,
+      gender: entity.gender,
+      address: entity.address,
+      streetAddress: entity.streetAddress,
+      streetAddress2: entity.streetAddress2,
+      city: entity.city,
+      region: entity.region,
+      country: entity.country,
+      postalCode: entity.postalCode,
+      avatarUrl: entity.avatarUrl,
+      externalId: entity.externalId,
+      sourceUrl: entity.sourceUrl,
+      sourceData: entity.sourceData,
+      searchContent: entity.searchContent,
+      linkedId: entity.linkedId,
+      linkedTable: entity.linkedTable,
+      userId: entity.userId || null,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+      lastAccessed: entity.lastAccessed,
+    };
   }
-
-  @ManyToMany(() => TagEntity, { nullable: true })
-  @JoinTable({
-    name: 'person_tag',
-    joinColumn: { name: 'person_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'tag_id', referencedColumnName: 'id' },
-  })
-  tags?: TagEntity[];
-
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
-
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
-
-  @Column({ type: 'timestamptz', default: () => 'NOW()' })
-  last_accessed!: Date;
 }
+
+export type Person = Readonly<Omit<PersonEntity, 'user' | 'tags' | 'loadPropertiesFromJsonb'>>;

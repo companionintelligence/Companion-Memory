@@ -5,6 +5,7 @@
 @config "../../tailwind.config.mjs";
 
 @source "../../../../packages/capture";
+@source "../../../../packages/editor";
 @source "../../../../packages/shadcn";
 
 @custom-variant dark (&:is(.dark *));

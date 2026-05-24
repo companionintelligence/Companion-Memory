@@ -1,0 +1,1 @@
+export { EntityDetails } from './EntityDetails';

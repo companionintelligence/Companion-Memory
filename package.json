@@ -15,8 +15,11 @@
   ],
   "devDependencies": {
     "@eslint/js": "^9.27.0",
+    "@playwright/test": "^1.57.0",
     "@storybook/react-vite": "^9.0.8",
+    "@types/node": "^25.0.1",
     "@types/pg": "^8",
+    "dotenv": "^17.2.3",
     "eslint": "^9.27.0",
     "eslint-config-prettier": "^10.1.5",
     "eslint-import-resolver-typescript": "^4.4.4",

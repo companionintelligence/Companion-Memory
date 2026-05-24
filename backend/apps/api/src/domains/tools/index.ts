@@ -8,7 +8,7 @@
  * - **`ToolRegistry`**: A central service that holds a collection of all available tools from
  *   all registered providers. It serves as the single point of entry for the LLM to discover
  *   and execute tools.
- * - **Tool Providers (`NativeToolProvider`, `McpToolProvider`)**: These are responsible for
+ * - **Tool Providers (`NativeToolProvider`)**: These are responsible for
  *   supplying a set of tools from a specific source. The `NativeToolProvider` manages tools
  *   defined directly within the application, while other providers can interface with external
  *   systems.
@@ -22,14 +22,15 @@
 
 import { Module } from '@nestjs/common';
 
+import { LoggerService } from '@ci/common/logging';
 import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
+import { SearchNextModule } from '@ci/domains/search-next';
 
-import { McpController } from './controllers/McpController';
-import { McpClientManager } from './providers/mcp/McpClientManager';
-import { McpToolProvider } from './providers/mcp/McpToolProvider';
+import { DatabaseSearchTool } from './providers/native/DatabaseSearchTool';
 import { ForgetKnowledgeTool } from './providers/native/ForgetKnowledgeTool';
 import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from './providers/native/GetFamilyMembersTool';
@@ -39,7 +40,6 @@ import { NativeToolProvider } from './providers/native/NativeToolProvider';
 import { ReadKnowledgeTool } from './providers/native/ReadKnowledgeTool';
 import { WriteKnowledgeTool } from './providers/native/WriteKnowledgeTool';
 import { ToolRegistry } from './registry/ToolRegistry';
-import { McpToolsService } from './services/McpToolsService';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 
 // Instantiate native tools
@@ -51,29 +51,37 @@ const nativeToolInstances = [
   GetFamilyMembersTool,
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
+  DatabaseSearchTool,
 ];
 
 /**
  * @internal
  */
 @Module({
-  imports: [EventsModule, ConversationModule, FilesModule, MemoryModule],
-  controllers: [McpController],
+  imports: [
+    EventsModule,
+    ConversationModule,
+    FilesModule,
+    MemoryModule,
+    IntelligenceModule,
+    SearchNextModule,
+  ],
   providers: [
     ToolRegistry,
-    McpClientManager,
-    McpToolProvider,
     // Native tools
     ...nativeToolInstances,
     // Native tool provider with injected tools
     {
       provide: NativeToolProvider,
-      useFactory: (...tools) => new NativeToolProvider(tools),
-      inject: nativeToolInstances,
+      inject: [LoggerService, ...nativeToolInstances],
+      useFactory: (...args) => {
+        const [logger, ...tools] = args;
+
+        return new NativeToolProvider(tools, logger);
+      },
     },
     // Registration service to wire everything together
     ToolsRegistrationService,
-    McpToolsService,
   ],
   exports: [ToolRegistry],
 })

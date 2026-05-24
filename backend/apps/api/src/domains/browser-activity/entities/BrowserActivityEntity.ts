@@ -1,4 +1,12 @@
-import { Entity, PrimaryColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  CreateDateColumn,
+  UpdateDateColumn,
+  Entity,
+  PrimaryColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 
 import { UserEntity } from '@ci/domains/user';
 
@@ -6,15 +14,18 @@ export interface Device {
   device_id: string;
 }
 
-@Entity('browser_activity')
+@Entity({ schema: 'ci', name: 'browser_activity' })
 export class BrowserActivityEntity {
-  @PrimaryColumn({ type: 'timestamptz' })
+  @PrimaryColumn({ type: 'uuid' })
+  id!: string;
+
+  @Column({ type: 'timestamptz' })
   time!: Date;
 
-  @PrimaryColumn({ type: 'uuid' })
+  @Column({ type: 'uuid' })
   user_id!: string;
 
-  @PrimaryColumn({ type: 'uuid' })
+  @Column({ type: 'uuid' })
   device_id!: string;
 
   // URL and page data
@@ -41,16 +52,6 @@ export class BrowserActivityEntity {
   @Column({ type: 'text', nullable: true })
   page_summary?: string;
 
-  @Column({
-    type: 'text',
-    nullable: true,
-    transformer: {
-      to: (v: number[]) => (v ? `[${v.join(',')}]` : null),
-      from: (v: string) => (v ? v.slice(1, -1).split(',').map(Number) : null),
-    },
-  })
-  page_embedding?: number[];
-
   @Column({ type: 'text', nullable: true })
   category?: string;
 
@@ -66,45 +67,36 @@ export class BrowserActivityEntity {
 
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
-  user?: UserEntity | null;
+  user?: UserEntity | undefined;
 
-  toBrowserActivity(): BrowserActivity {
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
+
+  static toEgressType(entity: BrowserActivityEntity): BrowserActivity {
     return {
-      time: this.time,
-      user_id: this.user_id,
-      device_id: this.device_id,
-      url: this.url,
-      title: this.title,
-      action_type: this.action_type,
-      properties: this.properties,
-      duration_seconds: this.duration_seconds,
-      scroll_depth_percent: this.scroll_depth_percent,
-      page_summary: this.page_summary,
-      page_embedding: this.page_embedding,
-      category: this.category,
-      productivity_score: this.productivity_score,
-      is_incognito: this.is_incognito,
-      contains_sensitive: this.contains_sensitive,
-      user: this.user?.toUser(),
+      id: entity.id,
+      time: entity.time,
+      user_id: entity.user_id,
+      device_id: entity.device_id,
+      url: entity.url,
+      title: entity.title,
+      action_type: entity.action_type,
+      properties: entity.properties,
+      duration_seconds: entity.duration_seconds,
+      scroll_depth_percent: entity.scroll_depth_percent,
+      page_summary: entity.page_summary,
+      category: entity.category,
+      productivity_score: entity.productivity_score,
+      is_incognito: entity.is_incognito,
+      contains_sensitive: entity.contains_sensitive,
+      user: entity.user == null ? undefined : entity.user,
+      updatedAt: entity.updatedAt,
+      createdAt: entity.createdAt,
     };
   }
 }
 
-export interface BrowserActivity {
-  readonly time: Date;
-  readonly user_id: string;
-  readonly device_id: string;
-  readonly url: string;
-  readonly title?: string;
-  readonly action_type?: string;
-  readonly properties: Record<string, unknown>;
-  readonly duration_seconds?: number;
-  readonly scroll_depth_percent?: number;
-  readonly page_summary?: string;
-  readonly page_embedding?: number[];
-  readonly category?: string;
-  readonly productivity_score?: number;
-  readonly is_incognito: boolean;
-  readonly contains_sensitive: boolean;
-  readonly user?: import('@ci/domains/user').User;
-}
+export type BrowserActivity = Readonly<BrowserActivityEntity>;

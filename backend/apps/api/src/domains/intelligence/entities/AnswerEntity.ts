@@ -8,55 +8,53 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-import { UserEntity } from '@ci/domains/user';
+import { UserEntity, type User } from '@ci/domains/user';
 
-import { Answer } from '../types';
+import { QuestionEntity, type Question } from './QuestionEntity';
 
-import { QuestionEntity } from './QuestionEntity';
-
-@Entity('answers')
+@Entity({ schema: 'ci', name: 'answers' })
 export class AnswerEntity {
-  @PrimaryColumn('uuid')
-  answer_id!: string;
+  @PrimaryColumn({ type: 'uuid', name: 'answer_id' })
+  id!: string;
 
-  @Column()
-  answer_text!: string;
+  @Column({ name: 'answer_text' })
+  answer!: string;
 
-  @Column({ type: 'double precision', nullable: true })
-  answer_confidence!: number;
+  @Column({ type: 'double precision', nullable: true, name: 'answer_confidence' })
+  answerConfidence!: number;
 
-  @Column({ default: 'user_input' })
-  answer_source!: string;
+  @Column({ default: 'user_input', name: 'answer_source' })
+  answerSource!: string;
 
-  @Column({ nullable: true })
-  answer_method!: string;
+  @Column({ nullable: true, name: 'answer_method' })
+  answerMethod!: string;
 
-  @Column({ type: 'timestamptz', default: () => 'NOW()' })
-  answered_at!: Date;
+  @Column({ type: 'timestamptz', default: () => 'NOW()', name: 'answered_at' })
+  answeredAt!: Date;
 
-  @Column({ type: 'jsonb', default: '{}' })
-  session_context!: Record<string, unknown>;
+  @Column({ type: 'jsonb', default: '{}', name: 'session_context' })
+  sessionContext!: Record<string, unknown>;
 
-  @Column({ nullable: true })
-  emotional_state!: string;
+  @Column({ nullable: true, name: 'emotional_state' })
+  emotionalState!: string;
 
-  @Column({ nullable: true })
-  location_context!: string;
+  @Column({ nullable: true, name: 'location_context' })
+  locationContext!: string;
 
-  @Column({ type: 'text', array: true, nullable: true })
-  extracted_entities!: string[];
+  @Column({ type: 'text', array: true, nullable: true, name: 'extracted_entities' })
+  extractedEntities!: string[];
 
-  @Column({ type: 'double precision', nullable: true })
-  sentiment_score!: number;
+  @Column({ type: 'double precision', nullable: true, name: 'sentiment_score' })
+  sentimentScore!: number;
 
-  @Column({ type: 'double precision', nullable: true })
-  complexity_score!: number;
+  @Column({ type: 'double precision', nullable: true, name: 'complexity_score' })
+  complexityScore!: number;
 
-  @Column({ default: false })
-  is_sensitive!: boolean;
+  @Column({ default: false, name: 'is_sensitive' })
+  isSensitive!: boolean;
 
-  @Column({ default: 'private' })
-  sharing_level!: string;
+  @Column({ default: 'private', name: 'sharing_level' })
+  sharingLevel!: string;
 
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
@@ -66,25 +64,36 @@ export class AnswerEntity {
   @JoinColumn({ name: 'question_id' })
   question?: QuestionEntity;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  created_at!: Date;
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updated_at!: Date;
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
+  updatedAt!: Date;
 
-  toAnswer() {
+  static toEgressType(entity: AnswerEntity) {
     return {
-      id: this.answer_id,
-      answer: this.answer_text,
-      answerConfidence: this.answer_confidence,
-      answerSource: this.answer_source,
-      answerMethod: this.answer_method,
-      answeredAt: this.answered_at,
-      isSensitive: this.is_sensitive,
-      sharingLevel: this.sharing_level,
+      id: entity.id,
+      answer: entity.answer,
+      answerConfidence: entity.answerConfidence,
+      answerSource: entity.answerSource,
+      answerMethod: entity.answerMethod,
+      answeredAt: entity.answeredAt,
+      isSensitive: entity.isSensitive,
+      sharingLevel: entity.sharingLevel,
+      complexityScore: entity.complexityScore,
+      sentimentScore: entity.sentimentScore,
+      extractedEntities: entity.extractedEntities,
+      emotionalState: entity.emotionalState,
+      locationContext: entity.locationContext,
+      sessionContext: entity.sessionContext,
 
-      user: this.user?.toUser(),
-      question: this.question?.toQuestion(),
-    } satisfies Answer;
+      user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
+      question: entity.question ? QuestionEntity.toEgressType(entity.question) : undefined,
+    };
   }
 }
+
+export type Answer = Readonly<Omit<AnswerEntity, 'user' | 'question' | 'createdAt' | 'updatedAt'>> & {
+  user?: User;
+  question?: Question;
+};

@@ -9,7 +9,7 @@ function getAllowedHosts(): string[] {
   const hostname = process.env.HOSTNAME;
 
   if (!hostname) {
-    return ['dev.companionintelligence.com', 'alpha.companionintel.com'];
+    return ['memory.ci.localhost'];
   }
 
   try {
@@ -101,12 +101,26 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // This package is type-only; resolve to empty module for runtime
+      '@graphql-typed-document-node/core': path.resolve(
+        __dirname,
+        './src/graphql/typed-document-node-shim.ts',
+      ),
     },
   },
   server: {
     host: '0.0.0.0',
-    port: 5173,
+    port: 8642,
     allowedHosts: getAllowedHosts(),
+    // `make local` also exposes nginx on :8642 which proxies /api → API. If you open the
+    // Vite URL directly (:5173), this mirrors that behavior so /api/* reaches Nest.
+    proxy: {
+      '/api': {
+        target: process.env.DEV_API_PROXY ?? 'http://127.0.0.1:3030',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api/, '') || '/',
+      },
+    },
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],
     },

@@ -1,16 +1,6 @@
-import {
-  Entity,
-  PrimaryColumn,
-  Column,
-  CreateDateColumn,
-  UpdateDateColumn,
-  ManyToOne,
-  JoinColumn,
-} from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
-import { GraphNodeEntity } from './GraphNodeEntity';
-
-@Entity({ name: 'relationships' })
+@Entity({ schema: 'ci', name: 'relationships' })
 export class RelationshipEntity {
   @PrimaryColumn('uuid')
   relationship_id!: string;
@@ -50,12 +40,4 @@ export class RelationshipEntity {
 
   @UpdateDateColumn({ type: 'timestamptz' })
   updated_at!: Date;
-
-  @ManyToOne(() => GraphNodeEntity)
-  @JoinColumn({ name: 'from_entity_id' })
-  from_entity?: GraphNodeEntity;
-
-  @ManyToOne(() => GraphNodeEntity)
-  @JoinColumn({ name: 'to_entity_id' })
-  to_entity?: GraphNodeEntity;
 }

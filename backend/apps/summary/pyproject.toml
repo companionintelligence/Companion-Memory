@@ -1,0 +1,51 @@
+[project]
+name = "ci-summary"
+version = "0.1.0"
+description = "CI-Summary: Temporal Summarization Service with Durable Workflows"
+requires-python = ">=3.10"
+dependencies = [
+    # Database
+    "psycopg2-binary",
+    "sqlalchemy",
+    "asyncpg",
+
+    # LLM Integration
+    "pydantic-ai",
+    "httpx",
+
+    # Workflow Orchestration
+    "temporalio",
+
+    # Environment & Configuration
+    "python-dotenv",
+    "pydantic",
+    "pydantic-settings",
+
+    # Utilities
+    "python-dateutil",
+    "pytz",
+    "tenacity",
+    "nest-asyncio",
+
+    # Logging
+    "structlog",
+
+    # API / HTTP
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

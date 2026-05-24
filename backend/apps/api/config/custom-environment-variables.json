@@ -8,32 +8,35 @@
     "session": {
       "fieldPepper": "AUTH_SESSION_PEPPER"
     },
+    "csrf": {
+      "secret": "AUTH_CSRF_TOKEN_SECRET"
+    },
+    "encryption": {
+      "fieldKey": "AUTH_FIELD_ENCRYPTION_KEY"
+    },
     "oauth": {
       "callbackUrl": "OAUTH_CALLBACK_URL"
     }
   },
   "db": {
-    "host": "POSTGRES_HOST",
-    "port": "POSTGRES_PORT",
-    "username": "POSTGRES_USERNAME",
-    "password": "POSTGRES_PASSWORD"
+    "host": "DATABASE_HOST",
+    "port": "DATABASE_PORT",
+    "username": "DATABASE_USERNAME",
+    "password": "DATABASE_PASSWORD"
   },
   "staticfiles": {
-    "storageUrl": "S3_URL",
+    "storageUrl": "OBJECT_STORE_URL",
     "auth": {
-      "accessKeyId": "S3_ACCESS_KEY_ID",
-      "secretAccessKey": "S3_SECRET_ACCESS_KEY"
+      "accessKeyId": "OBJECT_STORE_USERNAME",
+      "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }
   },
   "services": {
     "ollama": {
       "host": "OLLAMA_HOST"
     },
-    "stt": {
-      "host": "STT_HOST"
-    },
-    "tts": {
-      "host": "TTS_HOST"
+    "hbpe": {
+      "host": "HBPE_HOST"
     }
   },
   "features": {
@@ -41,7 +44,13 @@
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",
     "scheduled.entity.promotion": "ENABLE_SCHEDULED_ENTITY_PROMOTION",
     "pinned.demo.models": "ENABLE_PINNED_DEMO_MODELS",
-    "enable.system.prompt": "ENABLE_SYSTEM_PROMPT"
+    "enable.system.prompt": "ENABLE_SYSTEM_PROMPT",
+    "enable.inventory.page": "ENABLE_INVENTORY_PAGE",
+    "advanced.theme.tab": "ENABLE_ADVANCED_THEME_TAB",
+    "new.insights.page": "ENABLE_NEW_INSIGHTS_PAGE",
+    "require.signup.codes": "ENABLE_REQUIRE_SIGNUP_CODES",
+    "files.page": "ENABLE_FILES_PAGE",
+    "hbpe": "ENABLE_HBPE"
   },
   "environment": {
     "database.query.logging": "DATABASE_QUERY_LOGGING"

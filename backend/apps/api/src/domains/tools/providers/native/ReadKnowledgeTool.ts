@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { z } from 'zod';
 
+import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
 
 import { BaseTool } from '../../core/BaseTool';
@@ -362,8 +363,10 @@ export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledg
     private readonly graphQuery: GraphQueryService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    protected readonly logger: LoggerService,
   ) {
     super();
+    this.logger.setContext(ReadKnowledgeTool.name);
   }
 
   protected validateInput(input: unknown): ReadKnowledgeInput {
@@ -563,7 +566,7 @@ export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledg
       // First try to get entity_id directly from users table
       const userQuery = `
         SELECT entity_id
-        FROM ci_core.users
+        FROM ci.users
         WHERE id = $1
       `;
       const userResult = await this.dataSource.query(userQuery, [userId]);
@@ -575,7 +578,7 @@ export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledg
       // If user doesn't have entity_id set, try to find their Person entity via linked_table
       const entityQuery = `
         SELECT entity_id
-        FROM entities
+        FROM ci.entities
         WHERE linked_table = 'users'
           AND linked_id = $1
           AND is_active = TRUE

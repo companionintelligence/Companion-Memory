@@ -1,16 +1,1 @@
-{
-  "host": "0.0.0.0",
-  "logging": {
-    "level": "info"
-  },
-  "db": {
-    "host": "postgres",
-    "logging": false
-  },
-  "staticfiles": {
-    "storageUrl": "http://minio:9000",
-    "auth": {
-      "signatureUrl": "http://minio:9000"
-    }
-  }
-}
+{}

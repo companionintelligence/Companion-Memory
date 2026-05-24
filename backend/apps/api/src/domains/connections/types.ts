@@ -1,19 +1,4 @@
-export interface Connection {
-  readonly id: string;
-  readonly name: string | null;
-  readonly active: boolean;
-  readonly schedule: string | null;
-  readonly accessToken: string | null;
-  readonly refreshToken: string | null;
-  readonly tokenExpiry: Date | null;
-  readonly syncState: Record<string, unknown> | null;
-  readonly provider?: Provider;
-}
-
-export interface Provider {
-  readonly id: string;
-  readonly name: string | null;
-}
+import { z } from 'zod';
 
 export interface CompleteConnectionDto {
   state: string;
@@ -21,25 +6,36 @@ export interface CompleteConnectionDto {
 }
 
 export interface CreateConnectionDto {
-  name: string;
+  name?: string;
   providerId: string;
   clientid?: string;
+  accessToken?: string;
   clientkey?: string;
   clientsecret?: string;
   schedule?: string;
+  endpoints?: string[];
+  externalId?: string;
 }
 
 export interface UpdateConnectionDto {
   name?: string;
   active?: boolean;
-  clientid?: string;
-  clientkey?: string;
-  clientsecret?: string;
   schedule?: string;
-}
-
-export interface UpdateConnectionCredentialsDto {
   accessToken?: string | null;
   refreshToken?: string | null;
   tokenExpiry?: Date | null;
+  syncState?: Record<string, unknown> | null;
+  endpoints?: string[];
+  needsReauth?: boolean;
+  externalId?: string;
 }
+
+export interface connectProviderDto {
+  apiKey?: string;
+  endpoints: string[];
+}
+
+export const connectProviderSchema = z.object({
+  endpoints: z.array(z.string()),
+  apiKey: z.string().optional(),
+});

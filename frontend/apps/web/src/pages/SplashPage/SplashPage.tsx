@@ -1,23 +1,10 @@
-import { useMemo } from 'react';
-
-import { useDeviceLayout } from '@ci/common';
 import { Button } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
-import balloonImage from '@/assets/balloon-bouquet.jpg';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import splashImage from '@/assets/cells.jpg';
+import { ThemeToggle } from '@/components/ThemePicker';
 
 export function SplashPage() {
-  const { isMobile } = useDeviceLayout();
-
-  const gradient = useMemo(
-    () =>
-      isMobile
-        ? 'linear-gradient(to bottom, rgba(0,0,0,0.8), rgba(0,0,0,0))'
-        : 'linear-gradient(to right, rgba(0,0,0,0.6), rgba(0,0,0,0))',
-    [isMobile],
-  );
-
   return (
     <div className="relative h-lvh flex md:flex-row flex-col">
       <div className="absolute top-0 left-0 h-[max(0.5rem,env(safe-area-inset-top))] w-full">
@@ -29,7 +16,7 @@ export function SplashPage() {
       <div
         className="flex flex-col items-center justify-center flex-1 p-8 bg-cover bg-center text-white pt-[max(2rem,env(safe-area-inset-top))]"
         style={{
-          backgroundImage: `${gradient}, url(${balloonImage})`,
+          backgroundImage: `url(${splashImage})`,
         }}
       >
         <div className="md:max-w-xs text-center md:text-left">

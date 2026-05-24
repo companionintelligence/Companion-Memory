@@ -1,2 +1,2 @@
 export { EntityTypeFilter } from './EntityTypeFilter';
-export { SearchBox } from './SearchBox';
+export { SearchBox, type SearchResultItem } from './SearchBox';

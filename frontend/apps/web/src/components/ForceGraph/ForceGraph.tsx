@@ -58,8 +58,11 @@ function useContainerWidth(defaultWidth: number) {
 
 const defaultHeight = 420;
 const REPULSION_STRENGTH = 1200;
-const SPRING_LENGTH = 120;
-const SPRING_STRENGTH = 0.05;
+const MIN_SPRING_LENGTH = 30;
+const MAX_SPRING_LENGTH = 300;
+const MIN_SPRING_STRENGTH = 0.025;
+const MAX_SPRING_STRENGTH = 0.16;
+const STRENGTH_CURVE_EXPONENT = 2.2;
 const DAMPING = 0.85;
 const MAX_TICKS = 240;
 const MIN_ALPHA = 0.02;
@@ -92,6 +95,28 @@ function getTypeColor(entityType: string): string {
   const index = Math.abs(hash) % TYPE_COLOR_PALETTE.length;
 
   return TYPE_COLOR_PALETTE[index];
+}
+
+function clampRelationshipStrength(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function getSpringLengthFromStrength(value: number): number {
+  const normalized = clampRelationshipStrength(value);
+  const curved = Math.pow(normalized, STRENGTH_CURVE_EXPONENT);
+
+  return MAX_SPRING_LENGTH - curved * (MAX_SPRING_LENGTH - MIN_SPRING_LENGTH);
+}
+
+function getSpringStrengthFromRelationship(value: number): number {
+  const normalized = clampRelationshipStrength(value);
+  const curved = Math.pow(normalized, STRENGTH_CURVE_EXPONENT);
+
+  return MIN_SPRING_STRENGTH + curved * (MAX_SPRING_STRENGTH - MIN_SPRING_STRENGTH);
 }
 
 function ForceGraphBase({
@@ -259,8 +284,9 @@ function ForceGraphBase({
         const dx = target.x - source.x;
         const dy = target.y - source.y;
         const distance = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const desired = SPRING_LENGTH;
-        const springForce = (distance - desired) * SPRING_STRENGTH * alpha;
+        const desired = getSpringLengthFromStrength(link.strength);
+        const springStrength = getSpringStrengthFromRelationship(link.strength);
+        const springForce = (distance - desired) * springStrength * alpha;
         const fx = (springForce * dx) / distance;
         const fy = (springForce * dy) / distance;
 
