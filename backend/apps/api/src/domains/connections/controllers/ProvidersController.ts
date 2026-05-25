@@ -116,6 +116,11 @@ export class ProvidersController {
       };
     }
 
+    this.logger.log('No provider credentials found, falling back to CI Cloud OAuth proxy', {
+      providerId: id,
+      connectionId: connection.id,
+    });
+
     const providerName = this.cloudOAuthProxyService.getProviderNameForId(id);
 
     if (!providerName) {

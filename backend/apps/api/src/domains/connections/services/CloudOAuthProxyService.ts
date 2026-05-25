@@ -75,6 +75,10 @@ export class CloudOAuthProxyService {
     return key;
   }
 
+  private get authorizationHeader(): string {
+    return `Basic ${Buffer.from(`${this.deviceId}:${this.apiKey}`).toString('base64')}`;
+  }
+
   /**
    * Initiate an OAuth flow via CI Cloud.
    * Returns the authorization URL to redirect the user to.
@@ -98,7 +102,7 @@ export class CloudOAuthProxyService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Basic ${Buffer.from(`${config.ciPortal.deviceId}:${config.ciPortal.apiKey}`).toString('base64')}`,
+        Authorization: this.authorizationHeader,
       },
       body: JSON.stringify({
         provider,
@@ -137,7 +141,7 @@ export class CloudOAuthProxyService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `basic ${btoa(`${encodeURIComponent(config.ciPortal.deviceId)}:${encodeURIComponent(config.ciPortal.apiKey)}`)}`,
+        Authorization: this.authorizationHeader,
       },
       body: JSON.stringify({ refresh_token: proxyRefreshToken }),
     });
@@ -169,7 +173,7 @@ export class CloudOAuthProxyService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `basic ${btoa(`${encodeURIComponent(config.ciPortal.deviceId)}:${encodeURIComponent(config.ciPortal.apiKey)}`)}`,
+        Authorization: this.authorizationHeader,
       },
       body: JSON.stringify({ refresh_token: proxyRefreshToken }),
     });
