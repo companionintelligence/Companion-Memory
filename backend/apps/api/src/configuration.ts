@@ -122,6 +122,11 @@ export const ConfigSchema = z.object({
   environment: z.object({
     'database.query.logging': booleanStringSchema,
   }),
+  ciPortal: z.object({
+    url: z.string().optional(),
+    deviceId: z.string().optional(),
+    apiKey: z.string().optional(),
+  }),
 });
 
 export default ConfigSchema.parse(config);

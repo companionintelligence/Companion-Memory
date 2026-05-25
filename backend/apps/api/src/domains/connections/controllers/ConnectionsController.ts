@@ -19,9 +19,12 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
+import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 import { EventService } from '@ci/domains/events';
 
 import { ClientFactory } from '../clients';
+import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
 import type { CompleteConnectionDto, CreateConnectionDto, UpdateConnectionDto } from '../types';
 
@@ -55,10 +58,21 @@ const updateConnectionSchema = z.object({
   endpoints: z.array(z.string()).optional(),
 });
 
-const completeConnectionSchema = z.object({
-  state: z.string(),
-  code: z.string(),
-});
+const completeConnectionSchema = z.discriminatedUnion('flow', [
+  z.object({
+    flow: z.literal('proxy'),
+    state: z.string(),
+    accessToken: z.string(),
+    refreshToken: z.string().optional(),
+    expiresIn: z.number().int().positive().optional(),
+    userProviderId: z.string(),
+  }),
+  z.object({
+    flow: z.literal('direct'),
+    state: z.string(),
+    code: z.string(),
+  }),
+]);
 
 const completeOpenIDSchema = z.object({
   params: z.record(z.string()),
@@ -72,6 +86,7 @@ interface CompleteOpenIDDto {
 export class ConnectionsController {
   constructor(
     private readonly clientFactory: ClientFactory,
+    private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly connectionService: ConnectionService,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
@@ -170,17 +185,49 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+    const client = this.clientFactory.getClientByProviderId(
+      connection.provider?.id,
+    ) as BaseOAuth2Client | null;
 
     if (client == null) {
-      this.logger.log('Attmpted to connect without an associated client');
+      this.logger.log('Attempted to connect without an associated client');
 
       throw new InternalServerErrorException();
     }
 
-    return {
-      url: await client.getAuthorizationUrl(connection),
-    };
+    const clientCredentials = await client.getClientCredentials(connection);
+
+    //If the user has saved OAuth credentials for this provider, then just return the auth url generated for their OAuth app.
+    //Otherwise refresh through the proxy service on CI Portal
+    if (clientCredentials) {
+      return {
+        url: await client.getAuthorizationUrl(connection),
+      };
+    } else {
+      const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId);
+
+      if (!provider) {
+        this.logger.log('Attempted cloud proxy connect with unknown provider', {
+          providerId: connection.providerId,
+        });
+        throw new InternalServerErrorException();
+      }
+
+      // Build the callback URL from the configured OAUTH_CALLBACK_URL, embedding
+      // the connectionId so we know which connection to update on return.
+      const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
+      const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+
+      const scopes = client.getScopesFromActiveEndpoints(connection.activeEndpoints);
+
+      const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
+        provider,
+        callbackUrl,
+        scopes.length > 0 ? scopes.split(' ') : undefined,
+      );
+
+      return { url: authorization_url };
+    }
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -192,7 +239,7 @@ export class ConnectionsController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    const { state: connectionId, code } = body;
+    const { state: connectionId } = body;
 
     const connection = await this.connectionService.findById(serviceContext, connectionId);
 
@@ -200,6 +247,34 @@ export class ConnectionsController {
       this.logger.log('Performed a callback on `null` connection');
 
       throw new NotFoundException();
+    }
+
+    if (body.flow === 'proxy') {
+      // CI Cloud proxy flow: tokens already exchanged by CI Cloud.
+      // Check for duplicate connection before storing tokens.
+      const existingConnections = await this.connectionService.search(serviceContext, {
+        providerId: connection.providerId,
+        active: true,
+        externalId: body.userProviderId,
+      });
+
+      if (existingConnections.length > 0 && existingConnections.find((c) => c.id !== connectionId)) {
+        await this.connectionService.remove(serviceContext, connectionId);
+        throw new ConflictException('A connection to that account already exists');
+      }
+
+      const tokenExpiry = body.expiresIn ? new Date(Date.now() + body.expiresIn * 1000) : null;
+
+      await this.update(context, connectionId, {
+        accessToken: body.accessToken,
+        refreshToken: body.refreshToken ?? null,
+        tokenExpiry,
+        active: true,
+        needsReauth: false,
+        externalId: body.userProviderId,
+      });
+
+      return;
     }
 
     const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
@@ -210,7 +285,7 @@ export class ConnectionsController {
       throw new InternalServerErrorException();
     }
 
-    const tokenExchange = await client.exchangeAuthorizationCode(connection, code);
+    const tokenExchange = await client.exchangeAuthorizationCode(connection, body.code);
 
     await this.update(context, connectionId, {
       ...tokenExchange,

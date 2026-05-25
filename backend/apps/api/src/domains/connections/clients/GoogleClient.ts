@@ -3,16 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 
 import type { Connection } from '../entities/ConnectionEntity';
-import { ProviderKeyService } from '../services/ProviderKeyService';
 
 import { BaseOAuth2Client } from './BaseOAuth2Client';
 
 @Injectable()
 export class GoogleClient extends BaseOAuth2Client {
-  constructor(
-    readonly logger: LoggerService,
-    private readonly providerKeyService: ProviderKeyService,
-  ) {
+  constructor(readonly logger: LoggerService) {
     super();
     this.logger.setContext(GoogleClient.name);
   }
@@ -51,7 +47,7 @@ export class GoogleClient extends BaseOAuth2Client {
     prompt: 'consent',
   };
 
-  protected getScopesFromActiveEndpoints(activeEndpoints: string[]): string {
+  getScopesFromActiveEndpoints(activeEndpoints: string[]): string {
     const scopesSet = new Set<string>(
       this.endpointScopeMap['default'].map((scope) => `https://www.googleapis.com/auth/${scope}`),
     );
@@ -62,38 +58,6 @@ export class GoogleClient extends BaseOAuth2Client {
     });
 
     return scopesSet.size > 0 ? Array.from(scopesSet).join(' ') : '';
-  }
-
-  getClientCredentials(connection: Connection): Promise<{ clientId: string; clientSecret: string }> {
-    const clientIdVariable = 'GOOGLE_CLIENT_ID';
-    const clientSecretVariable = 'GOOGLE_CLIENT_SECRET';
-    const clientIdFromEnv = process.env[clientIdVariable];
-    const clientSecretFromEnv = process.env[clientSecretVariable];
-
-    return this.providerKeyService
-      .findByProviderId({ userId: connection.userId }, connection.id)
-      .then((keys) => {
-        const clientId = keys ? keys.clientId : clientIdFromEnv;
-        const clientSecret = keys ? keys.clientSecret : clientSecretFromEnv;
-
-        if (!clientId) {
-          this.logger.error(
-            `No custom providerKey for Google and expected environment variable ${clientIdVariable} not specified`,
-          );
-
-          throw new Error('Client id not configured for provider');
-        }
-
-        if (!clientSecret) {
-          this.logger.error(
-            `No custom providerKey for Google and expected environment variable ${clientSecretVariable} not specified`,
-          );
-
-          throw new Error('Client secret not configured for provider');
-        }
-
-        return { clientId, clientSecret };
-      });
   }
 
   getAccountIdentifier(connection: Connection): Promise<string> {

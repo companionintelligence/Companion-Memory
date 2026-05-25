@@ -1,9 +1,19 @@
 import { z } from 'zod';
 
-export interface CompleteConnectionDto {
-  state: string;
-  code: string;
-}
+export type CompleteConnectionDto =
+  | {
+      flow: 'proxy';
+      state: string;
+      accessToken: string;
+      refreshToken?: string;
+      expiresIn?: number;
+      userProviderId: string;
+    }
+  | {
+      flow: 'direct';
+      state: string;
+      code: string;
+    };
 
 export interface CreateConnectionDto {
   name?: string;

@@ -173,7 +173,7 @@ export class DiscordClient extends BaseOAuth2Client {
     'openid', // OpenID Connect - DEFINITELY VALID
   ];
 
-  protected getScopesFromActiveEndpoints(activeEndpoints: string[]): string {
+  getScopesFromActiveEndpoints(activeEndpoints: string[]): string {
     const scopesSet = new Set<string>(this.endpointScopeMap.default);
 
     activeEndpoints.forEach((endpoint) => {

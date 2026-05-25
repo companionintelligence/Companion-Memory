@@ -13,9 +13,11 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 
 import { ClientFactory } from '../clients';
+import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
@@ -24,6 +26,7 @@ import { connectProviderDto, connectProviderSchema } from '../types';
 export class ProvidersController {
   constructor(
     private readonly clientFactory: ClientFactory,
+    private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly connectionService: ConnectionService,
     private readonly providerService: ProviderService,
     private readonly logger: LoggerService,
@@ -59,15 +62,15 @@ export class ProvidersController {
     const provider = await this.providerService.findById(serviceContext, id);
 
     if (provider == null) {
-      this.logger.log('Attmpted to connect to a provider that does not exist');
+      this.logger.log('Attempted to connect to a provider that does not exist');
 
       throw new NotFoundException();
     }
 
-    const client = this.clientFactory.getClientByProviderId(id);
+    const client = this.clientFactory.getClientByProviderId(id) as BaseOAuth2Client | null;
 
     if (client == null) {
-      this.logger.log('Attmpted to create a connection without an associated client');
+      this.logger.log('Attempted to create a connection without an associated client');
 
       throw new InternalServerErrorException();
     }
@@ -94,31 +97,42 @@ export class ProvidersController {
       return {
         authorizationUrl,
       };
-    } else if (provider.authType === 'oauth2') {
-      const connection = await this.connectionService.create(serviceContext, {
-        providerId: provider.id,
-        name: provider.name ?? 'My Connection', // TODO: We shouldn't require a name here.
-        schedule: '1 hour',
-        endpoints: input.endpoints,
-      });
+    }
 
-      try {
-        await (client as BaseOAuth2Client).getClientCredentials(connection);
-      } catch (err) {
-        this.logger.error('Failed to resolve client credentials', {
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
+    const connection = await this.connectionService.create(serviceContext, {
+      providerId: provider.id,
+      name: provider.name ?? 'My Connection', // TODO: We shouldn't require a name here.
+      schedule: '1 hour',
+      endpoints: input.endpoints,
+    });
 
-        throw new InternalServerErrorException(
-          err instanceof Error ? err.message : 'Client credentials not configured for provider',
-        );
-      }
+    const credentials = await client.getClientCredentials(connection);
 
+    if (credentials) {
       const authorizationUrl = await client.getAuthorizationUrl(connection);
 
       return {
         authorizationUrl,
       };
     }
+
+    const providerName = this.cloudOAuthProxyService.getProviderNameForId(id);
+
+    if (!providerName) {
+      this.logger.error('CI Cloud proxy enabled but provider is not mapped', { providerId: id });
+      throw new InternalServerErrorException('Provider not configured for CI Cloud proxy');
+    }
+
+    const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
+    const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+
+    const scopes = client.getScopesFromActiveEndpoints(input.endpoints);
+    const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
+      providerName,
+      callbackUrl,
+      scopes.length > 0 ? scopes.split(' ') : undefined,
+    );
+
+    return { authorizationUrl: authorization_url };
   }
 }
