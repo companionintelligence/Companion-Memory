@@ -59,8 +59,8 @@ downloads).
 
 Use these authenticated mutations for high-throughput imports:
 
-- `createContents(input: [CreateContentInput!]!): [Content!]!`
-- `createEvents(input: [CreateEventInput!]!): [Event!]!`
+- `createContents(input: [CreateContentInput!]!): [ContentType!]!`
+- `createEvents(input: [CreateEventInput!]!): [EventType!]!`
 
 Both mutations accept arrays so import tooling can process large exports in
 batches instead of single-row mutations.
@@ -68,7 +68,8 @@ batches instead of single-row mutations.
 ### Recommended import strategy
 
 1. Parse and normalize raw exports in `CI-Import-Tools`
-2. Send records to CI-Server in bounded batches (for example 100-1000 records)
+2. Send records to CI-Server in bounded batches (for example 100-1000 records,
+   tuned by payload size, API timeout settings, and server memory/CPU headroom)
 3. Include source provenance (`sourceData`, `sourceUrl`, `sourceSystem`) so
    records remain attributable to the origin export
 4. Track per-batch success/failure and retry failed batches from the importer
