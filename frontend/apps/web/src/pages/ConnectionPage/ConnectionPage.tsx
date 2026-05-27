@@ -153,6 +153,28 @@ const GET_CONNECTION_SYNC_JOBS = gql(`
   }
 `);
 
+const GET_RECENT_CONNECTION_SYNC_JOBS = gql(`
+  query GetRecentConnectionSyncJobs($connectionId: ID!, $first: Int) {
+    connectionSyncJobs(connectionId: $connectionId, first: $first) {
+      edges {
+        cursor
+        node {
+          id
+          endpointName
+          status
+          type
+          data
+          createdAt
+          updatedAt
+          completedAt
+          error
+        }
+      }
+      totalCount
+    }
+  }
+`);
+
 type StatusJob = {
   endpointName: string;
   status: string;
@@ -163,6 +185,44 @@ type StatusJob = {
   updatedAt?: string | null;
   error?: { error?: string } | null;
 };
+
+type RecentJob = StatusJob & {
+  id: string;
+  data?: Record<string, unknown> | null;
+};
+
+// Sync services store fetched records as top-level arrays on the data payload.
+// We count all top-level arrays and ignore non-array metadata fields so the UI
+// stays conservative if providers add extra bookkeeping data.
+function countFetchedResults(data: Record<string, unknown> | null | undefined): number | null {
+  if (data == null) {
+    return null;
+  }
+
+  const arrayValues = Object.values(data).filter(Array.isArray);
+
+  if (arrayValues.length > 0) {
+    return arrayValues.reduce((sum, value) => sum + value.length, 0);
+  }
+
+  return Object.keys(data).length === 0 ? 0 : null;
+}
+
+function getJobTimestamp(job: Pick<StatusJob, 'completedAt' | 'updatedAt' | 'createdAt'>): Date {
+  return new Date(job.completedAt ?? job.updatedAt ?? job.createdAt);
+}
+
+function formatJobType(type?: string | null): string {
+  if (type === 'historical') {
+    return 'History';
+  }
+
+  if (type === 'incremental') {
+    return 'Ongoing';
+  }
+
+  return 'Run';
+}
 
 function computeEndpointStatus(
   jobs: StatusJob[],
@@ -210,7 +270,7 @@ function computeEndpointStatus(
       icon: <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-500 flex-shrink-0" />,
       text: (
         <span className="text-muted-foreground">
-          Successfully run at {new Date(latest.completedAt as string).toLocaleString()}
+          Successfully run at {getJobTimestamp(latest).toLocaleString()}
         </span>
       ),
     };
@@ -228,7 +288,7 @@ function computeEndpointStatus(
 
     return {
       icon: <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-500 flex-shrink-0" />,
-      text: <span className="text-muted-foreground">Last run failed: {String(errorText)}</span>,
+      text: <span className="text-muted-foreground">Last run failed: {errorText}</span>,
     };
   }
 
@@ -284,6 +344,7 @@ export function ConnectionPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [{ authToken }] = useAuth();
+  const encodedConnectionId = id ? GlobalUID.encode('connection', id) : undefined;
 
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
@@ -297,12 +358,23 @@ export function ConnectionPage() {
   const [{ endpoints, setEndpoints }] = useConnectService();
 
   const { data, loading } = useQuery(GET_CONNECTION, {
+    skip: encodedConnectionId == null,
     variables: {
-      id: GlobalUID.encode('connection', id!),
+      id: encodedConnectionId!,
+    },
+  });
+
+  const { data: recentJobsData } = useQuery(GET_RECENT_CONNECTION_SYNC_JOBS, {
+    skip: encodedConnectionId == null,
+    variables: {
+      connectionId: encodedConnectionId!,
+      first: 5,
     },
   });
 
   const connection = data?.connection;
+  const recentJobs: RecentJob[] =
+    (recentJobsData?.connectionSyncJobs.edges.map((edge) => edge.node) as RecentJob[] | undefined) ?? [];
 
   const [updateConnection] = useMutation(UPDATE_CONNECTION);
 
@@ -532,21 +604,19 @@ export function ConnectionPage() {
                     const hasHistorical = iterationTypes.includes('historical');
                     const hasIncremental = iterationTypes.includes('incremental');
                     const showBoth = hasHistorical && hasIncremental;
-                    const encodedConnectionId = GlobalUID.encode('connection', id!);
-
                     if (showBoth) {
                       return (
                         <li key={endpoint.name} className="flex flex-col gap-1 text-sm">
                           <span className="font-medium">{endpoint.name}</span>
                           <ul className="flex flex-col gap-1 pl-4">
                             <EndpointStatusRow
-                              connectionId={encodedConnectionId}
+                              connectionId={encodedConnectionId!}
                               endpoint={endpoint}
                               jobType="historical"
                               label="History"
                             />
                             <EndpointStatusRow
-                              connectionId={encodedConnectionId}
+                              connectionId={encodedConnectionId!}
                               endpoint={endpoint}
                               jobType="incremental"
                               label="Ongoing"
@@ -568,7 +638,7 @@ export function ConnectionPage() {
                     return (
                       <EndpointStatusRow
                         key={endpoint.name}
-                        connectionId={encodedConnectionId}
+                        connectionId={encodedConnectionId!}
                         endpoint={endpoint}
                         jobType={onlyType}
                       />
@@ -577,6 +647,50 @@ export function ConnectionPage() {
                 </ul>
               </div>
             )}
+
+            <div className="flex flex-col gap-2">
+              <Label>Recent fetches</Label>
+              {recentJobs.length > 0 ? (
+                <ul className="flex flex-col gap-2">
+                  {recentJobs.map((job) => {
+                    const resultCount = countFetchedResults(job.data);
+                    const ranAt = getJobTimestamp(job).toLocaleString();
+                    const errorText = job.error?.error ?? 'No error information available';
+
+                    return (
+                      <li key={job.id} className="rounded-md border p-3">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                          <span className="font-medium">{job.endpointName}</span>
+                          <span className="text-muted-foreground">•</span>
+                          <span className="text-muted-foreground">{formatJobType(job.type)}</span>
+                        </div>
+
+                        <div className="mt-1 text-sm text-muted-foreground">
+                          {job.status === 'success' && (
+                            <>
+                              Completed {ranAt}
+                              {resultCount != null &&
+                                ` • ${resultCount.toLocaleString()} result${resultCount === 1 ? '' : 's'}`}
+                            </>
+                          )}
+                          {job.status === 'in_progress' && <>Started {ranAt}</>}
+                          {job.status === 'failed' && (
+                            <>
+                              Failed {ranAt} • {errorText}
+                            </>
+                          )}
+                          {job.status === 'pending' && <>Queued {ranAt}</>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  No fetches have run yet for this connection.
+                </div>
+              )}
+            </div>
 
             {connection.needsReauth && (
               <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 flex items-start gap-3">
