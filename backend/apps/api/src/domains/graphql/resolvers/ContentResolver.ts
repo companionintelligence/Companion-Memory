@@ -27,14 +27,8 @@ export class ContentResolver {
     private readonly eventLoader: EventLoader,
   ) {}
 
-  @Mutation(() => ContentType)
-  async createContent(
-    @Context() context: RequestContext,
-    @Args('input') input: CreateContentInput,
-  ): Promise<ContentType> {
-    const serviceContext = toServiceContext(context);
-
-    const entity = await this.contentService.create(serviceContext, {
+  private toCreateContentDto(input: CreateContentInput) {
+    return {
       type: input.type,
       title: input.title,
       text: input.text,
@@ -43,9 +37,33 @@ export class ContentResolver {
       external_id: input.externalId,
       source_url: input.sourceUrl,
       source_data: input.sourceData,
-    });
+    };
+  }
+
+  @Mutation(() => ContentType)
+  async createContent(
+    @Context() context: RequestContext,
+    @Args('input') input: CreateContentInput,
+  ): Promise<ContentType> {
+    const serviceContext = toServiceContext(context);
+
+    const entity = await this.contentService.create(serviceContext, this.toCreateContentDto(input));
 
     return ContentType.toType(entity[0]);
+  }
+
+  @Mutation(() => [ContentType])
+  async createContents(
+    @Context() context: RequestContext,
+    @Args({ name: 'input', type: () => [CreateContentInput] }) input: CreateContentInput[],
+  ): Promise<ContentType[]> {
+    const serviceContext = toServiceContext(context);
+    const entities = await this.contentService.create(
+      serviceContext,
+      input.map((entry) => this.toCreateContentDto(entry)),
+    );
+
+    return entities.map((entity) => ContentType.toType(entity));
   }
 
   @Mutation(() => ContentType, { nullable: true })

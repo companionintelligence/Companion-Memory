@@ -48,3 +48,32 @@ To accept new violations:
 ```
 yarn depcheck:accept
 ```
+
+## Bulk import integration (CI-Import-Tools)
+
+CI-Server is the ingestion target for normalized records produced by
+`CI-Import-Tools` (including Google Takeout, Apple/iCloud exports, and Facebook
+downloads).
+
+### GraphQL bulk mutations
+
+Use these authenticated mutations for high-throughput imports:
+
+- `createContents(input: [CreateContentInput!]!): [Content!]!`
+- `createEvents(input: [CreateEventInput!]!): [Event!]!`
+
+Both mutations accept arrays so import tooling can process large exports in
+batches instead of single-row mutations.
+
+### Recommended import strategy
+
+1. Parse and normalize raw exports in `CI-Import-Tools`
+2. Send records to CI-Server in bounded batches (for example 100-1000 records)
+3. Include source provenance (`sourceData`, `sourceUrl`, `sourceSystem`) so
+   records remain attributable to the origin export
+4. Track per-batch success/failure and retry failed batches from the importer
+
+### CI-Import-Tools datasource adapters
+
+Source adapters are maintained in:
+`https://github.com/companionintelligence/CI-Import-Tools/tree/main/backend/src/datasources`

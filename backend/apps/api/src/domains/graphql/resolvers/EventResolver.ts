@@ -33,14 +33,8 @@ export class EventResolver {
     private readonly tagLoader: TagLoader,
   ) {}
 
-  @Mutation(() => EventType)
-  async createEvent(
-    @Context() context: RequestContext,
-    @Args('input') input: CreateEventInput,
-  ): Promise<EventType> {
-    const serviceContext = toServiceContext(context);
-
-    const entity = await this.eventService.create(serviceContext, {
+  private toCreateEventDto(input: CreateEventInput) {
+    return {
       title: input.title,
       description: input.description,
       event_type: input.eventType,
@@ -61,9 +55,33 @@ export class EventResolver {
       is_all_day: input.isAllDay,
       metadata: input.metadata,
       status: input.status,
-    });
+    };
+  }
+
+  @Mutation(() => EventType)
+  async createEvent(
+    @Context() context: RequestContext,
+    @Args('input') input: CreateEventInput,
+  ): Promise<EventType> {
+    const serviceContext = toServiceContext(context);
+
+    const entity = await this.eventService.create(serviceContext, this.toCreateEventDto(input));
 
     return EventType.toType(entity[0]);
+  }
+
+  @Mutation(() => [EventType])
+  async createEvents(
+    @Context() context: RequestContext,
+    @Args({ name: 'input', type: () => [CreateEventInput] }) input: CreateEventInput[],
+  ): Promise<EventType[]> {
+    const serviceContext = toServiceContext(context);
+    const entities = await this.eventService.create(
+      serviceContext,
+      input.map((entry) => this.toCreateEventDto(entry)),
+    );
+
+    return entities.map((entity) => EventType.toType(entity));
   }
 
   @Mutation(() => EventType, { nullable: true })
