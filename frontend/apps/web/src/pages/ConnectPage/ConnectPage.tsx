@@ -262,8 +262,18 @@ export function ConnectPage() {
               logo="/branding/github/logo.svg"
               background="bg-gray-800"
               border="border-gray-700"
-              text="Link GitHub to track your code repositories, commits, and development activity. Coming soon."
-              disabled
+              text="Link GitHub to track your repositories, pushes, pull requests, issues, and development activity."
+              onClick={() => navigate('/providers/b2cf9b7d-bd08-44c7-8b37-25fcf898d04a')}
+              subtext={
+                connectionsCount['b2cf9b7d-bd08-44c7-8b37-25fcf898d04a'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['b2cf9b7d-bd08-44c7-8b37-25fcf898d04a'] > 1
+                    ? `${connectionsCount['b2cf9b7d-bd08-44c7-8b37-25fcf898d04a']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['b2cf9b7d-bd08-44c7-8b37-25fcf898d04a'] > 0 ? 'bg-green-200' : undefined
+              }
             />
             <Card
               logo="/branding/instagram/logo.svg"

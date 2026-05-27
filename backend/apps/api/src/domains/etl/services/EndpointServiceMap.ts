@@ -15,6 +15,8 @@ import { FacebookPhotosTransformService } from './Facebook/transform/TransformFa
 import { FacebookPostsTransformService } from './Facebook/transform/TransformFacebookPosts';
 import { FacebookProfileTransformService } from './Facebook/transform/TransformFacebookProfile';
 import { FacebookVideosTransformService } from './Facebook/transform/TransformFacebookVideos';
+import { syncRepositoryEvents } from './GitHub/sync/SyncRepositoryEvents';
+import { GitHubRepositoryEventsTransformService } from './GitHub/transform/TransformRepositoryEvents';
 import { syncCalendar } from './Google/sync/SyncCalendar';
 import { syncContacts } from './Google/sync/SyncContacts';
 import { syncDrive } from './Google/sync/SyncDrive';
@@ -70,6 +72,7 @@ export class EndpointServiceMap {
     private readonly facebookPostsTransformService: FacebookPostsTransformService,
     private readonly facebookProfileTransformService: FacebookProfileTransformService,
     private readonly facebookVideosTransformService: FacebookVideosTransformService,
+    private readonly gitHubRepositoryEventsTransformService: GitHubRepositoryEventsTransformService,
     private readonly gmailTransformService: GmailTransformService,
     private readonly googleCalendarTransformService: GoogleCalendarTransformService,
     private readonly googleContactsTransformService: GoogleContactsTransformService,
@@ -117,6 +120,9 @@ export class EndpointServiceMap {
           Posts: syncPosts,
           Videos: syncVideos,
         },
+        GitHub: {
+          'Repository Events': syncRepositoryEvents,
+        },
         Spotify: {
           'Recently Played': syncRecentlyPlayed,
           Playlists: syncPlaylists,
@@ -140,6 +146,11 @@ export class EndpointServiceMap {
           Posts: this.facebookPostsTransformService.transform.bind(this.facebookPostsTransformService),
           Profile: this.facebookProfileTransformService.transform.bind(this.facebookProfileTransformService),
           Videos: this.facebookVideosTransformService.transform.bind(this.facebookVideosTransformService),
+        },
+        GitHub: {
+          'Repository Events': this.gitHubRepositoryEventsTransformService.transform.bind(
+            this.gitHubRepositoryEventsTransformService,
+          ),
         },
         Google: {
           Gmail: this.gmailTransformService.transformGmail.bind(this.gmailTransformService),

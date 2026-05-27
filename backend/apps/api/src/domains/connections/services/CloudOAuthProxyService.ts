@@ -42,6 +42,7 @@ export class CloudOAuthProxyService {
       [providers.google.id]: 'google',
       [providers.microsoft.id]: 'microsoft',
       [providers.facebook.id]: 'facebook',
+      [providers.github.id]: 'github',
       [providers.spotify.id]: 'spotify',
     };
 

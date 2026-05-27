@@ -37,6 +37,7 @@ import { FacebookPhotosTransformService } from './services/Facebook/transform/Tr
 import { FacebookPostsTransformService } from './services/Facebook/transform/TransformFacebookPosts';
 import { FacebookProfileTransformService } from './services/Facebook/transform/TransformFacebookProfile';
 import { FacebookVideosTransformService } from './services/Facebook/transform/TransformFacebookVideos';
+import { GitHubRepositoryEventsTransformService } from './services/GitHub/transform/TransformRepositoryEvents';
 import { GmailTransformService } from './services/Google/transform/TransformGmail';
 import { GoogleCalendarTransformService } from './services/Google/transform/TransformGoogleCalendar';
 import { GoogleContactsTransformService } from './services/Google/transform/TransformGoogleContacts';
@@ -85,6 +86,7 @@ import { SteamOwnedGamesTransformService } from './services/Steam/transform/Tran
     FacebookPostsTransformService,
     FacebookProfileTransformService,
     FacebookVideosTransformService,
+    GitHubRepositoryEventsTransformService,
     GmailTransformService,
     GoogleCalendarTransformService,
     GoogleContactsTransformService,
