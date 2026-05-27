@@ -212,9 +212,10 @@ export function ProviderPage() {
                         </div>
                         <Input
                           id="openid-api-key"
-                          type="text"
+                          type="password"
+                          autoComplete="off"
                           placeholder="API key"
-                          value={apiKey || undefined}
+                          value={apiKey ?? ''}
                           onChange={(e) => setApiKey(e.target.value)}
                         />
                       </div>

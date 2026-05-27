@@ -54,7 +54,7 @@
       "callbackUrl": ""
     },
     "openid": {
-      "callbackUrl": ""
+      "callbackUrl": "https://memory.ci.localhost/openid/callback"
     }
   },
   "db": {

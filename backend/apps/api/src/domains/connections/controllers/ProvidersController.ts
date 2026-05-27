@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -81,7 +82,7 @@ export class ProvidersController {
       if (!apiKey) {
         this.logger.log('Missing API key for OpenID connection');
 
-        throw new InternalServerErrorException('API key is required for OpenID provider');
+        throw new BadRequestException('API key is required for OpenID provider');
       }
 
       const connection = await this.connectionService.create(serviceContext, {
@@ -99,6 +100,7 @@ export class ProvidersController {
       };
     }
 
+    const oauthClient = client as BaseOAuth2Client;
     const connection = await this.connectionService.create(serviceContext, {
       providerId: provider.id,
       name: provider.name ?? 'My Connection', // TODO: We shouldn't require a name here.
@@ -106,20 +108,15 @@ export class ProvidersController {
       endpoints: input.endpoints,
     });
 
-    const credentials = await client.getClientCredentials(connection);
+    const credentials = await oauthClient.getClientCredentials(connection);
 
     if (credentials) {
-      const authorizationUrl = await client.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
 
       return {
         authorizationUrl,
       };
     }
-
-    this.logger.log('No provider credentials found, falling back to CI Cloud OAuth proxy', {
-      providerId: id,
-      connectionId: connection.id,
-    });
 
     const providerName = this.cloudOAuthProxyService.getProviderNameForId(id);
 

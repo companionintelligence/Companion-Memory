@@ -213,9 +213,9 @@ export abstract class BaseOAuth2Client extends BaseClient {
         let errorDetails;
 
         try {
-          errorDetails = tokenResponse.json();
+          errorDetails = await tokenResponse.json();
         } catch {
-          errorDetails = tokenResponse.text();
+          errorDetails = await tokenResponse.text();
         }
 
         this.logger.error('Token exchange failed', {

@@ -2,16 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { ProviderKeyService } from '../services/ProviderKeyService';
-
 import { BaseOpenIDClient } from './BaseOpenIDClient';
 
 @Injectable()
 export class SteamClient extends BaseOpenIDClient {
-  constructor(
-    readonly logger: LoggerService,
-    private readonly providerKeyService: ProviderKeyService,
-  ) {
+  constructor(readonly logger: LoggerService) {
     super();
     this.logger.setContext(SteamClient.name);
   }

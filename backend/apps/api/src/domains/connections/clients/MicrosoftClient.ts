@@ -41,6 +41,39 @@ export class MicrosoftClient extends BaseOAuth2Client {
     return scopesSet.size > 0 ? Array.from(scopesSet).join(' ') : '';
   }
 
+  async getClientCredentials(
+    connection: Connection,
+  ): Promise<{ clientId: string; clientSecret: string } | null> {
+    const clientIdVariable = 'MICROSOFT_CLIENT_ID';
+    const clientSecretVariable = 'MICROSOFT_CLIENT_SECRET';
+    const clientIdFromEnv = process.env[clientIdVariable];
+    const clientSecretFromEnv = process.env[clientSecretVariable];
+    const keys = await super.getClientCredentials(connection);
+    const clientId = keys?.clientId ?? clientIdFromEnv ?? null;
+    const clientSecret = keys?.clientSecret ?? clientSecretFromEnv ?? null;
+
+    if (!clientId && !clientSecret) {
+      return null;
+    }
+
+    if (!clientId) {
+      this.logger.error(
+        `No custom providerKey for Microsoft and expected environment variable ${clientIdVariable} not specified`,
+      );
+
+      throw new Error('Client id not configured for provider');
+    }
+
+    if (!clientSecret) {
+      this.logger.error(
+        `No custom providerKey for Microsoft and expected environment variable ${clientSecretVariable} not specified`,
+      );
+
+      throw new Error('Client secret not configured for provider');
+    }
+    return { clientId, clientSecret };
+  }
+
   getAccountIdentifier(connection: Connection): Promise<string> {
     return new Promise((resolve) =>
       this.fetchProfile(connection).then((result) => {

@@ -681,7 +681,8 @@ export function ConnectionPage() {
                     <Label htmlFor="edit-access-token">New OpenID API Key</Label>
                     <Input
                       id="edit-access-token"
-                      type="text"
+                      type="password"
+                      autoComplete="new-password"
                       placeholder="Leave blank to keep current key"
                       value={editFormData.accessToken}
                       onChange={(e) => setEditFormData({ ...editFormData, accessToken: e.target.value })}

@@ -118,10 +118,10 @@ export class SteamAchievementsTransformService {
 
               eventCreatedCount++;
             } else {
-              this.logger.debug('Game played event already exists, skipping', {
+              this.logger.debug('Achievement unlocked event already exists, skipping', {
                 appid: item.appid,
-                name: item.achievement.name,
-                rtime_last_played: item.achievement.unlocktime,
+                achievementApiName: item.achievement.apiname,
+                unlocktime: item.achievement.unlocktime,
               });
 
               skippedEventCount++;

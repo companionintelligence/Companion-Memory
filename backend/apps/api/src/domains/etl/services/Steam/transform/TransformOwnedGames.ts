@@ -71,11 +71,15 @@ export class SteamOwnedGamesTransformService {
             });
             skippedCount++;
           } else {
+            const iconUrl = game.img_icon_url
+              ? `https://media.steampowered.com/steamcommunity/public/images/apps/${game.appid}/${game.img_icon_url}.jpg`
+              : undefined;
+
             await this.contentService.create(context, {
               type: 'game',
               title: game.name,
               url: `https://store.steampowered.com/app/${game.appid}`,
-              source_url: `https://http://media.steampowered.com/steamcommunity/public/images/apps/${game.appid}/${game.img_icon_url}.jpg`,
+              ...(iconUrl ? { source_url: iconUrl } : {}),
               external_id: String(game.appid),
               source_data: {
                 appid: game.appid,
