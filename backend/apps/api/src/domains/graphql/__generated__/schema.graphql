@@ -977,7 +977,7 @@ type SearchResultEdge {
   node: SearchResultType!
 }
 
-union SearchResultType = AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
 
 type Subscription {
   """

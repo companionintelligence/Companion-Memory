@@ -5,21 +5,8 @@ import { type FindOptionsOrder } from 'typeorm';
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
-import { ThreadService } from '@ci/domains/conversations';
-import { FileService } from '@ci/domains/files';
-import { AnswerService } from '@ci/domains/intelligence';
-import {
-  CommunicationService,
-  ConceptService,
-  ContentService,
-  EventService,
-  EventEntity,
-  ItemService,
-  PersonService,
-  PlaceService,
-  CommunicationEntity,
-} from '@ci/domains/memory';
-import { NoteService } from '@ci/domains/notes';
+import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
+import { CommunicationService, EventService, EventEntity, CommunicationEntity } from '@ci/domains/memory';
 import {
   SearchService,
   TagService,
@@ -28,6 +15,7 @@ import {
   type TaggableEntity,
 } from '@ci/domains/search-next';
 
+import { ActionType } from '../types/ActionType';
 import { AnswerType } from '../types/AnswerType';
 import { BrowserActivityType } from '../types/BrowserActivityType';
 import { CommunicationType } from '../types/CommunicationType';
@@ -49,20 +37,12 @@ import { Paginator } from '../utils/Paginator';
 @Resolver()
 export class SearchResolver {
   constructor(
-    private readonly answerService: AnswerService,
     private readonly browserActivityService: BrowserActivityService,
     private readonly communicationService: CommunicationService,
-    private readonly conceptService: ConceptService,
-    private readonly contentService: ContentService,
+    private readonly entityResolutionService: EntityResolutionService,
     private readonly eventService: EventService,
-    private readonly fileService: FileService,
-    private readonly itemService: ItemService,
-    private readonly noteService: NoteService,
-    private readonly personService: PersonService,
-    private readonly placeService: PlaceService,
     private readonly searchService: SearchService,
     private readonly tagService: TagService,
-    private readonly threadService: ThreadService,
   ) {}
 
   @Query(() => SearchResultConnection)
@@ -249,131 +229,49 @@ export class SearchResolver {
     context: UserServiceContext,
     results: EntityIdentifier<IndexableEntity | TaggableEntity>[],
   ): Promise<SearchResult[]> {
-    const groupedByType: Map<IndexableEntity | TaggableEntity, string[]> = results.reduce((acc, result) => {
-      if (!acc.has(result.type)) {
-        acc.set(result.type, []);
-      }
+    const resolved = await this.entityResolutionService.resolve(context, results);
 
-      acc.get(result.type)!.push(result.id);
+    return results
+      .map((result) => {
+        const entry = resolved.get(`${result.type}:${result.id}`);
 
-      return acc;
-    }, new Map());
+        if (!entry) {
+          return null;
+        }
 
-    const answerIds = groupedByType.get('answer') || [];
-    const browserActivityIds = groupedByType.get('browser-activity') || [];
-    const communicationIds = groupedByType.get('communication') || [];
-    const conceptIds = groupedByType.get('concept') || [];
-    const contentIds = groupedByType.get('content') || [];
-    const eventIds = groupedByType.get('event') || [];
-    const fileIds = groupedByType.get('file') || [];
-    const itemIds = groupedByType.get('item') || [];
-    const noteIds = groupedByType.get('note') || [];
-    const peopleIds = groupedByType.get('person') || [];
-    const placeIds = groupedByType.get('place') || [];
-    const threadIds = groupedByType.get('thread') || [];
-
-    const [
-      answers,
-      browserActivities,
-      communications,
-      concepts,
-      content,
-      events,
-      files,
-      items,
-      notes,
-      people,
-      places,
-      threads,
-    ] = await Promise.all([
-      this.answerService.findByIds(context, answerIds),
-      this.browserActivityService.findByIds(context, browserActivityIds),
-      this.communicationService.findByIds(context, communicationIds),
-      this.conceptService.findByIds(context, conceptIds),
-      this.contentService.findByIds(context, contentIds),
-      this.eventService.findByIds(context, eventIds),
-      this.fileService.findByIds(context, fileIds),
-      this.itemService.findByIds(context, itemIds),
-      this.noteService.findByIds(context, noteIds),
-      this.personService.findByIds(context, peopleIds),
-      this.placeService.findByIds(context, placeIds),
-      this.threadService.findByIds(context, threadIds),
-    ]);
-
-    const answerResults = answers
-      .filter((entity) => entity != null)
-      .map((entity) => AnswerType.toType(entity));
-
-    const browserActivityResults = browserActivities
-      .filter((entity) => entity != null)
-      .map((entity) => BrowserActivityType.toType(entity));
-
-    const communicationResults = communications
-      .filter((entity) => entity != null)
-      .map((entity) => CommunicationType.toType(entity));
-
-    const conceptResults = concepts
-      .filter((entity) => entity != null)
-      .map((entity) => ConceptType.toType(entity));
-
-    const contentResults = content
-      .filter((entity) => entity != null)
-      .map((entity) => ContentType.toType(entity));
-
-    const eventResults = events.filter((entity) => entity != null).map((entity) => EventType.toType(entity));
-
-    const fileResults = files.filter((entity) => entity != null).map((entity) => FileType.toType(entity));
-
-    const itemResults = items.filter((entity) => entity != null).map((entity) => ItemType.toType(entity));
-
-    const noteResults = notes.filter((entity) => entity != null).map((entity) => NoteType.toType(entity));
-
-    const personResults = people
-      .filter((entity) => entity != null)
-      .map((entity) => PersonType.toType(entity));
-
-    const placeResults = places.filter((entity) => entity != null).map((entity) => PlaceType.toType(entity));
-
-    const threadResults = threads
-      .filter((entity) => entity != null)
-      .map((entity) => ThreadType.toType(entity));
-
-    const resultMap = new Map<string, SearchResult>();
-
-    answerResults.forEach((answer) => resultMap.set(makeCompositeKey('answer', answer.__source.id), answer));
-
-    browserActivityResults.forEach((activity) =>
-      resultMap.set(makeCompositeKey('browser-activity', activity.__source.id), activity),
-    );
-
-    communicationResults.forEach((communication) =>
-      resultMap.set(makeCompositeKey('communication', communication.__source.id), communication),
-    );
-
-    conceptResults.forEach((concept) =>
-      resultMap.set(makeCompositeKey('concept', concept.__source.id), concept),
-    );
-
-    contentResults.forEach((content) =>
-      resultMap.set(makeCompositeKey('content', content.__source.id), content),
-    );
-
-    eventResults.forEach((event) => resultMap.set(makeCompositeKey('event', event.__source.id), event));
-    fileResults.forEach((file) => resultMap.set(makeCompositeKey('file', file.__source.id), file));
-    itemResults.forEach((item) => resultMap.set(makeCompositeKey('item', item.__source.id), item));
-    noteResults.forEach((note) => resultMap.set(makeCompositeKey('note', note.__source.id), note));
-    personResults.forEach((person) => resultMap.set(makeCompositeKey('person', person.__source.id), person));
-    placeResults.forEach((place) => resultMap.set(makeCompositeKey('place', place.__source.id), place));
-    threadResults.forEach((thread) => resultMap.set(makeCompositeKey('thread', thread.__source.id), thread));
-
-    const orderedResults = results
-      .map((result) => resultMap.get(makeCompositeKey(result.type, result.id)))
-      .filter((entity): entity is SearchResult => entity != null);
-
-    return orderedResults;
+        return this.toSearchResult(entry);
+      })
+      .filter((r): r is SearchResult => r != null);
   }
-}
 
-function makeCompositeKey(type: IndexableEntity | TaggableEntity, id: string): string {
-  return `${type}:${id}`;
+  private toSearchResult(resolved: ResolvedEntity): SearchResult {
+    switch (resolved.type) {
+      case 'action':
+        return ActionType.toType(resolved.entity);
+      case 'answer':
+        return AnswerType.toType(resolved.entity);
+      case 'browser-activity':
+        return BrowserActivityType.toType(resolved.entity);
+      case 'communication':
+        return CommunicationType.toType(resolved.entity);
+      case 'concept':
+        return ConceptType.toType(resolved.entity);
+      case 'content':
+        return ContentType.toType(resolved.entity);
+      case 'event':
+        return EventType.toType(resolved.entity);
+      case 'file':
+        return FileType.toType(resolved.entity);
+      case 'item':
+        return ItemType.toType(resolved.entity);
+      case 'note':
+        return NoteType.toType(resolved.entity);
+      case 'person':
+        return PersonType.toType(resolved.entity);
+      case 'place':
+        return PlaceType.toType(resolved.entity);
+      case 'thread':
+        return ThreadType.toType(resolved.entity);
+    }
+  }
 }
