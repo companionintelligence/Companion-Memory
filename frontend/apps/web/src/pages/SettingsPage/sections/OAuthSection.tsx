@@ -24,6 +24,7 @@ const GET_PROVIDERS = gql(`
           name
           description
           logoUrl
+          authType
           providerKeys {
             id
             clientId
@@ -63,7 +64,7 @@ const DELETE_PROVIDER_KEY = gql(`
   }
 `);
 
-type OAuthProvider = 'google' | 'microsoft' | 'facebook';
+type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify';
 
 interface OAuthState {
   oauth: Record<
@@ -82,6 +83,7 @@ export function OAuthSection() {
       google: { clientId: '', clientSecret: '' },
       microsoft: { clientId: '', clientSecret: '' },
       facebook: { clientId: '', clientSecret: '' },
+      spotify: { clientId: '', clientSecret: '' },
     },
   });
 
@@ -92,6 +94,8 @@ export function OAuthSection() {
     microsoftClientSecret: false,
     facebookClientId: false,
     facebookClientSecret: false,
+    spotifyClientId: false,
+    spotifyClientSecret: false,
   });
 
   const [originalValues, setOriginalValues] = useState<
@@ -100,6 +104,7 @@ export function OAuthSection() {
     google: { clientId: '', clientSecret: '' },
     microsoft: { clientId: '', clientSecret: '' },
     facebook: { clientId: '', clientSecret: '' },
+    spotify: { clientId: '', clientSecret: '' },
   });
 
   const [validationErrors, setValidationErrors] = useState<
@@ -108,6 +113,7 @@ export function OAuthSection() {
     google: {},
     microsoft: {},
     facebook: {},
+    spotify: {},
   });
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -129,6 +135,7 @@ export function OAuthSection() {
       google: { clientId: '', clientSecret: '' },
       microsoft: { clientId: '', clientSecret: '' },
       facebook: { clientId: '', clientSecret: '' },
+      spotify: { clientId: '', clientSecret: '' },
     };
 
     setSettings((prev) => {
@@ -434,6 +441,7 @@ export function OAuthSection() {
         {renderProvider('google', 'Google')}
         {renderProvider('microsoft', 'Microsoft')}
         {renderProvider('facebook', 'Facebook')}
+        {renderProvider('spotify', 'Spotify')}
       </div>
 
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>

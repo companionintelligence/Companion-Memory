@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -13,8 +14,11 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
+import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 
 import { ClientFactory } from '../clients';
+import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
@@ -23,6 +27,7 @@ import { connectProviderDto, connectProviderSchema } from '../types';
 export class ProvidersController {
   constructor(
     private readonly clientFactory: ClientFactory,
+    private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly connectionService: ConnectionService,
     private readonly providerService: ProviderService,
     private readonly logger: LoggerService,
@@ -58,55 +63,78 @@ export class ProvidersController {
     const provider = await this.providerService.findById(serviceContext, id);
 
     if (provider == null) {
-      this.logger.log('Attmpted to connect to a provider that does not exist');
+      this.logger.log('Attempted to connect to a provider that does not exist');
 
       throw new NotFoundException();
     }
 
-    const client = this.clientFactory.getClientByProviderId(id);
+    const client = this.clientFactory.getClientByProviderId(id) as BaseOAuth2Client | null;
 
     if (client == null) {
-      this.logger.log('Attmpted to create a connection without an associated client');
+      this.logger.log('Attempted to create a connection without an associated client');
 
       throw new InternalServerErrorException();
     }
 
-    const clientIdVariable = `${provider.name?.toUpperCase()}_CLIENT_ID`;
-    const clientSecretVariable = `${provider.name?.toUpperCase()}_CLIENT_SECRET`;
+    if (provider.authType === 'openid') {
+      const apiKey = input.apiKey;
 
-    // TODO:
-    //   These are stand-in variables for user settings with fallback defaults.
-    //   We need to eventually replace this with a more robust system where we're
-    //   POST-ing to a gateway with protected keys, or a local API endpoint with
-    //   user-specified key overrides.
-    const clientId = process.env[clientIdVariable];
-    const clientSecret = process.env[clientSecretVariable];
+      if (!apiKey) {
+        this.logger.log('Missing API key for OpenID connection');
 
-    if (!clientId) {
-      this.logger.error(`Expected environment variable ${clientIdVariable} not specified`);
+        throw new BadRequestException('API key is required for OpenID provider');
+      }
 
-      throw new InternalServerErrorException('Client id not configured for provider');
+      const connection = await this.connectionService.create(serviceContext, {
+        providerId: provider.id,
+        name: provider.name ?? 'My Connection', // TODO: We shouldn't require a name here.
+        accessToken: apiKey,
+        schedule: '1 hour',
+        endpoints: input.endpoints,
+      });
+
+      const authorizationUrl = await client.getAuthorizationUrl(connection);
+
+      return {
+        authorizationUrl,
+      };
     }
 
-    if (!clientSecret) {
-      this.logger.error(`Expected environment variable ${clientSecretVariable} not specified`);
-
-      throw new InternalServerErrorException('Client secret not configured for provider');
-    }
-
+    const oauthClient = client as BaseOAuth2Client;
     const connection = await this.connectionService.create(serviceContext, {
       providerId: provider.id,
       name: provider.name ?? 'My Connection', // TODO: We shouldn't require a name here.
-      clientid: clientId,
-      clientsecret: clientSecret,
       schedule: '1 hour',
       endpoints: input.endpoints,
     });
 
-    const authorizationUrl = await client.getAuthorizationUrl(connection);
+    const credentials = await oauthClient.getClientCredentials(connection);
 
-    return {
-      authorizationUrl,
-    };
+    if (credentials) {
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+
+      return {
+        authorizationUrl,
+      };
+    }
+
+    const providerName = this.cloudOAuthProxyService.getProviderNameForId(id);
+
+    if (!providerName) {
+      this.logger.error('CI Cloud proxy enabled but provider is not mapped', { providerId: id });
+      throw new InternalServerErrorException('Provider not configured for CI Cloud proxy');
+    }
+
+    const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
+    const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+
+    const scopes = client.getScopesFromActiveEndpoints(input.endpoints);
+    const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
+      providerName,
+      callbackUrl,
+      scopes.length > 0 ? scopes.split(' ') : undefined,
+    );
+
+    return { authorizationUrl: authorization_url };
   }
 }

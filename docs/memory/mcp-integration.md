@@ -14,14 +14,18 @@ The companion-memory MCP server is a stdio server. Any host that supports the
 
 ## Tools
 
-| Tool                  | Purpose                                                              |
-| --------------------- | -------------------------------------------------------------------- |
-| `companion_remember`  | Store content as a memory.                                           |
-| `companion_recall`    | Hybrid full-text + prefix search.                                    |
-| `companion_list`      | List memories with optional filters.                                 |
-| `companion_forget`    | Archive (default) or hard-delete a memory by id.                     |
-| `companion_context`   | Return the user dossier used to pre-hydrate LLM prompts.             |
-| `companion_health`    | Backend liveness check.                                              |
+Each tool maps 1:1 onto a CI-Server endpoint that exists today on `main`.
+There is **no** client-side write surface — the `companion_turn` tool is
+the only mutation, and the backend currently treats it as a forward-
+compatible no-op stub.
+
+| Tool                  | Backed by                  | Purpose                                                              |
+| --------------------- | -------------------------- | -------------------------------------------------------------------- |
+| `companion_recall`    | `POST /api/memory/recall`  | Markdown block ready for prompt injection.                           |
+| `companion_turn`      | `POST /api/memory/turn`    | Sync a conversation turn (no-op stub today).                         |
+| `companion_context`   | `GET /api/graph/context`   | User dossier as JSON.                                                |
+| `companion_search`    | `GET /api/graph/search`    | Structured nodes + links.                                            |
+| `companion_node`      | `GET /api/graph/node`      | Single entity with bounded neighbours.                               |
 
 ## Claude Code
 

@@ -788,11 +788,13 @@ type ProviderThemeType {
 }
 
 type ProviderType implements Node {
+  authType: String
   description: String
   endpoints: [ProviderEndpointType!]!
   id: ID!
   logoUrl: String
   name: String
+  openidKeyLink: String
   providerKeys: ProviderKeyType
   theme: ProviderThemeType
 }

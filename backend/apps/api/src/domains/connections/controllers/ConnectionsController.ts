@@ -10,6 +10,7 @@ import {
   Param,
   Patch,
   Post,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -18,9 +19,12 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
+import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 import { EventService } from '@ci/domains/events';
 
 import { ClientFactory } from '../clients';
+import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
 import type { CompleteConnectionDto, CreateConnectionDto, UpdateConnectionDto } from '../types';
 
@@ -54,15 +58,35 @@ const updateConnectionSchema = z.object({
   endpoints: z.array(z.string()).optional(),
 });
 
-const completeConnectionSchema = z.object({
-  state: z.string(),
-  code: z.string(),
+const completeConnectionSchema = z.discriminatedUnion('flow', [
+  z.object({
+    flow: z.literal('proxy'),
+    state: z.string(),
+    accessToken: z.string(),
+    refreshToken: z.string().optional(),
+    expiresIn: z.number().int().positive().optional(),
+    userProviderId: z.string(),
+  }),
+  z.object({
+    flow: z.literal('direct'),
+    state: z.string(),
+    code: z.string(),
+  }),
+]);
+
+const completeOpenIDSchema = z.object({
+  params: z.record(z.string()),
 });
+
+interface CompleteOpenIDDto {
+  params: Record<string, string>;
+}
 
 @Controller('connections')
 export class ConnectionsController {
   constructor(
     private readonly clientFactory: ClientFactory,
+    private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly connectionService: ConnectionService,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
@@ -161,17 +185,49 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+    const client = this.clientFactory.getClientByProviderId(
+      connection.provider?.id,
+    ) as BaseOAuth2Client | null;
 
     if (client == null) {
-      this.logger.log('Attmpted to connect without an associated client');
+      this.logger.log('Attempted to connect without an associated client');
 
       throw new InternalServerErrorException();
     }
 
-    return {
-      url: await client.getAuthorizationUrl(connection),
-    };
+    const clientCredentials = await client.getClientCredentials(connection);
+
+    //If the user has saved OAuth credentials for this provider, then just return the auth url generated for their OAuth app.
+    //Otherwise refresh through the proxy service on CI Portal
+    if (clientCredentials) {
+      return {
+        url: await client.getAuthorizationUrl(connection),
+      };
+    } else {
+      const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId);
+
+      if (!provider) {
+        this.logger.log('Attempted cloud proxy connect with unknown provider', {
+          providerId: connection.providerId,
+        });
+        throw new InternalServerErrorException();
+      }
+
+      // Build the callback URL from the configured OAUTH_CALLBACK_URL, embedding
+      // the connectionId so we know which connection to update on return.
+      const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
+      const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+
+      const scopes = client.getScopesFromActiveEndpoints(connection.activeEndpoints);
+
+      const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
+        provider,
+        callbackUrl,
+        scopes.length > 0 ? scopes.split(' ') : undefined,
+      );
+
+      return { url: authorization_url };
+    }
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -183,7 +239,7 @@ export class ConnectionsController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    const { state: connectionId, code } = body;
+    const { state: connectionId } = body;
 
     const connection = await this.connectionService.findById(serviceContext, connectionId);
 
@@ -191,6 +247,34 @@ export class ConnectionsController {
       this.logger.log('Performed a callback on `null` connection');
 
       throw new NotFoundException();
+    }
+
+    if (body.flow === 'proxy') {
+      // CI Cloud proxy flow: tokens already exchanged by CI Cloud.
+      // Check for duplicate connection before storing tokens.
+      const existingConnections = await this.connectionService.search(serviceContext, {
+        providerId: connection.providerId,
+        active: true,
+        externalId: body.userProviderId,
+      });
+
+      if (existingConnections.length > 0 && existingConnections.find((c) => c.id !== connectionId)) {
+        await this.connectionService.remove(serviceContext, connectionId);
+        throw new ConflictException('A connection to that account already exists');
+      }
+
+      const tokenExpiry = body.expiresIn ? new Date(Date.now() + body.expiresIn * 1000) : null;
+
+      await this.update(context, connectionId, {
+        accessToken: body.accessToken,
+        refreshToken: body.refreshToken ?? null,
+        tokenExpiry,
+        active: true,
+        needsReauth: false,
+        externalId: body.userProviderId,
+      });
+
+      return;
     }
 
     const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
@@ -201,7 +285,7 @@ export class ConnectionsController {
       throw new InternalServerErrorException();
     }
 
-    const tokenExchange = await client.exchangeAuthorizationCode(connection, code);
+    const tokenExchange = await client.exchangeAuthorizationCode(connection, body.code);
 
     await this.update(context, connectionId, {
       ...tokenExchange,
@@ -226,6 +310,104 @@ export class ConnectionsController {
 
     await this.update(context, connectionId, {
       externalId,
+    });
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Post('openid/complete')
+  @HttpCode(204)
+  async completeOpenIDCallback(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(completeOpenIDSchema)) body: CompleteOpenIDDto,
+  ) {
+    const serviceContext = toServiceContext(context);
+    const { params } = body;
+
+    const claimedId = params['openid.claimed_id'];
+    const identity = params['openid.identity'];
+    const opEndpoint = params['openid.op_endpoint'];
+    const connectionId = params['connection_id'];
+
+    const connection = await this.connectionService.findById(serviceContext, connectionId);
+
+    if (connection == null) {
+      this.logger.log('Performed a callback on `null` connection');
+
+      throw new NotFoundException();
+    }
+
+    const client = this.clientFactory.getClientByProviderId(connection.provider?.id);
+
+    if (client == null) {
+      this.logger.log('Performed a callback without an associated client');
+
+      throw new InternalServerErrorException();
+    }
+
+    if (!claimedId || !identity || !opEndpoint) {
+      this.logger.log('Missing required OpenID parameters');
+      throw new InternalServerErrorException('Missing required OpenID parameters');
+    }
+
+    // Validate that the claimed_id is from a trusted Steam OpenID endpoint
+    if (!claimedId.startsWith('https://steamcommunity.com/openid/id/')) {
+      this.logger.log('Invalid OpenID claimed_id', { claimedId });
+      throw new UnauthorizedException('Invalid OpenID claimed_id');
+    }
+
+    // --- Direct Verification (Section 11.4.2) ---
+    // Send all params back to the OP with openid.mode changed to check_authentication
+    const verifyParams = new URLSearchParams();
+
+    for (const [key, value] of Object.entries(params)) {
+      if (key === 'openid.mode') {
+        verifyParams.set(key, 'check_authentication');
+      } else {
+        verifyParams.set(key, value);
+      }
+    }
+
+    const verifyResponse = await fetch(opEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: verifyParams.toString(),
+    });
+
+    const verifyBody = await verifyResponse.text();
+    const isValid = verifyBody.includes('is_valid:true');
+
+    if (!isValid) {
+      this.logger.log('OpenID signature verification failed', { verifyBody });
+      throw new UnauthorizedException('OpenID signature verification failed');
+    }
+
+    // Extract the Steam ID from the claimed_id URL
+    const steamId = claimedId.split('/').pop();
+
+    if (!steamId) {
+      throw new InternalServerErrorException('Could not extract Steam ID from claimed_id');
+    }
+
+    // Find the pending connection for this user.
+    // The connection was already created by ProvidersController.connect() when the user
+    // initiated the OpenID flow — find it by looking for an inactive connection with
+    // the Steam provider for this user.
+    const existingConnection = await this.connectionService.search(serviceContext, {
+      providerId: connection!.providerId,
+      active: true,
+      externalId: steamId,
+    });
+
+    if (existingConnection.length > 0 && existingConnection.find((c) => c.id !== connectionId)) {
+      await this.connectionService.remove(serviceContext, connectionId);
+      throw new ConflictException('A connection to that account already exists');
+    }
+
+    // Activate the connection and set the external ID to the Steam ID
+    await this.connectionService.update(serviceContext, connectionId, {
+      active: true,
+      needsReauth: false,
+      externalId: steamId,
     });
   }
 }

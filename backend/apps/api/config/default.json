@@ -42,10 +42,16 @@
       },
       "spotify": {
         "id": "019cbaf2-d789-7723-aada-7e3d709663f5"
+      },
+      "steam": {
+        "id": "019d6470-f9e1-720f-a3ce-299842abaece"
       }
     },
     "oauth": {
-      "callbackUrl": "https://memory.ci.localhost/oauth/callback"
+      "callbackUrl": ""
+    },
+    "openid": {
+      "callbackUrl": "https://memory.ci.localhost/openid/callback"
     }
   },
   "db": {
@@ -94,5 +100,10 @@
   },
   "environment": {
     "database.query.logging": false
+  },
+  "ciPortal": {
+    "url": "",
+    "apiKey": "",
+    "deviceId": ""
   }
 }

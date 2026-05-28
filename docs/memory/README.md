@@ -5,18 +5,17 @@ HTTP, MCP, or a Hermes/OpenClaw plugin. This directory documents that surface.
 
 ## What you get
 
-Two complementary REST surfaces on CI-Server, both auth'd with `x-api-key`:
+Two REST surfaces on CI-Server, both auth'd with `x-api-key`:
 
-| Surface                    | Purpose                                                            |
-| -------------------------- | ------------------------------------------------------------------ |
-| `/api/agent/{context,recall,absorb,tools}` | **Agent-shaped** — returns Markdown blocks ready for prompt injection, with a built-in ~3k-char token cap. `absorb` upserts a Communication row by `sessionId` so a long conversation is one growing row, not N nodes. |
-| `/api/memory/{remember,recall,list,forget,context,health}` | **CRUD-shaped** — returns structured JSON. The fine-grained surface MCP tools and the web UI consume. |
+| Surface                                  | Purpose                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| `POST /api/memory/recall` + `POST /api/memory/turn` | **Agent-shaped.** `recall` returns a Markdown block pre-formatted for prompt injection (built-in token cap). `turn` is a forward-compatible no-op stub that will start persisting threads + messages once that path is implemented. |
+| `GET /api/graph/{context,search,node,data}` | **Graph-shaped.** Structured JSON for explicit MCP tool use and the web UI. `context` returns the user dossier; `search` runs hybrid keyword + semantic; `node` fetches a single entity with neighbours. |
 
 ```
             ┌──────────────────────────────────────────────────────┐
             │                CI-Server (this repo)                 │
-            │  /api/agent/{context,recall,absorb,tools}            │
-            │  /api/memory/{remember,recall,list,forget,context}   │
+            │  /api/memory/{recall,turn}    /api/graph/{...}       │
             └──────────────────────────────────────────────────────┘
                 │                  │                   │
                 │                  │                   │
@@ -33,13 +32,12 @@ Two complementary REST surfaces on CI-Server, both auth'd with `x-api-key`:
         └────────────────┘ └────────────────┘ └──────────────────┘
 ```
 
-The Hermes plugin prefers `/api/agent/*` for the three hook-driven paths
-(`system_prompt_block`, `prefetch`, `sync_turn`) because the Markdown
-blocks slot directly into Hermes' prompt assembly. It falls back to
-`/api/memory/*` on 404 so it keeps working against older CI-Servers.
-The MCP server exposes both toolsets — `ci_*` + `agent_*` from the
-agent surface, `companion_*` from the memory surface — so MCP hosts get
-both shapes.
+The Hermes plugin maps its three hooks onto the agent-shaped surface
+(`system_prompt_block` → `/graph/context`, `prefetch` → `/memory/recall`,
+`sync_turn` → `/memory/turn`). The MCP server exposes five tools —
+`companion_recall`, `companion_context`, `companion_search`,
+`companion_node`, `companion_turn` — each one a direct 1:1 mapping onto
+a backend endpoint.
 
 All three surfaces talk to the same REST API — so a memory you store via
 Claude Code is visible to Hermes and to OpenClaw, and vice-versa.

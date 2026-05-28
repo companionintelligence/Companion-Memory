@@ -1,4 +1,19 @@
-"""Implementation of the Hermes ``MemoryProvider`` ABC backed by CI-Server."""
+"""Implementation of the Hermes ``MemoryProvider`` ABC backed by CI-Server.
+
+Targets the surface that exists on ``main`` after the agent-memory merge:
+
+- ``system_prompt_block`` → ``GET /api/graph/context`` formatted into Markdown.
+- ``prefetch``            → ``POST /api/memory/recall`` returns the block
+                            already formatted by ``RecallService``.
+- ``sync_turn``           → ``POST /api/memory/turn`` (no-op stub today;
+                            forward-compatible — the backend will start
+                            persisting threads + messages once that path is
+                            implemented).
+- ``on_memory_write``     → no-op until ``POST /api/memory/persist`` lands.
+- ``handle_tool_call``    → dispatches the three tool schemas the agent loop
+                            exposes (``companion_recall``,
+                            ``companion_context``, ``companion_search``).
+"""
 from __future__ import annotations
 
 import json
@@ -9,7 +24,6 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .client import CompanionMemoryClient, CompanionMemoryError
-from .tools import dispatch, tool_schemas
 
 LOG = logging.getLogger(__name__)
 
@@ -43,6 +57,46 @@ except Exception:  # pragma: no cover - import shim for non-Hermes envs
 CONFIG_FILE = "companion_memory.json"
 
 
+_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "name": "companion_recall",
+        "description": (
+            "Semantic recall against the Companion Intelligence personal memory. Returns a Markdown "
+            "block ready for prompt injection."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "maxResults": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "companion_context",
+        "description": "Return the user's identity, family, top preferences, and quick stats as JSON.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "companion_search",
+        "description": (
+            "Structured search against the personal knowledge graph. Returns nodes + links as JSON."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
 class CompanionMemoryProvider(MemoryProvider):
     """Hermes memory provider that persists state to a CI-Server instance."""
 
@@ -70,10 +124,14 @@ class CompanionMemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         self._session_id = session_id
-        self._hermes_home = Path(kwargs.get("hermes_home") or os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+        self._hermes_home = Path(
+            kwargs.get("hermes_home") or os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        )
         self._config = self._load_config(self._hermes_home)
 
-        base_url = self._config.get("base_url") or os.environ.get("COMPANION_MEMORY_URL") or "http://localhost:3030"
+        base_url = (
+            self._config.get("base_url") or os.environ.get("COMPANION_MEMORY_URL") or "http://localhost:3030"
+        )
         api_key = self._config.get("api_key") or os.environ.get("COMPANION_MEMORY_API_KEY")
         namespace = self._config.get("namespace") or os.environ.get("COMPANION_MEMORY_NAMESPACE") or session_id
         timeout = float(self._config.get("timeout") or os.environ.get("COMPANION_MEMORY_TIMEOUT") or 15.0)
@@ -100,7 +158,7 @@ class CompanionMemoryProvider(MemoryProvider):
     # ---- schema / tools --------------------------------------------------
 
     def get_tool_schemas(self) -> list:
-        return tool_schemas()
+        return list(_TOOL_SCHEMAS)
 
     def get_config_schema(self) -> list:
         return [
@@ -138,8 +196,6 @@ class CompanionMemoryProvider(MemoryProvider):
         home = Path(hermes_home)
         home.mkdir(parents=True, exist_ok=True)
         target = home / CONFIG_FILE
-        # `api_key` is treated as secret — Hermes already routes secrets to the
-        # keychain. The non-secret fields are persisted here.
         persistable = {key: value for key, value in values.items() if key != "api_key" and value is not None}
         target.write_text(json.dumps(persistable, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -147,8 +203,23 @@ class CompanionMemoryProvider(MemoryProvider):
 
     def handle_tool_call(self, name: str, args: Mapping[str, Any]) -> Any:
         client = self._require_client()
+        try:
+            if name == "companion_recall":
+                return client.recall(
+                    query=str(args["query"]),
+                    max_results=int(args.get("maxResults") or 5),
+                )
+            if name == "companion_context":
+                return {"context": client.context()}
+            if name == "companion_search":
+                return client.search(
+                    query=str(args["query"]),
+                    limit=int(args.get("limit") or 10),
+                )
+        except CompanionMemoryError as exc:
+            return {"error": True, "status": exc.status, "message": str(exc)}
 
-        return dispatch(client, name, args)
+        return {"error": True, "message": f"unknown tool: {name}"}
 
     # ---- hooks -----------------------------------------------------------
 
@@ -157,163 +228,106 @@ class CompanionMemoryProvider(MemoryProvider):
         if client is None:
             return ""
 
-        # Prefer the agent surface — it returns a Markdown block already
-        # formatted for direct injection, with the same shape (`# About You`,
-        # `## Close Relationships`, `## Preferences`, `## Knowledge Graph`)
-        # the backend assembles uniformly. Fall back to the JSON `/memory/context`
-        # endpoint and format client-side if the agent module isn't deployed.
-        try:
-            block = client.agent_context()
-        except CompanionMemoryError as exc:
-            LOG.warning("companion-memory agent_context failed: %s", exc)
-            block = None
-
-        if block:
-            return block
-
         try:
             context = client.context() or {}
         except CompanionMemoryError as exc:
             LOG.warning("companion-memory context fetch failed: %s", exc)
             return ""
 
-        if not context:
+        if not context or not isinstance(context, Mapping):
             return ""
 
-        user = context.get("currentUser", {}) if isinstance(context, dict) else {}
-        stats = context.get("quickStats", {}) if isinstance(context, dict) else {}
-        prefs = context.get("topPreferences", []) if isinstance(context, dict) else []
+        user = context.get("currentUser", {}) or {}
+        stats = context.get("quickStats", {}) or {}
+        prefs = context.get("topPreferences", []) or []
+        family = context.get("familyMembers", []) or []
 
-        lines = ["## Companion Intelligence — User Memory"]
+        lines = ["# About You"]
         if user.get("name"):
-            lines.append(f"- User: {user.get('name')}")
+            lines.append(f"**Name**: {user.get('name')}")
+        if isinstance(user, Mapping) and user.get("username"):
+            lines.append(f"**Username**: {user.get('username')}")
+
+        if family:
+            lines.append("\n## Close Relationships")
+            for member in family:
+                if isinstance(member, Mapping):
+                    age = f", age {member.get('age')}" if member.get("age") else ""
+                    lines.append(f"- **{member.get('name')}** ({member.get('relationship')}{age})")
+
+        likes = [p for p in prefs if isinstance(p, Mapping) and p.get("relationship") == "PREFERS"]
+        dislikes = [p for p in prefs if isinstance(p, Mapping) and p.get("relationship") == "DISLIKES"]
+
+        if likes:
+            lines.append("\n## Preferences")
+            lines.append("**Likes**: " + ", ".join(str(p.get("name")) for p in likes[:8]))
+        if dislikes:
+            if not likes:
+                lines.append("\n## Preferences")
+            lines.append("**Dislikes**: " + ", ".join(str(p.get("name")) for p in dislikes[:5]))
+
         if stats:
             stats_summary = ", ".join(f"{key}={value}" for key, value in stats.items())
-            lines.append(f"- Stats: {stats_summary}")
-        if prefs:
-            lines.append("- Top preferences:")
-            for pref in prefs[:5]:
-                if isinstance(pref, Mapping):
-                    lines.append(f"  - {pref.get('name')} ({pref.get('relationship')})")
-        lines.append(
-            "Use companion_recall before answering personal questions and companion_remember to persist new facts."
-        )
+            lines.append(f"\n## Knowledge Graph\n{stats_summary}")
 
         return "\n".join(lines)
 
     def prefetch(self, query: str) -> str:
-        if not query.strip() or self._client is None:
+        if self._client is None or not query.strip():
             return ""
-
-        # Prefer /agent/recall — returns a Markdown block capped at ~3k chars,
-        # built on the backend's SearchService.search auto-mode. Falls back to
-        # /memory/recall when the agent module isn't deployed.
         try:
-            agent_result = self._client.agent_recall(query=query, max_results=5)
+            result = self._client.recall(query=query, max_results=5)
         except CompanionMemoryError as exc:
-            LOG.warning("companion-memory agent_recall failed: %s", exc)
-            agent_result = None
-
-        if agent_result and isinstance(agent_result, Mapping):
-            block = str(agent_result.get("block") or "")
-            if block:
-                return block
-
-        try:
-            results = self._client.recall(query=query, limit=5)
-        except CompanionMemoryError as exc:
-            LOG.warning("companion-memory prefetch failed: %s", exc)
+            LOG.warning("companion-memory recall failed: %s", exc)
             return ""
 
-        if not results:
-            return ""
+        block = str(result.get("block") or "") if isinstance(result, Mapping) else ""
 
-        snippets = []
-        for record in results:
-            label = record.name or record.entity_type
-            snippet = (record.content or "").strip().replace("\n", " ")
-            snippets.append(f"- [{label}] {snippet[:240]}")
-        body = "\n".join(snippets)
-
-        return f"## Relevant Companion Memories\n{body}"
+        return block
 
     def sync_turn(self, user_content: str, assistant_content: str) -> None:
         if self._client is None or not user_content.strip():
             return
 
-        # Prefer /agent/absorb — upserts a single Communication row keyed by
-        # sessionId, so a long conversation becomes one growing row rather than
-        # N concept nodes. Falls back to /memory/remember if /agent/absorb is
-        # unavailable.
         messages = [
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": assistant_content},
         ]
 
-        def _persist_agent() -> bool:
+        def _persist() -> None:
             assert self._client is not None
             try:
-                result = self._client.agent_absorb(
-                    messages,
-                    session_id=self._session_id,
-                    platform="hermes",
-                )
+                self._client.turn(messages, session_id=self._session_id)
             except CompanionMemoryError as exc:
-                LOG.warning("companion-memory agent_absorb failed: %s", exc)
-                return False
-
-            return bool(result and result.get("ok"))
-
-        def _persist_fallback() -> None:
-            try:
-                self._client and self._client.remember(  # type: ignore[union-attr]
-                    content=f"USER: {user_content}\nASSISTANT: {assistant_content}",
-                    entity_type="Communication",
-                    tags=["hermes", "turn"],
-                    metadata={"session_id": self._session_id},
-                    source="hermes",
-                )
-            except CompanionMemoryError as exc:
-                LOG.warning("companion-memory sync_turn failed: %s", exc)
-
-        def _persist() -> None:
-            if not _persist_agent():
-                _persist_fallback()
+                LOG.warning("companion-memory turn failed: %s", exc)
 
         threading.Thread(target=_persist, name="companion-memory-sync", daemon=True).start()
 
     def on_session_end(self, messages: Iterable[Mapping[str, Any]]) -> None:
+        """Post the full session as a single absorb call.
+
+        ``/api/memory/turn`` is a no-op stub today, but it accepts the payload
+        and the backend will eventually persist it. We keep the call here so
+        we get the persistence for free once the backend implements it.
+        """
         if self._client is None:
             return
-        summary = self._summarise_messages(messages)
-        if not summary:
+        payload = [
+            {"role": str(message.get("role") or ""), "content": str(message.get("content") or "")}
+            for message in messages
+            if isinstance(message, Mapping)
+        ]
+        if not payload:
             return
         try:
-            self._client.remember(
-                content=summary,
-                entity_type="Concept",
-                name=f"Hermes session {self._session_id}",
-                tags=["hermes", "session-summary"],
-                metadata={"session_id": self._session_id},
-                source="hermes",
-            )
+            self._client.turn(payload, session_id=self._session_id)
         except CompanionMemoryError as exc:
-            LOG.warning("companion-memory session-end persist failed: %s", exc)
+            LOG.warning("companion-memory on_session_end failed: %s", exc)
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in MEMORY.md writes into CI-Server."""
-        if self._client is None:
-            return
-        try:
-            self._client.remember(
-                content=content,
-                entity_type="Concept",
-                tags=["hermes", "memory.md", action],
-                metadata={"target": target, "action": action},
-                source="hermes:MEMORY.md",
-            )
-        except CompanionMemoryError as exc:
-            LOG.warning("companion-memory on_memory_write failed: %s", exc)
+        """No-op until ``POST /api/memory/persist`` lands. We log so the
+        plugin is observably ready for that endpoint."""
+        LOG.debug("on_memory_write: %s %s (no /memory/persist yet)", action, target)
 
     # ---- helpers ---------------------------------------------------------
 
@@ -333,16 +347,3 @@ class CompanionMemoryProvider(MemoryProvider):
                 raise RuntimeError("companion-memory provider used before initialize()")
 
             return self._client
-
-    @staticmethod
-    def _summarise_messages(messages: Iterable[Mapping[str, Any]]) -> str:
-        joined = []
-        for message in messages:
-            role = str(message.get("role") or "?")
-            content = str(message.get("content") or "")
-            if not content.strip():
-                continue
-            joined.append(f"{role.upper()}: {content.strip()}")
-        text = "\n".join(joined)
-
-        return text[:8000]

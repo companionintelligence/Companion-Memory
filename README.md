@@ -1,6 +1,6 @@
 
 
-# CI Digital Memory Server
+# Companion Memory
 ### Personal Database for Companion Intelligence
 
 #### COPYRIGHT COMPANION INTELLIGENCE - LIFESCOPE INC

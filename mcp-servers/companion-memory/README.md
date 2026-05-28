@@ -3,16 +3,15 @@
 A stdio MCP server that exposes the Companion Intelligence memory graph to any
 MCP-compatible client (Claude Code, Claude Desktop, OpenClaw, Cursor, ...).
 
-It wraps the `/memory/*` REST endpoints on the CI-Server and adds six tools:
+Each tool maps 1:1 onto a CI-Server endpoint that exists on `main`:
 
-| Tool                | Action                                                           |
-| ------------------- | ---------------------------------------------------------------- |
-| `companion_remember`| Store content as a graph node (default entity type `Concept`).   |
-| `companion_recall`  | Hybrid full-text + prefix search over the user's memories.       |
-| `companion_list`    | List memories with optional filters.                             |
-| `companion_forget`  | Archive (default) or hard-delete a memory by id.                 |
-| `companion_context` | Return the current-user dossier used to pre-hydrate LLM prompts. |
-| `companion_health`  | Liveness probe against the backend.                              |
+| Tool                | Backed by                                          | Action                                                                  |
+| ------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `companion_recall`  | `POST /api/memory/recall`                          | Semantic recall returning a Markdown block ready for prompt injection.  |
+| `companion_turn`    | `POST /api/memory/turn`                            | Sync a conversation turn. Backend is a no-op stub today; forward-compatible. |
+| `companion_context` | `GET /api/graph/context`                           | Current-user dossier as JSON.                                           |
+| `companion_search`  | `GET /api/graph/search`                            | Structured search returning nodes + links.                              |
+| `companion_node`    | `GET /api/graph/node`                              | Single entity + bounded neighbour traversal.                            |
 
 ## Configuration
 

@@ -2,43 +2,44 @@ import { fetch, type RequestInit } from 'undici';
 
 import type { CompanionMemoryConfig } from './config.js';
 
-export interface MemoryRecord {
+// ---------------------------------------------------------------------------
+// Response shapes — match the backend's current surface.
+//
+//   POST /api/memory/recall   → { block, resultCount }
+//   POST /api/memory/turn     → {} (no-op stub today; reserves the path)
+//   GET  /api/graph/context   → { success, context }
+//   GET  /api/graph/search    → { success, nodes, links? }
+//   GET  /api/graph/node      → { success, node, relationships, subgraph }
+//
+// The richer CRUD surface that the original draft of this client targeted
+// (POST /memory/remember, DELETE /memory/forget/:id, ...) was deliberately
+// removed from the backend in `c4acbdd1 Remove tool calling from agent
+// domain; rely on MCP`. This client only calls endpoints that exist.
+// ---------------------------------------------------------------------------
+
+export interface RecallBlock {
+  block: string;
+  resultCount: number;
+}
+
+export interface GraphNodeSummary {
   id: string;
-  entityType: string;
+  entity_id: string;
+  entity_type: string;
   name: string | null;
-  content: string | null;
+  description: string | null;
+  properties: Record<string, unknown>;
   score?: number | null;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-  createdAt?: string | null;
-  updatedAt?: string | null;
 }
 
-export interface RememberInput {
-  content: string;
-  name?: string;
-  entityType?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-  source?: string;
-}
-
-export interface RecallInput {
-  query: string;
-  limit?: number;
-  entityType?: string;
-}
-
-export interface ListInput {
-  entityType?: string;
-  nameContains?: string;
-  limit?: number;
-}
-
-export interface ForgetInput {
+export interface GraphLinkSummary {
   id: string;
-  reason?: string;
-  hardDelete?: boolean;
+  relationship_id: string;
+  source: string;
+  target: string;
+  relationship_type: string;
+  strength: number;
+  properties: Record<string, unknown>;
 }
 
 export interface UserContextSnapshot {
@@ -47,143 +48,97 @@ export interface UserContextSnapshot {
     name: string;
     username: string | null;
     properties?: Record<string, unknown>;
+    dossier?: Record<string, unknown> | null;
   };
   familyMembers: Array<Record<string, unknown>>;
   topPreferences: Array<Record<string, unknown>>;
   quickStats: Record<string, number>;
 }
 
+export interface TurnMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface RecallInput {
+  query: string;
+  maxResults?: number;
+}
+
+export interface SearchInput {
+  query: string;
+  limit?: number;
+}
+
+export interface NodeInput {
+  entityId: string;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxEdges?: number;
+}
+
+export interface TurnInput {
+  messages: TurnMessage[];
+  sessionId?: string;
+}
+
 export class CompanionMemoryClient {
   constructor(private readonly config: CompanionMemoryConfig) {}
 
-  async remember(input: RememberInput): Promise<MemoryRecord> {
-    const body = {
-      content: input.content,
-      name: input.name,
-      entityType: input.entityType ?? 'Concept',
-      tags: input.tags,
-      metadata: this.augmentMetadata(input.metadata),
-      source: input.source,
-    };
+  // ---- agent-shaped surface (`/api/memory/*`) -----------------------------
 
-    const response = await this.request<{ success: boolean; memory: MemoryRecord }>(
-      'POST',
-      '/memory/remember',
-      { body },
-    );
-
-    return response.memory;
+  async recall(input: RecallInput): Promise<RecallBlock> {
+    return this.request<RecallBlock>('POST', '/memory/recall', { body: input });
   }
 
-  async recall(input: RecallInput): Promise<MemoryRecord[]> {
-    const params = new URLSearchParams({ query: input.query });
-    if (input.limit !== undefined) {
-      params.set('limit', String(input.limit));
-    }
-
-    if (input.entityType) {
-      params.set('entityType', input.entityType);
-    }
-
-    const response = await this.request<{ success: boolean; results: MemoryRecord[] }>(
-      'GET',
-      `/memory/recall?${params.toString()}`,
-    );
-
-    return response.results;
+  async turn(input: TurnInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>('POST', '/memory/turn', { body: input });
   }
 
-  async list(input: ListInput = {}): Promise<MemoryRecord[]> {
-    const params = new URLSearchParams();
-    if (input.entityType) {
-      params.set('entityType', input.entityType);
-    }
-
-    if (input.nameContains) {
-      params.set('nameContains', input.nameContains);
-    }
-
-    if (input.limit !== undefined) {
-      params.set('limit', String(input.limit));
-    }
-
-    const path = params.toString() ? `/memory/list?${params.toString()}` : '/memory/list';
-    const response = await this.request<{ success: boolean; results: MemoryRecord[] }>('GET', path);
-
-    return response.results;
-  }
-
-  async forget(input: ForgetInput): Promise<{ forgotten: boolean; id: string; mode: string }> {
-    const response = await this.request<{ success: boolean; forgotten: boolean; id: string; mode: string }>(
-      'DELETE',
-      `/memory/forget/${encodeURIComponent(input.id)}`,
-      {
-        body: {
-          reason: input.reason,
-          hardDelete: input.hardDelete ?? false,
-        },
-      },
-    );
-
-    return { forgotten: response.forgotten, id: response.id, mode: response.mode };
-  }
+  // ---- graph surface (`/api/graph/*`) -------------------------------------
 
   async context(): Promise<UserContextSnapshot | null> {
     const response = await this.request<{ success: boolean; context: UserContextSnapshot | null }>(
       'GET',
-      '/memory/context',
+      '/graph/context',
     );
 
     return response.context;
   }
 
-  async health(): Promise<{ success: boolean; service: string; time: string }> {
-    return this.request('GET', '/memory/health');
-  }
-
-  // ---------------------------------------------------------------------------
-  // Agent surface (`/api/agent/*`) — added in concert with the AgentModule
-  // landed by the feature/agent-memory branch. Returns Markdown blocks
-  // pre-formatted for direct prompt injection, with a built-in token cap.
-  // ---------------------------------------------------------------------------
-
-  async agentContext(): Promise<string> {
-    const response = await this.request<{ block: string }>('GET', '/agent/context');
-
-    return response.block ?? '';
-  }
-
-  async agentRecall(input: {
-    query: string;
-    maxResults?: number;
-  }): Promise<{ block: string; resultCount: number }> {
-    return this.request('POST', '/agent/recall', { body: input });
-  }
-
-  async agentAbsorb(input: {
-    messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
-    sessionId?: string;
-    platform?: string;
-  }): Promise<{ ok: boolean }> {
-    return this.request('POST', '/agent/absorb', { body: input });
-  }
-
-  async agentTool(input: {
-    tool: 'ci_search' | 'ci_query' | 'ci_remember';
-    args: Record<string, unknown>;
-  }): Promise<{ result: unknown }> {
-    return this.request('POST', '/agent/tools', { body: input });
-  }
-
-  private augmentMetadata(
-    metadata: Record<string, unknown> | undefined,
-  ): Record<string, unknown> | undefined {
-    if (!this.config.COMPANION_MEMORY_NAMESPACE) {
-      return metadata;
+  async search(input: SearchInput): Promise<{ nodes: GraphNodeSummary[]; links: GraphLinkSummary[] }> {
+    const params = new URLSearchParams({ query: input.query });
+    if (input.limit !== undefined) {
+      params.set('limit', String(input.limit));
     }
 
-    return { namespace: this.config.COMPANION_MEMORY_NAMESPACE, ...(metadata ?? {}) };
+    const response = await this.request<{
+      success: boolean;
+      nodes: GraphNodeSummary[];
+      links?: GraphLinkSummary[];
+    }>('GET', `/graph/search?${params.toString()}`);
+
+    return { nodes: response.nodes ?? [], links: response.links ?? [] };
   }
+
+  async node(input: NodeInput): Promise<unknown> {
+    const params = new URLSearchParams({ entityId: input.entityId });
+    if (input.maxDepth !== undefined) {
+      params.set('maxDepth', String(input.maxDepth));
+    }
+
+    if (input.maxNodes !== undefined) {
+      params.set('maxNodes', String(input.maxNodes));
+    }
+
+    if (input.maxEdges !== undefined) {
+      params.set('maxEdges', String(input.maxEdges));
+    }
+
+    return this.request<unknown>('GET', `/graph/node?${params.toString()}`);
+  }
+
+  // ---- internals ----------------------------------------------------------
 
   private async request<T>(
     method: 'GET' | 'POST' | 'DELETE',

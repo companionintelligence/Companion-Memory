@@ -45,25 +45,26 @@ secrets.
 | ---------------------- | -------------------------------------------------------------------- |
 | `is_available`         | True when `COMPANION_MEMORY_API_KEY` or `$HERMES_HOME/companion_memory.json` is present. |
 | `initialize`           | Builds an HTTP client; loads config; logs base_url + namespace.      |
-| `system_prompt_block`  | Calls `GET /memory/context` and renders user dossier as a system-prompt section. |
-| `prefetch(query)`      | Calls `GET /memory/recall` with `limit=5` and formats the snippets.  |
-| `sync_turn`            | Persists `USER: … / ASSISTANT: …` as a `Communication` entity on a daemon thread. |
-| `on_session_end`       | Stores a concatenated session summary as a `Concept` entity.         |
-| `on_memory_write`      | Mirrors built-in MEMORY.md writes into the graph.                    |
-| `handle_tool_call`     | Routes the 5 companion_* tools to the matching REST endpoint.        |
+| `system_prompt_block`  | Calls `GET /api/graph/context` and renders the user dossier as a Markdown system-prompt block. |
+| `prefetch(query)`      | Calls `POST /api/memory/recall` (`maxResults=5`) and injects the returned `block` directly. |
+| `sync_turn`            | `POST /api/memory/turn` on a daemon thread. Backend persistence is currently a stub; calling it is forward-compatible. |
+| `on_session_end`       | `POST /api/memory/turn` with the full message list.                  |
+| `on_memory_write`      | Logged-only no-op. Activates once `POST /api/memory/persist` ships.  |
+| `handle_tool_call`     | Routes `companion_recall`, `companion_context`, `companion_search`.  |
 | `shutdown`             | Closes the HTTP client.                                              |
 
 ## Tools the provider exposes
 
-These are the exact tool names Hermes registers when companion-memory is
-the active provider — symmetrical with the MCP server's tools, so the same
-prompts work in both surfaces.
+When companion-memory is the active Hermes provider, three tools become
+available to the agent loop:
 
-- `companion_remember`
-- `companion_recall`
-- `companion_list`
-- `companion_forget`
-- `companion_context`
+- `companion_recall` — semantic recall returning a Markdown block.
+- `companion_context` — user dossier (identity, family, preferences) as JSON.
+- `companion_search` — structured graph search returning nodes + links.
+
+These are deliberately the same three tools the MCP server exposes from
+the agent-shaped surface, so the same prompts behave consistently across
+Hermes, Claude Code, and OpenClaw.
 
 ## Disable / switch off
 

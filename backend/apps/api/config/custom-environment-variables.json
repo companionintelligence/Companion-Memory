@@ -54,5 +54,10 @@
   },
   "environment": {
     "database.query.logging": "DATABASE_QUERY_LOGGING"
+  },
+  "ciPortal": {
+    "url": "CI_CLOUD_URL",
+    "deviceId": "HUB_DEVICE_ID",
+    "apiKey": "HUB_API_KEY"
   }
 }

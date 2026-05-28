@@ -50,6 +50,12 @@ export class ProviderType {
   @Field(() => String, { nullable: true })
   logoUrl!: string | null;
 
+  @Field(() => String, { nullable: true })
+  authType!: string | null;
+
+  @Field(() => String, { nullable: true })
+  openidKeyLink!: string | null;
+
   @Field(() => ProviderThemeType, { nullable: true })
   theme!: ProviderThemeType | null;
 
@@ -62,6 +68,8 @@ export class ProviderType {
       description: provider.description,
       endpoints: provider.endpoints,
       logoUrl: provider.logoUrl,
+      authType: provider.authType,
+      openidKeyLink: provider.openidKeyLink,
       theme: provider.theme,
     };
   }

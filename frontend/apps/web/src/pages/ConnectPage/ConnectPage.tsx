@@ -221,7 +221,7 @@ export function ConnectPage() {
               logo="/branding/spotify/logo.svg"
               background="bg-green-500"
               border="border-green-400"
-              text="Connect Spotify to track your music listening habits, playlists, and audio memories. Coming soon."
+              text="Connect Spotify to track your music listening habits, playlists, and audio memories."
               onClick={() => navigate('/providers/019cbaf2-d789-7723-aada-7e3d709663f5')}
               subtext={
                 connectionsCount['019cbaf2-d789-7723-aada-7e3d709663f5'] === 1
@@ -232,6 +232,23 @@ export function ConnectPage() {
               }
               className={
                 connectionsCount['019cbaf2-d789-7723-aada-7e3d709663f5'] > 0 ? 'bg-green-200' : undefined
+              }
+            />
+            <Card
+              logo="/branding/steam/logo.svg"
+              background="bg-slate-700"
+              border="border-slate-600"
+              text="Connect Steam to track your game library and achievements."
+              onClick={() => navigate('/providers/019d6470-f9e1-720f-a3ce-299842abaece')}
+              subtext={
+                connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece'] === 1
+                  ? `1 Connection`
+                  : connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece'] > 1
+                    ? `${connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece']} Connections`
+                    : undefined
+              }
+              className={
+                connectionsCount['019d6470-f9e1-720f-a3ce-299842abaece'] > 0 ? 'bg-green-200' : undefined
               }
             />
             <Card
@@ -274,13 +291,6 @@ export function ConnectPage() {
               background="bg-purple-600"
               border="border-purple-500"
               text="Sync Slack to capture your team communications, channels, and workspace activity. Coming soon."
-              disabled
-            />
-            <Card
-              logo="/branding/steam/logo.svg"
-              background="bg-slate-700"
-              border="border-slate-600"
-              text="Connect Steam to track your gaming activity, achievements, and game library. Coming soon."
               disabled
             />
             <Card

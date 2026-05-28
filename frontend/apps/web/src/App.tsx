@@ -33,6 +33,7 @@ const NotePage = lazy(() => import('@/pages/NotePage'));
 const NotesPage = lazy(() => import('@/pages/NotesPage'));
 const OAuthCallbackPage = lazy(() => import('@/pages/OAuthCallbackPage'));
 const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'));
+const OpenIDCallbackPage = lazy(() => import('@/pages/OpenIDCallbackPage'));
 const PersonPage = lazy(() => import('@/pages/PersonPage'));
 const PlacePage = lazy(() => import('@/pages/PlacePage'));
 const ProviderPage = lazy(() => import('@/pages/ProviderPage'));
@@ -262,6 +263,15 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <OAuthCallbackPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/openid/callback"
+            element={
+              <ProtectedRoute>
+                <OpenIDCallbackPage />
               </ProtectedRoute>
             }
           />

@@ -1,14 +1,25 @@
 import { z } from 'zod';
 
-export interface CompleteConnectionDto {
-  state: string;
-  code: string;
-}
+export type CompleteConnectionDto =
+  | {
+      flow: 'proxy';
+      state: string;
+      accessToken: string;
+      refreshToken?: string;
+      expiresIn?: number;
+      userProviderId: string;
+    }
+  | {
+      flow: 'direct';
+      state: string;
+      code: string;
+    };
 
 export interface CreateConnectionDto {
   name?: string;
   providerId: string;
   clientid?: string;
+  accessToken?: string;
   clientkey?: string;
   clientsecret?: string;
   schedule?: string;
@@ -30,9 +41,11 @@ export interface UpdateConnectionDto {
 }
 
 export interface connectProviderDto {
+  apiKey?: string;
   endpoints: string[];
 }
 
 export const connectProviderSchema = z.object({
   endpoints: z.array(z.string()),
+  apiKey: z.string().optional(),
 });

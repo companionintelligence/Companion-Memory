@@ -26,122 +26,72 @@ This is the same store the existing `readKnowledge` / `writeKnowledge` /
 `forgetKnowledge` native tools use, so anything written via the memory API is
 visible in the existing graph UI and is queryable by every existing tool.
 
-## Two REST surfaces
+## REST surfaces
 
-There are **two** complementary REST surfaces that adapters can consume.
-Both auth via `x-api-key` (or session JWT) and scope every request to the
-authenticated user.
+Two surfaces today, both auth'd with `x-api-key` (or session JWT) and
+scoped per-user:
 
-| Surface                  | Auth                       | Shape                                       | Best for                                              |
-| ------------------------ | -------------------------- | ------------------------------------------- | ----------------------------------------------------- |
-| `/api/agent/*`           | `ApiKeyGuard` (API key only) | Markdown blocks ready for prompt injection. | Hermes hooks (`system_prompt_block`, `prefetch`, `sync_turn`). |
-| `/api/memory/*`          | `JwtOrApiKeyAuthGuard`     | Structured JSON.                            | MCP tools, web UI, scripts, explicit CRUD.            |
+| Surface                                                | Auth         | Shape                                              | Best for                                                    |
+| ------------------------------------------------------ | ------------ | -------------------------------------------------- | ----------------------------------------------------------- |
+| `POST /api/memory/recall` + `POST /api/memory/turn`    | `ApiKeyGuard`| Markdown block (`recall`) / no-op stub (`turn`).   | Hermes hooks (`prefetch`, `sync_turn`); OpenClaw assemble.  |
+| `GET /api/graph/{context,search,node,data}`            | `JwtOrApiKeyAuthGuard` | Structured JSON.                         | MCP explicit tool use, web UI, scripts.                     |
 
-### `/api/agent/*` — added by [AgentModule](../../backend/apps/api/src/domains/agent/index.ts)
+### `/api/memory/*` — provided by [AgentModule](../../backend/apps/api/src/domains/agent/index.ts)
 
-Four endpoints aimed at the *agent loop*:
+Despite the name, this module lives under `domains/agent/` — it's the
+agent-loop-facing surface. Two endpoints today:
 
-- `GET /api/agent/context` — L0 static user dossier as Markdown.
-- `POST /api/agent/recall` — L1 semantic recall as Markdown (capped at ~3,000 chars).
-- `POST /api/agent/absorb` — ingest a conversation turn (upserts a single `Communication` row keyed by `sessionId`).
-- `POST /api/agent/tools` — dispatch one of `ci_search`, `ci_query`, `ci_remember`.
+- `POST /api/memory/recall` — body `{query, maxResults}`, returns
+  `{block, resultCount}` where `block` is a Markdown snippet pre-formatted
+  for prompt injection (built via `SearchService.search` with `mode: 'keyword'`).
+- `POST /api/memory/turn` — body `{messages, sessionId}`, currently a
+  no-op stub. The endpoint is reserved so adapters can already call it;
+  thread + message persistence lands here once that path is implemented.
+- `POST /api/memory/persist` — declared as a no-op route comment in the
+  controller, reserved for explicit `on_memory_write` flows from Hermes
+  and `memory_store` from OpenClaw.
 
-These return Markdown blocks (`block: string`) that paste directly into a
-system prompt. The Hermes plugin uses them in preference to the CRUD
-surface because they collapse retrieval + formatting + budget capping
-into one call.
+### `/api/graph/*` — provided by [MemoryModule.GraphController](../../backend/apps/api/src/domains/memory/controllers/GraphController.ts)
 
-### `/api/memory/*` — added by [MemoryController](../../backend/apps/api/src/domains/memory/controllers/MemoryController.ts)
+The structured-JSON surface:
 
-The fine-grained CRUD surface MCP tools and the web UI consume. Auth via
-`x-api-key` header (or session JWT). Every endpoint scopes by the
-authenticated user.
-
-### `POST /api/memory/remember`
-
-Stores content as a graph node (default `entity_type=Concept`). The full text
-goes into `description` and `search_content`; tags and metadata land in the
-node's `properties` JSON.
-
-```json
-{
-  "content": "Liam prefers Pilates over yoga.",
-  "name": "Pilates preference",
-  "entityType": "Concept",
-  "tags": ["preferences", "fitness"],
-  "metadata": { "confidence": 0.9 },
-  "source": "claude-code"
-}
-```
-
-Response:
-
-```json
-{
-  "success": true,
-  "memory": {
-    "id": "0190f7ac-...",
-    "entityType": "Concept",
-    "name": "Pilates preference",
-    "content": "Liam prefers Pilates over yoga.",
-    "tags": ["preferences", "fitness"],
-    "metadata": { "confidence": 0.9, "source": "claude-code" }
-  }
-}
-```
-
-### `GET /api/memory/recall`
-
-```
-GET /api/memory/recall?query=pilates&limit=10&entityType=Concept
-```
-
-Runs the existing hybrid search (`searchNodesByText` + `searchNodesByPrefix`)
-and returns up to `limit` results merged and deduplicated, optionally filtered
-to a single entity type.
-
-### `GET /api/memory/list`
-
-Browse memories with simple filters (`entityType`, `nameContains`, `limit`).
-
-### `DELETE /api/memory/forget/:id`
-
-Archives the entity by default (`deactivateEntities(..., hardDelete=false)`).
-Pass `{"hardDelete": true}` in the body to remove it from the active graph
-entirely.
-
-### `GET /api/memory/context`
-
-Wraps `UserContextService.getUserContextForLLM`, returning the user's identity,
-family, top preferences, and quick stats — the same shape the existing
-`/api/graph/context` endpoint emits.
-
-### `GET /api/memory/health`
-
-Liveness probe used by the smoke test and the MCP `companion_health` tool.
+- `GET /api/graph/context` — the user dossier (`currentUser`, `familyMembers`,
+  `topPreferences`, `quickStats`).
+- `GET /api/graph/search?query=&limit=` — hybrid keyword + prefix search,
+  returns `{nodes, links}`.
+- `GET /api/graph/node?entityId=&maxDepth=&maxNodes=&maxEdges=` — single
+  entity plus bounded neighbour traversal.
+- `GET /api/graph/data` — full graph snapshot (capped at 200 nodes).
 
 ## Adapter layer
 
-Three thin adapters consume the REST API and expose it in each ecosystem's
-native style. None of them stores state of their own — they're all
-stateless translators.
+Three thin adapters consume those two surfaces and expose them in each
+ecosystem's native style. None of them stores state of their own.
 
 ### MCP server (`mcp-servers/companion-memory/`)
 
 - Stdio MCP server written in TypeScript (`@modelcontextprotocol/sdk`).
-- Six tools, one per REST endpoint plus `companion_health`.
+- Five tools, one per backend endpoint:
+  - `companion_recall` → `POST /api/memory/recall`
+  - `companion_turn` → `POST /api/memory/turn`
+  - `companion_context` → `GET /api/graph/context`
+  - `companion_search` → `GET /api/graph/search`
+  - `companion_node` → `GET /api/graph/node`
 - Configured entirely through env vars — no on-disk state.
-- Designed to be embedded into Claude Code, Claude Desktop, Cursor, OpenClaw
-  (which speaks MCP), and any other MCP-capable host.
+- Embeddable into Claude Code, Claude Desktop, Cursor, OpenClaw, and any
+  other MCP-capable host.
 
 ### Hermes plugin (`plugins/hermes-companion-memory/`)
 
 - Implements `agent.memory_provider.MemoryProvider`.
-- Single active provider — competes with honcho/mem0/etc.
-- Hooks: `system_prompt_block`, `prefetch`, `sync_turn`, `on_session_end`,
-  `on_memory_write`, `shutdown`.
-- Stores `api_key` via Hermes' standard secret routing; other config lives in
-  `$HERMES_HOME/companion_memory.json`.
+- Hook mapping:
+  - `system_prompt_block` → `GET /api/graph/context` (formatted client-side).
+  - `prefetch(query)` → `POST /api/memory/recall` (returns the block directly).
+  - `sync_turn(...)` → `POST /api/memory/turn` (async, daemon thread).
+  - `on_session_end(messages)` → `POST /api/memory/turn` with the full session.
+  - `on_memory_write(...)` → logged-only no-op until `/api/memory/persist` lands.
+- Three tools exposed to the agent: `companion_recall`, `companion_context`,
+  `companion_search`.
 
 ### OpenClaw skill (`plugins/openclaw-companion-memory/`)
 
@@ -149,20 +99,27 @@ stateless translators.
   companion-memory MCP server.
 - Trigger keywords: "remember", "don't forget", "save this", "what do I
   like", "who is", "keep this in mind".
-- All work goes through the MCP server, so OpenClaw sees the same tools as
-  Claude Code and Hermes.
+- All work goes through the MCP server, so OpenClaw sees the same tools
+  Claude Code does.
 
-## End-to-end data flow
+## End-to-end data flow (recall)
 
-1. The agent decides to store a fact.
-2. It calls the appropriate adapter tool (e.g. `companion_remember`).
-3. The adapter `POST`s `/api/memory/remember` with the auth header.
-4. `MemoryController` calls `GraphEventService.upsertNode`, which emits a
-   `GRAPH_NODE_UPSERTED` event.
-5. Existing graph-write listeners persist the node and update derived state
-   (search index, embeddings, summaries).
-6. Subsequent `companion_recall` calls hit the same `GraphQueryService`
-   pipeline the rest of the system uses.
+1. The agent decides it needs context for a turn.
+2. The Hermes plugin's `prefetch(query)` runs.
+3. It `POST`s `/api/memory/recall`.
+4. `RecallService.recall` calls `SearchService.search` (`mode: 'keyword'`)
+   against the existing entity index — graph (Apache AGE) + embeddings
+   (pgvector) + FTS (tsvector) all live in the same Postgres.
+5. Results are formatted into a Markdown block, capped, and returned.
+6. The block is injected into the model prompt for the current turn.
 
-There is no separate memory store, no separate index, no separate sync
-process. The new endpoints are pure surface; the data is the data.
+## End-to-end data flow (turn / write)
+
+Today the write path is a stub:
+
+1. The Hermes plugin's `sync_turn(user_content, assistant_content)` fires.
+2. It `POST`s `/api/memory/turn` on a daemon thread.
+3. `MemoryController.turn` currently returns immediately (no-op).
+
+When the team implements the persistence in `MemoryController.turn`, the
+plugin gets it for free — no client change required.

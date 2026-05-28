@@ -13,7 +13,7 @@ Common causes and fixes:
 | ---------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `Failed to connect to localhost`                           | CI-Server not running                       | `make local` from the repo root.                                                             |
 | `401` on every endpoint                                    | API key invalid / expired                   | Re-mint via `scripts/companion-memory/mint-api-key.sh`.                                      |
-| `404` on `/api/memory/health`                              | Backend not rebuilt after pulling new code  | Restart the API (`yarn dev` in `backend/apps/api`) or rebuild the Docker image.              |
+| `404` on `/api/memory/recall` or `/api/graph/context`      | Backend not rebuilt after pulling new code  | Restart the API (`yarn dev` in `backend/apps/api`) or rebuild the Docker image.              |
 | `recall did not return the just-written memory`            | Write succeeded but search index lagging    | The graph search runs synchronously; if you see this consistently, check `GraphQueryService` logs. |
 | `BadRequestException: Authenticated user context required` | API key was minted for a deactivated user   | Mint a new key under an active user.                                                         |
 
