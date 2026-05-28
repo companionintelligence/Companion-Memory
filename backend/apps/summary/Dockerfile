@@ -2,7 +2,7 @@ FROM python:3.11.12-slim-bookworm
 
 WORKDIR /app
 
-COPY LICENSE /LICENSE
+COPY LICENSE.md /LICENSE.md
 
 RUN useradd -m -u 1000 memorizer
 

@@ -40,7 +40,7 @@ COPY pyproject.toml ./
 RUN sed -i 's/onnxruntime-gpu/onnxruntime/g' pyproject.toml \
     && uv pip install --system --no-cache -r pyproject.toml
 
-COPY LICENSE /LICENSE
+COPY LICENSE.md /LICENSE.md
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY src/ ./src/

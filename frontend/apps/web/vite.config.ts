@@ -110,17 +110,8 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 8642,
+    port: 5173,
     allowedHosts: getAllowedHosts(),
-    // `make local` also exposes nginx on :8642 which proxies /api → API. If you open the
-    // Vite URL directly (:5173), this mirrors that behavior so /api/* reaches Nest.
-    proxy: {
-      '/api': {
-        target: process.env.DEV_API_PROXY ?? 'http://127.0.0.1:3030',
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api/, '') || '/',
-      },
-    },
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],
     },

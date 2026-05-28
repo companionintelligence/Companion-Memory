@@ -30,8 +30,8 @@ AGENTS.md
 .idea/
 
 # LICENSE copies distributed to build contexts during docker build
-infrastructure/*/LICENSE
-backend/apps/*/LICENSE
+infrastructure/*/LICENSE.md
+backend/apps/*/LICENSE.md
 
 # Playwright
 /test-results/

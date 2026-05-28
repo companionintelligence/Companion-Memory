@@ -65,13 +65,13 @@ help: ## List make commands with their descriptions
 .PHONY: distribute-license
 distribute-license:
 	@for dir in $(LICENSE_DIRS); do \
-		cp LICENSE "$$dir/LICENSE"; \
+		cp LICENSE.md "$$dir/LICENSE.md"; \
 	done
 
 .PHONY: clean-license
 clean-license:
 	@for dir in $(LICENSE_DIRS); do \
-		rm -f "$$dir/LICENSE"; \
+		rm -f "$$dir/LICENSE.md"; \
 	done
 
 .PHONY: reset

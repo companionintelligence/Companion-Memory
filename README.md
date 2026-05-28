@@ -163,8 +163,7 @@ make seed
 You should now be able to view the application and log in with the credentials below.
 
 * **With [CI-Gateway](https://github.com/companionintelligence/CI-Gateway)** (TLS + hostname routing): **https://memory.ci.localhost**
-* **Without CI-Gateway** (Docker nginx only): **http://localhost:8642** — one port for Vite + API (`/api` → API on 3030).
-* **Vite only** (**http://localhost:5173**): the dev server proxies `/api` to the API on 3030 so login works the same as through :8642.
+* **Without CI-Gateway** (Docker nginx only): **http://localhost:8642**
 
 ```
 Username: jsmith@example.com

@@ -39,7 +39,7 @@ RUN corepack enable && corepack prepare yarn@4.9.1 --activate
 
 WORKDIR /app
 
-COPY LICENSE /LICENSE
+COPY LICENSE.md /LICENSE.md
 COPY .yarnrc.yml ./
 COPY package.json ./
 COPY yarn.lock ./
