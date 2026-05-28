@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 
 import { LoadingPage, usePageTitle } from '@ci/common';
 import { useToast } from '@ci/shadcn';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
 
@@ -12,40 +12,70 @@ export function OAuthCallbackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
-  const [{ authToken }] = useAuth();
+  const [{ authToken, loading: authLoading }] = useAuth();
 
   const initialRequestRef = useRef<boolean>(false);
 
+  // CI Cloud proxy callback params (when OAuth is proxied through CI Cloud)
+  const accessToken = searchParams.get('access_token');
+  const refreshToken = searchParams.get('refresh_token');
+  const connectionId = searchParams.get('connectionId');
+  const userProviderId = searchParams.get('user_provider_id');
+  const expiresIn = searchParams.get('expires_in');
+
+  // Direct OAuth callback params
   const code = searchParams.get('code');
   const state = searchParams.get('state');
+
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
-  // If we're not logged into the application we can't actually complete a connection.
-  // This is an unlikely state, but possible.
-  if (!authToken) {
-    throw new Error('Unauthenticated');
-  }
+  const isCloudProxyCallback = !!accessToken;
 
-  // We should consider lifting this error into state so that whatever page we might redirect to
-  // can pick it up and render it. For now we'd just bubble to the nearest error boundary.
-  if (error) {
-    throw new Error(error);
-  }
+  // Handle OAuth errors and missing params
+  useEffect(() => {
+    if (error || errorDescription) {
+      toast.error(errorDescription || error || 'OAuth error');
+      navigate('/connections');
 
-  // Can we have an errorDescription without an error?
-  // Does this need to be a separate check?
-  if (errorDescription) {
-    throw new Error(errorDescription);
-  }
+      return;
+    }
 
-  // If don't have required OAuth credentials we can't proceed, so just error out.
-  if (!code || !state) {
-    throw new Error('Missing OAuth credentials');
+    if (isCloudProxyCallback && (!connectionId || !userProviderId)) {
+      toast.error('Missing OAuth credentials from provider');
+      navigate('/connections');
+
+      return;
+    }
+
+    if (!isCloudProxyCallback && (!code || !state)) {
+      toast.error('Missing OAuth credentials');
+      navigate('/connections');
+
+      return;
+    }
+  }, [
+    error,
+    errorDescription,
+    isCloudProxyCallback,
+    connectionId,
+    userProviderId,
+    code,
+    state,
+    toast,
+    navigate,
+  ]);
+
+  // Redirect to login if session was lost during the OAuth redirect.
+  if (!authLoading && !authToken) {
+    return <Navigate to="/login" state={{ from: `/oauth/callback?${searchParams.toString()}` }} replace />;
   }
 
   useEffect(() => {
-    if (!authToken || initialRequestRef.current) {
+    const hasError = !!(error || errorDescription);
+    const missingParams = isCloudProxyCallback ? !connectionId || !userProviderId : !code || !state;
+
+    if (!authToken || initialRequestRef.current || hasError || missingParams) {
       return;
     }
 
@@ -53,16 +83,24 @@ export function OAuthCallbackPage() {
       initialRequestRef.current = true;
 
       try {
+        const body = isCloudProxyCallback
+          ? {
+              flow: 'proxy' as const,
+              state: connectionId,
+              accessToken,
+              refreshToken: refreshToken ?? undefined,
+              expiresIn: expiresIn ? parseInt(expiresIn, 10) : undefined,
+              userProviderId,
+            }
+          : { flow: 'direct' as const, state, code };
+
         const response = await fetch(`/api/connections/complete`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({
-            state,
-            code,
-          }),
+          body: JSON.stringify(body),
         });
 
         if (response.ok) {
@@ -77,10 +115,25 @@ export function OAuthCallbackPage() {
       } catch (err: unknown) {
         toast.error(String(err));
       } finally {
+        window.history.replaceState(null, '', window.location.pathname);
         navigate('/connections');
       }
     })();
-  }, [authToken]);
+  }, [
+    authToken,
+    error,
+    errorDescription,
+    isCloudProxyCallback,
+    connectionId,
+    accessToken,
+    refreshToken,
+    expiresIn,
+    userProviderId,
+    code,
+    state,
+    toast,
+    navigate,
+  ]);
 
   return <LoadingPage />;
 }

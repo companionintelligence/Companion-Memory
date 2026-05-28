@@ -26,6 +26,7 @@ import { AuthScopesModule } from '@ci/common/scopes';
 import { ActorThrottlerGuard } from '@ci/common/throttling';
 import config from '@ci/configuration';
 import { ActorsModule } from '@ci/domains/actors';
+import { AgentModule } from '@ci/domains/agent';
 import { AgentMemoryModule } from '@ci/domains/agent-memory';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
@@ -81,6 +82,7 @@ import { UserModule } from '@ci/domains/user';
       { name: 'sustained', ttl: seconds(60), limit: 600 },
     ]),
     AgentMemoryModule,
+    AgentModule,
     ActorsModule,
     AuditModule,
     AuthScopesModule,

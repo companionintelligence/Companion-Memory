@@ -71,6 +71,7 @@ const GET_CONNECTION = gql(`
       provider {
         id
         name
+        authType
         endpoints {
           name
           description
@@ -100,6 +101,7 @@ const UPDATE_CONNECTION = gql(`
           provider {
               id
               name
+              authType
               endpoints {
                 name
                 description
@@ -287,6 +289,7 @@ export function ConnectionPage() {
   const [editFormData, setEditFormData] = useState({
     name: '',
     schedule: '1 hour',
+    accessToken: '',
   });
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -378,6 +381,7 @@ export function ConnectionPage() {
             name: editFormData.name || '',
             schedule: editFormData.schedule || '1 hour',
             activeEndpoints: endpoints,
+            ...(editFormData.accessToken ? { accessToken: editFormData.accessToken } : {}),
           },
         },
       });
@@ -451,6 +455,7 @@ export function ConnectionPage() {
       setEditFormData({
         name: connection.name || '',
         schedule: connection.schedule || '1 hour',
+        accessToken: '',
       });
       setModalError(null);
       setShowEditModal(true);
@@ -668,6 +673,21 @@ export function ConnectionPage() {
                     <div className="text-sm text-muted-foreground bg-muted px-3 py-2 rounded-md">
                       {connection.externalId} (cannot be changed)
                     </div>
+                  </div>
+                )}
+
+                {connection?.provider?.authType === 'openid' && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-access-token">New OpenID API Key</Label>
+                    <Input
+                      id="edit-access-token"
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder="Leave blank to keep current key"
+                      value={editFormData.accessToken}
+                      onChange={(e) => setEditFormData({ ...editFormData, accessToken: e.target.value })}
+                      disabled={modalLoading}
+                    />
                   </div>
                 )}
 
