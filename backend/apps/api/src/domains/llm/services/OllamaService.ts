@@ -5,7 +5,6 @@ import {
   type Message as OllamaMessage,
   type Tool,
   type ToolCall,
-  Ollama,
 } from 'ollama';
 
 import type { RequestContext } from '@ci/common/context';
@@ -16,9 +15,12 @@ import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
 
 import type { OllamaModel } from '../types';
 
+import { HubInferenceClient } from './HubInferenceClient';
+
 // Model selection is config-driven (config.llm.*). Defaults in config/default.json
 // preserve the historical pinned models; the CI Hub overrides them via bootstrap.env
-// (LLM_DEFAULT_CHAT_MODEL_BACKEND_ID) and operators can override locally.
+// (LLM_DEFAULT_CHAT_MODEL — a catalog id the Hub's OpenAI /v1 proxy accepts) and
+// operators can override locally.
 const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);
 
 interface PromptOptions {
@@ -44,9 +46,10 @@ interface ValidateModelResult {
 
 @Injectable()
 export class OllamaService {
-  private readonly ollama = new Ollama({
-    host: config.services.ollama.host,
-  });
+  // Transport is the CI Hub's OpenAI-compatible `/v1` proxy (falling back to a
+  // local Ollama's OpenAI-compatible API). The adapter mirrors the `ollama`
+  // client surface this service consumes, so the logic below is unchanged.
+  private readonly ollama = new HubInferenceClient();
 
   constructor(
     private readonly toolRegistry: ToolRegistry,

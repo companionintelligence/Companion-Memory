@@ -126,8 +126,9 @@ export const ConfigSchema = z.object({
   }),
   // Local-LLM / embedding config. Defaults (config/default.json) preserve the
   // historical pinned models; the CI Hub overrides chatModel/embeddingModel via
-  // bootstrap.env (the *_BACKEND_ID vars) plus apiBase/apiKey. Operators may
-  // override any of these locally.
+  // bootstrap.env (LLM_DEFAULT_CHAT_MODEL / LLM_DEFAULT_EMBEDDING_MODEL — catalog
+  // ids, which the Hub's OpenAI /v1 proxy accepts) plus apiBase/apiKey. Operators
+  // may override any of these locally.
   llm: z.object({
     apiBase: z.string().optional(),
     apiKey: z.string().optional(),

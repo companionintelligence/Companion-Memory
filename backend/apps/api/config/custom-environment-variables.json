@@ -63,10 +63,10 @@
   "llm": {
     "apiBase": "LLM_API_BASE",
     "apiKey": "LLM_API_KEY",
-    "chatModel": "LLM_DEFAULT_CHAT_MODEL_BACKEND_ID",
+    "chatModel": "LLM_DEFAULT_CHAT_MODEL",
     "visionModel": "LLM_VISION_MODEL",
     "textModel": "LLM_TEXT_MODEL",
-    "embeddingModel": "LLM_DEFAULT_EMBEDDING_MODEL_BACKEND_ID",
+    "embeddingModel": "LLM_DEFAULT_EMBEDDING_MODEL",
     "embeddingDimensions": "LLM_EMBEDDING_DIMENSIONS"
   }
 }

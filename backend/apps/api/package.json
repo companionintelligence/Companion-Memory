@@ -65,6 +65,7 @@
     "graphql-query-complexity": "^1.1.0",
     "graphql-type-json": "^0.3.2",
     "ollama": "^0.5.17",
+    "openai": "^4.0.0",
     "p-limit": "^7.1.1",
     "parse-duration": "^2.1.4",
     "passport": "^0.7.0",
