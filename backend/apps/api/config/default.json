@@ -85,6 +85,13 @@
       "host": "http://hbpe-service:8002"
     }
   },
+  "llm": {
+    "chatModel": "gemma3:1b",
+    "visionModel": "gemma3:27b",
+    "textModel": "qwen3:14b",
+    "embeddingModel": "nomic-embed-text",
+    "embeddingDimensions": 768
+  },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,

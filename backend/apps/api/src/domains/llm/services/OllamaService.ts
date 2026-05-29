@@ -16,9 +16,9 @@ import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
 
 import type { OllamaModel } from '../types';
 
-const PROMPT_MODEL = 'gemma3:1b';
-const DEMO_VISION_MODEL = 'gemma3:27b';
-const DEMO_TEXT_MODEL = 'qwen3:14b';
+// Model selection is config-driven (config.llm.*). Defaults in config/default.json
+// preserve the historical pinned models; the CI Hub overrides them via bootstrap.env
+// (LLM_DEFAULT_CHAT_MODEL_BACKEND_ID) and operators can override locally.
 const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);
 
 interface PromptOptions {
@@ -315,7 +315,7 @@ export class OllamaService {
   async resolveModel(context: RequestContext, opts?: ValidateModelOptions): Promise<ValidateModelResult> {
     const { messages = [], requestedModel, enableThinking = false, enableTools = false } = opts ?? {};
 
-    let resolvedModel = requestedModel ?? PROMPT_MODEL;
+    let resolvedModel = requestedModel ?? config.llm.chatModel;
     let resolvedThinking = enableThinking;
     let resolvedTools = enableTools;
 
@@ -327,7 +327,7 @@ export class OllamaService {
       const hasVisualContent = messages.some((message) => message.images && message.images.length > 0);
 
       // Use vision model for images, text model for regular chat
-      resolvedModel = hasVisualContent ? DEMO_VISION_MODEL : DEMO_TEXT_MODEL;
+      resolvedModel = hasVisualContent ? config.llm.visionModel : config.llm.textModel;
       resolvedThinking = hasVisualContent ? false : true;
       resolvedTools = hasVisualContent ? false : true;
     }

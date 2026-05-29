@@ -54,6 +54,7 @@ COPY backend/apps/api/config ./backend/apps/api/config
 COPY backend/apps/api/db ./backend/apps/api/db
 COPY backend/apps/api/bin ./backend/apps/api/bin
 COPY --chmod=755 backend/apps/api/entrypoint.sh ./backend/apps/api/entrypoint.sh
+COPY --chmod=755 backend/apps/api/bootstrap-from-hub.sh ./backend/apps/api/bootstrap-from-hub.sh
 
 WORKDIR /app/backend/apps/api
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.runtipi.io/v2/app-info.json",
-  "id": "companion",
-  "name": "Companion",
+  "id": "companion-memory",
+  "name": "Companion Memory",
   "version": "0.0.0",
   "short_desc": "Your private AI companion — on your own hardware.",
   "author": "Companion Intelligence",

@@ -59,5 +59,14 @@
     "url": "CI_CLOUD_URL",
     "deviceId": "HUB_DEVICE_ID",
     "apiKey": "HUB_API_KEY"
+  },
+  "llm": {
+    "apiBase": "LLM_API_BASE",
+    "apiKey": "LLM_API_KEY",
+    "chatModel": "LLM_DEFAULT_CHAT_MODEL_BACKEND_ID",
+    "visionModel": "LLM_VISION_MODEL",
+    "textModel": "LLM_TEXT_MODEL",
+    "embeddingModel": "LLM_DEFAULT_EMBEDDING_MODEL_BACKEND_ID",
+    "embeddingDimensions": "LLM_EMBEDDING_DIMENSIONS"
   }
 }

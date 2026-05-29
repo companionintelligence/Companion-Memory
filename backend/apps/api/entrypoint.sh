@@ -130,6 +130,24 @@ fi
 
 [ "$fail" -eq 1 ] && exit 1
 
+# ── Hub inference bootstrap ──────────────────────
+# Pull local-LLM config (endpoint, key, model ids) from the CI Hub — the same
+# mechanism CI-Hermes / CI-OpenClaw use. Fail-open: never blocks startup.
+
+HUB_BOOTSTRAP_FILE="${HUB_BOOTSTRAP_FILE:-/tmp/ci-hub-bootstrap.env}"
+export HUB_BOOTSTRAP_FILE
+
+if [ -x ./bootstrap-from-hub.sh ]; then
+  ./bootstrap-from-hub.sh || true
+fi
+
+if [ -f "$HUB_BOOTSTRAP_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$HUB_BOOTSTRAP_FILE"
+  set +a
+fi
+
 # ── Launch ───────────────────────────────────────
 
 exec "$@"

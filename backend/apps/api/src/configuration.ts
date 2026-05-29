@@ -124,6 +124,19 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
+  // Local-LLM / embedding config. Defaults (config/default.json) preserve the
+  // historical pinned models; the CI Hub overrides chatModel/embeddingModel via
+  // bootstrap.env (the *_BACKEND_ID vars) plus apiBase/apiKey. Operators may
+  // override any of these locally.
+  llm: z.object({
+    apiBase: z.string().optional(),
+    apiKey: z.string().optional(),
+    chatModel: z.string(),
+    visionModel: z.string(),
+    textModel: z.string(),
+    embeddingModel: z.string(),
+    embeddingDimensions: z.coerce.number().int(),
+  }),
 });
 
 export default ConfigSchema.parse(config);
