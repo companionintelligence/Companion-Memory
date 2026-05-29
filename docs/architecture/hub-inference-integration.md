@@ -8,6 +8,31 @@
 
 ---
 
+## ⚠️ Architecture update (supersedes §1–§9 below)
+
+**Direction changed: the Hub LLM proxy is being removed.** Apps no longer route
+inference through the Hub. Instead:
+
+- **CI-Server talks to the Ollama container directly** — the NestJS API uses the
+  native Ollama client against `OLLAMA_HOST` (`http://ci-hub-ollama:11434`, injected
+  by the Hub into every app), and the summary-service uses Ollama's own
+  OpenAI-compatible `/v1`. **Or** it uses a **cloud** provider's endpoint+key.
+- **The Hub only distributes credentials, it does not proxy:** a thin
+  `GET /api/inference/apps/companion-memory/credentials.env` returns the **direct**
+  Ollama `/v1` URL + **native** model ids (e.g. `hermes4:70b`) + `OLLAMA_HOST`, or —
+  when the operator has enabled a cloud provider — that provider's base/key/model.
+- **Model ids are native** (Ollama-native), not Hub catalog ids, since requests no
+  longer pass through a translating proxy.
+- The Hub still **selects + pre-pulls** the recommended models into its Ollama and
+  keeps the operator **preferred-model** setting + the **cloud-provider key store**.
+
+The sections below (which describe routing through the Hub OpenAI proxy and the
+`bootstrap.env` endpoint) are **retained for history but superseded** by the above.
+The implemented design: CI-Hub PR (remove proxy / add credentials distribution) +
+this PR's `credentials.env` bootstrap + `config.llm` wiring.
+
+---
+
 ## TL;DR decision
 
 CI-Server (the memory brain = "Companion Memory") should get its local LLM **and
