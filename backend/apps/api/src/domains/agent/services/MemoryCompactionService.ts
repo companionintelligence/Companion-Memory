@@ -20,7 +20,7 @@ import type { Message as OllamaMessage } from 'ollama';
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
-import { GraphEventService, ConceptService, PersonService } from '@ci/domains/memory';
+import { GraphEventService, ConceptService, PersonService, UserContextService } from '@ci/domains/memory';
 
 import type { AgentMemory } from '../entities/AgentMemoryEntity';
 import { AgentMemoryService } from '../services/AgentMemoryService';
@@ -42,14 +42,22 @@ Entity types (use ONLY these exact strings — reject anything else):
   item     — a physical object or possession the user owns or uses
   content  — a book, film, article, or piece of media the user has engaged with
 
-Relationship types: KNOWS, LIVES_IN, WORKS_AT, INTERESTED_IN, OWNS, ATTENDED, LIKES, DISLIKES, HAS_SKILL, RELATED_TO
+Relationship types — pick the MOST SPECIFIC one that applies (do NOT default to KNOWS for a relation that has a specific type):
+  Family/social: SIBLING_OF, PARENT_OF, CHILD_OF, SPOUSE, FRIENDS_WITH, WORKS_WITH, KNOWS
+  Other:         LIVES_IN, WORKS_AT, INTERESTED_IN, OWNS, ATTENDED, LIKES, DISLIKES, HAS_SKILL, RELATED_TO
 
 Rules — read carefully:
 1. ONLY extract personal facts about the human user (their life, preferences, people they know, places they've been).
 2. SKIP fragments that are code snippets, technical notes, API docs, commands, or configuration.
 3. SKIP fragments that are too vague or contain no personally meaningful information.
 4. ONLY include relationships where BOTH endpoints appear in the entities list.
-5. If nothing qualifies, return exactly: {"entities":[],"relationships":[]}`;
+5. CRITICAL — every entity's "description" MUST state how it relates to the user, using the relationship word explicitly. This is what makes the fact findable later.
+   - For a person: say their role relative to the user — e.g. "the user's sister", "the user's brother-in-law, a cardiologist", "the user's best friend who works at Stripe", "the user's coworker". Never describe a person without their relation to the user.
+   - For a place: say the connection — e.g. "the city where the user currently lives", "the user's childhood hometown", "a city the user visited".
+   - For a company: e.g. "the company where the user currently works", "the user's former employer".
+   - Prefer the SPECIFIC relation word the fragment uses (sister, parent, spouse, best friend, coworker, neighbor) over a vague one.
+6. Refer to the user consistently as "the user" (never invent a separate "User" entity); only create a person entity for the user if they state their own name.
+7. If nothing qualifies, return exactly: {"entities":[],"relationships":[]}`;
 
 /**
  * Allowed entity types.  The LLM is prompted with lowercase vocabulary
@@ -177,6 +185,7 @@ export class MemoryCompactionService {
     private readonly graphEvents: GraphEventService,
     private readonly personService: PersonService,
     private readonly conceptService: ConceptService,
+    private readonly userContext: UserContextService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(MemoryCompactionService.name);
@@ -207,6 +216,25 @@ export class MemoryCompactionService {
     const entityMap = new Map<string, string>();
     const serviceContext = { userId } as ServiceContext;
 
+    // Resolve the canonical "self" node so first-person facts ("my sister",
+    // "I live in…") anchor to the ONE user entity instead of minting duplicate
+    // "the user"/"User"/"<name>" nodes per batch. Pre-seed the entity map with
+    // every self-alias so relationships whose endpoint is the user resolve even
+    // when that batch didn't emit the user as an explicit entity.
+    const self = await this.userContext.getSelfIdentity(userId).catch(() => null);
+    const selfAliases = new Set<string>((self?.aliases ?? []).map((a) => a.toLowerCase()));
+    if (self) {
+      for (const alias of selfAliases) {
+        entityMap.set(this.entityKey('person', alias), self.entityId);
+      }
+
+      this.logger.log('Resolved canonical self node for compaction', {
+        userId,
+        selfEntityId: self.entityId,
+        aliasCount: selfAliases.size,
+      });
+    }
+
     const batches: AgentMemory[][] = [];
     for (let i = 0; i < fragments.length; i += BATCH_SIZE) {
       batches.push(fragments.slice(i, i + BATCH_SIZE));
@@ -219,7 +247,14 @@ export class MemoryCompactionService {
 
       if (outcome.completed) {
         anyBatchCompleted = true;
-        await this.upsertEntities(outcome.result.entities, userId, serviceContext, entityMap);
+        await this.upsertEntities(
+          outcome.result.entities,
+          userId,
+          serviceContext,
+          entityMap,
+          self?.entityId ?? null,
+          selfAliases,
+        );
         await this.upsertRelationships(outcome.result.relationships, userId, entityMap);
       }
     }
@@ -383,6 +418,8 @@ export class MemoryCompactionService {
     userId: string,
     serviceContext: ServiceContext,
     entityMap: Map<string, string>,
+    selfEntityId: string | null,
+    selfAliases: Set<string>,
   ): Promise<void> {
     for (const entity of entities) {
       const name = entity.name?.trim();
@@ -393,6 +430,15 @@ export class MemoryCompactionService {
           type: entity.type,
           name,
         });
+        continue;
+      }
+
+      // Self-anchor: if this is the user referring to themselves ("the user",
+      // "Max", "me"…), point the map at the canonical node and do NOT create a
+      // node or overwrite the canonical one's identity. The user's facts live
+      // as edges + neighbour descriptions, not on the self node's own fields.
+      if (selfEntityId && type === 'Person' && selfAliases.has(name.toLowerCase())) {
+        entityMap.set(this.entityKey(type, name), selfEntityId);
         continue;
       }
 

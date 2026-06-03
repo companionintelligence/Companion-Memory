@@ -247,66 +247,51 @@ class CIServerAdapter(MemoryAdapter):
             return 0
 
     def _reset_benchmark_state(self) -> None:
-        """Delete benchmark fragments and recently-derived entities for the user.
+        """Full wipe of the benchmark owner's graph, PRESERVING the canonical
+        user node (ci.users.entity_id).
 
-        We can't filter entities by fragment id (no provenance link in schema),
-        and we can't anchor on the oldest benchmark fragment because prior
-        --reset runs already wiped those, leaving only the current run's
-        timestamp.  So instead: capture the user id off any surviving benchmark
-        fragment (or fall back to all owners that have ever written one), then
-        sweep entities created within the last 24h for that owner — wide enough
-        to catch entities written across multiple benchmark runs in a day,
-        narrow enough to preserve the original seed data (typically days old).
-
-        Dev-only convenience.  In shared environments you should namespace
-        per-run by user_id instead.
+        The benchmark is recentred on the account's canonical self node so that
+        first-person facts anchor to it (via compaction self-resolution). For a
+        clean measurement every run starts from a blank graph for that owner —
+        but we must keep the canonical Person node itself, otherwise
+        ci.users.entity_id dangles and resolveUserEntity() falls back to an
+        arbitrary Person. So: delete everything the owner owns except that one
+        node (and its embedding/vector), plus all their relationships and
+        benchmark fragments. Destructive by design — dev/benchmark use only.
         """
         try:
-            # Collect owners from surviving benchmark fragments AND from recent
-            # entities — prior --reset runs may have already deleted the
-            # fragments, leaving entities (no provenance to fragments in schema).
-            owners_csv = self._psql(
-                "SELECT string_agg(DISTINCT user_id::text, ',') FROM ("
-                "  SELECT user_id FROM ci.agent_memory WHERE source='benchmark' "
-                "  UNION "
-                "  SELECT owner_user_id AS user_id FROM ci.entities "
-                "  WHERE created_at > NOW() - INTERVAL '24 hours' AND owner_user_id IS NOT NULL"
-                ") AS owners;"
+            # Owner + canonical self node come straight from ci.users (the same
+            # linkage UserContextService.resolveUserEntity uses).
+            row = self._psql(
+                "SELECT id::text || '|' || COALESCE(entity_id::text,'') "
+                "FROM ci.users WHERE entity_id IS NOT NULL ORDER BY id LIMIT 1;"
             )
-            self._psql("DELETE FROM ci.agent_memory WHERE source='benchmark';")
-
-            if not owners_csv:
-                print("  [CI-Server] --reset: nothing recent to clear")
+            if not row or "|" not in row:
+                print("  [CI-Server] --reset: no canonical user found; skipping wipe")
+                self._psql("DELETE FROM ci.agent_memory WHERE source='benchmark';")
                 return
 
-            owners_sql = ",".join(f"'{o.strip()}'" for o in owners_csv.split(",") if o.strip())
-            ent_subq = (
-                f"SELECT entity_id FROM ci.entities "
-                f"WHERE owner_user_id IN ({owners_sql}) "
-                f"AND created_at > NOW() - INTERVAL '24 hours'"
-            )
+            owner, canonical = row.split("|", 1)
+            owner = owner.strip()
+            canonical = canonical.strip()
 
-            # Order matters — drop FK-referencing rows before entities and
-            # relationships.  graph_deltas has a CHECK that forbids null
-            # entity_id/relationship_id, so the FK's ON DELETE SET NULL fails;
-            # delete the deltas first.
+            self._psql("DELETE FROM ci.agent_memory WHERE source='benchmark';")
+            # graph_deltas carries owner_user_id, so clear it wholesale (avoids
+            # the FK/CHECK dance) before relationships and entities.
+            self._psql(f"DELETE FROM ci.graph_deltas WHERE owner_user_id='{owner}';")
+            self._psql(f"DELETE FROM ci.relationships WHERE owner_user_id='{owner}';")
             self._psql(
-                f"DELETE FROM ci.graph_deltas WHERE entity_id IN ({ent_subq}) "
-                f"OR from_entity_id IN ({ent_subq}) OR to_entity_id IN ({ent_subq}) "
-                f"OR relationship_id IN (SELECT relationship_id FROM ci.relationships "
-                f"WHERE from_entity_id IN ({ent_subq}) OR to_entity_id IN ({ent_subq}));"
+                f"DELETE FROM ci_search.embeddings WHERE user_id='{owner}' AND entity_id <> '{canonical}';"
             )
             self._psql(
-                f"DELETE FROM ci.relationships WHERE from_entity_id IN ({ent_subq}) "
-                f"OR to_entity_id IN ({ent_subq});"
+                f"DELETE FROM ci_search.vectors WHERE user_id='{owner}' AND entity_id <> '{canonical}';"
             )
-            self._psql(f"DELETE FROM ci_search.embeddings WHERE entity_id IN ({ent_subq});")
-            self._psql(f"DELETE FROM ci_search.vectors WHERE entity_id IN ({ent_subq});")
             deleted = self._psql(
-                f"DELETE FROM ci.entities WHERE owner_user_id IN ({owners_sql}) "
-                f"AND created_at > NOW() - INTERVAL '24 hours' RETURNING 1;"
+                f"DELETE FROM ci.entities WHERE owner_user_id='{owner}' "
+                f"AND entity_id <> '{canonical}' RETURNING 1;"
             )
             rows = len(deleted.splitlines()) if deleted else 0
-            print(f"  [CI-Server] --reset: cleared benchmark fragments and {rows} recent entity row(s)")
+            print(f"  [CI-Server] --reset: full wipe of owner {owner[:8]}… "
+                  f"({rows} entities removed, canonical self node {canonical[:8]}… preserved)")
         except Exception as exc:
             print(f"  [CI-Server] --reset failed ({exc}); continuing without cleanup")

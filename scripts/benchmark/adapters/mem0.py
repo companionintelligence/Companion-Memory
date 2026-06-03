@@ -38,6 +38,12 @@ class Mem0Adapter(MemoryAdapter):
         self._embed_model = embed_model or os.environ.get("MEM0_EMBED_MODEL", "nomic-embed-text")
         self._embed_dims = embed_dims or int(os.environ.get("MEM0_EMBED_DIMS", "768"))
         self._chroma_path = chroma_path or os.environ.get("MEM0_CHROMA_PATH", "/tmp/mem0_benchmark")
+        # When set, route Mem0's LLM at an OpenAI-compatible base URL (e.g. the
+        # lmstudio_proxy in front of LM Studio) so the head-to-head holds the
+        # extraction model constant with CI-Server. Embeddings stay on Ollama
+        # (nomic) either way, matching CI-Server's embedder.
+        self._llm_base_url = os.environ.get("MEM0_LLM_BASE_URL", "").rstrip("/")
+        self._llm_api_key = os.environ.get("MEM0_LLM_API_KEY", "lm-studio")
         self._user_id: str = ""
         self._mem: object = None
 
@@ -59,14 +65,29 @@ class Mem0Adapter(MemoryAdapter):
 
         self._user_id = user_id
 
-        config = {
-            "llm": {
+        # LLM: either an OpenAI-compatible endpoint (proxy → LM Studio) for a
+        # fair same-model comparison, or local Ollama (default).
+        if self._llm_base_url:
+            llm_block = {
+                "provider": "openai",
+                "config": {
+                    "model": self._llm_model,
+                    "openai_base_url": self._llm_base_url,
+                    "api_key": self._llm_api_key,
+                    "temperature": 0,
+                },
+            }
+        else:
+            llm_block = {
                 "provider": "ollama",
                 "config": {
                     "model": self._llm_model,
                     "ollama_base_url": self._ollama,
                 },
-            },
+            }
+
+        config = {
+            "llm": llm_block,
             "embedder": {
                 "provider": "ollama",
                 "config": {
@@ -108,7 +129,12 @@ class Mem0Adapter(MemoryAdapter):
     def search(self, query: str) -> str:
         if self._mem is None:
             raise RuntimeError("setup() must be called before search()")
-        results = self._mem.search(query, user_id=self._user_id, limit=10)  # type: ignore[union-attr]
+        # mem0 2.x: user_id must go in filters=, and the limit kwarg is now top_k.
+        results = self._mem.search(  # type: ignore[union-attr]
+            query,
+            top_k=10,
+            filters={"user_id": self._user_id},
+        )
 
         # Mem0 returns a list of dicts with a "memory" key.
         if isinstance(results, list):

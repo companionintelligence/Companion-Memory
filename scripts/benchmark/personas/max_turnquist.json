@@ -1,0 +1,458 @@
+{
+  "_comment": "Hardened persona recentred on the canonical account user (Max Turnquist). First-person sessions anchor to ci.users.entity_id via compaction self-resolution. Gold answers present in sessions; each question carries 'answer' for the LLM judge.",
+  "persona_id": "max_turnquist",
+  "name": "Max Turnquist",
+  "description": "Robotics engineer, recently relocated. Recentred on the account's canonical self node (Max Turnquist) so first-person facts anchor to the real user entity. Tests current-vs-stale resolution, multi-hop relations, and retrieval under noise.",
+  "facts": [
+    {
+      "id": "f01",
+      "text": "Max currently lives in Denver (moved from Portland last spring)",
+      "category": "temporal-update"
+    },
+    {
+      "id": "f02",
+      "text": "Max currently works at Cobalt Robotics as a robotics engineer (left Northwind Logistics in March)",
+      "category": "temporal-update"
+    },
+    {
+      "id": "f03",
+      "text": "Max leads the perception team at Cobalt Robotics",
+      "category": "flat"
+    },
+    {
+      "id": "f04",
+      "text": "Max's sister is Anita; Anita is an architect",
+      "category": "relational"
+    },
+    {
+      "id": "f05",
+      "text": "Anita's husband (Max's brother-in-law) is Raj, a cardiologist",
+      "category": "multi-hop"
+    },
+    {
+      "id": "f06",
+      "text": "Anita and Raj live in Chicago",
+      "category": "relational"
+    },
+    {
+      "id": "f07",
+      "text": "Max's parents are Deepak and Sunita, who live in Portland",
+      "category": "relational"
+    },
+    {
+      "id": "f08",
+      "text": "Max's best friend is Lena, who works at Stripe",
+      "category": "multi-hop"
+    },
+    {
+      "id": "f09",
+      "text": "Max owns a Cannondale Synapse road bike",
+      "category": "flat"
+    },
+    {
+      "id": "f10",
+      "text": "Max plays the violin",
+      "category": "flat"
+    },
+    {
+      "id": "f11",
+      "text": "Max's cat is named Biryani, a tabby",
+      "category": "flat"
+    },
+    {
+      "id": "f12",
+      "text": "Max's favorite food is palak paneer",
+      "category": "flat"
+    },
+    {
+      "id": "f13",
+      "text": "Max is reading The Overstory by Richard Powers",
+      "category": "flat"
+    },
+    {
+      "id": "f14",
+      "text": "Max is learning Japanese for a trip to Kyoto in November",
+      "category": "flat"
+    },
+    {
+      "id": "f15",
+      "text": "Max enjoys hiking",
+      "category": "flat"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "sess_1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hey, I'm Max Turnquist. Still settling into Denver after the move from Portland last spring — boxes everywhere."
+        },
+        {
+          "role": "assistant",
+          "content": "Welcome to Denver! How's the move treating you?"
+        },
+        {
+          "role": "user",
+          "content": "Chaotic but good. Work changed too — I left Northwind Logistics back in March and started as a robotics engineer at Cobalt Robotics."
+        },
+        {
+          "role": "assistant",
+          "content": "Big year of changes. Are you enjoying the new role?"
+        },
+        {
+          "role": "user",
+          "content": "Yeah. The Denver hiking helps with the stress — did the Mount Falcon trail last weekend, gorgeous views."
+        }
+      ]
+    },
+    {
+      "id": "sess_2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My sister Anita is flying in next week with her husband Raj. He's a cardiologist, always on call."
+        },
+        {
+          "role": "assistant",
+          "content": "That'll be a nice visit. Where are they coming from?"
+        },
+        {
+          "role": "user",
+          "content": "Anita and Raj live in Chicago, so we don't see each other much."
+        },
+        {
+          "role": "assistant",
+          "content": "Is the rest of the family nearby?"
+        },
+        {
+          "role": "user",
+          "content": "No — my parents, Deepak and Sunita, still live back in Portland. They refused to leave their garden."
+        }
+      ]
+    },
+    {
+      "id": "sess_3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Caught up with my best friend Lena last night. She just got promoted at Stripe, so proud of her."
+        },
+        {
+          "role": "assistant",
+          "content": "Congrats to Lena! Do you two share hobbies?"
+        },
+        {
+          "role": "user",
+          "content": "She keeps pushing me to try climbing, but I'm loyal to my road bike — a Cannondale Synapse."
+        },
+        {
+          "role": "assistant",
+          "content": "Sounds like a good week."
+        },
+        {
+          "role": "user",
+          "content": "Eh, weather's been gray and I'm behind on everything, but I'll survive."
+        }
+      ]
+    },
+    {
+      "id": "sess_4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reading The Overstory by Richard Powers right now — slow but gorgeous."
+        },
+        {
+          "role": "assistant",
+          "content": "Great pick. What else are you up to?"
+        },
+        {
+          "role": "user",
+          "content": "Made palak paneer for dinner — my favorite, total childhood comfort food."
+        },
+        {
+          "role": "assistant",
+          "content": "Any new hobbies since the move?"
+        },
+        {
+          "role": "user",
+          "content": "Picked the violin back up after years. Playing scales badly every night, but it's something."
+        }
+      ]
+    },
+    {
+      "id": "sess_5",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Big news: I finally adopted a cat! Her name's Biryani — a little tabby with strong opinions."
+        },
+        {
+          "role": "assistant",
+          "content": "Amazing! How's work going?"
+        },
+        {
+          "role": "user",
+          "content": "Cobalt's got me leading the perception team now. Wild how fast that happened since I joined."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a fast ramp-up."
+        },
+        {
+          "role": "user",
+          "content": "Honestly I still miss Portland's food scene, but Denver's growing on me."
+        }
+      ]
+    },
+    {
+      "id": "sess_6",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Trying to learn Japanese before a trip to Kyoto in November. The verb conjugations are kicking me."
+        },
+        {
+          "role": "assistant",
+          "content": "Exciting trip! Any travel for work too?"
+        },
+        {
+          "role": "user",
+          "content": "They sent me to a robotics conference in Boston last month — met a few Cobalt clients there."
+        }
+      ]
+    },
+    {
+      "id": "sess_7",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Raj — my brother-in-law, the cardiologist — gave me unsolicited heart-health advice all weekend, ha."
+        },
+        {
+          "role": "assistant",
+          "content": "Family, right? How was the rest of the visit?"
+        },
+        {
+          "role": "user",
+          "content": "Lovely. Anita's an architect, so she spent the whole time critiquing Denver's buildings. She designed a library in Chicago last year."
+        }
+      ]
+    },
+    {
+      "id": "sess_8",
+      "messages": [
+        {
+          "role": "user",
+          "content": "It'll be one year in Denver next month. Cobalt Robotics, Biryani the cat, the Cannondale — life actually feels settled now."
+        }
+      ]
+    }
+  ],
+  "eval_questions": [
+    {
+      "id": "q01",
+      "question": "What instrument does Max play?",
+      "answer": "violin",
+      "keywords": [
+        "violin"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q02",
+      "question": "What is the name of Max's cat?",
+      "answer": "Biryani",
+      "keywords": [
+        "Biryani"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q03",
+      "question": "What kind of cat does Max have?",
+      "answer": "a tabby",
+      "keywords": [
+        "tabby"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q04",
+      "question": "What is Max's favorite food?",
+      "answer": "palak paneer",
+      "keywords": [
+        "palak paneer",
+        "palak"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q05",
+      "question": "What book is Max reading?",
+      "answer": "The Overstory by Richard Powers",
+      "keywords": [
+        "Overstory",
+        "Richard Powers"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q06",
+      "question": "What kind of bike does Max own?",
+      "answer": "a Cannondale Synapse road bike",
+      "keywords": [
+        "Cannondale",
+        "Synapse"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q07",
+      "question": "What language is Max learning?",
+      "answer": "Japanese",
+      "keywords": [
+        "Japanese"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q08",
+      "question": "Where is Max planning to travel?",
+      "answer": "Kyoto (in November)",
+      "keywords": [
+        "Kyoto"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q09",
+      "question": "What outdoor hobby does Max enjoy?",
+      "answer": "hiking",
+      "keywords": [
+        "hiking",
+        "hike"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q10",
+      "question": "What is the name of Max's sister?",
+      "answer": "Anita",
+      "keywords": [
+        "Anita"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q11",
+      "question": "What are Max's parents' names?",
+      "answer": "Deepak and Sunita",
+      "keywords": [
+        "Deepak",
+        "Sunita"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q12",
+      "question": "Where do Max's parents live?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q13",
+      "question": "Who is Max's best friend?",
+      "answer": "Lena",
+      "keywords": [
+        "Lena"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q14",
+      "question": "What city do Max's sister and her husband live in?",
+      "answer": "Chicago",
+      "keywords": [
+        "Chicago"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q15",
+      "question": "What does Max's brother-in-law do for work?",
+      "answer": "He is a cardiologist",
+      "keywords": [
+        "cardiologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q16",
+      "question": "Where does Max's best friend work?",
+      "answer": "Stripe",
+      "keywords": [
+        "Stripe"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q17",
+      "question": "What is Max's sister's profession?",
+      "answer": "architect",
+      "keywords": [
+        "architect"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q18",
+      "question": "What city does Max currently live in?",
+      "answer": "Denver",
+      "keywords": [
+        "Denver"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q19",
+      "question": "What company does Max currently work for?",
+      "answer": "Cobalt Robotics",
+      "keywords": [
+        "Cobalt"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q20",
+      "question": "What city did Max live in before her current one?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q21",
+      "question": "What company did Max work for before her current job?",
+      "answer": "Northwind Logistics",
+      "keywords": [
+        "Northwind"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q22",
+      "question": "What team does Max lead at her company?",
+      "answer": "the perception team",
+      "keywords": [
+        "perception"
+      ],
+      "category": "temporal-update"
+    }
+  ]
+}

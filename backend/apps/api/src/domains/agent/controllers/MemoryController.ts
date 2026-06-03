@@ -152,8 +152,11 @@ export class MemoryController {
     // When the user (or benchmark) explicitly triggers compaction they want
     // it to process everything immediately, regardless of how recently the
     // fragments were written.
+    // limit 1000 — a manual trigger means "process everything now"; the cron
+    // path keeps a smaller batch, but here we don't want a backlog to be
+    // silently truncated (e.g. a large benchmark corpus of 100s of fragments).
     const unprocessed = await this.agentMemoryService.findUnprocessed(toServiceContext(context), {
-      limit: 50,
+      limit: 1000,
       minAgeMinutes: 0,
     });
 
