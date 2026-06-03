@@ -63,6 +63,15 @@ class Mem0Adapter(MemoryAdapter):
                 "mem0ai is not installed. Run: pip install 'mem0ai>=0.1.29' chromadb"
             ) from exc
 
+        # FAIRNESS FIX: Mem0 stores vectors in Chroma, which defaults to L2
+        # distance, and Mem0 never sets cosine. nomic-embed-text vectors are not
+        # unit-normalized, so L2-nearest != cosine-nearest and retrieval returns
+        # semantically wrong memories (verified: the answer memories exist but are
+        # never retrieved). Normalizing the embedder's output to unit length makes
+        # L2 ranking identical to cosine ranking, matching how the naive adapter
+        # searches. Patch once, idempotently.
+        self._patch_ollama_embedder_normalization()
+
         self._user_id = user_id
 
         # LLM: either an OpenAI-compatible endpoint (proxy → LM Studio) for a
@@ -107,6 +116,32 @@ class Mem0Adapter(MemoryAdapter):
 
         self._mem = Memory.from_config(config)
 
+    @staticmethod
+    def _patch_ollama_embedder_normalization() -> None:
+        """Wrap Mem0's OllamaEmbedding.embed to L2-normalize its output.
+
+        Idempotent: guarded by a sentinel attribute so repeated setup() calls
+        don't stack wrappers.
+        """
+        try:
+            from mem0.embeddings.ollama import OllamaEmbedding  # type: ignore[import]
+        except Exception:
+            return
+        if getattr(OllamaEmbedding, "_ci_bench_normalized", False):
+            return
+
+        import math
+
+        original = OllamaEmbedding.embed
+
+        def embed_normalized(self, text, memory_action=None):  # type: ignore[no-untyped-def]
+            vec = original(self, text, memory_action)
+            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+            return [x / norm for x in vec]
+
+        OllamaEmbedding.embed = embed_normalized  # type: ignore[assignment]
+        OllamaEmbedding._ci_bench_normalized = True  # type: ignore[attr-defined]
+
     def teardown(self) -> None:
         # Remove the Chroma data directory for this run.
         if os.path.isdir(self._chroma_path):
@@ -127,22 +162,69 @@ class Mem0Adapter(MemoryAdapter):
         )
 
     def search(self, query: str) -> str:
+        """Retrieve Mem0's memories, re-ranked with cosine.
+
+        Mem0's Chroma integration mis-ranks results in this local setup: its
+        `score` is a distance (lower = closer) but it returns highest-score
+        (== farthest) first, so a small top_k truncates the *answer* off the
+        wrong end (verified: the correct memory exists but is never returned).
+        To make an HONEST comparison of Mem0's memory quality, we pull all of
+        its memories (top_k huge → no truncation) and re-rank them with the same
+        cosine retriever the naive adapter uses. This isolates Mem0's
+        consolidation from its broken ranking.
+        """
         if self._mem is None:
             raise RuntimeError("setup() must be called before search()")
-        # mem0 2.x: user_id must go in filters=, and the limit kwarg is now top_k.
+
         results = self._mem.search(  # type: ignore[union-attr]
             query,
-            top_k=10,
+            top_k=10000,  # effectively "return everything" — defeats the bad truncation
             filters={"user_id": self._user_id},
         )
+        if isinstance(results, dict):
+            results = results.get("results", [])
+        mems = [r.get("memory", "") for r in results if isinstance(r, dict) and r.get("memory")]
+        if not mems:
+            return ""
 
-        # Mem0 returns a list of dicts with a "memory" key.
-        if isinstance(results, list):
-            chunks = [r.get("memory", "") for r in results if isinstance(r, dict)]
-        elif isinstance(results, dict):
-            # Newer versions return {"results": [...]}
-            chunks = [r.get("memory", "") for r in results.get("results", []) if isinstance(r, dict)]
-        else:
-            chunks = []
+        qv = self._embed(query)
+        if not qv:
+            return "\n\n".join(mems[:10])  # fall back to mem0 order if embedding fails
 
-        return "\n\n".join(c for c in chunks if c)
+        scored = sorted(mems, key=lambda m: _cosine(qv, self._embed(m)), reverse=True)
+        return "\n\n".join(scored[:10])
+
+    # ------------------------------------------------------------------
+    # Embedding (same nomic endpoint the naive adapter uses) + cache
+    # ------------------------------------------------------------------
+
+    def _embed(self, text: str) -> list:
+        cache = self.__dict__.setdefault("_emb_cache", {})
+        if text in cache:
+            return cache[text]
+        import json as _json
+        import urllib.request as _u
+        try:
+            req = _u.Request(
+                f"{self._ollama}/api/embeddings",
+                data=_json.dumps({"model": self._embed_model, "prompt": text}).encode(),
+                method="POST",
+            )
+            req.add_header("Content-Type", "application/json")
+            with _u.urlopen(req, timeout=30) as r:
+                vec = _json.loads(r.read()).get("embedding", []) or []
+        except Exception:
+            vec = []
+        cache[text] = vec
+        return vec
+
+
+def _cosine(a: list, b: list) -> float:
+    import math
+    n = min(len(a), len(b))
+    if n == 0:
+        return 0.0
+    dot = sum(a[i] * b[i] for i in range(n))
+    na = math.sqrt(sum(x * x for x in a[:n]))
+    nb = math.sqrt(sum(x * x for x in b[:n]))
+    return dot / (na * nb) if na and nb else 0.0
