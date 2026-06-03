@@ -17,8 +17,13 @@ import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
 import type { OllamaModel } from '../types';
 
 /** Default model used for background inference tasks (extraction, Q&A, etc.).
- *  Import this constant rather than hardcoding the model name. */
-export const PROMPT_MODEL = 'gemma3:1b';
+ *  Import this constant rather than hardcoding the model name.
+ *
+ *  gemma3:1b returns truncated/off-vocabulary JSON for the memory-extraction
+ *  prompt (puts names in the type field, never closes the brace). gemma4:e4b
+ *  produces well-formed JSON with the right entity types and valid relationships,
+ *  at ~35s/batch on Metal. */
+export const PROMPT_MODEL = 'gemma4:e4b';
 const DEMO_VISION_MODEL = 'gemma3:27b';
 const DEMO_TEXT_MODEL = 'qwen3:14b';
 const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);

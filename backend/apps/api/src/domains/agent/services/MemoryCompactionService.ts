@@ -51,11 +51,94 @@ Rules — read carefully:
 4. ONLY include relationships where BOTH endpoints appear in the entities list.
 5. If nothing qualifies, return exactly: {"entities":[],"relationships":[]}`;
 
-/** Allowed entity type strings. Anything else is discarded. */
+/**
+ * Allowed entity types.  The LLM is prompted with lowercase vocabulary
+ * (`person`, `place`, …) and that's what it typically returns; the
+ * `ci.entities.valid_entity_type` CHECK constraint requires PascalCase
+ * (`^[A-Z][A-Za-z]*$`), so we validate case-insensitively against this set
+ * and normalize to PascalCase before storage.
+ */
 const VALID_ENTITY_TYPES = new Set(['person', 'concept', 'place', 'event', 'item', 'content']);
+
+/**
+ * Optional external extraction backend.  When `EXTRACTION_LLM_URL` is set we
+ * skip Ollama and call an OpenAI-compatible chat completions endpoint (LM
+ * Studio, vLLM, llama.cpp's server, etc.) — useful when a beefier remote
+ * machine on the local network is running a stronger model than the laptop
+ * can host.  The endpoint must still be reachable without internet egress;
+ * the platform is local-first.
+ */
+const EXTRACTION_LLM_URL = process.env['EXTRACTION_LLM_URL']?.replace(/\/$/, '') ?? '';
+const EXTRACTION_LLM_MODEL = process.env['EXTRACTION_LLM_MODEL'] ?? 'local-model';
+const EXTRACTION_LLM_API_KEY = process.env['EXTRACTION_LLM_API_KEY'] ?? '';
+const EXTRACTION_LLM_TIMEOUT_MS = Number.parseInt(process.env['EXTRACTION_LLM_TIMEOUT_MS'] ?? '120000', 10);
+
+/**
+ * JSON Schema for the OpenAI structured-outputs path.  Mirrors the prompt's
+ * shape so the server can constrain decoding at every token.  `additionalProperties:
+ * false` is required by OpenAI's strict mode; we keep the entity-type union open
+ * (just `string`) because the upstream `normalizeEntityType` validator handles
+ * filtering — letting bad types through here would force the model to fight
+ * its own logits.
+ */
+const EXTRACTION_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    entities: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          name: { type: 'string' },
+          description: { type: ['string', 'null'] },
+        },
+        required: ['type', 'name', 'description'],
+        additionalProperties: false,
+      },
+    },
+    relationships: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          fromName: { type: 'string' },
+          fromType: { type: 'string' },
+          toName: { type: 'string' },
+          toType: { type: 'string' },
+          relationshipType: { type: 'string' },
+        },
+        required: ['fromName', 'fromType', 'toName', 'toType', 'relationshipType'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['entities', 'relationships'],
+  additionalProperties: false,
+} as const;
+
+/** Lowercased input → PascalCased storage form expected by the DB constraint. */
+function normalizeEntityType(raw: string | undefined): string | null {
+  if (!raw) {
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+  if (!VALID_ENTITY_TYPES.has(lower)) {
+    return null;
+  }
+
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
 
 /** Maximum characters per fragment sent to the LLM. */
 const MAX_FRAGMENT_CHARS = 600;
+
+/**
+ * Max fragments per LLM call.  Small models (1–4B) struggle with long outputs;
+ * batching too many fragments at once causes truncation or empty responses.
+ */
+const BATCH_SIZE = 4;
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -117,10 +200,66 @@ export class MemoryCompactionService {
     });
 
     // ------------------------------------------------------------------
-    // 1. LLM extraction
+    // 1. LLM extraction — process in small batches so a 1-4B model
+    //    doesn't produce truncated or empty output for large inputs.
     // ------------------------------------------------------------------
 
-    const fragmentsText = fragments
+    const entityMap = new Map<string, string>();
+    const serviceContext = { userId } as ServiceContext;
+
+    const batches: AgentMemory[][] = [];
+    for (let i = 0; i < fragments.length; i += BATCH_SIZE) {
+      batches.push(fragments.slice(i, i + BATCH_SIZE));
+    }
+
+    let anyBatchCompleted = false;
+
+    for (const batch of batches) {
+      const outcome = await this.extractBatch(batch, userId);
+
+      if (outcome.completed) {
+        anyBatchCompleted = true;
+        await this.upsertEntities(outcome.result.entities, userId, serviceContext, entityMap);
+        await this.upsertRelationships(outcome.result.relationships, userId, entityMap);
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Mark fragments processed only if at least one batch actually ran
+    //    the LLM without throwing.  If every call threw (e.g. Ollama down,
+    //    PROMPT_MODEL missing), leave processed_at unset so the next run
+    //    retries — and the failure stays loud instead of silently swallowing
+    //    a whole user's worth of fragments.  Genuine empty extractions
+    //    (LLM returned {entities:[]}) still count as "completed".
+    // ------------------------------------------------------------------
+
+    if (!anyBatchCompleted) {
+      this.logger.warn('All extraction batches threw; leaving fragments unprocessed for retry', {
+        userId,
+        fragmentCount: fragments.length,
+        batchCount: batches.length,
+      });
+
+      return;
+    }
+
+    await this.agentMemoryService.markProcessed(
+      { userId: SYSTEM_USER } as ServiceContext,
+      fragments.map((f) => f.id),
+    );
+
+    this.logger.log('Memory compaction complete', { userId, fragmentCount: fragments.length });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Extraction helpers (split out of compactForUser for readability)
+  // ---------------------------------------------------------------------------
+
+  private async extractBatch(
+    batch: AgentMemory[],
+    userId: string,
+  ): Promise<{ completed: true; result: ExtractionResult } | { completed: false }> {
+    const fragmentsText = batch
       .map((f, index) => {
         const label = f.title ?? (f.source ? `[${f.source}]` : `[Fragment ${index + 1}]`);
         const body = f.content;
@@ -138,42 +277,118 @@ export class MemoryCompactionService {
       },
     ];
 
-    let extracted: ExtractionResult = { entities: [], relationships: [] };
-
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await this.ollamaService.chat({} as any, messages, {
-        model: PROMPT_MODEL,
-        format: 'json',
-      });
+      const content = EXTRACTION_LLM_URL
+        ? await this.callOpenAICompatibleChat(messages)
+        : await this.callOllamaChat(messages);
 
-      extracted = this.parseExtractionResult(response.message.content);
+      const extracted = this.parseExtractionResult(content);
 
-      this.logger.log('Extracted knowledge from fragments', {
+      this.logger.log('Extracted knowledge from batch', {
         userId,
+        batchSize: batch.length,
+        backend: EXTRACTION_LLM_URL ? 'openai-compatible' : 'ollama',
         entityCount: extracted.entities.length,
         relationshipCount: extracted.relationships.length,
       });
+
+      return { completed: true, result: extracted };
     } catch (err) {
       this.logger.error(
-        'LLM extraction failed; fragments will be marked processed to prevent re-submission',
+        'LLM extraction failed for batch',
         err instanceof Error ? err : new Error(String(err)),
       );
+
+      return { completed: false };
     }
+  }
 
-    // ------------------------------------------------------------------
-    // 2. Upsert entities
-    // ------------------------------------------------------------------
+  private async callOllamaChat(messages: OllamaMessage[]): Promise<string> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const response = await this.ollamaService.chat({} as any, messages, {
+      model: PROMPT_MODEL,
+      format: 'json',
+    });
 
-    /** `"type:name_lower"` → entityId in ci.entities */
-    const entityMap = new Map<string, string>();
+    return response.message.content;
+  }
 
-    const serviceContext = { userId } as ServiceContext;
+  /**
+   * Call any OpenAI-compatible /v1/chat/completions endpoint.  Used when the
+   * operator points compaction at LM Studio, vLLM, llama.cpp's server, etc.
+   * Stays local-first: the URL is whatever the operator configured, no
+   * default cloud fallback.
+   *
+   * Uses OpenAI structured outputs (`response_format.type = 'json_schema'`)
+   * so the server enforces the extraction shape at decode time — eliminates
+   * the truncation / wrong-type-field failures we get from prompt-only JSON
+   * mode on smaller models.  LM Studio rejects `json_object` outright and
+   * requires schema mode, so this is also the only thing that works there.
+   */
+  private async callOpenAICompatibleChat(messages: OllamaMessage[]): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXTRACTION_LLM_TIMEOUT_MS);
 
-    for (const entity of extracted.entities) {
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (EXTRACTION_LLM_API_KEY) {
+        headers['Authorization'] = `Bearer ${EXTRACTION_LLM_API_KEY}`;
+      }
+
+      const res = await fetch(`${EXTRACTION_LLM_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: EXTRACTION_LLM_MODEL,
+          messages,
+          temperature: 0,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'extraction_result',
+              strict: true,
+              schema: EXTRACTION_JSON_SCHEMA,
+            },
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Extraction LLM HTTP ${res.status}: ${body.slice(0, 200)}`);
+      }
+
+      const data = (await res.json()) as {
+        choices?: Array<{
+          message?: {
+            content?: string;
+            // Reasoning models (e.g. ornstein-3.6-27b on LM Studio, DeepSeek-R1)
+            // emit their schema-constrained output here when `content` ends
+            // up empty.  Fall back so we don't lose perfectly good extractions.
+            reasoning_content?: string;
+          };
+        }>;
+      };
+      const msg = data.choices?.[0]?.message;
+
+      return msg?.content || msg?.reasoning_content || '';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async upsertEntities(
+    entities: ExtractedEntity[],
+    userId: string,
+    serviceContext: ServiceContext,
+    entityMap: Map<string, string>,
+  ): Promise<void> {
+    for (const entity of entities) {
       const name = entity.name?.trim();
+      const type = normalizeEntityType(entity.type);
 
-      if (!name || !VALID_ENTITY_TYPES.has(entity.type)) {
+      if (!name || !type) {
         this.logger.debug('Skipping entity with missing name or invalid type', {
           type: entity.type,
           name,
@@ -182,33 +397,35 @@ export class MemoryCompactionService {
       }
 
       try {
-        const existingId = await this.findExistingEntityId(serviceContext, entity.type, name);
+        const existingId = await this.findExistingEntityId(serviceContext, type, name);
 
         const { entityId } = await this.graphEvents.upsertNode(userId, {
           entityId: existingId ?? undefined,
-          entityType: entity.type,
+          entityType: type,
           name,
           description: entity.description ?? null,
           properties: entity.properties ?? {},
           mergeProperties: existingId != null,
         });
 
-        entityMap.set(this.entityKey(entity.type, name), entityId);
+        entityMap.set(this.entityKey(type, name), entityId);
       } catch (err) {
         this.logger.warn('Failed to upsert entity', {
           userId,
           name,
-          type: entity.type,
+          type,
           error: err instanceof Error ? err.message : String(err),
         });
       }
     }
+  }
 
-    // ------------------------------------------------------------------
-    // 3. Upsert relationships
-    // ------------------------------------------------------------------
-
-    for (const rel of extracted.relationships) {
+  private async upsertRelationships(
+    relationships: ExtractedRelationship[],
+    userId: string,
+    entityMap: Map<string, string>,
+  ): Promise<void> {
+    for (const rel of relationships) {
       if (
         !rel.fromName?.trim() ||
         !rel.fromType?.trim() ||
@@ -249,20 +466,6 @@ export class MemoryCompactionService {
         });
       }
     }
-
-    // ------------------------------------------------------------------
-    // 4. Mark fragments as processed
-    // ------------------------------------------------------------------
-
-    await this.agentMemoryService.markProcessed(
-      { userId: SYSTEM_USER } as ServiceContext,
-      fragments.map((f) => f.id),
-    );
-
-    this.logger.log('Memory compaction complete', {
-      userId,
-      fragmentCount: fragments.length,
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -281,7 +484,8 @@ export class MemoryCompactionService {
     type: string,
     name: string,
   ): Promise<string | null> {
-    switch (type) {
+    // Accept either PascalCase storage form or the lowercase prompt vocabulary.
+    switch (type.toLowerCase()) {
       case 'person': {
         const results = await this.personService.search(context, { name });
 

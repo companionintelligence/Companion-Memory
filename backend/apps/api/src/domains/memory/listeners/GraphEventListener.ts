@@ -4,6 +4,14 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import { type EventPayloads, Events, EventService, OnEvent } from '@ci/domains/events';
 
+import {
+  ConceptCreatedEvent,
+  ContentCreatedEvent,
+  EventCreatedEvent,
+  ItemCreatedEvent,
+  PersonCreatedEvent,
+  PlaceCreatedEvent,
+} from '../events';
 import { GraphUtilityService } from '../services/GraphUtilityService';
 
 @Injectable()
@@ -244,7 +252,7 @@ export class GraphEventListener {
   @OnEvent(Events.GRAPH_NODE_UPSERTED)
   async handleNodeUpserted(payload: EventPayloads[Events.GRAPH_NODE_UPSERTED]) {
     try {
-      await this.graphUtility.createOrUpdateNode(payload.ownerId, {
+      const { node, created } = await this.graphUtility.createOrUpdateNode(payload.ownerId, {
         entityId: payload.node.entityId,
         entityType: payload.node.entityType,
         name: payload.node.name ?? null,
@@ -255,6 +263,14 @@ export class GraphEventListener {
         linkedId: payload.node.linkedId ?? null,
         mergeProperties: payload.node.mergeProperties,
       });
+
+      // Fan out to the per-type CreatedEvent so search-ingress builds embeddings
+      // and tsvectors.  Without this, generic upserts land in ci.entities but
+      // are invisible to /api/memory/recall (which queries ci_search.embeddings,
+      // not ci.entities directly).
+      if (created) {
+        await this.emitTypeCreatedEvent(payload.node.entityType, node.entity_id);
+      }
     } catch (error) {
       this.logger.error('Failed to handle GRAPH_NODE_UPSERTED', {
         ownerId: payload.ownerId,
@@ -353,6 +369,42 @@ export class GraphEventListener {
       entityType,
       searchContent,
     });
+  }
+
+  /**
+   * Emit the per-type CreatedEvent matching the given entity_type so that
+   * search-ingress listeners can build embeddings and tsvectors for the new
+   * entity.  Falls through silently for types without a corresponding listener.
+   */
+  private async emitTypeCreatedEvent(entityType: string, entityId: string): Promise<void> {
+    switch (entityType.toLowerCase()) {
+      case 'person':
+        await this.eventService.send(PersonCreatedEvent, { personId: entityId });
+
+        return;
+      case 'place':
+        await this.eventService.send(PlaceCreatedEvent, { placeId: entityId });
+
+        return;
+      case 'event':
+        await this.eventService.send(EventCreatedEvent, { eventId: entityId });
+
+        return;
+      case 'concept':
+        await this.eventService.send(ConceptCreatedEvent, { conceptId: entityId });
+
+        return;
+      case 'item':
+        await this.eventService.send(ItemCreatedEvent, { itemId: entityId });
+
+        return;
+      case 'content':
+        await this.eventService.send(ContentCreatedEvent, { contentId: entityId });
+
+        return;
+      default:
+        return;
+    }
   }
 
   private async ensureConcept(

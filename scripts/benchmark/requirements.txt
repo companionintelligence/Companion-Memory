@@ -1,0 +1,8 @@
+# Core — no extra deps needed for CI-Server adapter (stdlib urllib only)
+
+# Mem0 adapter
+mem0ai>=0.1.29
+chromadb>=0.4.0
+
+# Optional: Honcho adapter (when implemented)
+# honcho-ai>=0.0.9

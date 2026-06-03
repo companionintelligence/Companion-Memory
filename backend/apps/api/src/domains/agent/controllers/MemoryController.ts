@@ -148,8 +148,13 @@ export class MemoryController {
       return { queued: 0 };
     }
 
+    // minAgeMinutes: 0 — bypass the settling delay used by the cron.
+    // When the user (or benchmark) explicitly triggers compaction they want
+    // it to process everything immediately, regardless of how recently the
+    // fragments were written.
     const unprocessed = await this.agentMemoryService.findUnprocessed(toServiceContext(context), {
       limit: 50,
+      minAgeMinutes: 0,
     });
 
     if (unprocessed.length === 0) {
