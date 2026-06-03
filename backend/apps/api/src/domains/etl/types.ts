@@ -6,6 +6,8 @@ import type { User } from '../user';
 
 export type JobStatus = 'in_progress' | 'failed' | 'success' | 'pending';
 
+export type OrderByFormat = `${string}:${'ASC' | 'DESC'}`;
+
 export interface ConnectionSyncJob {
   readonly id: string;
   readonly userId: string;
@@ -66,7 +68,7 @@ export interface SearchConnectionSyncJobDto {
   type?: string;
   properties?: Record<string, unknown> | null;
   lastTransformed?: Date | null | undefined;
-  orderBy?: string;
+  orderBy?: OrderByFormat;
 }
 
 export const createConnectionSyncJobSchema = z.object({

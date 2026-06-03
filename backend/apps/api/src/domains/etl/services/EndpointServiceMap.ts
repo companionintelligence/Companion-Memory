@@ -15,6 +15,8 @@ import { FacebookPhotosTransformService } from './Facebook/transform/TransformFa
 import { FacebookPostsTransformService } from './Facebook/transform/TransformFacebookPosts';
 import { FacebookProfileTransformService } from './Facebook/transform/TransformFacebookProfile';
 import { FacebookVideosTransformService } from './Facebook/transform/TransformFacebookVideos';
+import { syncEvents as syncGitHubEvents } from './GitHub/sync/SyncEvents';
+import { GitHubEventsTransformService } from './GitHub/transform/TransformEvents';
 import { syncCalendar } from './Google/sync/SyncCalendar';
 import { syncContacts } from './Google/sync/SyncContacts';
 import { syncDrive } from './Google/sync/SyncDrive';
@@ -31,8 +33,6 @@ import { YouTubeActivitiesTransformService } from './Google/transform/TransformY
 import { YouTubeLikesTransformService } from './Google/transform/TransformYouTubeLikes';
 import { YouTubePlaylistsTransformService } from './Google/transform/TransformYouTubePlaylists';
 import { YouTubeSubscriptionsTransformService } from './Google/transform/TransformYouTubeSubscriptions';
-import { syncEvents as syncGitHubEvents } from './GitHub/sync/SyncEvents';
-import { GitHubEventsTransformService } from './GitHub/transform/TransformEvents';
 import { syncOneDrive } from './Microsoft/sync/SyncOneDrive';
 import { syncOutlookCalendar } from './Microsoft/sync/SyncOutlookCalendar';
 import { syncOutlookMail } from './Microsoft/sync/SyncOutlookMail';

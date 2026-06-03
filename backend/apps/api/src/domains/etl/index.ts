@@ -37,6 +37,7 @@ import { FacebookPhotosTransformService } from './services/Facebook/transform/Tr
 import { FacebookPostsTransformService } from './services/Facebook/transform/TransformFacebookPosts';
 import { FacebookProfileTransformService } from './services/Facebook/transform/TransformFacebookProfile';
 import { FacebookVideosTransformService } from './services/Facebook/transform/TransformFacebookVideos';
+import { GitHubEventsTransformService } from './services/GitHub/transform/TransformEvents';
 import { GmailTransformService } from './services/Google/transform/TransformGmail';
 import { GoogleCalendarTransformService } from './services/Google/transform/TransformGoogleCalendar';
 import { GoogleContactsTransformService } from './services/Google/transform/TransformGoogleContacts';
@@ -56,7 +57,6 @@ import { SpotifySavedEpisodesTransformService } from './services/Spotify/transfo
 import { SpotifySavedShowsTransformService } from './services/Spotify/transform/TransformSavedShows';
 import { SpotifySavedTracksTransformService } from './services/Spotify/transform/TransformSavedTracks';
 import { SpotifyTopArtistsTransformService } from './services/Spotify/transform/TransformTopArtists';
-import { GitHubEventsTransformService } from './services/GitHub/transform/TransformEvents';
 import { SteamAchievementsTransformService } from './services/Steam/transform/TransformAchievements';
 import { SteamFriendsTransformService } from './services/Steam/transform/TransformFriends';
 import { SteamOwnedGamesTransformService } from './services/Steam/transform/TransformOwnedGames';

@@ -43,6 +43,7 @@ export class CloudOAuthProxyService {
       [providers.microsoft.id]: 'microsoft',
       [providers.facebook.id]: 'facebook',
       [providers.spotify.id]: 'spotify',
+      [providers.github.id]: 'github',
     };
 
     return map[providerId];
@@ -137,13 +138,17 @@ export class CloudOAuthProxyService {
       throw new Error('HUB_API_KEY is not configured');
     }
 
+    console.log('refreshing token', proxyRefreshToken);
+    console.log('authHeader', this.authorizationHeader);
     const response = await fetch(`${this.baseUrl}/api/oauth/token/refresh`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: this.authorizationHeader,
       },
-      body: JSON.stringify({ refresh_token: proxyRefreshToken }),
+      body: JSON.stringify({
+        refresh_token: proxyRefreshToken,
+      }),
     });
 
     if (!response.ok) {

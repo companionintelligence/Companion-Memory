@@ -58,6 +58,7 @@ export class SyncOrchestrator {
               userId: connection.userId,
               endpointName: endpoint,
               type: 'incremental',
+              orderBy: 'updated_at:DESC',
             },
           );
 
@@ -122,6 +123,7 @@ export class SyncOrchestrator {
               userId: connection.userId,
               endpointName: endpoint,
               type: 'historical',
+              orderBy: 'updated_at:DESC',
             },
           );
 
@@ -220,14 +222,17 @@ export class SyncOrchestrator {
       { userId: SYSTEM_USER },
       {
         status: 'pending',
-        orderBy: 'updated_at:asc',
+        orderBy: 'updated_at:ASC',
       },
     );
+
+    console.log('pendingSyncJobs', pendingSyncJobs);
 
     const inProgressSyncJobs = await this.connectionSyncJobService.search(
       { userId: SYSTEM_USER },
       {
         status: 'in_progress',
+        orderBy: 'updated_at:ASC',
       },
     );
 
@@ -383,6 +388,7 @@ export class SyncOrchestrator {
         {
           status: 'success',
           lastTransformed: null,
+          orderBy: 'updated_at:DESC',
         },
       )
     ).slice(0, 10);

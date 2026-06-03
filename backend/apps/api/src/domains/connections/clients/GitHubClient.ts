@@ -3,16 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 
 import type { Connection } from '../entities/ConnectionEntity';
-import { ProviderKeyService } from '../services/ProviderKeyService';
 
 import { BaseOAuth2Client } from './BaseOAuth2Client';
 
 @Injectable()
 export class GitHubClient extends BaseOAuth2Client {
-  constructor(
-    readonly logger: LoggerService,
-    private readonly providerKeyService: ProviderKeyService,
-  ) {
+  constructor(readonly logger: LoggerService) {
     super();
     this.logger.setContext(GitHubClient.name);
   }
@@ -31,39 +27,8 @@ export class GitHubClient extends BaseOAuth2Client {
 
   protected readonly extraAuthParams = {};
 
-  getClientCredentials(connection: Connection): Promise<{ clientId: string; clientSecret: string }> {
-    const clientIdVariable = 'GITHUB_CLIENT_ID';
-    const clientSecretVariable = 'GITHUB_CLIENT_SECRET';
-    const clientIdFromEnv = process.env[clientIdVariable];
-    const clientSecretFromEnv = process.env[clientSecretVariable];
-
-    return this.providerKeyService
-      .findByProviderId({ userId: connection.userId }, connection.id)
-      .then((keys) => {
-        const clientId = keys ? keys.clientId : clientIdFromEnv;
-        const clientSecret = keys ? keys.clientSecret : clientSecretFromEnv;
-
-        if (!clientId) {
-          this.logger.error(
-            `No custom providerKey for GitHub and expected environment variable ${clientIdVariable} not specified`,
-          );
-
-          throw new Error('Client id not configured for provider');
-        }
-
-        if (!clientSecret) {
-          this.logger.error(
-            `No custom providerKey for GitHub and expected environment variable ${clientSecretVariable} not specified`,
-          );
-
-          throw new Error('Client secret not configured for provider');
-        }
-
-        return { clientId, clientSecret };
-      });
-  }
-
-  protected getScopesFromActiveEndpoints(_activeEndpoints: string[]) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  getScopesFromActiveEndpoints(_activeEndpoints: string[]) {
     // GitHub App permissions are defined on the app itself, not via scopes
     return '';
   }
@@ -92,5 +57,3 @@ export class GitHubClient extends BaseOAuth2Client {
     }
   }
 }
-
-

@@ -1,6 +1,27 @@
 import type { BaseClient, Connection } from '@ci/domains/connections';
 
-const PAGE_SIZE=10;
+const PAGE_SIZE = 10;
+
+export interface GithubEvent {
+  id: number;
+  type: string;
+  actor: {
+    id: number;
+    login: string;
+    display_login: string;
+    gravatar_id: string;
+    url: string;
+    avatar_url: string;
+  };
+  repo: {
+    id: number;
+    name: string;
+    url: string;
+  };
+  payload: Record<string, unknown>;
+  public: boolean;
+  created_at: string;
+}
 
 /**
  * Parse the GitHub 'Link' response header and extract the URL for a given rel.
@@ -8,7 +29,9 @@ const PAGE_SIZE=10;
  *   <https://api.github.com/repositories/1/events?page=2>; rel="next", <…>; rel="last"
  */
 function parseLinkHeader(header: string | null, rel: string) {
-  if (!header) return null;
+  if (!header) {
+    return null;
+  }
 
   for (const part of header.split(',')) {
     const match = part.match(/<([^>]+)>;\s*rel="([^"]+)"/);
@@ -38,7 +61,9 @@ async function fetchAllRepos(client: BaseClient, connection: Connection) {
 
     const data = (await response.json()) as Array<{ full_name: string }>;
     for (const repo of data) {
-      repos.push(repo.full_name);
+      if (repo.full_name.toLowerCase() === 'companionintelligence/ci-server') {
+        repos.push(repo.full_name);
+      }
     }
 
     const linkHeader = response.headers.get('link');
@@ -69,7 +94,7 @@ export async function syncEvents({
   connection,
   client,
   nextCursor,
-  historical
+  historical,
 }: {
   connection: Connection;
   client: BaseClient;
@@ -95,7 +120,14 @@ export async function syncEvents({
     const newCursor: Record<string, string | false> = {};
 
     for (const repoFullName of repos) {
+      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
+        console.log('Iterating over repo', repoFullName);
+      }
+
       const existingCursor = nextCursor[repoFullName];
+      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
+        console.log('existingCursor for', repoFullName, existingCursor);
+      }
 
       // If cursor is `false`, this repo was fully paginated in a previous
       // invocation and there was no next page. Skip it entirely — it's done.
@@ -120,13 +152,31 @@ export async function syncEvents({
         endpoint = `/repos/${repoFullName}/events?per_page=${PAGE_SIZE}`;
       }
 
+      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
+        console.log('calling endpoint', endpoint);
+      }
+
       const response = await client.requestRaw(connection, endpoint, { headers });
+
+      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
+        console.log('response', response);
+      }
 
       // 304 Not Modified — no new events since the saved ETag.
       if (response.status === 304) {
+        if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
+          console.log('no new events for repo', repoFullName, 'historical', historical);
+        }
+
         const etag = response.headers.get('etag') || (existingCursor as string);
         eventsMap[repoFullName] = [];
         newCursor[repoFullName] = historical ? false : etag;
+        console.log(
+          'Set eventsmap and newcursor for',
+          repoFullName,
+          eventsMap[repoFullName],
+          newCursor[repoFullName],
+        );
 
         client.logger.log('GitHub Events: no new events (304)', {
           connectionId: connection.id,
@@ -150,7 +200,13 @@ export async function syncEvents({
         continue;
       }
 
-      const events = (await response.json()) as unknown[];
+      const events = ((await response.json()) as GithubEvent[]).filter(
+        (event) => event.actor?.id.toString() === connection.externalId,
+      );
+      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
+        console.log('new events', events);
+      }
+
       eventsMap[repoFullName] = events;
 
       const linkHeader = response.headers.get('link');
@@ -159,13 +215,11 @@ export async function syncEvents({
       if (historical) {
         // Historical: one page per repo per invocation.
         // Save next-page URL if more pages remain, otherwise defaults to false, which indicates end.
-        if (nextPageUrl) {
-          newCursor[repoFullName] = nextPageUrl;
-        }
+        newCursor[repoFullName] = nextPageUrl || false;
       } else if (!historical && !cursorIsEtag(existingCursor)) {
         // Incremental first run (no ETag yet): single page to seed an ETag.
         const etag = response.headers.get('etag');
-        newCursor[repoFullName] = etag;
+        newCursor[repoFullName] = etag || false;
       } else {
         // Incremental with existing ETag: paginate through ALL remaining pages
         // in a single invocation so we catch up completely.
@@ -214,9 +268,7 @@ export async function syncEvents({
       connectionId: connection.id,
       repoCount: repos.length,
       totalEvents: Object.values(eventsMap).reduce((sum, arr) => sum + arr.length, 0),
-      hasMorePages: Object.values(newCursor).some(
-        (v) => typeof v === 'string' && v.startsWith('http'),
-      ),
+      hasMorePages: Object.values(newCursor).some((v) => typeof v === 'string' && v.startsWith('http')),
     });
 
     return {

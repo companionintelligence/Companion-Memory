@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { LoggerService } from '@ci/common/logging';
 
 import { ConnectionSyncJobEntity } from '../entities/ConnectionSyncJobEntity';
 import {
@@ -18,7 +19,10 @@ export class ConnectionSyncJobService {
   constructor(
     @InjectRepository(ConnectionSyncJobEntity)
     private readonly connectionSyncJobRepository: Repository<ConnectionSyncJobEntity>,
-  ) {}
+    private readonly logger: LoggerService,
+  ) {
+    this.logger.setContext(ConnectionSyncJobService.name);
+  }
 
   async create(context: UserServiceContext, data: CreateConnectionSyncJobDto): Promise<ConnectionSyncJob> {
     const id = data.id ?? uuidv7();
@@ -275,13 +279,16 @@ export class ConnectionSyncJobService {
       });
     }
 
-    if (query.orderBy) {
-      const orderSplit = query.orderBy.split(':');
-      const orderField = orderSplit[0];
-      const orderDirection = orderSplit[1] === 'asc' ? 'ASC' : 'DESC';
-      executable = executable.orderBy(orderField, orderDirection);
-    } else {
-      executable = executable.orderBy('updated_at', 'DESC');
+    if (query.orderBy != null) {
+      const [field, direction] = query.orderBy.split(':');
+      if (direction !== 'DESC' && direction !== 'ASC') {
+        this.logger.warn('Invalid orderBy direction in ConnectionSyncJobService.search', {
+          query,
+          direction,
+        });
+      } else {
+        executable = executable.orderBy(field, direction);
+      }
     }
 
     return executable.getMany();
