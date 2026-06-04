@@ -23,10 +23,6 @@ export class MemoryController {
     logger.setContext(MemoryController.name);
   }
 
-  // ---------------------------------------------------------------------------
-  // Agent-facing endpoints (API key only — called by Hermes/OpenClaw)
-  // ---------------------------------------------------------------------------
-
   /**
    * L0 — static user profile block for the agent system prompt.
    *
@@ -79,19 +75,12 @@ export class MemoryController {
    */
   @UseGuards(ApiKeyGuard)
   @HttpCode(201)
-  @Post('note')
-  async note(
+  @Post('write')
+  async write(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(agentMemorySchema)) input: AgentMemoryDto,
   ) {
-    const title = input.title ?? (input.source ? `[${input.source}]` : null);
-
-    await this.agentMemoryService.create(toServiceContext(context), {
-      content: input.content,
-      source: input.source ?? null,
-      title,
-      sessionId: input.sessionId ?? null,
-    });
+    return this.agentMemoryService.create(toServiceContext(context), input);
   }
 
   /**
@@ -165,7 +154,7 @@ export class MemoryController {
     }
 
     void this.compactionService
-      .compactForUser(userId, unprocessed)
+      .compactForUser({ userId }, unprocessed)
       .catch((err: unknown) =>
         this.logger.error('Manual compaction failed', err instanceof Error ? err : new Error(String(err))),
       );

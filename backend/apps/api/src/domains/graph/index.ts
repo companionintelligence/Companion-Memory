@@ -37,4 +37,4 @@ export class GraphModule {}
 export { GraphService, NodeService, RelationshipService };
 export { NodeEntity, RelationshipEntity };
 export type { Node, Relationship };
-export { RelationshipType } from './types';
+export { RelationshipMap, RelationshipType } from './types';

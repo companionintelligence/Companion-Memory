@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, LessThan, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
@@ -66,7 +66,7 @@ export class NoteService {
     return ids.map((id) => map.get(id) ?? null);
   }
 
-  async findAll(context: ServiceContext, options?: { take?: number }): Promise<Note[]> {
+  async findAll(context: ServiceContext): Promise<Note[]> {
     const results = await this.noteRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
@@ -76,7 +76,6 @@ export class NoteService {
       order: {
         updatedAt: 'DESC',
       },
-      ...(options?.take && { take: options.take }),
     });
 
     return results.map((entity) => NoteEntity.toEgressType(entity));
@@ -105,49 +104,6 @@ export class NoteService {
     });
 
     return NoteEntity.toEgressType(updatedEntity);
-  }
-
-  /**
-   * Returns unprocessed note fragments (processedAt IS NULL) older than the
-   * minimum age threshold, ordered oldest-first.  Pass SYSTEM_USER context to
-   * query across all users (used by the memory compaction cron).
-   */
-  async findUnprocessed(
-    context: ServiceContext,
-    options: { limit?: number; minAgeMinutes?: number } = {},
-  ): Promise<Note[]> {
-    const { limit = 50, minAgeMinutes = 2 } = options;
-    const cutoff = new Date(Date.now() - minAgeMinutes * 60 * 1000);
-
-    const results = await this.noteRepository.find({
-      where: {
-        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
-        processedAt: IsNull(),
-        createdAt: LessThan(cutoff),
-      },
-      order: { createdAt: 'ASC' },
-      take: limit,
-    });
-
-    return results.map((entity) => NoteEntity.toEgressType(entity));
-  }
-
-  /**
-   * Stamps processed_at = NOW() on a batch of note IDs.
-   * Scoped to the context's userId (use SYSTEM_USER to mark across all users).
-   */
-  async markProcessed(context: ServiceContext, ids: string[]): Promise<void> {
-    if (ids.length === 0) {
-      return;
-    }
-
-    await this.noteRepository.update(
-      {
-        id: In(ids),
-        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
-      },
-      { processedAt: new Date() },
-    );
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {

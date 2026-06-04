@@ -17,6 +17,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EmbeddingModule } from '@ci/common/embeddings';
 import { EntityResolutionModule } from '@ci/domains/entity-resolution';
+import { GraphModule } from '@ci/domains/graph';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
@@ -35,6 +36,7 @@ import { SerializerService } from './services/SerializerService';
     TypeOrmModule.forFeature([AgentMemoryEntity]),
     EmbeddingModule,
     EntityResolutionModule,
+    GraphModule,
     LLMModule,
     MemoryModule,
     SearchNextModule,

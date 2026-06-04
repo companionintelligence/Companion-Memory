@@ -1,8 +1,8 @@
 import { Column, CreateDateColumn, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
-@Entity({ schema: 'ci', name: 'agent_memory' })
+@Entity({ schema: 'ci', name: 'agent_memories' })
 export class AgentMemoryEntity {
-  @PrimaryColumn({ type: 'uuid' })
+  @PrimaryColumn('uuid')
   id!: string;
 
   @Column({ type: 'uuid', name: 'user_id' })
@@ -34,28 +34,8 @@ export class AgentMemoryEntity {
   updatedAt!: Date;
 
   static toEgressType(entity: AgentMemoryEntity): AgentMemory {
-    return {
-      id: entity.id,
-      userId: entity.userId,
-      sessionId: entity.sessionId,
-      source: entity.source,
-      title: entity.title,
-      content: entity.content,
-      processedAt: entity.processedAt,
-      createdAt: entity.createdAt,
-      updatedAt: entity.updatedAt,
-    };
+    return { ...entity };
   }
 }
 
-export type AgentMemory = Readonly<{
-  id: string;
-  userId: string;
-  sessionId: string | null;
-  source: string | null;
-  title: string | null;
-  content: string;
-  processedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}>;
+export type AgentMemory = Readonly<AgentMemoryEntity>;

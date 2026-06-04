@@ -14,7 +14,7 @@
 import { Injectable } from '@nestjs/common';
 import { CronExpression } from '@nestjs/schedule';
 
-import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
+import { SYSTEM_USER, type ServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
@@ -75,7 +75,9 @@ export class MemoryCompactionCron {
 
     for (const [userId, userFragments] of byUser) {
       try {
-        await this.compactionService.compactForUser(userId, userFragments);
+        const userServiceContext = toServiceContext({ userId });
+
+        await this.compactionService.compactForUser(userServiceContext, userFragments);
       } catch (err) {
         this.logger.error(
           `Memory compaction failed for user ${userId}`,

@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect } from 'react';
 
 import { LoadingPage, Portal, usePageTitle } from '@ci/common';
 import { Button, ScrollArea } from '@ci/shadcn';
-import { BrainCircuit, Key, KeyRound, Palette, X } from '@ci/shadcn/icons';
+import { Key, KeyRound, Palette, X } from '@ci/shadcn/icons';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 const AppearanceSection = lazy(() =>
@@ -12,9 +12,6 @@ const ApiKeysSection = lazy(() =>
   import('./sections/ApiKeysSection').then((m) => ({ default: m.ApiKeysSection })),
 );
 const OAuthSection = lazy(() => import('./sections/OAuthSection').then((m) => ({ default: m.OAuthSection })));
-const AgentMemorySection = lazy(() =>
-  import('./sections/AgentMemorySection').then((m) => ({ default: m.AgentMemorySection })),
-);
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   [
@@ -89,11 +86,6 @@ export function SettingsPage() {
                 <Key className="h-4 w-4" />
                 OAuth Credentials
               </NavLink>
-
-              <NavLink to="/settings/agent-memory" state={{ backgroundLocation }} className={navLinkClass}>
-                <BrainCircuit className="h-4 w-4" />
-                Agent Memory
-              </NavLink>
             </aside>
           </ScrollArea>
 
@@ -107,7 +99,6 @@ export function SettingsPage() {
                     <Route path="appearance" element={<AppearanceSection />} />
                     <Route path="api-keys" element={<ApiKeysSection />} />
                     <Route path="oauth" element={<OAuthSection />} />
-                    <Route path="agent-memory" element={<AgentMemorySection />} />
                   </Routes>
                 </Suspense>
               </div>

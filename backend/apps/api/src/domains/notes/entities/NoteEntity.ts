@@ -20,10 +20,6 @@ export class NoteEntity {
   @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updatedAt!: Date;
 
-  /** Set by the memory compaction cron after LLM extraction. Null = unprocessed. */
-  @Column({ type: 'timestamptz', nullable: true, name: 'processed_at' })
-  processedAt!: Date | null;
-
   static toEgressType(entity: NoteEntity): Note {
     return {
       id: entity.id,
@@ -32,7 +28,6 @@ export class NoteEntity {
       userId: entity.userId,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
-      processedAt: entity.processedAt ?? null,
     };
   }
 }

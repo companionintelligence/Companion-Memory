@@ -3,8 +3,8 @@
 -- Raw memory fragments written by the AI agent (via Hermes on_memory_write).
 -- Kept separate from ci.notes (user-authored notes) so the agent's memory
 -- lifecycle can evolve independently.
-CREATE TABLE ci.agent_memory (
-  id           UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+CREATE TABLE ci.agent_memories (
+  id           UUID        NOT NULL PRIMARY KEY,
   user_id      UUID        NOT NULL,
   session_id   TEXT        NULL,      -- Hermes session that produced this fragment
   source       TEXT        NULL,      -- "memory" | "user" from on_memory_write target
@@ -16,15 +16,15 @@ CREATE TABLE ci.agent_memory (
 );
 
 -- Fast scan for the compaction cron: all unprocessed rows for a user, oldest first.
-CREATE INDEX idx_agent_memory_unprocessed
-  ON ci.agent_memory (user_id, created_at)
+CREATE INDEX idx_agent_memories_unprocessed
+  ON ci.agent_memories (user_id, created_at)
   WHERE processed_at IS NULL;
 
 -- Lookup fragments by session for future turn-linking.
-CREATE INDEX idx_agent_memory_session
-  ON ci.agent_memory (session_id)
+CREATE INDEX idx_agent_memories_session
+  ON ci.agent_memories (session_id)
   WHERE session_id IS NOT NULL;
 
 -- migrate:down
 
-DROP TABLE IF EXISTS ci.agent_memory;
+DROP TABLE IF EXISTS ci.agent_memories;
