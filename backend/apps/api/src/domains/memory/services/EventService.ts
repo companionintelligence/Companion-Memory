@@ -75,6 +75,10 @@ export class EventService {
           toCreate.locationName = item.location_name;
         }
 
+        if (item.source_id) {
+          toCreate.sourceId = item.source_id;
+        }
+
         const id = item.id ?? uuidv7();
 
         const event = await this.eventRepository.create({

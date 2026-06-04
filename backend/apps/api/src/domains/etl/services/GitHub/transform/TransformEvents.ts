@@ -2,207 +2,24 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { GithubEvent } from '@ci/domains/etl/services/GitHub/sync/SyncEvents';
+import {
+  GithubEvent,
+  GithubCreateEvent,
+  GithubDiscussionEvent,
+  GithubForkEvent,
+  GithubCommitCommentEvent,
+  GithubIssueCommentEvent,
+  GithubIssueEvent,
+  GithubDeleteEvent,
+  GithubPullRequestEvent,
+  GithubPullRequestReviewEvent,
+  GithubPullRequestReviewCommentEvent,
+  GithubPushEvent,
+  GithubReleaseEvent,
+} from '@ci/domains/etl/services/GitHub/sync/SyncEvents';
 import { ContentService, EventService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
-
-export interface GithubCommitCommentEvent extends GithubEvent {
-  payload: {
-    action: string;
-    comment: {
-      html_url: string;
-      url: string;
-      id: number;
-      node_id: string;
-      body: string;
-      path: string;
-      position: number;
-      line: number;
-      commit_id: string;
-      author_association: string;
-    };
-  };
-}
-
-export interface GithubCreateEvent extends GithubEvent {
-  payload: {
-    ref: string;
-    ref_type: string;
-    full_ref: string;
-    master_branch: string;
-    description: string;
-    pusher_type: string;
-  };
-}
-
-export interface GithubDeleteEvent extends GithubEvent {
-  payload: {
-    ref: string;
-    ref_type: string;
-    full_ref: string;
-    pusher_type: string;
-  };
-}
-
-export interface GithubDiscussionEvent extends GithubEvent {
-  payload: {
-    action: string;
-    discussion: {
-      title: string;
-      body_text: string;
-    };
-  };
-}
-
-export interface GithubForkEvent extends GithubEvent {
-  payload: {
-    action: string;
-    forkee: {
-      id: number;
-      node_id: string;
-      name: string;
-      full_name: string;
-      description: string;
-      html_url: string;
-      url: string;
-    };
-  };
-}
-
-export interface GithubIssueCommentEvent extends GithubEvent {
-  payload: {
-    action: string;
-    issue: {
-      id: number;
-      node_id: string;
-      url: string;
-      repository_url: string;
-      number: number;
-      state: string;
-      title: string;
-      body: string;
-    };
-    comment: {
-      id: number;
-      node_id: string;
-      url: string;
-      html_url: string;
-      body: string;
-    };
-  };
-}
-
-export interface GithubIssueEvent extends GithubEvent {
-  payload: {
-    action: string;
-    issue: {
-      id: number;
-      node_id: string;
-      url: string;
-      repository_url: string;
-      number: number;
-      state: string;
-      title: string;
-      body: string;
-    };
-  };
-}
-
-export interface GithubPullRequestEvent extends GithubEvent {
-  payload: {
-    action: string;
-    number: number;
-    pull_request: {
-      id: number;
-      node_id: string;
-      url: string;
-      repository_url: string;
-      number: number;
-      state: string;
-      title: string;
-      body: string;
-    };
-  };
-}
-
-export interface GithubPullRequestReviewEvent extends GithubEvent {
-  payload: {
-    action: string;
-    pull_request: {
-      id: number;
-      node_id: string;
-      url: string;
-      repository_url: string;
-      number: number;
-      state: string;
-      title: string;
-      body: string;
-    };
-    review: {
-      id: number;
-      node_id: string;
-      body: string;
-      state: string;
-      html_url: string;
-      pull_request_url: string;
-      commit_id: string;
-    };
-  };
-}
-
-export interface GithubPullRequestReviewCommentEvent extends GithubEvent {
-  payload: {
-    action: string;
-    pull_request: {
-      id: number;
-      node_id: string;
-      url: string;
-      repository_url: string;
-      number: number;
-      state: string;
-      title: string;
-      body: string;
-    };
-    comment: {
-      html_url: string;
-      url: string;
-      id: number;
-      node_id: string;
-      body: string;
-      path: string;
-      position: number;
-      line: number;
-      commit_id: string;
-      author_association: string;
-    };
-  };
-}
-
-export interface GithubPushEvent extends GithubEvent {
-  payload: {
-    repository_id: number;
-    push_id: number;
-    ref: string;
-    head: string;
-    before: string;
-  };
-}
-
-export interface GithubReleaseEvent extends GithubEvent {
-  payload: {
-    action: string;
-    release: {
-      url: string;
-      html_url: string;
-      id: number;
-      node_id: string;
-      tag_name: string;
-      name: string;
-      body: string;
-    };
-  };
-}
 
 @Injectable()
 export class GitHubEventsTransformService {
@@ -219,7 +36,7 @@ export class GitHubEventsTransformService {
 
     this.logger.log('Starting GitHub Events transformation', {
       userId,
-      connectionId: connection.id
+      connectionId: connection.id,
     });
 
     const eventsMap = (data?.events as Record<string, GithubEvent[]>) || {};
@@ -242,8 +59,6 @@ export class GitHubEventsTransformService {
         continue;
       }
 
-      console.log('SELF EVENT TO PARSE', event)
-
       const existingEvent = await this.eventService.search(
         { userId },
         {
@@ -252,9 +67,6 @@ export class GitHubEventsTransformService {
         },
       );
 
-      console.log('ExistingEvent', existingEvent)
-
-      console.log('event.type', event.type)
       switch (event.type) {
         case 'CommitCommentEvent': {
           const existingContent = await this.contentService.search(
@@ -262,7 +74,7 @@ export class GitHubEventsTransformService {
             { external_id: event.id.toString() },
           );
           const comment = (event as GithubCommitCommentEvent).payload.comment;
-          if (!existingContent) {
+          if (existingContent.length === 0) {
             await this.contentService.create(
               { userId },
               {
@@ -275,7 +87,7 @@ export class GitHubEventsTransformService {
             );
           }
 
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
@@ -294,19 +106,20 @@ export class GitHubEventsTransformService {
 
         case 'CreateEvent': {
           const thisEvent = event as GithubCreateEvent;
-          if (thisEvent.payload.ref_type === 'branch' && !existingEvent) {
+          console.log('CreateEvent to parse', thisEvent);
+          if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
                 event_type: 'github_branch_creation',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
-                title: `Created branch ${thisEvent.payload.ref}`,
+                title: `Created branch ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
                 description: thisEvent.payload.description,
                 source_system: 'github_events',
               },
             );
-          } else if (thisEvent.payload.ref_type === 'tag' && !existingEvent) {
+          } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
@@ -318,7 +131,7 @@ export class GitHubEventsTransformService {
                 source_system: 'github_events',
               },
             );
-          } else if (thisEvent.payload.ref_type === 'repository' && !existingEvent) {
+          } else if (thisEvent.payload.ref_type === 'repository' && existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
@@ -335,35 +148,37 @@ export class GitHubEventsTransformService {
           break;
         }
 
-        case 'DeleteEvent':
-          if (event.payload.ref_type === 'branch' && !existingEvent) {
+        case 'DeleteEvent': {
+          const thisEvent = event as GithubDeleteEvent;
+          if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
                 event_type: 'github_branch_deletion',
-                source_id: event.id.toString(),
-                start_time: new Date(event.created_at),
-                title: `Deleted branch ${event.payload.ref}`,
+                source_id: thisEvent.id.toString(),
+                start_time: new Date(thisEvent.created_at),
+                title: `Deleted branch ${thisEvent.payload.ref}`,
                 source_system: 'github_events',
               },
             );
-          } else if (event.payload.ref_type === 'tag' && !existingEvent) {
+          } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
                 event_type: 'github_tag_deletion',
-                source_id: event.id.toString(),
-                start_time: new Date(event.created_at),
-                title: `Deleted tag ${event.payload.ref} in repository ${event.repo.name}`,
+                source_id: thisEvent.id.toString(),
+                start_time: new Date(thisEvent.created_at),
+                title: `Deleted tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
                 source_system: 'github_events',
               },
             );
           }
 
           break;
+        }
 
         case 'DiscussionEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubDiscussionEvent;
             await this.eventService.create(
               { userId },
@@ -381,7 +196,7 @@ export class GitHubEventsTransformService {
           break;
 
         case 'ForkEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubForkEvent;
             await this.eventService.create(
               { userId },
@@ -403,7 +218,7 @@ export class GitHubEventsTransformService {
             { userId },
             { external_id: thisEvent.payload.comment.id.toString() },
           );
-          if (!existingContent) {
+          if (existingContent.length === 0) {
             await this.contentService.create(
               { userId },
               {
@@ -416,7 +231,7 @@ export class GitHubEventsTransformService {
             );
           }
 
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
@@ -434,10 +249,10 @@ export class GitHubEventsTransformService {
         }
 
         case 'IssuesEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubIssueEvent;
             const actionCapitalized =
-              String(event.payload.action).charAt(0).toUpperCase() +
+              String(thisEvent.payload.action).charAt(0).toUpperCase() +
               String(thisEvent.payload.action).slice(1);
             await this.eventService.create(
               { userId },
@@ -455,18 +270,19 @@ export class GitHubEventsTransformService {
           break;
 
         case 'PullRequestEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubPullRequestEvent;
             const actionCapitalized =
               String(thisEvent.payload.action).charAt(0).toUpperCase() +
               String(thisEvent.payload.action).slice(1);
+            console.log('PR payload', thisEvent.payload.pull_request);
             await this.eventService.create(
               { userId },
               {
                 event_type: `github_pull_request_${thisEvent.payload.action}`,
                 source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `${actionCapitalized} pull request ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
+                start_time: new Date(thisEvent.payload.pull_request.updated_at),
+                title: `${actionCapitalized} pull request #${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
                 description: thisEvent.payload.pull_request.title,
                 source_system: 'github_events',
               },
@@ -476,7 +292,7 @@ export class GitHubEventsTransformService {
           break;
 
         case 'PullRequestReviewEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubPullRequestReviewEvent;
             const actionCapitalized =
               String(thisEvent.payload.action).charAt(0).toUpperCase() +
@@ -497,7 +313,7 @@ export class GitHubEventsTransformService {
           break;
 
         case 'PullRequestReviewCommentEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubPullRequestReviewCommentEvent;
             const actionCapitalized =
               String(thisEvent.payload.action).charAt(0).toUpperCase() +
@@ -518,15 +334,16 @@ export class GitHubEventsTransformService {
           break;
 
         case 'PushEvent': {
+          console.log('parsing PushEvent');
           const thisEvent = event as GithubPushEvent;
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
               {
                 event_type: `github_push`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
-                title: `Pushed commits to repo ${thisEvent.repo.name}`,
+                title: `Pushed commits to branch ${thisEvent.payload.ref.replace('refs/heads/', '')} in repo ${thisEvent.repo.name}`,
                 source_system: 'github_events',
               },
             );
@@ -536,7 +353,7 @@ export class GitHubEventsTransformService {
         }
 
         case 'ReleaseEvent':
-          if (!existingEvent) {
+          if (existingEvent.length === 0) {
             const thisEvent = event as GithubReleaseEvent;
             const actionCapitalized =
               String(thisEvent.payload.action).charAt(0).toUpperCase() +

@@ -1,6 +1,6 @@
 import type { BaseClient, Connection } from '@ci/domains/connections';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 100;
 
 export interface GithubEvent {
   id: number;
@@ -21,6 +21,204 @@ export interface GithubEvent {
   payload: Record<string, unknown>;
   public: boolean;
   created_at: string;
+}
+
+export interface GithubCommitCommentEvent extends GithubEvent {
+  payload: {
+    action: string;
+    comment: {
+      html_url: string;
+      url: string;
+      id: number;
+      node_id: string;
+      body: string;
+      path: string;
+      position: number;
+      line: number;
+      commit_id: string;
+      author_association: string;
+    };
+  };
+}
+
+export interface GithubCreateEvent extends GithubEvent {
+  payload: {
+    ref: string;
+    ref_type: string;
+    full_ref: string;
+    master_branch: string;
+    description: string;
+    pusher_type: string;
+  };
+}
+
+export interface GithubDeleteEvent extends GithubEvent {
+  payload: {
+    ref: string;
+    ref_type: string;
+    full_ref: string;
+    pusher_type: string;
+  };
+}
+
+export interface GithubDiscussionEvent extends GithubEvent {
+  payload: {
+    action: string;
+    discussion: {
+      title: string;
+      body_text: string;
+    };
+  };
+}
+
+export interface GithubForkEvent extends GithubEvent {
+  payload: {
+    action: string;
+    forkee: {
+      id: number;
+      node_id: string;
+      name: string;
+      full_name: string;
+      description: string;
+      html_url: string;
+      url: string;
+    };
+  };
+}
+
+export interface GithubIssueCommentEvent extends GithubEvent {
+  payload: {
+    action: string;
+    issue: {
+      id: number;
+      node_id: string;
+      url: string;
+      repository_url: string;
+      number: number;
+      state: string;
+      title: string;
+      body: string;
+    };
+    comment: {
+      id: number;
+      node_id: string;
+      url: string;
+      html_url: string;
+      body: string;
+    };
+  };
+}
+
+export interface GithubIssueEvent extends GithubEvent {
+  payload: {
+    action: string;
+    issue: {
+      id: number;
+      node_id: string;
+      url: string;
+      repository_url: string;
+      number: number;
+      state: string;
+      title: string;
+      body: string;
+    };
+  };
+}
+
+export interface GithubPullRequestEvent extends GithubEvent {
+  payload: {
+    action: string;
+    number: number;
+    pull_request: {
+      id: number;
+      node_id: string;
+      url: string;
+      repository_url: string;
+      number: number;
+      state: string;
+      title: string;
+      body: string;
+      updated_at: string;
+    };
+  };
+}
+
+export interface GithubPullRequestReviewEvent extends GithubEvent {
+  payload: {
+    action: string;
+    pull_request: {
+      id: number;
+      node_id: string;
+      url: string;
+      repository_url: string;
+      number: number;
+      state: string;
+      title: string;
+      body: string;
+    };
+    review: {
+      id: number;
+      node_id: string;
+      body: string;
+      state: string;
+      html_url: string;
+      pull_request_url: string;
+      commit_id: string;
+    };
+  };
+}
+
+export interface GithubPullRequestReviewCommentEvent extends GithubEvent {
+  payload: {
+    action: string;
+    pull_request: {
+      id: number;
+      node_id: string;
+      url: string;
+      repository_url: string;
+      number: number;
+      state: string;
+      title: string;
+      body: string;
+    };
+    comment: {
+      html_url: string;
+      url: string;
+      id: number;
+      node_id: string;
+      body: string;
+      path: string;
+      position: number;
+      line: number;
+      commit_id: string;
+      author_association: string;
+    };
+  };
+}
+
+export interface GithubPushEvent extends GithubEvent {
+  payload: {
+    repository_id: number;
+    push_id: number;
+    ref: string;
+    head: string;
+    before: string;
+  };
+}
+
+export interface GithubReleaseEvent extends GithubEvent {
+  payload: {
+    action: string;
+    release: {
+      url: string;
+      html_url: string;
+      id: number;
+      node_id: string;
+      tag_name: string;
+      name: string;
+      body: string;
+    };
+  };
 }
 
 /**
@@ -203,9 +401,38 @@ export async function syncEvents({
       const events = ((await response.json()) as GithubEvent[]).filter(
         (event) => event.actor?.id.toString() === connection.externalId,
       );
-      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
-        console.log('new events', events);
-      }
+
+      await Promise.all(
+        events.map(async (event) => {
+          if (event.type === 'PullRequestEvent') {
+            const thisEvent = event as GithubPullRequestEvent;
+            const detailsResponse = await client.requestRaw(
+              connection,
+              thisEvent.payload.pull_request.url,
+              {},
+            );
+
+            if (!detailsResponse.ok) {
+              const errorText = await detailsResponse.text().catch(() => 'Unknown error');
+              client.logger.error('GitHub Events: failed to fetch PR details', {
+                connectionId: connection.id,
+                repo: repoFullName,
+                status: detailsResponse.status,
+                error: errorText,
+              });
+
+              return;
+            }
+
+            event.payload.pull_request =
+              (await detailsResponse.json()) as GithubPullRequestEvent['payload']['pull_request'];
+
+            return;
+          } else {
+            return;
+          }
+        }),
+      );
 
       eventsMap[repoFullName] = events;
 
@@ -239,7 +466,42 @@ export async function syncEvents({
             break;
           }
 
-          const pageEvents = (await pageResponse.json()) as unknown[];
+          const pageEvents = ((await response.json()) as GithubEvent[]).filter(
+            (event) => event.actor?.id.toString() === connection.externalId,
+          );
+
+          await Promise.all(
+            pageEvents.map(async (event) => {
+              if (event.type === 'PullRequestEvent') {
+                const thisEvent = event as GithubPullRequestEvent;
+                const detailsResponse = await client.requestRaw(
+                  connection,
+                  thisEvent.payload.pull_request.url,
+                  {},
+                );
+
+                if (!detailsResponse.ok) {
+                  const errorText = await detailsResponse.text().catch(() => 'Unknown error');
+                  client.logger.error('GitHub Events: failed to fetch PR details', {
+                    connectionId: connection.id,
+                    repo: repoFullName,
+                    status: detailsResponse.status,
+                    error: errorText,
+                  });
+
+                  return;
+                }
+
+                event.payload.pull_request =
+                  (await detailsResponse.json()) as GithubPullRequestEvent['payload']['pull_request'];
+
+                return;
+              } else {
+                return;
+              }
+            }),
+          );
+
           eventsMap[repoFullName].push(...pageEvents);
 
           client.logger.log('GitHub Events: fetched additional incremental page', {
