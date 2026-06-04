@@ -29,35 +29,36 @@ import { AgentMemoryService } from '../services/AgentMemoryService';
 // LLM extraction prompt
 // ---------------------------------------------------------------------------
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a personal knowledge graph assistant. Your job is to extract PERSONAL biographical facts about the user from informal memory fragments.
+const EXTRACTION_SYSTEM_PROMPT = `You are a knowledge-graph extractor. From informal memory fragments, extract a graph of the entities mentioned and the relationships between them. Capture facts about the user AND about everyone and everything they mention (a friend's job, a sibling's profession, a company's location, where a relative lives) — every concrete fact is worth keeping, not only facts whose subject is the user.
 
 Return ONLY valid JSON with no markdown, no code fences, no extra text:
-{"entities":[{"type":"<type>","name":"<name>","description":"<optional>"}],"relationships":[{"fromName":"<name>","fromType":"<type>","toName":"<name>","toType":"<type>","relationshipType":"<UPPER_SNAKE_CASE>"}]}
+{"entities":[{"type":"<type>","name":"<name>","description":"<facts about this entity>"}],"relationships":[{"fromName":"<name>","fromType":"<type>","toName":"<name>","toType":"<type>","relationshipType":"<UPPER_SNAKE_CASE>"}]}
 
-Entity types (use ONLY these exact strings — reject anything else):
-  person   — a human being the user knows or is
-  concept  — a hobby, preference, skill, topic, or abstract idea the user cares about
-  place    — a city, building, venue, or geographic area the user has been to or lives near
-  event    — something that happened or will happen to the user at a specific time
-  item     — a physical object or possession the user owns or uses
-  content  — a book, film, article, or piece of media the user has engaged with
+Entity types (use ONLY these exact strings):
+  person   — a human being (the user, or anyone they mention)
+  concept  — a hobby, skill, topic, preference, or abstract idea
+  place    — a city, building, venue, region, OR an organization/company
+  event    — something that happened or will happen at a point in time
+  item     — a physical object or possession
+  content  — a book, film, show, article, or piece of media
 
-Relationship types — pick the MOST SPECIFIC one that applies (do NOT default to KNOWS for a relation that has a specific type):
+Relationship types — pick the MOST SPECIFIC that applies; do NOT default to KNOWS/RELATED_TO when a specific one fits:
   Family/social: SIBLING_OF, PARENT_OF, CHILD_OF, SPOUSE, FRIENDS_WITH, WORKS_WITH, KNOWS
   Other:         LIVES_IN, WORKS_AT, INTERESTED_IN, OWNS, ATTENDED, LIKES, DISLIKES, HAS_SKILL, RELATED_TO
 
-Rules — read carefully:
-1. ONLY extract personal facts about the human user (their life, preferences, people they know, places they've been).
-2. SKIP fragments that are code snippets, technical notes, API docs, commands, or configuration.
-3. SKIP fragments that are too vague or contain no personally meaningful information.
-4. ONLY include relationships where BOTH endpoints appear in the entities list.
-5. CRITICAL — every entity's "description" MUST state how it relates to the user, using the relationship word explicitly. This is what makes the fact findable later.
-   - For a person: say their role relative to the user — e.g. "the user's sister", "the user's brother-in-law, a cardiologist", "the user's best friend who works at Stripe", "the user's coworker". Never describe a person without their relation to the user.
-   - For a place: say the connection — e.g. "the city where the user currently lives", "the user's childhood hometown", "a city the user visited".
-   - For a company: e.g. "the company where the user currently works", "the user's former employer".
-   - Prefer the SPECIFIC relation word the fragment uses (sister, parent, spouse, best friend, coworker, neighbor) over a vague one.
-6. Refer to the user consistently as "the user" (never invent a separate "User" entity); only create a person entity for the user if they state their own name.
-7. If nothing qualifies, return exactly: {"entities":[],"relationships":[]}`;
+How to extract:
+1. Create an entity for every person, place/organization, item, event, content, and notable concept mentioned — including third parties, not just the user.
+2. Put each entity's concrete ATTRIBUTES in its "description" (e.g. a person's profession, a place's role, a thing's brand/model). Capture the attribute even when the entity is not the user — "Anita is an architect" → entity Anita, description "an architect". This is what makes the fact findable later, so be specific and complete; do not omit attributes to keep it short.
+3. ALSO, when an entity is connected to the user, state that connection in its description using the explicit relation word ("the user's sister", "the user's best friend", "the company where the user works", "the city where the user currently lives", "the user's childhood hometown").
+4. Promote relationships between entities to typed edges, for BOTH user↔X and X↔Y links. Examples: the user SIBLING_OF Anita; Anita WORKS_AT <firm>; the user's friend Lena WORKS_AT Stripe; Lena LIVES_IN San Francisco; the user LIVES_IN Denver. An employer/company is a "place" entity joined by WORKS_AT.
+5. Only include a relationship when BOTH endpoints also appear in the entities list.
+6. Refer to the user as "the user"; do not invent a separate "User" entity. Only create a person entity for the user if they state their own name.
+7. SKIP code, configuration, commands, and content with no real-world facts.
+
+Example fragment: "My sister Anita is an architect; she works at Foster + Partners in London."
+Example output: {"entities":[{"type":"person","name":"Anita","description":"the user's sister; an architect who works at Foster + Partners"},{"type":"place","name":"Foster + Partners","description":"an architecture firm in London where Anita works"},{"type":"place","name":"London","description":"city where Foster + Partners is located"}],"relationships":[{"fromName":"the user","fromType":"person","toName":"Anita","toType":"person","relationshipType":"SIBLING_OF"},{"fromName":"Anita","fromType":"person","toName":"Foster + Partners","toType":"place","relationshipType":"WORKS_AT"}]}
+
+If there is nothing to extract, return exactly: {"entities":[],"relationships":[]}`;
 
 /**
  * Allowed entity types.  The LLM is prompted with lowercase vocabulary
@@ -137,6 +138,71 @@ function normalizeEntityType(raw: string | undefined): string | null {
   }
 
   return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+/**
+ * Max characters for a merged entity description. Generous on purpose — an
+ * entity accumulates attributes across many mentions, and truncating drops
+ * facts (and search recall with them). 4000 chars comfortably holds a rich
+ * multi-attribute profile while still bounding pathological growth.
+ */
+const MAX_DESCRIPTION_CHARS = 4000;
+
+/**
+ * Merge an entity's existing description with a newly-extracted one.
+ *
+ * Fix A for the storage gap: `createOrUpdateNode` OVERWRITES `description` on
+ * update, and extraction puts every attribute into the description. So an entity
+ * mentioned across batches ("sister Anita" / "Anita is an architect" / "Anita is
+ * Mira's mother") kept only the last mention, dropping attributes from the search
+ * index. Here we accumulate distinct clauses instead, so all attributes survive
+ * and become retrievable. Bounded by MAX_DESCRIPTION_CHARS.
+ */
+function mergeDescription(
+  existing: string | null | undefined,
+  incoming: string | null | undefined,
+): string | null {
+  const a = (existing ?? '').trim();
+  const b = (incoming ?? '').trim();
+  if (!a) {
+    return b || null;
+  }
+
+  if (!b || a === b) {
+    return a;
+  }
+
+  const seen = new Set<string>();
+  const clauses: string[] = [];
+  for (const part of [...a.split(/[.;]\s+/), ...b.split(/[.;]\s+/)]) {
+    const clause = part
+      .trim()
+      .replace(/[.;]+$/, '')
+      .trim();
+    if (!clause) {
+      continue;
+    }
+
+    const key = clause.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    clauses.push(clause);
+  }
+
+  let result = '';
+  for (const clause of clauses) {
+    const next = result ? `${result}; ${clause}` : clause;
+    if (next.length > MAX_DESCRIPTION_CHARS) {
+      break;
+    }
+
+    result = next;
+  }
+
+  return result || clauses[0]?.slice(0, MAX_DESCRIPTION_CHARS) || null;
 }
 
 /** Maximum characters per fragment sent to the LLM. */
@@ -443,15 +509,20 @@ export class MemoryCompactionService {
       }
 
       try {
-        const existingId = await this.findExistingEntityId(serviceContext, type, name);
+        const existing = await this.findExisting(serviceContext, type, name);
+        // Fix A: merge new attributes into the existing description instead of
+        // letting createOrUpdateNode overwrite it (which dropped attributes).
+        const description = existing
+          ? mergeDescription(existing.description, entity.description)
+          : (entity.description ?? null);
 
         const { entityId } = await this.graphEvents.upsertNode(userId, {
-          entityId: existingId ?? undefined,
+          entityId: existing?.id ?? undefined,
           entityType: type,
           name,
-          description: entity.description ?? null,
+          description,
           properties: entity.properties ?? {},
-          mergeProperties: existingId != null,
+          mergeProperties: existing != null,
         });
 
         entityMap.set(this.entityKey(type, name), entityId);
@@ -525,23 +596,25 @@ export class MemoryCompactionService {
    * Only person and concept have a reliable name-search API; all other types
    * fall through to null (a fresh graph node is created on upsert).
    */
-  private async findExistingEntityId(
+  private async findExisting(
     context: ServiceContext,
     type: string,
     name: string,
-  ): Promise<string | null> {
+  ): Promise<{ id: string; description: string | null } | null> {
     // Accept either PascalCase storage form or the lowercase prompt vocabulary.
     switch (type.toLowerCase()) {
       case 'person': {
         const results = await this.personService.search(context, { name });
+        const hit = results.find((p) => p.name?.toLowerCase() === name.toLowerCase());
 
-        return results.find((p) => p.name?.toLowerCase() === name.toLowerCase())?.id ?? null;
+        return hit ? { id: hit.id, description: hit.description ?? null } : null;
       }
 
       case 'concept': {
         const results = await this.conceptService.search(context, { name });
+        const hit = results.find((c) => c.name?.toLowerCase() === name.toLowerCase());
 
-        return results.find((c) => c.name?.toLowerCase() === name.toLowerCase())?.id ?? null;
+        return hit ? { id: hit.id, description: hit.description ?? null } : null;
       }
 
       // place, event, item, content: no name-search API available yet.

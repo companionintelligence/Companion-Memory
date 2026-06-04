@@ -1,0 +1,59 @@
+# Harness v2 — one container per memory system, all from the same image
+# (selected by $SYSTEM). The orchestrator on the host only speaks the uniform
+# HTTP contract to these containers; no vendor SDKs / agents run on the host.
+#
+# Build the image once:   docker build -t bench-mem-v2 .
+# Bring up:               docker compose up -d
+#
+# host.docker.internal lets containers reach host services (Ollama, CI-Server,
+# Hindsight server). LM Studio is a LAN IP and reached directly.
+
+services:
+  naive:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: naive
+      LLM_URL: http://192.168.0.202:1234
+      LLM_MODEL: gemma-4-31b-it-abliterated
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9101:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  mem0:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: mem0
+      LLM_URL: http://192.168.0.202:1234
+      LLM_MODEL: gemma-4-31b-it-abliterated
+      LMS_TARGET: http://192.168.0.202:1234
+      MEM0_LLM_BASE_URL: http://localhost:1235/v1
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9102:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  hindsight:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: hindsight
+      LLM_URL: http://192.168.0.202:1234
+      LLM_MODEL: gemma-4-31b-it-abliterated
+      HINDSIGHT_BASE_URL: http://host.docker.internal:8888
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9103:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  ci_server:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: ci_server
+      LLM_URL: http://192.168.0.202:1234
+      LLM_MODEL: gemma-4-31b-it-abliterated
+      CI_SERVER_URL: http://host.docker.internal:8642
+      CI_SERVER_TOKEN: b32b1f4623ace2526a358b2a3ca0b9c44749af96b4f83b56ece3e495ccd956aa
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9104:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
