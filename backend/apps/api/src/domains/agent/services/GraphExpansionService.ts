@@ -83,10 +83,20 @@ const RELATIONSHIP_GLOSSES: Record<string, string> = {
   SPOUSE: 'spouse, husband, wife, married to, partner',
   OWNS: 'owns, possession, has, belongings, property',
   ATTENDED: 'attended, went to, participated in, visited, was at an event',
+  // VISITED holds places the user goes (gym, cafe, trails), not just events.
+  // Without an entry it fell back to the bare word "visited", so "where does
+  // X work out" (→ the gym) scored below the type floor and was dropped.
+  VISITED:
+    'visited, went to, attended, was at, works out at, gym, exercises at, trains at, a place someone goes',
   LIKES: 'likes, enjoys, favorite, fond of',
   DISLIKES: 'dislikes, hates, avoids, not a fan of',
   PREFERS: 'prefers, preference, favorite choice, would rather',
-  INTERESTED_IN: 'interested in, hobby, passion, topic of interest',
+  // INTERESTED_IN is the extraction's catch-all: it holds hobbies, sports,
+  // musical instruments, languages, diet, and media (books/movies/podcasts).
+  // The gloss must cover all of those vocabularies or e.g. "what instrument
+  // does X play" / "current diet" score below the floor and never expand.
+  INTERESTED_IN:
+    'interested in, hobby, pastime, passion, plays a musical instrument, music, sport, diet, dietary preference, what they eat, reads books, watches movies, listens to podcasts, topic of interest',
   HAS_SKILL: 'has skill, ability, proficient in, learning, good at',
   RELATED_TO: 'related to, associated with, connected to, about',
 };
