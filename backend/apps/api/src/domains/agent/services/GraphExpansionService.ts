@@ -273,7 +273,11 @@ export class GraphExpansionService {
 
     const vecString = `[${queryVec.join(',')}]`;
     const rows: Array<{ entity_id: string; sim: string }> = await this.dataSource.query(
-      `SELECT entity_id, 1 - (embedding <-> $1::vector) AS sim
+      // Cosine similarity. MUST use <=> (cosine distance), NOT <-> (L2):
+      // nomic-embed-text vectors are unnormalised (‖v‖≈22), so 1 - L2 yields
+      // large negatives (~-22) that swamp the W_NODE term and push every
+      // neighbour below NEIGHBOUR_SCORE_FLOOR — silently killing all expansion.
+      `SELECT entity_id, 1 - (embedding <=> $1::vector) AS sim
        FROM ci_search.embeddings
        WHERE user_id = $2 AND entity_id = ANY($3::uuid[])`,
       [vecString, userId, neighbourIds],
