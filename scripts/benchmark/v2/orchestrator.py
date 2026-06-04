@@ -27,8 +27,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-JUDGE_URL = "http://192.168.0.202:1234"
-JUDGE_MODEL = "gemma-4-31b-it-abliterated"
+JUDGE_URL = "http://192.168.0.203:1234"
+JUDGE_MODEL = "ornstein-3.6-27b"
 
 # CI-Server account (for the out-of-band full-wipe; sidecar only uses the API).
 CI_OWNER_QUERY = "SELECT id::text || '|' || COALESCE(entity_id::text,'') FROM ci.users WHERE entity_id IS NOT NULL ORDER BY id LIMIT 1;"
@@ -110,7 +110,7 @@ def ci_server_wipe() -> str:
     if "|" not in row:
         return "no canonical user; skipped"
     owner, canon = (s.strip() for s in row.split("|", 1))
-    _psql("DELETE FROM ci.agent_memory WHERE source='benchmark';")
+    _psql("DELETE FROM ci.agent_memories WHERE source='benchmark';")
     _psql(f"DELETE FROM ci.graph_deltas WHERE owner_user_id='{owner}';")
     _psql(f"DELETE FROM ci.relationships WHERE owner_user_id='{owner}';")
     _psql(f"DELETE FROM ci_search.embeddings WHERE user_id='{owner}' AND entity_id<>'{canon}';")
@@ -123,28 +123,34 @@ def ci_server_wipe() -> str:
 # Run one system
 # --------------------------------------------------------------------------- #
 
-def run_system(name: str, url: str, persona: dict) -> dict:
+def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False) -> dict:
     print(f"\n{'='*60}\n  {name}  ({url})\n{'='*60}")
     health = post(f"{url}/health", {}) if False else json.loads(
         urllib.request.urlopen(f"{url}/health", timeout=10).read())
     print(f"  health: {health}")
 
-    if name == "ci_server":
-        print(f"  CI-Server wipe: {ci_server_wipe()}")
-    post(f"{url}/reset", {})
+    if skip_ingest:
+        print("  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)")
+    else:
+        if name == "ci_server":
+            print(f"  CI-Server wipe: {ci_server_wipe()}")
+        post(f"{url}/reset", {})
 
-    msgs = [(m["content"], s["id"]) for s in persona["sessions"] for m in s["messages"] if m["role"] == "user"]
-    print(f"  ingesting {len(msgs)} statements…")
-    t0 = time.monotonic()
-    fails = 0
-    for text, sid in msgs:
-        try:
-            post(f"{url}/ingest", {"text": text, "session_id": sid})
-        except Exception as exc:  # noqa: BLE001 — one bad ingest must not abort the run
-            fails += 1
-            print(f"    [warn] ingest failed ({exc}); continuing")
-    post(f"{url}/flush", {})
-    print(f"  ingest+flush done ({time.monotonic()-t0:.0f}s, {fails} ingest failures)")
+        msgs = [(m["content"], s["id"]) for s in persona["sessions"] for m in s["messages"] if m["role"] == "user"]
+        print(f"  ingesting {len(msgs)} statements…")
+        t0 = time.monotonic()
+        fails = 0
+        for text, sid in msgs:
+            try:
+                post(f"{url}/ingest", {"text": text, "session_id": sid})
+            except Exception as exc:  # noqa: BLE001 — one bad ingest must not abort the run
+                fails += 1
+                print(f"    [warn] ingest failed ({exc}); continuing")
+        # /flush blocks server-side until compaction completes (container deadline
+        # 1800s). The HTTP call must out-wait that, or it aborts mid-compaction —
+        # 342 fragments at BATCH_SIZE=4 ≈ 12 min. 700s default was too short.
+        post(f"{url}/flush", {}, timeout=2000)
+        print(f"  ingest+flush done ({time.monotonic()-t0:.0f}s, {fails} ingest failures)")
 
     rows = []
     ans_hits = store_hits = 0
@@ -170,12 +176,14 @@ def main() -> None:
     ap.add_argument("--persona", required=True)
     ap.add_argument("--systems", required=True, help="name=url,name=url")
     ap.add_argument("--out", default="report_v2.md")
+    ap.add_argument("--skip-ingest", action="store_true",
+                    help="score against the existing graph; skip wipe/ingest/flush")
     args = ap.parse_args()
 
     persona = json.loads(Path(args.persona).read_text())
     systems = [tuple(s.split("=", 1)) for s in args.systems.split(",")]
 
-    results = [run_system(name, url, persona) for name, url in systems]
+    results = [run_system(name, url, persona, args.skip_ingest) for name, url in systems]
 
     cats = []
     for q in persona["eval_questions"]:

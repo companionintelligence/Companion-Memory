@@ -13,7 +13,7 @@ JSON object out of the model.
 CI-Server does NOT need this — it already speaks json_schema natively.
 
 Usage:
-  LMS_TARGET=http://192.168.0.202:1234 PROXY_PORT=1235 python lmstudio_proxy.py
+  LMS_TARGET=http://192.168.0.203:1234 PROXY_PORT=1235 python lmstudio_proxy.py
 """
 
 import http.server
@@ -23,7 +23,7 @@ import threading
 import urllib.error
 import urllib.request
 
-TARGET = os.environ.get("LMS_TARGET", "http://192.168.0.202:1234").rstrip("/")
+TARGET = os.environ.get("LMS_TARGET", "http://192.168.0.203:1234").rstrip("/")
 PORT = int(os.environ.get("PROXY_PORT", "1235"))
 
 # A permissive object schema: forces a JSON object, constrains nothing else.

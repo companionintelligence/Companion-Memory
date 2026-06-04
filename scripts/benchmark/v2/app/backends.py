@@ -232,21 +232,25 @@ class CIServerBackend:
         pass
 
     def ingest(self, text: str, session_id: str) -> None:
-        self._post("/api/memory/note", {"content": text, "source": "benchmark", "sessionId": session_id})
+        self._post("/api/memory/write", {"content": text, "source": "benchmark", "sessionId": session_id})
 
     def flush(self) -> None:
         result = self._post("/api/memory/compact", {})
         if result.get("queued", 0) == 0:
             return
-        deadline = time.monotonic() + 600
+        # Compaction marks processed_at on ALL fragments at once at the very end
+        # (MemoryCompactionService stamps the whole batch after every LLM sub-batch
+        # runs), so processed flips 0 -> all-done. A 342-fragment corpus at
+        # BATCH_SIZE=4 is ~86 LLM calls ≈ 12 min, so the deadline must be generous.
+        deadline = time.monotonic() + 1800
         while time.monotonic() < deadline:
-            time.sleep(3)
+            time.sleep(5)
             notes = self._get("/api/memory/notes")
             if isinstance(notes, list):
                 bench = [n for n in notes if n.get("source") == "benchmark"]
                 if bench and not [n for n in bench if not n.get("processedAt")]:
                     break
-        time.sleep(20)  # let async graph indexing settle
+        time.sleep(45)  # let async graph indexing settle (hundreds of entities)
 
     def retrieve(self, query: str) -> list[str]:
         res = self._post("/api/memory/recall", {"query": query, "maxResults": TOP_K})

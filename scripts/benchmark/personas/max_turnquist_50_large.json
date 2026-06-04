@@ -1,0 +1,2059 @@
+{
+  "_comment": "Max Turnquist, scaled to ~50 questions. Recentred on the canonical account self node. All gold answers stated verbatim in sessions.",
+  "persona_id": "max_turnquist_50_large",
+  "name": "Max Turnquist",
+  "description": "Robotics engineer (canonical account self). Scaled persona: 50 questions across flat/relational/multi-hop/temporal, recentred on the user node. [LARGE: +300 hard-negative/filler distractor messages to defeat fixed top-k retrieval]",
+  "sessions": [
+    {
+      "id": "sess_00",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Quick intro: I'm Max Turnquist, a robotics engineer."
+        },
+        {
+          "role": "user",
+          "content": "I picked the violin back up this year and practice most evenings."
+        },
+        {
+          "role": "user",
+          "content": "I adopted a cat named Biryani, a little tabby with opinions."
+        }
+      ]
+    },
+    {
+      "id": "sess_01",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Palak paneer is my favorite food, total comfort dish."
+        },
+        {
+          "role": "user",
+          "content": "I'm reading The Overstory by Richard Powers right now."
+        },
+        {
+          "role": "user",
+          "content": "I ride a Cannondale Synapse road bike on weekends."
+        }
+      ]
+    },
+    {
+      "id": "sess_02",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I'm learning Japanese before a trip to Kyoto in November."
+        },
+        {
+          "role": "user",
+          "content": "Most weekends I go hiking in the foothills."
+        },
+        {
+          "role": "user",
+          "content": "My coffee order is always a flat white."
+        }
+      ]
+    },
+    {
+      "id": "sess_03",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My favorite movie is Arrival; I rewatch it constantly."
+        },
+        {
+          "role": "user",
+          "content": "Radiohead is my favorite band by a mile."
+        },
+        {
+          "role": "user",
+          "content": "I shoot photos with a Fujifilm X100V."
+        }
+      ]
+    },
+    {
+      "id": "sess_04",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My go-to cocktail is a negroni."
+        },
+        {
+          "role": "user",
+          "content": "I keep a fiddle-leaf fig in the living room."
+        },
+        {
+          "role": "user",
+          "content": "I listen to the Lex Fridman podcast on commutes."
+        }
+      ]
+    },
+    {
+      "id": "sess_05",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My sister Anita flew in to visit last week."
+        },
+        {
+          "role": "user",
+          "content": "My parents, Deepak and Sunita, still live back in Portland."
+        },
+        {
+          "role": "user",
+          "content": "My best friend Lena and I have known each other since school."
+        }
+      ]
+    },
+    {
+      "id": "sess_06",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Anita and her husband Raj live in Chicago."
+        },
+        {
+          "role": "user",
+          "content": "My manager at work, Priyanka, runs a tight ship."
+        },
+        {
+          "role": "user",
+          "content": "My old college roommate Diego crashed on my couch last month."
+        }
+      ]
+    },
+    {
+      "id": "sess_07",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My niece Mira just turned six."
+        },
+        {
+          "role": "user",
+          "content": "My grad-school mentor was Professor Okafor."
+        },
+        {
+          "role": "user",
+          "content": "Raj \u2014 my brother-in-law \u2014 is a cardiologist at a big hospital."
+        }
+      ]
+    },
+    {
+      "id": "sess_08",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My best friend Lena works at Stripe and lives in San Francisco."
+        },
+        {
+          "role": "user",
+          "content": "Anita is an architect and designed a library downtown."
+        },
+        {
+          "role": "user",
+          "content": "Mira is Anita's daughter, so I spoil her rotten."
+        }
+      ]
+    },
+    {
+      "id": "sess_09",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My manager Priyanka has been at Cobalt Robotics for a decade."
+        },
+        {
+          "role": "user",
+          "content": "Professor Okafor taught robotics and still publishes constantly."
+        },
+        {
+          "role": "user",
+          "content": "I'm finally settled in Denver after moving from Portland last spring."
+        }
+      ]
+    },
+    {
+      "id": "sess_10",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I left Northwind Logistics in March and now work at Cobalt Robotics."
+        },
+        {
+          "role": "user",
+          "content": "Cobalt has me leading the perception team now."
+        },
+        {
+          "role": "user",
+          "content": "I switched from an iPhone to a Pixel a few months ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_11",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I used to play soccer but these days I train for marathons."
+        },
+        {
+          "role": "user",
+          "content": "I got promoted to senior engineer at the last review."
+        },
+        {
+          "role": "user",
+          "content": "I traded my old Civic for a Subaru Outback this year."
+        }
+      ]
+    },
+    {
+      "id": "sess_12",
+      "messages": [
+        {
+          "role": "user",
+          "content": "We moved out of our apartment into a small house in the spring."
+        },
+        {
+          "role": "user",
+          "content": "I went vegetarian last year after decades of eating meat."
+        },
+        {
+          "role": "user",
+          "content": "I recently got engaged to my partner Sam."
+        }
+      ]
+    },
+    {
+      "id": "sess_x",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I climb at the Mesa Rim gym twice a week."
+        },
+        {
+          "role": "user",
+          "content": "Autumn is hands down my favorite season."
+        },
+        {
+          "role": "user",
+          "content": "I've been a Portland Trail Blazers fan my whole life."
+        }
+      ]
+    },
+    {
+      "id": "noise_000",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my friend Priscilla adopted a cockatiel last month."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco took a new job as a journalist in Seattle."
+        },
+        {
+          "role": "user",
+          "content": "Spent the evening reorganizing my closet."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up German again."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei is learning Italian for fun."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu plays the saxophone in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas keeps recommending Educated by Tara Westover but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei took a new job as a teacher in Sacramento."
+        },
+        {
+          "role": "user",
+          "content": "my manager Steph just bought a secondhand mountain bike for the commute."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up French again."
+        }
+      ]
+    },
+    {
+      "id": "noise_001",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Portuguese again."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei took a new job as a graphic designer in Atlanta."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Korean again."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan is learning Spanish for fun."
+        },
+        {
+          "role": "user",
+          "content": "Long standup meeting, not enough coffee."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Acme Freight that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco plays the trumpet in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Wonka Labs about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas took a new job as a dentist in San Diego."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla is really into baking sourdough these days."
+        }
+      ]
+    },
+    {
+      "id": "noise_002",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my friend Marco just started learning the cello \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan just bought a Canyon Endurace for the commute."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda just bought a Canyon Endurace for the commute."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei is really into woodworking these days."
+        },
+        {
+          "role": "user",
+          "content": "Traffic on the way in was brutal this morning."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu just got back from a trip to Atlanta."
+        },
+        {
+          "role": "user",
+          "content": "Grocery run, forgot half the list of course."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan is really into pottery these days."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Soylent Corp that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda just started learning the clarinet \u2014 sounds rough so far."
+        }
+      ]
+    },
+    {
+      "id": "noise_003",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my uncle Vikram plays the saxophone in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "Watered the plants and called it a productive day."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan just got back from a trip to Atlanta."
+        },
+        {
+          "role": "user",
+          "content": "my manager Steph just bought a Specialized Tarmac for the commute."
+        },
+        {
+          "role": "user",
+          "content": "Traffic on the way in was brutal this morning."
+        },
+        {
+          "role": "user",
+          "content": "Spent the evening reorganizing my closet."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla moved to Boston for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Hooli that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan moved to Minneapolis for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        }
+      ]
+    },
+    {
+      "id": "noise_004",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my coworker Dan keeps recommending The Name of the Wind but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas swears their favorite food is ramen."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda took a new job as a plumber in Sacramento."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Initech about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu just started learning the ukulele \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei plays the cello in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla moved to Nashville for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco swears their favorite food is pad thai."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco is learning Korean for fun."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda just bought a secondhand mountain bike for the commute."
+        }
+      ]
+    },
+    {
+      "id": "noise_005",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my coworker Brenda plays the drums in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my manager Steph took a new job as a barista in Sacramento."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla is learning Portuguese for fun."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan swears their favorite food is tamales."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas moved to San Diego for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules swears their favorite food is ramen."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan keeps recommending Project Hail Mary but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules just started learning the drums \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan just started learning the trumpet \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "Spent the evening reorganizing my closet."
+        }
+      ]
+    },
+    {
+      "id": "noise_006",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my teammate Olu just got back from a trip to Nashville."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei moved to Boston for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas just got back from a trip to Minneapolis."
+        },
+        {
+          "role": "user",
+          "content": "New episode dropped and I have thoughts."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Initech about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram just bought an old steel Bianchi for the commute."
+        },
+        {
+          "role": "user",
+          "content": "It rained all day, never left the apartment."
+        },
+        {
+          "role": "user",
+          "content": "my cousin Ravi keeps recommending Educated by Tara Westover but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda keeps recommending The Name of the Wind but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up German again."
+        }
+      ]
+    },
+    {
+      "id": "noise_007",
+      "messages": [
+        {
+          "role": "user",
+          "content": "We have a client over at Hooli that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "Watered the plants and called it a productive day."
+        },
+        {
+          "role": "user",
+          "content": "Grocery run, forgot half the list of course."
+        },
+        {
+          "role": "user",
+          "content": "My phone battery has been dying super fast lately."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Initech that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda swears their favorite food is tamales."
+        },
+        {
+          "role": "user",
+          "content": "Weekend plans fell through, just relaxed instead."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Acme Freight about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules took a new job as a plumber in Minneapolis."
+        }
+      ]
+    },
+    {
+      "id": "noise_008",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my cousin Ravi is really into birdwatching these days."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla just started learning the cello \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules moved to Atlanta for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu keeps recommending Dune by Frank Herbert but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu moved to Sacramento for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu adopted a husky named Storm last month."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan adopted a corgi last month."
+        },
+        {
+          "role": "user",
+          "content": "Grocery run, forgot half the list of course."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan adopted a cockatiel last month."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan just got back from a trip to Atlanta."
+        }
+      ]
+    },
+    {
+      "id": "noise_009",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my manager Steph just got back from a trip to Nashville."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei adopted a corgi last month."
+        },
+        {
+          "role": "user",
+          "content": "My phone battery has been dying super fast lately."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla keeps recommending Educated by Tara Westover but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "Long standup meeting, not enough coffee."
+        },
+        {
+          "role": "user",
+          "content": "New episode dropped and I have thoughts."
+        },
+        {
+          "role": "user",
+          "content": "The coffee machine at the office broke again."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas swears their favorite food is butter chicken."
+        },
+        {
+          "role": "user",
+          "content": "New episode dropped and I have thoughts."
+        }
+      ]
+    },
+    {
+      "id": "noise_010",
+      "messages": [
+        {
+          "role": "user",
+          "content": "We have a client over at Wonka Labs that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla adopted a siamese cat last month."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Globex about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco moved to Phoenix for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "New episode dropped and I have thoughts."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules just bought an old steel Bianchi for the commute."
+        },
+        {
+          "role": "user",
+          "content": "My phone battery has been dying super fast lately."
+        }
+      ]
+    },
+    {
+      "id": "noise_011",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my uncle Vikram is learning Portuguese for fun."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan keeps recommending The Name of the Wind but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Acme Freight that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        },
+        {
+          "role": "user",
+          "content": "The coffee machine at the office broke again."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas is really into woodworking these days."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan is really into kayaking these days."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram just got back from a trip to Minneapolis."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda keeps recommending Dune by Frank Herbert but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda keeps recommending Piranesi by Susanna Clarke but I haven't started it."
+        }
+      ]
+    },
+    {
+      "id": "noise_012",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my manager Steph is really into chess these days."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Globex about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu is really into woodworking these days."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu just started learning the drums \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei just started learning the drums \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei took a new job as a journalist in Austin."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram adopted a beagle named Rufus last month."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda just started learning the drums \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda is learning Korean for fun."
+        }
+      ]
+    },
+    {
+      "id": "noise_013",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tried a new cafe downtown, decent but overpriced."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco just got back from a trip to Seattle."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Acme Freight that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan is learning Mandarin for fun."
+        },
+        {
+          "role": "user",
+          "content": "The neighbors were loud again until midnight."
+        },
+        {
+          "role": "user",
+          "content": "Long standup meeting, not enough coffee."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla is really into kayaking these days."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Hooli about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "Weekend plans fell through, just relaxed instead."
+        }
+      ]
+    },
+    {
+      "id": "noise_014",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Grocery run, forgot half the list of course."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu just got back from a trip to Pittsburgh."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla is learning Korean for fun."
+        },
+        {
+          "role": "user",
+          "content": "my cousin Ravi is really into salsa dancing these days."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas plays the clarinet in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "The coffee machine at the office broke again."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu is learning French for fun."
+        },
+        {
+          "role": "user",
+          "content": "Spent the evening reorganizing my closet."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Mandarin again."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco swears their favorite food is lasagna."
+        }
+      ]
+    },
+    {
+      "id": "noise_015",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my neighbor Wei swears their favorite food is ramen."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas moved to San Diego for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "Spent the evening reorganizing my closet."
+        },
+        {
+          "role": "user",
+          "content": "The neighbors were loud again until midnight."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu is learning Portuguese for fun."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules just bought a Canyon Endurace for the commute."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram took a new job as a barista in Nashville."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas plays the cello in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my manager Steph swears their favorite food is butter chicken."
+        }
+      ]
+    },
+    {
+      "id": "noise_016",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Portuguese again."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan moved to Sacramento for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan swears their favorite food is ramen."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco took a new job as a teacher in Pittsburgh."
+        },
+        {
+          "role": "user",
+          "content": "It rained all day, never left the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Watered the plants and called it a productive day."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco just got back from a trip to Pittsburgh."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco took a new job as a data analyst in Nashville."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan just started learning the clarinet \u2014 sounds rough so far."
+        }
+      ]
+    },
+    {
+      "id": "noise_017",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my coworker Brenda plays the saxophone in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Hooli about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei plays the ukulele in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules took a new job as a teacher in Nashville."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco just started learning the piano \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla is really into kayaking these days."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei just got back from a trip to Seattle."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu swears their favorite food is tamales."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan moved to Nashville for the lower rent."
+        }
+      ]
+    },
+    {
+      "id": "noise_018",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "The coffee machine at the office broke again."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        },
+        {
+          "role": "user",
+          "content": "Watered the plants and called it a productive day."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new cafe downtown, decent but overpriced."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan is learning Portuguese for fun."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei plays the flute in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Korean again."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Acme Freight about a partnership."
+        }
+      ]
+    },
+    {
+      "id": "noise_019",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan is really into pottery these days."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei adopted a cockatiel last month."
+        },
+        {
+          "role": "user",
+          "content": "my cousin Ravi plays the drums in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram just started learning the ukulele \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda keeps recommending Dune by Frank Herbert but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei just got back from a trip to Boston."
+        },
+        {
+          "role": "user",
+          "content": "The coffee machine at the office broke again."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco adopted a beagle named Rufus last month."
+        },
+        {
+          "role": "user",
+          "content": "Got way too into a documentary about deep-sea fish last night."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        }
+      ]
+    },
+    {
+      "id": "noise_020",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my barista Jules just bought a Specialized Tarmac for the commute."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Portuguese again."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda just got back from a trip to San Diego."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram just started learning the clarinet \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla just started learning the trumpet \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda moved to Nashville for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "The coffee machine at the office broke again."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas adopted a bearded dragon last month."
+        }
+      ]
+    },
+    {
+      "id": "noise_021",
+      "messages": [
+        {
+          "role": "user",
+          "content": "We have a client over at Hooli that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "Long standup meeting, not enough coffee."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco is learning French for fun."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla took a new job as a teacher in Phoenix."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla is learning German for fun."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram swears their favorite food is bibimbap."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules moved to San Diego for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla swears their favorite food is pho."
+        },
+        {
+          "role": "user",
+          "content": "my manager Steph is really into baking sourdough these days."
+        },
+        {
+          "role": "user",
+          "content": "Long standup meeting, not enough coffee."
+        }
+      ]
+    },
+    {
+      "id": "noise_022",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my teammate Olu adopted a cockatiel last month."
+        },
+        {
+          "role": "user",
+          "content": "Watered the plants and called it a productive day."
+        },
+        {
+          "role": "user",
+          "content": "Spent the evening reorganizing my closet."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda took a new job as a dentist in Boston."
+        },
+        {
+          "role": "user",
+          "content": "New episode dropped and I have thoughts."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan is really into birdwatching these days."
+        },
+        {
+          "role": "user",
+          "content": "Weekend plans fell through, just relaxed instead."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan just got back from a trip to Seattle."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas is really into woodworking these days."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan just got back from a trip to Atlanta."
+        }
+      ]
+    },
+    {
+      "id": "noise_023",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My phone battery has been dying super fast lately."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new cafe downtown, decent but overpriced."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla plays the drums in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "It rained all day, never left the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda adopted a corgi last month."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Initech that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Hooli that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my old roommate Tomas just started learning the clarinet \u2014 sounds rough so far."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco keeps recommending Educated by Tara Westover but I haven't started it."
+        }
+      ]
+    },
+    {
+      "id": "noise_024",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Long standup meeting, not enough coffee."
+        },
+        {
+          "role": "user",
+          "content": "It rained all day, never left the apartment."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram adopted a siamese cat last month."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei just got back from a trip to Atlanta."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco keeps recommending Piranesi by Susanna Clarke but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "Weekend plans fell through, just relaxed instead."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Globex about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Globex that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram took a new job as a journalist in San Diego."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Umbrella Analytics about a partnership."
+        }
+      ]
+    },
+    {
+      "id": "noise_025",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tried a new cafe downtown, decent but overpriced."
+        },
+        {
+          "role": "user",
+          "content": "my cousin Ravi moved to Boston for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules swears their favorite food is pho."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Korean again."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei swears their favorite food is bibimbap."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei moved to Nashville for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Italian again."
+        },
+        {
+          "role": "user",
+          "content": "Traffic on the way in was brutal this morning."
+        },
+        {
+          "role": "user",
+          "content": "My phone battery has been dying super fast lately."
+        }
+      ]
+    },
+    {
+      "id": "noise_026",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my uncle Vikram plays the piano in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "Spent an hour just answering emails, ugh."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan moved to Phoenix for the lower rent."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Hooli about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Initech about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu is learning French for fun."
+        },
+        {
+          "role": "user",
+          "content": "It rained all day, never left the apartment."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco just bought a secondhand mountain bike for the commute."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan adopted a siamese cat last month."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules is really into pottery these days."
+        }
+      ]
+    },
+    {
+      "id": "noise_027",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my cousin Ravi just bought a Trek Domane for the commute."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up French again."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla plays the ukulele in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Stark Solutions that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu is learning Mandarin for fun."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleaned out the garage this weekend."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Hooli about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Stark Solutions about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my friend Marco just bought a Specialized Tarmac for the commute."
+        },
+        {
+          "role": "user",
+          "content": "my barista Jules adopted a bearded dragon last month."
+        }
+      ]
+    },
+    {
+      "id": "noise_028",
+      "messages": [
+        {
+          "role": "user",
+          "content": "my teammate Olu adopted a siamese cat last month."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Hooli that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Dan just bought a Canyon Endurace for the commute."
+        },
+        {
+          "role": "user",
+          "content": "The neighbors were loud again until midnight."
+        },
+        {
+          "role": "user",
+          "content": "my gym buddy Hassan keeps recommending Project Hail Mary but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "my cousin Ravi just bought a Giant Defy for the commute."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei keeps recommending The Name of the Wind but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up German again."
+        },
+        {
+          "role": "user",
+          "content": "Had a call with someone from Stark Solutions about a partnership."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda plays the clarinet in a weekend band."
+        }
+      ]
+    },
+    {
+      "id": "noise_029",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Watered the plants and called it a productive day."
+        },
+        {
+          "role": "user",
+          "content": "my neighbor Wei just bought a Trek Domane for the commute."
+        },
+        {
+          "role": "user",
+          "content": "my uncle Vikram plays the cello in a weekend band."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu swears their favorite food is lasagna."
+        },
+        {
+          "role": "user",
+          "content": "We have a client over at Acme Freight that keeps changing the spec."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up German again."
+        },
+        {
+          "role": "user",
+          "content": "my coworker Brenda is learning Portuguese for fun."
+        },
+        {
+          "role": "user",
+          "content": "my friend Priscilla keeps recommending Dune by Frank Herbert but I haven't started it."
+        },
+        {
+          "role": "user",
+          "content": "Thinking about whether to ever pick up Mandarin again."
+        },
+        {
+          "role": "user",
+          "content": "my teammate Olu took a new job as a journalist in San Diego."
+        }
+      ]
+    }
+  ],
+  "eval_questions": [
+    {
+      "id": "q01",
+      "question": "What is Max's profession?",
+      "answer": "robotics engineer",
+      "keywords": [
+        "robotics engineer",
+        "robotics"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q02",
+      "question": "What instrument does Max play?",
+      "answer": "violin",
+      "keywords": [
+        "violin"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q03",
+      "question": "What is the name of Max's cat?",
+      "answer": "Biryani",
+      "keywords": [
+        "Biryani"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q04",
+      "question": "What kind of cat does Max have?",
+      "answer": "a tabby",
+      "keywords": [
+        "tabby"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q05",
+      "question": "What is Max's favorite food?",
+      "answer": "palak paneer",
+      "keywords": [
+        "palak paneer",
+        "palak"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q06",
+      "question": "What book is Max reading?",
+      "answer": "The Overstory by Richard Powers",
+      "keywords": [
+        "Overstory",
+        "Richard Powers"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q07",
+      "question": "What kind of bike does Max own?",
+      "answer": "a Cannondale Synapse",
+      "keywords": [
+        "Cannondale",
+        "Synapse"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q08",
+      "question": "What language is Max learning?",
+      "answer": "Japanese",
+      "keywords": [
+        "Japanese"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q09",
+      "question": "Where is Max planning to travel?",
+      "answer": "Kyoto",
+      "keywords": [
+        "Kyoto"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q10",
+      "question": "What outdoor hobby does Max enjoy?",
+      "answer": "hiking",
+      "keywords": [
+        "hiking",
+        "hike"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q11",
+      "question": "What is Max's coffee order?",
+      "answer": "a flat white",
+      "keywords": [
+        "flat white"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q12",
+      "question": "What is Max's favorite movie?",
+      "answer": "Arrival",
+      "keywords": [
+        "Arrival"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q13",
+      "question": "What is Max's favorite band?",
+      "answer": "Radiohead",
+      "keywords": [
+        "Radiohead"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q14",
+      "question": "What camera does Max use?",
+      "answer": "a Fujifilm X100V",
+      "keywords": [
+        "Fujifilm",
+        "X100V"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q15",
+      "question": "What is Max's favorite cocktail?",
+      "answer": "a negroni",
+      "keywords": [
+        "negroni"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q16",
+      "question": "What houseplant does Max keep?",
+      "answer": "a fiddle-leaf fig",
+      "keywords": [
+        "fiddle-leaf",
+        "fig"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q17",
+      "question": "What podcast does Max listen to?",
+      "answer": "the Lex Fridman podcast",
+      "keywords": [
+        "Lex Fridman",
+        "Fridman"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q18",
+      "question": "What is the name of Max's sister?",
+      "answer": "Anita",
+      "keywords": [
+        "Anita"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q19",
+      "question": "What are Max's parents' names?",
+      "answer": "Deepak and Sunita",
+      "keywords": [
+        "Deepak",
+        "Sunita"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q20",
+      "question": "Where do Max's parents live?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q21",
+      "question": "Who is Max's best friend?",
+      "answer": "Lena",
+      "keywords": [
+        "Lena"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q22",
+      "question": "What city do Max's sister and her husband live in?",
+      "answer": "Chicago",
+      "keywords": [
+        "Chicago"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q23",
+      "question": "What is the name of Max's brother-in-law?",
+      "answer": "Raj",
+      "keywords": [
+        "Raj"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q24",
+      "question": "Who is Max's manager?",
+      "answer": "Priyanka",
+      "keywords": [
+        "Priyanka"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q25",
+      "question": "Who was Max's college roommate?",
+      "answer": "Diego",
+      "keywords": [
+        "Diego"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q26",
+      "question": "What is the name of Max's niece?",
+      "answer": "Mira",
+      "keywords": [
+        "Mira"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q27",
+      "question": "Who was Max's mentor?",
+      "answer": "Professor Okafor",
+      "keywords": [
+        "Okafor"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q28",
+      "question": "What does Max's brother-in-law do for work?",
+      "answer": "cardiologist",
+      "keywords": [
+        "cardiologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q29",
+      "question": "Where does Max's best friend work?",
+      "answer": "Stripe",
+      "keywords": [
+        "Stripe"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q30",
+      "question": "What city does Max's best friend live in?",
+      "answer": "San Francisco",
+      "keywords": [
+        "San Francisco"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q31",
+      "question": "What is Max's sister's profession?",
+      "answer": "architect",
+      "keywords": [
+        "architect"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q32",
+      "question": "Who is Max's niece's mother?",
+      "answer": "Anita",
+      "keywords": [
+        "Anita"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q33",
+      "question": "Where does Max's manager work?",
+      "answer": "Cobalt Robotics",
+      "keywords": [
+        "Cobalt"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q34",
+      "question": "What field is Max's mentor in?",
+      "answer": "robotics",
+      "keywords": [
+        "robotics"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q35",
+      "question": "What city does Max currently live in?",
+      "answer": "Denver",
+      "keywords": [
+        "Denver"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q36",
+      "question": "What city did Max live in before his current one?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q37",
+      "question": "What company does Max currently work for?",
+      "answer": "Cobalt Robotics",
+      "keywords": [
+        "Cobalt"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q38",
+      "question": "What company did Max work for before his current job?",
+      "answer": "Northwind Logistics",
+      "keywords": [
+        "Northwind"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q39",
+      "question": "What team does Max lead?",
+      "answer": "the perception team",
+      "keywords": [
+        "perception"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q40",
+      "question": "What phone does Max currently use?",
+      "answer": "a Pixel",
+      "keywords": [
+        "Pixel"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q41",
+      "question": "What does Max currently train for?",
+      "answer": "marathons",
+      "keywords": [
+        "marathon"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q42",
+      "question": "What is Max's current job title?",
+      "answer": "senior engineer",
+      "keywords": [
+        "senior"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q43",
+      "question": "What car does Max currently drive?",
+      "answer": "a Subaru Outback",
+      "keywords": [
+        "Subaru",
+        "Outback"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q44",
+      "question": "What type of home does Max currently live in?",
+      "answer": "a house",
+      "keywords": [
+        "house"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q45",
+      "question": "What is Max's current diet?",
+      "answer": "vegetarian",
+      "keywords": [
+        "vegetarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q46",
+      "question": "What is Max's relationship status?",
+      "answer": "engaged",
+      "keywords": [
+        "engaged"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q47",
+      "question": "What is the name of Max's partner?",
+      "answer": "Sam",
+      "keywords": [
+        "Sam"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q48",
+      "question": "Where does Max work out?",
+      "answer": "Mesa Rim",
+      "keywords": [
+        "Mesa Rim"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q49",
+      "question": "What is Max's favorite season?",
+      "answer": "autumn",
+      "keywords": [
+        "autumn"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q50",
+      "question": "What sports team does Max support?",
+      "answer": "the Portland Trail Blazers",
+      "keywords": [
+        "Trail Blazers",
+        "Blazers"
+      ],
+      "category": "flat-recall"
+    }
+  ]
+}

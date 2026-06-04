@@ -32,7 +32,7 @@ SYSTEM = os.environ.get("SYSTEM", "naive").lower()
 if SYSTEM == "mem0":
     subprocess.Popen(
         ["python", "lmstudio_proxy.py"],
-        env={**os.environ, "LMS_TARGET": os.environ.get("LMS_TARGET", "http://192.168.0.202:1234"),
+        env={**os.environ, "LMS_TARGET": os.environ.get("LMS_TARGET", "http://192.168.0.203:1234"),
              "PROXY_PORT": "1235"},
     )
     time.sleep(2)

@@ -11,18 +11,20 @@ import json
 import os
 import urllib.request
 
-LLM_URL = os.environ.get("LLM_URL", "http://192.168.0.202:1234").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL", "gemma-4-31b-it-abliterated")
+LLM_URL = os.environ.get("LLM_URL", "http://192.168.0.203:1234").rstrip("/")
+LLM_MODEL = os.environ.get("LLM_MODEL", "ornstein-3.6-27b")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "lm-studio")
 
 _SYSTEM = (
-    "You are the memory of a personal assistant whose single user is the person "
-    "named in the QUESTION. ALL memory entries are about that one user, even when "
-    'written in first person ("I") or as "the user" or "the narrator". So a memory '
-    'saying "I play violin" IS a fact about the user named in the question. Never '
-    "claim the person is not mentioned just because the memory uses 'I' or 'the "
-    "user'. Answer in one short sentence using ONLY the memory; only say \"I don't "
-    'know" if the specific fact asked for is genuinely absent from the memory.'
+    "You are the memory of a personal assistant. The user is the person named in "
+    'the QUESTION; memory entries about them are written as "the user", "I", or '
+    '"the narrator" — bind ALL of these to that name (a memory saying "I play '
+    'violin" IS a fact about the named user). The memory ALSO lists facts about '
+    "OTHER named people (their favorite foods, cities, jobs); IGNORE those. To "
+    "answer, scan for the single entry about THE USER that matches the question "
+    '(e.g. for "favorite food", the entry "…the user\'s favorite food…") and '
+    "report it. Answer in one short sentence using ONLY the memory. Say \"I don't "
+    'know" only if NO entry about the user matches the question.'
 )
 
 

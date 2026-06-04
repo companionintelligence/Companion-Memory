@@ -461,7 +461,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--judge-url",
-        default=os.environ.get("JUDGE_LLM_URL", "http://192.168.0.202:1234"),
+        default=os.environ.get("JUDGE_LLM_URL", "http://192.168.0.203:1234"),
         help="OpenAI-compatible base URL for the LLM judge (default: $JUDGE_LLM_URL or LM Studio).",
     )
     parser.add_argument(

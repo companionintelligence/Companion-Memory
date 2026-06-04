@@ -10,7 +10,7 @@ Run the server (once), pointed at the same model:
 
   docker run -d --name hindsight -p 8888:8888 -p 9999:9999 \
     -e HINDSIGHT_API_LLM_PROVIDER=lmstudio \
-    -e HINDSIGHT_API_LLM_BASE_URL=http://192.168.0.202:1234/v1 \
+    -e HINDSIGHT_API_LLM_BASE_URL=http://192.168.0.203:1234/v1 \
     -e HINDSIGHT_API_LLM_MODEL=gemma-4-31b-it-abliterated \
     -e HINDSIGHT_API_LLM_MAX_CONCURRENT=1 \
     -v $HOME/.hindsight-docker:/home/hindsight/.pg0 \
