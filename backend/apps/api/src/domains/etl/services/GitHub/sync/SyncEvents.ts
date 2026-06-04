@@ -466,7 +466,7 @@ export async function syncEvents({
             break;
           }
 
-          const pageEvents = ((await response.json()) as GithubEvent[]).filter(
+          const pageEvents = ((await pageResponse.json()) as GithubEvent[]).filter(
             (event) => event.actor?.id.toString() === connection.externalId,
           );
 
