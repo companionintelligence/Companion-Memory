@@ -1,7 +1,7 @@
 import type { BaseSyntheticEvent } from 'react';
 
-import { Button, Card } from '@ci/shadcn';
-import { Link } from 'react-router-dom';
+import { Button, Card, Separator } from '@ci/shadcn';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
 
@@ -9,6 +9,8 @@ import { LoginForm, type LoginFormData } from './LoginForm';
 
 export function LoginPage() {
   const [, { login }] = useAuth();
+  const [searchParams] = useSearchParams();
+  const oidcError = searchParams.get('error');
 
   const handleSubmit = async (data: LoginFormData, e?: BaseSyntheticEvent) => {
     e?.preventDefault();
@@ -26,6 +28,23 @@ export function LoginPage() {
 
         <Card.Content>
           <LoginForm onSubmit={handleSubmit} />
+
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <Separator className="w-full" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card text-muted-foreground px-2">Or</span>
+            </div>
+          </div>
+
+          {oidcError && (
+            <p className="text-destructive mb-2 text-center text-sm">Sign in failed. Please try again.</p>
+          )}
+
+          <Button variant="outline" className="w-full" asChild>
+            <a href="/api/authenticate/oidc">Sign in with CI Portal</a>
+          </Button>
         </Card.Content>
       </Card>
 

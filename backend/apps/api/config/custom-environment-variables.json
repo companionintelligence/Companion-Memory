@@ -16,6 +16,10 @@
     },
     "oauth": {
       "callbackUrl": "OAUTH_CALLBACK_URL"
+    },
+    "oidc": {
+      "issuerUrl": "OIDC_ISSUER_URL",
+      "callbackUrl": "OIDC_CALLBACK_URL"
     }
   },
   "db": {

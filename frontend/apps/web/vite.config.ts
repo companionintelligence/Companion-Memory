@@ -59,13 +59,14 @@ export default defineConfig({
         ],
       },
       devOptions: {
-        enabled: true,
+        enabled: false,
         type: 'module',
       },
       workbox: {
         // Pre-caches all matching assets.
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
 
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             // Match any request that ends with .png, .jpg, .jpeg or .svg.
@@ -82,8 +83,8 @@ export default defineConfig({
             },
           },
           {
-            // Match any request where the path matches /api
-            urlPattern: /\/api\//,
+            // Match API requests, excluding OIDC auth redirects which cross origins
+            urlPattern: /\/api\/(?!authenticate\/oidc)/,
             handler: 'NetworkOnly',
             options: {
               backgroundSync: {
@@ -115,5 +116,11 @@ export default defineConfig({
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],
     },
+    warmup: {
+      clientFiles: ['./src/main.tsx'],
+    },
+  },
+  optimizeDeps: {
+    include: ['@ci/shadcn', 'react', 'react-dom', 'react-router-dom'],
   },
 });

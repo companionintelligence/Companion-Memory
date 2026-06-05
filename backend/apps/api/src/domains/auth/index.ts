@@ -26,6 +26,7 @@ import config from '@ci/configuration';
 import { UserModule } from '@ci/domains/user';
 
 import { ApiKeyController } from './controllers/ApiKeyController';
+import { OidcController } from './controllers/OidcController';
 import { SessionController } from './controllers/SessionController';
 import { SignupController } from './controllers/SignupController';
 import { ApiKeyEntity } from './entities/ApiKeyEntity';
@@ -63,7 +64,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     ApiKeyService,
     ApiKeyStrategy,
   ],
-  controllers: [SessionController, SignupController, ApiKeyController],
+  controllers: [SessionController, SignupController, ApiKeyController, OidcController],
   exports: [SignupCodeService, ApiKeyService],
 })
 export class AuthModule {}

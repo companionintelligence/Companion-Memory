@@ -52,6 +52,10 @@
     },
     "openid": {
       "callbackUrl": "https://memory.ci.localhost/openid/callback"
+    },
+    "oidc": {
+      "issuerUrl": "",
+      "callbackUrl": "https://memory.ci.localhost/api/authenticate/oidc/callback"
     }
   },
   "db": {
