@@ -12,7 +12,12 @@ import os
 import urllib.request
 
 LLM_URL = os.environ.get("LLM_URL", "http://192.168.0.203:1234").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL", "ornstein-3.6-27b")
+# The shared answerer model — held constant across all systems for fairness.
+# Kept SEPARATE from LLM_MODEL (which a system like mem0 reuses for its internal
+# extractor) so Phase A (ingest, gemma loaded) and Phase B (answer, ornstein
+# loaded) only require swapping the LM Studio model, never a store-wiping
+# container recreate.
+LLM_MODEL = os.environ.get("ANSWERER_MODEL") or os.environ.get("LLM_MODEL", "ornstein-3.6-27b")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "lm-studio")
 
 _SYSTEM = (

@@ -21,6 +21,7 @@ ci_server=http://localhost:9104,hindsight=http://localhost:9103 \
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import subprocess
 import time
@@ -123,7 +124,8 @@ def ci_server_wipe() -> str:
 # Run one system
 # --------------------------------------------------------------------------- #
 
-def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False) -> dict:
+def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False, ingest_only: bool = False,
+               concurrency: int = 1) -> dict:
     print(f"\n{'='*60}\n  {name}  ({url})\n{'='*60}")
     health = post(f"{url}/health", {}) if False else json.loads(
         urllib.request.urlopen(f"{url}/health", timeout=10).read())
@@ -149,24 +151,46 @@ def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False) ->
         # /flush blocks server-side until compaction completes (container deadline
         # 1800s). The HTTP call must out-wait that, or it aborts mid-compaction —
         # 342 fragments at BATCH_SIZE=4 ≈ 12 min. 700s default was too short.
-        post(f"{url}/flush", {}, timeout=2000)
+        post(f"{url}/flush", {}, timeout=3300)
         print(f"  ingest+flush done ({time.monotonic()-t0:.0f}s, {fails} ingest failures)")
 
-    rows = []
-    ans_hits = store_hits = 0
-    for q in persona["eval_questions"]:
-        gold = q.get("answer") or ", ".join(q.get("keywords", []))
-        resp = post(f"{url}/answer", {"question": q["question"]})
-        ans, ctx = resp.get("answer", ""), resp.get("contexts", [])
-        a_ok, a_why = judge_answer(q["question"], gold, ans)
-        s_ok, _ = judge_storage(q["question"], gold, ctx)
-        ans_hits += a_ok
-        store_hits += s_ok
-        rows.append({"id": q["id"], "category": q["category"], "answer_ok": a_ok, "store_ok": s_ok,
-                     "answer": ans, "reason": a_why})
-        print(f"    {'✓' if a_ok else '✗'}ans {'✓' if s_ok else '✗'}store  {q['id']} ({q['category']})  {ans[:50]!r}")
+    if ingest_only:
+        # Phase A: stores are built; the answer/judge phase runs later under a
+        # different loaded model (--skip-ingest). No scoring here.
+        print("  ingest-only: store built, skipping answer/judge phase")
+        return {"name": name, "n": 0, "answer": 0, "storage": 0, "rows": []}
 
     n = len(persona["eval_questions"])
+
+    def score_one(q: dict) -> dict:
+        gold = q.get("answer") or ", ".join(q.get("keywords", []))
+        try:
+            resp = post(f"{url}/answer", {"question": q["question"]})
+            ans, ctx = resp.get("answer", ""), resp.get("contexts", [])
+            a_ok, a_why = judge_answer(q["question"], gold, ans)
+            s_ok, _ = judge_storage(q["question"], gold, ctx)
+        except Exception as exc:  # noqa: BLE001 — one bad question must not abort the system
+            ans, a_ok, s_ok, a_why = f"(error: {exc})", False, False, str(exc)
+        return {"id": q["id"], "category": q["category"], "answer_ok": bool(a_ok),
+                "store_ok": bool(s_ok), "answer": ans, "reason": a_why}
+
+    # Answer + judge questions concurrently. ornstein on one GPU still serialises
+    # somewhat, but LM Studio pipelines several in-flight requests, so a small
+    # worker pool gives a real wall-clock win over strict sequential scoring.
+    results_by_id: dict = {}
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+        futs = {ex.submit(score_one, q): q["id"] for q in persona["eval_questions"]}
+        for fut in concurrent.futures.as_completed(futs):
+            r = fut.result()
+            results_by_id[r["id"]] = r
+            done += 1
+            print(f"    [{done}/{n}] {'✓' if r['answer_ok'] else '✗'}ans "
+                  f"{'✓' if r['store_ok'] else '✗'}store  {r['id']} ({r['category']})  {r['answer'][:50]!r}")
+
+    rows = [results_by_id[q["id"]] for q in persona["eval_questions"]]
+    ans_hits = sum(r["answer_ok"] for r in rows)
+    store_hits = sum(r["store_ok"] for r in rows)
     print(f"  ANSWER {ans_hits}/{n}   STORAGE {store_hits}/{n}")
     return {"name": name, "n": n, "answer": ans_hits, "storage": store_hits, "rows": rows}
 
@@ -177,13 +201,23 @@ def main() -> None:
     ap.add_argument("--systems", required=True, help="name=url,name=url")
     ap.add_argument("--out", default="report_v2.md")
     ap.add_argument("--skip-ingest", action="store_true",
-                    help="score against the existing graph; skip wipe/ingest/flush")
+                    help="Phase B: score against the existing store; skip wipe/ingest/flush")
+    ap.add_argument("--ingest-only", action="store_true",
+                    help="Phase A: build stores (wipe/ingest/flush) then stop; no answering")
+    ap.add_argument("--answer-concurrency", type=int, default=1,
+                    help="Phase B: number of questions answered+judged concurrently")
     args = ap.parse_args()
 
     persona = json.loads(Path(args.persona).read_text())
     systems = [tuple(s.split("=", 1)) for s in args.systems.split(",")]
 
-    results = [run_system(name, url, persona, args.skip_ingest) for name, url in systems]
+    results = [run_system(name, url, persona, args.skip_ingest, args.ingest_only, args.answer_concurrency)
+               for name, url in systems]
+
+    if args.ingest_only:
+        print("\nPhase A complete: stores built for", ", ".join(n for n, _ in systems))
+        print("Swap the loaded model to the answerer, then re-run with --skip-ingest.")
+        return
 
     cats = []
     for q in persona["eval_questions"]:

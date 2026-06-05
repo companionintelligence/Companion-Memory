@@ -167,25 +167,37 @@ class HindsightBackend:
         self._bank = "bench_user_" + os.urandom(3).hex()
 
     def ingest(self, text: str, session_id: str) -> None:
-        self._client.retain(bank_id=self._bank, content=text, document_id=session_id, retain_async=False)
+        # ASYNC retain: enqueue fast and return, so the server can consolidate the
+        # backlog at HINDSIGHT_API_LLM_MAX_CONCURRENT (we run it at 4). A sync
+        # retain serialises one ~17s consolidation per call (the orchestrator
+        # ingests sequentially), wasting the server's concurrency.
+        self._client.retain(bank_id=self._bank, content=text, document_id=session_id, retain_async=True)
 
     def flush(self) -> None:
-        # let async consolidation settle
-        last, stable, deadline = -1, 0, time.monotonic() + 120
+        # Wait for the async consolidation backlog to fully drain. With async
+        # retain, recall result-count grows as consolidation proceeds; we treat
+        # it as drained when the count stops growing for a sustained window.
+        # Generous deadline: 490 facts / 4 concurrent * ~17s ≈ 35 min worst case.
+        last, stable, started = -1, 0, time.monotonic()
+        deadline = started + 2700  # 45 min
+        STABLE_NEEDED = 5          # count unchanged across 5 polls (~50s) = drained
         while time.monotonic() < deadline:
             try:
                 r = self._client.recall(bank_id=self._bank, query="what do you know about the user",
                                         max_tokens=4096, budget="high")
                 n = len(getattr(r, "results", []) or [])
-            except Exception:
+            except Exception:  # noqa: BLE001 — transient during heavy consolidation
                 n = last
-            if n == last:
+            # Only allow "drained" once we've actually seen memories form.
+            if n == last and n > 0:
                 stable += 1
-                if stable >= 2:
-                    return
+                if stable >= STABLE_NEEDED:
+                    break
             else:
-                stable, last = 0, n
-            time.sleep(5)
+                stable = 0 if n != last else stable
+                last = n
+            time.sleep(10)
+        time.sleep(10)  # final settle
 
     def retrieve(self, query: str) -> list[str]:
         r = self._client.recall(bank_id=self._bank, query=query, max_tokens=4096, budget="high")

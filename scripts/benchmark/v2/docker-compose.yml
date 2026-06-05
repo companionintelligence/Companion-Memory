@@ -14,7 +14,8 @@ services:
     environment:
       SYSTEM: naive
       LLM_URL: http://192.168.0.203:1234
-      LLM_MODEL: gemma-4-31b-it-abliterated
+      LLM_MODEL: gemma-4-31b-it-abliterated   # internal extractor (Phase A, gemma loaded)
+      ANSWERER_MODEL: ornstein-3.6-27b        # shared answerer (Phase B, ornstein loaded)
       OLLAMA_HOST: http://host.docker.internal:11434
       EMBED_MODEL: nomic-embed-text
     ports: ["9101:8080"]
@@ -25,7 +26,8 @@ services:
     environment:
       SYSTEM: mem0
       LLM_URL: http://192.168.0.203:1234
-      LLM_MODEL: gemma-4-31b-it-abliterated
+      LLM_MODEL: gemma-4-31b-it-abliterated   # mem0 internal extractor (Phase A)
+      ANSWERER_MODEL: ornstein-3.6-27b        # shared answerer (Phase B)
       LMS_TARGET: http://192.168.0.203:1234
       MEM0_LLM_BASE_URL: http://localhost:1235/v1
       OLLAMA_HOST: http://host.docker.internal:11434
@@ -38,7 +40,8 @@ services:
     environment:
       SYSTEM: hindsight
       LLM_URL: http://192.168.0.203:1234
-      LLM_MODEL: gemma-4-31b-it-abliterated
+      LLM_MODEL: gemma-4-31b-it-abliterated   # (hindsight's extractor is server-side)
+      ANSWERER_MODEL: ornstein-3.6-27b        # shared answerer (Phase B)
       HINDSIGHT_BASE_URL: http://host.docker.internal:8888
       OLLAMA_HOST: http://host.docker.internal:11434
       EMBED_MODEL: nomic-embed-text
@@ -50,7 +53,8 @@ services:
     environment:
       SYSTEM: ci_server
       LLM_URL: http://192.168.0.203:1234
-      LLM_MODEL: ornstein-3.6-27b
+      LLM_MODEL: gemma-4-31b-it-abliterated   # (ci_server's extractor is the host API via .env)
+      ANSWERER_MODEL: ornstein-3.6-27b        # shared answerer (Phase B)
       CI_SERVER_URL: http://host.docker.internal:8642
       CI_SERVER_TOKEN: b32b1f4623ace2526a358b2a3ca0b9c44749af96b4f83b56ece3e495ccd956aa
       OLLAMA_HOST: http://host.docker.internal:11434
