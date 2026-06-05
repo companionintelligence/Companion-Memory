@@ -138,8 +138,6 @@ export class CloudOAuthProxyService {
       throw new Error('HUB_API_KEY is not configured');
     }
 
-    console.log('refreshing token', proxyRefreshToken);
-    console.log('authHeader', this.authorizationHeader);
     const response = await fetch(`${this.baseUrl}/api/oauth/token/refresh`, {
       method: 'POST',
       headers: {

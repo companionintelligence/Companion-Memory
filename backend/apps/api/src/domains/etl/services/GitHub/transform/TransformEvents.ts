@@ -106,7 +106,6 @@ export class GitHubEventsTransformService {
 
         case 'CreateEvent': {
           const thisEvent = event as GithubCreateEvent;
-          console.log('CreateEvent to parse', thisEvent);
           if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
             await this.eventService.create(
               { userId },
@@ -275,7 +274,6 @@ export class GitHubEventsTransformService {
             const actionCapitalized =
               String(thisEvent.payload.action).charAt(0).toUpperCase() +
               String(thisEvent.payload.action).slice(1);
-            console.log('PR payload', thisEvent.payload.pull_request);
             await this.eventService.create(
               { userId },
               {
@@ -334,7 +332,6 @@ export class GitHubEventsTransformService {
           break;
 
         case 'PushEvent': {
-          console.log('parsing PushEvent');
           const thisEvent = event as GithubPushEvent;
           if (existingEvent.length === 0) {
             await this.eventService.create(

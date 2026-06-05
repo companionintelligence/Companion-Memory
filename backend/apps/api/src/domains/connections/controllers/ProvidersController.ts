@@ -135,8 +135,6 @@ export class ProvidersController {
       scopes.length > 0 ? scopes.split(' ') : undefined,
     );
 
-    console.log('authorization_url', authorization_url);
-
     return { authorizationUrl: authorization_url };
   }
 }

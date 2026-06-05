@@ -180,8 +180,6 @@ export abstract class BaseOAuth2Client extends BaseClient {
 
     const tokenExpiry = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : null;
 
-    console.log('new tokenData', tokenData);
-
     return {
       accessToken: tokenData.access_token || null,
       refreshToken: tokenData.refresh_token || null,

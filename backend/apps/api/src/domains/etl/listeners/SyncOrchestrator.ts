@@ -226,8 +226,6 @@ export class SyncOrchestrator {
       },
     );
 
-    console.log('pendingSyncJobs', pendingSyncJobs);
-
     const inProgressSyncJobs = await this.connectionSyncJobService.search(
       { userId: SYSTEM_USER },
       {
