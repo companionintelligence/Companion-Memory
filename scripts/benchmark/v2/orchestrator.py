@@ -87,8 +87,23 @@ _STORAGE_JUDGE = (
 )
 
 
+_EXISTENCE_JUDGE = (
+    "You grade an existence (yes/no) question about ONE person's memory. You are "
+    "given the QUESTION, the GROUND TRUTH (whether the thing exists, with the correct "
+    "detail), and the assistant's ANSWER. Mark correct=true ONLY if the ANSWER's "
+    "yes/no determination matches the ground truth — and for a true 'yes' it must "
+    "name the correct thing. A confident 'yes' to something that does NOT exist (a "
+    "hallucination) is incorrect. 'I don't know', or hedging that lands on the wrong "
+    "side, is incorrect. 'the user'/'I'/the subject's name all refer to one person."
+)
+
+
 def judge_answer(q: str, gold: str, ans: str) -> tuple[bool, str]:
     return _judge(_ANSWER_JUDGE, f"QUESTION: {q}\nGOLD ANSWER: {gold}\nANSWER: {ans}")
+
+
+def judge_existence(q: str, gold: str, ans: str) -> tuple[bool, str]:
+    return _judge(_EXISTENCE_JUDGE, f"QUESTION: {q}\nGROUND TRUTH: {gold}\nANSWER: {ans}")
 
 
 def judge_storage(q: str, gold: str, contexts: list[str]) -> tuple[bool, str]:
@@ -167,16 +182,41 @@ def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False, in
         try:
             resp = post(f"{url}/answer", {"question": q["question"]})
             ans, ctx = resp.get("answer", ""), resp.get("contexts", [])
-            a_ok, a_why = judge_answer(q["question"], gold, ans)
-            s_ok, _ = judge_storage(q["question"], gold, ctx)
+            cat = q.get("category")
+            if cat == "enumeration":
+                # Deterministic SET RECALL over the canonical gold members — the
+                # graph's claimed strength is returning the COMPLETE set. answer
+                # recall = members named; storage recall = members surfaced in
+                # the raw retrieved context. No LLM judge (reproducible, unspinnable).
+                members = [m.lower() for m in q.get("keywords", [])]
+                al = ans.lower()
+                cl = " ".join(ctx).lower()
+                hit_a = sum(1 for m in members if m in al)
+                hit_s = sum(1 for m in members if m in cl)
+                a_ok = hit_a / len(members) if members else 0.0
+                s_ok = hit_s / len(members) if members else 0.0
+                a_why = f"set-recall {hit_a}/{len(members)}"
+            elif cat in ("absence", "presence-control"):
+                # Existence question: did the answer's yes/no match the truth
+                # (no hallucinated "yes" for things that don't exist)? Storage
+                # isn't separately meaningful here, so mirror the answer verdict.
+                ok, a_why = judge_existence(q["question"], gold, ans)
+                a_ok = s_ok = float(bool(ok))
+            else:
+                a_ok, a_why = judge_answer(q["question"], gold, ans)
+                s_ok, _ = judge_storage(q["question"], gold, ctx)
+                a_ok, s_ok = float(bool(a_ok)), float(bool(s_ok))
         except Exception as exc:  # noqa: BLE001 — one bad question must not abort the system
-            ans, a_ok, s_ok, a_why = f"(error: {exc})", False, False, str(exc)
-        return {"id": q["id"], "category": q["category"], "answer_ok": bool(a_ok),
-                "store_ok": bool(s_ok), "answer": ans, "reason": a_why}
+            ans, a_ok, s_ok, a_why = f"(error: {exc})", 0.0, 0.0, str(exc)
+        return {"id": q["id"], "category": q["category"], "answer_ok": a_ok,
+                "store_ok": s_ok, "answer": ans, "reason": a_why}
 
     # Answer + judge questions concurrently. ornstein on one GPU still serialises
     # somewhat, but LM Studio pipelines several in-flight requests, so a small
     # worker pool gives a real wall-clock win over strict sequential scoring.
+    def _mk(v: float) -> str:
+        return "✓" if v >= 0.999 else ("~" if v > 0 else "✗")
+
     results_by_id: dict = {}
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
@@ -185,13 +225,13 @@ def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False, in
             r = fut.result()
             results_by_id[r["id"]] = r
             done += 1
-            print(f"    [{done}/{n}] {'✓' if r['answer_ok'] else '✗'}ans "
-                  f"{'✓' if r['store_ok'] else '✗'}store  {r['id']} ({r['category']})  {r['answer'][:50]!r}")
+            print(f"    [{done}/{n}] {_mk(r['answer_ok'])}ans "
+                  f"{_mk(r['store_ok'])}store  {r['id']} ({r['category']})  {r['answer'][:50]!r}")
 
     rows = [results_by_id[q["id"]] for q in persona["eval_questions"]]
     ans_hits = sum(r["answer_ok"] for r in rows)
     store_hits = sum(r["store_ok"] for r in rows)
-    print(f"  ANSWER {ans_hits}/{n}   STORAGE {store_hits}/{n}")
+    print(f"  ANSWER {ans_hits:.1f}/{n}   STORAGE {store_hits:.1f}/{n}")
     return {"name": name, "n": n, "answer": ans_hits, "storage": store_hits, "rows": rows}
 
 
@@ -230,10 +270,12 @@ def main() -> None:
          "| System | Answer | Storage | " + " | ".join(cats) + " |",
          "|" + "|".join(["---"] * (3 + len(cats))) + "|"]
     for r in results:
-        per = {c: sum(1 for x in r["rows"] if x["category"] == c and x["answer_ok"]) for c in cats}
+        # answer_ok is a score in [0,1] (binary for judged categories, set-recall
+        # for enumeration), so SUM the scores rather than count truthy.
+        per = {c: sum(x["answer_ok"] for x in r["rows"] if x["category"] == c) for c in cats}
         tot = {c: sum(1 for x in r["rows"] if x["category"] == c) for c in cats}
-        cells = " | ".join(f"{per[c]}/{tot[c]}" for c in cats)
-        L.append(f"| {r['name']} | **{r['answer']}/{r['n']}** | {r['storage']}/{r['n']} | {cells} |")
+        cells = " | ".join(f"{per[c]:.1f}/{tot[c]}" for c in cats)
+        L.append(f"| {r['name']} | **{r['answer']:.1f}/{r['n']}** | {r['storage']:.1f}/{r['n']} | {cells} |")
     report = "\n".join(L) + "\n"
     Path(args.out).write_text(report, encoding="utf-8")
     print("\n" + report)
