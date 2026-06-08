@@ -346,6 +346,63 @@ class OpenVikingBackend:
         return out
 
 
+# --------------------------------------------------------------------------- #
+# Holographic — NousResearch Hermes built-in memory provider, vendored from
+# hermes-agent/plugins/memory/holographic (store.py + retrieval.py +
+# holographic.py; the Hermes-runtime __init__.py glue is replaced by this
+# adapter). A LOCAL SQLite fact store: FTS5 keyword + Jaccard + HRR
+# (holographic reduced representations) retrieval, with trust scoring. NO LLM
+# and NO embeddings — ingest is instant; retrieval is keyword/algebraic, so it
+# is sensitive to query↔fact term overlap (a real characteristic, not a bug).
+# --------------------------------------------------------------------------- #
+
+class HolographicBackend:
+    name = "Holographic (SQLite FTS5+HRR)"
+
+    def __init__(self) -> None:
+        from _holographic.store import MemoryStore
+        from _holographic.retrieval import FactRetriever
+        self._MemoryStore = MemoryStore
+        self._FactRetriever = FactRetriever
+        self.reset()
+
+    def reset(self) -> None:
+        import tempfile
+        self._db = tempfile.mktemp(suffix=".db", dir="/tmp")
+        self._store = self._MemoryStore(db_path=self._db)
+        self._retriever = self._FactRetriever(self._store)  # default fts/jaccard/hrr weights + hrr_dim=1024
+
+    def ingest(self, text: str, session_id: str) -> None:
+        # No LLM/embeddings — a plain fact insert + FTS5/HRR index update.
+        self._store.add_fact(text, category="general")
+
+    def flush(self) -> None:
+        pass  # FTS5/HRR index synchronously on add; nothing async to settle
+
+    # FTS5 MATCH treats space-separated terms as implicit AND, so a raw
+    # natural-language question ("what is the name of Max's cat") requires one
+    # fact containing ALL those words → it AND-misses → 0 results. Holographic
+    # has no semantic embedder to handle raw questions, so (like our naive
+    # baseline and ci_server's boosted search, which OR their keyword terms) we
+    # send an OR-of-keywords query; HRR + Jaccard + trust then re-rank the
+    # candidates. Without this the keyword store returns ~nothing.
+    _STOP = {"what", "who", "whom", "whose", "where", "when", "which", "why", "how",
+             "does", "do", "did", "is", "are", "was", "were", "be", "the", "a", "an",
+             "of", "to", "for", "in", "on", "at", "and", "or", "with", "have", "has",
+             "had", "his", "her", "their", "they", "you", "your"}
+
+    def _fts_or_query(self, query: str) -> str:
+        import re
+        toks = [t for t in re.findall(r"[A-Za-z0-9]+", query.lower())
+                if len(t) > 1 and t not in self._STOP]
+        return " OR ".join(toks) if toks else query
+
+    def retrieve(self, query: str) -> list[str]:
+        # min_trust=0.0 — we give no feedback, so don't trust-filter.
+        res = self._retriever.search(self._fts_or_query(query), min_trust=0.0, limit=TOP_K)
+        return [r.get("content", "") for r in res if r.get("content")]
+
+
 def make_backend():
     system = os.environ.get("SYSTEM", "naive").lower()
     return {
@@ -354,4 +411,5 @@ def make_backend():
         "hindsight": HindsightBackend,
         "ci_server": CIServerBackend,
         "openviking": OpenVikingBackend,
+        "holographic": HolographicBackend,
     }[system]()

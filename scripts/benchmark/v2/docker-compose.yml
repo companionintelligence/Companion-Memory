@@ -75,3 +75,14 @@ services:
       EMBED_MODEL: nomic-embed-text
     ports: ["9105:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"]
+
+  holographic:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: holographic            # vendored Hermes plugin — local SQLite, no LLM/embeddings
+      ANSWERER_MODEL: ornstein-3.6-27b   # shared answerer (Phase B)
+      LLM_URL: http://192.168.0.203:1234
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9106:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]

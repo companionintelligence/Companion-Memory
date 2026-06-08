@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     fastapi==0.115.* "uvicorn[standard]==0.32.*" pydantic==2.* \
-    "mem0ai==2.0.4" chromadb ollama "hindsight-client>=0.7,<1"
+    "mem0ai==2.0.4" chromadb ollama "hindsight-client>=0.7,<1" numpy
 
 COPY app/ /app/
 

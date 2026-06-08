@@ -15,20 +15,26 @@ OUT = os.path.join(os.path.dirname(__file__), "charts")
 os.makedirs(OUT, exist_ok=True)
 
 # ---- real measured data ---------------------------------------------------- #
-SYS = ["ci_server", "mem0", "naive", "hindsight", "openviking"]
+SYS = ["ci_server", "mem0", "naive", "hindsight", "openviking", "holographic"]
 COLOR = {"ci_server": "#1b6ca8", "mem0": "#9aa0a6", "naive": "#9aa0a6", "hindsight": "#c0392b",
-         "openviking": "#d9822b"}
-LATENCY = {"ci_server": 0.08, "mem0": 0.12, "naive": 0.06, "hindsight": 1.16, "openviking": 0.03}   # s/query (median warm)
-STRUCT_Q = {"ci_server": 73.7, "mem0": 64.0, "naive": 63.0, "hindsight": 26.3, "openviking": 32.7}  # (temporal20+enum10)/30 %
-COMPLETE = {"ci_server": 73.0, "mem0": 70.8, "naive": 65.4, "hindsight": 27.6, "openviking": 38.9}  # struct storage /37 %
+         "openviking": "#d9822b", "holographic": "#2e8b57"}
+LATENCY = {"ci_server": 0.08, "mem0": 0.12, "naive": 0.06, "hindsight": 1.16, "openviking": 0.03,
+           "holographic": 0.005}   # s/query (median warm)
+STRUCT_Q = {"ci_server": 73.7, "mem0": 64.0, "naive": 63.0, "hindsight": 26.3, "openviking": 32.7,
+            "holographic": 25.0}   # (temporal20+enum10)/30 %
+COMPLETE = {"ci_server": 73.0, "mem0": 70.8, "naive": 65.4, "hindsight": 27.6, "openviking": 38.9,
+            "holographic": 31.1}   # struct storage /37 %
 
-CAP = {  # radar axes, all as %; Query speed = (fastest latency / latency) * 100  (openviking fastest)
-    "Temporal\n(current vs past)":      {"ci_server": 75, "mem0": 65, "naive": 70, "hindsight": 25, "openviking": 35},
-    "Enumeration\n(complete sets)":     {"ci_server": 71, "mem0": 62, "naive": 49, "hindsight": 29, "openviking": 28},
-    "Retrieval\ncompleteness":          {"ci_server": 73, "mem0": 71, "naive": 65, "hindsight": 28, "openviking": 39},
-    "Decisiveness\n(present facts)":     {"ci_server": 100, "mem0": 57, "naive": 71, "hindsight": 57, "openviking": 43},
-    "Query speed":                      {"ci_server": 38, "mem0": 25, "naive": 50, "hindsight": 3, "openviking": 100},
+CAP = {  # radar axes, all as %
+    "Temporal\n(current vs past)":      {"ci_server": 75, "mem0": 65, "naive": 70, "hindsight": 25, "openviking": 35, "holographic": 35},
+    "Enumeration\n(complete sets)":     {"ci_server": 71, "mem0": 62, "naive": 49, "hindsight": 29, "openviking": 28, "holographic": 5},
+    "Retrieval\ncompleteness":          {"ci_server": 73, "mem0": 71, "naive": 65, "hindsight": 28, "openviking": 39, "holographic": 31},
+    "Decisiveness\n(present facts)":     {"ci_server": 100, "mem0": 57, "naive": 71, "hindsight": 57, "openviking": 43, "holographic": 86},
 }
+# Query speed: log-scaled from latency so all sub-150ms systems cluster high and
+# only the slow outlier (hindsight) drops — fairer than a raw ratio that one
+# very-fast system would dominate.
+CAP["Query speed"] = {s: max(5, min(100, round(100 - 28 * math.log10(LATENCY[s] * 1000)))) for s in SYS}
 
 FOOT = ("100Q corpus (90 facts + 400 distractors) · ingest gemma-4-31b · answerer+judge ornstein-3.6-27b · "
         "query latency = median warm /retrieve")
@@ -49,7 +55,7 @@ def _scatter(yvals, ylabel, title, fname, annotate_better=True):
     ax.set_xscale("log")
     ax.set_xlabel("Query latency  (s/query, log — left is faster)", fontsize=11)
     ax.set_ylabel(ylabel, fontsize=11)
-    ax.set_xlim(0.022, 2.4)   # small latency (fast) on the LEFT (incl. openviking ~30ms)
+    ax.set_xlim(0.003, 2.6)   # small latency (fast) on the LEFT (incl. holographic ~5ms)
     ax.set_ylim(15, 90)
     ax.grid(True, which="both", alpha=0.25)
     ax.set_title(title, fontsize=13, fontweight="bold", pad=14)
@@ -70,7 +76,7 @@ def chart_radar():
     N = len(axes)
     ang = [n / N * 2 * math.pi for n in range(N)] + [0.0]
     fig, ax = plt.subplots(figsize=(12, 10.5), subplot_kw=dict(polar=True))
-    order = ["hindsight", "openviking", "naive", "mem0", "ci_server"]  # ci_server last = on top
+    order = ["hindsight", "openviking", "holographic", "naive", "mem0", "ci_server"]  # ci_server last = on top
     for s in order:
         vals = [CAP[a][s] for a in axes] + [CAP[axes[0]][s]]
         big = s == "ci_server"
@@ -94,9 +100,10 @@ def chart_radar():
 
 def chart_concurrency():
     fig, ax = plt.subplots(figsize=(8, 5))
-    order = ["openviking", "naive", "ci_server", "mem0", "hindsight"]
+    order = ["holographic", "openviking", "naive", "ci_server", "mem0", "hindsight"]
     lat = [LATENCY[s] * 1000 for s in order]
-    safe = {"naive": True, "ci_server": True, "mem0": True, "hindsight": False, "openviking": True}
+    safe = {"naive": True, "ci_server": True, "mem0": True, "hindsight": False, "openviking": True,
+            "holographic": True}
     bars = ax.bar(order, lat, color=["#2e8b57" if safe[s] else "#c0392b" for s in order],
                   edgecolor="black", linewidth=0.8)
     ax.set_yscale("log")
@@ -107,7 +114,7 @@ def chart_concurrency():
         ax.annotate(f"{b.get_height():.0f} ms\n{tag}", (b.get_x() + b.get_width()/2, b.get_height()),
                     xytext=(0, 6), textcoords="offset points", ha="center", fontsize=9,
                     fontweight="bold" if s == "ci_server" else "normal")
-    ax.set_ylim(40, 4000)
+    ax.set_ylim(3, 4000)
     fig.text(0.5, 0.005, FOOT, ha="center", fontsize=6.6, color="#777")
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     p = os.path.join(OUT, "chart4_latency_concurrency.png")
