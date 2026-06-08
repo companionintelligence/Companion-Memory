@@ -1,0 +1,145 @@
+
+============================================================
+  naive  (http://localhost:9101)
+============================================================
+  health: {'status': 'ok', 'system': 'Naive RAG (vector)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/37] ✓ans ✓store  s01 (temporal-update)  'Max currently lives in Denver.'
+    [2/37] ✓ans ✓store  s04 (temporal-update)  'Max worked for Northwind Logistics before his curr'
+    [3/37] ✓ans ✓store  s03 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [4/37] ✗ans ✗store  s02 (temporal-update)  "I don't know."
+    [5/37] ✓ans ✓store  s05 (temporal-update)  'Max currently uses a Pixel phone.'
+    [6/37] ✓ans ✓store  s06 (temporal-update)  'Max used an iPhone before his current Pixel.'
+    [7/37] ✗ans ✗store  s07 (temporal-update)  "I don't know."
+    [8/37] ✗ans ✗store  s08 (temporal-update)  "I don't know"
+    [9/37] ✓ans ✗store  s10 (temporal-update)  'Max lived in an apartment before.'
+    [10/37] ✓ans ✗store  s09 (temporal-update)  'Max currently lives in a small house.'
+    [11/37] ✓ans ✓store  s12 (temporal-update)  'Max ate meat for decades before going vegetarian.'
+    [12/37] ✗ans ✗store  s11 (temporal-update)  "I don't know."
+    [13/37] ✓ans ✓store  s13 (temporal-update)  'Max mainly uses Rust now.'
+    [14/37] ✓ans ✓store  s14 (temporal-update)  'Max mainly used C++ before switching to Rust.'
+    [15/37] ✓ans ✓store  s15 (temporal-update)  'Max currently trains for marathons.'
+    [16/37] ✓ans ✓store  s16 (temporal-update)  'Max played soccer before switching to marathon tra'
+    [17/37] ✗ans ✗store  s17 (temporal-update)  "I don't know."
+    [18/37] ✓ans ✓store  s18 (temporal-update)  'Max got LASIK last spring.'
+    [19/37] ✓ans ✓store  s20 (temporal-update)  'Max currently leads the perception team at Cobalt '
+    [20/37] ✗ans ✗store  s19 (temporal-update)  "I don't know."
+    [21/37] ~ans ~store  s21 (enumeration)  "Based on the memories, Max's family members are: h"
+    [22/37] ✓ans ✓store  s22 (enumeration)  'Max has worked at Northwind Logistics and Cobalt R'
+    [23/37] ✗ans ✗store  s23 (enumeration)  "The musical instruments played by people in Max's "
+    [24/37] ~ans ~store  s24 (enumeration)  "Max's friends are Lena, Marco, and Priscilla."
+    [25/37] ✓ans ✓store  s25 (enumeration)  'Max has lived in Portland and Denver.'
+    [26/37] ✗ans ~store  s26 (enumeration)  "I don't know - the memory doesn't mention anyone n"
+    [27/37] ✗ans ✗store  s27 (enumeration)  'Max shoots photos with a Fujifilm X100V, has been '
+    [28/37] ~ans ~store  s29 (enumeration)  'Based on the memory, Max works directly with Imani'
+    [29/37] ✓ans ✓store  s30 (enumeration)  'Based on the memory, Max is learning Japanese.'
+    [30/37] ~ans ✓store  s28 (enumeration)  "Based on the memory entries, Max's relatives live "
+    [31/37] ✓ans ✓store  s31 (aggregation)  'Based on the memory entries, Max has lived in 2 ci'
+    [32/37] ✓ans ✓store  s32 (aggregation)  'Max has worked for 2 companies.'
+    [33/37] ✓ans ✓store  s33 (aggregation)  'Based on the memory, Anita has 2 children: Mira an'
+    [34/37] ✓ans ✓store  s34 (aggregation)  'Based on the memory, Max has one sibling: his sist'
+    [35/37] ✓ans ✓store  s35 (aggregation)  "Based on the memory entries, Raj (the narrator's b"
+    [36/37] ✗ans ✗store  s36 (aggregation)  "Looking at all the people in Max's life mentioned "
+    [37/37] ✓ans ✓store  s37 (aggregation)  "Anita, Max's sister, is the architect in his famil"
+  ANSWER 24.9/37   STORAGE 24.2/37
+
+============================================================
+  mem0  (http://localhost:9102)
+============================================================
+  health: {'status': 'ok', 'system': 'Mem0 (vector)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/37] ✓ans ✓store  s01 (temporal-update)  'Max currently lives in Denver.'
+    [2/37] ✓ans ✓store  s02 (temporal-update)  'Max lived in Portland before his current city.'
+    [3/37] ✓ans ✓store  s04 (temporal-update)  'Max previously worked at Northwind Logistics befor'
+    [4/37] ✓ans ✓store  s03 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [5/37] ✓ans ✓store  s05 (temporal-update)  'Max currently uses a Google Pixel phone.'
+    [6/37] ✓ans ✓store  s06 (temporal-update)  'Max used an iPhone before switching to his current'
+    [7/37] ✗ans ✗store  s07 (temporal-update)  "I don't know."
+    [8/37] ✗ans ✗store  s08 (temporal-update)  "I don't know."
+    [9/37] ✗ans ✓store  s10 (temporal-update)  "I don't know."
+    [10/37] ✓ans ✓store  s09 (temporal-update)  'Max currently lives in a small house.'
+    [11/37] ✓ans ✓store  s12 (temporal-update)  'Based on the memory, Max ate meat for decades befo'
+    [12/37] ✗ans ✗store  s11 (temporal-update)  "I don't know."
+    [13/37] ✓ans ✓store  s13 (temporal-update)  'Max mainly uses Rust now.'
+    [14/37] ✓ans ✓store  s14 (temporal-update)  'Max mainly used C++ before switching to Rust.'
+    [15/37] ✓ans ✓store  s16 (temporal-update)  'Max played soccer before switching to marathon tra'
+    [16/37] ✗ans ✗store  s15 (temporal-update)  'Max currently trains by learning Japanese in prepa'
+    [17/37] ✗ans ✗store  s17 (temporal-update)  "I don't know."
+    [18/37] ✓ans ✓store  s18 (temporal-update)  'Max had LASIK eye surgery in the spring of 2026.'
+    [19/37] ✓ans ✓store  s20 (temporal-update)  'Max currently leads the perception team at Cobalt '
+    [20/37] ✗ans ✗store  s19 (temporal-update)  'Max Turnquist works as a robotics engineer.'
+    [21/37] ~ans ~store  s21 (enumeration)  "Based on the memory, Max's family members are: Dee"
+    [22/37] ✓ans ✓store  s22 (enumeration)  'Max has worked at Northwind Logistics and Cobalt R'
+    [23/37] ~ans ~store  s23 (enumeration)  "The musical instruments played by people in Max's "
+    [24/37] ~ans ~store  s24 (enumeration)  "Based on the memory entries, Max's friends are Len"
+    [25/37] ✓ans ✓store  s25 (enumeration)  'Max has lived in Portland and Denver.'
+    [26/37] ~ans ~store  s26 (enumeration)  "Max's blood relatives are his parents Deepak and S"
+    [27/37] ✗ans ✗store  s27 (enumeration)  'Max enjoys playing the board game Catan enough to '
+    [28/37] ✓ans ✓store  s29 (enumeration)  'Max works directly with their teammate Imani and t'
+    [29/37] ✗ans ✗store  s30 (enumeration)  'Max has studied French, Portuguese, Mandarin, Ital'
+    [30/37] ✓ans ✓store  s28 (enumeration)  "Based on the memory entries, Max's relatives live "
+    [31/37] ✓ans ✓store  s31 (aggregation)  'Max has lived in 2 cities: Portland and Denver.'
+    [32/37] ✓ans ✓store  s32 (aggregation)  'Max has worked for 2 companies: Northwind Logistic'
+    [33/37] ✓ans ✓store  s33 (aggregation)  'Based on the memory entries, Anita has 2 children:'
+    [34/37] ✓ans ✓store  s34 (aggregation)  'Based on the memory entries, Max (the user) has 1 '
+    [35/37] ✓ans ✓store  s35 (aggregation)  "Max's brother-in-law Raj works in medicine as a ca"
+    [36/37] ✓ans ✓store  s37 (aggregation)  "Anita, Max's sister, is the architect."
+    [37/37] ✗ans ✗store  s36 (aggregation)  'There are 7 different instruments played by people'
+  ANSWER 25.2/37   STORAGE 26.2/37
+
+============================================================
+  ci_server  (http://localhost:9104)
+============================================================
+  health: {'status': 'ok', 'system': 'CI-Server (graph)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/37] ✓ans ✓store  s01 (temporal-update)  'Max currently lives in Denver.'
+    [2/37] ✓ans ✓store  s04 (temporal-update)  'Max worked for Northwind Logistics before his curr'
+    [3/37] ✓ans ✓store  s02 (temporal-update)  'Portland'
+    [4/37] ✓ans ✓store  s03 (temporal-update)  'Max currently works for Cobalt Robotics.'
+    [5/37] ✗ans ✗store  s06 (temporal-update)  "I don't know."
+    [6/37] ✓ans ✓store  s07 (temporal-update)  'Max currently drives a Subaru Outback.'
+    [7/37] ✗ans ✗store  s05 (temporal-update)  "I don't know"
+    [8/37] ✓ans ✓store  s08 (temporal-update)  'Max drove a Civic before his current car.'
+    [9/37] ✓ans ✓store  s09 (temporal-update)  'Max currently lives in a small house.'
+    [10/37] ✓ans ✓store  s11 (temporal-update)  "Based on the memory, Max's current diet is vegetar"
+    [11/37] ✗ans ✗store  s10 (temporal-update)  "I don't know."
+    [12/37] ✗ans ✗store  s12 (temporal-update)  "I don't know."
+    [13/37] ✓ans ✓store  s13 (temporal-update)  'Based on the memory, Max mainly uses Rust now, as '
+    [14/37] ✓ans ✓store  s14 (temporal-update)  'C++ was the programming language Max mainly used b'
+    [15/37] ✓ans ✓store  s15 (temporal-update)  'Max currently trains for marathons.'
+    [16/37] ✓ans ✓store  s16 (temporal-update)  'Max played soccer before switching to marathon tra'
+    [17/37] ✓ans ✓store  s17 (temporal-update)  'Max is engaged to Sam.'
+    [18/37] ✗ans ✗store  s18 (temporal-update)  "I don't know."
+    [19/37] ✓ans ✓store  s20 (temporal-update)  'Max currently leads the perception team at Cobalt '
+    [20/37] ~ans ~store  s21 (enumeration)  "Based on the memory entries, Max's family members "
+    [21/37] ✓ans ✓store  s19 (temporal-update)  "Max's current job title is senior engineer."
+    [22/37] ✓ans ✓store  s22 (enumeration)  'Based on the memory, Max has worked for Umbrella A'
+    [23/37] ✗ans ✓store  s23 (enumeration)  "The musical instruments played by people in Max's "
+    [24/37] ✓ans ✓store  s25 (enumeration)  'Max has lived in Portland and Denver.'
+    [25/37] ✓ans ✓store  s24 (enumeration)  "Max's friends are Lena, Priscilla, Yusuf, Marco, T"
+    [26/37] ~ans ~store  s26 (enumeration)  "Max's blood relatives are Ravi (cousin), Bashir (u"
+    [27/37] ~ans ✓store  s28 (enumeration)  "Max's relatives live in Portland and San Diego."
+    [28/37] ✓ans ✓store  s27 (enumeration)  "Max's hobbies and activities include climbing at M"
+    [29/37] ✓ans ✓store  s29 (enumeration)  'Max works directly with Priyanka, Imani, Dan, Olu,'
+    [30/37] ✓ans ✓store  s30 (enumeration)  'Based on the memory, Max has studied or is learnin'
+    [31/37] ✗ans ✗store  s31 (aggregation)  'Based on the memory provided, Max has lived in 1 c'
+    [32/37] ✗ans ✓store  s32 (aggregation)  'Based on the memory entries, Max has worked for 3 '
+    [33/37] ✓ans ✓store  s34 (aggregation)  'Based on the memory, Max has 1 sibling - Anita is '
+    [34/37] ✗ans ✓store  s33 (aggregation)  'Based on the memory, Anita has at least two childr'
+    [35/37] ✓ans ✗store  s35 (aggregation)  'Raj works in medicine at hospitals.'
+    [36/37] ✗ans ✗store  s37 (aggregation)  "I don't know which member of Max's family is an ar"
+    [37/37] ✗ans ✗store  s36 (aggregation)  "There are 8 instruments played by people in Max's "
+  ANSWER 24.1/37   STORAGE 27.0/37
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 37 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | temporal-update | enumeration | aggregation |
+|---|---|---|---|---|---|
+| naive | **24.9/37** | 24.2/37 | 14.0/20 | 4.9/10 | 6.0/7 |
+| mem0 | **25.2/37** | 26.2/37 | 13.0/20 | 6.2/10 | 6.0/7 |
+| ci_server | **24.1/37** | 27.0/37 | 15.0/20 | 7.1/10 | 2.0/7 |
+

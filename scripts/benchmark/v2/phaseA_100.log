@@ -1,0 +1,36 @@
+
+============================================================
+  naive  (http://localhost:9101)
+============================================================
+  health: {'status': 'ok', 'system': 'Naive RAG (vector)'}
+  ingesting 490 statements…
+  ingest+flush done (16s, 0 ingest failures)
+  ingest-only: store built, skipping answer/judge phase
+
+============================================================
+  hindsight  (http://localhost:9103)
+============================================================
+  health: {'status': 'ok', 'system': 'Hindsight (retain/recall)'}
+  ingesting 490 statements…
+  ingest+flush done (2104s, 0 ingest failures)
+  ingest-only: store built, skipping answer/judge phase
+
+============================================================
+  mem0  (http://localhost:9102)
+============================================================
+  health: {'status': 'ok', 'system': 'Mem0 (vector)'}
+  ingesting 490 statements…
+  ingest+flush done (876s, 0 ingest failures)
+  ingest-only: store built, skipping answer/judge phase
+
+============================================================
+  ci_server  (http://localhost:9104)
+============================================================
+  health: {'status': 'ok', 'system': 'CI-Server (graph)'}
+  CI-Server wipe: wiped 182 entities (canonical preserved)
+  ingesting 490 statements…
+  ingest+flush done (970s, 0 ingest failures)
+  ingest-only: store built, skipping answer/judge phase
+
+Phase A complete: stores built for naive, hindsight, mem0, ci_server
+Swap the loaded model to the answerer, then re-run with --skip-ingest.

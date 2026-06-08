@@ -1,0 +1,68 @@
+
+============================================================
+  ci_server  (http://localhost:9104)
+============================================================
+  health: {'status': 'ok', 'system': 'CI-Server (graph)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    ✗ans ✗store  q01 (flat-recall)  'Max leads the perception team at Cobalt Robotics.'
+    ✓ans ✓store  q02 (flat-recall)  'Max plays the violin.'
+    ✓ans ✓store  q03 (flat-recall)  "Max's cat is named Biryani."
+    ✓ans ✓store  q04 (flat-recall)  'Max has a tabby cat.'
+    ✓ans ✓store  q05 (flat-recall)  "Palak paneer is Max's favorite food."
+    ✗ans ✗store  q06 (flat-recall)  "I don't know."
+    ✓ans ✓store  q07 (flat-recall)  'Max owns a Cannondale Synapse road bike.'
+    ✓ans ✓store  q08 (flat-recall)  'Max is learning Japanese.'
+    ✓ans ✓store  q09 (flat-recall)  'Max is planning to travel to Kyoto.'
+    ✗ans ✓store  q10 (flat-recall)  'Max enjoys climbing as an outdoor hobby.'
+    ✓ans ✓store  q11 (flat-recall)  "Max's coffee order is a flat white."
+    ✗ans ✗store  q12 (flat-recall)  "I don't know."
+    ✓ans ✓store  q13 (flat-recall)  "Radiohead is Max's favorite band."
+    ✓ans ✓store  q14 (flat-recall)  'Max uses a Fujifilm X100V camera.'
+    ✓ans ✓store  q15 (flat-recall)  "Max's favorite cocktail is the negroni."
+    ✗ans ✗store  q16 (flat-recall)  "I don't know."
+    ✗ans ✗store  q17 (flat-recall)  "I don't know."
+    ✓ans ✓store  q18 (relational)  "Max's sister is named Anita."
+    ✓ans ✓store  q19 (relational)  "Max's parents are named Sunita and Deepak."
+    ✓ans ✓store  q20 (relational)  "Max's parents live in Portland."
+    ✓ans ✓store  q21 (relational)  "Lena is Max's best friend."
+    ✓ans ✓store  q22 (relational)  "Max's sister Anita and her husband Raj live in Chi"
+    ✓ans ✓store  q23 (relational)  "Raj is Max's brother-in-law."
+    ✗ans ✓store  q24 (relational)  "Steph is Max's manager."
+    ✓ans ✓store  q25 (relational)  "Diego was Max's college roommate."
+    ✓ans ✓store  q26 (relational)  "The name of Max's niece is Mira."
+    ✓ans ✓store  q27 (relational)  "Professor Okafor was Max's grad-school mentor."
+    ✗ans ✗store  q28 (multi-hop)  "I don't know."
+    ✓ans ✓store  q29 (multi-hop)  "Max's best friend works at Stripe."
+    ✓ans ✓store  q30 (multi-hop)  "Max's best friend Lena lives in San Francisco."
+    ✗ans ✗store  q31 (multi-hop)  "I don't know."
+    ✓ans ✓store  q32 (multi-hop)  "Anita is Max's niece's mother."
+    ✓ans ✓store  q33 (multi-hop)  "Max's manager works at Cobalt Robotics."
+    ✓ans ✓store  q34 (multi-hop)  'Professor Okafor teaches robotics.'
+    ✓ans ✓store  q35 (temporal-update)  'Max currently lives in Denver.'
+    ✓ans ✓store  q36 (temporal-update)  'Max lived in Portland before his current city.'
+    ✓ans ✓store  q37 (temporal-update)  'Max currently works for Cobalt Robotics.'
+    ✓ans ✓store  q38 (temporal-update)  'Max worked for Northwind Logistics before his curr'
+    ✓ans ✓store  q39 (temporal-update)  'Max leads the perception team at Cobalt Robotics.'
+    ✓ans ✓store  q40 (temporal-update)  'Max currently uses a Pixel.'
+    ✓ans ✓store  q41 (temporal-update)  'Max currently trains for marathons.'
+    ✓ans ✓store  q42 (temporal-update)  "Max's current job title is senior engineer."
+    ✓ans ✓store  q43 (temporal-update)  'Max currently drives a Subaru Outback.'
+    ✓ans ✓store  q44 (temporal-update)  'Max currently lives in a small house.'
+    ✓ans ✓store  q45 (temporal-update)  'Max follows a vegetarian diet.'
+    ✓ans ✓store  q46 (temporal-update)  'Max is engaged to Sam, who is their partner and fi'
+    ✓ans ✓store  q47 (temporal-update)  "Max's partner is Sam."
+    ✓ans ✓store  q48 (flat-recall)  'Mesa Rim gym, a climbing gym where Max exercises t'
+    ✓ans ✓store  q49 (flat-recall)  "Max's favorite season is autumn."
+    ✓ans ✓store  q50 (flat-recall)  'Max supports the Portland Trail Blazers.'
+  ANSWER 41/50   STORAGE 43/50
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 50 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | flat-recall | relational | multi-hop | temporal-update |
+|---|---|---|---|---|---|---|
+| ci_server | **41/50** | 43/50 | 14/20 | 9/10 | 5/7 | 13/13 |
+

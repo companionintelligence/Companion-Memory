@@ -1,0 +1,103 @@
+
+============================================================
+  naive  (http://localhost:9101)
+============================================================
+  health: {'status': 'ok', 'system': 'Naive RAG (vector)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/23] ✓ans ✓store  n01 (absence)  "I don't know."
+    [2/23] ✓ans ✓store  n04 (absence)  "I don't know - there's no mention in the memories "
+    [3/23] ✓ans ✓store  n02 (absence)  "I don't know."
+    [4/23] ✓ans ✓store  n03 (absence)  "I don't know."
+    [5/23] ✓ans ✓store  n05 (absence)  'No, Max is not married but is engaged to partner S'
+    [6/23] ✓ans ✓store  n07 (absence)  'No, Max works at Cobalt Robotics, not Stripe.'
+    [7/23] ✓ans ✓store  n06 (absence)  "I don't know."
+    [8/23] ✗ans ✗store  n09 (absence)  "I don't know - the memory indicates Max went veget"
+    [9/23] ✓ans ✓store  n08 (absence)  "I don't know."
+    [10/23] ✓ans ✓store  n10 (absence)  "No, Max doesn't currently play soccer since they u"
+    [11/23] ✓ans ✓store  n11 (absence)  "I don't know."
+    [12/23] ✓ans ✓store  n12 (absence)  "I don't know."
+    [13/23] ✓ans ✓store  n13 (absence)  "I don't know."
+    [14/23] ✓ans ✓store  n14 (absence)  "I don't know."
+    [15/23] ✓ans ✓store  n17 (presence-control)  'Yes, Max has a sister named Anita.'
+    [16/23] ✓ans ✓store  n16 (absence)  "I don't know."
+    [17/23] ✓ans ✓store  n15 (absence)  "I don't know if Max has a second cat; the memories"
+    [18/23] ✓ans ✓store  n18 (presence-control)  'Yes, Max owns a cat named Biryani, which is a litt'
+    [19/23] ✓ans ✓store  n20 (presence-control)  'Yes, Max is engaged - he recently got engaged to h'
+    [20/23] ✗ans ✗store  n21 (presence-control)  "I don't know."
+    [21/23] ✗ans ✗store  n19 (presence-control)  "I don't know."
+    [22/23] ✓ans ✓store  n22 (presence-control)  'Yes, Max works at Cobalt Robotics.'
+    [23/23] ✓ans ✓store  n23 (presence-control)  'Yes, Max has a niece named Mira who just turned si'
+  ANSWER 20.0/23   STORAGE 20.0/23
+
+============================================================
+  mem0  (http://localhost:9102)
+============================================================
+  health: {'status': 'ok', 'system': 'Mem0 (vector)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/23] ✓ans ✓store  n01 (absence)  "I don't know."
+    [2/23] ✓ans ✓store  n02 (absence)  "I don't know."
+    [3/23] ✓ans ✓store  n03 (absence)  "I don't know."
+    [4/23] ✓ans ✓store  n04 (absence)  "I don't know."
+    [5/23] ✓ans ✓store  n05 (absence)  "I don't know."
+    [6/23] ✓ans ✓store  n07 (absence)  "I don't know."
+    [7/23] ✓ans ✓store  n06 (absence)  "I don't know - there is no mention of someone name"
+    [8/23] ✓ans ✓store  n08 (absence)  'No, Max does not have a pet named Rufus; Max adopt'
+    [9/23] ✓ans ✓store  n10 (absence)  'No, Max does not currently play soccer; he used to'
+    [10/23] ✗ans ✗store  n09 (absence)  "I don't know."
+    [11/23] ✓ans ✓store  n12 (absence)  "I don't know."
+    [12/23] ✓ans ✓store  n11 (absence)  "I don't know."
+    [13/23] ✓ans ✓store  n13 (absence)  "I don't know."
+    [14/23] ✗ans ✗store  n14 (absence)  "I don't know."
+    [15/23] ✓ans ✓store  n15 (absence)  "I don't know if Max has a second cat; the memory o"
+    [16/23] ✓ans ✓store  n17 (presence-control)  'Yes, Max has a sister named Anita.'
+    [17/23] ✓ans ✓store  n16 (absence)  "I don't know."
+    [18/23] ✓ans ✓store  n20 (presence-control)  'Yes, Max recently got engaged to their partner Sam'
+    [19/23] ✓ans ✓store  n18 (presence-control)  'Yes, Max owns a tabby cat named Biryani.'
+    [20/23] ✗ans ✗store  n19 (presence-control)  "I don't know."
+    [21/23] ✓ans ✓store  n23 (presence-control)  'Yes, Max has a niece named Mira.'
+    [22/23] ✗ans ✗store  n21 (presence-control)  "I don't know."
+    [23/23] ✗ans ✗store  n22 (presence-control)  "I don't know - there is no mention of anyone named"
+  ANSWER 18.0/23   STORAGE 18.0/23
+
+============================================================
+  ci_server  (http://localhost:9104)
+============================================================
+  health: {'status': 'ok', 'system': 'CI-Server (graph)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/23] ✗ans ✗store  n03 (absence)  "I don't know if Max plays the piano since the memo"
+    [2/23] ✓ans ✓store  n02 (absence)  "I don't know."
+    [3/23] ✗ans ✗store  n01 (absence)  "I don't know — the memory doesn't mention whether "
+    [4/23] ✗ans ✗store  n04 (absence)  "Based on the memory provided, I don't know if Max "
+    [5/23] ✗ans ✗store  n05 (absence)  'Yes, Max is married to Sam.'
+    [6/23] ✓ans ✓store  n07 (absence)  'No, Max does not work at Stripe; he works at Cobal'
+    [7/23] ✓ans ✓store  n06 (absence)  "I don't know."
+    [8/23] ✓ans ✓store  n08 (absence)  "I don't know."
+    [9/23] ✗ans ✗store  n09 (absence)  "I don't know."
+    [10/23] ✓ans ✓store  n10 (absence)  'No, Max does not currently play soccer; the user o'
+    [11/23] ✓ans ✓store  n11 (absence)  "I don't know."
+    [12/23] ✓ans ✓store  n12 (absence)  "I don't know."
+    [13/23] ✓ans ✓store  n13 (absence)  "I don't know if Max has ever worked at Google base"
+    [14/23] ✓ans ✓store  n14 (absence)  'No, according to my memory Max plays the violin, n'
+    [15/23] ✓ans ✓store  n16 (absence)  "I don't know."
+    [16/23] ✓ans ✓store  n15 (absence)  'No, Max has only one cat named Biryani.'
+    [17/23] ✓ans ✓store  n17 (presence-control)  'Yes, Max has a sister named Anita.'
+    [18/23] ✓ans ✓store  n18 (presence-control)  'Yes, Max owns a cat named Biryani.'
+    [19/23] ✓ans ✓store  n19 (presence-control)  'Yes, Max plays the violin, which he picked back up'
+    [20/23] ✓ans ✓store  n20 (presence-control)  'Yes, Max is engaged to Sam.'
+    [21/23] ✓ans ✓store  n21 (presence-control)  'Yes, Max currently lives in Denver after moving th'
+    [22/23] ✓ans ✓store  n22 (presence-control)  'Yes, Max works at Cobalt Robotics where he leads t'
+    [23/23] ✓ans ✓store  n23 (presence-control)  'Yes, Max has a niece named Mira who is six years o'
+  ANSWER 18.0/23   STORAGE 18.0/23
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 23 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | absence | presence-control |
+|---|---|---|---|---|
+| naive | **20.0/23** | 20.0/23 | 15.0/16 | 5.0/7 |
+| mem0 | **18.0/23** | 18.0/23 | 14.0/16 | 4.0/7 |
+| ci_server | **18.0/23** | 18.0/23 | 11.0/16 | 7.0/7 |
+

@@ -1,0 +1,55 @@
+
+============================================================
+  hindsight  (http://localhost:9103)
+============================================================
+  health: {'status': 'ok', 'system': 'Hindsight (retain/recall)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/37] ✗ans ✓store  s01 (temporal-update)  "I don't know."
+    [2/37] ✓ans ✓store  s02 (temporal-update)  'Portland'
+    [3/37] ✓ans ✗store  s03 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [4/37] ✗ans ✗store  s04 (temporal-update)  "I don't know."
+    [5/37] ✗ans ✗store  s05 (temporal-update)  "I don't know."
+    [6/37] ✗ans ✗store  s06 (temporal-update)  "I don't know."
+    [7/37] ✓ans ✓store  s07 (temporal-update)  'Max currently drives a Subaru Outback.'
+    [8/37] ✓ans ✗store  s08 (temporal-update)  'Max drove a Honda Civic before his current car.'
+    [9/37] ✗ans ✗store  s09 (temporal-update)  "I don't know."
+    [10/37] ✗ans ✗store  s10 (temporal-update)  "I don't know — there is no mention of anyone named"
+    [11/37] ✗ans ✗store  s11 (temporal-update)  "I don't know - there is no mention of anyone named"
+    [12/37] ✗ans ✗store  s12 (temporal-update)  "I don't know."
+    [13/37] ✗ans ✗store  s13 (temporal-update)  "I don't know"
+    [14/37] ✗ans ✗store  s14 (temporal-update)  "I don't know"
+    [15/37] ✗ans ✗store  s15 (temporal-update)  "I don't know"
+    [16/37] ✗ans ✗store  s16 (temporal-update)  "I don't know."
+    [17/37] ✓ans ✗store  s17 (temporal-update)  'Max is currently engaged to Sam.'
+    [18/37] ✗ans ✗store  s18 (temporal-update)  "I don't know."
+    [19/37] ✗ans ✗store  s19 (temporal-update)  "I don't know."
+    [20/37] ✗ans ✗store  s20 (temporal-update)  "I don't know."
+    [21/37] ✗ans ~store  s21 (enumeration)  "I don't know - there is no mention of anyone named"
+    [22/37] ~ans ~store  s22 (enumeration)  'Based on the memory provided, Max currently works '
+    [23/37] ~ans ~store  s23 (enumeration)  'Max plays the violin.'
+    [24/37] ✗ans ~store  s24 (enumeration)  "I don't know."
+    [25/37] ✓ans ✓store  s25 (enumeration)  'Max has lived in Portland and Denver.'
+    [26/37] ~ans ~store  s26 (enumeration)  "Based on the memory entries, Max's blood relatives"
+    [27/37] ✗ans ~store  s27 (enumeration)  "I don't know."
+    [28/37] ~ans ~store  s28 (enumeration)  "Based on the memory, Max's relatives live in Portl"
+    [29/37] ✗ans ~store  s29 (enumeration)  'Dan is a coworker of Max.'
+    [30/37] ✗ans ✗store  s30 (enumeration)  'Based on the memory, Max has studied or is learnin'
+    [31/37] ✗ans ✗store  s31 (aggregation)  "I don't know."
+    [32/37] ✗ans ✗store  s32 (aggregation)  "I don't know."
+    [33/37] ✓ans ✓store  s33 (aggregation)  'Anita has two children: Mira and Felix.'
+    [34/37] ✗ans ✗store  s34 (aggregation)  "I don't know."
+    [35/37] ✓ans ✓store  s35 (aggregation)  "Raj, Max's brother-in-law, works as a cardiologist"
+    [36/37] ✗ans ✗store  s36 (aggregation)  'Based on the memory entries, there are 3 different'
+    [37/37] ✗ans ✗store  s37 (aggregation)  "I don't know."
+  ANSWER 9.9/37   STORAGE 10.2/37
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 37 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | temporal-update | enumeration | aggregation |
+|---|---|---|---|---|---|
+| hindsight | **9.9/37** | 10.2/37 | 5.0/20 | 2.9/10 | 2.0/7 |
+

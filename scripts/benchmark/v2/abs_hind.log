@@ -1,0 +1,41 @@
+
+============================================================
+  hindsight  (http://localhost:9103)
+============================================================
+  health: {'status': 'ok', 'system': 'Hindsight (retain/recall)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/23] ✓ans ✓store  n01 (absence)  "I don't know."
+    [2/23] ✓ans ✓store  n02 (absence)  "I don't know."
+    [3/23] ✓ans ✓store  n03 (absence)  "I don't know."
+    [4/23] ✗ans ✗store  n04 (absence)  "I don't know whether Max has any children of his o"
+    [5/23] ✓ans ✓store  n05 (absence)  "I don't know."
+    [6/23] ✓ans ✓store  n06 (absence)  "I don't know."
+    [7/23] ✓ans ✓store  n07 (absence)  "I don't know."
+    [8/23] ✓ans ✓store  n08 (absence)  "I don't know."
+    [9/23] ✗ans ✗store  n09 (absence)  "I don't know."
+    [10/23] ✓ans ✓store  n10 (absence)  "I don't know."
+    [11/23] ✓ans ✓store  n11 (absence)  "I don't know."
+    [12/23] ✓ans ✓store  n12 (absence)  "I don't know if Max has a sister named Priya, as t"
+    [13/23] ✓ans ✓store  n13 (absence)  "I don't know."
+    [14/23] ✓ans ✓store  n14 (absence)  "I don't know."
+    [15/23] ✓ans ✓store  n15 (absence)  "I don't know."
+    [16/23] ✓ans ✓store  n16 (absence)  "I don't know."
+    [17/23] ✓ans ✓store  n17 (presence-control)  'Yes, Max has a sister named Anita.'
+    [18/23] ✗ans ✗store  n18 (presence-control)  "I don't know."
+    [19/23] ✗ans ✗store  n19 (presence-control)  "I don't know."
+    [20/23] ✓ans ✓store  n20 (presence-control)  'Yes, Max is engaged to their partner Sam.'
+    [21/23] ✓ans ✓store  n21 (presence-control)  'Yes, Max has lived in Denver since moving there fr'
+    [22/23] ✗ans ✗store  n22 (presence-control)  "I don't know."
+    [23/23] ✓ans ✓store  n23 (presence-control)  'Yes, Max has a niece named Mira, who is the daught'
+  ANSWER 18.0/23   STORAGE 18.0/23
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 23 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | absence | presence-control |
+|---|---|---|---|---|
+| hindsight | **18.0/23** | 18.0/23 | 14.0/16 | 4.0/7 |
+

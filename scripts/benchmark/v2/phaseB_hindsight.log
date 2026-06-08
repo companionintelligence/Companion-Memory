@@ -1,0 +1,118 @@
+
+============================================================
+  hindsight  (http://localhost:9103)
+============================================================
+  health: {'status': 'ok', 'system': 'Hindsight (retain/recall)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/100] ✗ans ✗store  q01 (flat-recall)  "I don't know."
+    [2/100] ✗ans ✗store  q02 (flat-recall)  "I don't know."
+    [3/100] ✗ans ✗store  q03 (flat-recall)  "I don't know."
+    [4/100] ✗ans ✗store  q04 (flat-recall)  "I don't know."
+    [5/100] ✗ans ✗store  q05 (flat-recall)  "I don't know."
+    [6/100] ✓ans ✓store  q06 (flat-recall)  "Max is currently reading 'The Overstory' by Richar"
+    [7/100] ✗ans ✗store  q07 (flat-recall)  "I don't know."
+    [8/100] ✗ans ✗store  q08 (flat-recall)  'Based on the memory, Max (the user) is considering'
+    [9/100] ✗ans ✗store  q09 (flat-recall)  "I don't know."
+    [10/100] ✗ans ✗store  q10 (flat-recall)  "I don't know."
+    [11/100] ✓ans ✓store  q11 (flat-recall)  "Max's coffee order is always a flat white."
+    [12/100] ✗ans ✗store  q12 (flat-recall)  "I don't know."
+    [13/100] ✗ans ✗store  q13 (flat-recall)  "I don't know."
+    [14/100] ✓ans ✗store  q14 (flat-recall)  'Max uses a Fujifilm X100V camera for photography.'
+    [15/100] ✗ans ✗store  q15 (flat-recall)  "I don't know."
+    [16/100] ✓ans ✗store  q16 (flat-recall)  'Max keeps a fiddle-leaf fig in the living room.'
+    [17/100] ✗ans ✗store  q17 (flat-recall)  "I don't know."
+    [18/100] ✓ans ✓store  q18 (relational)  "Anita is Max's sister."
+    [19/100] ✓ans ✓store  q19 (relational)  "Max's parents are named Deepak and Sunita."
+    [20/100] ✓ans ✓store  q20 (relational)  "Max's parents live in Portland."
+    [21/100] ✗ans ✗store  q21 (relational)  "I don't know."
+    [22/100] ✗ans ✗store  q22 (relational)  "I don't know."
+    [23/100] ✓ans ✓store  q23 (relational)  "Raj is the name of Max's brother-in-law."
+    [24/100] ✗ans ✗store  q24 (relational)  "I don't know - there is no mention of anyone named"
+    [25/100] ✓ans ✓store  q25 (relational)  "Diego was Max's college roommate."
+    [26/100] ✗ans ✓store  q26 (relational)  "I don't know."
+    [27/100] ✗ans ✗store  q27 (relational)  "I don't know."
+    [28/100] ✓ans ✓store  q28 (multi-hop)  "Max's brother-in-law Raj works as a cardiologist a"
+    [29/100] ✗ans ✗store  q29 (multi-hop)  "I don't know."
+    [30/100] ✗ans ✗store  q30 (multi-hop)  "I don't know."
+    [31/100] ✗ans ✗store  q31 (multi-hop)  "I don't know."
+    [32/100] ✓ans ✗store  q32 (multi-hop)  "Anita is the mother of Max's niece."
+    [33/100] ✗ans ✗store  q33 (multi-hop)  "I don't know."
+    [34/100] ✗ans ✗store  q34 (multi-hop)  "I don't know"
+    [35/100] ✗ans ✓store  q35 (temporal-update)  "I don't know - there is no mention of anyone named"
+    [36/100] ✓ans ✓store  q36 (temporal-update)  'Portland'
+    [37/100] ✓ans ✗store  q37 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [38/100] ✗ans ✗store  q38 (temporal-update)  "I don't know."
+    [39/100] ✗ans ✗store  q39 (temporal-update)  "I don't know."
+    [40/100] ✗ans ✗store  q40 (temporal-update)  "I don't know."
+    [41/100] ✗ans ✗store  q41 (temporal-update)  "I don't know."
+    [42/100] ✗ans ✗store  q42 (temporal-update)  "I don't know."
+    [43/100] ✓ans ✓store  q43 (temporal-update)  'Max currently drives a Subaru Outback.'
+    [44/100] ✗ans ✗store  q44 (temporal-update)  "I don't know."
+    [45/100] ✗ans ✗store  q45 (temporal-update)  "I don't know."
+    [46/100] ✓ans ✗store  q46 (temporal-update)  'Max got engaged to their partner Sam recently befo'
+    [47/100] ✗ans ✓store  q47 (temporal-update)  "I don't know"
+    [48/100] ✗ans ✗store  q48 (flat-recall)  "I don't know."
+    [49/100] ✗ans ✗store  q49 (flat-recall)  "I don't know."
+    [50/100] ✓ans ✓store  q50 (flat-recall)  'Max supports the Portland Trail Blazers.'
+    [51/100] ✗ans ✗store  q51 (flat-recall)  "I don't know."
+    [52/100] ✗ans ✗store  q52 (flat-recall)  "I don't know."
+    [53/100] ✗ans ✗store  q53 (flat-recall)  "I don't know."
+    [54/100] ✗ans ✗store  q54 (flat-recall)  "I don't know."
+    [55/100] ✗ans ✗store  q55 (flat-recall)  "I don't know."
+    [56/100] ✓ans ✓store  q56 (flat-recall)  "Max's favorite holiday is Diwali."
+    [57/100] ✗ans ✗store  q57 (flat-recall)  "I don't know."
+    [58/100] ✗ans ✗store  q58 (flat-recall)  "I don't know."
+    [59/100] ✗ans ✗store  q59 (flat-recall)  "I don't know."
+    [60/100] ✗ans ✗store  q60 (flat-recall)  "I don't know."
+    [61/100] ✗ans ✗store  q61 (flat-recall)  "I don't know."
+    [62/100] ✗ans ✗store  q62 (flat-recall)  "I don't know - there is no mention of anyone named"
+    [63/100] ✗ans ✗store  q63 (flat-recall)  "I don't know."
+    [64/100] ✓ans ✓store  q64 (flat-recall)  "Catan is Max's favorite board game."
+    [65/100] ✓ans ✓store  q65 (relational)  "Felix is Max's nephew."
+    [66/100] ✗ans ✗store  q66 (relational)  "I don't know"
+    [67/100] ✓ans ✓store  q67 (relational)  "The name of Max's uncle on his mother's side is Ba"
+    [68/100] ✓ans ✓store  q68 (relational)  "Dr. Cardoza is Max's dentist."
+    [69/100] ✗ans ✗store  q69 (relational)  "I don't know."
+    [70/100] ✗ans ✗store  q70 (relational)  "I don't know."
+    [71/100] ✗ans ✗store  q71 (relational)  "I don't know."
+    [72/100] ✗ans ✗store  q72 (relational)  "I don't know."
+    [73/100] ✓ans ✓store  q73 (relational)  "Diego's daughter is named Ines."
+    [74/100] ✗ans ✗store  q74 (relational)  'Based on the available memory, Raj works at a larg'
+    [75/100] ✗ans ✗store  q75 (relational)  "I don't know."
+    [76/100] ✗ans ✗store  q76 (relational)  "I don't know."
+    [77/100] ✗ans ✗store  q77 (multi-hop)  "I don't know."
+    [78/100] ✓ans ✗store  q78 (multi-hop)  "Max's fiancé plays the viola."
+    [79/100] ✗ans ✗store  q79 (multi-hop)  "I don't know."
+    [80/100] ✗ans ✗store  q80 (multi-hop)  "I don't know."
+    [81/100] ✗ans ✗store  q81 (multi-hop)  "I don't know"
+    [82/100] ✗ans ✗store  q82 (multi-hop)  "I don't know - there is no mention of Max or his n"
+    [83/100] ✗ans ✗store  q83 (multi-hop)  "I don't know"
+    [84/100] ✗ans ✗store  q84 (multi-hop)  "I don't know."
+    [85/100] ✗ans ✗store  q85 (multi-hop)  "I don't know."
+    [86/100] ✗ans ✗store  q86 (multi-hop)  "I don't know"
+    [87/100] ✗ans ✗store  q87 (multi-hop)  "I don't know"
+    [88/100] ✗ans ✗store  q88 (multi-hop)  "I don't know."
+    [89/100] ✗ans ✗store  q89 (multi-hop)  "I don't know"
+    [90/100] ✗ans ✗store  q90 (multi-hop)  "I don't know."
+    [91/100] ✓ans ✓store  q91 (multi-hop)  'Imani worked at an aerospace company called Aeroli'
+    [92/100] ✗ans ✗store  q92 (temporal-update)  "I don't know."
+    [93/100] ✗ans ✗store  q93 (temporal-update)  "I don't know."
+    [94/100] ✗ans ✗store  q94 (temporal-update)  "I don't know."
+    [95/100] ✗ans ✗store  q95 (temporal-update)  "I don't know."
+    [96/100] ✓ans ✗store  q96 (temporal-update)  'Max deleted all of their social media accounts in '
+    [97/100] ✗ans ✗store  q97 (temporal-update)  "I don't know."
+    [98/100] ✗ans ✗store  q98 (temporal-update)  "I don't know."
+    [99/100] ✗ans ✗store  q99 (temporal-update)  "I don't know."
+    [100/100] ✗ans ✗store  q100 (temporal-update)  "I don't know."
+  ANSWER 25/100   STORAGE 21/100
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 100 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | flat-recall | relational | multi-hop | temporal-update |
+|---|---|---|---|---|---|---|
+| hindsight | **25/100** | 21/100 | 7/34 | 9/22 | 4/22 | 5/22 |
+

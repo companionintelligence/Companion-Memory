@@ -1,0 +1,442 @@
+
+============================================================
+  naive  (http://localhost:9101)
+============================================================
+  health: {'status': 'ok', 'system': 'Naive RAG (vector)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/100] ✓ans ✓store  q03 (flat-recall)  "Max's cat is named Biryani."
+    [2/100] ✓ans ✗store  q04 (flat-recall)  'Max has a tabby cat named Biryani.'
+    [3/100] ✗ans ✗store  q01 (flat-recall)  'Max works at Cobalt Robotics.'
+    [4/100] ✗ans ✗store  q02 (flat-recall)  "I don't know."
+    [5/100] ✓ans ✓store  q07 (flat-recall)  'Max owns a Cannondale Synapse road bike.'
+    [6/100] ✓ans ✓store  q06 (flat-recall)  'Max is reading The Overstory by Richard Powers.'
+    [7/100] ✓ans ✓store  q08 (flat-recall)  'Max is learning Japanese.'
+    [8/100] ✗ans ✗store  q05 (flat-recall)  "I don't know."
+    [9/100] ✓ans ✓store  q09 (flat-recall)  'Max is planning to travel to Kyoto in November.'
+    [10/100] ✓ans ✓store  q10 (flat-recall)  'Max enjoys riding his Cannondale Synapse road bike'
+    [11/100] ✓ans ✓store  q11 (flat-recall)  "Max's coffee order is always a flat white."
+    [12/100] ✓ans ✓store  q12 (flat-recall)  'Arrival'
+    [13/100] ✓ans ✓store  q13 (flat-recall)  "Max's favorite band is Radiohead."
+    [14/100] ✓ans ✓store  q15 (flat-recall)  "Max's favorite cocktail is a negroni."
+    [15/100] ✓ans ✓store  q14 (flat-recall)  'Max uses a Fujifilm X100V.'
+    [16/100] ✓ans ✓store  q16 (flat-recall)  'Max keeps a fiddle-leaf fig in the living room.'
+    [17/100] ✓ans ✓store  q17 (flat-recall)  'Max listens to the Lex Fridman podcast on commutes'
+    [18/100] ✓ans ✓store  q18 (relational)  "Max's sister is named Anita."
+    [19/100] ✓ans ✓store  q19 (relational)  "Max's parents are named Deepak and Sunita."
+    [20/100] ✓ans ✓store  q20 (relational)  "Max's parents live in Portland."
+    [21/100] ✓ans ✓store  q21 (relational)  "Max's best friend is Lena."
+    [22/100] ✓ans ✓store  q22 (relational)  'Chicago'
+    [23/100] ✓ans ✓store  q23 (relational)  "Max's brother-in-law is named Raj."
+    [24/100] ✓ans ✓store  q25 (relational)  "Max's college roommate was Diego."
+    [25/100] ✓ans ✓store  q24 (relational)  "Based on the memory entries, Max's manager is Priy"
+    [26/100] ✓ans ✓store  q26 (relational)  "Max's niece is named Mira."
+    [27/100] ✓ans ✓store  q27 (relational)  "Professor Okafor was Max's mentor."
+    [28/100] ✓ans ✓store  q29 (multi-hop)  "Max's best friend works at Stripe."
+    [29/100] ✓ans ✓store  q28 (multi-hop)  "Based on the memory, Max's brother-in-law Raj is a"
+    [30/100] ✓ans ✓store  q30 (multi-hop)  "Max's best friend lives in San Francisco."
+    [31/100] ✗ans ✗store  q31 (multi-hop)  "I don't know."
+    [32/100] ✓ans ✓store  q32 (multi-hop)  "Anita is Max's niece's mother."
+    [33/100] ✓ans ✓store  q33 (multi-hop)  'Cobalt Robotics'
+    [34/100] ✗ans ✗store  q34 (multi-hop)  "I don't know."
+    [35/100] ✓ans ✓store  q35 (temporal-update)  'Max currently lives in Denver.'
+    [36/100] ✓ans ✓store  q37 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [37/100] ✗ans ✗store  q36 (temporal-update)  "Based on the memory entry about the user's parents"
+    [38/100] ✓ans ✓store  q38 (temporal-update)  'Max worked at Northwind Logistics before his curre'
+    [39/100] ✓ans ✓store  q39 (temporal-update)  'Max leads the perception team.'
+    [40/100] ✓ans ✓store  q40 (temporal-update)  'Max currently uses a Pixel.'
+    [41/100] ✓ans ✓store  q41 (temporal-update)  'Max currently trains for marathons.'
+    [42/100] ✗ans ✗store  q42 (temporal-update)  "I don't know."
+    [43/100] ✗ans ✗store  q43 (temporal-update)  "I don't know."
+    [44/100] ✗ans ✗store  q45 (temporal-update)  "I don't know."
+    [45/100] ✗ans ✗store  q44 (temporal-update)  "I don't know."
+    [46/100] ✗ans ✗store  q46 (temporal-update)  "I don't know."
+    [47/100] ✗ans ✗store  q47 (temporal-update)  "I don't know."
+    [48/100] ✓ans ✓store  q49 (flat-recall)  "Max's favorite season is Autumn."
+    [49/100] ✗ans ✗store  q48 (flat-recall)  "I don't know."
+    [50/100] ✓ans ✓store  q50 (flat-recall)  'Max has been a Portland Trail Blazers fan his whol'
+    [51/100] ✓ans ✓store  q51 (flat-recall)  'Max wears a Garmin watch.'
+    [52/100] ✓ans ✓store  q52 (flat-recall)  "Max's comfort TV show is The Bear."
+    [53/100] ✓ans ✓store  q53 (flat-recall)  "Max's favorite city he has traveled to is Lisbon."
+    [54/100] ✓ans ✓store  q54 (flat-recall)  'Max is allergic to penicillin.'
+    [55/100] ✓ans ✓store  q55 (flat-recall)  "Max's favorite dessert is crème brûlée."
+    [56/100] ✓ans ✓store  q56 (flat-recall)  "Max's favorite holiday is Diwali."
+    [57/100] ✓ans ✓store  q57 (flat-recall)  "The codename of Max's team's flagship project is M"
+    [58/100] ✓ans ✓store  q58 (flat-recall)  'Max uses a Mac at home.'
+    [59/100] ✓ans ✓store  q59 (flat-recall)  "Max's work laptop is a ThinkPad."
+    [60/100] ✗ans ✗store  q60 (flat-recall)  "I don't know."
+    [61/100] ✓ans ✓store  q62 (flat-recall)  'Max is afraid of heights.'
+    [62/100] ✗ans ✗store  q61 (flat-recall)  "I don't know."
+    [63/100] ✓ans ✓store  q63 (flat-recall)  'Max takes his tea with oat milk, never dairy.'
+    [64/100] ✓ans ✓store  q64 (flat-recall)  "Catan is Max's favorite board game."
+    [65/100] ✓ans ✓store  q65 (relational)  "Max's nephew is named Felix."
+    [66/100] ✓ans ✓store  q67 (relational)  "Max's uncle on his mother's side is Bashir."
+    [67/100] ✓ans ✓store  q66 (relational)  "Max's grandmother's name is Nana Rose."
+    [68/100] ✓ans ✓store  q68 (relational)  "Dr. Cardoza is Max's dentist."
+    [69/100] ✓ans ✓store  q69 (relational)  "Imani is Max's closest teammate on the perception "
+    [70/100] ✓ans ✓store  q70 (relational)  'Max started a running club with his friend Yusuf.'
+    [71/100] ✓ans ✓store  q71 (relational)  'Max went to university at Halford University.'
+    [72/100] ✓ans ✓store  q72 (relational)  "Theo is the name of Lena's partner."
+    [73/100] ✓ans ✓store  q74 (relational)  'Raj works at Meridian General hospital.'
+    [74/100] ✓ans ✓store  q75 (relational)  "Anita's architecture firm is called Hargrove & Fie"
+    [75/100] ✓ans ✓store  q73 (relational)  "Diego's daughter is named Ines."
+    [76/100] ✓ans ✓store  q76 (relational)  'Raj plays tennis.'
+    [77/100] ✓ans ✓store  q79 (multi-hop)  "Max's best friend Lena grew up in Vancouver."
+    [78/100] ✗ans ✗store  q78 (multi-hop)  "I don't know."
+    [79/100] ✗ans ✗store  q77 (multi-hop)  "I don't know."
+    [80/100] ✓ans ✓store  q80 (multi-hop)  "Max's best friend's role at her company is product"
+    [81/100] ✓ans ✓store  q83 (multi-hop)  "Max's niece Mira is learning the harp."
+    [82/100] ✗ans ✗store  q81 (multi-hop)  "I don't know."
+    [83/100] ✓ans ✓store  q82 (multi-hop)  "Max's nephew Felix is obsessed with dinosaurs."
+    [84/100] ✓ans ✓store  q84 (multi-hop)  "Max's grandmother lives in Portland."
+    [85/100] ✓ans ✓store  q85 (multi-hop)  "Max's grandmother was a concert pianist in her you"
+    [86/100] ✓ans ✓store  q86 (multi-hop)  "Max's manager worked at Lumen Labs before Cobalt R"
+    [87/100] ✓ans ✓store  q87 (multi-hop)  "Max's manager earned her PhD at Caltech."
+    [88/100] ✓ans ✓store  q88 (multi-hop)  "Max's college roommate Diego now lives in Montreal"
+    [89/100] ✓ans ✓store  q89 (multi-hop)  "Max's college roommate Diego is a lawyer."
+    [90/100] ✗ans ✗store  q90 (multi-hop)  "I don't know."
+    [91/100] ✗ans ✗store  q91 (multi-hop)  "I don't know."
+    [92/100] ✓ans ✓store  q92 (temporal-update)  'Max mainly uses Rust now.'
+    [93/100] ✓ans ✓store  q93 (temporal-update)  'Max mainly used C++ before switching to Rust.'
+    [94/100] ✓ans ✓store  q94 (temporal-update)  'Max currently lives with Sam.'
+    [95/100] ✓ans ✓store  q95 (temporal-update)  'Max quit smoking five years ago.'
+    [96/100] ✓ans ✓store  q96 (temporal-update)  'Max deleted all their social media this year.'
+    [97/100] ✓ans ✓store  q97 (temporal-update)  'Max played soccer before switching to marathon tra'
+    [98/100] ✓ans ✓store  q98 (temporal-update)  'Max used an iPhone before his current Pixel.'
+    [99/100] ✓ans ✓store  q100 (temporal-update)  'Max got LASIK surgery last spring.'
+    [100/100] ✗ans ✗store  q99 (temporal-update)  "I don't know."
+  ANSWER 79/100   STORAGE 78/100
+
+============================================================
+  mem0  (http://localhost:9102)
+============================================================
+  health: {'status': 'ok', 'system': 'Mem0 (vector)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/100] ✓ans ✗store  q04 (flat-recall)  'Max has a tabby cat named Biryani.'
+    [2/100] ✓ans ✓store  q01 (flat-recall)  'Max works as a robotics engineer.'
+    [3/100] ✗ans ✗store  q02 (flat-recall)  "I don't know."
+    [4/100] ✓ans ✓store  q03 (flat-recall)  "Max's cat is named Biryani."
+    [5/100] ✓ans ✓store  q06 (flat-recall)  "Max is currently reading 'The Overstory' by Richar"
+    [6/100] ✗ans ✗store  q05 (flat-recall)  "I don't know."
+    [7/100] ✗ans ✗store  q08 (flat-recall)  "I don't know."
+    [8/100] ✗ans ✗store  q07 (flat-recall)  "I don't know what kind of bike Max owns because th"
+    [9/100] ✓ans ✓store  q09 (flat-recall)  'Max is planning to travel to Kyoto in November 202'
+    [10/100] ✓ans ✓store  q12 (flat-recall)  "Max's favorite movie is 'Arrival'."
+    [11/100] ✗ans ✗store  q10 (flat-recall)  "I don't know - there's no information about Max in"
+    [12/100] ✓ans ✓store  q11 (flat-recall)  "Max's coffee order is a flat white."
+    [13/100] ✓ans ✓store  q14 (flat-recall)  'Max uses a Fujifilm X100V camera.'
+    [14/100] ✓ans ✓store  q15 (flat-recall)  "Max's favorite cocktail is a negroni."
+    [15/100] ✗ans ✗store  q13 (flat-recall)  "I don't know."
+    [16/100] ✓ans ✓store  q16 (flat-recall)  'Max keeps a fiddle-leaf fig plant in their living '
+    [17/100] ✓ans ✓store  q17 (flat-recall)  'Max listens to the Lex Fridman podcast.'
+    [18/100] ✓ans ✓store  q20 (relational)  "Max's parents live in Portland."
+    [19/100] ✓ans ✓store  q18 (relational)  "Max's sister is named Anita."
+    [20/100] ✓ans ✓store  q19 (relational)  "Max's parents are named Deepak and Sunita."
+    [21/100] ✓ans ✓store  q22 (relational)  "Max's sister and her husband live in Chicago."
+    [22/100] ✓ans ✓store  q21 (relational)  "Max's best friend is Lena."
+    [23/100] ✓ans ✓store  q23 (relational)  "Max's brother-in-law's name is Raj."
+    [24/100] ✗ans ✓store  q24 (relational)  'Based on the memory entries, Max has two managers:'
+    [25/100] ✓ans ✓store  q26 (relational)  "Max's niece is named Mira."
+    [26/100] ✓ans ✓store  q25 (relational)  "Max's college roommate was Diego."
+    [27/100] ✓ans ✓store  q28 (multi-hop)  "Max's brother-in-law is a cardiologist at a large "
+    [28/100] ✓ans ✓store  q27 (relational)  "Professor Okafor was Max's mentor during graduate "
+    [29/100] ✓ans ✓store  q30 (multi-hop)  "Max's best friend lives in San Francisco."
+    [30/100] ✓ans ✓store  q29 (multi-hop)  "Max's best friend works at Stripe."
+    [31/100] ✓ans ✓store  q31 (multi-hop)  "Max's sister is an architect."
+    [32/100] ✓ans ✓store  q32 (multi-hop)  'Based on the memory entries, if Max is the user, t'
+    [33/100] ✓ans ✓store  q34 (multi-hop)  "Max's mentor is in the field of robotics."
+    [34/100] ✓ans ✓store  q33 (multi-hop)  "Max's manager works at Cobalt Robotics."
+    [35/100] ✓ans ✓store  q35 (temporal-update)  'Max currently lives in Denver.'
+    [36/100] ✓ans ✓store  q36 (temporal-update)  'Max lived in Portland before moving to Denver.'
+    [37/100] ✓ans ✓store  q37 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [38/100] ✓ans ✓store  q38 (temporal-update)  'Max worked at Northwind Logistics before his curre'
+    [39/100] ✓ans ✓store  q39 (temporal-update)  'Max leads the perception team at Cobalt Robotics.'
+    [40/100] ✓ans ✓store  q40 (temporal-update)  'Max currently uses a Google Pixel phone.'
+    [41/100] ✗ans ✗store  q41 (temporal-update)  'Max currently trains for a trip to Kyoto in Novemb'
+    [42/100] ✗ans ✗store  q42 (temporal-update)  'Max Turnquist works as a robotics engineer.'
+    [43/100] ✗ans ✗store  q43 (temporal-update)  "I don't know."
+    [44/100] ✓ans ✓store  q44 (temporal-update)  'Max currently lives in a small house.'
+    [45/100] ✗ans ✗store  q45 (temporal-update)  "I don't know."
+    [46/100] ✗ans ✗store  q46 (temporal-update)  "I don't know."
+    [47/100] ✗ans ✗store  q47 (temporal-update)  "I don't know."
+    [48/100] ✗ans ✗store  q48 (flat-recall)  "I don't know."
+    [49/100] ✓ans ✓store  q49 (flat-recall)  "Max's favorite season is autumn."
+    [50/100] ✓ans ✓store  q50 (flat-recall)  'Max supports the Portland Trail Blazers.'
+    [51/100] ✓ans ✓store  q51 (flat-recall)  'Max wears a Garmin watch.'
+    [52/100] ✓ans ✓store  q53 (flat-recall)  "Max's favorite city he has traveled to is Lisbon."
+    [53/100] ✓ans ✓store  q52 (flat-recall)  "Max's comfort TV show is 'The Bear'."
+    [54/100] ✓ans ✓store  q54 (flat-recall)  'Max is allergic to penicillin.'
+    [55/100] ✗ans ✗store  q55 (flat-recall)  "I don't know."
+    [56/100] ✗ans ✗store  q56 (flat-recall)  "I don't know."
+    [57/100] ✓ans ✓store  q57 (flat-recall)  "The codename of Max's team's flagship project is M"
+    [58/100] ✓ans ✓store  q58 (flat-recall)  'Max uses a Mac at home.'
+    [59/100] ✓ans ✓store  q59 (flat-recall)  'Max uses a ThinkPad for work.'
+    [60/100] ✓ans ✓store  q61 (flat-recall)  'Max collects vintage film cameras.'
+    [61/100] ✓ans ✓store  q62 (flat-recall)  'Max is afraid of heights.'
+    [62/100] ✗ans ✗store  q60 (flat-recall)  "I don't know."
+    [63/100] ✓ans ✓store  q63 (flat-recall)  'Max takes his tea with oat milk and never uses dai'
+    [64/100] ✓ans ✓store  q64 (flat-recall)  'Max loves Catan.'
+    [65/100] ✓ans ✓store  q65 (relational)  "Felix is the name of Max's nephew."
+    [66/100] ✓ans ✓store  q66 (relational)  "Max's grandmother is named Nana Rose."
+    [67/100] ✓ans ✓store  q67 (relational)  "Max's maternal uncle is named Bashir."
+    [68/100] ✓ans ✓store  q69 (relational)  "Max's closest teammate on the perception team is I"
+    [69/100] ✓ans ✓store  q68 (relational)  "Max's dentist is Dr. Cardoza."
+    [70/100] ✓ans ✓store  q70 (relational)  'Max started a running club with their friend Yusuf'
+    [71/100] ✓ans ✓store  q71 (relational)  'Max went to Halford University.'
+    [72/100] ✓ans ✓store  q72 (relational)  "Lena's partner is named Theo."
+    [73/100] ✓ans ✓store  q73 (relational)  "Diego's daughter is named Ines."
+    [74/100] ✓ans ✓store  q74 (relational)  'Raj works at Meridian General hospital.'
+    [75/100] ✓ans ✓store  q75 (relational)  "Anita's architecture firm is called Hargrove & Fie"
+    [76/100] ✓ans ✓store  q76 (relational)  'Raj plays tennis.'
+    [77/100] ✗ans ✗store  q77 (multi-hop)  "I don't know - there is no mention of anyone named"
+    [78/100] ✗ans ✗store  q78 (multi-hop)  "I don't know."
+    [79/100] ✓ans ✓store  q80 (multi-hop)  "Max's best friend works as a product designer at S"
+    [80/100] ✓ans ✓store  q79 (multi-hop)  "Max's best friend grew up in Vancouver."
+    [81/100] ✓ans ✓store  q82 (multi-hop)  "Max's nephew is obsessed with dinosaurs."
+    [82/100] ✓ans ✓store  q81 (multi-hop)  "Max's best friend's partner, Theo, works as a past"
+    [83/100] ✓ans ✓store  q83 (multi-hop)  "Max's niece Mira is learning to play the harp."
+    [84/100] ✓ans ✓store  q84 (multi-hop)  "Max's grandmother lives in a retirement community "
+    [85/100] ✓ans ✓store  q85 (multi-hop)  "Max's grandmother Nana Rose was a concert pianist "
+    [86/100] ✓ans ✓store  q86 (multi-hop)  'Lumen Labs'
+    [87/100] ✓ans ✓store  q87 (multi-hop)  "Max's manager earned her PhD at Caltech."
+    [88/100] ✓ans ✓store  q88 (multi-hop)  'Montreal'
+    [89/100] ✓ans ✓store  q89 (multi-hop)  "Max's college roommate is a lawyer."
+    [90/100] ✓ans ✓store  q90 (multi-hop)  "Max's mentor's university is located in Montreal."
+    [91/100] ✓ans ✓store  q92 (temporal-update)  'Based on the memory, Max mainly uses Rust now.'
+    [92/100] ✗ans ✗store  q91 (multi-hop)  "I don't know."
+    [93/100] ✓ans ✓store  q93 (temporal-update)  'Max mainly used C++ before switching to Rust.'
+    [94/100] ✓ans ✓store  q95 (temporal-update)  'Max quit smoking five years ago.'
+    [95/100] ✗ans ✓store  q94 (temporal-update)  "I don't know."
+    [96/100] ✓ans ✓store  q96 (temporal-update)  'Max deleted all of their social media accounts thi'
+    [97/100] ✓ans ✓store  q97 (temporal-update)  'Max used to play soccer before switching to marath'
+    [98/100] ✓ans ✓store  q100 (temporal-update)  'Max had LASIK eye surgery in the spring of 2026.'
+    [99/100] ✓ans ✓store  q98 (temporal-update)  'Max used an iPhone before switching to his current'
+    [100/100] ✗ans ✗store  q99 (temporal-update)  "I don't know"
+  ANSWER 78/100   STORAGE 79/100
+
+============================================================
+  hindsight  (http://localhost:9103)
+============================================================
+  health: {'status': 'ok', 'system': 'Hindsight (retain/recall)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/100] ✗ans ✗store  q04 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [2/100] ✗ans ✗store  q01 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [3/100] ✗ans ✗store  q03 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [4/100] ✗ans ✗store  q05 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [5/100] ✗ans ✗store  q06 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [6/100] ✗ans ✗store  q07 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [7/100] ✗ans ✗store  q09 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [8/100] ✗ans ✗store  q08 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [9/100] ✗ans ✗store  q10 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [10/100] ✗ans ✗store  q11 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [11/100] ✗ans ✗store  q12 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [12/100] ✗ans ✗store  q15 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [13/100] ✗ans ✗store  q14 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [14/100] ✗ans ✗store  q13 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [15/100] ✗ans ✗store  q17 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [16/100] ✗ans ✗store  q18 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [17/100] ✗ans ✗store  q16 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [18/100] ✗ans ✗store  q20 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [19/100] ✗ans ✗store  q19 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [20/100] ✗ans ✗store  q21 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [21/100] ✗ans ✗store  q22 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [22/100] ✗ans ✗store  q23 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [23/100] ✗ans ✗store  q24 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [24/100] ✗ans ✗store  q25 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [25/100] ✗ans ✗store  q26 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [26/100] ✗ans ✗store  q27 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [27/100] ✗ans ✗store  q28 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [28/100] ✗ans ✗store  q29 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [29/100] ✗ans ✗store  q30 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [30/100] ✗ans ✗store  q31 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [31/100] ✗ans ✗store  q32 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [32/100] ✗ans ✗store  q33 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [33/100] ✗ans ✗store  q34 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [34/100] ✗ans ✗store  q35 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [35/100] ✗ans ✗store  q37 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [36/100] ✗ans ✗store  q36 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [37/100] ✗ans ✗store  q38 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [38/100] ✗ans ✗store  q39 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [39/100] ✗ans ✗store  q41 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [40/100] ✗ans ✗store  q40 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [41/100] ✗ans ✗store  q42 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [42/100] ✗ans ✗store  q44 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [43/100] ✗ans ✗store  q43 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [44/100] ✗ans ✗store  q45 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [45/100] ✗ans ✗store  q46 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [46/100] ✗ans ✗store  q48 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [47/100] ✗ans ✗store  q47 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [48/100] ✗ans ✗store  q49 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [49/100] ✗ans ✗store  q50 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [50/100] ✗ans ✗store  q51 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [51/100] ✗ans ✗store  q52 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [52/100] ✗ans ✗store  q53 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [53/100] ✗ans ✗store  q54 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [54/100] ✗ans ✗store  q55 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [55/100] ✗ans ✗store  q56 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [56/100] ✗ans ✗store  q57 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [57/100] ✗ans ✗store  q58 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [58/100] ✗ans ✗store  q59 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [59/100] ✗ans ✗store  q60 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [60/100] ✗ans ✗store  q61 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [61/100] ✗ans ✗store  q63 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [62/100] ✗ans ✗store  q62 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [63/100] ✗ans ✗store  q64 (flat-recall)  '(error: HTTP Error 500: Internal Server Error)'
+    [64/100] ✗ans ✗store  q66 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [65/100] ✗ans ✗store  q65 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [66/100] ✗ans ✗store  q67 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [67/100] ✗ans ✗store  q68 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [68/100] ✗ans ✗store  q69 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [69/100] ✗ans ✗store  q70 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [70/100] ✗ans ✗store  q71 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [71/100] ✗ans ✗store  q73 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [72/100] ✗ans ✗store  q72 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [73/100] ✗ans ✗store  q74 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [74/100] ✗ans ✗store  q76 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [75/100] ✗ans ✗store  q75 (relational)  '(error: HTTP Error 500: Internal Server Error)'
+    [76/100] ✗ans ✗store  q77 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [77/100] ✗ans ✗store  q79 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [78/100] ✗ans ✗store  q78 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [79/100] ✗ans ✗store  q80 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [80/100] ✗ans ✗store  q83 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [81/100] ✗ans ✗store  q81 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [82/100] ✗ans ✗store  q82 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [83/100] ✗ans ✗store  q84 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [84/100] ✗ans ✗store  q85 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [85/100] ✗ans ✗store  q86 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [86/100] ✗ans ✗store  q87 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [87/100] ✗ans ✗store  q88 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [88/100] ✗ans ✗store  q89 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [89/100] ✗ans ✗store  q90 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [90/100] ✗ans ✗store  q91 (multi-hop)  '(error: HTTP Error 500: Internal Server Error)'
+    [91/100] ✗ans ✗store  q92 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [92/100] ✗ans ✗store  q93 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [93/100] ✗ans ✗store  q94 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [94/100] ✗ans ✗store  q95 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [95/100] ✗ans ✗store  q96 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [96/100] ✗ans ✗store  q97 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [97/100] ✗ans ✗store  q99 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [98/100] ✗ans ✗store  q98 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [99/100] ✗ans ✗store  q100 (temporal-update)  '(error: HTTP Error 500: Internal Server Error)'
+    [100/100] ✗ans ✗store  q02 (flat-recall)  "I don't know."
+  ANSWER 0/100   STORAGE 0/100
+
+============================================================
+  ci_server  (http://localhost:9104)
+============================================================
+  health: {'status': 'ok', 'system': 'CI-Server (graph)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/100] ✓ans ✓store  q03 (flat-recall)  'Biryani'
+    [2/100] ✓ans ✓store  q04 (flat-recall)  'Max has a tabby cat.'
+    [3/100] ✓ans ✓store  q02 (flat-recall)  'Max plays the violin.'
+    [4/100] ✗ans ✗store  q01 (flat-recall)  "I don't know."
+    [5/100] ✓ans ✓store  q08 (flat-recall)  'Japanese'
+    [6/100] ✓ans ✓store  q07 (flat-recall)  'Max owns a Cannondale Synapse road bike.'
+    [7/100] ✗ans ✗store  q06 (flat-recall)  "I don't know."
+    [8/100] ✓ans ✓store  q05 (flat-recall)  "Based on the memory, Max's favorite food is Palak "
+    [9/100] ✓ans ✓store  q09 (flat-recall)  'Max is planning to travel to Kyoto, Japan in Novem'
+    [10/100] ✓ans ✓store  q11 (flat-recall)  "Max's coffee order is a flat white."
+    [11/100] ✓ans ✓store  q10 (flat-recall)  'Based on the memory, Max enjoys hiking in the foot'
+    [12/100] ✗ans ✗store  q12 (flat-recall)  "I don't know."
+    [13/100] ✓ans ✓store  q13 (flat-recall)  "Max's favorite band is Radiohead."
+    [14/100] ✓ans ✓store  q14 (flat-recall)  'Max uses a Fujifilm X100V to shoot photos.'
+    [15/100] ✗ans ✗store  q16 (flat-recall)  "I don't know."
+    [16/100] ✓ans ✓store  q15 (flat-recall)  "Max's favorite cocktail is a negroni."
+    [17/100] ✗ans ✗store  q17 (flat-recall)  "I don't know what podcast Max listens to based on "
+    [18/100] ✓ans ✓store  q18 (relational)  "Anita is Max's sister."
+    [19/100] ✓ans ✓store  q20 (relational)  "Max's parents live in Portland."
+    [20/100] ✓ans ✓store  q19 (relational)  "Max's parents' names are Sunita and Deepak."
+    [21/100] ✓ans ✓store  q21 (relational)  "Lena is Max's best friend."
+    [22/100] ✓ans ✓store  q22 (relational)  "Max's sister and her husband live in Chicago."
+    [23/100] ✓ans ✓store  q24 (relational)  "Priyanka is Max's manager."
+    [24/100] ✓ans ✓store  q25 (relational)  "Diego was Max's college roommate."
+    [25/100] ✗ans ✓store  q23 (relational)  "I don't know."
+    [26/100] ✓ans ✓store  q26 (relational)  "Mira is Max's niece."
+    [27/100] ✓ans ✓store  q27 (relational)  "Professor Okafor was Max's grad-school mentor."
+    [28/100] ✓ans ✓store  q29 (multi-hop)  "Max's best friend works at Stripe."
+    [29/100] ✗ans ✗store  q28 (multi-hop)  "I don't know"
+    [30/100] ✗ans ✗store  q30 (multi-hop)  "I don't know — the memory mentions that Lena is Ma"
+    [31/100] ✗ans ✗store  q31 (multi-hop)  "I don't know."
+    [32/100] ✓ans ✓store  q33 (multi-hop)  "Max's manager (Priyanka) works at Cobalt Robotics."
+    [33/100] ✓ans ✓store  q34 (multi-hop)  "Max's mentor is in the field of robotics."
+    [34/100] ✓ans ✓store  q35 (temporal-update)  'Max currently lives in Denver.'
+    [35/100] ✗ans ✓store  q32 (multi-hop)  "I don't know - while Anita is Max's sister and has"
+    [36/100] ✓ans ✓store  q36 (temporal-update)  'Max lived in Portland before his current city of D'
+    [37/100] ✓ans ✓store  q38 (temporal-update)  'Max worked for Northwind Logistics before his curr'
+    [38/100] ✓ans ✓store  q39 (temporal-update)  'Max leads the perception team at Cobalt Robotics.'
+    [39/100] ✓ans ✓store  q37 (temporal-update)  'Max currently works for Cobalt Robotics.'
+    [40/100] ✗ans ✗store  q40 (temporal-update)  "I don't know."
+    [41/100] ✓ans ✓store  q41 (temporal-update)  'Max currently trains for marathons.'
+    [42/100] ✓ans ✓store  q43 (temporal-update)  'Max currently drives a Subaru Outback.'
+    [43/100] ✓ans ✓store  q42 (temporal-update)  "Max's current job title is senior engineer."
+    [44/100] ✓ans ✓store  q44 (temporal-update)  'Max currently lives in a small house.'
+    [45/100] ✓ans ✓store  q45 (temporal-update)  'Max currently follows a vegetarian diet.'
+    [46/100] ✓ans ✓store  q47 (temporal-update)  "Sam is Max's partner."
+    [47/100] ✓ans ✓store  q46 (temporal-update)  'Max is engaged, with Sam as his fiancé.'
+    [48/100] ✓ans ✓store  q51 (flat-recall)  'Max wears a Garmin watch.'
+    [49/100] ✓ans ✓store  q48 (flat-recall)  'The user works out at Mesa Rim gym.'
+    [50/100] ✓ans ✓store  q50 (flat-recall)  'Max supports the Portland Trail Blazers.'
+    [51/100] ✓ans ✓store  q49 (flat-recall)  "Autumn is Max's favorite season."
+    [52/100] ✓ans ✓store  q53 (flat-recall)  "Max's favorite city he has traveled to is Lisbon."
+    [53/100] ✓ans ✓store  q55 (flat-recall)  "Max's favorite dessert is crème brûlée."
+    [54/100] ✓ans ✓store  q54 (flat-recall)  'Max is allergic to penicillin.'
+    [55/100] ✗ans ✗store  q52 (flat-recall)  "I don't know."
+    [56/100] ✓ans ✓store  q59 (flat-recall)  "Max's work laptop is a ThinkPad."
+    [57/100] ✓ans ✓store  q58 (flat-recall)  'Max uses a Mac as his home computer.'
+    [58/100] ✓ans ✓store  q57 (flat-recall)  'The codename is Magpie.'
+    [59/100] ✗ans ✗store  q56 (flat-recall)  "I don't know."
+    [60/100] ✓ans ✓store  q62 (flat-recall)  'Max is afraid of heights.'
+    [61/100] ✓ans ✓store  q61 (flat-recall)  'Max collects vintage film cameras.'
+    [62/100] ✓ans ✓store  q60 (flat-recall)  'Max has taken up surfing.'
+    [63/100] ✓ans ✓store  q63 (flat-recall)  'Max takes his tea with oat milk.'
+    [64/100] ✓ans ✓store  q65 (relational)  "Max's nephew is named Felix."
+    [65/100] ✓ans ✓store  q66 (relational)  "Max's grandmother's name is Nana Rose."
+    [66/100] ✗ans ✗store  q64 (flat-recall)  "I don't know."
+    [67/100] ✓ans ✓store  q67 (relational)  "Bashir is Max's uncle on his mother's side."
+    [68/100] ✓ans ✓store  q68 (relational)  "Dr. Cardoza is Max's dentist."
+    [69/100] ✓ans ✓store  q70 (relational)  'Max started a running club with Yusuf.'
+    [70/100] ✓ans ✓store  q71 (relational)  'Max went to Halford University.'
+    [71/100] ✗ans ✗store  q69 (relational)  "I don't know"
+    [72/100] ✓ans ✓store  q72 (relational)  "Theo is Lena's partner."
+    [73/100] ✓ans ✓store  q73 (relational)  "Diego's daughter is named Ines."
+    [74/100] ✓ans ✓store  q75 (relational)  "Anita's architecture firm is called Hargrove & Fie"
+    [75/100] ✓ans ✓store  q76 (relational)  'Raj plays tennis.'
+    [76/100] ✗ans ✓store  q74 (relational)  "I don't know."
+    [77/100] ✗ans ✗store  q77 (multi-hop)  "I don't know — there is no information about Max's"
+    [78/100] ✗ans ✗store  q80 (multi-hop)  "I don't know — the memory mentions Lena is Max's b"
+    [79/100] ✗ans ✗store  q78 (multi-hop)  "I don't know."
+    [80/100] ✗ans ✗store  q79 (multi-hop)  "I don't know."
+    [81/100] ✓ans ✓store  q81 (multi-hop)  'Theo is a pastry chef who runs a bakery-cafe.'
+    [82/100] ✓ans ✓store  q84 (multi-hop)  "Max's grandmother lives in a retirement community "
+    [83/100] ✓ans ✓store  q82 (multi-hop)  "Max's nephew is obsessed with dinosaurs."
+    [84/100] ✓ans ✓store  q83 (multi-hop)  "Max's niece Mira is learning to play the harp."
+    [85/100] ✓ans ✓store  q85 (multi-hop)  "Max's grandmother was formerly a concert pianist."
+    [86/100] ✓ans ✓store  q88 (multi-hop)  'Montreal'
+    [87/100] ✓ans ✓store  q87 (multi-hop)  'Priyanka earned her PhD at Caltech.'
+    [88/100] ✓ans ✓store  q86 (multi-hop)  "Max's manager worked at Lumen Labs before Cobalt R"
+    [89/100] ✗ans ✗store  q89 (multi-hop)  "I don't know."
+    [90/100] ✓ans ✓store  q91 (multi-hop)  'Imani previously worked at Aerolith before joining'
+    [91/100] ✗ans ✗store  q90 (multi-hop)  "I don't know"
+    [92/100] ✓ans ✓store  q92 (temporal-update)  'Max mainly uses Rust now, as he switched to it at '
+    [93/100] ✓ans ✓store  q93 (temporal-update)  'C++'
+    [94/100] ✗ans ✗store  q94 (temporal-update)  "I don't know."
+    [95/100] ✓ans ✓store  q95 (temporal-update)  'Max quit smoking five years ago.'
+    [96/100] ✓ans ✓store  q96 (temporal-update)  'Social media platforms.'
+    [97/100] ✗ans ✗store  q98 (temporal-update)  "I don't know."
+    [98/100] ✓ans ✓store  q99 (temporal-update)  'Max drove a Civic before his current car.'
+    [99/100] ✓ans ✓store  q97 (temporal-update)  'Soccer'
+    [100/100] ✗ans ✗store  q100 (temporal-update)  "I don't know."
+  ANSWER 75/100   STORAGE 78/100
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 100 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | flat-recall | relational | multi-hop | temporal-update |
+|---|---|---|---|---|---|---|
+| naive | **79/100** | 78/100 | 28/34 | 22/22 | 15/22 | 14/22 |
+| mem0 | **78/100** | 79/100 | 24/34 | 21/22 | 19/22 | 14/22 |
+| hindsight | **0/100** | 0/100 | 0/34 | 0/22 | 0/22 | 0/22 |
+| ci_server | **75/100** | 78/100 | 26/34 | 19/22 | 12/22 | 18/22 |
+
