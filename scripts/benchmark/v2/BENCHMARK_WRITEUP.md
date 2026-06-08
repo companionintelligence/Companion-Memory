@@ -204,7 +204,7 @@ other keyword paths.
 - **CI-Server's edge is structured/temporal/relational memory** — best temporal,
   best enumeration, best retrieval completeness, most decisive on present facts, all
   at ~80 ms recall and concurrency-safe.
-- **Trade-offs we don't hide:** aggregation (counting) and absence-precision are
+- **Trade-offs:** aggregation (counting) and absence-precision are
   weak spots (the flip side of surfacing rich context); multi-hop trails mem0's
   consolidation; ingest is mid-pack.
 - **OpenViking & Hindsight** — the two other graph/context-DB systems — both land

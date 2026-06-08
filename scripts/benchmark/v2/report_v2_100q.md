@@ -28,9 +28,11 @@ is NOT a per-system cost and is excluded.
 
 | System | Ingest (490 msgs) | Answer phase (100 Q) | Recall latency / query |
 |---|---|---|---|
-| naive | **16 s** (sequential) | ~13 m (concurrency 4) | ~0.06 s |
+| holographic | **5 s** (no LLM, no embeddings — fastest) | ~13 m (concurrency 4) | **~0.005 s** (fastest) |
+| naive | 16 s (sequential embeds) | ~13 m (concurrency 4) | ~0.06 s |
 | mem0 | 14 m 36 s (sequential) | ~13 m (concurrency 4) | ~0.12 s |
 | ci_server | 16 m 10 s (sequential) | ~13 m (concurrency 4) | ~0.08 s |
+| openviking | **~50 m** (sequential VLM extraction — slowest) | ~13 m (concurrency 4) | ~0.03 s |
 | hindsight | **35 m** *with* server concurrency=4; **~2.3 h sequential** | **37 m (forced serial)** | ~1.16 s (not concurrency-safe) |
 
 **Fairness note — hindsight has two concurrency handicaps the others don't:**
@@ -41,7 +43,10 @@ is NOT a per-system cost and is excluded.
 2. *Answer:* its recall client 500s under concurrent calls, so it must answer
    **serially** (37 min/100 Q) while the others run at concurrency 4 (~13 min).
 
-So hindsight's true comparable wall-clock is **~2.5–3 hours**, vs ~30 min
-(ingest + answer) for the others. naive/mem0/ci_server ingest = same gemma-4-31b
-extractor; naive just embeds (no LLM). Recall latency = median of 3 warm
-`/retrieve` calls (naive's ~1 s cold first call excluded).
+Total comparable wall-clock (ingest + answer) spans widely: **holographic ~13 m**
+(no model — just SQLite) and **naive ~13 m**, **mem0 / ci_server ~28–29 m**,
+**openviking ~63 m**, and **hindsight ~2.5–3 h**. Extractor models: mem0 / ci_server /
+openviking run LLM extraction on gemma-4-31b at ingest; naive only embeds; holographic
+uses **no LLM and no embeddings** at all. Recall latency = median of 3 warm `/retrieve`
+calls (naive's ~1 s cold first call excluded). All systems answer at concurrency 4
+except hindsight, whose recall client 500s under concurrent calls (forced serial).

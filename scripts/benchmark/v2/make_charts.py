@@ -16,7 +16,7 @@ os.makedirs(OUT, exist_ok=True)
 
 # ---- real measured data ---------------------------------------------------- #
 SYS = ["ci_server", "mem0", "naive", "hindsight", "openviking", "holographic"]
-COLOR = {"ci_server": "#1b6ca8", "mem0": "#9aa0a6", "naive": "#9aa0a6", "hindsight": "#c0392b",
+COLOR = {"ci_server": "#1b6ca8", "mem0": "#8e44ad", "naive": "#9aa0a6", "hindsight": "#c0392b",
          "openviking": "#d9822b", "holographic": "#2e8b57"}
 LATENCY = {"ci_server": 0.08, "mem0": 0.12, "naive": 0.06, "hindsight": 1.16, "openviking": 0.03,
            "holographic": 0.005}   # s/query (median warm)
