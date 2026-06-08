@@ -1,0 +1,11 @@
+
+============================================================
+  openviking  (http://localhost:9105)
+============================================================
+  health: {'status': 'ok', 'system': 'OpenViking (context DB)'}
+  ingesting 490 statements…
+  ingest+flush done (3001s, 0 ingest failures)
+  ingest-only: store built, skipping answer/judge phase
+
+Phase A complete: stores built for openviking
+Swap the loaded model to the answerer, then re-run with --skip-ingest.

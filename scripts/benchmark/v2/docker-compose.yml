@@ -61,3 +61,17 @@ services:
       EMBED_MODEL: nomic-embed-text
     ports: ["9104:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"]
+
+  openviking:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: openviking
+      LLM_URL: http://192.168.0.203:1234
+      LLM_MODEL: gemma-4-31b-it-abliterated   # OpenViking's VLM (extraction, Phase A)
+      ANSWERER_MODEL: ornstein-3.6-27b        # shared answerer (Phase B)
+      OPENVIKING_URL: http://host.docker.internal:1933   # host-run openviking-server
+      OPENVIKING_API_KEY: benchkey
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9105:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]

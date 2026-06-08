@@ -1,0 +1,214 @@
+
+============================================================
+  openviking  (http://localhost:9105)
+============================================================
+  health: {'status': 'ok', 'system': 'OpenViking (context DB)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/100] ✓ans ✓store  q01 (flat-recall)  'Max is a Senior Robotics Engineer at Cobalt Roboti'
+    [2/100] ✓ans ✓store  q04 (flat-recall)  'Max has a tabby cat.'
+    [3/100] ✗ans ✗store  q02 (flat-recall)  "I don't know."
+    [4/100] ✗ans ✗store  q03 (flat-recall)  "I don't know."
+    [5/100] ✓ans ✓store  q07 (flat-recall)  'Max owns a Cannondale Synapse road bike.'
+    [6/100] ✗ans ✗store  q08 (flat-recall)  "I don't know"
+    [7/100] ✗ans ✓store  q05 (flat-recall)  "I don't know."
+    [8/100] ✗ans ✗store  q06 (flat-recall)  'Max is currently reading a book by Richard Powers.'
+    [9/100] ✗ans ✗store  q09 (flat-recall)  "I don't know."
+    [10/100] ✗ans ✗store  q10 (flat-recall)  'Max enjoys road biking as an outdoor hobby.'
+    [11/100] ✓ans ✓store  q12 (flat-recall)  "Max's favorite movie is Arrival."
+    [12/100] ✓ans ✓store  q11 (flat-recall)  "Max's coffee order is a flat white."
+    [13/100] ✗ans ✗store  q14 (flat-recall)  'Max collects vintage film cameras for his photogra'
+    [14/100] ✓ans ✓store  q15 (flat-recall)  "Max's go-to cocktail is a Negroni."
+    [15/100] ✓ans ✓store  q13 (flat-recall)  "Max's favorite band is Radiohead."
+    [16/100] ✗ans ✗store  q16 (flat-recall)  "I don't know what specific houseplant Max keeps; t"
+    [17/100] ✓ans ✓store  q17 (flat-recall)  'Max listens to the Lex Fridman podcast during comm'
+    [18/100] ✗ans ✗store  q19 (relational)  "I don't know."
+    [19/100] ✓ans ✓store  q18 (relational)  "Max's sister is named Anita."
+    [20/100] ✓ans ✓store  q20 (relational)  "Max's parents both live in Portland."
+    [21/100] ✓ans ✓store  q22 (relational)  'Chicago'
+    [22/100] ✗ans ✗store  q21 (relational)  "Based on the memory, Max's best friend since schoo"
+    [23/100] ✗ans ✓store  q23 (relational)  "I don't know."
+    [24/100] ✗ans ✗store  q24 (relational)  "Max's manager at Cobalt Robotics did her PhD at Ca"
+    [25/100] ✗ans ✗store  q26 (relational)  "I don't know"
+    [26/100] ✓ans ✓store  q25 (relational)  "Max's college roommate was Diego."
+    [27/100] ✗ans ✗store  q27 (relational)  "I don't know."
+    [28/100] ✗ans ✗store  q28 (multi-hop)  "Max's brother-in-law works at Meridian General hos"
+    [29/100] ✗ans ✗store  q30 (multi-hop)  "Max's best friend lives in the Bay Area."
+    [30/100] ✓ans ✓store  q31 (multi-hop)  "Max's sister is an architect at the firm Hargrove "
+    [31/100] ✗ans ✓store  q29 (multi-hop)  "I don't know"
+    [32/100] ✓ans ✓store  q34 (multi-hop)  "Max's mentor is in the field of robotics, as indic"
+    [33/100] ✗ans ✗store  q33 (multi-hop)  "I don't know."
+    [34/100] ✗ans ✓store  q32 (multi-hop)  "I don't know."
+    [35/100] ✗ans ✗store  q35 (temporal-update)  "I don't know."
+    [36/100] ✗ans ✗store  q36 (temporal-update)  "I don't know"
+    [37/100] ✓ans ✓store  q37 (temporal-update)  'Max currently works for Cobalt Robotics.'
+    [38/100] ✗ans ✗store  q38 (temporal-update)  "I don't know."
+    [39/100] ✓ans ✓store  q39 (temporal-update)  'Max leads the perception team at Cobalt Robotics.'
+    [40/100] ✗ans ✗store  q40 (temporal-update)  "I don't know."
+    [41/100] ✓ans ✓store  q41 (temporal-update)  'Max currently trains for marathons.'
+    [42/100] ✗ans ✗store  q43 (temporal-update)  "I don't know."
+    [43/100] ✓ans ✓store  q42 (temporal-update)  'Max is a Senior Robotics Engineer at Cobalt Roboti'
+    [44/100] ✓ans ✓store  q44 (temporal-update)  'Max currently lives in a small house.'
+    [45/100] ✓ans ✓store  q46 (temporal-update)  'Max is engaged to Sam.'
+    [46/100] ✗ans ✗store  q45 (temporal-update)  "I don't know."
+    [47/100] ✗ans ✓store  q48 (flat-recall)  "I don't know."
+    [48/100] ✗ans ✗store  q47 (temporal-update)  "I don't know - the memory mentions that Max has a "
+    [49/100] ✓ans ✓store  q49 (flat-recall)  "Max's favorite season is Autumn."
+    [50/100] ✓ans ✓store  q50 (flat-recall)  'Max is a lifelong fan of the Portland Trail Blazer'
+    [51/100] ✗ans ✗store  q51 (flat-recall)  "I don't know."
+    [52/100] ✓ans ✓store  q53 (flat-recall)  "Max's favorite city he has traveled to is Lisbon."
+    [53/100] ✗ans ✗store  q52 (flat-recall)  "I don't know."
+    [54/100] ✓ans ✓store  q54 (flat-recall)  'Max is allergic to penicillin.'
+    [55/100] ✓ans ✓store  q55 (flat-recall)  "Max's favorite dessert is crème brûlée."
+    [56/100] ✓ans ✓store  q56 (flat-recall)  "Max's favorite holiday is Diwali."
+    [57/100] ✗ans ✗store  q57 (flat-recall)  "I don't know."
+    [58/100] ✓ans ✓store  q58 (flat-recall)  'Max uses a Mac at home.'
+    [59/100] ✓ans ✓store  q59 (flat-recall)  "Max's work laptop is a ThinkPad."
+    [60/100] ✗ans ✗store  q60 (flat-recall)  "I don't know."
+    [61/100] ✗ans ✗store  q61 (flat-recall)  "I don't know."
+    [62/100] ✓ans ✓store  q62 (flat-recall)  'Max is afraid of heights.'
+    [63/100] ✗ans ✗store  q63 (flat-recall)  "I don't know."
+    [64/100] ✓ans ✓store  q64 (flat-recall)  'Max loves playing Catan.'
+    [65/100] ✓ans ✓store  q65 (relational)  "Based on the memory entries, Max's nephew's name i"
+    [66/100] ✗ans ✗store  q66 (relational)  "I don't know."
+    [67/100] ✗ans ✗store  q67 (relational)  "I don't know."
+    [68/100] ✗ans ✗store  q68 (relational)  "I don't know."
+    [69/100] ✗ans ✗store  q69 (relational)  "I don't know."
+    [70/100] ✗ans ✗store  q70 (relational)  'Based on the memory, Max started a running club wi'
+    [71/100] ✗ans ✓store  q71 (relational)  "I don't know."
+    [72/100] ✓ans ✓store  q73 (relational)  "Diego's daughter's name is Ines."
+    [73/100] ✗ans ✗store  q72 (relational)  "Based on the memory, Lena's partner is named Sam."
+    [74/100] ✗ans ✓store  q74 (relational)  "I don't know - the memory mentions Raj as the fath"
+    [75/100] ✓ans ✓store  q77 (multi-hop)  "Max's fiancé works as a veterinarian at Brightpath"
+    [76/100] ✗ans ✗store  q76 (relational)  "I don't know."
+    [77/100] ✗ans ✓store  q75 (relational)  "I don't know."
+    [78/100] ✓ans ✓store  q78 (multi-hop)  "Max's fiancé plays the viola."
+    [79/100] ✗ans ✗store  q79 (multi-hop)  "I don't know."
+    [80/100] ✓ans ✓store  q80 (multi-hop)  "Max's best friend works as a product designer."
+    [81/100] ✗ans ✓store  q81 (multi-hop)  "I don't know."
+    [82/100] ✓ans ✓store  q82 (multi-hop)  "Max's nephew is obsessed with dinosaurs."
+    [83/100] ✓ans ✓store  q85 (multi-hop)  "Max's grandmother was a concert pianist in her you"
+    [84/100] ✓ans ✓store  q83 (multi-hop)  "Max's niece is learning the harp."
+    [85/100] ✓ans ✓store  q84 (multi-hop)  "Max's grandmother lives in a retirement community "
+    [86/100] ✓ans ✓store  q86 (multi-hop)  "Max's manager spent years at Lumen Labs before joi"
+    [87/100] ✓ans ✓store  q87 (multi-hop)  "Max's manager earned her PhD at Caltech."
+    [88/100] ✓ans ✓store  q90 (multi-hop)  "Max's mentor's university is located in Montreal."
+    [89/100] ✓ans ✓store  q88 (multi-hop)  "Max's college roommate lives in Montreal."
+    [90/100] ✓ans ✓store  q89 (multi-hop)  "Max's college roommate is a lawyer."
+    [91/100] ✗ans ✗store  q92 (temporal-update)  "I don't know."
+    [92/100] ✓ans ✓store  q91 (multi-hop)  'Imani worked at an aerospace company called Aeroli'
+    [93/100] ✗ans ✗store  q93 (temporal-update)  "I don't know"
+    [94/100] ✗ans ✗store  q94 (temporal-update)  "I don't know."
+    [95/100] ✓ans ✓store  q96 (temporal-update)  'Max deleted all of their social media accounts thi'
+    [96/100] ✗ans ✗store  q95 (temporal-update)  "I don't know."
+    [97/100] ✗ans ✗store  q97 (temporal-update)  "I don't know"
+    [98/100] ✓ans ✓store  q98 (temporal-update)  'Max used an iPhone before switching to his current'
+    [99/100] ✗ans ✗store  q99 (temporal-update)  "I don't know."
+    [100/100] ✗ans ✗store  q100 (temporal-update)  "I don't know."
+  ANSWER 47.0/100   STORAGE 56.0/100
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 100 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | flat-recall | relational | multi-hop | temporal-update |
+|---|---|---|---|---|---|---|
+| openviking | **47.0/100** | 56.0/100 | 18.0/34 | 6.0/22 | 15.0/22 | 8.0/22 |
+
+
+============================================================
+  openviking  (http://localhost:9105)
+============================================================
+  health: {'status': 'ok', 'system': 'OpenViking (context DB)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/37] ✓ans ✓store  s03 (temporal-update)  'Max currently works at Cobalt Robotics.'
+    [2/37] ✗ans ✗store  s01 (temporal-update)  "I don't know."
+    [3/37] ✗ans ✗store  s02 (temporal-update)  "I don't know"
+    [4/37] ✗ans ✗store  s04 (temporal-update)  "I don't know."
+    [5/37] ✗ans ✗store  s05 (temporal-update)  "I don't know."
+    [6/37] ✗ans ✗store  s08 (temporal-update)  "I don't know."
+    [7/37] ✓ans ✓store  s06 (temporal-update)  'Max used an iPhone before switching to his current'
+    [8/37] ✗ans ✗store  s07 (temporal-update)  "I don't know."
+    [9/37] ✓ans ✓store  s09 (temporal-update)  'Max currently lives in a small house.'
+    [10/37] ✓ans ✓store  s12 (temporal-update)  'Max ate meat before going vegetarian.'
+    [11/37] ✗ans ✗store  s10 (temporal-update)  "I don't know"
+    [12/37] ✗ans ✗store  s11 (temporal-update)  "I don't know."
+    [13/37] ✗ans ✗store  s13 (temporal-update)  "I don't know."
+    [14/37] ✗ans ✗store  s14 (temporal-update)  "I don't know."
+    [15/37] ✓ans ✓store  s15 (temporal-update)  'Max currently trains for marathons.'
+    [16/37] ✗ans ✗store  s16 (temporal-update)  "I don't know."
+    [17/37] ✓ans ✓store  s17 (temporal-update)  'Max is engaged to Sam.'
+    [18/37] ✗ans ✗store  s18 (temporal-update)  "I don't know."
+    [19/37] ✓ans ✓store  s20 (temporal-update)  'Max currently leads the perception team.'
+    [20/37] ✗ans ✓store  s19 (temporal-update)  "Max's current job title is Senior Robotics Enginee"
+    [21/37] ~ans ~store  s21 (enumeration)  "Based on the memory, Max's family members are: Ani"
+    [22/37] ~ans ~store  s22 (enumeration)  'Based on the memory provided, Max has worked at Co'
+    [23/37] ✗ans ~store  s24 (enumeration)  'Based on the memory, Max has four friends: one who'
+    [24/37] ✗ans ✗store  s25 (enumeration)  "I don't know."
+    [25/37] ~ans ~store  s23 (enumeration)  "The musical instruments played by people in Max's "
+    [26/37] ✗ans ~store  s26 (enumeration)  "Max's blood relatives mentioned in the memory are:"
+    [27/37] ~ans ~store  s27 (enumeration)  "Max's hobbies and activities include marathon trai"
+    [28/37] ✗ans ✗store  s29 (enumeration)  'Based on the memory, Max works directly with two c'
+    [29/37] ✓ans ✓store  s28 (enumeration)  "Based on the memory entries, Max's relatives live "
+    [30/37] ✗ans ✗store  s30 (enumeration)  'Based on the memory, Max has studied German, Korea'
+    [31/37] ✗ans ✗store  s31 (aggregation)  "I don't know."
+    [32/37] ✗ans ✗store  s33 (aggregation)  "Based on the memory, Max's sister Anita has one ch"
+    [33/37] ✗ans ✗store  s32 (aggregation)  'Based on the memory provided, Max has worked for 1'
+    [34/37] ✓ans ✓store  s34 (aggregation)  'Max has one sibling, his sister Anita.'
+    [35/37] ✓ans ✓store  s35 (aggregation)  "Max's brother-in-law works in medicine at Meridian"
+    [36/37] ✓ans ✓store  s37 (aggregation)  "Max's sister is the architect in his family."
+    [37/37] ✗ans ✗store  s36 (aggregation)  'Eight different instruments are played by people i'
+  ANSWER 12.8/37   STORAGE 14.4/37
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 37 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | temporal-update | enumeration | aggregation |
+|---|---|---|---|---|---|
+| openviking | **12.8/37** | 14.4/37 | 7.0/20 | 2.8/10 | 3.0/7 |
+
+
+============================================================
+  openviking  (http://localhost:9105)
+============================================================
+  health: {'status': 'ok', 'system': 'OpenViking (context DB)'}
+  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)
+    [1/23] ✓ans ✓store  n01 (absence)  "I don't know."
+    [2/23] ✓ans ✓store  n02 (absence)  "I don't know."
+    [3/23] ✓ans ✓store  n03 (absence)  "I don't know."
+    [4/23] ✓ans ✓store  n04 (absence)  "I don't know."
+    [5/23] ✓ans ✓store  n05 (absence)  'No, Max is engaged to Sam but not yet married.'
+    [6/23] ✓ans ✓store  n07 (absence)  'No, Max works as a Senior Robotics Engineer at Cob'
+    [7/23] ✓ans ✓store  n06 (absence)  "I don't know."
+    [8/23] ✗ans ✗store  n08 (absence)  "I don't know if Max has a pet named Rufus based on"
+    [9/23] ✗ans ✗store  n10 (absence)  "Based on the memory provided, I don't know if Max "
+    [10/23] ✗ans ✗store  n09 (absence)  "I don't know."
+    [11/23] ✓ans ✓store  n11 (absence)  "I don't know - there's no mention of Max owning a "
+    [12/23] ✓ans ✓store  n12 (absence)  "Based on the memory provided, I don't see any ment"
+    [13/23] ✓ans ✓store  n15 (absence)  "No, Max has one cat (a tabby), so he doesn't have "
+    [14/23] ✗ans ✗store  n14 (absence)  "I don't know if Max plays the guitar based on the "
+    [15/23] ✓ans ✓store  n13 (absence)  "I don't know."
+    [16/23] ✓ans ✓store  n16 (absence)  "I don't know."
+    [17/23] ✗ans ✗store  n17 (presence-control)  'Yes, Max has a sister who lives in Chicago and wor'
+    [18/23] ✗ans ✗store  n18 (presence-control)  'Yes, Max owns a tabby cat described as having "opi'
+    [19/23] ✗ans ✗store  n19 (presence-control)  "I don't know."
+    [20/23] ✓ans ✓store  n20 (presence-control)  'Yes, Max is engaged to his partner Sam.'
+    [21/23] ✓ans ✓store  n21 (presence-control)  'Yes, Max has lived in Denver since moving there fr'
+    [22/23] ✓ans ✓store  n22 (presence-control)  'Yes, Max works at Cobalt Robotics as a Senior Robo'
+    [23/23] ✗ans ✗store  n23 (presence-control)  'Yes, Max has a niece who turned six on June 8, 202'
+  ANSWER 15.0/23   STORAGE 15.0/23
+
+# Memory Benchmark v2 — Max Turnquist
+
+> 23 questions · containerized · retrieval-augmented answerer · LLM judge
+
+## Scores
+
+| System | Answer | Storage | absence | presence-control |
+|---|---|---|---|---|
+| openviking | **15.0/23** | 15.0/23 | 12.0/16 | 3.0/7 |
+

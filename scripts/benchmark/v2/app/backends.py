@@ -271,6 +271,81 @@ class CIServerBackend:
         return [ln for ln in block.splitlines() if ln and not ln.startswith("#")]
 
 
+# --------------------------------------------------------------------------- #
+# OpenViking — volcengine "context database". Extraction-based, like mem0/
+# hindsight: messages are added to a session, then `extract` runs the VLM
+# (gemma-31b) to distill them into typed entity memories; `find` does semantic
+# retrieval and returns the memory content in each hit's `abstract`.
+# Talks to a host-run openviking-server (REST) configured for local models
+# (.203 gemma-31b VLM + nomic embeddings). Data dir is wiped out-of-band before
+# the run (see orchestrator.openviking_wipe), so reset() just opens a session.
+# --------------------------------------------------------------------------- #
+
+class OpenVikingBackend:
+    name = "OpenViking (context DB)"
+    EXTRACT_EVERY = 25  # extract+commit every N messages so the VLM context stays small
+
+    def __init__(self) -> None:
+        self._base = os.environ.get("OPENVIKING_URL", "http://host.docker.internal:1933").rstrip("/")
+        self._key = os.environ.get("OPENVIKING_API_KEY", "benchkey")
+        self._sid: str | None = None
+        self._pending = 0
+
+    def _post(self, path: str, payload: dict, timeout: float = 300.0) -> dict:
+        req = urllib.request.Request(f"{self._base}{path}", data=json.dumps(payload).encode(), method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("x-api-key", self._key)
+        req.add_header("X-OpenViking-Account", "default")
+        req.add_header("X-OpenViking-User", "default")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", "replace")
+        return json.loads(body) if body else {}
+
+    def reset(self) -> None:
+        # Clean slate comes from wiping the server's data dir out-of-band; here we
+        # just open a fresh session to accumulate this run's messages.
+        r = self._post("/api/v1/sessions", {})
+        self._sid = (r.get("result") or {}).get("session_id") or r.get("session_id")
+        self._pending = 0
+
+    def _extract_commit(self) -> None:
+        if not self._sid:
+            return
+        try:
+            self._post(f"/api/v1/sessions/{self._sid}/extract", {}, timeout=600)
+            # clear processed messages so the next extract sees only new ones
+            self._post(f"/api/v1/sessions/{self._sid}/commit", {"keep_recent_count": 0}, timeout=180)
+        except Exception:  # noqa: BLE001 — extraction is best-effort per batch
+            pass
+        self._pending = 0
+
+    def ingest(self, text: str, session_id: str) -> None:
+        if not self._sid:
+            self.reset()
+        self._post(f"/api/v1/sessions/{self._sid}/messages", {"role": "user", "content": text})
+        self._pending += 1
+        if self._pending >= self.EXTRACT_EVERY:
+            self._extract_commit()
+
+    def flush(self) -> None:
+        if self._sid and self._pending > 0:
+            self._extract_commit()
+
+    def retrieve(self, query: str) -> list[str]:
+        r = self._post("/api/v1/search/find", {"query": query, "limit": TOP_K}, timeout=120)
+        res = r.get("result") or {}
+        out: list[str] = []
+        for m in (res.get("memories") or [])[:TOP_K]:
+            uri = m.get("uri", "")
+            # skip structural scope markers (…/.abstract.md, …/.overview.md)
+            if uri.endswith(".abstract.md") or uri.endswith(".overview.md"):
+                continue
+            t = (m.get("abstract") or m.get("overview") or "").strip()
+            if t:
+                out.append(t)
+        return out
+
+
 def make_backend():
     system = os.environ.get("SYSTEM", "naive").lower()
     return {
@@ -278,4 +353,5 @@ def make_backend():
         "mem0": Mem0Backend,
         "hindsight": HindsightBackend,
         "ci_server": CIServerBackend,
+        "openviking": OpenVikingBackend,
     }[system]()
