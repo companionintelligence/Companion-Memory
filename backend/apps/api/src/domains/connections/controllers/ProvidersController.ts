@@ -100,6 +100,8 @@ export class ProvidersController {
       };
     }
 
+    if (provider.localOnly && !provider.providerKeys)
+
     const oauthClient = client as BaseOAuth2Client;
     const connection = await this.connectionService.create(serviceContext, {
       providerId: provider.id,

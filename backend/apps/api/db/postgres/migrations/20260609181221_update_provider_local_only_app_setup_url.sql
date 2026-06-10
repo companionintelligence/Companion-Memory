@@ -32,3 +32,7 @@ UPDATE ci.providers SET app_setup_url = null WHERE id IN (
     '019cbaf2-d789-7723-aada-7e3d709663f5', -- Spotify
     '019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04' -- GitHub
 );
+
+update ci.providers SET local_only = false WHERE id IN (
+    '019cbaf2-d789-7723-aada-7e3d709663f5' -- Spotify
+);

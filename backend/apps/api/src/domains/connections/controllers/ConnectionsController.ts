@@ -308,7 +308,7 @@ export class ConnectionsController {
         needsReauth: true,
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((error as any).details.code === 403) {
+      if ((error as any).details?.code === 403) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         throw new ForbiddenException((error as any).details.message);
       } else {
