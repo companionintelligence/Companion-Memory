@@ -6,6 +6,7 @@ import parseDuration from 'parse-duration';
 import { Agent, fetch as undiciFetch } from 'undici';
 
 import { SYSTEM_USER } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
@@ -50,6 +51,7 @@ export class OidcController {
     private readonly userService: UserService,
     private readonly authService: AuthService,
     private readonly csrfService: CsrfService,
+    private readonly featureService: FeatureService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OidcController.name);
@@ -184,7 +186,7 @@ export class OidcController {
           code_verifier: codeVerifier,
         }),
         dispatcher: fetchDispatcher,
-        signal: AbortSignal.timeout(2_000),
+        signal: AbortSignal.timeout(10_000),
       });
 
       if (!tokenResponse.ok) {
@@ -208,7 +210,7 @@ export class OidcController {
           Accept: 'application/json',
         },
         dispatcher: fetchDispatcher,
-        signal: AbortSignal.timeout(2_000),
+        signal: AbortSignal.timeout(10_000),
       });
 
       if (!userInfoResponse.ok) {
@@ -231,6 +233,18 @@ export class OidcController {
       let user = await this.userService.findByEmail(userInfo.email);
 
       if (!user) {
+        // Portal SSO must not bypass the signup-code gate: when codes are
+        // required, only users that already exist on this server may sign in.
+        const isSignupCodeRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
+
+        if (isSignupCodeRequired) {
+          this.logger.warn(
+            `OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`,
+          );
+
+          return res.redirect('/login?error=signup_code_required');
+        }
+
         // Auto-create account for Portal-authenticated users.
         // Generate a random password since they'll authenticate via OIDC.
         user = await this.userService.create(
