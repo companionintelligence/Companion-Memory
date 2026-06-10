@@ -5,6 +5,7 @@ import { Button, Card, Dialog, Input, Label } from '@ci/shadcn';
 import { Eye, EyeOff, Save, Trash } from '@ci/shadcn/icons';
 
 import type { Provider } from '@/pages/ConnectionsPage/ConnectionsPage.tsx';
+import { GET_PROVIDERS } from '@/queries';
 
 export interface ProviderKey {
   readonly id: string;
@@ -13,28 +14,6 @@ export interface ProviderKey {
   readonly providerId: string;
   readonly userId: string;
 }
-
-const GET_PROVIDERS = gql(`
-  query GetProviders {
-    providers {
-      edges {
-        cursor
-        node {
-          id
-          name
-          description
-          logoUrl
-          authType
-          providerKeys {
-            id
-            clientId
-            clientSecret
-          }
-        }
-      }
-    }
-  }
-`);
 
 const CREATE_PROVIDER_KEY = gql(`
   mutation CreateProviderKey($input: CreateProviderKeyInput!) {

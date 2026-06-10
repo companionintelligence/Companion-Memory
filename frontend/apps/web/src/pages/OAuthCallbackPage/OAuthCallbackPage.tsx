@@ -108,6 +108,8 @@ export function OAuthCallbackPage() {
         } else {
           if (response.status === 409) {
             toast.error('A connection to that account already exists');
+          } else if (response.status === 403) {
+            toast.error('Could not use new credentials to access API');
           } else {
             toast.error('Failed to create connection');
           }

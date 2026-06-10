@@ -35,6 +35,9 @@ export class ProviderEntity {
   @Column({ type: 'text', name: 'openid_key_link', nullable: true })
   openidKeyLink!: string | null;
 
+  @Column({ type: 'text', name: 'app_setup_url', nullable: true })
+  appSetupUrl!: string | null;
+
   @Column({ type: 'jsonb', default: '{}' })
   theme!: ProviderTheme;
 
@@ -43,6 +46,9 @@ export class ProviderEntity {
 
   @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updatedAt!: Date;
+
+  @Column({ type: 'boolean', name: 'local_only', default: false })
+  localOnly!: boolean;
 
   static toEgressType(entity: ProviderEntity): Provider {
     return {
@@ -57,6 +63,8 @@ export class ProviderEntity {
       },
       authType: entity.authType ?? null,
       openidKeyLink: entity.openidKeyLink ?? null,
+      appSetupUrl: entity.appSetupUrl ?? null,
+      localOnly: entity.localOnly ?? false,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };

@@ -30,6 +30,10 @@ export abstract class BaseOAuth2Client extends BaseClient {
 
   abstract getScopesFromActiveEndpoints(activeEndpoints: string[]): string;
 
+  getScopes(): string[] {
+    return this.scopes;
+  }
+
   async getClientCredentials(
     connection: Connection,
   ): Promise<{ clientId: string; clientSecret: string } | null> {
@@ -81,6 +85,10 @@ export abstract class BaseOAuth2Client extends BaseClient {
           };
         }
       } catch {
+        errorDetails = {
+          code: response.status,
+          message: response.statusText,
+        };
         // If we can't parse the error response, use the default message
       }
 
@@ -90,9 +98,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
       throw error;
     }
 
-    const data: T = await response.json();
-
-    return data;
+    return (await response.json()) as T;
   }
 
   async getAuthorizationUrl(connection: Connection): Promise<string> {

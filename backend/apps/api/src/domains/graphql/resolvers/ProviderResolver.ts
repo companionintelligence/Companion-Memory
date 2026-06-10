@@ -3,7 +3,7 @@ import { Args, ID, Query, Resolver, ResolveField, Parent } from '@nestjs/graphql
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { ProviderKeyService, ProviderService } from '@ci/domains/connections';
+import { ClientFactory, ProviderKeyService, ProviderService } from '@ci/domains/connections';
 
 import { ProviderKeyLoader } from '../loaders/ProviderKeyLoader';
 import { GlobalUID } from '../types/GlobalUID';
@@ -21,6 +21,7 @@ export class ProviderResolver {
     private readonly providerService: ProviderService,
     private readonly providerKeyService: ProviderKeyService,
     private readonly providerKeyLoader: ProviderKeyLoader,
+    private readonly clientFactory: ClientFactory,
   ) {}
 
   @Query(() => ProviderConnection)
@@ -66,6 +67,11 @@ export class ProviderResolver {
     return entity ? ProviderType.toType(entity) : null;
   }
 
+  @Query(() => String)
+  oAuthCallbackUrl(): string {
+    return this.providerService.getOAuthCallbackUrl();
+  }
+
   @ResolveField(() => ProviderKeyType, { nullable: true })
   async providerKeys(
     @Context() context: RequestContext,
@@ -73,7 +79,6 @@ export class ProviderResolver {
   ): Promise<ProviderKeyType | null> {
     const serviceContext = toServiceContext(context);
     const { id: decodedId } = GlobalUID.decode(provider.id);
-    console.log('providerKeys resovler', context, provider);
 
     const providerKeys = await this.providerKeyService.findByProviderId(serviceContext, decodedId);
 
@@ -84,5 +89,18 @@ export class ProviderResolver {
     const providerKeyLoad = await this.providerKeyLoader.load(serviceContext, providerKeys.id);
 
     return ProviderKeyType.toType(providerKeyLoad!);
+  }
+
+  @ResolveField(() => [String], { nullable: true })
+  scopes(@Parent() provider: ProviderType): string[] | null {
+    const { id: decodedId } = GlobalUID.decode(provider.id);
+
+    try {
+      // Steam (and other OpenID providers) have no scopes — getScopes() returns null.
+      return this.clientFactory.getClientByProviderId(decodedId).getScopes();
+    } catch {
+      // No client registered for this provider id.
+      return null;
+    }
   }
 }

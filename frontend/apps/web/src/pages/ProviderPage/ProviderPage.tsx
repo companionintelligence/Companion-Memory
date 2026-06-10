@@ -33,6 +33,8 @@ const GET_PROVIDER = gql(`
       description
       logoUrl
       authType
+      localOnly
+      appSetupUrl
       openidKeyLink
       theme {
         backgroundColor

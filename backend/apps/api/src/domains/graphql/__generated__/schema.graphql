@@ -788,14 +788,17 @@ type ProviderThemeType {
 }
 
 type ProviderType implements Node {
+  appSetupUrl: String
   authType: String
   description: String
   endpoints: [ProviderEndpointType!]!
   id: ID!
+  localOnly: Boolean!
   logoUrl: String
   name: String
   openidKeyLink: String
   providerKeys: ProviderKeyType
+  scopes: [String!]
   theme: ProviderThemeType
 }
 
@@ -832,6 +835,7 @@ type Query {
   node(id: ID!): Node
   note(id: ID!): NoteType
   notes(after: String, before: String, first: Int, last: Int): NoteConnection!
+  oAuthCallbackUrl: String!
   people(after: String, before: String, first: Int, last: Int): PersonConnection!
   person(id: ID!): PersonType
   place(id: ID!): PlaceType

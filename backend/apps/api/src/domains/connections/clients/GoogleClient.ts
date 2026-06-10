@@ -61,11 +61,12 @@ export class GoogleClient extends BaseOAuth2Client {
   }
 
   getAccountIdentifier(connection: Connection): Promise<string> {
-    return new Promise((resolve) =>
-      this.fetchProfile(connection).then((result) => {
-        console.log('Google profile', result);
-        resolve(result.id || '');
-      }),
+    return new Promise((resolve, reject) =>
+      this.fetchProfile(connection)
+        .then((result) => {
+          resolve(result.id || '');
+        })
+        .catch((err) => reject(err)),
     );
   }
 
