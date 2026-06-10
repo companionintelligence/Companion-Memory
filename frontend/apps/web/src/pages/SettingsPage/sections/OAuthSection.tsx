@@ -64,7 +64,7 @@ const DELETE_PROVIDER_KEY = gql(`
   }
 `);
 
-type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify';
+type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify' | 'github';
 
 interface OAuthState {
   oauth: Record<
@@ -84,6 +84,7 @@ export function OAuthSection() {
       microsoft: { clientId: '', clientSecret: '' },
       facebook: { clientId: '', clientSecret: '' },
       spotify: { clientId: '', clientSecret: '' },
+      github: { clientId: '', clientSecret: '' },
     },
   });
 
@@ -96,6 +97,8 @@ export function OAuthSection() {
     facebookClientSecret: false,
     spotifyClientId: false,
     spotifyClientSecret: false,
+    githubClientId: false,
+    githubClientSecret: false,
   });
 
   const [originalValues, setOriginalValues] = useState<
@@ -105,6 +108,7 @@ export function OAuthSection() {
     microsoft: { clientId: '', clientSecret: '' },
     facebook: { clientId: '', clientSecret: '' },
     spotify: { clientId: '', clientSecret: '' },
+    github: { clientId: '', clientSecret: '' },
   });
 
   const [validationErrors, setValidationErrors] = useState<
@@ -114,6 +118,7 @@ export function OAuthSection() {
     microsoft: {},
     facebook: {},
     spotify: {},
+    github: {},
   });
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -136,6 +141,7 @@ export function OAuthSection() {
       microsoft: { clientId: '', clientSecret: '' },
       facebook: { clientId: '', clientSecret: '' },
       spotify: { clientId: '', clientSecret: '' },
+      github: { clientId: '', clientSecret: '' },
     };
 
     setSettings((prev) => {
@@ -438,9 +444,10 @@ export function OAuthSection() {
       </div>
 
       <div className="space-y-4">
+        {renderProvider('facebook', 'Facebook')}
+        {renderProvider('github', 'GitHub')}
         {renderProvider('google', 'Google')}
         {renderProvider('microsoft', 'Microsoft')}
-        {renderProvider('facebook', 'Facebook')}
         {renderProvider('spotify', 'Spotify')}
       </div>
 
