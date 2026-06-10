@@ -72,6 +72,10 @@ export const ConfigSchema = z.object({
     oauth: z.object({
       callbackUrl: z.string(),
     }),
+    oidc: z.object({
+      issuerUrl: z.string(),
+      callbackUrl: z.string(),
+    }),
   }),
   db: z.object({
     type: z.literal('postgres'), // restrict to 'postgres' (or z.string() for other DBs)
