@@ -44,6 +44,10 @@ export class ProviderService {
   }
 
   getOAuthCallbackUrl(): string {
-    return config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback` || `https://${config.hostname}/oauth/callback`;
+    return (
+      config.auth.oauth.callbackUrl ||
+      `${process.env.APP_PUBLIC_URL}/oauth/callback` ||
+      `https://${config.hostname}/oauth/callback`
+    );
   }
 }
