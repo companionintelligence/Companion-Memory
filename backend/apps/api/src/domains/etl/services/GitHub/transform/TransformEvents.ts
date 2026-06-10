@@ -69,11 +69,12 @@ export class GitHubEventsTransformService {
 
       switch (event.type) {
         case 'CommitCommentEvent': {
+          const comment = (event as GithubCommitCommentEvent).payload.comment;
+          const contentExternalId = `${comment.commit_id}:${comment.id}`;
           const existingContent = await this.contentService.search(
             { userId },
-            { external_id: event.id.toString() },
+            { external_id: contentExternalId },
           );
-          const comment = (event as GithubCommitCommentEvent).payload.comment;
           if (existingContent.length === 0) {
             await this.contentService.create(
               { userId },

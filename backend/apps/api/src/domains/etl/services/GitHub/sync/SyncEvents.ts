@@ -259,9 +259,7 @@ async function fetchAllRepos(client: BaseClient, connection: Connection) {
 
     const data = (await response.json()) as Array<{ full_name: string }>;
     for (const repo of data) {
-      if (repo.full_name.toLowerCase() === 'companionintelligence/ci-server') {
-        repos.push(repo.full_name);
-      }
+      repos.push(repo.full_name);
     }
 
     const linkHeader = response.headers.get('link');
@@ -318,14 +316,7 @@ export async function syncEvents({
     const newCursor: Record<string, string | false> = {};
 
     for (const repoFullName of repos) {
-      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
-        console.log('Iterating over repo', repoFullName);
-      }
-
       const existingCursor = nextCursor[repoFullName];
-      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
-        console.log('existingCursor for', repoFullName, existingCursor);
-      }
 
       // If cursor is `false`, this repo was fully paginated in a previous
       // invocation and there was no next page. Skip it entirely — it's done.
@@ -350,31 +341,13 @@ export async function syncEvents({
         endpoint = `/repos/${repoFullName}/events?per_page=${PAGE_SIZE}`;
       }
 
-      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
-        console.log('calling endpoint', endpoint);
-      }
-
       const response = await client.requestRaw(connection, endpoint, { headers });
-
-      if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
-        console.log('response', response);
-      }
 
       // 304 Not Modified — no new events since the saved ETag.
       if (response.status === 304) {
-        if (repoFullName.toLowerCase() === 'companionintelligence/ci-server') {
-          console.log('no new events for repo', repoFullName, 'historical', historical);
-        }
-
         const etag = response.headers.get('etag') || (existingCursor as string);
         eventsMap[repoFullName] = [];
         newCursor[repoFullName] = historical ? false : etag;
-        console.log(
-          'Set eventsmap and newcursor for',
-          repoFullName,
-          eventsMap[repoFullName],
-          newCursor[repoFullName],
-        );
 
         client.logger.log('GitHub Events: no new events (304)', {
           connectionId: connection.id,
