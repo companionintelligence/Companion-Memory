@@ -416,7 +416,7 @@ export async function syncEvents({
         // Historical: one page per repo per invocation.
         // Save next-page URL if more pages remain, otherwise defaults to false, which indicates end.
         newCursor[repoFullName] = nextPageUrl || false;
-      } else if (!historical && !cursorIsEtag(existingCursor)) {
+      } else if (!cursorIsEtag(existingCursor)) {
         // Incremental first run (no ETag yet): single page to seed an ETag.
         const etag = response.headers.get('etag');
         newCursor[repoFullName] = etag || false;
