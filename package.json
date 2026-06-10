@@ -13,6 +13,14 @@
     "frontend/apps/*",
     "frontend/packages/*"
   ],
+  "resolutions": {
+    "fast-xml-parser": "4.5.5",
+    "multer": "2.1.1",
+    "path-to-regexp": "^8.4.0",
+    "immutable@npm:~3.7.6": "3.8.3",
+    "glob@npm:11.0.1": "11.1.0",
+    "picomatch@npm:4.0.2": "4.0.4"
+  },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
     "@playwright/test": "^1.57.0",
