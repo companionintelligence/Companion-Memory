@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 
-import { Controller, Get, HttpCode, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, HttpCode, Query, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import parseDuration from 'parse-duration';
 import { Agent, fetch as undiciFetch } from 'undici';
@@ -78,7 +78,9 @@ export class OidcController {
     const { issuerUrl } = config.auth.oidc;
 
     if (!issuerUrl) {
-      throw new UnauthorizedException('OIDC is not configured — OIDC_ISSUER_URL is required');
+      // Redirect like every other error path — the login page renders the error,
+      // instead of the browser landing on raw 401 JSON.
+      return res.redirect('/login?error=oidc_not_configured');
     }
 
     const callbackUrl = this.getCallbackUrl(req);
