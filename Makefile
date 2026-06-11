@@ -124,7 +124,7 @@ build-local: distribute-license ## Build Docker images for local development
 	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
 
 	@printf "\n➤ Building HBPE service image...\n\n"
-	@docker build -f backend/apps/hbpe/Dockerfile.local $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
+	@docker build -f backend/apps/hbpe/Dockerfile $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
 
 	@$(MAKE) clean-license
 
@@ -165,7 +165,7 @@ build-staging: distribute-license ## Build Docker images for staging deployment
 	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
 
 	@printf "\n➤ Building HBPE service image...\n\n"
-	@docker build -f backend/apps/hbpe/Dockerfile.rocm $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
+	@docker build -f backend/apps/hbpe/Dockerfile $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
 
 	@$(MAKE) clean-license
 
@@ -209,7 +209,7 @@ build-production: distribute-license ## Build the application
 	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
 
 	@printf "\n➤ Building HBPE service image...\n\n"
-	@docker build -f backend/apps/hbpe/Dockerfile.rocm $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
+	@docker build -f backend/apps/hbpe/Dockerfile $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
 
 	@$(MAKE) clean-license
 
