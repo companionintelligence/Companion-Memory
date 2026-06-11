@@ -219,7 +219,7 @@ export class BrowserActivityService {
     }
 
     if (options.endTime) {
-      query = query.andWhere('browser-activity.time >= :endTime', { endTime: options.endTime });
+      query = query.andWhere('browser-activity.time <= :endTime', { endTime: options.endTime });
     }
 
     const results = await query.getRawMany();

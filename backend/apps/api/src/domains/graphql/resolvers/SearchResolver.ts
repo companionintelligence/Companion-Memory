@@ -75,11 +75,16 @@ export class SearchResolver {
 
       results.push(...queryResults);
     } else {
+      const noInputs =
+        (!input.includeTypes || input.includeTypes.length === 0) &&
+        (!input.excludeTypes || input.excludeTypes.length === 0) &&
+        !input.startTime &&
+        !input.endTime;
       const queryResults = await this.searchByTimedEntities(serviceContext, {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
         startTime: input.startTime ? new Date(input.startTime) : undefined,
-        endTime: input.endTime ? new Date(input.endTime) : undefined,
+        endTime: noInputs ? new Date() : input.endTime ? new Date(input.endTime) : undefined,
       });
 
       results.push(...queryResults);
@@ -190,8 +195,8 @@ export class SearchResolver {
 
     if (endTime) {
       eventOptions.endTime = endTime;
-      browserActivityOptions.startTime = endTime;
-      communicationOptions.startTime = endTime;
+      browserActivityOptions.endTime = endTime;
+      communicationOptions.endTime = endTime;
     }
 
     const [eventResults, browserActivityResults, communicationResults] = await Promise.all([

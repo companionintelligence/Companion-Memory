@@ -373,11 +373,14 @@ export class EventService {
     }
 
     if (options.startTime) {
-      query = query.andWhere('event.start_time >= :startTime', { startDate: options.startTime });
+      query = query.andWhere('event.start_time >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('event.end_time >= :endTime', { endTime: options.endTime });
+      query = query.andWhere('event.start_time <= :endTime', { startTime: options.endTime });
+      query = query.andWhere('(event.end_time IS NULL OR (event.end_time <= :endTime))', {
+        endTime: options.endTime,
+      });
     }
 
     const results = await query.getRawMany();

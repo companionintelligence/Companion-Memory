@@ -295,7 +295,7 @@ export class CommunicationService {
     }
 
     if (options.endTime) {
-      query = query.andWhere('communications.time >= :endTime', { endTime: options.endTime });
+      query = query.andWhere('communications.time <= :endTime', { endTime: options.endTime });
     }
 
     const results = await query.getRawMany();
