@@ -37,6 +37,26 @@ LICENSE_DIRS := \
 # Helper: expands to "-t repo:tag" only when TAG is non-empty
 versioned_tag = $(if $(TAG),-t $(1):$(TAG))
 
+# ─────────────────────────────────────────────────────────────────────
+# Build configuration (consumed by the `build` target)
+#
+#   make build ENV=local|staging|production  GPU=cpu|cuda|rocm
+#
+# ENV selects which images are built (local omits API/gateway/secrets).
+# GPU selects the HBPE base image (cpu = the default Dockerfile).
+# ─────────────────────────────────────────────────────────────────────
+ENV ?= local
+GPU ?= cpu
+
+VALID_ENVS := local staging production
+VALID_GPUS := cpu cuda rocm
+
+# GPU → HBPE Dockerfile (cpu uses the default Dockerfile)
+HBPE_DOCKERFILE_cpu  := Dockerfile
+HBPE_DOCKERFILE_cuda := Dockerfile.cuda
+HBPE_DOCKERFILE_rocm := Dockerfile.rocm
+HBPE_DOCKERFILE := $(HBPE_DOCKERFILE_$(GPU))
+
 
 define BANNER
    ______                                  _
@@ -101,47 +121,17 @@ reset: ## Reset the local development environment
 
 	@printf "\n$(GREEN)✓$(RESET) Reset complete.\n\n"
 
-.PHONY: build-local
-build-local: distribute-license ## Build Docker images for local development
-	@printf "🧱 Building local images...\n\n"
+.PHONY: build
+build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cuda|rocm (default cpu)
+	@echo "$(VALID_ENVS)" | grep -qw "$(ENV)" || { printf "$(RED)✗$(RESET) Invalid ENV '$(ENV)'. Choose one of: $(VALID_ENVS)\n\n"; exit 1; }
+	@echo "$(VALID_GPUS)" | grep -qw "$(GPU)" || { printf "$(RED)✗$(RESET) Invalid GPU '$(GPU)'. Choose one of: $(VALID_GPUS)\n\n"; exit 1; }
 
-	@printf "➤ Building database setup image...\n\n"
-	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database
+	@$(MAKE) distribute-license
 
-	@printf "\n➤ Building database image...\n\n"
-	@docker build -f infrastructure/database/Dockerfile $(call versioned_tag,$(DATABASE_REPO)) -t $(DATABASE_REPO):latest infrastructure/database
+	@printf "🧱 Building $(ENV) images...\n"
 
-	@printf "\n➤ Building object store image...\n\n"
-	@docker build -f infrastructure/object-store/Dockerfile $(call versioned_tag,$(OBJECT_STORE_REPO)) -t $(OBJECT_STORE_REPO):latest infrastructure/object-store
-
-	@printf "\n➤ Building orchestrator setup image...\n\n"
-	@docker build -f infrastructure/setup-orchestrator/Dockerfile $(call versioned_tag,$(SETUP_ORCHESTRATOR_REPO)) -t $(SETUP_ORCHESTRATOR_REPO):latest infrastructure/setup-orchestrator
-
-	@printf "\n➤ Building orchestrator image...\n\n"
-	@docker build -f infrastructure/orchestrator/Dockerfile $(call versioned_tag,$(ORCHESTRATOR_REPO)) -t $(ORCHESTRATOR_REPO):latest infrastructure/orchestrator
-
-	@printf "\n➤ Building summary service image...\n\n"
-	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
-
-	@printf "\n➤ Building HBPE service image...\n\n"
-	@docker build -f backend/apps/hbpe/Dockerfile $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
-
-	@$(MAKE) clean-license
-
-	@printf "\n"
-
-.PHONY: build-staging
-build-staging: distribute-license ## Build Docker images for staging deployment
-	@printf "🧱 Building staging images...\n\n"
-
-	@printf "➤ Compiling API...\n\n"
-	@cd backend/apps/api && yarn clean && yarn build
-
-	@printf "\n➤ Compiling web frontend...\n\n"
-	@cd frontend/apps/web && yarn clean && yarn build
-
-	@printf "\n➤ Building API image...\n\n"
-	@docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest .
+	@# API, gateway and web frontend are only built for staging/production
+	@if [ "$(ENV)" != "local" ]; then printf "\n➤ Compiling API...\n\n" && ( cd backend/apps/api && yarn clean && yarn build ) && printf "\n➤ Compiling web frontend...\n\n" && ( cd frontend/apps/web && yarn clean && yarn build ) && printf "\n➤ Building API image...\n\n" && docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest . && printf "\n➤ Building gateway image...\n\n" && docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest . ; fi
 
 	@printf "\n➤ Building database setup image...\n\n"
 	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database
@@ -149,9 +139,6 @@ build-staging: distribute-license ## Build Docker images for staging deployment
 	@printf "\n➤ Building database image...\n\n"
 	@docker build -f infrastructure/database/Dockerfile $(call versioned_tag,$(DATABASE_REPO)) -t $(DATABASE_REPO):latest infrastructure/database
 
-	@printf "\n➤ Building gateway image...\n\n"
-	@docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest .
-
 	@printf "\n➤ Building object store image...\n\n"
 	@docker build -f infrastructure/object-store/Dockerfile $(call versioned_tag,$(OBJECT_STORE_REPO)) -t $(OBJECT_STORE_REPO):latest infrastructure/object-store
 
@@ -161,55 +148,14 @@ build-staging: distribute-license ## Build Docker images for staging deployment
 	@printf "\n➤ Building orchestrator image...\n\n"
 	@docker build -f infrastructure/orchestrator/Dockerfile $(call versioned_tag,$(ORCHESTRATOR_REPO)) -t $(ORCHESTRATOR_REPO):latest infrastructure/orchestrator
 
-	@printf "\n➤ Building summary service image...\n\n"
-	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
-
-	@printf "\n➤ Building HBPE service image...\n\n"
-	@docker build -f backend/apps/hbpe/Dockerfile $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
-
-	@$(MAKE) clean-license
-
-	@printf "\n"
-
-.PHONY: build-production
-build-production: distribute-license ## Build the application
-	@printf "🧱 Building production images...\n\n"
-
-	@printf "➤ Compiling API...\n\n"
-	@cd backend/apps/api && yarn clean && yarn build
-
-	@printf "\n➤ Compiling web frontend...\n\n"
-	@cd frontend/apps/web && yarn clean && yarn build
-
-	@printf "\n➤ Building API image...\n\n"
-	@docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest .
-
-	@printf "\n➤ Building database setup image...\n\n"
-	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database
-
-	@printf "\n➤ Building database image...\n\n"
-	@docker build -f infrastructure/database/Dockerfile $(call versioned_tag,$(DATABASE_REPO)) -t $(DATABASE_REPO):latest infrastructure/database
-
-	@printf "\n➤ Building gateway image...\n\n"
-	@docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest .
-
-	@printf "\n➤ Building object store image...\n\n"
-	@docker build -f infrastructure/object-store/Dockerfile $(call versioned_tag,$(OBJECT_STORE_REPO)) -t $(OBJECT_STORE_REPO):latest infrastructure/object-store
-
-	@printf "\n➤ Building orchestrator setup image...\n\n"
-	@docker build -f infrastructure/setup-orchestrator/Dockerfile $(call versioned_tag,$(SETUP_ORCHESTRATOR_REPO)) -t $(SETUP_ORCHESTRATOR_REPO):latest infrastructure/setup-orchestrator
-
-	@printf "\n➤ Building orchestrator image...\n\n"
-	@docker build -f infrastructure/orchestrator/Dockerfile $(call versioned_tag,$(ORCHESTRATOR_REPO)) -t $(ORCHESTRATOR_REPO):latest infrastructure/orchestrator
-
-	@printf "\n➤ Building setup secrets image...\n\n"
-	@docker build -f infrastructure/setup-secrets/Dockerfile $(call versioned_tag,$(SETUP_SECRETS_REPO)) -t $(SETUP_SECRETS_REPO):latest infrastructure/setup-secrets
+	@# setup-secrets is only built for production
+	@if [ "$(ENV)" = "production" ]; then printf "\n➤ Building setup secrets image...\n\n" && docker build -f infrastructure/setup-secrets/Dockerfile $(call versioned_tag,$(SETUP_SECRETS_REPO)) -t $(SETUP_SECRETS_REPO):latest infrastructure/setup-secrets ; fi
 
 	@printf "\n➤ Building summary service image...\n\n"
 	@docker build -f backend/apps/summary/Dockerfile $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest backend/apps/summary
 
-	@printf "\n➤ Building HBPE service image...\n\n"
-	@docker build -f backend/apps/hbpe/Dockerfile $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
+	@printf "\n➤ Building HBPE service image ($(GPU))...\n\n"
+	@docker build -f backend/apps/hbpe/$(HBPE_DOCKERFILE) $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest backend/apps/hbpe
 
 	@$(MAKE) clean-license
 
@@ -374,7 +320,11 @@ install: ## Install project dependencies
 	@printf "\n"
 
 .PHONY: local
-local: health init build-local stop ## Run the local deployment
+local: health init ## Run the local deployment
+	@$(MAKE) build ENV=local GPU=$(GPU)
+
+	@$(MAKE) stop
+
 	@printf "⌨️ Starting local services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d --remove-orphans
@@ -392,7 +342,11 @@ migrate: ## Run database migrations
 	@printf "\nMigrations successfully run.\n\n"
 
 .PHONY: production
-production: health init build-production stop ## Run the production deployment
+production: health init ## Run the production deployment
+	@$(MAKE) build ENV=production GPU=$(GPU)
+
+	@$(MAKE) stop
+
 	@printf "🚀 Starting production services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.production.yml --profile production up -d --remove-orphans
@@ -400,7 +354,9 @@ production: health init build-production stop ## Run the production deployment
 	@printf "\n"
 
 .PHONY: publish
-publish: init build-production ## Publish CI-Server images and metadata to the CI-Portal store
+publish: init ## Publish CI-Server images and metadata to the CI-Portal store
+	@$(MAKE) build ENV=production GPU=$(GPU)
+
 	@printf "📦 Publishing to CI-Portal registry...\n\n"
 
 	@scripts/publish/publish.sh
@@ -454,7 +410,11 @@ seed-production: ## Seed production database via ephemeral proxy
 	@printf "\nDatabase successfully seeded. 🌳\n\n"
 
 .PHONY: staging
-staging: health init build-staging stop ## Run the staging deployment
+staging: health init ## Run the staging deployment
+	@$(MAKE) build ENV=staging GPU=$(GPU)
+
+	@$(MAKE) stop
+
 	@printf "🎭 Starting staging services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile staging up -d --remove-orphans

@@ -65,7 +65,7 @@ done
 # ── Image Map ──────────────────────────────────────────────────────────
 # Maps: local-image-name → registry-repo-name
 #
-# Local images are built by `make build-production` as ci/<name>.
+# Local images are built by `make build ENV=production` as ci/<name>.
 # Registry repos use companion/<name> as the public namespace.
 # Parallel arrays instead of associative array (bash 3.2 compat).
 
