@@ -42,14 +42,13 @@ This is a Yarn workspace monorepo with the following structure:
 ```
 hermes memory setup
 ```
-
 ### Point to running Companion Memory Server URL
 
-<img height="180" alt="434image" src="https://github.com/user-attachments/assets/ba285919-36cd-435f-946c-912dfbbad034" />
+<img height="150" alt="434image" src="https://github.com/user-attachments/assets/ba285919-36cd-435f-946c-912dfbbad034" />
 
 Automatic Setup
 
-<img height="380" alt="2image" src="https://github.com/user-attachments/assets/e85091a4-3169-40c4-933a-5deabff679ca" />
+<img height="350" alt="2image" src="https://github.com/user-attachments/assets/e85091a4-3169-40c4-933a-5deabff679ca" />
 
 Select Memory provider
 
