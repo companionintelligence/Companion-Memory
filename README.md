@@ -1,7 +1,14 @@
 
+<p align="center">
+    <img width="512" height="512" alt="companion-memory-logo" src="https://github.com/user-attachments/assets/e8f0d40b-3e84-44ad-85ee-55f677b08cb3" />
+</p>
+
 
 # Companion Memory
 ### Personal Database for Companion Intelligence
+
+### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
+
 
 #### COPYRIGHT COMPANION INTELLIGENCE - LIFESCOPE INC
 
@@ -27,6 +34,27 @@ This is a Yarn workspace monorepo with the following structure:
     ├── shadcn/                 # ShadCN components (these typically shouldn't be modified directly, they're just local copies of our component library)
     └── template/               # A starter package to copy and paste when you need to create a new package in frontend/packages/
 ```
+
+## TL;DR - Hermes
+
+### STANDALONE SETUP
+
+```
+hermes memory setup
+```
+
+### Point to running Companion Memory Server URL
+
+<img height="180" alt="434image" src="https://github.com/user-attachments/assets/ba285919-36cd-435f-946c-912dfbbad034" />
+
+Automatic Setup
+
+<img height="380" alt="2image" src="https://github.com/user-attachments/assets/e85091a4-3169-40c4-933a-5deabff679ca" />
+
+Select Memory provider
+
+<img height="300" alt="5image" src="https://github.com/user-attachments/assets/aba17970-b2d2-4842-b268-495bffdde2c8" />
+
 
 ## Getting started
 
