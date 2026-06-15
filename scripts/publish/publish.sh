@@ -41,8 +41,18 @@ fi
 
 REGISTRY="${REGISTRY:-portal.ci.localhost}"
 PORTAL_API="${PORTAL_API:-https://portal.ci.localhost/api}"
-ADMIN_KEY="${STORE_ADMIN_API_KEY:?STORE_ADMIN_API_KEY must be set}"
+ADMIN_KEY="${STORE_ADMIN_API_KEY:-}"
 SLUG="companion"
+
+# Portal catalog registration (ingest → publish) is best-effort. Pushing the
+# images to the registry is the part that actually matters for installs, so a
+# missing / unreachable Portal must NOT abort the image push. When PORTAL_API
+# or the admin key aren't configured (e.g. DEV_PORTAL_API unset in CI, or an
+# images-only publish), we skip the Portal phases and still push images.
+PORTAL_ENABLED=true
+if [[ -z "${ADMIN_KEY}" || "${SKIP_PORTAL:-false}" == "true" ]]; then
+  PORTAL_ENABLED=false
+fi
 
 # Allow insecure TLS only for local development
 if [[ "$REGISTRY" == *".localhost" || "$REGISTRY" == "localhost"* ]]; then
@@ -310,31 +320,34 @@ main() {
   log ""
 
   # ── Step 2: Upload bundle (Phase 1) ────────────────────────────────
-  log "=== Step 2: Upload bundle → pending ==="
-
   local RESULT HTTP_CODE BODY STATUS
-  RESULT=$(curl $CURL_OPTS -w '\n%{http_code}' -X POST "${PORTAL_API}/store/ingest" \
-    -H "x-admin-key: ${ADMIN_KEY}" \
-    -H "Content-Type: application/octet-stream" \
-    --data-binary "@${BUNDLE}")
+  if [[ "$PORTAL_ENABLED" == "true" ]]; then
+    log "=== Step 2: Upload bundle → pending ==="
 
-  HTTP_CODE=$(echo "$RESULT" | tail -1)
-  BODY=$(echo "$RESULT" | sed '$d')
+    # Non-fatal: a connection error (curl exits non-zero) or non-200 must not
+    # abort the run — we degrade to image-only publish.
+    RESULT=$(curl $CURL_OPTS -w '\n%{http_code}' -X POST "${PORTAL_API}/store/ingest" \
+      -H "x-admin-key: ${ADMIN_KEY}" \
+      -H "Content-Type: application/octet-stream" \
+      --data-binary "@${BUNDLE}" 2>/dev/null) || RESULT=""
 
-  if [[ "$HTTP_CODE" != "200" ]]; then
-    log "  HTTP ${HTTP_CODE}"
-    log "$BODY"
-    fail "Upload failed (HTTP ${HTTP_CODE})"
+    HTTP_CODE=$(echo "$RESULT" | tail -1)
+    BODY=$(echo "$RESULT" | sed '$d')
+    STATUS=$(echo "$BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
+
+    if [[ "$HTTP_CODE" == "200" && "$STATUS" == "pending" ]]; then
+      log "  HTTP ${HTTP_CODE} — status: pending"
+    else
+      log "  ⚠ Portal ingest failed (HTTP ${HTTP_CODE:-none}) at ${PORTAL_API}"
+      log "    Skipping catalog registration — images will still be pushed."
+      PORTAL_ENABLED=false
+    fi
+    log ""
+  else
+    log "=== Step 2: Upload bundle → pending (SKIPPED — Portal not configured) ==="
+    log "  Set PORTAL_API + STORE_ADMIN_API_KEY to register the store bundle."
+    log ""
   fi
-
-  STATUS=$(echo "$BODY" | jq -r '.status // empty')
-  if [[ "$STATUS" != "pending" ]]; then
-    log "$BODY"
-    fail "Expected status=pending, got: ${STATUS}"
-  fi
-
-  log "  HTTP ${HTTP_CODE} — status: pending"
-  log ""
 
   # ── Step 3: Tag and push images ────────────────────────────────────
   if [[ "${SKIP_IMAGE_PUSH:-false}" == "true" ]]; then
@@ -403,39 +416,43 @@ main() {
   fi
 
   # ── Step 4: Publish (Phase 3) ──────────────────────────────────────
-  log "=== Step 4: Publish → published ==="
+  if [[ "$PORTAL_ENABLED" == "true" ]]; then
+    log "=== Step 4: Publish → published ==="
 
-  RESULT=$(curl $CURL_OPTS -w '\n%{http_code}' -X POST \
-    "${PORTAL_API}/store/publish/${SLUG}" \
-    -H "x-admin-key: ${ADMIN_KEY}")
+    RESULT=$(curl $CURL_OPTS -w '\n%{http_code}' -X POST \
+      "${PORTAL_API}/store/publish/${SLUG}" \
+      -H "x-admin-key: ${ADMIN_KEY}" 2>/dev/null) || RESULT=""
 
-  HTTP_CODE=$(echo "$RESULT" | tail -1)
-  BODY=$(echo "$RESULT" | sed '$d')
+    HTTP_CODE=$(echo "$RESULT" | tail -1)
+    BODY=$(echo "$RESULT" | sed '$d')
+    STATUS=$(echo "$BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
 
-  if [[ "$HTTP_CODE" != "200" ]]; then
-    log "  HTTP ${HTTP_CODE}"
-    log "$BODY"
-    fail "Finalize failed (HTTP ${HTTP_CODE})"
-  fi
-
-  STATUS=$(echo "$BODY" | jq -r '.status // empty')
-  if [[ "$STATUS" != "published" ]]; then
-    log "$BODY"
-    fail "Expected status=published, got: ${STATUS}"
-  fi
-
-  log "  ✓ ${SLUG}@${VERSION} published!"
-  log ""
-
-  # ── Step 5: Verify store listing ───────────────────────────────────
-  if ! $QUIET; then
-    echo "=== Step 5: Verify store listing ==="
-    curl $CURL_OPTS "${PORTAL_API}/store/${SLUG}" | jq '.' 2>/dev/null \
-      || echo "  (listing endpoint returned non-JSON — but publish succeeded)"
-    echo ""
-    echo "✓ ${SLUG}@${VERSION} published to ${REGISTRY}"
+    if [[ "$HTTP_CODE" == "200" && "$STATUS" == "published" ]]; then
+      log "  ✓ ${SLUG}@${VERSION} published!"
+    else
+      log "  ⚠ Portal publish failed (HTTP ${HTTP_CODE:-none}) — images are pushed but the catalog entry was not finalized."
+      PORTAL_ENABLED=false
+    fi
+    log ""
   else
-    echo "  ✓ ${SLUG}@${VERSION}"
+    log "=== Step 4: Publish → published (SKIPPED — Portal not configured) ==="
+    log ""
+  fi
+
+  # ── Step 5: Verify / summary ───────────────────────────────────────
+  if [[ "$PORTAL_ENABLED" == "true" ]]; then
+    if ! $QUIET; then
+      echo "=== Step 5: Verify store listing ==="
+      curl $CURL_OPTS "${PORTAL_API}/store/${SLUG}" | jq '.' 2>/dev/null \
+        || echo "  (listing endpoint returned non-JSON — but publish succeeded)"
+      echo ""
+      echo "✓ ${SLUG}@${VERSION} published to ${REGISTRY}"
+    else
+      echo "  ✓ ${SLUG}@${VERSION}"
+    fi
+  else
+    echo "✓ Images for ${SLUG}@${VERSION} pushed to ${REGISTRY}."
+    echo "  (Portal catalog registration was skipped — set PORTAL_API + STORE_ADMIN_API_KEY to enable.)"
   fi
 }
 
