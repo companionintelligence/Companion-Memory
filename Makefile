@@ -34,6 +34,11 @@ LICENSE_DIRS := \
 	backend/apps/summary \
 	backend/apps/hbpe
 
+# Helper: emoji $(2) when goal $(1) is the one invoked at top level, else ➤.
+# The MAKELEVEL/MAKECMDGOALS guard keeps the icon to the directly-requested
+# target, so recursive sub-makes fall back to the plain arrow.
+task_icon =$(if $(and $(filter 0,$(MAKELEVEL)),$(filter $(1),$(MAKECMDGOALS))),$(2),➤)
+
 # Helper: expands to "-t repo:tag" only when TAG is non-empty
 versioned_tag = $(if $(TAG),-t $(1):$(TAG))
 
@@ -96,7 +101,7 @@ clean-license:
 
 .PHONY: reset
 reset: ## Reset the local development environment
-	@printf "🧹 Resetting Docker environment INCLUDING ALL DATA...\n\n"
+	@printf "$(call task_icon,reset,🧹) Resetting Docker environment INCLUDING ALL DATA...\n\n"
 
 	@$(MAKE) stop
 
@@ -128,7 +133,7 @@ build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cud
 
 	@$(MAKE) distribute-license
 
-	@printf "🧱 Building $(ENV) images...\n"
+	@printf "$(call task_icon,build,🧱) Building $(ENV) images...\n"
 
 	@# API, gateway and web frontend are only built for staging/production
 	@if [ "$(ENV)" != "local" ]; then printf "\n➤ Compiling API...\n\n" && ( cd backend/apps/api && yarn clean && yarn build ) && printf "\n➤ Compiling web frontend...\n\n" && ( cd frontend/apps/web && yarn clean && yarn build ) && printf "\n➤ Building API image...\n\n" && docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest . && printf "\n➤ Building gateway image...\n\n" && docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest . ; fi
@@ -163,7 +168,7 @@ build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cud
 
 .PHONY: dbclear
 dbclear: ## Clear the data stored in the PostgreSQL database
-	@printf "🧻 Clearing PostgreSQL data...\n\n"
+	@printf "$(call task_icon,dbclear,🧻) Clearing PostgreSQL data...\n\n"
 
 	@cd backend/apps/api && yarn db:clear
 
@@ -171,7 +176,7 @@ dbclear: ## Clear the data stored in the PostgreSQL database
 
 .PHONY: dbdestroy
 dbdestroy: ## Drop all PostgreSQL data including tables
-	@printf "🧨 Destroying PostgreSQL database...\n\n"
+	@printf "$(call task_icon,dbdestroy,🧨) Destroying PostgreSQL database...\n\n"
 
 	@cd backend/apps/api && yarn db:destroy
 
@@ -209,7 +214,7 @@ dev: local ## Run the development environment locally
 
 .PHONY: graphql
 graphql: ## Generate GraphQL schema and frontend types
-	@printf "🏷️ Generating GraphQL...\n"
+	@printf "$(call task_icon,graphql,🏷️) Generating GraphQL...\n"
 
 	@yarn workspace @ci/be-api graphql:generate
 
@@ -221,7 +226,7 @@ graphql: ## Generate GraphQL schema and frontend types
 
 .PHONY: health
 health: ## Check the repository for prerequisites
-	@printf "🩺 Checking health of prerequisites...\n\n"
+	@printf "$(call task_icon,health,🩺) Checking health of prerequisites...\n\n"
 
 	@NODEJS=$$(which node 2>/dev/null); \
 	if [ -z "$$NODEJS" ]; then \
@@ -289,7 +294,7 @@ health: ## Check the repository for prerequisites
 
 .PHONY: init
 init: ## Initialize repository after checkout
-	@printf "🏗️ Initializing repository...\n\n"
+	@printf "$(call task_icon,init,🏗️) Initializing repository...\n\n"
 
 	@corepack enable
 	@corepack prepare yarn@$$(grep '"packageManager"' package.json | cut -d@ -f2 | tr -d '", ') --activate
@@ -313,7 +318,7 @@ init: ## Initialize repository after checkout
 
 .PHONY: install
 install: ## Install project dependencies
-	@printf "📦 Installing dependencies...\n\n"
+	@printf "$(call task_icon,install,📦) Installing dependencies...\n\n"
 
 	@yarn install
 
@@ -325,7 +330,7 @@ local: health init ## Run the local deployment
 
 	@$(MAKE) stop
 
-	@printf "⌨️ Starting local services...\n\n"
+	@printf "$(call task_icon,local,⌨️) Starting local services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d --remove-orphans
 
@@ -335,7 +340,7 @@ local: health init ## Run the local deployment
 
 .PHONY: migrate
 migrate: ## Run database migrations
-	@printf "🪿 Running database migrations...\n\n"
+	@printf "$(call task_icon,migrate,🪿) Running database migrations...\n\n"
 
 	@cd backend/apps/api && yarn migrate
 
@@ -347,7 +352,7 @@ production: health init ## Run the production deployment
 
 	@$(MAKE) stop
 
-	@printf "🚀 Starting production services...\n\n"
+	@printf "$(call task_icon,production,🚀) Starting production services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.production.yml --profile production up -d --remove-orphans
 
@@ -357,7 +362,7 @@ production: health init ## Run the production deployment
 publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@$(MAKE) build ENV=production GPU=$(GPU)
 
-	@printf "📦 Publishing to CI-Portal registry...\n\n"
+	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
 
 	@scripts/publish/publish.sh
 
@@ -369,7 +374,7 @@ publish-quiet: ## Publish to CI-Portal store (quiet mode)
 
 .PHONY: seed
 seed: ## Seed database with John Smith user and demo data
-	@printf "🌱 Seeding database...\n\n"
+	@printf "$(call task_icon,seed,🌱) Seeding database...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
 
@@ -377,7 +382,7 @@ seed: ## Seed database with John Smith user and demo data
 
 .PHONY: predict
 predict: ## Run the HBPE prediction pipeline against the local container
-	@printf "🔮 Running HBPE prediction pipeline (local)...\n\n"
+	@printf "$(call task_icon,predict,🔮) Running HBPE prediction pipeline (local)...\n\n"
 
 	@docker exec ci-server-hbpe-service-1 python3 scripts/run_pipeline.py $(JOHN_SMITH_USER_ID)
 
@@ -385,7 +390,7 @@ predict: ## Run the HBPE prediction pipeline against the local container
 
 .PHONY: predict-production
 predict-production: ## Run the HBPE prediction pipeline against the production container
-	@printf "🔮 Running HBPE prediction pipeline (production)...\n\n"
+	@printf "$(call task_icon,predict-production,🔮) Running HBPE prediction pipeline (production)...\n\n"
 
 	@docker exec ci-server-hbpe-service-1 \
 		sh -c 'export $$(cat /proc/$$(pgrep -f "ci.worker" | head -1)/environ | xargs -0 | grep DATABASE_URL) \
@@ -395,7 +400,7 @@ predict-production: ## Run the HBPE prediction pipeline against the production c
 
 .PHONY: seed-production
 seed-production: ## Seed production database via ephemeral proxy
-	@printf "🌱 Seeding production database...\n\n"
+	@printf "$(call task_icon,seed-production,🌱) Seeding production database...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.production.yml --profile tooling up -d dbproxy >/dev/null 2>&1
 	@CONNSTR=$$(docker compose -f docker-compose.yml -f docker-compose.production.yml --profile tooling run --rm dbconnstr 2>/dev/null) && \
@@ -415,7 +420,7 @@ staging: health init ## Run the staging deployment
 
 	@$(MAKE) stop
 
-	@printf "🎭 Starting staging services...\n\n"
+	@printf "$(call task_icon,staging,🎭) Starting staging services...\n\n"
 
 	@docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile staging up -d --remove-orphans
 
@@ -434,7 +439,7 @@ stop: ## Stop all running services
 
 .PHONY: tooling
 tooling: ## Run development tooling services
-	@printf "🛠️ Starting development tooling services...\n\n"
+	@printf "$(call task_icon,tooling,🛠️) Starting development tooling services...\n\n"
 
 	@docker compose -f docker-compose.yml --profile tooling up -d
 
@@ -446,7 +451,7 @@ tooling: ## Run development tooling services
 
 .PHONY: gentoken
 gentoken: ## Generates a stable access token for use during development
-	@printf "🔑 Generating stable access token...\n\n"
+	@printf "$(call task_icon,gentoken,🔑) Generating stable access token...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/generate-stable-access-token.ts
 
@@ -454,13 +459,13 @@ gentoken: ## Generates a stable access token for use during development
 
 .PHONY: signup
 signup: ## Generates a set of signup codes for user registration
-	@printf "👋 Generating signup codes...\n\n"
+	@printf "$(call task_icon,signup,👋) Generating signup codes...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/generate-signup-codes.ts
 
 .PHONY: userpw
 userpw: ## Change a user's password
-	@printf "🔑 Changing user password...\n\n"
+	@printf "$(call task_icon,userpw,🔑) Changing user password...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
 
@@ -468,7 +473,7 @@ userpw: ## Change a user's password
 
 .PHONY: chatreset
 chatreset: ## Reset John Smith's demo threads
-	@printf "🧹 Resetting John Smith's demo threads...\n\n"
+	@printf "$(call task_icon,chatreset,🧹) Resetting John Smith's demo threads...\n\n"
 
 	@cd backend/apps/api && yarn db:chatreset
 
@@ -476,7 +481,7 @@ chatreset: ## Reset John Smith's demo threads
 
 .PHONY: filereset
 filereset: ## Clear all files from the system
-	@printf "🧹 Clearing all files from the system...\n\n"
+	@printf "$(call task_icon,filereset,🧹) Clearing all files from the system...\n\n"
 
 	@cd backend/apps/api && yarn db:filereset
 
