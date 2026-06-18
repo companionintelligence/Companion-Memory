@@ -67,10 +67,10 @@ services:
 
 volumes:
   db-data:
-    name: ci-server-local-db-data
+    name: ${COMPOSE_PROJECT_NAME}-local-db-data
   object-data:
-    name: ci-server-local-object-data
+    name: ${COMPOSE_PROJECT_NAME}-local-object-data
   hbpe-models:
-    name: ci-server-local-hbpe-models
+    name: ${COMPOSE_PROJECT_NAME}-local-hbpe-models
   hbpe-corpus:
-    name: ci-server-local-hbpe-corpus
+    name: ${COMPOSE_PROJECT_NAME}-local-hbpe-corpus

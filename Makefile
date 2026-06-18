@@ -18,6 +18,10 @@ PROJECT_NAME := $(shell \
 	fi; \
 	echo "$$repo" | tr '[:upper:]' '[:lower:]')
 
+# Pin Compose's project name to match, so the compose stacks and reset's
+# volume/network filters always agree regardless of the checkout directory.
+export COMPOSE_PROJECT_NAME := $(PROJECT_NAME)
+
 export API_REPO ?= ci/api
 export DATABASE_REPO ?= ci/database
 export GATEWAY_REPO ?= ci/gateway

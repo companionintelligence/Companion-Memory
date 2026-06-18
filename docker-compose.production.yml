@@ -118,6 +118,6 @@ services:
 
 volumes:
   db-data:
-    name: ci-server-production-db-data
+    name: ${COMPOSE_PROJECT_NAME}-production-db-data
   object-data:
-    name: ci-server-production-object-data
+    name: ${COMPOSE_PROJECT_NAME}-production-object-data
