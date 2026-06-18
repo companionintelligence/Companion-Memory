@@ -54,6 +54,35 @@ task_icon =$(if $(and $(filter 0,$(MAKELEVEL)),$(filter $(1),$(MAKECMDGOALS))),$
 # Helper: expands to "-t repo:tag" only when TAG is non-empty
 versioned_tag = $(if $(TAG),-t $(1):$(TAG))
 
+# Detects which environment (local|staging|production) is currently up by
+# reading the running compose project's config files from Docker as the source
+# of truth.
+running_env = $(shell docker compose ls --format json 2>/dev/null \
+	| tr ',' '\n' \
+	| grep -F "$(CURDIR)/docker-compose." \
+	| sed -n 's|.*/docker-compose\.\([a-z]*\)\.yml.*|\1|p' \
+	| grep -E '^(local|staging|production)$$' \
+	| head -n1)
+
+define switch_env
+	@CURRENT="$(running_env)"; \
+	if [ -n "$$CURRENT" ] && [ "$$CURRENT" != "$(1)" ]; then \
+		printf "➤ $$CURRENT services are running, stopping before starting $(1)...\n\n"; \
+		$(MAKE) stop; \
+	fi
+endef
+
+# Bring up environment $(1) only when it is not already the running one,
+# delegating to its target (which switches away from any other env first).
+define ensure_env
+	@CURRENT="$(running_env)"; \
+	if [ "$$CURRENT" = "$(1)" ]; then \
+		printf "$(GREEN)✓$(RESET) $(1) services already running\n\n"; \
+	else \
+		$(MAKE) $(1); \
+	fi
+endef
+
 # ─────────────────────────────────────────────────────────────────────
 # Build configuration (consumed by the `build` target)
 #
