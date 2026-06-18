@@ -119,6 +119,16 @@ Note that `nvm` uses the `.nvmrc` file to define the version of NodeJS to use.
 brew install tmux
 ```
 
+#### Overmind
+
+[Overmind](https://github.com/DarthSim/overmind) is a process manager that reads the repo's `Procfile` and runs each declared process (the `api` and `web` dev servers) inside a single `tmux` session. `make dev` requires it on your `PATH` and will fail fast if it's missing.
+
+```bash
+brew install overmind
+```
+
+Because Overmind multiplexes through `tmux`, the `tmux` prerequisite above must be installed first.
+
 #### Ollama
 
 Ollama is an open-source tool that enables users to run large language models (LLMs) like Llama, Mistral, and Gemma directly on their local machines.
@@ -176,7 +186,28 @@ This runs a variety of commands to do setup, including:
 
 ### 3. Run local services
 
-Run our applications following the instructions in their respective READMEs.
+The simplest path is:
+
+```bash
+make dev
+```
+
+This runs the prerequisite health checks (Node, Ollama, required models), ensures the local Docker stack is up, and then hands off to `overmind start`. Overmind reads the `Procfile` and launches both dev servers in a single `tmux` session. The session name is pinned to `$COMPOSE_PROJECT_NAME` (e.g. `ci-server`, or a worktree-specific name in a linked worktree) so concurrent checkouts don't collide:
+
+```
+api: yarn workspace @ci/be-api dev
+web: yarn workspace @ci/fe-web dev --clearScreen false
+```
+
+Useful Overmind commands while it's running:
+
+* `overmind connect api` — attach to the `api` process pane
+* `overmind restart web` — restart a single process
+* `overmind quit` — stop all processes
+
+To tear down a leftover session, `make reset` runs `overmind quit` for you.
+
+Alternatively, you can run the applications individually following the instructions in their respective READMEs:
 
 * Backend (api) [README](backend/apps/api/README.md)
 * Frontend (web) [README](frontend/apps/web/README.md)

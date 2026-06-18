@@ -22,6 +22,12 @@ PROJECT_NAME := $(shell \
 # volume/network filters always agree regardless of the checkout directory.
 export COMPOSE_PROJECT_NAME := $(PROJECT_NAME)
 
+# Drive Overmind's tmux session name off the same identity, so concurrent
+# worktrees get distinct dev sessions instead of colliding on a shared name
+# (Overmind otherwise falls back to the working-dir basename) and `reset` can
+# target the exact session this checkout started.
+export OVERMIND_TMUX_SESSION_NAME := $(PROJECT_NAME)
+
 export API_REPO ?= ci/api
 export DATABASE_REPO ?= ci/database
 export GATEWAY_REPO ?= ci/gateway
@@ -150,9 +156,9 @@ reset: ## Reset the local development environment
 
 	@$(MAKE) stop
 
-	@if tmux has-session -t companion 2>/dev/null; then \
-		printf "\n➤ Killing tmux dev session...\n\n"; \
-		tmux kill-session -t companion; \
+	@if [ -S .overmind.sock ]; then \
+		printf "\n➤ Stopping Overmind dev session...\n\n"; \
+		overmind quit 2>/dev/null || true; \
 	fi
 
 	@VOLS=$$(docker volume ls -q --filter "name=$(PROJECT_NAME)"); \
@@ -236,26 +242,59 @@ deploy: ## DEPRECATED: Use production, staging, or local targets instead
 	@$(MAKE) staging
 
 .PHONY: dev
-dev: local ## Run the development environment locally
-	@which tmux >/dev/null || { printf "\n$(RED)✗$(RESET) You do not have tmux installed. Please install it first.\n\n"; exit 1; }
-	@SESSION="companion"; \
-	BACKEND_DIR="backend/apps/api"; \
-	FRONTEND_DIR="frontend/apps/web"; \
-	\
-	if tmux has-session -t $$SESSION 2>/dev/null; then \
-		printf "\n🔪 Killing existing tmux session: $$SESSION\n\n"; \
-		tmux kill-session -t $$SESSION; \
-	fi; \
-	\
-	printf "🚀 Starting new tmux session: $$SESSION\n\n"; \
-	tmux new-session -d -s $$SESSION -c $$BACKEND_DIR; \
-	tmux send-keys -t $$SESSION "yarn dev" C-m; \
-	\
-	tmux split-window -h -t $$SESSION -c $$FRONTEND_DIR; \
-	tmux send-keys -t $$SESSION "yarn dev" C-m; \
-	\
-	tmux select-pane -t 0; \
-	tmux attach -t $$SESSION
+dev: ## Run the development environment locally
+	@printf "$(call task_icon,dev,🧑‍💻) Starting development environment...\n\n"
+
+	@$(MAKE) health
+
+	@OVERMIND=$$(which overmind 2>/dev/null); \
+	if [ -z "$$OVERMIND" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'overmind' installed or it is not in your PATH.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) overmind found at $$OVERMIND\n\n"; \
+	fi
+
+	@OLLAMA=$$(which ollama 2>/dev/null); \
+	if [ -z "$$OLLAMA" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'ollama' installed or it is not in your PATH.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) ollama found at $$OLLAMA 🦙\n\n"; \
+	fi
+
+	@if nc -z localhost 11434 > /dev/null 2>&1; then \
+		printf "  $(GREEN)✓$(RESET) ollama is running on port 11434\n\n"; \
+	else \
+		printf "  $(RED)✗$(RESET) ollama is NOT running on port 11434. Please start ollama (e.g., 'ollama serve')\n\n"; \
+		exit 1; \
+	fi
+
+	@MODEL=nomic-embed-text; \
+	ollama list | grep -Fq "$$MODEL"; \
+	STATUS=$$?; \
+	if [ "$$STATUS" -eq 0 ]; then \
+		printf "  $(GREEN)✓$(RESET) ollama model '$$MODEL' is available\n\n"; \
+	else \
+		printf "  $(RED)✗$(RESET) ollama model '$$MODEL' is not yet pulled\n\n"; \
+		exit 1; \
+	fi
+
+	@MODEL=gemma3:1b; \
+	ollama list | grep -Fq "$$MODEL"; \
+	STATUS=$$?; \
+	if [ "$$STATUS" -eq 0 ]; then \
+		printf "  $(GREEN)✓$(RESET) ollama model '$$MODEL' is available\n\n"; \
+	else \
+		printf "  $(RED)✗$(RESET) ollama model '$$MODEL' is not yet pulled\n\n"; \
+		exit 1; \
+	fi
+
+	@$(MAKE) init
+
+	$(call ensure_env,local)
+
+	@overmind start
 
 .PHONY: graphql
 graphql: ## Generate GraphQL schema and frontend types
@@ -300,41 +339,6 @@ health: ## Check the repository for prerequisites
 		exit 1; \
 	else \
 		printf "$(GREEN)✓$(RESET) Yarn version matches ($$current_yarn)\n\n"; \
-	fi
-
-	@OLLAMA=$$(which ollama 2>/dev/null); \
-	if [ -z "$$OLLAMA" ]; then \
-		printf "$(RED)✗$(RESET) You do not have 'ollama' installed or it is not in your PATH.\n\n"; \
-		exit 1; \
-	else \
-		printf "$(GREEN)✓$(RESET) ollama found at $$OLLAMA 🦙\n\n"; \
-	fi
-
-	@if nc -z localhost 11434 > /dev/null 2>&1; then \
-		printf "\t$(GREEN)✓$(RESET) ollama is running on port 11434\n\n"; \
-	else \
-		printf "\t$(RED)✗$(RESET) ollama is NOT running on port 11434. Please start ollama (e.g., 'ollama serve')\n\n"; \
-		exit 1; \
-	fi
-
-	@MODEL=nomic-embed-text; \
-	ollama list | grep -Fq "$$MODEL"; \
-	STATUS=$$?; \
-	if [ "$$STATUS" -eq 0 ]; then \
-		printf "\t$(GREEN)✓$(RESET) ollama model '$$MODEL' is available\n\n"; \
-	else \
-		printf "\t$(RED)✗$(RESET) ollama model '$$MODEL' is not yet pulled\n\n"; \
-		exit 1; \
-	fi
-
-	@MODEL=gemma3:1b; \
-	ollama list | grep -Fq "$$MODEL"; \
-	STATUS=$$?; \
-	if [ "$$STATUS" -eq 0 ]; then \
-		printf "\t$(GREEN)✓$(RESET) ollama model '$$MODEL' is available\n\n"; \
-	else \
-		printf "\t$(RED)✗$(RESET) ollama model '$$MODEL' is not yet pulled\n\n"; \
-		exit 1; \
 	fi
 
 .PHONY: init
