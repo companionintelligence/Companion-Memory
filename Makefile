@@ -369,7 +369,7 @@ install: ## Install project dependencies
 local: health init ## Run the local deployment
 	@$(MAKE) build ENV=local GPU=$(GPU)
 
-	@$(MAKE) stop
+	$(call switch_env,local)
 
 	@printf "$(call task_icon,local,⌨️) Starting local services...\n\n"
 
@@ -391,7 +391,7 @@ migrate: ## Run database migrations
 production: health init ## Run the production deployment
 	@$(MAKE) build ENV=production GPU=$(GPU)
 
-	@$(MAKE) stop
+	$(call switch_env,production)
 
 	@printf "$(call task_icon,production,🚀) Starting production services...\n\n"
 
@@ -459,7 +459,7 @@ seed-production: ## Seed production database via ephemeral proxy
 staging: health init ## Run the staging deployment
 	@$(MAKE) build ENV=staging GPU=$(GPU)
 
-	@$(MAKE) stop
+	$(call switch_env,staging)
 
 	@printf "$(call task_icon,staging,🎭) Starting staging services...\n\n"
 
