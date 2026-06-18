@@ -5,6 +5,19 @@ GREEN=\033[0;32m
 YELLOW=\033[0;33m
 RESET=\033[0m
 
+# Compose project identity, anchored to the origin remote's repo name (its dir
+# basename is transient/unreliable — "main", a code, etc.), then CWD when there
+# is no remote. A linked git worktree (git-dir != git-common-dir) appends its
+# own dir basename, so each worktree gets an isolated stack that can't collide
+# with another repo's worktree of the same name (e.g. ci-server-feat-a).
+PROJECT_NAME := $(shell \
+	repo=$$(basename -s .git "$$(git remote get-url origin 2>/dev/null)" 2>/dev/null); \
+	[ -n "$$repo" ] || repo=$$(basename "$(CURDIR)"); \
+	if [ "$$(git rev-parse --git-dir 2>/dev/null)" != "$$(git rev-parse --git-common-dir 2>/dev/null)" ]; then \
+		repo="$$repo-$$(basename "$$(git rev-parse --show-toplevel 2>/dev/null)")"; \
+	fi; \
+	echo "$$repo" | tr '[:upper:]' '[:lower:]')
+
 export API_REPO ?= ci/api
 export DATABASE_REPO ?= ci/database
 export GATEWAY_REPO ?= ci/gateway
@@ -21,7 +34,6 @@ JOHN_SMITH_USER_ID := b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
 
 export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 
-PROJECT_NAME := $(shell basename "$(CURDIR)" | tr '[:upper:]' '[:lower:]')
 
 # Subdirectory build contexts that need a copy of LICENSE
 LICENSE_DIRS := \
