@@ -34,11 +34,11 @@ describe('HealthController', () => {
     });
 
     it('responds to repeated calls (liveness probe semantics)', async () => {
-      const calls = await Promise.all(
-        Array.from({ length: 5 }, () => request(app.getHttpServer()).get('/health')),
-      );
-
-      for (const res of calls) {
+      // Sequential, not Promise.all: parallel supertest requests each spin up a
+      // fresh ephemeral listener on the same un-listened server and race to bind,
+      // which flakes in CI. A liveness probe only needs to stay 200 across calls.
+      for (let i = 0; i < 5; i++) {
+        const res = await request(app.getHttpServer()).get('/health');
         expect(res.status).toBe(200);
         expect(res.body.status).toBe('ok');
       }
