@@ -6,6 +6,7 @@
 
 | System | Answer | Storage | flat-recall | relational | multi-hop | temporal-update |
 |---|---|---|---|---|---|---|
+| tencentdb | **85/100** | 85/100 | 28/34 | 16/22 | 20/22 | 21/22 |
 | naive | **79/100** | 78/100 | 28/34 | 22/22 | 15/22 | 14/22 |
 | mem0 | **78/100** | 79/100 | 24/34 | 21/22 | 19/22 | 14/22 |
 | hindsight | **25/100** | 21/100 | 7/34 | 9/22 | 4/22 | 5/22 |
@@ -19,6 +20,14 @@
 > Embeddings: nomic-embed-text for all except hindsight (its built-in bge-small — minor confound).
 > Caveat: hindsight scored serially (--answer-concurrency 1); its recall client 500s under
 > concurrent calls. The 0/100 from the concurrent run was an artifact, not a result.
+> tencentdb (TencentCloud Agent Memory, MIT): host-run TdaiGateway, sqlite-vec + BM25 hybrid,
+> nomic embeddings + gemma-31b extraction (parity). Tops the suite. Two caveats that cut AGAINST
+> tencentdb (i.e. its true ceiling is higher): (1) it's a Chinese-first system — even with the
+> prompt told to match the user's language, gemma emits a fraction of memories in Chinese
+> (nomic's multilingual vectors partially bridge it); (2) Node's built-in node:sqlite lacks FTS5
+> on this host, so its keyword arm is the JS BM25 only (the vendored Docker image ships FTS5).
+> Ingest was the slowest of the field — ~102 min — because extraction is serialized per message
+> to avoid the scheduler coalescing/stranding rapid captures.
 
 ## Timing (memory-system cost)
 

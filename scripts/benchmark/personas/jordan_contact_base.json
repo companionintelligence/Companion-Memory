@@ -1,0 +1,1842 @@
+{
+  "_comment": "Jordan Rivera folded into the single-user benchmark world as Max Turnquist's FRIEND. All sessions are Max's first-person statements ABOUT Jordan and his sub-network (third person). Built by build_jordan_contact.py from personas/jordan_rivera_base.json: first-person -> Max-about-Jordan reframing, full collision rename (distinct from Max and Priya namespaces), and re-categorization by hop-distance from Max (Jordan = 1 hop). Canonical facts only; run generate_large_persona.py to bury under distractor noise.",
+  "persona_id": "jordan_contact",
+  "name": "Jordan Rivera (Max's friend)",
+  "description": "Jordan Rivera as a contact in Max Turnquist's world — Max's friend, described entirely in Max's third-person statements. Dense entity/relationship graph (Jordan's wife, parents, siblings, niece/nephew, grandmother, friends, colleagues, manager, pets, possessions, media tastes, allergies, job history, temporal updates). Renamed to avoid all collisions with Max's and Priya Sharma's value spaces.",
+  "sessions": [
+    {
+      "id": "sess_1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My friend Jordan Rivera is a senior software engineer, and he lives in Austin, Texas."
+        },
+        {
+          "role": "user",
+          "content": "Jordan grew up in Miami but he's been in Austin for about three years now."
+        },
+        {
+          "role": "user",
+          "content": "Jordan goes to the Austin Bouldering Project pretty regularly to climb."
+        },
+        {
+          "role": "user",
+          "content": "Jordan rescued a greyhound named Mochi about a year ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan works at Cumbre AI, where they're in the middle of a big Go migration."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's team was a Python shop but switched to Go for the backend about six months ago."
+        },
+        {
+          "role": "user",
+          "content": "Jordan has been at Cumbre AI for two years, and he just got promoted to Senior Engineer a couple months ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's brother Rafael is a PM at Google and lives in Seattle."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's parents, Elena and Carlos, live in Miami and love visiting him in Austin."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's best friend is Valentina, who is in Phoenix working at Palantir; they met at PyCon 2021 in Salt Lake City."
+        }
+      ]
+    },
+    {
+      "id": "sess_4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan has been re-reading Project Hail Mary and practices guitar in the evenings."
+        },
+        {
+          "role": "user",
+          "content": "Jordan has played acoustic guitar for about ten years, and his favorite author is Ted Chiang — he loves Story of Your Life."
+        },
+        {
+          "role": "user",
+          "content": "Jordan speaks intermediate Spanish and is saving up for a Japan trip he's planning for October."
+        }
+      ]
+    },
+    {
+      "id": "sess_5",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's favorite food is tacos al pastor, and he raves about a spot near his office."
+        },
+        {
+          "role": "user",
+          "content": "Jordan finally bought a Specialized Diverge for gravel riding around Austin."
+        }
+      ]
+    },
+    {
+      "id": "sess_6",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Before Cumbre AI, Jordan spent four years at a fintech startup called Larkspur Pay."
+        },
+        {
+          "role": "user",
+          "content": "At Larkspur Pay Jordan was a mid-level backend engineer, not yet senior."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's manager at Cumbre AI is named Adaeze Nwosu, and she's the VP of Engineering."
+        },
+        {
+          "role": "user",
+          "content": "Adaeze Nwosu did her undergrad at Georgia Tech."
+        },
+        {
+          "role": "user",
+          "content": "Cumbre AI's headquarters is in Austin, but it was originally founded in Toronto."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's team at Cumbre AI is the Recommendations team, and their main product is codenamed Driftwood."
+        },
+        {
+          "role": "user",
+          "content": "Jordan writes Go on the backend and uses React on the frontend day to day."
+        }
+      ]
+    },
+    {
+      "id": "sess_7",
+      "messages": [
+        {
+          "role": "user",
+          "content": "In Houston, before he moved to Austin, Jordan lived in the Montrose district."
+        },
+        {
+          "role": "user",
+          "content": "Back in Houston Jordan rented a tiny studio apartment, but in Austin he bought a small bungalow."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's neighborhood in Austin is called Travis Heights, just south of the river."
+        },
+        {
+          "role": "user",
+          "content": "When Jordan lived in Houston he worked at Larkspur Pay, whose office was downtown."
+        }
+      ]
+    },
+    {
+      "id": "sess_8",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's wife's name is Noor Haddad, and they got married four years ago."
+        },
+        {
+          "role": "user",
+          "content": "Noor is an emergency room physician at Dell Seton Medical Center in Austin."
+        },
+        {
+          "role": "user",
+          "content": "Noor grew up in Amman, Jordan, and moved to the US for medical school."
+        },
+        {
+          "role": "user",
+          "content": "Jordan and Noor met at a tango class about seven years ago."
+        },
+        {
+          "role": "user",
+          "content": "Noor is the only doctor in Jordan's family."
+        }
+      ]
+    },
+    {
+      "id": "sess_9",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Besides his brother Rafael, Jordan has a younger sister named Lucia Rivera."
+        },
+        {
+          "role": "user",
+          "content": "Lucia is a marine biologist and works at the Monterey Bay Aquarium."
+        },
+        {
+          "role": "user",
+          "content": "Lucia lives in Monterey, California."
+        },
+        {
+          "role": "user",
+          "content": "Lucia has a daughter — Jordan's niece — named Camila, who is six."
+        },
+        {
+          "role": "user",
+          "content": "Camila is completely obsessed with sea turtles, thanks to her mom."
+        },
+        {
+          "role": "user",
+          "content": "Rafael, Jordan's brother, has a son named Mateo — Jordan's nephew — who is nine."
+        },
+        {
+          "role": "user",
+          "content": "Mateo plays in a youth soccer league and is the goalkeeper."
+        }
+      ]
+    },
+    {
+      "id": "sess_10",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's grandmother on his dad's side, whom the family calls Abuela Marta, lives in Tampa, Florida."
+        },
+        {
+          "role": "user",
+          "content": "Abuela Marta was a seamstress who ran her own tailoring shop for decades."
+        },
+        {
+          "role": "user",
+          "content": "Rafael's wife — Jordan's sister-in-law — is named Yuki Tanaka, and she's a UX researcher at Microsoft."
+        },
+        {
+          "role": "user",
+          "content": "Yuki Tanaka grew up in Calgary, Canada."
+        }
+      ]
+    },
+    {
+      "id": "sess_11",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's closest friend at work is a colleague named Devon Ellison."
+        },
+        {
+          "role": "user",
+          "content": "Devon Ellison is a machine learning engineer, also at Cumbre AI."
+        },
+        {
+          "role": "user",
+          "content": "Devon moved to Austin from New Orleans, where he grew up."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's oldest friend from childhood is Hector Morales — they've known each other since middle school."
+        },
+        {
+          "role": "user",
+          "content": "Hector Morales is a high school chemistry teacher in Orlando, Florida."
+        },
+        {
+          "role": "user",
+          "content": "Jordan has a cycling buddy named Greta Lindqvist who races competitively."
+        },
+        {
+          "role": "user",
+          "content": "Greta Lindqvist is a veterinarian and runs her own small-animal clinic."
+        }
+      ]
+    },
+    {
+      "id": "sess_12",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Mochi the greyhound is Jordan's only dog, but he also has a tabby cat named Pelusa."
+        },
+        {
+          "role": "user",
+          "content": "Pelusa the cat is fourteen years old — Jordan has had her since college."
+        },
+        {
+          "role": "user",
+          "content": "Those two, Mochi and Pelusa, are Jordan's only pets."
+        },
+        {
+          "role": "user",
+          "content": "Jordan drives a 2019 Toyota 4Runner that he takes camping."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's everyday phone is a Samsung Galaxy S24."
+        },
+        {
+          "role": "user",
+          "content": "For photography Jordan shoots with an Olympus OM-1 mirrorless camera."
+        },
+        {
+          "role": "user",
+          "content": "Jordan wears a Coros Apex watch when he's cycling and hiking."
+        }
+      ]
+    },
+    {
+      "id": "sess_13",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Outside of guitar, Jordan's hobbies are gravel cycling, bouldering, sea kayaking, and birdwatching."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite band is Khruangbin, and he's seen them live three times."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's comfort movie is Coherence — fitting, since he loves Ted Chiang."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite video game is Hollow Knight."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is a huge fan of the TV show Severance."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's go-to board game is Wingspan, which pairs well with his birdwatching."
+        }
+      ]
+    },
+    {
+      "id": "sess_14",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan is allergic to shellfish, which makes coastal trips a little nerve-wracking for him."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is also lactose intolerant, so he drinks his coffee with almond milk."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is mildly colorblind — red-green — which his designer friends never let him forget."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite dessert is tres leches cake, an old family recipe from Abuela Marta."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite holiday is Nochebuena, Christmas Eve, when his whole family cooks together."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is terrified of deep open water, which is ironic given the kayaking."
+        }
+      ]
+    },
+    {
+      "id": "sess_15",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan used to drive a Honda Element for years, but he replaced it with his Toyota 4Runner last year."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's old phone was an iPhone 11, but he switched to a Samsung Galaxy S24 this spring."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to live with three roommates in Houston, but now he lives with just his wife Noor."
+        },
+        {
+          "role": "user",
+          "content": "For backend Jordan used to write Python, but he switched to Go about six months ago."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to study Portuguese in college, but these days he's focused on learning Spanish instead."
+        }
+      ]
+    },
+    {
+      "id": "sess_16",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan quit drinking coffee for years and was a strict tea person, but he went back to coffee when he started at Cumbre AI."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to use a Windows desktop for everything, but he switched to a MacBook Pro two years ago."
+        },
+        {
+          "role": "user",
+          "content": "Jordan gave up running after a knee injury and took up cycling as his main cardio instead."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to be a vegetarian, but now he just eats pescatarian — minus the shellfish he's allergic to."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's main editor used to be Vim, but he moved to VS Code when he joined Cumbre AI."
+        }
+      ]
+    },
+    {
+      "id": "sess_17",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan was the best man at his brother Rafael's wedding."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's blood type is O negative, so the blood bank loves him."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is an early riser — he's usually up by 5:30 for a ride before work."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's coffee order is a flat white with almond milk."
+        },
+        {
+          "role": "user",
+          "content": "Jordan named his dog Mochi after his favorite childhood dessert, before tres leches took over."
+        },
+        {
+          "role": "user",
+          "content": "Jordan just turned 34 this year."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's best friend Valentina Cruz works as a data scientist over at Palantir in Phoenix."
+        }
+      ]
+    }
+  ],
+  "eval_questions": [
+    {
+      "id": "jq01",
+      "question": "Where does Max's friend Jordan currently live?",
+      "answer": "Austin, Texas",
+      "keywords": [
+        "Austin"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq02",
+      "question": "What city was Jordan born in?",
+      "answer": "Miami, Florida",
+      "keywords": [
+        "Miami"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq03",
+      "question": "How old is Jordan?",
+      "answer": "34",
+      "keywords": [
+        "34"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq04",
+      "question": "What company does Jordan work at?",
+      "answer": "Cumbre AI",
+      "keywords": [
+        "Cumbre"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq05",
+      "question": "What is Jordan's job title?",
+      "answer": "Senior Software Engineer",
+      "keywords": [
+        "Senior Software Engineer",
+        "senior"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq06",
+      "question": "What is the name of Jordan's dog?",
+      "answer": "Mochi",
+      "keywords": [
+        "Mochi"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq07",
+      "question": "What breed is Jordan's dog?",
+      "answer": "a greyhound",
+      "keywords": [
+        "greyhound"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq08",
+      "question": "What is the name of Jordan's cat?",
+      "answer": "Pelusa",
+      "keywords": [
+        "Pelusa"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq09",
+      "question": "What instrument does Jordan play?",
+      "answer": "acoustic guitar",
+      "keywords": [
+        "guitar"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq10",
+      "question": "Who is Jordan's favorite author?",
+      "answer": "Ted Chiang",
+      "keywords": [
+        "Ted Chiang",
+        "Chiang"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq11",
+      "question": "What is Jordan's favorite food?",
+      "answer": "tacos al pastor",
+      "keywords": [
+        "tacos",
+        "al pastor"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq12",
+      "question": "What book has Jordan been reading?",
+      "answer": "Project Hail Mary",
+      "keywords": [
+        "Project Hail Mary",
+        "Hail Mary"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq13",
+      "question": "What kind of bike does Jordan own?",
+      "answer": "a Specialized Diverge gravel bike",
+      "keywords": [
+        "Specialized",
+        "Diverge"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq14",
+      "question": "What programming language does Jordan use for the backend now?",
+      "answer": "Go",
+      "keywords": [
+        "Go"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq15",
+      "question": "What does Jordan use for frontend development?",
+      "answer": "React",
+      "keywords": [
+        "React"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq16",
+      "question": "What is the codename of Jordan's team's main product?",
+      "answer": "Driftwood",
+      "keywords": [
+        "Driftwood"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq17",
+      "question": "What team does Jordan work on at Cumbre AI?",
+      "answer": "the Recommendations team",
+      "keywords": [
+        "Recommendations"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq18",
+      "question": "What neighborhood does Jordan live in in Austin?",
+      "answer": "Travis Heights",
+      "keywords": [
+        "Travis Heights"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq19",
+      "question": "What kind of home does Jordan own in Austin?",
+      "answer": "a small bungalow",
+      "keywords": [
+        "bungalow"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq20",
+      "question": "What car does Jordan currently drive?",
+      "answer": "a 2019 Toyota 4Runner",
+      "keywords": [
+        "4Runner",
+        "Toyota"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq21",
+      "question": "What phone does Jordan currently use?",
+      "answer": "a Samsung Galaxy S24",
+      "keywords": [
+        "Galaxy S24"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq22",
+      "question": "What camera does Jordan use for photography?",
+      "answer": "an Olympus OM-1",
+      "keywords": [
+        "Olympus",
+        "OM-1"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq23",
+      "question": "What brand of watch does Jordan wear?",
+      "answer": "a Coros Apex",
+      "keywords": [
+        "Coros"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq24",
+      "question": "What is Jordan allergic to?",
+      "answer": "shellfish",
+      "keywords": [
+        "shellfish"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq25",
+      "question": "What is Jordan's favorite dessert?",
+      "answer": "tres leches cake",
+      "keywords": [
+        "tres leches"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq26",
+      "question": "What is Jordan's favorite holiday?",
+      "answer": "Nochebuena",
+      "keywords": [
+        "Nochebuena"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq27",
+      "question": "What is Jordan's favorite band?",
+      "answer": "Khruangbin",
+      "keywords": [
+        "Khruangbin"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq28",
+      "question": "What is Jordan's comfort movie?",
+      "answer": "Coherence",
+      "keywords": [
+        "Coherence"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq29",
+      "question": "What is Jordan's favorite video game?",
+      "answer": "Hollow Knight",
+      "keywords": [
+        "Hollow Knight"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq30",
+      "question": "What TV show is Jordan a big fan of?",
+      "answer": "Severance",
+      "keywords": [
+        "Severance"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq31",
+      "question": "What is Jordan's go-to board game?",
+      "answer": "Wingspan",
+      "keywords": [
+        "Wingspan"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq32",
+      "question": "What is Jordan's blood type?",
+      "answer": "O negative",
+      "keywords": [
+        "O negative",
+        "O-"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq33",
+      "question": "What is Jordan's coffee order?",
+      "answer": "a flat white with almond milk",
+      "keywords": [
+        "flat white"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq34",
+      "question": "What is Jordan's favorite Ted Chiang story?",
+      "answer": "Story of Your Life",
+      "keywords": [
+        "Story of Your Life"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq35",
+      "question": "What is the name of Jordan's wife?",
+      "answer": "Noor Haddad",
+      "keywords": [
+        "Noor"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq36",
+      "question": "What is the name of Jordan's brother?",
+      "answer": "Rafael Rivera",
+      "keywords": [
+        "Rafael"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq37",
+      "question": "What is the name of Jordan's sister?",
+      "answer": "Lucia Rivera",
+      "keywords": [
+        "Lucia"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq38",
+      "question": "What are the names of Jordan's parents?",
+      "answer": "Elena and Carlos",
+      "keywords": [
+        "Elena",
+        "Carlos"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq39",
+      "question": "What is the name of Jordan's grandmother?",
+      "answer": "Abuela Marta",
+      "keywords": [
+        "Marta"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq40",
+      "question": "What is the name of Jordan's niece?",
+      "answer": "Camila",
+      "keywords": [
+        "Camila"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq41",
+      "question": "What is the name of Jordan's nephew?",
+      "answer": "Mateo",
+      "keywords": [
+        "Mateo"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq42",
+      "question": "What is the name of Jordan's sister-in-law?",
+      "answer": "Yuki Tanaka",
+      "keywords": [
+        "Yuki"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq43",
+      "question": "Who is Jordan's best friend?",
+      "answer": "Valentina Cruz",
+      "keywords": [
+        "Valentina"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq44",
+      "question": "Who is Jordan's closest friend at work?",
+      "answer": "Devon Ellison",
+      "keywords": [
+        "Devon"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq45",
+      "question": "Who is Jordan's oldest childhood friend?",
+      "answer": "Hector Morales",
+      "keywords": [
+        "Hector"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq46",
+      "question": "Who is Jordan's cycling buddy?",
+      "answer": "Greta Lindqvist",
+      "keywords": [
+        "Greta"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq47",
+      "question": "Who is Jordan's manager at Cumbre AI?",
+      "answer": "Adaeze Nwosu",
+      "keywords": [
+        "Adaeze Nwosu",
+        "Nwosu"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq48",
+      "question": "Where does Jordan's brother Rafael live?",
+      "answer": "Seattle",
+      "keywords": [
+        "Seattle"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq49",
+      "question": "Where does Jordan's sister Lucia live?",
+      "answer": "Monterey, California",
+      "keywords": [
+        "Monterey"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq50",
+      "question": "Where do Jordan's parents live?",
+      "answer": "Miami, Florida",
+      "keywords": [
+        "Miami"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq51",
+      "question": "What company does Jordan's best friend Valentina work at?",
+      "answer": "Palantir",
+      "keywords": [
+        "Palantir"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq52",
+      "question": "What city does Jordan's best friend Valentina live in?",
+      "answer": "Phoenix",
+      "keywords": [
+        "Phoenix"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq53",
+      "question": "What does Jordan's brother Rafael do for work?",
+      "answer": "a product manager at Google",
+      "keywords": [
+        "product manager",
+        "Google"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq54",
+      "question": "What is the profession of Jordan's wife Noor?",
+      "answer": "an emergency room physician",
+      "keywords": [
+        "physician",
+        "ER",
+        "emergency"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq55",
+      "question": "Where did Jordan meet his best friend Valentina?",
+      "answer": "at PyCon 2021 in Salt Lake City",
+      "keywords": [
+        "PyCon",
+        "Salt Lake City"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq56",
+      "question": "Where did Jordan meet his wife Noor?",
+      "answer": "at a tango class",
+      "keywords": [
+        "tango"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq57",
+      "question": "In what city is Jordan's employer Cumbre AI headquartered?",
+      "answer": "Austin",
+      "keywords": [
+        "Austin"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq58",
+      "question": "Who was the best man at Rafael's wedding?",
+      "answer": "Jordan",
+      "keywords": [
+        "best man"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq59",
+      "question": "What does Jordan's sister do for work?",
+      "answer": "a marine biologist",
+      "keywords": [
+        "marine biologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq60",
+      "question": "Where does Jordan's sister work?",
+      "answer": "the Monterey Bay Aquarium",
+      "keywords": [
+        "Monterey Bay Aquarium"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq61",
+      "question": "What is Jordan's niece obsessed with?",
+      "answer": "sea turtles",
+      "keywords": [
+        "sea turtles"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq62",
+      "question": "What sport does Jordan's nephew play?",
+      "answer": "soccer",
+      "keywords": [
+        "soccer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq63",
+      "question": "What position does Jordan's nephew play in soccer?",
+      "answer": "goalkeeper",
+      "keywords": [
+        "goalkeeper"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq64",
+      "question": "What hospital does Jordan's wife work at?",
+      "answer": "Dell Seton Medical Center",
+      "keywords": [
+        "Dell Seton"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq65",
+      "question": "What city did Jordan's wife grow up in?",
+      "answer": "Amman, Jordan",
+      "keywords": [
+        "Amman"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq66",
+      "question": "What was Jordan's grandmother's profession?",
+      "answer": "a seamstress",
+      "keywords": [
+        "seamstress"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq67",
+      "question": "What city does Jordan's grandmother live in?",
+      "answer": "Tampa, Florida",
+      "keywords": [
+        "Tampa"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq68",
+      "question": "What company does Jordan's sister-in-law work at?",
+      "answer": "Microsoft",
+      "keywords": [
+        "Microsoft"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq69",
+      "question": "What is Jordan's sister-in-law's profession?",
+      "answer": "a UX researcher",
+      "keywords": [
+        "UX researcher"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq70",
+      "question": "Where did Jordan's sister-in-law grow up?",
+      "answer": "Calgary, Canada",
+      "keywords": [
+        "Calgary"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq71",
+      "question": "What is the profession of Jordan's coworker Devon?",
+      "answer": "a machine learning engineer",
+      "keywords": [
+        "machine learning engineer",
+        "ML engineer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq72",
+      "question": "Where did Jordan's coworker Devon grow up?",
+      "answer": "New Orleans",
+      "keywords": [
+        "New Orleans"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq73",
+      "question": "What does Jordan's childhood friend Hector do for work?",
+      "answer": "a high school chemistry teacher",
+      "keywords": [
+        "chemistry teacher"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq74",
+      "question": "What city does Jordan's childhood friend Hector live in?",
+      "answer": "Orlando, Florida",
+      "keywords": [
+        "Orlando"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq75",
+      "question": "What is the profession of Jordan's cycling buddy Greta?",
+      "answer": "a veterinarian",
+      "keywords": [
+        "veterinarian",
+        "vet"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq76",
+      "question": "What is the job title of Jordan's manager Adaeze Nwosu?",
+      "answer": "VP of Engineering",
+      "keywords": [
+        "VP of Engineering",
+        "VP"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq77",
+      "question": "Where did Jordan's manager Adaeze Nwosu do her undergrad?",
+      "answer": "Georgia Tech",
+      "keywords": [
+        "Georgia Tech"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq78",
+      "question": "In what city was Jordan's employer Cumbre AI originally founded?",
+      "answer": "Toronto",
+      "keywords": [
+        "Toronto"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq79",
+      "question": "What does Jordan's best friend Valentina do for work?",
+      "answer": "a data scientist",
+      "keywords": [
+        "data scientist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq80",
+      "question": "Which aquarium does Jordan's niece's mother work at?",
+      "answer": "the Monterey Bay Aquarium",
+      "keywords": [
+        "Monterey Bay Aquarium"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq81",
+      "question": "What dessert recipe did Jordan's grandmother pass down?",
+      "answer": "tres leches cake",
+      "keywords": [
+        "tres leches"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq82",
+      "question": "What did Jordan's grandmother run for decades?",
+      "answer": "her own tailoring shop",
+      "keywords": [
+        "tailoring shop"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq83",
+      "question": "What city does Jordan currently live in?",
+      "answer": "Austin",
+      "keywords": [
+        "Austin"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq84",
+      "question": "What city did Jordan live in before Austin?",
+      "answer": "Houston",
+      "keywords": [
+        "Houston"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq85",
+      "question": "What company does Jordan currently work for?",
+      "answer": "Cumbre AI",
+      "keywords": [
+        "Cumbre"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq86",
+      "question": "What company did Jordan work for before Cumbre AI?",
+      "answer": "Larkspur Pay",
+      "keywords": [
+        "Larkspur"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq87",
+      "question": "What language does Jordan use for backend work now?",
+      "answer": "Go",
+      "keywords": [
+        "Go"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq88",
+      "question": "What language did Jordan use for backend work before switching?",
+      "answer": "Python",
+      "keywords": [
+        "Python"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq89",
+      "question": "What car does Jordan currently drive?",
+      "answer": "a Toyota 4Runner",
+      "keywords": [
+        "4Runner"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq90",
+      "question": "What car did Jordan drive before his current one?",
+      "answer": "a Honda Element",
+      "keywords": [
+        "Honda Element"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq91",
+      "question": "What phone does Jordan use now?",
+      "answer": "a Samsung Galaxy S24",
+      "keywords": [
+        "Galaxy S24"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq92",
+      "question": "What phone did Jordan use before his current one?",
+      "answer": "an iPhone 11",
+      "keywords": [
+        "iPhone 11"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq93",
+      "question": "Who does Jordan currently live with?",
+      "answer": "his wife Noor",
+      "keywords": [
+        "Noor"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq94",
+      "question": "Who did Jordan live with before, in Houston?",
+      "answer": "three roommates",
+      "keywords": [
+        "roommates"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq95",
+      "question": "What language is Jordan learning now?",
+      "answer": "Spanish",
+      "keywords": [
+        "Spanish"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq96",
+      "question": "What language did Jordan study in college before Spanish?",
+      "answer": "Portuguese",
+      "keywords": [
+        "Portuguese"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq97",
+      "question": "What computer does Jordan use now?",
+      "answer": "a MacBook Pro",
+      "keywords": [
+        "MacBook"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq98",
+      "question": "What computer did Jordan use before his MacBook?",
+      "answer": "a Windows desktop",
+      "keywords": [
+        "Windows"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq99",
+      "question": "What code editor does Jordan use now?",
+      "answer": "VS Code",
+      "keywords": [
+        "VS Code"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq100",
+      "question": "What code editor did Jordan use before VS Code?",
+      "answer": "Vim",
+      "keywords": [
+        "Vim"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq101",
+      "question": "What is Jordan's main form of cardio now?",
+      "answer": "cycling",
+      "keywords": [
+        "cycling"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq102",
+      "question": "What cardio did Jordan do before he gave it up for cycling?",
+      "answer": "running",
+      "keywords": [
+        "running"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq103",
+      "question": "What is Jordan's current diet?",
+      "answer": "pescatarian",
+      "keywords": [
+        "pescatarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq104",
+      "question": "What diet did Jordan follow before going pescatarian?",
+      "answer": "vegetarian",
+      "keywords": [
+        "vegetarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq105",
+      "question": "What is Jordan's current job title?",
+      "answer": "Senior Software Engineer",
+      "keywords": [
+        "Senior"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq106",
+      "question": "What does Jordan drink in the morning now, after switching back at Cumbre AI?",
+      "answer": "coffee",
+      "keywords": [
+        "coffee"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq107",
+      "question": "List all of Jordan's pets.",
+      "answer": "Mochi (a greyhound) and Pelusa (a cat)",
+      "keywords": [
+        "Mochi",
+        "Pelusa"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq108",
+      "question": "Name all of Jordan's siblings.",
+      "answer": "Rafael and Lucia",
+      "keywords": [
+        "Rafael",
+        "Lucia"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq109",
+      "question": "List all the cities Jordan has lived in.",
+      "answer": "Miami, Houston, and Austin",
+      "keywords": [
+        "Miami",
+        "Houston",
+        "Austin"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq110",
+      "question": "Name every company Jordan has worked for.",
+      "answer": "Larkspur Pay and Cumbre AI",
+      "keywords": [
+        "Larkspur",
+        "Cumbre"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq111",
+      "question": "List all of Jordan's hobbies.",
+      "answer": "gravel cycling, bouldering, sea kayaking, birdwatching, and playing guitar",
+      "keywords": [
+        "cycling",
+        "bouldering",
+        "kayaking",
+        "birdwatching",
+        "guitar"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq112",
+      "question": "What are all of Jordan's named friends?",
+      "answer": "Valentina Cruz, Devon Ellison, Hector Morales, and Greta Lindqvist",
+      "keywords": [
+        "Valentina",
+        "Devon",
+        "Hector",
+        "Greta"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq113",
+      "question": "List the things Jordan is allergic to or intolerant of.",
+      "answer": "shellfish (allergy) and lactose (intolerance)",
+      "keywords": [
+        "shellfish",
+        "lactose"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq114",
+      "question": "Name Jordan's wife and his two siblings.",
+      "answer": "his wife Noor, brother Rafael, and sister Lucia",
+      "keywords": [
+        "Noor",
+        "Rafael",
+        "Lucia"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq115",
+      "question": "List Jordan's niece and nephew.",
+      "answer": "Camila (niece) and Mateo (nephew)",
+      "keywords": [
+        "Camila",
+        "Mateo"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq116",
+      "question": "What devices and gadgets does Jordan own?",
+      "answer": "a Samsung Galaxy S24 phone, an Olympus OM-1 camera, a Coros Apex watch, and a MacBook Pro",
+      "keywords": [
+        "Galaxy S24",
+        "Olympus",
+        "Coros",
+        "MacBook"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq117",
+      "question": "Name all the parents and grandparents Jordan has mentioned.",
+      "answer": "his parents Elena and Carlos and his grandmother Abuela Marta",
+      "keywords": [
+        "Elena",
+        "Carlos",
+        "Marta"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq118",
+      "question": "List all of Jordan's favorite media (band, movie, game, show, board game).",
+      "answer": "band Khruangbin, movie Coherence, video game Hollow Knight, TV show Severance, and board game Wingspan",
+      "keywords": [
+        "Khruangbin",
+        "Coherence",
+        "Hollow Knight",
+        "Severance",
+        "Wingspan"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq119",
+      "question": "How many siblings does Jordan have?",
+      "answer": "two (Rafael and Lucia)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq120",
+      "question": "How many pets does Jordan have?",
+      "answer": "two (a dog, Mochi, and a cat, Pelusa)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq121",
+      "question": "How many cities has Jordan lived in?",
+      "answer": "three (Miami, Houston, and Austin)",
+      "keywords": [
+        "three",
+        "3"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq122",
+      "question": "How many companies has Jordan worked for?",
+      "answer": "two (Larkspur Pay and Cumbre AI)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq123",
+      "question": "Which member of Jordan's family is a doctor?",
+      "answer": "his wife Noor, an ER physician",
+      "keywords": [
+        "Noor"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq124",
+      "question": "Which of Jordan's relatives is a marine biologist?",
+      "answer": "his sister Lucia",
+      "keywords": [
+        "Lucia"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq125",
+      "question": "How many of Jordan's named friends work as a veterinarian?",
+      "answer": "one (Greta Lindqvist)",
+      "keywords": [
+        "one",
+        "1",
+        "Greta"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq126",
+      "question": "How many children do Jordan's siblings have in total?",
+      "answer": "two (Camila and Mateo)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq127",
+      "question": "Does Jordan have a pet bird?",
+      "answer": "No — Jordan's only pets are a dog (Mochi) and a cat (Pelusa). He enjoys birdwatching, but owns no bird.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq128",
+      "question": "Does Jordan have a third sibling?",
+      "answer": "No — Jordan has exactly two siblings, his brother Rafael and his sister Lucia.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq129",
+      "question": "Does Jordan work at Palantir?",
+      "answer": "No — Jordan works at Cumbre AI. Palantir is where his best friend Valentina Cruz works.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq130",
+      "question": "Is Jordan a doctor?",
+      "answer": "No — Jordan is a software engineer. His wife Noor is the doctor (an ER physician).",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq131",
+      "question": "Does Jordan have any children of his own?",
+      "answer": "No — Jordan has a niece (Camila) and a nephew (Mateo), but no children of his own.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq132",
+      "question": "Has Jordan ever worked at Google?",
+      "answer": "No — Jordan has worked at Larkspur Pay and Cumbre AI. His brother Rafael is the one at Google.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq133",
+      "question": "Does Jordan currently live in Houston?",
+      "answer": "No — Jordan moved to Austin three years ago. He lived in Houston before that, not now.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq134",
+      "question": "Is Jordan a veterinarian?",
+      "answer": "No — Jordan is a software engineer. His cycling buddy Greta Lindqvist is the veterinarian.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq135",
+      "question": "Does Jordan currently use an iPhone?",
+      "answer": "No — Jordan now uses a Samsung Galaxy S24. He used an iPhone 11 before, but switched this spring.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq136",
+      "question": "Does Jordan play the piano?",
+      "answer": "No — Jordan plays acoustic guitar, not piano.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq137",
+      "question": "Does Jordan still write Python for the backend?",
+      "answer": "No — Jordan switched from Python to Go about six months ago.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq138",
+      "question": "Is Jordan currently a vegetarian?",
+      "answer": "No — Jordan used to be vegetarian but is now pescatarian.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq139",
+      "question": "Does Jordan live in Phoenix?",
+      "answer": "No — Jordan lives in Austin. Phoenix is where his best friend Valentina Cruz lives.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq140",
+      "question": "Is Jordan allergic to peanuts?",
+      "answer": "No — Jordan is allergic to shellfish (and lactose intolerant), but not peanuts.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq141",
+      "question": "Does Jordan have a sister named Yuki?",
+      "answer": "No — Jordan's sister is Lucia. Yuki Tanaka is his sister-in-law (his brother Rafael's wife).",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq142",
+      "question": "Does Jordan use Vim as his code editor now?",
+      "answer": "No — Jordan switched from Vim to VS Code when he joined Cumbre AI.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq143",
+      "question": "Does Jordan have a sister?",
+      "answer": "Yes — his sister Lucia, a marine biologist.",
+      "keywords": [
+        "yes",
+        "Lucia"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq144",
+      "question": "Does Jordan own a cat?",
+      "answer": "Yes — a tabby cat named Pelusa.",
+      "keywords": [
+        "yes",
+        "Pelusa"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq145",
+      "question": "Is Jordan married?",
+      "answer": "Yes — to his wife Noor Haddad.",
+      "keywords": [
+        "yes",
+        "Noor"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq146",
+      "question": "Does Jordan play a musical instrument?",
+      "answer": "Yes — acoustic guitar.",
+      "keywords": [
+        "yes",
+        "guitar"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq147",
+      "question": "Does Jordan have a nephew?",
+      "answer": "Yes — his nephew Mateo.",
+      "keywords": [
+        "yes",
+        "Mateo"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq148",
+      "question": "Does Jordan work at Cumbre AI?",
+      "answer": "Yes — as a Senior Software Engineer on the Recommendations team.",
+      "keywords": [
+        "yes",
+        "Cumbre"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq149",
+      "question": "Has Jordan lived in Austin?",
+      "answer": "Yes — he currently lives in Austin.",
+      "keywords": [
+        "yes",
+        "Austin"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq150",
+      "question": "Does Jordan own a dog?",
+      "answer": "Yes — a rescue greyhound named Mochi.",
+      "keywords": [
+        "yes",
+        "Mochi"
+      ],
+      "category": "presence-control"
+    }
+  ]
+}

@@ -403,6 +403,87 @@ class HolographicBackend:
         return [r.get("content", "") for r in res if r.get("content")]
 
 
+# --------------------------------------------------------------------------- #
+# TencentDB Agent Memory — TencentCloud's local-first memory system (MIT).
+# A 4-tier progressive pipeline (L0 raw turns -> L1 extracted memories ->
+# L2 scenes -> personas) over local SQLite + sqlite-vec (vector) and BM25.
+# We drive its standalone `TdaiGateway` HTTP server (run on the host, like
+# OpenViking), configured for local models: gemma-31b extraction + nomic
+# embeddings via LM Studio. The gateway's SQLite store is wiped + the gateway
+# restarted out-of-band before a run (see tencentdb/run_gateway.sh), so reset()
+# just fixes the session key.
+#
+# Contract mapping:  ingest -> POST /capture ; flush -> POST /session/end
+# (runs the session's buffered L0->L1 extraction) ; retrieve -> POST
+# /search/memories (hybrid vec+BM25 over the extracted L1 memories).
+#
+# Platform caveat: Node's built-in `node:sqlite` lacks FTS5, so the SQLite-FTS5
+# keyword arm is unavailable on this host (the JS BM25 encoder + sqlite-vec
+# vector search are active). The vendored Docker image ships an FTS5-enabled
+# SQLite; here recall is vector-dominant. Flagged in the writeup.
+# --------------------------------------------------------------------------- #
+
+class TencentDBBackend:
+    name = "TencentDB Agent Memory (sqlite-vec)"
+
+    def __init__(self) -> None:
+        self._base = os.environ.get("TENCENTDB_URL", "http://host.docker.internal:8420").rstrip("/")
+        self._skey = "bench"
+
+    def _post(self, path: str, payload: dict, timeout: float = 600.0) -> dict:
+        req = urllib.request.Request(f"{self._base}{path}", data=json.dumps(payload).encode(), method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", "replace")
+        return json.loads(body) if body else {}
+
+    def reset(self) -> None:
+        # Fresh store comes from wiping the gateway's SQLite data dir + restarting
+        # it out-of-band before the run. One session_key groups the whole corpus
+        # as a single ongoing conversation so the L1 extractor aggregates over it.
+        self._skey = "bench"
+
+    def ingest(self, text: str, session_id: str) -> None:
+        # /capture is turn-shaped (user + assistant). The corpus is documents, not
+        # dialogues, so each statement is the user turn with a constant ack (the
+        # extractor reads facts from the user turn). We then /session/end to force
+        # AND AWAIT this turn's L0->L1 extraction before the next capture.
+        #
+        # The per-message serialization is required, not incidental: the pipeline
+        # scheduler COALESCES rapid captures ("L1 already queued, skipping"), which
+        # strands un-extracted messages (a batch of 3 yielded only 1 memory). With
+        # everyNConversations=1 + warmup off + flush-per-turn, extraction keeps pace
+        # and nothing is lost — at the cost of one gemma extraction call per message
+        # (so TencentDB's ingest is on the slower side; an honest Phase-A cost).
+        self._post("/capture", {
+            "session_key": self._skey,
+            "user_content": text,
+            "assistant_content": "Noted.",
+        }, timeout=300)
+        self._post("/session/end", {"session_key": self._skey}, timeout=600)
+
+    def flush(self) -> None:
+        # Per-message ingest already extracts every turn; this is a final settle
+        # for any trailing scene/L2 aggregation + vec indexing.
+        self._post("/session/end", {"session_key": self._skey}, timeout=600)
+        time.sleep(10)
+
+    def retrieve(self, query: str) -> list[str]:
+        r = self._post("/search/memories", {"query": query, "limit": TOP_K}, timeout=120)
+        text = r.get("results", "") or ""
+        if not text or text.startswith("No matching"):
+            return []
+        # Format is "Found N matching memories:\n\n- **[type]** (...)\n  <content>\n..."
+        # Keep the indented content lines; drop the header and the per-item meta line.
+        out: list[str] = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("Found ") or s.startswith("- **["):
+                continue
+            out.append(s)
+        return out[:TOP_K]
+
+
 def make_backend():
     system = os.environ.get("SYSTEM", "naive").lower()
     return {
@@ -412,4 +493,5 @@ def make_backend():
         "ci_server": CIServerBackend,
         "openviking": OpenVikingBackend,
         "holographic": HolographicBackend,
+        "tencentdb": TencentDBBackend,
     }[system]()

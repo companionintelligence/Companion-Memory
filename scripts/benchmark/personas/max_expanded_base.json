@@ -1,0 +1,5606 @@
+{
+  "_comment": "Single-user expanded benchmark: Max Turnquist + his friends Priya and Jordan folded in as people he knows (their networks give deep multi-hop). Canonical only; run generate_large_persona.py for distractors.",
+  "persona_id": "max_expanded",
+  "name": "Max Turnquist",
+  "description": "Max Turnquist expanded single-user persona: Max plus two friends (Priya, Jordan) and their sub-networks folded in as people Max knows.",
+  "sessions": [
+    {
+      "id": "sess_00",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Quick intro: I'm Max Turnquist, a robotics engineer."
+        },
+        {
+          "role": "user",
+          "content": "I picked the violin back up this year and practice most evenings."
+        },
+        {
+          "role": "user",
+          "content": "I adopted a cat named Biryani, a little tabby with opinions."
+        }
+      ]
+    },
+    {
+      "id": "sess_01",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Palak paneer is my favorite food, total comfort dish."
+        },
+        {
+          "role": "user",
+          "content": "I'm reading The Overstory by Richard Powers right now."
+        },
+        {
+          "role": "user",
+          "content": "I ride a Cannondale Synapse road bike on weekends."
+        }
+      ]
+    },
+    {
+      "id": "sess_02",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I'm learning Japanese before a trip to Kyoto in November."
+        },
+        {
+          "role": "user",
+          "content": "Most weekends I go hiking in the foothills."
+        },
+        {
+          "role": "user",
+          "content": "My coffee order is always a flat white."
+        }
+      ]
+    },
+    {
+      "id": "sess_03",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My favorite movie is Arrival; I rewatch it constantly."
+        },
+        {
+          "role": "user",
+          "content": "Radiohead is my favorite band by a mile."
+        },
+        {
+          "role": "user",
+          "content": "I shoot photos with a Fujifilm X100V."
+        }
+      ]
+    },
+    {
+      "id": "sess_04",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My go-to cocktail is a negroni."
+        },
+        {
+          "role": "user",
+          "content": "I keep a fiddle-leaf fig in the living room."
+        },
+        {
+          "role": "user",
+          "content": "I listen to the Lex Fridman podcast on commutes."
+        }
+      ]
+    },
+    {
+      "id": "sess_05",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My sister Anita flew in to visit last week."
+        },
+        {
+          "role": "user",
+          "content": "My parents, Deepak and Sunita, still live back in Portland."
+        },
+        {
+          "role": "user",
+          "content": "My best friend Lena and I have known each other since school."
+        }
+      ]
+    },
+    {
+      "id": "sess_06",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Anita and her husband Raj live in Chicago."
+        },
+        {
+          "role": "user",
+          "content": "My manager at work, Priyanka, runs a tight ship."
+        },
+        {
+          "role": "user",
+          "content": "My old college roommate Diego crashed on my couch last month."
+        }
+      ]
+    },
+    {
+      "id": "sess_07",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My niece Mira just turned six."
+        },
+        {
+          "role": "user",
+          "content": "My grad-school mentor was Professor Okafor."
+        },
+        {
+          "role": "user",
+          "content": "Raj — my brother-in-law — is a cardiologist at a big hospital."
+        }
+      ]
+    },
+    {
+      "id": "sess_08",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My best friend Lena works at Stripe and lives in San Francisco."
+        },
+        {
+          "role": "user",
+          "content": "Anita is an architect and designed a library downtown."
+        },
+        {
+          "role": "user",
+          "content": "Mira is Anita's daughter, so I spoil her rotten."
+        }
+      ]
+    },
+    {
+      "id": "sess_09",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My manager Priyanka has been at Cobalt Robotics for a decade."
+        },
+        {
+          "role": "user",
+          "content": "Professor Okafor taught robotics and still publishes constantly."
+        },
+        {
+          "role": "user",
+          "content": "I'm finally settled in Denver after moving from Portland last spring."
+        }
+      ]
+    },
+    {
+      "id": "sess_10",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I left Northwind Logistics in March and now work at Cobalt Robotics."
+        },
+        {
+          "role": "user",
+          "content": "Cobalt has me leading the perception team now."
+        },
+        {
+          "role": "user",
+          "content": "I switched from an iPhone to a Pixel a few months ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_11",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I used to play soccer but these days I train for marathons."
+        },
+        {
+          "role": "user",
+          "content": "I got promoted to senior engineer at the last review."
+        },
+        {
+          "role": "user",
+          "content": "I traded my old Civic for a Subaru Outback this year."
+        }
+      ]
+    },
+    {
+      "id": "sess_12",
+      "messages": [
+        {
+          "role": "user",
+          "content": "We moved out of our apartment into a small house in the spring."
+        },
+        {
+          "role": "user",
+          "content": "I went vegetarian last year after decades of eating meat."
+        },
+        {
+          "role": "user",
+          "content": "I recently got engaged to my partner Sam."
+        }
+      ]
+    },
+    {
+      "id": "sess_x",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I climb at the Mesa Rim gym twice a week."
+        },
+        {
+          "role": "user",
+          "content": "Autumn is hands down my favorite season."
+        },
+        {
+          "role": "user",
+          "content": "I've been a Portland Trail Blazers fan my whole life."
+        }
+      ]
+    },
+    {
+      "id": "sess_13",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Sam, my fiancé, is a veterinarian at a clinic called Brightpath Animal Hospital."
+        },
+        {
+          "role": "user",
+          "content": "Sam and I first met at the Mesa Rim climbing gym, actually."
+        },
+        {
+          "role": "user",
+          "content": "Sam plays the viola in a community orchestra."
+        }
+      ]
+    },
+    {
+      "id": "sess_14",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My best friend Lena's partner is named Theo."
+        },
+        {
+          "role": "user",
+          "content": "Theo is a pastry chef and runs a little bakery-cafe."
+        },
+        {
+          "role": "user",
+          "content": "Lena grew up in Vancouver before she moved to the Bay Area."
+        },
+        {
+          "role": "user",
+          "content": "At Stripe, Lena's actual role is product designer."
+        }
+      ]
+    },
+    {
+      "id": "sess_15",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Anita's architecture firm is called Hargrove & Field."
+        },
+        {
+          "role": "user",
+          "content": "Besides Mira, my sister Anita has a younger son — my nephew Felix."
+        },
+        {
+          "role": "user",
+          "content": "Felix just turned three and is obsessed with dinosaurs."
+        }
+      ]
+    },
+    {
+      "id": "sess_16",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My brother-in-law Raj works at Meridian General hospital."
+        },
+        {
+          "role": "user",
+          "content": "Raj is a serious tennis player and competes most weekends."
+        },
+        {
+          "role": "user",
+          "content": "Raj grew up in London and came here for his medical residency."
+        }
+      ]
+    },
+    {
+      "id": "sess_17",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Before Cobalt, my manager Priyanka spent years at Lumen Labs."
+        },
+        {
+          "role": "user",
+          "content": "Priyanka did her PhD at Caltech."
+        }
+      ]
+    },
+    {
+      "id": "sess_18",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My old college roommate Diego is a lawyer now and lives in Montreal."
+        },
+        {
+          "role": "user",
+          "content": "Diego and I both studied at Halford University."
+        },
+        {
+          "role": "user",
+          "content": "Diego recently had a daughter named Ines."
+        }
+      ]
+    },
+    {
+      "id": "sess_19",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Professor Okafor, my mentor, also teaches at Halford University."
+        },
+        {
+          "role": "user",
+          "content": "Halford University is in Montreal."
+        },
+        {
+          "role": "user",
+          "content": "Okafor just won an award called the Turing Robotics Prize."
+        }
+      ]
+    },
+    {
+      "id": "sess_20",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My niece Mira is learning the harp."
+        },
+        {
+          "role": "user",
+          "content": "Mira does gymnastics every Saturday."
+        }
+      ]
+    },
+    {
+      "id": "sess_21",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My grandmother, Nana Rose, lives in a retirement community back in Portland."
+        },
+        {
+          "role": "user",
+          "content": "Nana Rose was a concert pianist in her younger years."
+        },
+        {
+          "role": "user",
+          "content": "My uncle on my mom's side, Bashir, runs a bakery in Portland."
+        }
+      ]
+    },
+    {
+      "id": "sess_22",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Our perception team's flagship project is a warehouse robot codenamed Magpie."
+        },
+        {
+          "role": "user",
+          "content": "On the team I work most closely with my teammate Imani."
+        },
+        {
+          "role": "user",
+          "content": "Imani joined Cobalt from an aerospace company called Aerolith."
+        }
+      ]
+    },
+    {
+      "id": "sess_23",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I wear a Garmin watch to track my marathon training."
+        },
+        {
+          "role": "user",
+          "content": "My work laptop is a ThinkPad, but at home I use a Mac."
+        },
+        {
+          "role": "user",
+          "content": "I started a running club with my friend Yusuf."
+        },
+        {
+          "role": "user",
+          "content": "My dentist, Dr. Cardoza, has been seeing me for years."
+        }
+      ]
+    },
+    {
+      "id": "sess_24",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My comfort TV show is The Bear; I've watched it three times."
+        },
+        {
+          "role": "user",
+          "content": "The favorite city I've ever traveled to is Lisbon."
+        },
+        {
+          "role": "user",
+          "content": "I'm allergic to penicillin — found out the hard way as a kid."
+        },
+        {
+          "role": "user",
+          "content": "My favorite dessert is crème brûlée."
+        },
+        {
+          "role": "user",
+          "content": "My favorite holiday is Diwali."
+        }
+      ]
+    },
+    {
+      "id": "sess_25",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I recently started taking surfing lessons on weekends."
+        },
+        {
+          "role": "user",
+          "content": "I collect vintage film cameras — got three on a shelf."
+        },
+        {
+          "role": "user",
+          "content": "Funny enough, I'm afraid of heights, despite all the climbing."
+        },
+        {
+          "role": "user",
+          "content": "I drink my tea with oat milk, never dairy."
+        },
+        {
+          "role": "user",
+          "content": "I could play Catan every night; it's my favorite board game."
+        }
+      ]
+    },
+    {
+      "id": "sess_26",
+      "messages": [
+        {
+          "role": "user",
+          "content": "For years I coded mostly in C++, but at Cobalt I've switched to Rust."
+        },
+        {
+          "role": "user",
+          "content": "I wore glasses for years but got LASIK last spring."
+        },
+        {
+          "role": "user",
+          "content": "I used to live alone, but Sam moved in with me last year."
+        },
+        {
+          "role": "user",
+          "content": "I quit smoking five years ago after a decade of it."
+        },
+        {
+          "role": "user",
+          "content": "I deleted all my social media this year."
+        }
+      ]
+    },
+    {
+      "id": "sess_01",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My friend Priya Sharma currently lives in Phoenix; she moved there from Eugene last spring."
+        },
+        {
+          "role": "user",
+          "content": "Priya works at Verdant Automata now as a perception engineer; she left Borealis Freight back in March."
+        },
+        {
+          "role": "user",
+          "content": "At Verdant Automata, Priya leads the perception team."
+        },
+        {
+          "role": "user",
+          "content": "Priya's official job title at Verdant Automata is now Principal Perception Engineer — she got promoted from Senior Engineer in April."
+        }
+      ]
+    },
+    {
+      "id": "sess_02",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's husband is named Arjun Mehta."
+        },
+        {
+          "role": "user",
+          "content": "Arjun is a structural engineer at a firm called Halcyon Bridgeworks in Phoenix."
+        },
+        {
+          "role": "user",
+          "content": "Arjun plays the harmonium and sings at their temple on weekends."
+        },
+        {
+          "role": "user",
+          "content": "Arjun grew up in Nairobi and moved to the US for grad school."
+        },
+        {
+          "role": "user",
+          "content": "Priya and Arjun got married in Udaipur four years ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_03",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's parents are Mohan and Lalita Sharma, and they still live in Eugene."
+        },
+        {
+          "role": "user",
+          "content": "Priya's father Mohan is a retired botany professor."
+        },
+        {
+          "role": "user",
+          "content": "Priya's mother Lalita runs a small textile shop called Marigold Looms."
+        },
+        {
+          "role": "user",
+          "content": "Priya's grandmother, whom she calls Naani Asha, lives with her parents in Eugene."
+        },
+        {
+          "role": "user",
+          "content": "Naani Asha was a radio playback singer in Lucknow when she was young."
+        }
+      ]
+    },
+    {
+      "id": "sess_04",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's older sister is Kavya, and she's an architect."
+        },
+        {
+          "role": "user",
+          "content": "Kavya lives in Boston with her husband Vikram."
+        },
+        {
+          "role": "user",
+          "content": "Last year Kavya designed a public library in Boston."
+        },
+        {
+          "role": "user",
+          "content": "Kavya and Vikram have two kids: Priya's niece Tara and her nephew Kiran."
+        },
+        {
+          "role": "user",
+          "content": "Priya's niece Tara is twelve and is a competitive figure skater."
+        },
+        {
+          "role": "user",
+          "content": "Priya's nephew Kiran is eight and is obsessed with building marble runs."
+        }
+      ]
+    },
+    {
+      "id": "sess_05",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's brother-in-law Vikram — Kavya's husband — is a cardiologist."
+        },
+        {
+          "role": "user",
+          "content": "Vikram works at a hospital called Lakeshore Cardiac Center in Boston."
+        },
+        {
+          "role": "user",
+          "content": "Vikram is an avid open-water swimmer and does a relay across the lake every summer."
+        }
+      ]
+    },
+    {
+      "id": "sess_06",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya also has a younger brother named Rohan."
+        },
+        {
+          "role": "user",
+          "content": "Rohan is a marine biologist at the Coralline Institute."
+        },
+        {
+          "role": "user",
+          "content": "Rohan lives in Kochi, in India."
+        },
+        {
+          "role": "user",
+          "content": "Rohan is married to Priya's sister-in-law Fatima, who is a documentary filmmaker."
+        },
+        {
+          "role": "user",
+          "content": "Rohan and Fatima have a baby daughter named Zoya."
+        }
+      ]
+    },
+    {
+      "id": "sess_07",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's best friend is Bianca, and she works at Plaid."
+        },
+        {
+          "role": "user",
+          "content": "Bianca is a staff product manager at Plaid."
+        },
+        {
+          "role": "user",
+          "content": "Bianca lives in Oakland and commutes across the bay."
+        },
+        {
+          "role": "user",
+          "content": "Priya and Bianca met in college, where they were both on the rowing team."
+        }
+      ]
+    },
+    {
+      "id": "sess_08",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's close friend Meera Iyer is a pediatrician."
+        },
+        {
+          "role": "user",
+          "content": "Meera works at Saint Brigid Hospital in Phoenix."
+        },
+        {
+          "role": "user",
+          "content": "Meera owns a Bernese mountain dog named Laddoo."
+        },
+        {
+          "role": "user",
+          "content": "Priya and Meera do a pottery class together on Thursday evenings."
+        }
+      ]
+    },
+    {
+      "id": "sess_09",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's friend Gabriel Okonkwo is a wine sommelier."
+        },
+        {
+          "role": "user",
+          "content": "Gabriel runs the wine program at a restaurant in Reykjavik."
+        },
+        {
+          "role": "user",
+          "content": "Gabriel was Priya's roommate during her exchange semester abroad."
+        }
+      ]
+    },
+    {
+      "id": "sess_10",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's manager at Verdant Automata is named Helena Vance."
+        },
+        {
+          "role": "user",
+          "content": "Helena was an astronaut candidate before she went into the robotics field."
+        },
+        {
+          "role": "user",
+          "content": "On the perception team, Priya works most closely with her teammate Oscar Mbeki."
+        },
+        {
+          "role": "user",
+          "content": "Oscar joined Verdant Automata from a drone company called Skylark Dynamics."
+        },
+        {
+          "role": "user",
+          "content": "Priya's mentor from grad school, Dr. Nadia Brandt, teaches at Rutgers."
+        }
+      ]
+    },
+    {
+      "id": "sess_11",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's cat is named Pumpkin, a little tabby with strong opinions."
+        },
+        {
+          "role": "user",
+          "content": "Pumpkin is the only pet Priya has — just the one cat."
+        },
+        {
+          "role": "user",
+          "content": "Priya adopted Pumpkin from a shelter called Mile-High Rescue."
+        }
+      ]
+    },
+    {
+      "id": "sess_12",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya rides a Trek Domane road bike."
+        },
+        {
+          "role": "user",
+          "content": "Priya drives a Rivian R1S — it's electric."
+        },
+        {
+          "role": "user",
+          "content": "Priya plays the violin; she picked it back up after years."
+        },
+        {
+          "role": "user",
+          "content": "Priya's everyday watch is a Withings ScanWatch."
+        }
+      ]
+    },
+    {
+      "id": "sess_13",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya is reading Cloud Atlas by David Mitchell right now."
+        },
+        {
+          "role": "user",
+          "content": "Priya's comfort show is Schitt's Creek — she's rewatched it four times."
+        },
+        {
+          "role": "user",
+          "content": "Priya's favorite film of all time is Spirited Away."
+        },
+        {
+          "role": "user",
+          "content": "Priya's go-to karaoke song is Mr. Brightside."
+        },
+        {
+          "role": "user",
+          "content": "Priya is completely hooked on a podcast called Ologies."
+        }
+      ]
+    },
+    {
+      "id": "sess_14",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's favorite food is palak paneer — total childhood comfort food for her."
+        },
+        {
+          "role": "user",
+          "content": "Priya's favorite dessert is gulab jamun."
+        },
+        {
+          "role": "user",
+          "content": "Priya is allergic to shellfish; she found out the hard way at a wedding."
+        },
+        {
+          "role": "user",
+          "content": "Priya takes her chai with cardamom and no sugar."
+        },
+        {
+          "role": "user",
+          "content": "Priya is strictly vegetarian and has been her whole life."
+        }
+      ]
+    },
+    {
+      "id": "sess_15",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya enjoys hiking — she did the Mount Falcon trail her first weekend in Phoenix."
+        },
+        {
+          "role": "user",
+          "content": "Priya has recently taken up indoor rock climbing at a gym called Summit Stone."
+        },
+        {
+          "role": "user",
+          "content": "Priya keeps a beehive on their rooftop and harvests honey in the fall."
+        },
+        {
+          "role": "user",
+          "content": "Priya is terrified of deep open water, ironic given her brother's job."
+        },
+        {
+          "role": "user",
+          "content": "Priya is learning Korean for a trip to Seoul in November."
+        },
+        {
+          "role": "user",
+          "content": "Priya collects vintage fountain pens — she has about a dozen."
+        }
+      ]
+    },
+    {
+      "id": "sess_16",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya used to commute on an old Vespa scooter, but now she drives her Rivian."
+        },
+        {
+          "role": "user",
+          "content": "For years Priya's daily phone was a BlackBerry, but she switched to a OnePlus last year."
+        },
+        {
+          "role": "user",
+          "content": "Priya used to code mostly in MATLAB, but at Verdant Automata she works almost entirely in Julia now."
+        },
+        {
+          "role": "user",
+          "content": "Priya lived with three roommates in Eugene, but now she lives just with her husband Arjun in Phoenix."
+        },
+        {
+          "role": "user",
+          "content": "Priya gave up coffee two years ago and switched entirely to chai."
+        }
+      ]
+    },
+    {
+      "id": "sess_17",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya used to wear contact lenses, but she got PRK the year before last and ditched them."
+        },
+        {
+          "role": "user",
+          "content": "Priya's old laptop was a clunky Dell, but her work machine now is a Framework laptop."
+        },
+        {
+          "role": "user",
+          "content": "Priya was learning the sitar for a while, but she set it aside and went back to the violin."
+        },
+        {
+          "role": "user",
+          "content": "Priya used to run marathons, but a knee injury pushed her toward cycling instead."
+        },
+        {
+          "role": "user",
+          "content": "Priya quit biting her nails after twenty years — she finally kicked it last winter."
+        }
+      ]
+    },
+    {
+      "id": "sess_18",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Priya's favorite season is autumn, hands down."
+        },
+        {
+          "role": "user",
+          "content": "Priya is a green-tea-over-everything kind of person, but chai is her real love."
+        },
+        {
+          "role": "user",
+          "content": "Priya's lucky number is seven."
+        },
+        {
+          "role": "user",
+          "content": "Priya volunteers monthly at an engineering club for middle-schoolers called GearWorks."
+        },
+        {
+          "role": "user",
+          "content": "Priya left Borealis Freight, where she had been a logistics systems engineer, back in March."
+        }
+      ]
+    },
+    {
+      "id": "sess_1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My friend Jordan Rivera is a senior software engineer, and he lives in Austin, Texas."
+        },
+        {
+          "role": "user",
+          "content": "Jordan grew up in Miami but he's been in Austin for about three years now."
+        },
+        {
+          "role": "user",
+          "content": "Jordan goes to the Austin Bouldering Project pretty regularly to climb."
+        },
+        {
+          "role": "user",
+          "content": "Jordan rescued a greyhound named Mochi about a year ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan works at Cumbre AI, where they're in the middle of a big Go migration."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's team was a Python shop but switched to Go for the backend about six months ago."
+        },
+        {
+          "role": "user",
+          "content": "Jordan has been at Cumbre AI for two years, and he just got promoted to Senior Engineer a couple months ago."
+        }
+      ]
+    },
+    {
+      "id": "sess_3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's brother Rafael is a PM at Google and lives in Seattle."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's parents, Elena and Carlos, live in Miami and love visiting him in Austin."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's best friend is Valentina, who is in Phoenix working at Palantir; they met at PyCon 2021 in Salt Lake City."
+        }
+      ]
+    },
+    {
+      "id": "sess_4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan has been re-reading Project Hail Mary and practices guitar in the evenings."
+        },
+        {
+          "role": "user",
+          "content": "Jordan has played acoustic guitar for about ten years, and his favorite author is Ted Chiang — he loves Story of Your Life."
+        },
+        {
+          "role": "user",
+          "content": "Jordan speaks intermediate Spanish and is saving up for a Japan trip he's planning for October."
+        }
+      ]
+    },
+    {
+      "id": "sess_5",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's favorite food is tacos al pastor, and he raves about a spot near his office."
+        },
+        {
+          "role": "user",
+          "content": "Jordan finally bought a Specialized Diverge for gravel riding around Austin."
+        }
+      ]
+    },
+    {
+      "id": "sess_6",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Before Cumbre AI, Jordan spent four years at a fintech startup called Larkspur Pay."
+        },
+        {
+          "role": "user",
+          "content": "At Larkspur Pay Jordan was a mid-level backend engineer, not yet senior."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's manager at Cumbre AI is named Adaeze Nwosu, and she's the VP of Engineering."
+        },
+        {
+          "role": "user",
+          "content": "Adaeze Nwosu did her undergrad at Georgia Tech."
+        },
+        {
+          "role": "user",
+          "content": "Cumbre AI's headquarters is in Austin, but it was originally founded in Toronto."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's team at Cumbre AI is the Recommendations team, and their main product is codenamed Driftwood."
+        },
+        {
+          "role": "user",
+          "content": "Jordan writes Go on the backend and uses React on the frontend day to day."
+        }
+      ]
+    },
+    {
+      "id": "sess_7",
+      "messages": [
+        {
+          "role": "user",
+          "content": "In Houston, before he moved to Austin, Jordan lived in the Montrose district."
+        },
+        {
+          "role": "user",
+          "content": "Back in Houston Jordan rented a tiny studio apartment, but in Austin he bought a small bungalow."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's neighborhood in Austin is called Travis Heights, just south of the river."
+        },
+        {
+          "role": "user",
+          "content": "When Jordan lived in Houston he worked at Larkspur Pay, whose office was downtown."
+        }
+      ]
+    },
+    {
+      "id": "sess_8",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's wife's name is Noor Haddad, and they got married four years ago."
+        },
+        {
+          "role": "user",
+          "content": "Noor is an emergency room physician at Dell Seton Medical Center in Austin."
+        },
+        {
+          "role": "user",
+          "content": "Noor grew up in Amman, Jordan, and moved to the US for medical school."
+        },
+        {
+          "role": "user",
+          "content": "Jordan and Noor met at a tango class about seven years ago."
+        },
+        {
+          "role": "user",
+          "content": "Noor is the only doctor in Jordan's family."
+        }
+      ]
+    },
+    {
+      "id": "sess_9",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Besides his brother Rafael, Jordan has a younger sister named Lucia Rivera."
+        },
+        {
+          "role": "user",
+          "content": "Lucia is a marine biologist and works at the Monterey Bay Aquarium."
+        },
+        {
+          "role": "user",
+          "content": "Lucia lives in Monterey, California."
+        },
+        {
+          "role": "user",
+          "content": "Lucia has a daughter — Jordan's niece — named Camila, who is six."
+        },
+        {
+          "role": "user",
+          "content": "Camila is completely obsessed with sea turtles, thanks to her mom."
+        },
+        {
+          "role": "user",
+          "content": "Rafael, Jordan's brother, has a son named Mateo — Jordan's nephew — who is nine."
+        },
+        {
+          "role": "user",
+          "content": "Mateo plays in a youth soccer league and is the goalkeeper."
+        }
+      ]
+    },
+    {
+      "id": "sess_10",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's grandmother on his dad's side, whom the family calls Abuela Marta, lives in Tampa, Florida."
+        },
+        {
+          "role": "user",
+          "content": "Abuela Marta was a seamstress who ran her own tailoring shop for decades."
+        },
+        {
+          "role": "user",
+          "content": "Rafael's wife — Jordan's sister-in-law — is named Yuki Tanaka, and she's a UX researcher at Microsoft."
+        },
+        {
+          "role": "user",
+          "content": "Yuki Tanaka grew up in Calgary, Canada."
+        }
+      ]
+    },
+    {
+      "id": "sess_11",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan's closest friend at work is a colleague named Devon Ellison."
+        },
+        {
+          "role": "user",
+          "content": "Devon Ellison is a machine learning engineer, also at Cumbre AI."
+        },
+        {
+          "role": "user",
+          "content": "Devon moved to Austin from New Orleans, where he grew up."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's oldest friend from childhood is Hector Morales — they've known each other since middle school."
+        },
+        {
+          "role": "user",
+          "content": "Hector Morales is a high school chemistry teacher in Orlando, Florida."
+        },
+        {
+          "role": "user",
+          "content": "Jordan has a cycling buddy named Greta Lindqvist who races competitively."
+        },
+        {
+          "role": "user",
+          "content": "Greta Lindqvist is a veterinarian and runs her own small-animal clinic."
+        }
+      ]
+    },
+    {
+      "id": "sess_12",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Mochi the greyhound is Jordan's only dog, but he also has a tabby cat named Pelusa."
+        },
+        {
+          "role": "user",
+          "content": "Pelusa the cat is fourteen years old — Jordan has had her since college."
+        },
+        {
+          "role": "user",
+          "content": "Those two, Mochi and Pelusa, are Jordan's only pets."
+        },
+        {
+          "role": "user",
+          "content": "Jordan drives a 2019 Toyota 4Runner that he takes camping."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's everyday phone is a Samsung Galaxy S24."
+        },
+        {
+          "role": "user",
+          "content": "For photography Jordan shoots with an Olympus OM-1 mirrorless camera."
+        },
+        {
+          "role": "user",
+          "content": "Jordan wears a Coros Apex watch when he's cycling and hiking."
+        }
+      ]
+    },
+    {
+      "id": "sess_13",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Outside of guitar, Jordan's hobbies are gravel cycling, bouldering, sea kayaking, and birdwatching."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite band is Khruangbin, and he's seen them live three times."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's comfort movie is Coherence — fitting, since he loves Ted Chiang."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite video game is Hollow Knight."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is a huge fan of the TV show Severance."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's go-to board game is Wingspan, which pairs well with his birdwatching."
+        }
+      ]
+    },
+    {
+      "id": "sess_14",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan is allergic to shellfish, which makes coastal trips a little nerve-wracking for him."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is also lactose intolerant, so he drinks his coffee with almond milk."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is mildly colorblind — red-green — which his designer friends never let him forget."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite dessert is tres leches cake, an old family recipe from Abuela Marta."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's favorite holiday is Nochebuena, Christmas Eve, when his whole family cooks together."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is terrified of deep open water, which is ironic given the kayaking."
+        }
+      ]
+    },
+    {
+      "id": "sess_15",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan used to drive a Honda Element for years, but he replaced it with his Toyota 4Runner last year."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's old phone was an iPhone 11, but he switched to a Samsung Galaxy S24 this spring."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to live with three roommates in Houston, but now he lives with just his wife Noor."
+        },
+        {
+          "role": "user",
+          "content": "For backend Jordan used to write Python, but he switched to Go about six months ago."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to study Portuguese in college, but these days he's focused on learning Spanish instead."
+        }
+      ]
+    },
+    {
+      "id": "sess_16",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan quit drinking coffee for years and was a strict tea person, but he went back to coffee when he started at Cumbre AI."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to use a Windows desktop for everything, but he switched to a MacBook Pro two years ago."
+        },
+        {
+          "role": "user",
+          "content": "Jordan gave up running after a knee injury and took up cycling as his main cardio instead."
+        },
+        {
+          "role": "user",
+          "content": "Jordan used to be a vegetarian, but now he just eats pescatarian — minus the shellfish he's allergic to."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's main editor used to be Vim, but he moved to VS Code when he joined Cumbre AI."
+        }
+      ]
+    },
+    {
+      "id": "sess_17",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Jordan was the best man at his brother Rafael's wedding."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's blood type is O negative, so the blood bank loves him."
+        },
+        {
+          "role": "user",
+          "content": "Jordan is an early riser — he's usually up by 5:30 for a ride before work."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's coffee order is a flat white with almond milk."
+        },
+        {
+          "role": "user",
+          "content": "Jordan named his dog Mochi after his favorite childhood dessert, before tres leches took over."
+        },
+        {
+          "role": "user",
+          "content": "Jordan just turned 34 this year."
+        },
+        {
+          "role": "user",
+          "content": "Jordan's best friend Valentina Cruz works as a data scientist over at Palantir in Phoenix."
+        }
+      ]
+    }
+  ],
+  "eval_questions": [
+    {
+      "id": "q01",
+      "question": "What is Max's profession?",
+      "answer": "robotics engineer",
+      "keywords": [
+        "robotics engineer",
+        "robotics"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q02",
+      "question": "What instrument does Max play?",
+      "answer": "violin",
+      "keywords": [
+        "violin"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q03",
+      "question": "What is the name of Max's cat?",
+      "answer": "Biryani",
+      "keywords": [
+        "Biryani"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q04",
+      "question": "What kind of cat does Max have?",
+      "answer": "a tabby",
+      "keywords": [
+        "tabby"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q05",
+      "question": "What is Max's favorite food?",
+      "answer": "palak paneer",
+      "keywords": [
+        "palak paneer",
+        "palak"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q06",
+      "question": "What book is Max reading?",
+      "answer": "The Overstory by Richard Powers",
+      "keywords": [
+        "Overstory",
+        "Richard Powers"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q07",
+      "question": "What kind of bike does Max own?",
+      "answer": "a Cannondale Synapse",
+      "keywords": [
+        "Cannondale",
+        "Synapse"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q08",
+      "question": "What language is Max learning?",
+      "answer": "Japanese",
+      "keywords": [
+        "Japanese"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q09",
+      "question": "Where is Max planning to travel?",
+      "answer": "Kyoto",
+      "keywords": [
+        "Kyoto"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q10",
+      "question": "What outdoor hobby does Max enjoy?",
+      "answer": "hiking",
+      "keywords": [
+        "hiking",
+        "hike"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q11",
+      "question": "What is Max's coffee order?",
+      "answer": "a flat white",
+      "keywords": [
+        "flat white"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q12",
+      "question": "What is Max's favorite movie?",
+      "answer": "Arrival",
+      "keywords": [
+        "Arrival"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q13",
+      "question": "What is Max's favorite band?",
+      "answer": "Radiohead",
+      "keywords": [
+        "Radiohead"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q14",
+      "question": "What camera does Max use?",
+      "answer": "a Fujifilm X100V",
+      "keywords": [
+        "Fujifilm",
+        "X100V"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q15",
+      "question": "What is Max's favorite cocktail?",
+      "answer": "a negroni",
+      "keywords": [
+        "negroni"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q16",
+      "question": "What houseplant does Max keep?",
+      "answer": "a fiddle-leaf fig",
+      "keywords": [
+        "fiddle-leaf",
+        "fig"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q17",
+      "question": "What podcast does Max listen to?",
+      "answer": "the Lex Fridman podcast",
+      "keywords": [
+        "Lex Fridman",
+        "Fridman"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q18",
+      "question": "What is the name of Max's sister?",
+      "answer": "Anita",
+      "keywords": [
+        "Anita"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q19",
+      "question": "What are Max's parents' names?",
+      "answer": "Deepak and Sunita",
+      "keywords": [
+        "Deepak",
+        "Sunita"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q20",
+      "question": "Where do Max's parents live?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q21",
+      "question": "Who is Max's best friend?",
+      "answer": "Lena",
+      "keywords": [
+        "Lena"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q22",
+      "question": "What city do Max's sister and her husband live in?",
+      "answer": "Chicago",
+      "keywords": [
+        "Chicago"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q23",
+      "question": "What is the name of Max's brother-in-law?",
+      "answer": "Raj",
+      "keywords": [
+        "Raj"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q24",
+      "question": "Who is Max's manager?",
+      "answer": "Priyanka",
+      "keywords": [
+        "Priyanka"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q25",
+      "question": "Who was Max's college roommate?",
+      "answer": "Diego",
+      "keywords": [
+        "Diego"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q26",
+      "question": "What is the name of Max's niece?",
+      "answer": "Mira",
+      "keywords": [
+        "Mira"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q27",
+      "question": "Who was Max's mentor?",
+      "answer": "Professor Okafor",
+      "keywords": [
+        "Okafor"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q28",
+      "question": "What does Max's brother-in-law do for work?",
+      "answer": "cardiologist",
+      "keywords": [
+        "cardiologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q29",
+      "question": "Where does Max's best friend work?",
+      "answer": "Stripe",
+      "keywords": [
+        "Stripe"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q30",
+      "question": "What city does Max's best friend live in?",
+      "answer": "San Francisco",
+      "keywords": [
+        "San Francisco"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q31",
+      "question": "What is Max's sister's profession?",
+      "answer": "architect",
+      "keywords": [
+        "architect"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q32",
+      "question": "Who is Max's niece's mother?",
+      "answer": "Anita",
+      "keywords": [
+        "Anita"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q33",
+      "question": "Where does Max's manager work?",
+      "answer": "Cobalt Robotics",
+      "keywords": [
+        "Cobalt"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q34",
+      "question": "What field is Max's mentor in?",
+      "answer": "robotics",
+      "keywords": [
+        "robotics"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q35",
+      "question": "What city does Max currently live in?",
+      "answer": "Denver",
+      "keywords": [
+        "Denver"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q36",
+      "question": "What city did Max live in before his current one?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q37",
+      "question": "What company does Max currently work for?",
+      "answer": "Cobalt Robotics",
+      "keywords": [
+        "Cobalt"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q38",
+      "question": "What company did Max work for before his current job?",
+      "answer": "Northwind Logistics",
+      "keywords": [
+        "Northwind"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q39",
+      "question": "What team does Max lead?",
+      "answer": "the perception team",
+      "keywords": [
+        "perception"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q40",
+      "question": "What phone does Max currently use?",
+      "answer": "a Pixel",
+      "keywords": [
+        "Pixel"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q41",
+      "question": "What does Max currently train for?",
+      "answer": "marathons",
+      "keywords": [
+        "marathon"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q42",
+      "question": "What is Max's current job title?",
+      "answer": "senior engineer",
+      "keywords": [
+        "senior"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q43",
+      "question": "What car does Max currently drive?",
+      "answer": "a Subaru Outback",
+      "keywords": [
+        "Subaru",
+        "Outback"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q44",
+      "question": "What type of home does Max currently live in?",
+      "answer": "a house",
+      "keywords": [
+        "house"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q45",
+      "question": "What is Max's current diet?",
+      "answer": "vegetarian",
+      "keywords": [
+        "vegetarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q46",
+      "question": "What is Max's relationship status?",
+      "answer": "engaged",
+      "keywords": [
+        "engaged"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q47",
+      "question": "What is the name of Max's partner?",
+      "answer": "Sam",
+      "keywords": [
+        "Sam"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q48",
+      "question": "Where does Max work out?",
+      "answer": "Mesa Rim",
+      "keywords": [
+        "Mesa Rim"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q49",
+      "question": "What is Max's favorite season?",
+      "answer": "autumn",
+      "keywords": [
+        "autumn"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q50",
+      "question": "What sports team does Max support?",
+      "answer": "the Portland Trail Blazers",
+      "keywords": [
+        "Trail Blazers",
+        "Blazers"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q51",
+      "question": "What brand of watch does Max wear?",
+      "answer": "Garmin",
+      "keywords": [
+        "Garmin"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q52",
+      "question": "What is Max's comfort TV show?",
+      "answer": "The Bear",
+      "keywords": [
+        "The Bear"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q53",
+      "question": "What is Max's favorite city he has traveled to?",
+      "answer": "Lisbon",
+      "keywords": [
+        "Lisbon"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q54",
+      "question": "What medication is Max allergic to?",
+      "answer": "penicillin",
+      "keywords": [
+        "penicillin"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q55",
+      "question": "What is Max's favorite dessert?",
+      "answer": "crème brûlée",
+      "keywords": [
+        "creme brulee",
+        "crème brûlée"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q56",
+      "question": "What is Max's favorite holiday?",
+      "answer": "Diwali",
+      "keywords": [
+        "Diwali"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q57",
+      "question": "What is the codename of Max's team's flagship project?",
+      "answer": "Magpie",
+      "keywords": [
+        "Magpie"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q58",
+      "question": "What computer does Max use at home?",
+      "answer": "a Mac",
+      "keywords": [
+        "Mac"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q59",
+      "question": "What is Max's work laptop?",
+      "answer": "a ThinkPad",
+      "keywords": [
+        "ThinkPad"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q60",
+      "question": "What water sport has Max taken up?",
+      "answer": "surfing",
+      "keywords": [
+        "surfing"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q61",
+      "question": "What does Max collect?",
+      "answer": "vintage film cameras",
+      "keywords": [
+        "film cameras",
+        "cameras"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q62",
+      "question": "What is Max afraid of?",
+      "answer": "heights",
+      "keywords": [
+        "heights"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q63",
+      "question": "How does Max take his tea?",
+      "answer": "with oat milk",
+      "keywords": [
+        "oat milk"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q64",
+      "question": "What board game does Max love?",
+      "answer": "Catan",
+      "keywords": [
+        "Catan"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q65",
+      "question": "What is the name of Max's nephew?",
+      "answer": "Felix",
+      "keywords": [
+        "Felix"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q66",
+      "question": "What is the name of Max's grandmother?",
+      "answer": "Nana Rose",
+      "keywords": [
+        "Rose",
+        "Nana Rose"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q67",
+      "question": "What is the name of Max's uncle on his mother's side?",
+      "answer": "Bashir",
+      "keywords": [
+        "Bashir"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q68",
+      "question": "Who is Max's dentist?",
+      "answer": "Dr. Cardoza",
+      "keywords": [
+        "Cardoza"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q69",
+      "question": "Who is Max's closest teammate on the perception team?",
+      "answer": "Imani",
+      "keywords": [
+        "Imani"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q70",
+      "question": "Who did Max start a running club with?",
+      "answer": "Yusuf",
+      "keywords": [
+        "Yusuf"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q71",
+      "question": "Where did Max go to university?",
+      "answer": "Halford University",
+      "keywords": [
+        "Halford"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q72",
+      "question": "What is the name of Lena's partner?",
+      "answer": "Theo",
+      "keywords": [
+        "Theo"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q73",
+      "question": "What is the name of Diego's daughter?",
+      "answer": "Ines",
+      "keywords": [
+        "Ines"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q74",
+      "question": "What hospital does Raj work at?",
+      "answer": "Meridian General",
+      "keywords": [
+        "Meridian General",
+        "Meridian"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q75",
+      "question": "What is the name of Anita's architecture firm?",
+      "answer": "Hargrove & Field",
+      "keywords": [
+        "Hargrove"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q76",
+      "question": "What sport does Raj play?",
+      "answer": "tennis",
+      "keywords": [
+        "tennis"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q77",
+      "question": "What does Max's fiancé do for work?",
+      "answer": "veterinarian",
+      "keywords": [
+        "veterinarian",
+        "vet"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q78",
+      "question": "What instrument does Max's fiancé play?",
+      "answer": "viola",
+      "keywords": [
+        "viola"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q79",
+      "question": "Where did Max's best friend grow up?",
+      "answer": "Vancouver",
+      "keywords": [
+        "Vancouver"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q80",
+      "question": "What is Max's best friend's role at her company?",
+      "answer": "product designer",
+      "keywords": [
+        "product designer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q81",
+      "question": "What does Max's best friend's partner do for work?",
+      "answer": "pastry chef",
+      "keywords": [
+        "pastry chef",
+        "chef"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q82",
+      "question": "What is Max's nephew obsessed with?",
+      "answer": "dinosaurs",
+      "keywords": [
+        "dinosaurs"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q83",
+      "question": "What instrument is Max's niece learning?",
+      "answer": "harp",
+      "keywords": [
+        "harp"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q84",
+      "question": "Where does Max's grandmother live?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q85",
+      "question": "What was Max's grandmother's former profession?",
+      "answer": "concert pianist",
+      "keywords": [
+        "pianist",
+        "concert pianist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q86",
+      "question": "Where did Max's manager work before Cobalt Robotics?",
+      "answer": "Lumen Labs",
+      "keywords": [
+        "Lumen Labs"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q87",
+      "question": "Where did Max's manager earn her PhD?",
+      "answer": "Caltech",
+      "keywords": [
+        "Caltech"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q88",
+      "question": "In what city does Max's college roommate now live?",
+      "answer": "Montreal",
+      "keywords": [
+        "Montreal"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q89",
+      "question": "What is the profession of Max's college roommate?",
+      "answer": "lawyer",
+      "keywords": [
+        "lawyer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q90",
+      "question": "In what city is Max's mentor's university located?",
+      "answer": "Montreal",
+      "keywords": [
+        "Montreal"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q91",
+      "question": "Where did Max's teammate Imani work before Cobalt?",
+      "answer": "Aerolith",
+      "keywords": [
+        "Aerolith"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "q92",
+      "question": "What programming language does Max mainly use now?",
+      "answer": "Rust",
+      "keywords": [
+        "Rust"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q93",
+      "question": "What programming language did Max mainly use before Rust?",
+      "answer": "C++",
+      "keywords": [
+        "C++"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q94",
+      "question": "Who does Max currently live with?",
+      "answer": "Sam",
+      "keywords": [
+        "Sam"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q95",
+      "question": "What habit did Max quit five years ago?",
+      "answer": "smoking",
+      "keywords": [
+        "smoking"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q96",
+      "question": "What did Max delete this year?",
+      "answer": "social media",
+      "keywords": [
+        "social media"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q97",
+      "question": "What sport did Max play before switching to marathon training?",
+      "answer": "soccer",
+      "keywords": [
+        "soccer"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q98",
+      "question": "What phone did Max use before his current one?",
+      "answer": "an iPhone",
+      "keywords": [
+        "iPhone"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q99",
+      "question": "What car did Max drive before his current one?",
+      "answer": "a Civic",
+      "keywords": [
+        "Civic"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "q100",
+      "question": "How did Max correct his vision last spring?",
+      "answer": "LASIK",
+      "keywords": [
+        "LASIK"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss01",
+      "question": "What city does Max currently live in?",
+      "answer": "Denver",
+      "keywords": [
+        "Denver"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss02",
+      "question": "What city did Max live in before his current one?",
+      "answer": "Portland",
+      "keywords": [
+        "Portland"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss03",
+      "question": "What company does Max currently work for?",
+      "answer": "Cobalt Robotics",
+      "keywords": [
+        "Cobalt"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss04",
+      "question": "What company did Max work for before his current job?",
+      "answer": "Northwind Logistics",
+      "keywords": [
+        "Northwind"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss05",
+      "question": "What phone does Max currently use?",
+      "answer": "a Pixel",
+      "keywords": [
+        "Pixel"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss06",
+      "question": "What phone did Max use before his current one?",
+      "answer": "an iPhone",
+      "keywords": [
+        "iPhone"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss07",
+      "question": "What car does Max currently drive?",
+      "answer": "a Subaru Outback",
+      "keywords": [
+        "Subaru"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss08",
+      "question": "What car did Max drive before his current one?",
+      "answer": "a Civic",
+      "keywords": [
+        "Civic"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss09",
+      "question": "What type of home does Max currently live in?",
+      "answer": "a house",
+      "keywords": [
+        "house"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss10",
+      "question": "What type of home did Max live in before?",
+      "answer": "an apartment",
+      "keywords": [
+        "apartment"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss11",
+      "question": "What is Max's current diet?",
+      "answer": "vegetarian",
+      "keywords": [
+        "vegetarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss12",
+      "question": "What did Max eat before going vegetarian?",
+      "answer": "meat",
+      "keywords": [
+        "meat"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss13",
+      "question": "What programming language does Max mainly use now?",
+      "answer": "Rust",
+      "keywords": [
+        "Rust"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss14",
+      "question": "What programming language did Max mainly use before?",
+      "answer": "C++",
+      "keywords": [
+        "C++"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss15",
+      "question": "What does Max currently train for?",
+      "answer": "marathons",
+      "keywords": [
+        "marathon"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss16",
+      "question": "What sport did Max play before switching to marathon training?",
+      "answer": "soccer",
+      "keywords": [
+        "soccer"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss17",
+      "question": "What is Max's current relationship status?",
+      "answer": "engaged",
+      "keywords": [
+        "engaged"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss18",
+      "question": "How did Max correct his vision last spring?",
+      "answer": "LASIK",
+      "keywords": [
+        "LASIK"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss19",
+      "question": "What is Max's current job title?",
+      "answer": "senior engineer",
+      "keywords": [
+        "senior engineer"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss20",
+      "question": "What team does Max currently lead?",
+      "answer": "the perception team",
+      "keywords": [
+        "perception"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "ss21",
+      "question": "List all of Max's family members.",
+      "answer": "Anita, Deepak, Sunita, Raj, Mira, Felix, Sam, Nana Rose, Bashir",
+      "keywords": [
+        "Anita",
+        "Deepak",
+        "Sunita",
+        "Raj",
+        "Mira",
+        "Felix",
+        "Sam",
+        "Rose",
+        "Bashir"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss22",
+      "question": "Name every company Max has worked for.",
+      "answer": "Cobalt Robotics, Northwind Logistics",
+      "keywords": [
+        "Cobalt",
+        "Northwind"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss23",
+      "question": "List the musical instruments played by people in Max's life.",
+      "answer": "violin, viola, harp",
+      "keywords": [
+        "violin",
+        "viola",
+        "harp"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss24",
+      "question": "Who are all of Max's friends?",
+      "answer": "Lena, Diego, Yusuf",
+      "keywords": [
+        "Lena",
+        "Diego",
+        "Yusuf"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss25",
+      "question": "List all the cities Max has lived in.",
+      "answer": "Portland, Denver",
+      "keywords": [
+        "Portland",
+        "Denver"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss26",
+      "question": "Name all of Max's blood relatives (not in-laws).",
+      "answer": "Anita, Deepak, Sunita, Mira, Felix, Nana Rose, Bashir",
+      "keywords": [
+        "Anita",
+        "Deepak",
+        "Sunita",
+        "Mira",
+        "Felix",
+        "Rose",
+        "Bashir"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss27",
+      "question": "List Max's hobbies and activities.",
+      "answer": "violin, hiking, climbing, marathons, surfing",
+      "keywords": [
+        "violin",
+        "hiking",
+        "climbing",
+        "marathon",
+        "surf"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss28",
+      "question": "Name the cities where Max's relatives live.",
+      "answer": "Portland, Chicago",
+      "keywords": [
+        "Portland",
+        "Chicago"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss29",
+      "question": "Who are the people Max works with directly?",
+      "answer": "Priyanka, Imani",
+      "keywords": [
+        "Priyanka",
+        "Imani"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss30",
+      "question": "List the languages Max has studied or is learning.",
+      "answer": "Japanese",
+      "keywords": [
+        "Japanese"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "ss31",
+      "question": "How many cities has Max lived in?",
+      "answer": "two (Portland and Denver)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "ss32",
+      "question": "How many companies has Max worked for?",
+      "answer": "two (Cobalt Robotics and Northwind Logistics)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "ss33",
+      "question": "How many children does Max's sister Anita have?",
+      "answer": "two (Mira and Felix)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "ss34",
+      "question": "How many siblings does Max have?",
+      "answer": "one (his sister Anita)",
+      "keywords": [
+        "one",
+        "1"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "ss35",
+      "question": "Which of Max's relatives works in medicine?",
+      "answer": "Raj, his brother-in-law (a cardiologist)",
+      "keywords": [
+        "Raj"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "ss36",
+      "question": "How many instruments are played by people in Max's life?",
+      "answer": "three (violin, viola, harp)",
+      "keywords": [
+        "three",
+        "3"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "ss37",
+      "question": "Which member of Max's family is an architect?",
+      "answer": "his sister Anita",
+      "keywords": [
+        "Anita"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "an01",
+      "question": "Does Max have a brother?",
+      "answer": "No — Max has one sibling, a sister named Anita; no brother. (His brother-in-law Raj is not his brother.)",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an02",
+      "question": "Does Max own a dog?",
+      "answer": "No — Max's only pet is a cat named Biryani.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an03",
+      "question": "Does Max play the piano?",
+      "answer": "No — Max plays the violin. (His grandmother was a pianist, not him.)",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an04",
+      "question": "Does Max have any children of his own?",
+      "answer": "No — Max has a niece (Mira) and a nephew (Felix), but no children of his own.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an05",
+      "question": "Is Max married?",
+      "answer": "No — Max is engaged to Sam, not married.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an06",
+      "question": "Has Max ever lived in Seattle?",
+      "answer": "No — Max has only lived in Portland and Denver.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an07",
+      "question": "Does Max work at Stripe?",
+      "answer": "No — Max works at Cobalt Robotics. Stripe is where his friend Lena works.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an08",
+      "question": "Does Max have a pet named Rufus?",
+      "answer": "No — Max's pet is a cat named Biryani. (Rufus is a distractor pet belonging to someone else.)",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an09",
+      "question": "Is Max vegan?",
+      "answer": "No — Max is vegetarian, not vegan.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an10",
+      "question": "Does Max currently play soccer?",
+      "answer": "No — Max used to play soccer but now trains for marathons.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an11",
+      "question": "Does Max own a motorcycle?",
+      "answer": "No — Max drives a Subaru Outback and rides a Cannondale road bike.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an12",
+      "question": "Does Max have a sister named Priya?",
+      "answer": "No — Max's sister is named Anita.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an13",
+      "question": "Has Max ever worked at Google?",
+      "answer": "No — Max has worked at Cobalt Robotics and Northwind Logistics.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an14",
+      "question": "Does Max play the guitar?",
+      "answer": "No — Max plays the violin.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an15",
+      "question": "Does Max have a second cat?",
+      "answer": "No — Max has one cat, Biryani.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an16",
+      "question": "Is Max fluent in Mandarin?",
+      "answer": "No — Max is learning Japanese, not Mandarin.",
+      "keywords": [],
+      "category": "absence"
+    },
+    {
+      "id": "an17",
+      "question": "Does Max have a sister?",
+      "answer": "Yes — his sister Anita.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "an18",
+      "question": "Does Max own a cat?",
+      "answer": "Yes — a cat named Biryani.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "an19",
+      "question": "Does Max play a musical instrument?",
+      "answer": "Yes — the violin.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "an20",
+      "question": "Is Max engaged?",
+      "answer": "Yes — to his partner Sam.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "an21",
+      "question": "Has Max lived in Denver?",
+      "answer": "Yes — he currently lives in Denver.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "an22",
+      "question": "Does Max work at Cobalt Robotics?",
+      "answer": "Yes — he currently works there, leading the perception team.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "an23",
+      "question": "Does Max have a niece?",
+      "answer": "Yes — his niece Mira.",
+      "keywords": [],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq01",
+      "question": "What instrument does Priya play?",
+      "answer": "the violin",
+      "keywords": [
+        "violin"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq02",
+      "question": "What is the name of Priya's cat?",
+      "answer": "Pumpkin",
+      "keywords": [
+        "Pumpkin"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq03",
+      "question": "What kind of cat does Priya have?",
+      "answer": "a tabby",
+      "keywords": [
+        "tabby"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq04",
+      "question": "What is Priya's favorite food?",
+      "answer": "palak paneer",
+      "keywords": [
+        "palak paneer",
+        "palak"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq05",
+      "question": "What is Priya's favorite dessert?",
+      "answer": "gulab jamun",
+      "keywords": [
+        "gulab jamun"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq06",
+      "question": "What book is Priya reading?",
+      "answer": "Cloud Atlas by David Mitchell",
+      "keywords": [
+        "Cloud Atlas",
+        "David Mitchell"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq07",
+      "question": "What kind of bike does Priya ride?",
+      "answer": "a Trek Domane road bike",
+      "keywords": [
+        "Trek",
+        "Domane"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq08",
+      "question": "What language is Priya learning?",
+      "answer": "Korean",
+      "keywords": [
+        "Korean"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq09",
+      "question": "What outdoor hobby does Priya enjoy?",
+      "answer": "hiking",
+      "keywords": [
+        "hiking",
+        "hike"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq10",
+      "question": "What is Priya's comfort TV show?",
+      "answer": "Schitt's Creek",
+      "keywords": [
+        "Schitt's Creek",
+        "Schitt"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq11",
+      "question": "What is Priya's favorite film?",
+      "answer": "Spirited Away",
+      "keywords": [
+        "Spirited Away"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq12",
+      "question": "What food is Priya allergic to?",
+      "answer": "shellfish",
+      "keywords": [
+        "shellfish"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq13",
+      "question": "What is Priya's go-to karaoke song?",
+      "answer": "Mr. Brightside",
+      "keywords": [
+        "Mr. Brightside",
+        "Brightside"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq14",
+      "question": "What podcast is Priya hooked on?",
+      "answer": "Ologies",
+      "keywords": [
+        "Ologies"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq15",
+      "question": "What car does Priya drive?",
+      "answer": "a Rivian R1S",
+      "keywords": [
+        "Rivian"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq16",
+      "question": "What brand of watch does Priya wear?",
+      "answer": "a Withings ScanWatch",
+      "keywords": [
+        "Withings",
+        "ScanWatch"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq17",
+      "question": "What does Priya collect?",
+      "answer": "vintage fountain pens",
+      "keywords": [
+        "fountain pens",
+        "pens"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq18",
+      "question": "What climbing gym does Priya go to?",
+      "answer": "Summit Stone",
+      "keywords": [
+        "Summit Stone"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq19",
+      "question": "What does Priya keep on her rooftop?",
+      "answer": "a beehive",
+      "keywords": [
+        "beehive",
+        "bees"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq20",
+      "question": "What is Priya afraid of?",
+      "answer": "deep open water",
+      "keywords": [
+        "open water",
+        "deep"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq21",
+      "question": "How does Priya take her chai?",
+      "answer": "with cardamom and no sugar",
+      "keywords": [
+        "cardamom"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq22",
+      "question": "What is Priya's dietary preference?",
+      "answer": "vegetarian",
+      "keywords": [
+        "vegetarian"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq23",
+      "question": "What is Priya's favorite season?",
+      "answer": "autumn",
+      "keywords": [
+        "autumn"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq24",
+      "question": "What is Priya's lucky number?",
+      "answer": "seven",
+      "keywords": [
+        "seven",
+        "7"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq25",
+      "question": "What city is Priya planning to travel to?",
+      "answer": "Seoul",
+      "keywords": [
+        "Seoul"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq26",
+      "question": "In what month is Priya's Seoul trip?",
+      "answer": "November",
+      "keywords": [
+        "November"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq27",
+      "question": "What trail did Priya hike her first weekend in Phoenix?",
+      "answer": "the Mount Falcon trail",
+      "keywords": [
+        "Mount Falcon"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq28",
+      "question": "What is Priya's current job title at Verdant Automata?",
+      "answer": "Principal Perception Engineer",
+      "keywords": [
+        "Principal Perception Engineer",
+        "Principal"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq29",
+      "question": "What team does Priya lead at Verdant Automata?",
+      "answer": "the perception team",
+      "keywords": [
+        "perception"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq30",
+      "question": "Where did Priya adopt her cat?",
+      "answer": "Mile-High Rescue",
+      "keywords": [
+        "Mile-High Rescue",
+        "Mile-High"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq31",
+      "question": "What youth engineering club does Priya volunteer at?",
+      "answer": "GearWorks",
+      "keywords": [
+        "GearWorks"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq32",
+      "question": "What city did Priya hike Mount Falcon in?",
+      "answer": "Phoenix",
+      "keywords": [
+        "Phoenix"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq33",
+      "question": "What kind of engineer is Priya at Verdant Automata?",
+      "answer": "a perception engineer",
+      "keywords": [
+        "perception engineer"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq34",
+      "question": "What sweetener does Priya use in her chai?",
+      "answer": "none — she takes it with no sugar",
+      "keywords": [
+        "no sugar"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "pq35",
+      "question": "What is the name of Priya's husband?",
+      "answer": "Arjun Mehta",
+      "keywords": [
+        "Arjun"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq36",
+      "question": "What is the name of Priya's older sister?",
+      "answer": "Kavya",
+      "keywords": [
+        "Kavya"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq37",
+      "question": "What is the name of Priya's younger brother?",
+      "answer": "Rohan",
+      "keywords": [
+        "Rohan"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq38",
+      "question": "What are the names of Priya's parents?",
+      "answer": "Mohan and Lalita",
+      "keywords": [
+        "Mohan",
+        "Lalita"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq39",
+      "question": "What is the name of Priya's grandmother?",
+      "answer": "Naani Asha",
+      "keywords": [
+        "Asha",
+        "Naani"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq40",
+      "question": "Who is Priya's brother-in-law (her sister's husband)?",
+      "answer": "Vikram",
+      "keywords": [
+        "Vikram"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq41",
+      "question": "What is the name of Priya's niece?",
+      "answer": "Tara",
+      "keywords": [
+        "Tara"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq42",
+      "question": "What is the name of Priya's nephew?",
+      "answer": "Kiran",
+      "keywords": [
+        "Kiran"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq43",
+      "question": "Who is Priya's best friend?",
+      "answer": "Bianca",
+      "keywords": [
+        "Bianca"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq44",
+      "question": "What is the name of Priya's pediatrician friend?",
+      "answer": "Meera Iyer",
+      "keywords": [
+        "Meera"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq45",
+      "question": "Who is Priya's friend that works as a sommelier?",
+      "answer": "Gabriel Okonkwo",
+      "keywords": [
+        "Gabriel"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq46",
+      "question": "Who is Priya's manager at Verdant Automata?",
+      "answer": "Helena Vance",
+      "keywords": [
+        "Helena"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq47",
+      "question": "Who is Priya's closest teammate on the perception team?",
+      "answer": "Oscar Mbeki",
+      "keywords": [
+        "Oscar"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq48",
+      "question": "Who was Priya's grad-school mentor?",
+      "answer": "Dr. Nadia Brandt",
+      "keywords": [
+        "Nadia",
+        "Brandt"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq49",
+      "question": "What city do Priya's sister and brother-in-law live in?",
+      "answer": "Boston",
+      "keywords": [
+        "Boston"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq50",
+      "question": "Where do Priya's parents live?",
+      "answer": "Eugene",
+      "keywords": [
+        "Eugene"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq51",
+      "question": "What is the name of Priya's sister-in-law (her brother's wife)?",
+      "answer": "Fatima",
+      "keywords": [
+        "Fatima"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq52",
+      "question": "What is the name of Priya's brother Rohan's baby daughter?",
+      "answer": "Zoya",
+      "keywords": [
+        "Zoya"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq53",
+      "question": "Where does Priya's brother Rohan live?",
+      "answer": "Kochi",
+      "keywords": [
+        "Kochi"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq54",
+      "question": "What is Priya's sister Kavya's profession?",
+      "answer": "architect",
+      "keywords": [
+        "architect"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq55",
+      "question": "What does Priya's brother-in-law Vikram do for work?",
+      "answer": "He is a cardiologist",
+      "keywords": [
+        "cardiologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq56",
+      "question": "What pet does Priya's friend Meera own?",
+      "answer": "a Bernese mountain dog named Laddoo",
+      "keywords": [
+        "Laddoo",
+        "Bernese"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq57",
+      "question": "Where did Priya and Bianca meet?",
+      "answer": "in college, on the rowing team",
+      "keywords": [
+        "college",
+        "rowing"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq58",
+      "question": "What city was Priya married in?",
+      "answer": "Udaipur",
+      "keywords": [
+        "Udaipur"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq59",
+      "question": "What does Priya's husband do for work?",
+      "answer": "structural engineer",
+      "keywords": [
+        "structural engineer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq60",
+      "question": "What firm does Priya's husband work at?",
+      "answer": "Halcyon Bridgeworks",
+      "keywords": [
+        "Halcyon"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq61",
+      "question": "What instrument does Priya's husband play?",
+      "answer": "the harmonium",
+      "keywords": [
+        "harmonium"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq62",
+      "question": "Where did Priya's husband grow up?",
+      "answer": "Nairobi",
+      "keywords": [
+        "Nairobi"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq63",
+      "question": "Where does Priya's best friend work?",
+      "answer": "Plaid",
+      "keywords": [
+        "Plaid"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq64",
+      "question": "What is Priya's best friend's job title?",
+      "answer": "staff product manager",
+      "keywords": [
+        "product manager"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq65",
+      "question": "What city does Priya's best friend Bianca live in?",
+      "answer": "Oakland",
+      "keywords": [
+        "Oakland"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq66",
+      "question": "What hospital does Priya's brother-in-law Vikram work at?",
+      "answer": "Lakeshore Cardiac Center",
+      "keywords": [
+        "Lakeshore"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq67",
+      "question": "What sport is Priya's brother-in-law Vikram into?",
+      "answer": "open-water swimming",
+      "keywords": [
+        "swimming",
+        "swimmer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq68",
+      "question": "What is Priya's niece Tara's sport?",
+      "answer": "figure skating",
+      "keywords": [
+        "figure skater",
+        "skating"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq69",
+      "question": "What is Priya's nephew Kiran obsessed with building?",
+      "answer": "marble runs",
+      "keywords": [
+        "marble runs",
+        "marble"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq70",
+      "question": "What does Priya's brother Rohan do for work?",
+      "answer": "marine biologist",
+      "keywords": [
+        "marine biologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq71",
+      "question": "What institute does Priya's brother Rohan work at?",
+      "answer": "the Coralline Institute",
+      "keywords": [
+        "Coralline"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq72",
+      "question": "What does Priya's sister-in-law Fatima do for work?",
+      "answer": "documentary filmmaker",
+      "keywords": [
+        "filmmaker",
+        "documentary"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq73",
+      "question": "What hospital does Priya's friend Meera work at?",
+      "answer": "Saint Brigid Hospital",
+      "keywords": [
+        "Saint Brigid"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq74",
+      "question": "In what city does Priya's friend Gabriel work?",
+      "answer": "Reykjavik",
+      "keywords": [
+        "Reykjavik"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq75",
+      "question": "What was Priya's manager Helena before she went into robotics?",
+      "answer": "an astronaut candidate",
+      "keywords": [
+        "astronaut"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq76",
+      "question": "What company did Priya's teammate Oscar join Verdant Automata from?",
+      "answer": "Skylark Dynamics",
+      "keywords": [
+        "Skylark"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq77",
+      "question": "At what university does Priya's mentor Nadia Brandt teach?",
+      "answer": "Rutgers",
+      "keywords": [
+        "Rutgers"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq78",
+      "question": "What was Priya's grandmother's former profession?",
+      "answer": "a radio playback singer",
+      "keywords": [
+        "playback singer",
+        "singer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq79",
+      "question": "What is Priya's father Mohan's former profession?",
+      "answer": "a botany professor",
+      "keywords": [
+        "botany professor",
+        "botany"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq80",
+      "question": "What shop does Priya's mother Lalita run?",
+      "answer": "Marigold Looms",
+      "keywords": [
+        "Marigold Looms",
+        "Marigold"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq81",
+      "question": "What kind of public building did Priya's sister Kavya design last year?",
+      "answer": "a public library",
+      "keywords": [
+        "library"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq82",
+      "question": "In what city did Priya's grandmother sing on the radio?",
+      "answer": "Lucknow",
+      "keywords": [
+        "Lucknow"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "pq83",
+      "question": "What city does Priya currently live in?",
+      "answer": "Phoenix",
+      "keywords": [
+        "Phoenix"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq84",
+      "question": "What city did Priya live in before her current one?",
+      "answer": "Eugene",
+      "keywords": [
+        "Eugene"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq85",
+      "question": "What company does Priya currently work for?",
+      "answer": "Verdant Automata",
+      "keywords": [
+        "Verdant"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq86",
+      "question": "What company did Priya work for before her current job?",
+      "answer": "Borealis Freight",
+      "keywords": [
+        "Borealis"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq87",
+      "question": "What phone does Priya currently use?",
+      "answer": "a OnePlus",
+      "keywords": [
+        "OnePlus"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq88",
+      "question": "What phone did Priya use before her current one?",
+      "answer": "a BlackBerry",
+      "keywords": [
+        "BlackBerry"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq89",
+      "question": "What programming language does Priya mainly use now?",
+      "answer": "Julia",
+      "keywords": [
+        "Julia"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq90",
+      "question": "What programming language did Priya mainly use before Julia?",
+      "answer": "MATLAB",
+      "keywords": [
+        "MATLAB"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq91",
+      "question": "What does Priya drive now for her commute?",
+      "answer": "a Rivian",
+      "keywords": [
+        "Rivian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq92",
+      "question": "What did Priya commute on before her current car?",
+      "answer": "an old Vespa scooter",
+      "keywords": [
+        "Vespa"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq93",
+      "question": "Who does Priya currently live with?",
+      "answer": "her husband Arjun",
+      "keywords": [
+        "Arjun"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq94",
+      "question": "What was Priya's living situation before her current one?",
+      "answer": "she lived with three roommates",
+      "keywords": [
+        "three roommates",
+        "roommates"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq95",
+      "question": "What is Priya's current job title?",
+      "answer": "Principal Perception Engineer",
+      "keywords": [
+        "Principal"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq96",
+      "question": "What was Priya's job title before her promotion?",
+      "answer": "Senior Engineer",
+      "keywords": [
+        "Senior Engineer",
+        "Senior"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq97",
+      "question": "How does Priya correct her vision now?",
+      "answer": "she got PRK",
+      "keywords": [
+        "PRK"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq98",
+      "question": "How did Priya correct her vision before PRK?",
+      "answer": "she wore contact lenses",
+      "keywords": [
+        "contact lenses",
+        "contacts"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq99",
+      "question": "What is Priya's current work laptop?",
+      "answer": "a Framework laptop",
+      "keywords": [
+        "Framework"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq100",
+      "question": "What laptop did Priya use before her current one?",
+      "answer": "an old Dell",
+      "keywords": [
+        "Dell"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq101",
+      "question": "What endurance sport does Priya do now?",
+      "answer": "cycling",
+      "keywords": [
+        "cycling",
+        "cycle"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq102",
+      "question": "What endurance sport did Priya do before her knee injury?",
+      "answer": "running marathons",
+      "keywords": [
+        "marathon"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq103",
+      "question": "What stringed instrument did Priya set aside before going back to the violin?",
+      "answer": "the sitar",
+      "keywords": [
+        "sitar"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq104",
+      "question": "What hot drink did Priya switch to after giving up coffee?",
+      "answer": "chai",
+      "keywords": [
+        "chai"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq105",
+      "question": "What drink did Priya give up two years ago?",
+      "answer": "coffee",
+      "keywords": [
+        "coffee"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq106",
+      "question": "What habit did Priya quit last winter after twenty years?",
+      "answer": "biting her nails",
+      "keywords": [
+        "biting",
+        "nails"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "pq107",
+      "question": "List all of Priya's siblings.",
+      "answer": "Kavya (sister) and Rohan (brother)",
+      "keywords": [
+        "Kavya",
+        "Rohan"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq108",
+      "question": "List all the cities Priya has lived in.",
+      "answer": "Eugene and Phoenix",
+      "keywords": [
+        "Eugene",
+        "Phoenix"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq109",
+      "question": "Name every company Priya has worked for.",
+      "answer": "Verdant Automata and Borealis Freight",
+      "keywords": [
+        "Verdant",
+        "Borealis"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq110",
+      "question": "Name Priya's parents.",
+      "answer": "Mohan and Lalita",
+      "keywords": [
+        "Mohan",
+        "Lalita"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq111",
+      "question": "List Priya's sister Kavya's children.",
+      "answer": "Tara and Kiran",
+      "keywords": [
+        "Tara",
+        "Kiran"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq112",
+      "question": "Who are all of Priya's close friends?",
+      "answer": "Bianca, Meera, and Gabriel",
+      "keywords": [
+        "Bianca",
+        "Meera",
+        "Gabriel"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq113",
+      "question": "List Priya's hobbies and activities.",
+      "answer": "hiking, rock climbing, violin, cycling, beekeeping, collecting fountain pens",
+      "keywords": [
+        "hiking",
+        "climbing",
+        "violin",
+        "cycling",
+        "beehive",
+        "fountain pens"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq114",
+      "question": "List the musical instruments played by Priya and her husband.",
+      "answer": "violin (Priya) and harmonium (Arjun)",
+      "keywords": [
+        "violin",
+        "harmonium"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq115",
+      "question": "Name all of Priya's coworkers at Verdant Automata that she has mentioned.",
+      "answer": "Helena Vance (manager) and Oscar Mbeki (teammate)",
+      "keywords": [
+        "Helena",
+        "Oscar"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq116",
+      "question": "List the cities where Priya's relatives live.",
+      "answer": "Eugene (parents), Boston (sister), and Kochi (brother)",
+      "keywords": [
+        "Eugene",
+        "Boston",
+        "Kochi"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq117",
+      "question": "Name all of Priya's pets.",
+      "answer": "one cat, named Pumpkin",
+      "keywords": [
+        "Pumpkin"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq118",
+      "question": "List the in-laws Priya has gained through her siblings.",
+      "answer": "Vikram (sister's husband) and Fatima (brother's wife)",
+      "keywords": [
+        "Vikram",
+        "Fatima"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "pq119",
+      "question": "How many siblings does Priya have?",
+      "answer": "two (Kavya and Rohan)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq120",
+      "question": "How many cities has Priya lived in?",
+      "answer": "two (Eugene and Phoenix)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq121",
+      "question": "How many companies has Priya worked for?",
+      "answer": "two (Verdant Automata and Borealis Freight)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq122",
+      "question": "How many children does Priya's sister Kavya have?",
+      "answer": "two (Tara and Kiran)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq123",
+      "question": "How many pets does Priya have?",
+      "answer": "one (a cat named Pumpkin)",
+      "keywords": [
+        "one",
+        "1"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq124",
+      "question": "Which of Priya's relatives is a doctor?",
+      "answer": "Vikram, her brother-in-law, who is a cardiologist",
+      "keywords": [
+        "Vikram"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq125",
+      "question": "Which member of Priya's family is an architect?",
+      "answer": "her sister Kavya",
+      "keywords": [
+        "Kavya"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq126",
+      "question": "How many close friends has Priya named?",
+      "answer": "three (Bianca, Meera, and Gabriel)",
+      "keywords": [
+        "three",
+        "3"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "pq127",
+      "question": "Does Priya own a dog?",
+      "answer": "No — Priya's only pet is a cat named Pumpkin. (The Bernese mountain dog Laddoo belongs to her friend Meera.)",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq128",
+      "question": "Does Priya have a brother named Vikram?",
+      "answer": "No — Priya's brother is named Rohan. Vikram is her brother-in-law (her sister Kavya's husband).",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq129",
+      "question": "Is Priya a cardiologist?",
+      "answer": "No — Priya is a perception engineer. Her brother-in-law Vikram is the cardiologist.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq130",
+      "question": "Does Priya play the harmonium?",
+      "answer": "No — Priya plays the violin. Her husband Arjun is the one who plays the harmonium.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq131",
+      "question": "Has Priya ever lived in Boston?",
+      "answer": "No — Priya has only lived in Eugene and Phoenix. Boston is where her sister Kavya lives.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq132",
+      "question": "Does Priya work at Plaid?",
+      "answer": "No — Priya works at Verdant Automata. Plaid is where her best friend Bianca works.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq133",
+      "question": "Does Priya have any children?",
+      "answer": "No — Priya has a niece (Tara) and a nephew (Kiran), but no children of her own.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq134",
+      "question": "Is Priya a marine biologist?",
+      "answer": "No — Priya is a perception engineer. Her brother Rohan is the marine biologist.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq135",
+      "question": "Does Priya have a second cat?",
+      "answer": "No — Priya has exactly one cat, Pumpkin.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq136",
+      "question": "Is Priya allergic to penicillin?",
+      "answer": "No — Priya's allergy is to shellfish, not penicillin.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq137",
+      "question": "Does Priya currently run marathons?",
+      "answer": "No — Priya used to run marathons but switched to cycling after a knee injury.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq138",
+      "question": "Does Priya eat meat?",
+      "answer": "No — Priya is strictly vegetarian.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq139",
+      "question": "Is Priya learning Spanish?",
+      "answer": "No — Priya is learning Korean, not Spanish.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq140",
+      "question": "Does Priya drive a Vespa to work now?",
+      "answer": "No — Priya used to commute on a Vespa scooter but now drives a Rivian.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq141",
+      "question": "Is Priya's husband a structural engineer at Verdant Automata?",
+      "answer": "No — Priya's husband Arjun is a structural engineer at Halcyon Bridgeworks; Verdant Automata is where Priya herself works.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq142",
+      "question": "Does Priya still drink coffee?",
+      "answer": "No — Priya gave up coffee two years ago and switched to chai.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "pq143",
+      "question": "Does Priya have a sister?",
+      "answer": "Yes — her older sister Kavya.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq144",
+      "question": "Does Priya own a cat?",
+      "answer": "Yes — a tabby named Pumpkin.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq145",
+      "question": "Does Priya play a musical instrument?",
+      "answer": "Yes — the violin.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq146",
+      "question": "Is Priya married?",
+      "answer": "Yes — to her husband Arjun Mehta.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq147",
+      "question": "Does Priya have a brother?",
+      "answer": "Yes — her younger brother Rohan.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq148",
+      "question": "Does Priya work at Verdant Automata?",
+      "answer": "Yes — she leads the perception team there.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq149",
+      "question": "Does Priya have a niece?",
+      "answer": "Yes — her niece Tara.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "pq150",
+      "question": "Is Priya learning Korean?",
+      "answer": "Yes — for a trip to Seoul in November.",
+      "keywords": [
+        "yes"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq01",
+      "question": "Where does Max's friend Jordan currently live?",
+      "answer": "Austin, Texas",
+      "keywords": [
+        "Austin"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq02",
+      "question": "What city was Jordan born in?",
+      "answer": "Miami, Florida",
+      "keywords": [
+        "Miami"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq03",
+      "question": "How old is Jordan?",
+      "answer": "34",
+      "keywords": [
+        "34"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq04",
+      "question": "What company does Jordan work at?",
+      "answer": "Cumbre AI",
+      "keywords": [
+        "Cumbre"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq05",
+      "question": "What is Jordan's job title?",
+      "answer": "Senior Software Engineer",
+      "keywords": [
+        "Senior Software Engineer",
+        "senior"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq06",
+      "question": "What is the name of Jordan's dog?",
+      "answer": "Mochi",
+      "keywords": [
+        "Mochi"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq07",
+      "question": "What breed is Jordan's dog?",
+      "answer": "a greyhound",
+      "keywords": [
+        "greyhound"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq08",
+      "question": "What is the name of Jordan's cat?",
+      "answer": "Pelusa",
+      "keywords": [
+        "Pelusa"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq09",
+      "question": "What instrument does Jordan play?",
+      "answer": "acoustic guitar",
+      "keywords": [
+        "guitar"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq10",
+      "question": "Who is Jordan's favorite author?",
+      "answer": "Ted Chiang",
+      "keywords": [
+        "Ted Chiang",
+        "Chiang"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq11",
+      "question": "What is Jordan's favorite food?",
+      "answer": "tacos al pastor",
+      "keywords": [
+        "tacos",
+        "al pastor"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq12",
+      "question": "What book has Jordan been reading?",
+      "answer": "Project Hail Mary",
+      "keywords": [
+        "Project Hail Mary",
+        "Hail Mary"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq13",
+      "question": "What kind of bike does Jordan own?",
+      "answer": "a Specialized Diverge gravel bike",
+      "keywords": [
+        "Specialized",
+        "Diverge"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq14",
+      "question": "What programming language does Jordan use for the backend now?",
+      "answer": "Go",
+      "keywords": [
+        "Go"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq15",
+      "question": "What does Jordan use for frontend development?",
+      "answer": "React",
+      "keywords": [
+        "React"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq16",
+      "question": "What is the codename of Jordan's team's main product?",
+      "answer": "Driftwood",
+      "keywords": [
+        "Driftwood"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq17",
+      "question": "What team does Jordan work on at Cumbre AI?",
+      "answer": "the Recommendations team",
+      "keywords": [
+        "Recommendations"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq18",
+      "question": "What neighborhood does Jordan live in in Austin?",
+      "answer": "Travis Heights",
+      "keywords": [
+        "Travis Heights"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq19",
+      "question": "What kind of home does Jordan own in Austin?",
+      "answer": "a small bungalow",
+      "keywords": [
+        "bungalow"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq20",
+      "question": "What car does Jordan currently drive?",
+      "answer": "a 2019 Toyota 4Runner",
+      "keywords": [
+        "4Runner",
+        "Toyota"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq21",
+      "question": "What phone does Jordan currently use?",
+      "answer": "a Samsung Galaxy S24",
+      "keywords": [
+        "Galaxy S24"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq22",
+      "question": "What camera does Jordan use for photography?",
+      "answer": "an Olympus OM-1",
+      "keywords": [
+        "Olympus",
+        "OM-1"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq23",
+      "question": "What brand of watch does Jordan wear?",
+      "answer": "a Coros Apex",
+      "keywords": [
+        "Coros"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq24",
+      "question": "What is Jordan allergic to?",
+      "answer": "shellfish",
+      "keywords": [
+        "shellfish"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq25",
+      "question": "What is Jordan's favorite dessert?",
+      "answer": "tres leches cake",
+      "keywords": [
+        "tres leches"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq26",
+      "question": "What is Jordan's favorite holiday?",
+      "answer": "Nochebuena",
+      "keywords": [
+        "Nochebuena"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq27",
+      "question": "What is Jordan's favorite band?",
+      "answer": "Khruangbin",
+      "keywords": [
+        "Khruangbin"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq28",
+      "question": "What is Jordan's comfort movie?",
+      "answer": "Coherence",
+      "keywords": [
+        "Coherence"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq29",
+      "question": "What is Jordan's favorite video game?",
+      "answer": "Hollow Knight",
+      "keywords": [
+        "Hollow Knight"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq30",
+      "question": "What TV show is Jordan a big fan of?",
+      "answer": "Severance",
+      "keywords": [
+        "Severance"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq31",
+      "question": "What is Jordan's go-to board game?",
+      "answer": "Wingspan",
+      "keywords": [
+        "Wingspan"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq32",
+      "question": "What is Jordan's blood type?",
+      "answer": "O negative",
+      "keywords": [
+        "O negative",
+        "O-"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq33",
+      "question": "What is Jordan's coffee order?",
+      "answer": "a flat white with almond milk",
+      "keywords": [
+        "flat white"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq34",
+      "question": "What is Jordan's favorite Ted Chiang story?",
+      "answer": "Story of Your Life",
+      "keywords": [
+        "Story of Your Life"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "jq35",
+      "question": "What is the name of Jordan's wife?",
+      "answer": "Noor Haddad",
+      "keywords": [
+        "Noor"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq36",
+      "question": "What is the name of Jordan's brother?",
+      "answer": "Rafael Rivera",
+      "keywords": [
+        "Rafael"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq37",
+      "question": "What is the name of Jordan's sister?",
+      "answer": "Lucia Rivera",
+      "keywords": [
+        "Lucia"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq38",
+      "question": "What are the names of Jordan's parents?",
+      "answer": "Elena and Carlos",
+      "keywords": [
+        "Elena",
+        "Carlos"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq39",
+      "question": "What is the name of Jordan's grandmother?",
+      "answer": "Abuela Marta",
+      "keywords": [
+        "Marta"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq40",
+      "question": "What is the name of Jordan's niece?",
+      "answer": "Camila",
+      "keywords": [
+        "Camila"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq41",
+      "question": "What is the name of Jordan's nephew?",
+      "answer": "Mateo",
+      "keywords": [
+        "Mateo"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq42",
+      "question": "What is the name of Jordan's sister-in-law?",
+      "answer": "Yuki Tanaka",
+      "keywords": [
+        "Yuki"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq43",
+      "question": "Who is Jordan's best friend?",
+      "answer": "Valentina Cruz",
+      "keywords": [
+        "Valentina"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq44",
+      "question": "Who is Jordan's closest friend at work?",
+      "answer": "Devon Ellison",
+      "keywords": [
+        "Devon"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq45",
+      "question": "Who is Jordan's oldest childhood friend?",
+      "answer": "Hector Morales",
+      "keywords": [
+        "Hector"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq46",
+      "question": "Who is Jordan's cycling buddy?",
+      "answer": "Greta Lindqvist",
+      "keywords": [
+        "Greta"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq47",
+      "question": "Who is Jordan's manager at Cumbre AI?",
+      "answer": "Adaeze Nwosu",
+      "keywords": [
+        "Adaeze Nwosu",
+        "Nwosu"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq48",
+      "question": "Where does Jordan's brother Rafael live?",
+      "answer": "Seattle",
+      "keywords": [
+        "Seattle"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq49",
+      "question": "Where does Jordan's sister Lucia live?",
+      "answer": "Monterey, California",
+      "keywords": [
+        "Monterey"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq50",
+      "question": "Where do Jordan's parents live?",
+      "answer": "Miami, Florida",
+      "keywords": [
+        "Miami"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq51",
+      "question": "What company does Jordan's best friend Valentina work at?",
+      "answer": "Palantir",
+      "keywords": [
+        "Palantir"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq52",
+      "question": "What city does Jordan's best friend Valentina live in?",
+      "answer": "Phoenix",
+      "keywords": [
+        "Phoenix"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq53",
+      "question": "What does Jordan's brother Rafael do for work?",
+      "answer": "a product manager at Google",
+      "keywords": [
+        "product manager",
+        "Google"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq54",
+      "question": "What is the profession of Jordan's wife Noor?",
+      "answer": "an emergency room physician",
+      "keywords": [
+        "physician",
+        "ER",
+        "emergency"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq55",
+      "question": "Where did Jordan meet his best friend Valentina?",
+      "answer": "at PyCon 2021 in Salt Lake City",
+      "keywords": [
+        "PyCon",
+        "Salt Lake City"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq56",
+      "question": "Where did Jordan meet his wife Noor?",
+      "answer": "at a tango class",
+      "keywords": [
+        "tango"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq57",
+      "question": "In what city is Jordan's employer Cumbre AI headquartered?",
+      "answer": "Austin",
+      "keywords": [
+        "Austin"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq58",
+      "question": "Who was the best man at Rafael's wedding?",
+      "answer": "Jordan",
+      "keywords": [
+        "best man"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq59",
+      "question": "What does Jordan's sister do for work?",
+      "answer": "a marine biologist",
+      "keywords": [
+        "marine biologist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq60",
+      "question": "Where does Jordan's sister work?",
+      "answer": "the Monterey Bay Aquarium",
+      "keywords": [
+        "Monterey Bay Aquarium"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq61",
+      "question": "What is Jordan's niece obsessed with?",
+      "answer": "sea turtles",
+      "keywords": [
+        "sea turtles"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq62",
+      "question": "What sport does Jordan's nephew play?",
+      "answer": "soccer",
+      "keywords": [
+        "soccer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq63",
+      "question": "What position does Jordan's nephew play in soccer?",
+      "answer": "goalkeeper",
+      "keywords": [
+        "goalkeeper"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq64",
+      "question": "What hospital does Jordan's wife work at?",
+      "answer": "Dell Seton Medical Center",
+      "keywords": [
+        "Dell Seton"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq65",
+      "question": "What city did Jordan's wife grow up in?",
+      "answer": "Amman, Jordan",
+      "keywords": [
+        "Amman"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq66",
+      "question": "What was Jordan's grandmother's profession?",
+      "answer": "a seamstress",
+      "keywords": [
+        "seamstress"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq67",
+      "question": "What city does Jordan's grandmother live in?",
+      "answer": "Tampa, Florida",
+      "keywords": [
+        "Tampa"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq68",
+      "question": "What company does Jordan's sister-in-law work at?",
+      "answer": "Microsoft",
+      "keywords": [
+        "Microsoft"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq69",
+      "question": "What is Jordan's sister-in-law's profession?",
+      "answer": "a UX researcher",
+      "keywords": [
+        "UX researcher"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq70",
+      "question": "Where did Jordan's sister-in-law grow up?",
+      "answer": "Calgary, Canada",
+      "keywords": [
+        "Calgary"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq71",
+      "question": "What is the profession of Jordan's coworker Devon?",
+      "answer": "a machine learning engineer",
+      "keywords": [
+        "machine learning engineer",
+        "ML engineer"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq72",
+      "question": "Where did Jordan's coworker Devon grow up?",
+      "answer": "New Orleans",
+      "keywords": [
+        "New Orleans"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq73",
+      "question": "What does Jordan's childhood friend Hector do for work?",
+      "answer": "a high school chemistry teacher",
+      "keywords": [
+        "chemistry teacher"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq74",
+      "question": "What city does Jordan's childhood friend Hector live in?",
+      "answer": "Orlando, Florida",
+      "keywords": [
+        "Orlando"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq75",
+      "question": "What is the profession of Jordan's cycling buddy Greta?",
+      "answer": "a veterinarian",
+      "keywords": [
+        "veterinarian",
+        "vet"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq76",
+      "question": "What is the job title of Jordan's manager Adaeze Nwosu?",
+      "answer": "VP of Engineering",
+      "keywords": [
+        "VP of Engineering",
+        "VP"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq77",
+      "question": "Where did Jordan's manager Adaeze Nwosu do her undergrad?",
+      "answer": "Georgia Tech",
+      "keywords": [
+        "Georgia Tech"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq78",
+      "question": "In what city was Jordan's employer Cumbre AI originally founded?",
+      "answer": "Toronto",
+      "keywords": [
+        "Toronto"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq79",
+      "question": "What does Jordan's best friend Valentina do for work?",
+      "answer": "a data scientist",
+      "keywords": [
+        "data scientist"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq80",
+      "question": "Which aquarium does Jordan's niece's mother work at?",
+      "answer": "the Monterey Bay Aquarium",
+      "keywords": [
+        "Monterey Bay Aquarium"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq81",
+      "question": "What dessert recipe did Jordan's grandmother pass down?",
+      "answer": "tres leches cake",
+      "keywords": [
+        "tres leches"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq82",
+      "question": "What did Jordan's grandmother run for decades?",
+      "answer": "her own tailoring shop",
+      "keywords": [
+        "tailoring shop"
+      ],
+      "category": "multi-hop"
+    },
+    {
+      "id": "jq83",
+      "question": "What city does Jordan currently live in?",
+      "answer": "Austin",
+      "keywords": [
+        "Austin"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq84",
+      "question": "What city did Jordan live in before Austin?",
+      "answer": "Houston",
+      "keywords": [
+        "Houston"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq85",
+      "question": "What company does Jordan currently work for?",
+      "answer": "Cumbre AI",
+      "keywords": [
+        "Cumbre"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq86",
+      "question": "What company did Jordan work for before Cumbre AI?",
+      "answer": "Larkspur Pay",
+      "keywords": [
+        "Larkspur"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq87",
+      "question": "What language does Jordan use for backend work now?",
+      "answer": "Go",
+      "keywords": [
+        "Go"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq88",
+      "question": "What language did Jordan use for backend work before switching?",
+      "answer": "Python",
+      "keywords": [
+        "Python"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq89",
+      "question": "What car does Jordan currently drive?",
+      "answer": "a Toyota 4Runner",
+      "keywords": [
+        "4Runner"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq90",
+      "question": "What car did Jordan drive before his current one?",
+      "answer": "a Honda Element",
+      "keywords": [
+        "Honda Element"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq91",
+      "question": "What phone does Jordan use now?",
+      "answer": "a Samsung Galaxy S24",
+      "keywords": [
+        "Galaxy S24"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq92",
+      "question": "What phone did Jordan use before his current one?",
+      "answer": "an iPhone 11",
+      "keywords": [
+        "iPhone 11"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq93",
+      "question": "Who does Jordan currently live with?",
+      "answer": "his wife Noor",
+      "keywords": [
+        "Noor"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq94",
+      "question": "Who did Jordan live with before, in Houston?",
+      "answer": "three roommates",
+      "keywords": [
+        "roommates"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq95",
+      "question": "What language is Jordan learning now?",
+      "answer": "Spanish",
+      "keywords": [
+        "Spanish"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq96",
+      "question": "What language did Jordan study in college before Spanish?",
+      "answer": "Portuguese",
+      "keywords": [
+        "Portuguese"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq97",
+      "question": "What computer does Jordan use now?",
+      "answer": "a MacBook Pro",
+      "keywords": [
+        "MacBook"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq98",
+      "question": "What computer did Jordan use before his MacBook?",
+      "answer": "a Windows desktop",
+      "keywords": [
+        "Windows"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq99",
+      "question": "What code editor does Jordan use now?",
+      "answer": "VS Code",
+      "keywords": [
+        "VS Code"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq100",
+      "question": "What code editor did Jordan use before VS Code?",
+      "answer": "Vim",
+      "keywords": [
+        "Vim"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq101",
+      "question": "What is Jordan's main form of cardio now?",
+      "answer": "cycling",
+      "keywords": [
+        "cycling"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq102",
+      "question": "What cardio did Jordan do before he gave it up for cycling?",
+      "answer": "running",
+      "keywords": [
+        "running"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq103",
+      "question": "What is Jordan's current diet?",
+      "answer": "pescatarian",
+      "keywords": [
+        "pescatarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq104",
+      "question": "What diet did Jordan follow before going pescatarian?",
+      "answer": "vegetarian",
+      "keywords": [
+        "vegetarian"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq105",
+      "question": "What is Jordan's current job title?",
+      "answer": "Senior Software Engineer",
+      "keywords": [
+        "Senior"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq106",
+      "question": "What does Jordan drink in the morning now, after switching back at Cumbre AI?",
+      "answer": "coffee",
+      "keywords": [
+        "coffee"
+      ],
+      "category": "temporal-update"
+    },
+    {
+      "id": "jq107",
+      "question": "List all of Jordan's pets.",
+      "answer": "Mochi (a greyhound) and Pelusa (a cat)",
+      "keywords": [
+        "Mochi",
+        "Pelusa"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq108",
+      "question": "Name all of Jordan's siblings.",
+      "answer": "Rafael and Lucia",
+      "keywords": [
+        "Rafael",
+        "Lucia"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq109",
+      "question": "List all the cities Jordan has lived in.",
+      "answer": "Miami, Houston, and Austin",
+      "keywords": [
+        "Miami",
+        "Houston",
+        "Austin"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq110",
+      "question": "Name every company Jordan has worked for.",
+      "answer": "Larkspur Pay and Cumbre AI",
+      "keywords": [
+        "Larkspur",
+        "Cumbre"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq111",
+      "question": "List all of Jordan's hobbies.",
+      "answer": "gravel cycling, bouldering, sea kayaking, birdwatching, and playing guitar",
+      "keywords": [
+        "cycling",
+        "bouldering",
+        "kayaking",
+        "birdwatching",
+        "guitar"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq112",
+      "question": "What are all of Jordan's named friends?",
+      "answer": "Valentina Cruz, Devon Ellison, Hector Morales, and Greta Lindqvist",
+      "keywords": [
+        "Valentina",
+        "Devon",
+        "Hector",
+        "Greta"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq113",
+      "question": "List the things Jordan is allergic to or intolerant of.",
+      "answer": "shellfish (allergy) and lactose (intolerance)",
+      "keywords": [
+        "shellfish",
+        "lactose"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq114",
+      "question": "Name Jordan's wife and his two siblings.",
+      "answer": "his wife Noor, brother Rafael, and sister Lucia",
+      "keywords": [
+        "Noor",
+        "Rafael",
+        "Lucia"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq115",
+      "question": "List Jordan's niece and nephew.",
+      "answer": "Camila (niece) and Mateo (nephew)",
+      "keywords": [
+        "Camila",
+        "Mateo"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq116",
+      "question": "What devices and gadgets does Jordan own?",
+      "answer": "a Samsung Galaxy S24 phone, an Olympus OM-1 camera, a Coros Apex watch, and a MacBook Pro",
+      "keywords": [
+        "Galaxy S24",
+        "Olympus",
+        "Coros",
+        "MacBook"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq117",
+      "question": "Name all the parents and grandparents Jordan has mentioned.",
+      "answer": "his parents Elena and Carlos and his grandmother Abuela Marta",
+      "keywords": [
+        "Elena",
+        "Carlos",
+        "Marta"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq118",
+      "question": "List all of Jordan's favorite media (band, movie, game, show, board game).",
+      "answer": "band Khruangbin, movie Coherence, video game Hollow Knight, TV show Severance, and board game Wingspan",
+      "keywords": [
+        "Khruangbin",
+        "Coherence",
+        "Hollow Knight",
+        "Severance",
+        "Wingspan"
+      ],
+      "category": "enumeration"
+    },
+    {
+      "id": "jq119",
+      "question": "How many siblings does Jordan have?",
+      "answer": "two (Rafael and Lucia)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq120",
+      "question": "How many pets does Jordan have?",
+      "answer": "two (a dog, Mochi, and a cat, Pelusa)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq121",
+      "question": "How many cities has Jordan lived in?",
+      "answer": "three (Miami, Houston, and Austin)",
+      "keywords": [
+        "three",
+        "3"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq122",
+      "question": "How many companies has Jordan worked for?",
+      "answer": "two (Larkspur Pay and Cumbre AI)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq123",
+      "question": "Which member of Jordan's family is a doctor?",
+      "answer": "his wife Noor, an ER physician",
+      "keywords": [
+        "Noor"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq124",
+      "question": "Which of Jordan's relatives is a marine biologist?",
+      "answer": "his sister Lucia",
+      "keywords": [
+        "Lucia"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq125",
+      "question": "How many of Jordan's named friends work as a veterinarian?",
+      "answer": "one (Greta Lindqvist)",
+      "keywords": [
+        "one",
+        "1",
+        "Greta"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq126",
+      "question": "How many children do Jordan's siblings have in total?",
+      "answer": "two (Camila and Mateo)",
+      "keywords": [
+        "two",
+        "2"
+      ],
+      "category": "aggregation"
+    },
+    {
+      "id": "jq127",
+      "question": "Does Jordan have a pet bird?",
+      "answer": "No — Jordan's only pets are a dog (Mochi) and a cat (Pelusa). He enjoys birdwatching, but owns no bird.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq128",
+      "question": "Does Jordan have a third sibling?",
+      "answer": "No — Jordan has exactly two siblings, his brother Rafael and his sister Lucia.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq129",
+      "question": "Does Jordan work at Palantir?",
+      "answer": "No — Jordan works at Cumbre AI. Palantir is where his best friend Valentina Cruz works.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq130",
+      "question": "Is Jordan a doctor?",
+      "answer": "No — Jordan is a software engineer. His wife Noor is the doctor (an ER physician).",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq131",
+      "question": "Does Jordan have any children of his own?",
+      "answer": "No — Jordan has a niece (Camila) and a nephew (Mateo), but no children of his own.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq132",
+      "question": "Has Jordan ever worked at Google?",
+      "answer": "No — Jordan has worked at Larkspur Pay and Cumbre AI. His brother Rafael is the one at Google.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq133",
+      "question": "Does Jordan currently live in Houston?",
+      "answer": "No — Jordan moved to Austin three years ago. He lived in Houston before that, not now.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq134",
+      "question": "Is Jordan a veterinarian?",
+      "answer": "No — Jordan is a software engineer. His cycling buddy Greta Lindqvist is the veterinarian.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq135",
+      "question": "Does Jordan currently use an iPhone?",
+      "answer": "No — Jordan now uses a Samsung Galaxy S24. He used an iPhone 11 before, but switched this spring.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq136",
+      "question": "Does Jordan play the piano?",
+      "answer": "No — Jordan plays acoustic guitar, not piano.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq137",
+      "question": "Does Jordan still write Python for the backend?",
+      "answer": "No — Jordan switched from Python to Go about six months ago.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq138",
+      "question": "Is Jordan currently a vegetarian?",
+      "answer": "No — Jordan used to be vegetarian but is now pescatarian.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq139",
+      "question": "Does Jordan live in Phoenix?",
+      "answer": "No — Jordan lives in Austin. Phoenix is where his best friend Valentina Cruz lives.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq140",
+      "question": "Is Jordan allergic to peanuts?",
+      "answer": "No — Jordan is allergic to shellfish (and lactose intolerant), but not peanuts.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq141",
+      "question": "Does Jordan have a sister named Yuki?",
+      "answer": "No — Jordan's sister is Lucia. Yuki Tanaka is his sister-in-law (his brother Rafael's wife).",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq142",
+      "question": "Does Jordan use Vim as his code editor now?",
+      "answer": "No — Jordan switched from Vim to VS Code when he joined Cumbre AI.",
+      "keywords": [
+        "no"
+      ],
+      "category": "absence"
+    },
+    {
+      "id": "jq143",
+      "question": "Does Jordan have a sister?",
+      "answer": "Yes — his sister Lucia, a marine biologist.",
+      "keywords": [
+        "yes",
+        "Lucia"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq144",
+      "question": "Does Jordan own a cat?",
+      "answer": "Yes — a tabby cat named Pelusa.",
+      "keywords": [
+        "yes",
+        "Pelusa"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq145",
+      "question": "Is Jordan married?",
+      "answer": "Yes — to his wife Noor Haddad.",
+      "keywords": [
+        "yes",
+        "Noor"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq146",
+      "question": "Does Jordan play a musical instrument?",
+      "answer": "Yes — acoustic guitar.",
+      "keywords": [
+        "yes",
+        "guitar"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq147",
+      "question": "Does Jordan have a nephew?",
+      "answer": "Yes — his nephew Mateo.",
+      "keywords": [
+        "yes",
+        "Mateo"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq148",
+      "question": "Does Jordan work at Cumbre AI?",
+      "answer": "Yes — as a Senior Software Engineer on the Recommendations team.",
+      "keywords": [
+        "yes",
+        "Cumbre"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq149",
+      "question": "Has Jordan lived in Austin?",
+      "answer": "Yes — he currently lives in Austin.",
+      "keywords": [
+        "yes",
+        "Austin"
+      ],
+      "category": "presence-control"
+    },
+    {
+      "id": "jq150",
+      "question": "Does Jordan own a dog?",
+      "answer": "Yes — a rescue greyhound named Mochi.",
+      "keywords": [
+        "yes",
+        "Mochi"
+      ],
+      "category": "presence-control"
+    }
+  ]
+}

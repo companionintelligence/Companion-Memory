@@ -1,0 +1,26 @@
+{
+  "server": { "port": 8420, "host": "127.0.0.1" },
+  "data": { "baseDir": "/tmp/tdai-data" },
+  "llm": {
+    "enabled": true,
+    "baseUrl": "http://192.168.0.203:1234/v1",
+    "apiKey": "lm-studio",
+    "model": "gemma-4-31b-it-abliterated"
+  },
+  "memory": {
+    "storeBackend": "sqlite",
+    "embedding": {
+      "enabled": true,
+      "provider": "openai",
+      "baseUrl": "http://192.168.0.203:1234/v1",
+      "apiKey": "lm-studio",
+      "model": "text-embedding-nomic-embed-text-v1.5",
+      "dimensions": 768,
+      "sendDimensions": false
+    },
+    "recall": { "strategy": "hybrid" },
+    "bm25": { "language": "en" },
+    "extraction": { "enabled": true, "maxMemoriesPerSession": 5000 },
+    "pipeline": { "everyNConversations": 1, "enableWarmup": false, "l1IdleTimeoutSeconds": 5 }
+  }
+}

@@ -86,3 +86,16 @@ services:
       EMBED_MODEL: nomic-embed-text
     ports: ["9106:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"]
+
+  tencentdb:
+    image: bench-mem-v2
+    environment:
+      SYSTEM: tencentdb              # TencentCloud Agent Memory — host-run TdaiGateway (sqlite-vec)
+      LLM_URL: http://192.168.0.203:1234
+      LLM_MODEL: gemma-4-31b-it-abliterated   # its L1 extractor (Phase A; set in the gateway config)
+      ANSWERER_MODEL: ornstein-3.6-27b        # shared answerer (Phase B)
+      TENCENTDB_URL: http://host.docker.internal:8420   # host-run TdaiGateway
+      OLLAMA_HOST: http://host.docker.internal:11434
+      EMBED_MODEL: nomic-embed-text
+    ports: ["9107:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]

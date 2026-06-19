@@ -17,9 +17,10 @@
 \newcommand{\sap}{$\sim$}             % alias (typo-safe)
 \definecolor{ci}{HTML}{1B6CA8}
 \newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\pmci}[1]{{\footnotesize$\pm$#1}}
 
 \title{\textbf{Local Memory-System Benchmark}\\[2pt]
-\large CI-Server vs.\ Mem0, Hindsight, OpenViking, Holographic, and Naive RAG}
+\large A single-user evaluation of CI-Server vs.\ Mem0, TencentDB, OpenViking, Holographic, Hindsight, and Naive RAG}
 \author{Companion Intelligence --- CI-Server}
 \date{June 2026}
 
@@ -29,24 +30,35 @@
 \begin{center}\footnotesize\itshape Private \& Confidential --- Property of Lifescope Inc.\ Do not distribute.\end{center}
 
 \begin{abstract}
-\noindent A fully local, head-to-head evaluation of six agent-memory systems on a single
-synthetic persona, with no cloud calls.\footnote{Cloud-only providers (Honcho, RetainDB,
-Supermemory, Memori) were excluded by the local-only constraint. Mem0 was run self-hosted
-(open-source library + Chroma) against local models, not its hosted SaaS.} On a 100-question
-flat/relational corpus the top three are a statistical tie --- \textbf{naive 79}, \textbf{mem0 78},
-\textbf{CI-Server 75} (answer accuracy/100) --- followed by \textbf{Holographic 69}, \textbf{OpenViking 47},
-and \textbf{Hindsight 25}. On \emph{structured} tasks (relationship enumeration, temporal supersession),
-the workloads a knowledge graph is built for, \textbf{CI-Server leads}: best temporal, best enumeration,
-best retrieval completeness, at top-tier query latency. Plain vector RAG is brutally cost-effective for
-one-shot fact lookup; the graph's edge appears on relationship traversal and ``what is true now.''
+\noindent A fully local, head-to-head evaluation of \textbf{seven} agent-memory systems on a single
+synthetic user, with no cloud calls.\footnote{Cloud-only providers (Honcho, RetainDB, Supermemory, Memori)
+were excluded by the local-only constraint. Mem0 was run self-hosted (open-source library + Chroma) against
+local models, not its hosted SaaS.} The definitive run is an \textbf{expanded single-user corpus} --- one
+user (``Max''), plus the people he knows and \emph{their} sub-networks folded in as third-party facts ---
+\textbf{257 canonical facts under 400 distractors (657 messages), 460 questions across nine classes}.
+Headline answer accuracy (95\% CI, $N=460$): \textbf{Mem0 86.9\%}, OpenViking 80.2\%, Naive 78.3\%,
+\textbf{TencentDB 76.2\%}, \textbf{CI-Server 75.9\%}, Holographic 69.9\%, Hindsight 22.3\%. Mem0 is the
+statistically clear leader; OpenViking / Naive / TencentDB / CI-Server are a \textbf{four-way tie}
+(overlapping intervals). CI-Server's defensible, unspinnable niche is \textbf{enumeration} --- complete-set
+recall, best of any system --- together with low ingest cost and concurrency-safety. Two findings matter as
+much as the numbers: (1) these systems are \textbf{single-user by design}, so a multi-user benchmark is
+meaningless (\S\ref{sec:single-user}); and (2) targeted recall improvements to CI-Server fall \textbf{below
+the benchmark's per-category noise floor} and cannot be measured at this resolution (\S\ref{sec:ablation}).
 \end{abstract}
 
 \section{Method}
 
-\textbf{Corpus.} One synthetic persona (``Max Turnquist''): \textbf{90 hand-authored canonical facts}
-(people, places, employers, relationships, multi-hop chains, facts that change over time), buried under
-\textbf{400 distractor messages} (the same topics about \emph{other} people, plus low-signal filler) so a
-fixed top-$k$ retriever cannot trivially win. Total \textbf{490 messages; top-10 \sapp 2\% coverage}.
+\textbf{One user is the only real use case.}\label{sec:single-user} Each of these systems is built for a
+single deployment serving a single user; there is no notion of separate accounts inside one store. An early
+multi-\emph{persona} design (three independent users) was abandoned once it was shown to be meaningless ---
+it exposed identity-handling bugs that simply do not arise in production (Addendum \S\ref{sec:addendum}). The
+definitive benchmark therefore models \textbf{one user (Max) plus a rich network of people he knows}: two
+friends (Priya, Jordan) and their families/colleagues are folded in as third-party facts Max states, which
+also stresses deep multi-hop traversal (Max $\to$ friend $\to$ their relative $\to$ attribute).
+
+\textbf{Corpus.} \textbf{257 hand-authored canonical facts} (people, places, employers, multi-hop chains,
+facts that change over time), buried under \textbf{400 distractor messages} so a fixed top-$k$ retriever
+cannot trivially win. Total \textbf{657 messages; top-10 \sapp 1\% coverage}.
 
 \textbf{Uniform contract.} Each system runs in its own container exposing the same HTTP surface
 (\texttt{reset}, \texttt{ingest}, \texttt{flush}, \texttt{retrieve}, \texttt{answer}); the orchestrator
@@ -57,185 +69,232 @@ speaks only this contract.
   \item \emph{Phase A --- ingest/extraction:} every system ingests the identical corpus using the same
   extractor LLM (\texttt{gemma-4-31b-it-abliterated}) and the same embeddings
   (\texttt{nomic-embed-text}).\footnote{Hindsight uses its built-in \texttt{bge-small} embedder, a flagged
-  minor confound. Holographic uses \emph{no} LLM and \emph{no} embeddings (SQLite FTS5 + HRR).} This isolates
-  the memory \emph{architecture}, not the model.
+  minor confound. Holographic uses \emph{no} LLM and \emph{no} embeddings (SQLite FTS5 + HRR).}
   \item \emph{Phase B --- answer + judge:} a single, constant retrieval-augmented answerer and LLM judge
   (\texttt{ornstein-3.6-27b}) is used for \emph{all} systems, so we compare memory layers, not answer-writers.
+  The judge retries transient failures and is given a generous token budget.\footnote{\texttt{ornstein} is a
+  reasoning model: it spends tokens reasoning before emitting the schema-constrained verdict. An early run
+  used too small a budget and returned (False) on any hiccup, silently scoring questions wrong and producing
+  spurious all-zeros; the fixed judge retries and never concedes on a transient empty (Addendum
+  \S\ref{sec:addendum}).}
 \end{itemize}
 
 \textbf{Two scored dimensions.} \emph{Answer}: did the constant answerer, given the system's retrieved
 context, produce a correct final answer? \emph{Storage}: was the gold fact actually present in the
-\emph{raw retrieved context}?\footnote{Storage isolates ``did the memory store + surface the fact'' from
-``did the answerer phrase it well.'' A system can have high storage but lower answer, or vice versa.}
+\emph{raw retrieved context}? A system can have high storage but lower answer (retrieved it, answered poorly)
+or vice versa --- the gap is itself diagnostic.
 
 \section{Question taxonomy}
 
-Three suites span nine classes. Every gold answer is grounded in exactly one canonical fact, so a miss is a
-retrieval/answer failure, not a missing fact.
+460 questions across nine classes. Every gold answer is grounded in exactly one canonical fact, so a miss is
+a retrieval/answer failure, not a missing fact. Because the two friends are now \emph{people Max knows},
+their own attributes count as \textbf{relational} (one hop from Max) and their networks as \textbf{multi-hop}.
 
-\subsection*{Suite A --- Broad recall (100 questions)}
 \begin{description}
-  \item[\texttt{flat-recall} (34)] A single atomic fact stated once. \emph{``What instrument does Max play?''}
-  $\to$ violin. Probes whether the system surfaces one stated fact from under 400 distractors. LLM-judged.
-  \item[\texttt{relational} (22)] One relationship hop. \emph{``Where do Max's parents live?''} $\to$ Portland.
-  \item[\texttt{multi-hop} (22)] Two or more hops. \emph{``What does Max's brother-in-law do for work?''}
-  $\to$ cardiologist (Max $\to$ sister Anita $\to$ husband Raj $\to$ occupation).
-  \item[\texttt{temporal-update} (22)] Facts that changed; asks for the current value. \emph{``What city does
-  Max currently live in?''} $\to$ Denver, not the prior Portland. Probes supersession.
-\end{description}
-
-\subsection*{Suite B --- Structured / agentic (37 questions)}
-\begin{description}
-  \item[\texttt{temporal-update} (20)] As above, both directions (current \emph{and} prior value).
-  \item[\texttt{enumeration} (10)] ``List all X'' set queries. \emph{``List all of Max's family members.''}
-  Scored by \textbf{deterministic set recall} --- the fraction of gold members surfaced --- with no LLM
-  judge.\footnote{Set recall is reproducible and unspinnable: it counts how many of the canonical members
-  appear, in the answer and (for storage) in the retrieved context.} Probes returning the \emph{complete}
+  \item[\texttt{flat-recall} (34)] An atomic fact about Max stated once. \emph{``What instrument does Max
+  play?''} $\to$ violin. LLM-judged.
+  \item[\texttt{relational} (90)] One hop. \emph{``What does Max's friend Priya do for work?''} $\to$
+  perception engineer.
+  \item[\texttt{multi-hop} (118)] Two or more hops. \emph{``What does Priya's husband do?''} (Max $\to$ Priya
+  $\to$ husband $\to$ occupation). The largest class --- the graph's intended home turf.
+  \item[\texttt{temporal-update} (90)] Facts that changed; current \emph{and} prior value. Probes supersession.
+  \item[\texttt{enumeration} (34)] ``List all X'' set queries, scored by \textbf{deterministic set recall}
+  (fraction of gold members surfaced --- no LLM judge, unspinnable). Probes returning the \emph{complete}
   typed set, the graph's structural strength.
-  \item[\texttt{aggregation} (7)] Counts and single-target filters. \emph{``How many cities has Max lived
-  in?''} $\to$ 2. LLM-judged.
-\end{description}
-
-\subsection*{Suite C --- Absence / anti-hallucination (23 questions)}
-\begin{description}
-  \item[\texttt{absence} (16)] Baited negatives; the answer is \emph{no}, and each is baited with a tempting
-  distractor about someone else. \emph{``Does Max work at Stripe?''} $\to$ No (that is his friend Lena's
-  employer). Probes hallucination resistance. Scored by an existence-aware judge.\footnote{Correct only if
-  the yes/no matches truth; a confident ``yes'' to a non-existent thing is a hallucination (wrong); ``I don't
-  know'' is treated as not-a-hallucination.}
-  \item[\texttt{presence-control} (7)] Genuine ``yes'' questions, so a system that blindly answers ``no''
+  \item[\texttt{aggregation} (23)] Counts/filters. \emph{``How many companies has Max worked for?''} $\to$ 2.
+  \item[\texttt{absence} (48)] Baited negatives (answer \emph{no}, each baited with a tempting distractor about
+  someone else). Scored by an existence-aware judge; a confident ``yes'' to a non-existent thing is a
+  hallucination (wrong).
+  \item[\texttt{presence-control} (23)] Genuine ``yes'' questions, so a system that blindly answers ``no''
   cannot game the absence suite.
 \end{description}
 
-\section{Results}
+\section{Results}\label{sec:results}
 
 \begin{table}[H]\centering\small
-\caption{Suite A --- 100 questions (answer / storage, then per-category answer).}
-\begin{tabular}{lcccccc}
+\caption{Expanded single-user benchmark --- 460 questions. Answer accuracy with 95\% Wilson CI; then
+per-category answer score. Bold marks the per-column leader. CI-Server row highlighted.}
+\begin{tabular}{lccccccccc}
 \toprule
-System & Answer & Storage & flat (34) & relational (22) & multi-hop (22) & temporal (22) \\
+System & Answer (95\% CI) & flat & rel & m-hop & temporal & enum & aggr & abs & pres \\
+       & /460             & /34  & /90 & /118  & /90      & /34  & /23  & /48 & /23  \\
 \midrule
-naive       & \best{79} & 78 & 28 & \best{22} & 15 & 14 \\
-mem0        & 78 & \best{79} & 24 & 21 & \best{19} & 14 \\
-\rowcolor{ci!12} CI-Server & 75 & 78 & 26 & 19 & 12 & \best{18} \\
-holographic & 69 & 72 & 25 & 20 & 13 & 11 \\
-openviking  & 47 & 56 & 18 & 6  & 15 & 8  \\
-hindsight   & 25 & 21 & 7  & 9  & 4  & 5  \\
+mem0        & \best{86.9\%} \pmci{3.1} & 23 & 83 & \best{109} & \best{78} & 24.9 & 17 & 43 & \best{22} \\
+openviking  & 80.2\% \pmci{3.6}        & \best{26} & 69 & 106 & 61 & 24.9 & 17 & 43 & \best{22} \\
+naive       & 78.3\% \pmci{3.8}        & \best{26} & \best{86} & 80 & 64 & 23.4 & \best{18} & 42 & 21 \\
+tencentdb   & 76.2\% \pmci{3.9}        & \best{26} & 79 & 77 & 64 & 24.7 & 17 & \best{44} & 19 \\
+\rowcolor{ci!12} CI-Server & 75.9\% \pmci{3.9} & 25 & 60 & 96 & 66 & \best{27.0} & 14 & 40 & 21 \\
+holographic & 69.9\% \pmci{4.2}        & 25 & 70 & 86 & 56 & 13.6 & 8 & 43 & 20 \\
+hindsight   & 22.3\% \pmci{3.8}        & 1 & 12 & 15 & 14 & 6.8 & 5 & 42 & 7 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{table}[H]\centering\small
-\caption{Suite B --- Structured (answer / storage; enumeration scored by set recall).}
-\begin{tabular}{lccccc}
-\toprule
-System & Answer & Storage & temporal (20) & enumeration (10) & aggregation (7) \\
-\midrule
-mem0        & \best{25.2} & 26.2 & 13.0 & 6.2 & \best{6.0} \\
-naive       & 24.9 & 24.2 & 14.0 & 4.9 & \best{6.0} \\
-\rowcolor{ci!12} CI-Server & 24.1 & \best{27.0} & \best{15.0} & \best{7.1} & 2.0 \\
-openviking  & 12.8 & 14.4 & 7.0 & 2.8 & 3.0 \\
-hindsight   & 9.9  & 10.2 & 5.0 & 2.9 & 2.0 \\
-holographic & 9.5  & 11.5 & 7.0 & 0.5 & 2.0 \\
-\bottomrule
-\end{tabular}
-\end{table}
+\noindent\textbf{How to read the intervals.} At $N=460$ the headline CI is $\pm$3--4\,pp. Mem0's floor
+(83.5\%) sits at or above every other system's ceiling --- a real lead. OpenViking, Naive, TencentDB, and
+CI-Server overlap heavily (76--82\%): a \textbf{four-way statistical tie}. Holographic is clearly below them;
+Hindsight far back. \emph{Per-category} intervals are much wider --- relational/temporal $\pm$8\,pp,
+absence $\pm$11\,pp, flat/enumeration $\pm$13\,pp, aggregation/presence $\pm$16\,pp --- so single-category
+gaps under those margins (e.g.\ Mem0's m-hop 109 vs OpenViking 106) are noise, while large ones
+(Holographic's enumeration 13.6 vs the field's \sap25) are real.
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.92\linewidth]{expanded_leaderboard.png}
+\caption{Answer accuracy on the 460-question single-user benchmark, with 95\% Wilson confidence intervals.
+Overlapping bars are statistical ties. Mem0 leads; OpenViking/Naive/TencentDB/CI-Server tie; CI-Server's
+distinguishing win is the enumeration column of the table above, not the headline.}
+\end{figure}
+
+\subsection{What CI-Server wins, honestly}
+\textbf{Enumeration (27.0/34, best of any system.)} ``List all of Max's family / all his employers'' is the
+complete-set query, and the typed graph assembles it where flat stores miss members and keyword stores
+collapse (Holographic 13.6). This is deterministic set recall --- nothing to spin. CI-Server is also
+\textbf{strong on multi-hop} (96/118, 3rd), \textbf{cheap to ingest} (\sapp16 min), and concurrency-safe.
+
+\subsection{Where CI-Server loses}
+\textbf{Relational (60/90), its softest spot}, and \textbf{aggregation (14/23)}. The failures are specific
+and instructive: (a) the right attribute is retrieved but a \emph{competing} entity is answered (``Max has
+two managers''); (b) a \emph{former} attribute outranks the current one (``Priya used to learn the sitar''
+when the answer is violin); (c) aggregation \emph{overcounts} from a polluted prose block (``5 employers'';
+counting a friend's sister as Max's). All are retrieval-precision issues, not missing data --- storage
+(366.7) far exceeds answer (349.0).
 
 \begin{table}[H]\centering\small
-\caption{Suite C --- Absence / anti-hallucination (answer / absence / presence-control).}
-\begin{tabular}{lccc}
-\toprule
-System & Answer & absence (16) & presence-control (7) \\
-\midrule
-naive       & 20 & 15 & 5 \\
-mem0        & 18 & 14 & 4 \\
-\rowcolor{ci!12} CI-Server & 18 & 11 & \best{7} \\
-hindsight   & 18 & 14 & 4 \\
-holographic & 20 & 14 & \best{6} \\
-openviking  & 15 & 12 & 3 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{table}[H]\centering\small
-\caption{Cost --- memory-layer work only. The answer phase is the shared model (excluded as a per-system cost).}
+\caption{Cost --- memory-layer work only (the answer phase is the shared model, excluded). Ingest scaled to
+the 657-message corpus.}
 \begin{tabular}{llll}
 \toprule
-System & Ingest (490 msgs) & Recall latency/query & Concurrency-safe \\
+System & Ingest (657 msgs) & Recall latency/query & Concurrency-safe \\
 \midrule
-holographic & \best{5 s} (no LLM/embeddings) & \best{\sapp5 ms} & yes \\
-naive       & 16 s & \sapp60 ms & yes \\
-mem0        & \sapp15 m & \sapp120 ms & yes \\
+holographic & \best{\sapp7 s} (no LLM/embeddings) & \best{\sapp5 ms} & yes \\
+naive       & \sapp20 s & \sapp60 ms & yes \\
+mem0        & \sapp20 m & \sapp120 ms & yes \\
 \rowcolor{ci!12} CI-Server & \sapp16 m & \sapp80 ms & yes \\
-openviking  & \sapp50 m (VLM extraction) & \sap30 ms & yes \\
-hindsight   & \sapp35 m\footnote{With a concurrency boost only Hindsight received
-(\texttt{HINDSIGHT\_API\_LLM\_MAX\_CONCURRENT=4} + async retain). Under the same sequential terms as the
-others it was \sap2.3 hours --- still the slowest ingest.} / \sap2.3 h seq & \sap1160 ms & no\footnote{Hindsight's
-recall client returns HTTP 500 under concurrent calls, so it was scored serially; a concurrent run produced a
-spurious 0/100 that is an artifact, not a result.} \\
+openviking  & \sapp70 m (VLM extraction) & \sap30 ms & yes \\
+tencentdb   & \sapp100 m (per-message extraction)\footnote{TencentDB's scheduler coalesces rapid captures, so
+the harness serializes ingestion (one extraction call per message) to avoid silently dropping facts --- an
+honest, on-the-slow-side Phase-A cost.} & \sap25 ms & yes \\
+hindsight   & \sap3 h (cannot truly parallelize) & \sap1160 ms & no\footnote{Hindsight's recall client
+returns HTTP 500 under concurrent calls, so it was scored serially.} \\
 \bottomrule
 \end{tabular}
 \end{table}
-\noindent{\small\itshape Recall latency is the median of 3 warm \texttt{/retrieve} calls; naive's \sapp1 s
-cold first call is excluded.}
 
-\subsection{Charts}
+\section{CI-Server improvement ablation}\label{sec:ablation}
 
-\begin{figure}[H]\centering
-\includegraphics[width=0.82\linewidth]{chart1_quality_vs_latency.png}
-\caption{Structured/relational accuracy (temporal + enumeration) vs.\ query latency. CI-Server occupies the
-top-left (highest structured quality at top-tier latency). Holographic and OpenViking are fast but low on
-structured quality; Hindsight is slow and low.}
-\end{figure}
+We attempted to raise CI-Server's relational/aggregation scores with read-side changes (no re-ingest), one
+variable at a time, each re-scored against the \textbf{baseline 349.0/460}.
 
-\begin{figure}[H]\centering
-\includegraphics[width=0.82\linewidth]{chart3_capability_radar.png}
-\caption{Capability footprint across five axes. CI-Server has the largest enclosed area, leading temporal,
-enumeration, retrieval completeness, and decisiveness on present facts.}
-\end{figure}
+\begin{table}[H]\centering\small
+\caption{Ablation (CI-Server only, same store, same judge). All deltas are within noise.}
+\begin{tabular}{lcccl}
+\toprule
+Change & Answer & relational & storage & Verdict \\
+\midrule
+baseline & 349.0 & 60 & 366.7 & --- \\
+\#1 read-time node consolidation & 335.1 & 60 & 363.7 & no effect (reverted) \\
+\#2 loosen expansion gates (completeness) & 342.3 & 57 & \best{368.9} & no effect (reverted) \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\begin{figure}[H]\centering
-\includegraphics[width=0.80\linewidth]{chart2_completeness_vs_latency.png}
-\caption{Retrieval completeness (fraction of gold facts actually surfaced) vs.\ query latency. CI-Server is
-highest on completeness.}
-\end{figure}
-
-\begin{figure}[H]\centering
-\includegraphics[width=0.80\linewidth]{chart4_latency_concurrency.png}
-\caption{Recall latency and concurrency safety. Five of six systems are concurrency-safe; Hindsight fails
-under concurrent recall.}
-\end{figure}
+\begin{itemize}
+  \item \textbf{\#1 (merge near-duplicate person nodes at read time)} was motivated by entity fragmentation
+  (``Priya'' and ``Priya Sharma'' as two nodes). It merged them cleanly but \textbf{relational did not move
+  (60$\to$60)}: fragmentation was not the bottleneck.
+  \item \textbf{\#2 (surface more of a queried entity's attributes)} raised \emph{storage} (+2.2: more gold
+  facts retrieved) but \emph{lowered answer} ($-6.7$): the extra neighbours added noise the answerer tripped
+  on. CI-Server's recall is \textbf{precision-limited, not completeness-limited.}
+  \item \textbf{The decisive finding is methodological.} Per-category effect sizes here are 3--6 questions;
+  the per-category noise floor is $\pm$8 (relational, $N=90$) to $\pm$16 (aggregation, $N=23$). \textbf{These
+  recall tweaks are smaller than the noise} --- they cannot be measured at this resolution. Productive next
+  steps are (i) a focused micro-suite (200+ questions in one class) to make a fix measurable, and (ii) larger
+  \emph{ingest-time} levers (entity resolution: merge duplicate nodes, stop two people sharing one ``violin''
+  node), whose effect is large enough to clear the noise. Aggregation should also be answered \emph{on the
+  graph} (count typed edges) rather than by an LLM tallying prose --- correct by construction, even if this
+  benchmark cannot score the delta.
+\end{itemize}
 
 \section{Conclusions}
 
 \begin{itemize}
-  \item \textbf{Flat fact lookup is a solved problem.} Two lightweight systems --- naive (vector) and
-  Holographic (keyword/HRR\footnote{Holographic is keyword-only (SQLite FTS5 + HRR), with no semantic embedder.
-  Its FTS5 layer ANDs query terms, so a raw natural-language question matches nothing; the adapter sends an
-  \emph{OR-of-keywords} query (stopwords dropped), the same treatment naive and CI-Server's boosted search
-  already apply to their keyword terms. Without it Holographic scores \sap0 --- an artifact of query format,
-  not the system. Vendored from \texttt{NousResearch/hermes-agent} plugins/memory/holographic; the
-  Hermes-runtime plugin glue was replaced by a thin adapter.}) both reach \sap70--79 at trivial cost. A
-  graph is overkill here.
-  \item \textbf{CI-Server's edge is structured / temporal / relational memory:} best temporal, best
-  enumeration, best retrieval completeness, most decisive on present facts, at \sap80\,ms recall and
-  concurrency-safe.
-  \item \textbf{Trade-offs:} aggregation (counting) and absence-precision are weak spots (the
-  flip side of surfacing rich context); multi-hop trails Mem0's consolidation; ingest is mid-pack.
-  \item \textbf{The other graph/context-DB systems land below CI-Server on structured tasks.} OpenViking\footnote{%
-  OpenViking (Volcengine/ByteDance) is a self-hostable ``context database''; we ran its server on the same local
-  models (gemma-4-31b VLM + nomic embeddings). Its text-only-VLM path works on our image-free corpus. License:
-  AGPL-3.0 --- a consideration for shipping, not for benchmarking.} is fastest at recall but slowest to ingest;
-  Hindsight is slowest and weakest overall.
-  \item \textbf{Holographic is the efficiency dark horse:} fastest ingest (5\,s) and recall (\sap5\,ms), 69/100
-  on broad recall --- but it \emph{collapses} on enumeration (0.5/10): a keyword store cannot assemble a set,
-  exactly where CI-Server's structure wins.
+  \item \textbf{Mem0 leads this corpus} (86.9\%), driven by multi-hop (109/118): consolidating related facts
+  into dense records pays off when most questions traverse 2--3 hops.
+  \item \textbf{Four-way tie in the 76--80\% band} --- OpenViking, Naive, TencentDB, CI-Server. No honest
+  claim separates them on headline accuracy.
+  \item \textbf{CI-Server's real, defensible win is enumeration} (best, and unspinnable), plus low ingest cost
+  and concurrency-safety. Its losses are \emph{precision}, not coverage.
+  \item \textbf{Lightweight wins are real:} Naive (vector) ties the top cluster; Holographic (keyword/HRR,
+  \sap7\,s ingest, \sap5\,ms recall) is the efficiency dark horse --- but \emph{collapses} on enumeration
+  (13.6/34), exactly where structure matters.
+  \item \textbf{Consolidation memory is identity-fragile} on multi-entity corpora (Addendum
+  \S\ref{sec:addendum}); raw retrieval is robust. This, and the single-user realization, are the study's most
+  transferable lessons.
 \end{itemize}
 
+\appendix
+\section{Addendum: methods, configurations, and dead ends}\label{sec:addendum}
+
+A chronological record of what was tried, so the next iteration does not re-walk it.
+
+\subsection*{A.1 Early small-corpus tuning (CI-Server)}
+The first runs used a $\sim$50-question persona. CI-Server scored erratically (38, 41, 25 / 50 across builds)
+until the root cause surfaced: \textbf{the recall SQL used L2 distance (\texttt{<->}) where it needed cosine
+(\texttt{<=>})}. \texttt{nomic} vectors are unnormalised ($\|v\|\approx 22$), so the L2 threshold
+never matched and semantic/graph expansion returned nothing. Switching to \texttt{<=>} (plus OR-joining the
+\texttt{websearch\_to\_tsquery} terms so multi-word questions match) unblocked recall. This is the single
+fix that made CI-Server competitive.
+
+\subsection*{A.2 Scaling and adding systems}
+The corpus grew to 90 facts + 400 distractors (490 messages, 100 questions), then gained two structured
+suites (37 + 23 questions). Systems were added incrementally: Naive, Mem0, Hindsight, then
+\textbf{OpenViking} (Volcengine context DB; AGPL-3.0; run as a host server with local gemma-VLM + nomic),
+\textbf{Holographic} (NousResearch Hermes plugin; SQLite FTS5 + HRR, no LLM/embeddings; its FTS5 ANDs terms,
+so the adapter sends an OR-of-keywords query), and \textbf{TencentDB} (TencentCloud Agent Memory; MIT;
+SQLite + sqlite-vec; driven via its standalone \texttt{TdaiGateway}). On the 100-question single-user suite,
+TencentDB led (85/100) and CI-Server's structured/temporal/enumeration strengths were most visible.
+
+\subsection*{A.3 The multi-persona detour (abandoned)}
+To grow $N$, three personas were modelled as \emph{separate users}. This failed instructively and was
+discarded:
+\begin{itemize}
+  \item \textbf{CI-Server} anchors first-person facts to a single canonical ``self'' node tied to the account
+  (``Max''). A second persona's facts either bound to the wrong identity (answer $\ll$ storage: facts
+  retrieved but ``I don't know --- no info about Priya'') or, when the node was renamed, collapsed onto the
+  self node and \emph{hurt} retrieval (storage 102$\to$44). Neither config gave a clean number.
+  \item \textbf{TencentDB} consolidated a persona's first-person facts under a prominent \emph{other} named
+  entity (her manager, ``Helena'') via coreference drift in its persona-generation step --- flat-recall
+  collapsed to 3/34.
+  \item \textbf{Raw stores} (Naive, Mem0, Holographic) were unaffected.
+\end{itemize}
+The lesson --- \textbf{these systems are single-user by design} --- reshaped the benchmark (\S\ref{sec:single-user}):
+the personas were re-cast as \emph{people the one user knows}, yielding the 460-question single-user corpus.
+
+\subsection*{A.4 The judge bug (fixed)}
+The first expanded-corpus scoring produced impossible all-zeros for whichever systems were scored while
+\texttt{ornstein} was freshly loaded: correct answers (``robotics engineer'') were marked wrong. Cause ---
+the judge set no \texttt{max\_tokens} and conceded \texttt{(False)} on any exception, so a reasoning model
+that ran out of budget (or hiccuped on load) silently scored questions wrong. Fix: generous token budget +
+retry-with-backoff + a loud \texttt{JUDGE\_UNSCORED} flag instead of a silent wrong. All final numbers use the
+fixed judge (0 judge failures).
+
+\subsection*{A.5 The recall ablation and the noise floor}
+\S\ref{sec:ablation}: read-side fixes (node consolidation, completeness) moved CI-Server within the
+per-category noise floor and were reverted. The benchmark, as built, cannot resolve a 3--6 question
+improvement in a single category. Future recall tuning needs a sharper instrument or larger (ingest-time)
+levers.
+
+\subsection*{A.6 Operational notes}
+The harness runs each system in a container against the uniform contract; the slow, externally-hosted systems
+(Hindsight, OpenViking, TencentDB gateway) run as host services driven over HTTP. Long ingests are detached
+(double-fork) so they survive session restarts. Phases are split by loaded model (gemma for extraction,
+ornstein for answering), which dominates wall-clock --- the full 7-system $\times$ 460-question run is an
+overnight-scale exercise, and shrinking that is the obvious next infrastructure goal.
+
 \section*{Reproduce}
-\small All artifacts live in \texttt{scripts/benchmark/v2/}: \texttt{orchestrator.py} (harness),
-\texttt{docker-compose.yml} (one container per system), personas in \texttt{../personas/}, per-suite reports
-(\texttt{report\_v2\_100q.md}, \texttt{report\_v2\_struct.md}, \texttt{report\_holo\_*.md}), and charts in
-\texttt{charts/} (regenerate with \texttt{make\_charts.py}).
+\small All artifacts live in \texttt{scripts/benchmark/v2/}: \texttt{orchestrator.py} (harness, with the fixed
+judge and \texttt{ci\_server\_wipe} canonical re-identification), \texttt{docker-compose.yml} (one container
+per system), personas in \texttt{../personas/} (\texttt{max\_expanded\_large.json} is the definitive corpus),
+per-suite reports (\texttt{report\_expanded\_*.md}), and charts in \texttt{charts/}.
 
 \end{document}

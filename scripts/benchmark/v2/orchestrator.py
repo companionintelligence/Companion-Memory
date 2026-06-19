@@ -61,16 +61,34 @@ def _judge(system_prompt: str, user_msg: str) -> tuple[bool, str]:
         "model": JUDGE_MODEL,
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
         "temperature": 0,
+        # ornstein is a REASONING model: it spends tokens reasoning before it
+        # emits the schema-constrained verdict in `content`. Without a generous
+        # budget the verdict gets truncated -> empty content -> a silent wrong.
+        "max_tokens": 6000,
         "response_format": {"type": "json_schema",
                             "json_schema": {"name": "verdict", "strict": True, "schema": _ANS_SCHEMA}},
     }
-    try:
-        data = post(f"{JUDGE_URL}/v1/chat/completions", payload, timeout=120)
-        msg = data.get("choices", [{}])[0].get("message", {})
-        v = json.loads(msg.get("content") or msg.get("reasoning_content") or "{}")
-        return bool(v.get("correct")), str(v.get("reason", ""))
-    except Exception as exc:  # noqa: BLE001
-        return False, f"judge error: {exc}"
+    # Retry transient failures (empty content, timeout, a 500 from a still-warming
+    # model). The OLD code returned (False, ...) on ANY exception, which silently
+    # SCORED THE QUESTION WRONG whenever the judge hiccuped — so an unstable
+    # answerer/judge produced all-zeros that looked like a real result. Retrying
+    # (and only conceding after several genuine failures) prevents that.
+    last = "no response"
+    for attempt in range(5):
+        try:
+            data = post(f"{JUDGE_URL}/v1/chat/completions", payload, timeout=180)
+            msg = data.get("choices", [{}])[0].get("message", {})
+            raw = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+            if raw:
+                v = json.loads(raw)
+                return bool(v.get("correct")), str(v.get("reason", ""))
+            last = "empty judge response"
+        except Exception as exc:  # noqa: BLE001
+            last = f"judge error: {exc}"
+        time.sleep(2 * (attempt + 1))
+    # Persistent failure: surface it loudly rather than silently scoring wrong.
+    print(f"    [JUDGE FAILED after retries] {last}")
+    return False, f"JUDGE_UNSCORED: {last}"
 
 
 _ANSWER_JUDGE = (
@@ -121,7 +139,7 @@ def _psql(sql: str) -> str:
     return out.stdout.strip()
 
 
-def ci_server_wipe() -> str:
+def ci_server_wipe(persona_name: str | None = None) -> str:
     row = _psql(CI_OWNER_QUERY)
     if "|" not in row:
         return "no canonical user; skipped"
@@ -132,7 +150,24 @@ def ci_server_wipe() -> str:
     _psql(f"DELETE FROM ci_search.embeddings WHERE user_id='{owner}' AND entity_id<>'{canon}';")
     _psql(f"DELETE FROM ci_search.vectors WHERE user_id='{owner}' AND entity_id<>'{canon}';")
     n = _psql(f"DELETE FROM ci.entities WHERE owner_user_id='{owner}' AND entity_id<>'{canon}' RETURNING 1;")
-    return f"wiped {len(n.splitlines()) if n else 0} entities (canonical preserved)"
+    renamed = ""
+    if persona_name:
+        # Re-identify the account's canonical "self" node as THIS persona before
+        # ingest. The single benchmark account otherwise keeps the previous run's
+        # identity (e.g. "Max"), so a new persona's first-person facts ("my
+        # favorite dessert is X") anchor to a self node named for the wrong
+        # person AND the self-intro ("I'm Priya") spawns a duplicate entity —
+        # fragmenting the identity so the answerer can't bind "the user" to the
+        # persona ("I don't know — no info about Priya"), despite the fact being
+        # retrieved. Renaming the canonical node up front makes getSelfIdentity
+        # emit the persona's aliases, so first-person facts + the self-intro all
+        # resolve to one correctly-named node. (In production this never arises:
+        # one account = one user.)
+        safe = persona_name.replace("'", "''")
+        _psql(f"UPDATE ci.entities SET name='{safe}', description='This is you ({safe}).' "
+              f"WHERE entity_id='{canon}';")
+        renamed = f"; canonical re-identified as {persona_name!r}"
+    return f"wiped {len(n.splitlines()) if n else 0} entities (canonical preserved){renamed}"
 
 
 # --------------------------------------------------------------------------- #
@@ -150,7 +185,7 @@ def run_system(name: str, url: str, persona: dict, skip_ingest: bool = False, in
         print("  skip-ingest: scoring against the EXISTING graph (no wipe/ingest/flush)")
     else:
         if name == "ci_server":
-            print(f"  CI-Server wipe: {ci_server_wipe()}")
+            print(f"  CI-Server wipe: {ci_server_wipe(persona.get('name'))}")
         post(f"{url}/reset", {})
 
         msgs = [(m["content"], s["id"]) for s in persona["sessions"] for m in s["messages"] if m["role"] == "user"]
