@@ -3,20 +3,27 @@
 RED=\033[0;31m
 GREEN=\033[0;32m
 YELLOW=\033[0;33m
+BLUE=\033[0;34m
 RESET=\033[0m
 
-# Compose project identity, anchored to the origin remote's repo name (its dir
+# Repo identity stem, anchored to the origin remote's repo name (its dir
 # basename is transient/unreliable — "main", a code, etc.), then CWD when there
-# is no remote. A linked git worktree (git-dir != git-common-dir) appends its
-# own dir basename, so each worktree gets an isolated stack that can't collide
-# with another repo's worktree of the same name (e.g. ci-server-feat-a).
-PROJECT_NAME := $(shell \
+# is no remote. This is the stable prefix every stack's name shares, across all
+# worktrees, and the single source of truth for the volume/stack naming convention.
+REPO := $(shell \
 	repo=$$(basename -s .git "$$(git remote get-url origin 2>/dev/null)" 2>/dev/null); \
 	[ -n "$$repo" ] || repo=$$(basename "$(CURDIR)"); \
-	if [ "$$(git rev-parse --git-dir 2>/dev/null)" != "$$(git rev-parse --git-common-dir 2>/dev/null)" ]; then \
-		repo="$$repo-$$(basename "$$(git rev-parse --show-toplevel 2>/dev/null)")"; \
-	fi; \
 	echo "$$repo" | tr '[:upper:]' '[:lower:]')
+
+# Compose project identity = the repo stem, plus a linked worktree's own dir
+# basename (git-dir != git-common-dir), so each worktree gets an isolated stack
+# that can't collide with another worktree's (e.g. ci-server-feat-a).
+PROJECT_NAME := $(shell \
+	repo="$(REPO)"; \
+	if [ "$$(git rev-parse --git-dir 2>/dev/null)" != "$$(git rev-parse --git-common-dir 2>/dev/null)" ]; then \
+		repo="$$repo-$$(basename "$$(git rev-parse --show-toplevel 2>/dev/null)" | tr '[:upper:]' '[:lower:]')"; \
+	fi; \
+	echo "$$repo")
 
 # Pin Compose's project name to match, so the compose stacks and reset's
 # volume/network filters always agree regardless of the checkout directory.
@@ -74,6 +81,16 @@ running_env = $(shell docker compose ls --format json 2>/dev/null \
 	| grep -E '^(local|staging|production)$$' \
 	| head -n1)
 
+# Host port the running stack published for Postgres, discovered from Docker so
+# DB-touching targets reach THIS worktree's database even when dev-stack.ts gave
+# it a dynamic (ephemeral) port. Falls back to 5432 (default / nothing running).
+db_host_port = $(shell p=$$(docker compose -f docker-compose.yml -f docker-compose.local.yml port database 5432 2>/dev/null | sed -n 's/.*://p' | head -n1); echo "$${p:-5432}")
+
+# Point every local-DB target at that port. node-config reads DATABASE_PORT, and
+# dotenv won't override an already-set env var, so this wins over .env's 5432.
+# Evaluated lazily per target, so non-DB targets never pay the Docker lookup.
+seed migrate dbclear dbdestroy dbshell chatreset filereset gentoken signup userpw: export DATABASE_PORT = $(db_host_port)
+
 define switch_env
 	@CURRENT="$(running_env)"; \
 	if [ -n "$$CURRENT" ] && [ "$$CURRENT" != "$(1)" ]; then \
@@ -103,6 +120,13 @@ endef
 # ─────────────────────────────────────────────────────────────────────
 ENV ?= local
 GPU ?= cpu
+# REBUILD=1 forces `dev`/`local` to rebuild local images; unset reuses them.
+REBUILD ?=
+
+# Images built for ENV=local — must match the `build` recipe's local set
+# (api/gateway/setup-secrets are NOT built for local).
+LOCAL_IMAGES := $(SETUP_DATABASE_REPO) $(DATABASE_REPO) $(OBJECT_STORE_REPO) \
+	$(SETUP_ORCHESTRATOR_REPO) $(ORCHESTRATOR_REPO) $(SUMMARY_REPO) $(HBPE_REPO)
 
 VALID_ENVS := local staging production
 VALID_GPUS := cpu cuda rocm
@@ -237,10 +261,6 @@ dbdestroy: ## Drop all PostgreSQL data including tables
 dbshell: ## Open a psql shell to the PostgreSQL database
 	@yarn workspace @ci/be-api dbshell
 
-.PHONY: deploy
-deploy: ## DEPRECATED: Use production, staging, or local targets instead
-	@$(MAKE) staging
-
 .PHONY: dev
 dev: ## Run the development environment locally
 	@printf "$(call task_icon,dev,🧑‍💻) Starting development environment...\n\n"
@@ -253,6 +273,21 @@ dev: ## Run the development environment locally
 		exit 1; \
 	else \
 		printf "$(GREEN)✓$(RESET) overmind found at $$OVERMIND\n\n"; \
+	fi
+
+	@CADDY=$$(which caddy 2>/dev/null); \
+	if [ -z "$$CADDY" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'caddy' installed or it is not in your PATH.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) caddy found at $$CADDY\n\n"; \
+	fi
+
+	@if curl -sf http://localhost:2019/config/ >/dev/null 2>&1; then \
+		printf "  $(GREEN)✓$(RESET) caddy admin API reachable on :2019\n\n"; \
+	else \
+		printf "  $(RED)✗$(RESET) caddy admin API not reachable on :2019. Start it with 'brew services start caddy'.\n\n"; \
+		exit 1; \
 	fi
 
 	@OLLAMA=$$(which ollama 2>/dev/null); \
@@ -292,9 +327,36 @@ dev: ## Run the development environment locally
 
 	@$(MAKE) init
 
-	$(call ensure_env,local)
+	@# The supervisor runs `docker compose up` (not build), so the local images
+	@# must exist first. Build them only when one is missing or REBUILD=1 — a warm
+	@# spin-up reuses them.
+	@missing=""; for img in $(LOCAL_IMAGES); do \
+		docker image inspect "$$img:latest" >/dev/null 2>&1 || missing="$$missing $$img"; \
+	done; \
+	if [ -n "$(REBUILD)" ] || [ -n "$$missing" ]; then \
+		[ -n "$$missing" ] && printf "$(YELLOW)•$(RESET) building — missing image(s):$$missing\n\n" || true; \
+		$(MAKE) build ENV=local GPU=$(GPU); \
+	else \
+		printf "$(GREEN)✓$(RESET) Reusing existing local images (set $(YELLOW)REBUILD=1$(RESET) to rebuild)\n\n"; \
+	fi
 
-	@overmind start
+	@# Hand off to the per-worktree stack supervisor: it allocates ports, brings
+	@# up the compose stack, migrates, registers the Caddy route at
+	@# $(PROJECT_NAME).localhost, and runs the Procfile via overmind. Foreground;
+	@# Ctrl-C tears the route down and stops the stack.
+	@yarn tsx scripts/dev-stack/index.ts up --key $(PROJECT_NAME)
+
+.PHONY: dev-down
+dev-down: ## Deregister this worktree's Caddy route (clears a stale route)
+	@yarn tsx scripts/dev-stack/index.ts down --key $(PROJECT_NAME)
+
+.PHONY: oauth
+oauth: ## Point the canonical OAuth host at this worktree's running stack (replaces any prior claim)
+	@yarn tsx scripts/dev-stack/oauth.ts up --key $(PROJECT_NAME)
+
+.PHONY: oauth-down
+oauth-down: ## Release the canonical OAuth host claim
+	@yarn tsx scripts/dev-stack/oauth.ts down --key $(PROJECT_NAME)
 
 .PHONY: graphql
 graphql: ## Generate GraphQL schema and frontend types
@@ -310,7 +372,7 @@ graphql: ## Generate GraphQL schema and frontend types
 
 .PHONY: health
 health: ## Check the repository for prerequisites
-	@printf "$(call task_icon,health,🩺) Checking health of prerequisites...\n\n"
+	@printf "$(call task_icon,health,🩺) Checking repository health...\n\n"
 
 	@NODEJS=$$(which node 2>/dev/null); \
 	if [ -z "$$NODEJS" ]; then \
@@ -339,6 +401,32 @@ health: ## Check the repository for prerequisites
 		exit 1; \
 	else \
 		printf "$(GREEN)✓$(RESET) Yarn version matches ($$current_yarn)\n\n"; \
+	fi
+
+	@# Report on per-stack data volumes (convention: <project>-local-*). Purely
+	@# informational — flags volumes whose key has no live worktree so orphans
+	@# from deleted worktrees are visible; never removes anything.
+	@if docker volume ls >/dev/null 2>&1; then \
+		main_root=$$(cd "$$(dirname "$$(git rev-parse --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd); \
+		active=$$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | while read -r p; do \
+			if [ "$$p" = "$$main_root" ]; then echo "$(REPO)"; else echo "$(REPO)-$$(basename "$$p" | tr '[:upper:]' '[:lower:]')"; fi; \
+		done); \
+		vols=$$(docker volume ls -q --filter name="$(REPO)" 2>/dev/null | grep -- '-local-'); \
+		total=$$(printf '%s\n' "$$vols" | grep -c .); \
+		keys=$$(printf '%s\n' "$$vols" | sed -n 's/-local-.*//p' | sort -u); \
+		stacks=$$(printf '%s\n' "$$keys" | grep -c .); \
+		printf "$(BLUE)ⓘ$(RESET)  %s project data volume(s) across %s stack(s)\n\n" "$$total" "$$stacks"; \
+		orphans=""; for k in $$keys; do echo "$$active" | grep -qxF "$$k" || orphans="$$orphans $$k"; done; \
+		if [ -n "$$orphans" ]; then \
+			orphan_vols=$$(for k in $$orphans; do docker volume ls -q --filter name="$$k-local-"; done | tr '\n' ' '); \
+			n=$$(printf '%s' "$$orphan_vols" | wc -w | tr -d ' '); \
+			printf "  $(YELLOW)•$(RESET) %s volume(s) with no live worktree:%s\n" "$$n" "$$orphans"; \
+			printf "    remove a dead stack (its stopped containers + volumes) with:\n"; \
+			for k in $$orphans; do \
+				printf "      $(YELLOW)COMPOSE_PROJECT_NAME=%s docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local down -v$(RESET)\n" "$$k"; \
+			done; \
+			printf "\n"; \
+		fi; \
 	fi
 
 .PHONY: init
@@ -372,20 +460,6 @@ install: ## Install project dependencies
 	@yarn install
 
 	@printf "\n"
-
-.PHONY: local
-local: health init ## Run the local deployment
-	@$(MAKE) build ENV=local GPU=$(GPU)
-
-	$(call switch_env,local)
-
-	@printf "$(call task_icon,local,⌨️) Starting local services...\n\n"
-
-	@docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d --remove-orphans
-
-	@printf "\n"
-
-	@$(MAKE) migrate
 
 .PHONY: migrate
 migrate: ## Run database migrations

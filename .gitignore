@@ -42,6 +42,9 @@ backend/apps/*/LICENSE.md
 
 .beads/
 
+# Per-worktree overmind sockets created by scripts/dev-stack.ts
+.overmind*.sock
+
 backend/apps/hbpe/src/ci/model/__pycache__/
 
 backend/apps/hbpe/src/ci/tokenizer/__pycache__/

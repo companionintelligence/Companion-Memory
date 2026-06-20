@@ -1,5 +1,6 @@
 {
   "hostname": "HOSTNAME",
+  "port": { "__name": "PORT", "__format": "json" },
   "auth": {
     "jwt": {
       "authTokenSecret": "AUTH_TOKEN_SECRET",
@@ -18,8 +19,7 @@
       "callbackUrl": "OAUTH_CALLBACK_URL"
     },
     "oidc": {
-      "issuerUrl": "OIDC_ISSUER_URL",
-      "callbackUrl": "OIDC_CALLBACK_URL"
+      "issuerUrl": "OIDC_ISSUER_URL"
     }
   },
   "db": {
