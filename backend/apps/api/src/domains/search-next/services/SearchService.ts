@@ -106,6 +106,39 @@ export class SearchService {
   }
 
   /**
+   * Vector search over raw message embeddings (entity_type = 'message') — the
+   * "naive RAG" retrieval channel that complements entity/graph search. Source
+   * messages carry detail the terse entity serialisation drops, so surfacing the
+   * closest raw fragments alongside the graph lifts recall (see RecallService).
+   *
+   * Cosine distance (<=>), matching semanticSearch — nomic embeddings are
+   * unnormalised, so L2 is meaningless here. Top-K by similarity, no distance
+   * threshold: callers union the result and let the answerer filter.
+   */
+  async searchMessages(
+    context: UserServiceContext,
+    query: string,
+    maxResults = 10,
+  ): Promise<{ id: string; score: number }[]> {
+    const vector = await this.embeddingGenerationService.generateEmbeddingString(query);
+
+    const sql = `
+      SELECT entity_id, 1 - (embedding <=> $2) AS score
+      FROM ci_search.embeddings
+      WHERE user_id = $1 AND entity_type = 'message'
+      ORDER BY score DESC
+      LIMIT ${maxResults}
+    `;
+
+    const rows = await this.embeddingRepo.query(sql, [context.userId, vector]);
+
+    return rows.map((row: { entity_id: string; score: string }) => ({
+      id: row.entity_id,
+      score: parseFloat(row.score),
+    }));
+  }
+
+  /**
    * Automatically selects the best search strategy based on query characteristics.
    *
    * - Short queries (≤3 words) or special chars: keyword only (fast, no embedding call)

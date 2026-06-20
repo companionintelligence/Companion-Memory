@@ -103,4 +103,23 @@ export class AgentMemoryService {
       { processedAt: new Date() },
     );
   }
+
+  /**
+   * Fetch a batch of memory fragments by id (owner-scoped). Used by the recall
+   * message channel to turn message-embedding hits back into their raw text.
+   */
+  async findByIds(context: ServiceContext, ids: string[]): Promise<AgentMemory[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const rows = await this.repository.find({
+      where: {
+        id: In(ids),
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+    });
+
+    return rows.map(AgentMemoryEntity.toEgressType);
+  }
 }

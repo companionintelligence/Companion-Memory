@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.3.8)  19 JUN 2026 10:46
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.3.8)  20 JUN 2026 11:54
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -400,7 +400,7 @@ LaTeX Font Info:    External font `cmex10' loaded for size
 LaTeX Font Info:    External font `cmex10' loaded for size
 (Font)              <9> on input line 36.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <10.95> on input line 57.
+(Font)              <10.95> on input line 59.
 
 
 [1
@@ -408,7 +408,7 @@ LaTeX Font Info:    External font `cmex10' loaded for size
 {/usr/local/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/loc
 al/texlive/2025/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t1.enc}]
 LaTeX Font Info:    Font shape `T1/cmtt/bx/n' in size <10.95> not available
-(Font)              Font shape `T1/cmtt/m/n' tried instead on input line 94.
+(Font)              Font shape `T1/cmtt/m/n' tried instead on input line 96.
 
 
 [2{/usr/local/texlive/2025/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc
@@ -417,46 +417,62 @@ LaTeX Font Info:    Font shape `T1/cmtt/bx/n' in size <10.95> not available
 File: charts/expanded_leaderboard.png Graphic file (type png)
 <use charts/expanded_leaderboard.png>
 Package pdftex.def Info: charts/expanded_leaderboard.png  used on input line 14
-2.
+7.
 (pdftex.def)             Requested size: 432.17375pt x 240.10175pt.
 
 
 [3 <./charts/expanded_leaderboard.png>]
+Overfull \hbox (15.32628pt too wide) in paragraph at lines 209--213
+[]\T1/cmr/bx/n/10.95 Adding struc-ture didn't help. \T1/cmr/m/n/10.95 Merg-ing 
+near-duplicate per-son nodes (``Priya''/``Priya Sharma''),
+ []
+
+
 
 [4]
-Overfull \hbox (0.44215pt too wide) in paragraph at lines 227--230
-\OMS/cmsy/m/n/10.95 ^^X$\T1/cmr/m/n/10.95 7s in-gest, $\OMS/cmsy/m/n/10.95 ^^X$
-\T1/cmr/m/n/10.95 5ms re-call) is the ef-fi-ciency dark horse --- but \T1/cmr/m
-/it/10.95 col-lapses \T1/cmr/m/n/10.95 on enu-mer-a-tion (13.6/34),
+Overfull \hbox (5.59543pt too wide) in paragraph at lines 258--261
+[]\T1/cmr/bx/n/10.95 Mem0 re-mains the strongest single-modality sys-tem \T1/cm
+r/m/n/10.95 (86.9%, best multi-hop at 109/118):
  []
 
 
 
 [5]
-Overfull \hbox (29.1787pt too wide) in paragraph at lines 295--299
+
+[6]
+Overfull \hbox (29.1787pt too wide) in paragraph at lines 346--354
 \T1/cmr/m/n/10 All ar-ti-facts live in \T1/cmtt/m/n/10 scripts/benchmark/v2/\T1
 /cmr/m/n/10 : \T1/cmtt/m/n/10 orchestrator.py \T1/cmr/m/n/10 (har-ness, with th
 e fixed judge and \T1/cmtt/m/n/10 ci_server_wipe
  []
 
 
+Overfull \hbox (43.9251pt too wide) in paragraph at lines 346--354
+\T1/cmr/m/n/10 Na-tive code changes live in \T1/cmtt/m/n/10 backend/apps/api/sr
+c/domains/ \T1/cmr/m/n/10 (\T1/cmtt/m/n/10 search-next/SearchService\T1/cmr/m/n
+/10 , \T1/cmtt/m/n/10 agent/RecallService\T1/cmr/m/n/10 ,
+ []
 
-[6] (./BENCHMARK_REPORT.aux)
+
+
+[7]
+
+[8] (./BENCHMARK_REPORT.aux)
  ***********
 LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2025-01-18>
  ***********
 Package rerunfilecheck Info: File `BENCHMARK_REPORT.out' has not changed.
-(rerunfilecheck)             Checksum: 8DE5B2594362A3430B24449B35E4BEBE;1257.
+(rerunfilecheck)             Checksum: FFB63DBEA30915BF2AEC70D9E30D6B2D;1568.
  ) 
 Here is how much of TeX's memory you used:
- 11353 strings out of 473190
- 180016 string characters out of 5715801
- 597966 words of memory out of 5000000
- 34442 multiletter control sequences out of 15000+600000
- 577525 words of font info for 72 fonts, out of 8000000 for 9000
+ 11361 strings out of 473190
+ 180089 string characters out of 5715801
+ 601053 words of memory out of 5000000
+ 34445 multiletter control sequences out of 15000+600000
+ 578226 words of font info for 73 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,17n,79p,448b,513s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,17n,79p,507b,539s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
 pdfTeX warning (dest): name{Hfootnote.5} has been referenced but does not exist
 , replaced by a fixed one
@@ -469,28 +485,29 @@ pdfTeX warning (dest): name{Hfootnote.4} has been referenced but does not exist
 /usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></u
 sr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></us
 r/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy9.pfb></usr/
-local/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1000.pfb></usr/lo
-cal/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1095.pfb></usr/loca
-l/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1200.pfb></usr/local/
-texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1440.pfb></usr/local/te
-xlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1728.pfb></usr/local/texl
-ive/2025/texmf-dist/fonts/type1/public/cm-super/sfrm0600.pfb></usr/local/texliv
-e/2025/texmf-dist/fonts/type1/public/cm-super/sfrm0700.pfb></usr/local/texlive/
-2025/texmf-dist/fonts/type1/public/cm-super/sfrm0800.pfb></usr/local/texlive/20
-25/texmf-dist/fonts/type1/public/cm-super/sfrm0900.pfb></usr/local/texlive/2025
-/texmf-dist/fonts/type1/public/cm-super/sfrm1000.pfb></usr/local/texlive/2025/t
-exmf-dist/fonts/type1/public/cm-super/sfrm1095.pfb></usr/local/texlive/2025/tex
-mf-dist/fonts/type1/public/cm-super/sfrm1200.pfb></usr/local/texlive/2025/texmf
--dist/fonts/type1/public/cm-super/sfti0900.pfb></usr/local/texlive/2025/texmf-d
-ist/fonts/type1/public/cm-super/sfti1000.pfb></usr/local/texlive/2025/texmf-dis
-t/fonts/type1/public/cm-super/sfti1095.pfb></usr/local/texlive/2025/texmf-dist/
-fonts/type1/public/cm-super/sftt0900.pfb></usr/local/texlive/2025/texmf-dist/fo
-nts/type1/public/cm-super/sftt1000.pfb></usr/local/texlive/2025/texmf-dist/font
-s/type1/public/cm-super/sftt1095.pfb>
-Output written on BENCHMARK_REPORT.pdf (6 pages, 546539 bytes).
+local/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbi1440.pfb></usr/lo
+cal/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1000.pfb></usr/loca
+l/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1095.pfb></usr/local/
+texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1200.pfb></usr/local/te
+xlive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1440.pfb></usr/local/texl
+ive/2025/texmf-dist/fonts/type1/public/cm-super/sfbx1728.pfb></usr/local/texliv
+e/2025/texmf-dist/fonts/type1/public/cm-super/sfrm0600.pfb></usr/local/texlive/
+2025/texmf-dist/fonts/type1/public/cm-super/sfrm0700.pfb></usr/local/texlive/20
+25/texmf-dist/fonts/type1/public/cm-super/sfrm0800.pfb></usr/local/texlive/2025
+/texmf-dist/fonts/type1/public/cm-super/sfrm0900.pfb></usr/local/texlive/2025/t
+exmf-dist/fonts/type1/public/cm-super/sfrm1000.pfb></usr/local/texlive/2025/tex
+mf-dist/fonts/type1/public/cm-super/sfrm1095.pfb></usr/local/texlive/2025/texmf
+-dist/fonts/type1/public/cm-super/sfrm1200.pfb></usr/local/texlive/2025/texmf-d
+ist/fonts/type1/public/cm-super/sfti0900.pfb></usr/local/texlive/2025/texmf-dis
+t/fonts/type1/public/cm-super/sfti1000.pfb></usr/local/texlive/2025/texmf-dist/
+fonts/type1/public/cm-super/sfti1095.pfb></usr/local/texlive/2025/texmf-dist/fo
+nts/type1/public/cm-super/sftt0900.pfb></usr/local/texlive/2025/texmf-dist/font
+s/type1/public/cm-super/sftt1000.pfb></usr/local/texlive/2025/texmf-dist/fonts/
+type1/public/cm-super/sftt1095.pfb>
+Output written on BENCHMARK_REPORT.pdf (8 pages, 591577 bytes).
 PDF statistics:
- 219 PDF objects out of 1000 (max. 8388607)
- 162 compressed objects within 2 object streams
- 31 named destinations out of 1000 (max. 500000)
+ 240 PDF objects out of 1000 (max. 8388607)
+ 178 compressed objects within 2 object streams
+ 35 named destinations out of 1000 (max. 500000)
  70 words of extra memory for PDF output out of 10000 (max. 10000000)
 

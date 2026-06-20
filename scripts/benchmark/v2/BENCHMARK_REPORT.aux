@@ -7,15 +7,16 @@
 \@writefile{toc}{\contentsline {section}{\numberline {2}Question taxonomy}{2}{section.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {3}Results}{3}{section.3}\protected@file@percent }
 \newlabel{sec:results}{{3}{3}{Results}{section.3}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Expanded single-user benchmark --- 460 questions. Answer accuracy with 95\% Wilson CI; then per-category answer score. Bold marks the per-column leader. CI-Server row highlighted.}}{3}{table.caption.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Answer accuracy on the 460-question single-user benchmark, with 95\% Wilson confidence intervals. Overlapping bars are statistical ties. Mem0 leads; OpenViking/Naive/TencentDB/CI-Server tie; CI-Server's distinguishing win is the enumeration column of the table above, not the headline.}}{3}{figure.caption.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}What CI-Server wins, honestly}{4}{subsection.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Where CI-Server loses}{4}{subsection.3.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Expanded single-user benchmark --- 460 questions. Answer accuracy with 95\% Wilson CI; then per-category answer score. Bold marks the per-column leader. CI-Server's two configurations highlighted --- \emph  {graph} (vanilla, the four-way-tie baseline) and \emph  {hybrid} (graph $\cup $ raw-message vector search).}}{3}{table.caption.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Answer accuracy on the 460-question single-user benchmark, with 95\% Wilson confidence intervals. Overlapping bars are statistical ties. CI-Server's \emph  {hybrid} configuration leads the field; its \emph  {vanilla graph} sat in the four-way tie with OpenViking/Naive/TencentDB --- the hybrid channel (\S  \ref {sec:hybrid}) is the difference.}}{3}{figure.caption.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}What the vanilla graph won, and where it lost}{4}{subsection.3.1}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Cost --- memory-layer work only (the answer phase is the shared model, excluded). Ingest scaled to the 657-message corpus.}}{4}{table.caption.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}CI-Server improvement ablation}{4}{section.4}\protected@file@percent }
-\newlabel{sec:ablation}{{4}{4}{CI-Server improvement ablation}{section.4}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Ablation (CI-Server only, same store, same judge). All deltas are within noise.}}{4}{table.caption.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Conclusions}{5}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {A}Addendum: methods, configurations, and dead ends}{5}{appendix.A}\protected@file@percent }
-\newlabel{sec:addendum}{{A}{5}{Addendum: methods, configurations, and dead ends}{appendix.A}{}}
-\gdef \@abspage@last{6}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Improving CI-Server I: what \emph  {didn't} work}{4}{section.4}\protected@file@percent }
+\newlabel{sec:ablation}{{4}{4}{Improving CI-Server I: what \emph {didn't} work}{section.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces CI-Server-only changes, same judge. Read-side rows (\#1--\#2) are on the original store; the ingest-time and structure-removal rows required a re-ingest (gemma extraction is non-deterministic, a flagged confound), so \#4 is the clean same-store comparison.}}{4}{table.caption.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Improving CI-Server II: the hybrid channel (the win)}{5}{section.5}\protected@file@percent }
+\newlabel{sec:hybrid}{{5}{5}{Improving CI-Server II: the hybrid channel (the win)}{section.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusions}{5}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {A}Addendum: methods, configurations, and dead ends}{6}{appendix.A}\protected@file@percent }
+\newlabel{sec:addendum}{{A}{6}{Addendum: methods, configurations, and dead ends}{appendix.A}{}}
+\gdef \@abspage@last{8}

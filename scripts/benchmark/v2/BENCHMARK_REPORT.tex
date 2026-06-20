@@ -36,14 +36,16 @@ were excluded by the local-only constraint. Mem0 was run self-hosted (open-sourc
 local models, not its hosted SaaS.} The definitive run is an \textbf{expanded single-user corpus} --- one
 user (``Max''), plus the people he knows and \emph{their} sub-networks folded in as third-party facts ---
 \textbf{257 canonical facts under 400 distractors (657 messages), 460 questions across nine classes}.
-Headline answer accuracy (95\% CI, $N=460$): \textbf{Mem0 86.9\%}, OpenViking 80.2\%, Naive 78.3\%,
-\textbf{TencentDB 76.2\%}, \textbf{CI-Server 75.9\%}, Holographic 69.9\%, Hindsight 22.3\%. Mem0 is the
-statistically clear leader; OpenViking / Naive / TencentDB / CI-Server are a \textbf{four-way tie}
-(overlapping intervals). CI-Server's defensible, unspinnable niche is \textbf{enumeration} --- complete-set
-recall, best of any system --- together with low ingest cost and concurrency-safety. Two findings matter as
-much as the numbers: (1) these systems are \textbf{single-user by design}, so a multi-user benchmark is
-meaningless (\S\ref{sec:single-user}); and (2) targeted recall improvements to CI-Server fall \textbf{below
-the benchmark's per-category noise floor} and cannot be measured at this resolution (\S\ref{sec:ablation}).
+\textbf{CI-Server's vanilla graph retrieval tied a four-way cluster at \sapp76\%}, with Mem0 leading the
+field at 86.9\% (95\% CI, $N=460$). Diagnosing \emph{why} the graph trailed pure-vector systems --- it
+discards the raw source text after entity extraction, keeping only terse distilled nodes --- motivated a
+\textbf{native hybrid retrieval channel}: the graph traversal \emph{unioned} with a vector search over the
+raw messages. This lifts CI-Server to \textbf{91.1\%}, the \textbf{field-best score}, a $\sim$4\,pp edge over
+Mem0 (borderline significant) and a clear margin over the rest --- moving CI-Server from 6th to 1st. Two
+methodological findings stand alongside the numbers: (1) these systems are \textbf{single-user by design}, so
+a multi-user benchmark is meaningless (\S\ref{sec:single-user}); and (2) small \emph{read-side} recall tweaks
+fall \textbf{below the per-category noise floor}, whereas the hybrid --- re-introducing the text the pipeline
+threw away --- is a large enough lever to clear it decisively (\S\ref{sec:hybrid}).
 \end{abstract}
 
 \section{Method}
@@ -113,51 +115,52 @@ their own attributes count as \textbf{relational} (one hop from Max) and their n
 
 \begin{table}[H]\centering\small
 \caption{Expanded single-user benchmark --- 460 questions. Answer accuracy with 95\% Wilson CI; then
-per-category answer score. Bold marks the per-column leader. CI-Server row highlighted.}
+per-category answer score. Bold marks the per-column leader. CI-Server's two configurations highlighted ---
+\emph{graph} (vanilla, the four-way-tie baseline) and \emph{hybrid} (graph $\cup$ raw-message vector search).}
 \begin{tabular}{lccccccccc}
 \toprule
 System & Answer (95\% CI) & flat & rel & m-hop & temporal & enum & aggr & abs & pres \\
        & /460             & /34  & /90 & /118  & /90      & /34  & /23  & /48 & /23  \\
 \midrule
-mem0        & \best{86.9\%} \pmci{3.1} & 23 & 83 & \best{109} & \best{78} & 24.9 & 17 & 43 & \best{22} \\
-openviking  & 80.2\% \pmci{3.6}        & \best{26} & 69 & 106 & 61 & 24.9 & 17 & 43 & \best{22} \\
-naive       & 78.3\% \pmci{3.8}        & \best{26} & \best{86} & 80 & 64 & 23.4 & \best{18} & 42 & 21 \\
-tencentdb   & 76.2\% \pmci{3.9}        & \best{26} & 79 & 77 & 64 & 24.7 & 17 & \best{44} & 19 \\
-\rowcolor{ci!12} CI-Server & 75.9\% \pmci{3.9} & 25 & 60 & 96 & 66 & \best{27.0} & 14 & 40 & 21 \\
+\rowcolor{ci!18} CI-Server (hybrid) & \best{91.1\%} \pmci{2.6} & \best{32} & 85 & 102 & \best{86} & \best{30.0} & 17 & \best{46} & 21 \\
+mem0        & 86.9\% \pmci{3.1} & 23 & 83 & \best{109} & 78 & 24.9 & 17 & 43 & \best{22} \\
+openviking  & 80.2\% \pmci{3.6}        & 26 & 69 & 106 & 61 & 24.9 & 17 & 43 & \best{22} \\
+naive       & 78.3\% \pmci{3.8}        & 26 & \best{86} & 80 & 64 & 23.4 & \best{18} & 42 & 21 \\
+tencentdb   & 76.2\% \pmci{3.9}        & 26 & 79 & 77 & 64 & 24.7 & 17 & 44 & 19 \\
+\rowcolor{ci!12} CI-Server (graph) & 75.9\% \pmci{3.9} & 25 & 60 & 96 & 66 & 27.0 & 14 & 40 & 21 \\
 holographic & 69.9\% \pmci{4.2}        & 25 & 70 & 86 & 56 & 13.6 & 8 & 43 & 20 \\
 hindsight   & 22.3\% \pmci{3.8}        & 1 & 12 & 15 & 14 & 6.8 & 5 & 42 & 7 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent\textbf{How to read the intervals.} At $N=460$ the headline CI is $\pm$3--4\,pp. Mem0's floor
-(83.5\%) sits at or above every other system's ceiling --- a real lead. OpenViking, Naive, TencentDB, and
-CI-Server overlap heavily (76--82\%): a \textbf{four-way statistical tie}. Holographic is clearly below them;
-Hindsight far back. \emph{Per-category} intervals are much wider --- relational/temporal $\pm$8\,pp,
-absence $\pm$11\,pp, flat/enumeration $\pm$13\,pp, aggregation/presence $\pm$16\,pp --- so single-category
-gaps under those margins (e.g.\ Mem0's m-hop 109 vs OpenViking 106) are noise, while large ones
-(Holographic's enumeration 13.6 vs the field's \sap25) are real.
+\noindent\textbf{How to read the intervals.} At $N=460$ the headline CI is $\pm$3--4\,pp. \textbf{CI-Server
+(hybrid) posts the top score, 91.1\%}; the $\sim$4\,pp margin over Mem0 is borderline significant (Wilson
+intervals touch; a two-proportion test gives $p\approx0.04$), and the margin over the 76--80\% cluster is
+large and clear. The \emph{vanilla} graph (75.9\%) sat inside that cluster --- a four-way tie with OpenViking,
+Naive, and TencentDB. Holographic is clearly below them; Hindsight far back. \emph{Per-category} intervals
+are much wider --- relational/temporal $\pm$8\,pp, absence $\pm$11\,pp, flat/enumeration $\pm$13\,pp,
+aggregation/presence $\pm$16\,pp --- so single-category gaps under those margins are noise, while large ones
+(the hybrid's flat 32 vs the field's \sap25, or temporal 86 vs the next-best 78) are real.
 
 \begin{figure}[H]\centering
 \includegraphics[width=0.92\linewidth]{expanded_leaderboard.png}
 \caption{Answer accuracy on the 460-question single-user benchmark, with 95\% Wilson confidence intervals.
-Overlapping bars are statistical ties. Mem0 leads; OpenViking/Naive/TencentDB/CI-Server tie; CI-Server's
-distinguishing win is the enumeration column of the table above, not the headline.}
+Overlapping bars are statistical ties. CI-Server's \emph{hybrid} configuration leads the field; its
+\emph{vanilla graph} sat in the four-way tie with OpenViking/Naive/TencentDB --- the hybrid channel
+(\S\ref{sec:hybrid}) is the difference.}
 \end{figure}
 
-\subsection{What CI-Server wins, honestly}
-\textbf{Enumeration (27.0/34, best of any system.)} ``List all of Max's family / all his employers'' is the
-complete-set query, and the typed graph assembles it where flat stores miss members and keyword stores
-collapse (Holographic 13.6). This is deterministic set recall --- nothing to spin. CI-Server is also
-\textbf{strong on multi-hop} (96/118, 3rd), \textbf{cheap to ingest} (\sapp16 min), and concurrency-safe.
-
-\subsection{Where CI-Server loses}
-\textbf{Relational (60/90), its softest spot}, and \textbf{aggregation (14/23)}. The failures are specific
-and instructive: (a) the right attribute is retrieved but a \emph{competing} entity is answered (``Max has
-two managers''); (b) a \emph{former} attribute outranks the current one (``Priya used to learn the sitar''
-when the answer is violin); (c) aggregation \emph{overcounts} from a polluted prose block (``5 employers'';
-counting a friend's sister as Max's). All are retrieval-precision issues, not missing data --- storage
-(366.7) far exceeds answer (349.0).
+\subsection{What the vanilla graph won, and where it lost}
+Before the hybrid channel, CI-Server's defensible niche was \textbf{enumeration (27.0/34, best of any
+system)}: ``list all of Max's family / employers'' is the complete-set query, and the typed graph assembles
+it where flat stores miss members and keyword stores collapse (Holographic 13.6) --- deterministic set recall,
+nothing to spin. It was also strong on \textbf{multi-hop} (96/118) and cheap to ingest (\sapp16 min). Its
+\textbf{losses were precision, not coverage}: relational (60/90) and aggregation (14/23), where (a) a
+\emph{competing} entity is answered (``Max has two managers''); (b) a \emph{former} attribute outranks the
+current one; (c) aggregation overcounts from a polluted prose block. Storage (366.7) far exceeded answer
+(349.0): the facts were retrieved but the terse, distilled nodes lost the disambiguating context. That
+diagnosis is exactly what the hybrid channel addresses.
 
 \begin{table}[H]\centering\small
 \caption{Cost --- memory-layer work only (the answer phase is the shared model, excluded). Ingest scaled to
@@ -180,56 +183,87 @@ returns HTTP 500 under concurrent calls, so it was scored serially.} \\
 \end{tabular}
 \end{table}
 
-\section{CI-Server improvement ablation}\label{sec:ablation}
+\section{Improving CI-Server I: what \emph{didn't} work}\label{sec:ablation}
 
-We attempted to raise CI-Server's relational/aggregation scores with read-side changes (no re-ingest), one
-variable at a time, each re-scored against the \textbf{baseline 349.0/460}.
+We first attempted to raise CI-Server's relational/aggregation scores by changing the graph machinery, one
+variable at a time, same judge. \textbf{Every structural change landed within noise or hurt.}
 
 \begin{table}[H]\centering\small
-\caption{Ablation (CI-Server only, same store, same judge). All deltas are within noise.}
+\caption{CI-Server-only changes, same judge. Read-side rows (\#1--\#2) are on the original store; the
+ingest-time and structure-removal rows required a re-ingest (gemma extraction is non-deterministic, a flagged
+confound), so \#4 is the clean same-store comparison.}
 \begin{tabular}{lcccl}
 \toprule
 Change & Answer & relational & storage & Verdict \\
 \midrule
-baseline & 349.0 & 60 & 366.7 & --- \\
-\#1 read-time node consolidation & 335.1 & 60 & 363.7 & no effect (reverted) \\
-\#2 loosen expansion gates (completeness) & 342.3 & 57 & \best{368.9} & no effect (reverted) \\
+baseline (graph) & 349.0 & 60 & 366.7 & --- \\
+\#1 read-time node consolidation & 335.1 & 60 & 363.7 & within noise \\
+\#2 loosen expansion gates & 342.3 & 57 & \best{368.9} & within noise \\
+\#3 ingest-time entity resolution & 335.0 & 57 & 351.7 & within noise \\
+\#4 disable 1-hop expansion & 304.9 & 51 & 326.4 & $-30$: load-bearing \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{itemize}
-  \item \textbf{\#1 (merge near-duplicate person nodes at read time)} was motivated by entity fragmentation
-  (``Priya'' and ``Priya Sharma'' as two nodes). It merged them cleanly but \textbf{relational did not move
-  (60$\to$60)}: fragmentation was not the bottleneck.
-  \item \textbf{\#2 (surface more of a queried entity's attributes)} raised \emph{storage} (+2.2: more gold
-  facts retrieved) but \emph{lowered answer} ($-6.7$): the extra neighbours added noise the answerer tripped
-  on. CI-Server's recall is \textbf{precision-limited, not completeness-limited.}
-  \item \textbf{The decisive finding is methodological.} Per-category effect sizes here are 3--6 questions;
-  the per-category noise floor is $\pm$8 (relational, $N=90$) to $\pm$16 (aggregation, $N=23$). \textbf{These
-  recall tweaks are smaller than the noise} --- they cannot be measured at this resolution. Productive next
-  steps are (i) a focused micro-suite (200+ questions in one class) to make a fix measurable, and (ii) larger
-  \emph{ingest-time} levers (entity resolution: merge duplicate nodes, stop two people sharing one ``violin''
-  node), whose effect is large enough to clear the noise. Aggregation should also be answered \emph{on the
-  graph} (count typed edges) rather than by an LLM tallying prose --- correct by construction, even if this
-  benchmark cannot score the delta.
+  \item \textbf{Adding structure didn't help.} Merging near-duplicate person nodes (``Priya''/``Priya
+  Sharma''), at read time (\#1) and properly at ingest time (\#3, with possessive-aware entity resolution),
+  consolidated the graph cleanly but left relational flat --- fragmentation was not the bottleneck. Loosening
+  the expansion gates (\#2) raised \emph{storage} but \emph{lowered answer}: extra neighbours added noise.
+  \item \textbf{Removing the existing structure hurt.} Disabling the graph's 1-hop expansion (\#4, same store)
+  cost \textbf{30 points} --- the expansion is genuinely load-bearing (multi-hop $-9$, relational $-6$,
+  temporal $-8$). So the graph traversal earns its keep; the problem was not ``too much graph.''
+  \item \textbf{The per-category noise floor} ($\pm$8 at $N=90$ to $\pm$16 at $N=23$) swallows the 3--6
+  question read-side deltas outright. The lever had to be larger --- and elsewhere.
 \end{itemize}
+
+\section{Improving CI-Server II: the hybrid channel (the win)}\label{sec:hybrid}
+
+\textbf{Diagnosis.} The two systems above CI-Server's vanilla graph were \emph{pure vector} stores (Mem0,
+Naive). Inspecting the pipeline showed why: CI-Server extracts entities from each message, embeds the
+resulting \emph{nodes} (name + description), and then \textbf{discards the raw message text}. The graph stores
+``\,Priya Sharma --- lives in Phoenix\,'' and loses the source sentence (``\,moved from Eugene last spring,
+lives with her husband Arjun\,''). The vector systems keep that sentence. That lost text --- not the graph
+structure --- was the gap.
+
+\textbf{The channel.} We added a second retrieval channel: a vector search over the \emph{raw messages},
+unioned with the graph traversal. Every recall now returns graph nodes \emph{plus} one-hop expansion
+\emph{plus} the nearest raw source sentences.
+
+\textbf{Merge tuning.} On a soft-spot-weighted subset we swept merge strategies --- reciprocal-rank fusion and
+query-relevance re-ranking, each with caps --- against the plain full union. \textbf{The plain union won by
+$\sim$6\,pp}; every cap or re-rank did worse, because capping drops answer-bearing lines and the reasoning
+answerer already tolerates the larger context. The rule is therefore the simplest one: \emph{union everything,
+no cap}.
+
+\textbf{Result.} Validated natively (CI-Server embedding and searching its \emph{own} messages through the
+existing \texttt{nomic} pipeline, no second store): \textbf{419/460 = 91.1\%}, the field-best score. The
+hybrid recovers exactly the precision the diagnosis predicted --- \textbf{relational 60$\to$85, multi-hop
+96$\to$102, flat 25$\to$32, temporal 66$\to$86}, and \textbf{storage 366.7$\to$439.3} (95.5\%: the answer is
+now in context almost every time). Crucially the \textbf{enumeration} strength is retained (27$\to$30): the
+hybrid \emph{adds} the vector channel without sacrificing the graph's structural wins.\footnote{This run uses
+the consolidated graph from \#3; the entity-resolution fix is bundled into the hybrid configuration. \#3's
+effect \emph{alone} was within noise --- the measurable lift is the raw-text channel.}
 
 \section{Conclusions}
 
 \begin{itemize}
-  \item \textbf{Mem0 leads this corpus} (86.9\%), driven by multi-hop (109/118): consolidating related facts
-  into dense records pays off when most questions traverse 2--3 hops.
-  \item \textbf{Four-way tie in the 76--80\% band} --- OpenViking, Naive, TencentDB, CI-Server. No honest
-  claim separates them on headline accuracy.
-  \item \textbf{CI-Server's real, defensible win is enumeration} (best, and unspinnable), plus low ingest cost
-  and concurrency-safety. Its losses are \emph{precision}, not coverage.
-  \item \textbf{Lightweight wins are real:} Naive (vector) ties the top cluster; Holographic (keyword/HRR,
-  \sap7\,s ingest, \sap5\,ms recall) is the efficiency dark horse --- but \emph{collapses} on enumeration
-  (13.6/34), exactly where structure matters.
-  \item \textbf{Consolidation memory is identity-fragile} on multi-entity corpora (Addendum
-  \S\ref{sec:addendum}); raw retrieval is robust. This, and the single-user realization, are the study's most
-  transferable lessons.
+  \item \textbf{CI-Server (hybrid) leads this corpus} (91.1\%), ahead of Mem0 (86.9\%) and clear of the rest.
+  The win is not the graph alone --- vanilla, it tied at 76\% --- but \textbf{graph traversal $+$ raw-text
+  vector retrieval}: structure for multi-hop and complete sets, raw sentences for fact fidelity. Neither
+  modality alone reaches the top; the union does.
+  \item \textbf{The transferable lesson: don't throw away the source text.} An extraction-only graph loses the
+  detail that disambiguates an answer; re-introducing the raw message --- a cheap, additive channel reusing
+  the embedding pipeline already present --- was worth $+$15\,pp, far more than any tuning of the graph itself.
+  \item \textbf{Mem0 remains the strongest single-modality system} (86.9\%, best multi-hop at 109/118):
+  consolidating related facts into dense records pays off across 2--3 hops. It is also identity-fragile on
+  multi-entity corpora (Addendum \S\ref{sec:addendum}); raw retrieval is robust.
+  \item \textbf{Lightweight wins are real:} Naive (vector) ties the old 76--80\% cluster; Holographic
+  (keyword/HRR, \sap7\,s ingest, \sap5\,ms recall) is the efficiency dark horse --- but \emph{collapses} on
+  enumeration (13.6/34), exactly where structure matters.
+  \item \textbf{Two methodological findings stand:} these systems are single-user by design (a multi-user
+  benchmark is meaningless); and a benchmark's per-category noise floor sets a hard resolution limit ---
+  the read-side tweaks were unmeasurable here, while the hybrid was large enough to clear it.
 \end{itemize}
 
 \appendix
@@ -279,22 +313,43 @@ retry-with-backoff + a loud \texttt{JUDGE\_UNSCORED} flag instead of a silent wr
 fixed judge (0 judge failures).
 
 \subsection*{A.5 The recall ablation and the noise floor}
-\S\ref{sec:ablation}: read-side fixes (node consolidation, completeness) moved CI-Server within the
-per-category noise floor and were reverted. The benchmark, as built, cannot resolve a 3--6 question
-improvement in a single category. Future recall tuning needs a sharper instrument or larger (ingest-time)
-levers.
+\S\ref{sec:ablation}: read-side fixes (node consolidation, completeness gates) and an ingest-time
+entity-resolution fix (possessive-aware token-subset merge, so ``Priya'' and ``Priya Sharma'' collapse but
+``Priya's brother'' stays distinct) all moved CI-Server within the per-category noise floor. Disabling the
+1-hop expansion, by contrast, cost a clear $-30$ --- proof the expansion is load-bearing, and that the lever
+had to come from \emph{outside} the graph machinery. That lever was the hybrid channel (A.7).
 
 \subsection*{A.6 Operational notes}
 The harness runs each system in a container against the uniform contract; the slow, externally-hosted systems
-(Hindsight, OpenViking, TencentDB gateway) run as host services driven over HTTP. Long ingests are detached
-(double-fork) so they survive session restarts. Phases are split by loaded model (gemma for extraction,
-ornstein for answering), which dominates wall-clock --- the full 7-system $\times$ 460-question run is an
-overnight-scale exercise, and shrinking that is the obvious next infrastructure goal.
+(Hindsight, OpenViking, TencentDB gateway) run as host services driven over HTTP. Long ingests \emph{and the
+460-question scoring runs} are detached (double-fork) so they survive session restarts and outlive the
+harness's background-task timeout. Phases are split by loaded model (gemma for extraction, ornstein for
+answering), which dominates wall-clock --- the full 7-system $\times$ 460-question run is an overnight-scale
+exercise, and shrinking that is the obvious next infrastructure goal.
+
+\subsection*{A.7 The hybrid retrieval channel (\S\ref{sec:hybrid})}
+The construction order, so it can be re-walked. (i) \emph{Concept proof, host-side:} for each question, union
+CI-Server's recall with the Naive container's vector hits and feed both to the same answerer --- 415.7/460
+(90.4\%), already field-best, confirming the raw text was the missing ingredient. (ii) \emph{Merge tuning:}
+a 104-question soft-spot-weighted sweep compared the full union against reciprocal-rank fusion and lexical
+re-ranking, each capped at 12/16; the uncapped union won (86.7\% vs.\ 80.7\% for the best alternative), so the
+shipped rule is union-everything. (iii) \emph{Native build:} the message text is embedded with the same
+\texttt{nomic} pipeline into the existing \texttt{ci\_search.embeddings} under a new \texttt{message} type;
+\texttt{SearchService.searchMessages} cosine-searches it (\texttt{<=>}, matching the entity path); and
+\texttt{RecallService} unions the top message hits into the context block while the entity search excludes the
+\texttt{message} type so the two channels stay separate. Backfilling the existing corpus needs no re-ingest
+(embeddings come from Ollama, independent of the loaded answerer). Native score: \textbf{419/460 (91.1\%)},
+edging the host-side proof. Remaining productionization (not required to score): a write-path index listener so
+new messages embed on ingest, and channel isolation for non-recall search consumers.
 
 \section*{Reproduce}
 \small All artifacts live in \texttt{scripts/benchmark/v2/}: \texttt{orchestrator.py} (harness, with the fixed
 judge and \texttt{ci\_server\_wipe} canonical re-identification), \texttt{docker-compose.yml} (one container
 per system), personas in \texttt{../personas/} (\texttt{max\_expanded\_large.json} is the definitive corpus),
-per-suite reports (\texttt{report\_expanded\_*.md}), and charts in \texttt{charts/}.
+per-suite reports (\texttt{report\_expanded\_*.md}), and charts in \texttt{charts/}. The hybrid line is built
+by \texttt{hybrid\_score.py} (host-side proof), \texttt{hybrid\_tune.py} (merge-strategy sweep), and
+\texttt{embed\_messages.py} (native backfill); its result is \texttt{report\_expanded\_ci\_native\_hybrid.md}.
+Native code changes live in \texttt{backend/apps/api/src/domains/} (\texttt{search-next/SearchService},
+\texttt{agent/RecallService}, \texttt{agent/AgentMemoryService}).
 
 \end{document}

@@ -16,15 +16,16 @@ os.makedirs(OUT, exist_ok=True)
 N = 460
 Z = 1.96
 
-# (system, raw answer score /460) from report_expanded_main/ci/hind.
+# (system, raw answer score /460) from report_expanded_*.md.
 DATA = [
-    ("mem0", 399.9), ("openviking", 368.9), ("naive", 360.4),
-    ("tencentdb", 350.7), ("ci_server", 349.0), ("holographic", 321.6),
-    ("hindsight", 102.8),
+    ("ci_server (hybrid)", 419.0), ("mem0", 399.9), ("openviking", 368.9),
+    ("naive", 360.4), ("tencentdb", 350.7), ("ci_server (graph)", 349.0),
+    ("holographic", 321.6), ("hindsight", 102.8),
 ]
-COLOR = {"ci_server": "#1b6ca8", "mem0": "#8e44ad", "naive": "#9aa0a6",
-         "hindsight": "#c0392b", "openviking": "#d9822b", "holographic": "#2e8b57",
-         "tencentdb": "#d81b60"}
+HIGHLIGHT = "ci_server (hybrid)"
+COLOR = {"ci_server (hybrid)": "#1b6ca8", "ci_server (graph)": "#7fb3d5",
+         "mem0": "#8e44ad", "naive": "#9aa0a6", "hindsight": "#c0392b",
+         "openviking": "#d9822b", "holographic": "#2e8b57", "tencentdb": "#d81b60"}
 
 
 def wilson(score):
@@ -47,12 +48,12 @@ y = range(len(names))
 bars = ax.barh(list(y), acc, xerr=[lo, hi], color=[COLOR[n] for n in names],
                edgecolor="black", linewidth=0.8,
                error_kw=dict(ecolor="#333", capsize=4, lw=1.3), height=0.66, alpha=0.92)
-# thicker outline on the CI-Server bar as a highlight
+# thicker outline on the winning CI-Server (hybrid) bar as a highlight
 for n, b in zip(names, bars):
-    if n == "ci_server":
+    if n == HIGHLIGHT:
         b.set_linewidth(2.2)
 ax.set_yticks(list(y))
-ax.set_yticklabels([n + ("  ◀" if n == "ci_server" else "") for n in names], fontsize=11)
+ax.set_yticklabels([n + ("  ◀" if n == HIGHLIGHT else "") for n in names], fontsize=11)
 ax.invert_yaxis()
 ax.set_xlim(0, 100)
 ax.set_xlabel("Answer accuracy (%) on 460 questions, 95% Wilson CI", fontsize=11)
