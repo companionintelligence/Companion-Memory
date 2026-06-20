@@ -11,13 +11,8 @@ function makeListener(): EventSearchIndexListener {
   // The constructor calls logger.setContext; everything else is unused by
   // getSearchDocument, so stub the logger and leave the rest as no-ops.
   const logger = { setContext: () => undefined } as never;
-  return new EventSearchIndexListener(
-    null as never,
-    null as never,
-    null as never,
-    null as never,
-    logger,
-  );
+
+  return new EventSearchIndexListener(null as never, null as never, null as never, null as never, logger);
 }
 
 function doc(event: Partial<Event>): string | null {

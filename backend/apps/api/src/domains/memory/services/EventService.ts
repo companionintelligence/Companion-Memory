@@ -122,6 +122,7 @@ export class EventService {
               return EventEntity.toEgressType(existing);
             }
           }
+
           throw err;
         }
 
