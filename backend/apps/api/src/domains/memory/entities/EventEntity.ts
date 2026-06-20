@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryColumn,
   Column,
   CreateDateColumn,
@@ -12,6 +13,13 @@ import {
 import { UserEntity, User } from '@ci/domains/user';
 
 @Entity({ schema: 'ci', name: 'events' })
+// Idempotency key for captured/imported events. Created by migration
+// 20260620213807_add_events_source_idempotency; declared here so TypeORM is
+// aware of it (schema sync stays off — the migration is the source of truth).
+@Index('events_source_triple_uniq', ['sourceType', 'sourceSystem', 'sourceId'], {
+  unique: true,
+  where: '"source_id" IS NOT NULL',
+})
 export class EventEntity {
   @PrimaryColumn('uuid', { name: 'event_id' })
   id!: string;

@@ -176,24 +176,39 @@ export class EventSearchIndexListener {
     push(event.category ?? null);
     push(event.eventType ?? null);
 
-    //We don't have any good examples of metadata fields to search on, but
-    //putting this here as an example in case we ever do
-    // const metadata = (event.metadata ?? {}) as Record<string, unknown>;
-    // // We don't have a schema on properties yet. These values are an accumulated
-    // // superset of values we've indexed in various places.
-    // const candidateKeys = [];
-    //
-    // for (const key of candidateKeys) {
-    //   push(metadata[key]);
-    // }
-    //
-    // const aliases = metadata['aliases'];
-    //
-    // if (Array.isArray(aliases)) {
-    //   for (const alias of aliases) {
-    //     push(alias);
-    //   }
-    // }
+    // High-signal structured fields that capture sources (notably CI-Import-Tools)
+    // record in event metadata. Without these, semantically-searchable content for
+    // imported events would be limited to title/description; pulling the subject,
+    // message text, track/artist, product name, etc. makes the imported memory
+    // recallable. There is no metadata schema yet, so this is a curated allowlist
+    // of keys observed across importers — extend as new sources land.
+    const metadata = (event.metadata ?? {}) as Record<string, unknown>;
+    const candidateKeys = [
+      'Subject',
+      'Text',
+      'Track',
+      'Artist',
+      'Album',
+      'Product',
+      'Sender',
+      'Book',
+      'Author',
+      'Title',
+      'Name',
+      'Notes',
+    ];
+
+    for (const key of candidateKeys) {
+      push(metadata[key]);
+    }
+
+    const aliases = metadata['aliases'];
+
+    if (Array.isArray(aliases)) {
+      for (const alias of aliases) {
+        push(alias);
+      }
+    }
 
     const result = Array.from(parts).join(' ');
 
