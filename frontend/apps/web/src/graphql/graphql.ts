@@ -363,6 +363,7 @@ export type CreateEventInput = {
   metadata?: InputMaybe<Scalars['JSON']['input']>;
   organizerEntityId?: InputMaybe<Scalars['ID']['input']>;
   participantEntityIds?: InputMaybe<Array<Scalars['ID']['input']>>;
+  sharingLevel?: InputMaybe<Scalars['String']['input']>;
   sourceId?: InputMaybe<Scalars['ID']['input']>;
   sourceSystem?: InputMaybe<Scalars['String']['input']>;
   sourceType?: InputMaybe<Scalars['String']['input']>;
