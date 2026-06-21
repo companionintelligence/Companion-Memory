@@ -26,6 +26,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { UserModule, UserEntity } from '@ci/domains/user';
 
+import { EventsIngestController } from './controllers/EventsIngestController';
 import { GraphController } from './controllers/GraphController';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
@@ -95,7 +96,7 @@ import { UserContextService } from './services/UserContextService';
     FileService,
     PlaceService,
   ],
-  controllers: [GraphController],
+  controllers: [GraphController, EventsIngestController],
   exports: [
     CommunicationService,
     ContentService,
