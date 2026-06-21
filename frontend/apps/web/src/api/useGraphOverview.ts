@@ -21,12 +21,18 @@ type GraphLink = {
   properties: Record<string, unknown>;
 };
 
+type TagMatch = {
+  active: boolean;
+  entityIds: string[];
+};
+
 type GraphDataResponse = {
   success: boolean;
   data: {
     nodes: GraphNode[];
     links: GraphLink[];
   };
+  tagMatch?: TagMatch;
 };
 
 type GraphContextDetails = {
@@ -60,6 +66,9 @@ type GraphOverviewState = {
   subgraph: Subgraph | null;
   quickStats: GraphContextDetails['quickStats'] | null;
   currentUser: GraphContextDetails['currentUser'] | null;
+  // Graph `entity_id`s carrying the active tag filter, or null when the filter
+  // is inactive (no `tags` param requested).
+  tagMatchedEntityIds: Set<string> | null;
 };
 
 function buildSubgraph(
@@ -102,6 +111,10 @@ function buildSubgraph(
 export interface GraphOverviewOptions {
   maxDepth?: number;
   refreshKey?: number | string;
+  // Comma-separated tag labels from the explorer's `tags` URL param. `undefined`
+  // leaves the filter inactive; any string (including '') activates it, honoring
+  // the "filter active = present, even if empty" contract.
+  tags?: string;
 }
 
 export function useGraphOverview(
@@ -110,6 +123,7 @@ export function useGraphOverview(
 ): GraphOverviewState {
   const maxDepth = options.maxDepth ?? 1;
   const refreshKey = options.refreshKey ?? 0;
+  const tags = options.tags;
 
   const [state, setState] = useState<GraphOverviewState>({
     loading: true,
@@ -118,6 +132,7 @@ export function useGraphOverview(
     subgraph: null,
     quickStats: null,
     currentUser: null,
+    tagMatchedEntityIds: null,
   });
 
   useEffect(() => {
@@ -134,9 +149,14 @@ export function useGraphOverview(
           credentials: 'include',
         };
 
+        // Send `tags` only when the filter is active (param present), so an
+        // absent param leaves the backend returning the whole graph.
+        const dataUrl =
+          tags !== undefined ? `/api/graph/data?tags=${encodeURIComponent(tags)}` : '/api/graph/data';
+
         const [contextResponse, graphResponse] = await Promise.all([
           fetchJson<GraphContextResponse>('/api/graph/context', { ...baseInit }),
-          fetchJson<GraphDataResponse>('/api/graph/data', { ...baseInit }),
+          fetchJson<GraphDataResponse>(dataUrl, { ...baseInit }),
         ]);
 
         if (!contextResponse?.success || !contextResponse.context) {
@@ -150,6 +170,8 @@ export function useGraphOverview(
         const context = contextResponse.context!;
         const userEntityId = context.currentUser.entityId;
         const subgraph = buildSubgraph(graphResponse.data, userEntityId, maxDepth);
+        const tagMatch = graphResponse.tagMatch;
+        const tagMatchedEntityIds = tagMatch && tagMatch.active ? new Set(tagMatch.entityIds) : null;
 
         if (!cancelled) {
           setState({
@@ -159,6 +181,7 @@ export function useGraphOverview(
             subgraph,
             quickStats: context.quickStats,
             currentUser: context.currentUser,
+            tagMatchedEntityIds,
           });
         }
       } catch (error) {
@@ -180,6 +203,7 @@ export function useGraphOverview(
           quickStats: null,
           currentUser: null,
           error: message,
+          tagMatchedEntityIds: null,
         });
       }
     }
@@ -189,7 +213,7 @@ export function useGraphOverview(
     return () => {
       cancelled = true;
     };
-  }, [authToken, maxDepth, refreshKey]);
+  }, [authToken, maxDepth, refreshKey, tags]);
 
   return useMemo(() => state, [state]);
 }

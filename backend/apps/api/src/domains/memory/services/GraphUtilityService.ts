@@ -78,6 +78,37 @@ export class GraphUtilityService {
     });
   }
 
+  /**
+   * Resolve the set of graph-node `entity_id`s that correspond to a set of
+   * source-record ids (as carried by the tag system).
+   *
+   * Taggable entities live in two id spaces:
+   * - Person/Concept/Place/File records ARE graph nodes, so their tag id is the
+   *   node's own `entity_id`.
+   * - Content/Event/Item/… records live in their own tables, so their tag id is
+   *   the node's `linked_id` (the back-link to the source record).
+   *
+   * Matching on `(entity_id IN ids OR linked_id IN ids)` covers both, returning
+   * the graph `entity_id`s the caller can filter on. Callers must pass uuid ids
+   * — both columns are uuid, so non-uuid source ids never match a node anyway.
+   */
+  async getEntityIdsByLinkedOrEntityIds(ownerUserId: string, ids: string[]): Promise<string[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const rows = await this.entityRepo
+      .createQueryBuilder('entity')
+      .select('entity.entity_id', 'entity_id')
+      .where('entity.owner_user_id = :ownerUserId', { ownerUserId })
+      .andWhere('entity.is_active = true')
+      .andWhere('(entity.entity_id IN (:...ids) OR entity.linked_id IN (:...ids))', { ids })
+      .limit(2000)
+      .getRawMany<{ entity_id: string }>();
+
+    return rows.map((row) => row.entity_id);
+  }
+
   async queryNodes(
     ownerUserId: string,
     filters: {
