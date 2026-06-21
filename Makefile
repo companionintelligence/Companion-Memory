@@ -358,6 +358,13 @@ oauth: ## Point the canonical OAuth host at this worktree's running stack (repla
 oauth-down: ## Release the canonical OAuth host claim
 	@yarn tsx scripts/dev-stack/oauth.ts down --key $(PROJECT_NAME)
 
+.PHONY: tunnel
+tunnel: ## Expose this running stack at https://dev.companionintelligence.com via Cloudflare Tunnel (see infrastructure/cloudflare/README.md)
+	@command -v cloudflared >/dev/null 2>&1 || { printf "$(RED)cloudflared not found — run: brew install cloudflared$(RESET)\n"; exit 1; }
+	@test -f infrastructure/cloudflare/config.yml || { printf "$(RED)Missing infrastructure/cloudflare/config.yml — copy infrastructure/cloudflare/config.example.yml and fill it in (see README.md)$(RESET)\n"; exit 1; }
+	@printf "$(YELLOW)Exposing https://dev.companionintelligence.com publicly — confirm Cloudflare Access is enabled. Ctrl-C to stop.$(RESET)\n"
+	cloudflared tunnel --config infrastructure/cloudflare/config.yml run
+
 .PHONY: graphql
 graphql: ## Generate GraphQL schema and frontend types
 	@printf "$(call task_icon,graphql,🏷️) Generating GraphQL...\n"

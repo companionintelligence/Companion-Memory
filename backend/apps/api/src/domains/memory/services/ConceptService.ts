@@ -6,6 +6,7 @@ import { v7 as uuid7 } from 'uuid';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type Concept, ConceptEntity } from '../entities/ConceptEntity';
 import { ConceptCreatedEvent, ConceptRemovedEvent, ConceptUpdatedEvent } from '../events';
@@ -112,6 +113,39 @@ export class ConceptService {
     const map = new Map(entities.map((entity) => [entity.id, ConceptEntity.toEgressType(entity)]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  /**
+   * Lightweight identifiers for the most-recent concepts, for the unified
+   * search/explorer feed. Full entities are batch-resolved downstream.
+   */
+  async getEntitiesForConcepts(
+    context: ServiceContext,
+    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.conceptRepository
+      .createQueryBuilder('concept')
+      .select('concept.id', 'id')
+      .where('concept.entity_type = :entityType', { entityType: 'Concept' })
+      .andWhere('concept.owner_user_id = :userId', { userId: context.userId });
+
+    if (options.startTime) {
+      query = query.andWhere('concept.created_at >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('concept.created_at <= :endTime', { endTime: options.endTime });
+    }
+
+    query = query.orderBy('concept.created_at', options.order ?? 'DESC');
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+
+    return rows.map((row) => ({ id: row.id, type: 'concept' as IndexableEntity }));
   }
 
   async findById(context: ServiceContext, id: string): Promise<Concept | null> {

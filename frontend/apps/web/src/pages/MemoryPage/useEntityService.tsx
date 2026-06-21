@@ -8,8 +8,28 @@ import { type ResultOf } from '@graphql-typed-document-node/core';
 import { gql } from '@/graphql';
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!]) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes }) {
+  query Search(
+    $query: String!
+    $includeTypes: [String!]
+    $excludeTypes: [String!]
+    $tags: [String!]
+    $startTime: String
+    $endTime: String
+    $sortBy: SearchSortBy
+    $sortOrder: SearchSortOrder
+  ) {
+    search(
+      input: {
+        query: $query
+        includeTypes: $includeTypes
+        excludeTypes: $excludeTypes
+        tags: $tags
+        startTime: $startTime
+        endTime: $endTime
+        sortBy: $sortBy
+        sortOrder: $sortOrder
+      }
+    ) {
       edges {
         node {
           __typename
@@ -67,20 +87,41 @@ type ReturnType = [
   },
 ];
 
+export type SortBy = 'time' | 'name' | 'relevance';
+export type SortOrder = 'ASC' | 'DESC';
+
+// The GraphQL enum values are upper-cased; the explorer uses lower-case in URLs.
+const SORT_BY_GQL = { time: 'TIME', name: 'NAME', relevance: 'RELEVANCE' } as const;
+
 function useEntityService({
   searchQuery,
   includeTypes,
   excludeTypes,
+  tags,
+  startTime,
+  endTime,
+  sortBy,
+  sortOrder,
 }: {
   searchQuery: string;
   includeTypes?: string[];
   excludeTypes?: string[];
+  tags?: string[];
+  startTime?: string;
+  endTime?: string;
+  sortBy?: SortBy;
+  sortOrder?: SortOrder;
 }): ReturnType {
   const { data, loading, error } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
       excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
+      tags: tags && tags.length > 0 ? tags : undefined,
+      startTime: startTime || undefined,
+      endTime: endTime || undefined,
+      sortBy: sortBy ? SORT_BY_GQL[sortBy] : undefined,
+      sortOrder,
     },
     fetchPolicy: 'cache-and-network',
   });

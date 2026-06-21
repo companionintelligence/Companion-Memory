@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client';
 import { GlobalUID, Portal } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { Breadcrumb, Tabs, Sheet, Tooltip } from '@ci/shadcn';
@@ -8,7 +8,6 @@ import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
 import { useSearchParams, Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
-import { SearchBox } from '@/components/SearchBox';
 import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 
@@ -19,21 +18,6 @@ import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
 import { DesktopMapView } from './MapView';
-
-const CREATE_SAVED_SEARCH = gql(`
-  mutation CreateSavedSearch($input: CreateSavedSearchInput!) {
-    createSavedSearch(input: $input) {
-      savedSearch {
-        id
-        name
-        description
-        query
-        entityTypes
-        tags
-      }
-    }
-  }
-`);
 
 const GET_SAVED_SEARCH = gql(`
   query GetSavedSearch($id: ID!) {
@@ -114,45 +98,6 @@ export default function DesktopMemoryPage() {
     }
   }, []);
 
-  const [createSavedSearch] = useMutation(CREATE_SAVED_SEARCH);
-
-  const handleSearch = useCallback(
-    (data: { query: string; entityFilters?: string[] }) => {
-      const currentParams = new URLSearchParams(searchParams);
-
-      if (data.query.trim()) {
-        currentParams.set('search', data.query.trim());
-      } else {
-        currentParams.delete('search');
-      }
-
-      setSearchParams(currentParams);
-    },
-    [searchParams, setSearchParams],
-  );
-
-  const handleClear = useCallback(() => {
-    const currentParams = new URLSearchParams(searchParams);
-
-    currentParams.delete('search');
-
-    setSearchParams(currentParams);
-  }, [searchParams, setSearchParams]);
-
-  const handleSaveSearch = useCallback(async (query: string, entityTypes: string[]) => {
-    await createSavedSearch({
-      variables: {
-        input: {
-          name: '',
-          description: '',
-          query,
-          entityTypes,
-          tags: [],
-        },
-      },
-    });
-  }, []);
-
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -173,15 +118,9 @@ export default function DesktopMemoryPage() {
 
       <PageContent className="p-0 gap-0">
         <div className="flex items-center gap-2 p-4">
-          <div className="flex-1">
-            <SearchBox
-              onSearch={handleSearch}
-              onClear={handleClear}
-              onSave={handleSaveSearch}
-              autoSubmit
-              displayDropdown
-            />
-          </div>
+          {/* Free-text search + entity-type filters live in the global top bar
+              (PrimaryNavigation). These are the explorer-local controls. */}
+          <div className="flex-1" />
 
           {/* View Toggle */}
           <Tooltip.Provider>

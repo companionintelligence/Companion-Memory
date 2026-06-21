@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useMutation } from '@apollo/client';
 import { Portal } from '@ci/common';
-import { Button, DropdownMenu, Kbd, Separator, useToast } from '@ci/shadcn';
+import { Button, DropdownMenu, Separator, useToast } from '@ci/shadcn';
 import {
   NotebookPen,
   Upload,
@@ -14,27 +15,92 @@ import {
   Lightbulb,
   Package,
 } from '@ci/shadcn/icons';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useUploadFile, useTriggerHbpe } from '@/api';
 import { AddPersonModal } from '@/components/modals/AddItemModal';
 import { AddConceptModal } from '@/components/modals/AddItemModal/AddConceptModal.tsx';
 import { CaptureModal } from '@/components/modals/CaptureModal';
 import { InventoryItemModal } from '@/components/modals/InventoryItemModal';
-import { SearchModal } from '@/components/modals/SearchModal';
 import { UploadModal } from '@/components/modals/UploadModal';
+import { SearchBox } from '@/components/SearchBox';
+import { gql } from '@/graphql';
 import { useModalControls } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
 
 import { NavUser } from './NavUser';
 
+const CREATE_SAVED_SEARCH = gql(`
+  mutation CreateGlobalSavedSearch($input: CreateSavedSearchInput!) {
+    createSavedSearch(input: $input) {
+      savedSearch {
+        id
+        name
+        query
+        entityTypes
+        tags
+      }
+    }
+  }
+`);
+
 export function PrimaryNavigation() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const [, { trigger }] = useTriggerHbpe();
 
-  const [{ isOpen: isSearchModalOpen }, { open: openSearchModal, close: closeSearchModal }] =
-    useModalControls();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [createSavedSearch] = useMutation(CREATE_SAVED_SEARCH);
+
+  const isOnMemory = location.pathname === '/memory';
+
+  // Single, app-wide search: write the explorer's `search` URL param. When
+  // already on /memory it updates results in place; from anywhere else it routes
+  // to /memory carrying any filters already set on the current URL.
+  const writeSearch = useCallback(
+    (query: string) => {
+      const params = new URLSearchParams(searchParams);
+      const trimmed = query.trim();
+
+      if (trimmed) {
+        params.set('search', trimmed);
+      } else {
+        params.delete('search');
+      }
+
+      if (isOnMemory) {
+        setSearchParams(params);
+      } else {
+        navigate(`/memory?${params.toString()}`);
+      }
+    },
+    [searchParams, setSearchParams, isOnMemory, navigate],
+  );
+
+  const handleSearch = useCallback((data: { query: string }) => writeSearch(data.query), [writeSearch]);
+
+  const handleClearSearch = useCallback(() => {
+    if (!isOnMemory) {
+      return;
+    }
+
+    const params = new URLSearchParams(searchParams);
+    params.delete('search');
+    setSearchParams(params);
+  }, [isOnMemory, searchParams, setSearchParams]);
+
+  const handleSaveSearch = useCallback(
+    async (query: string, entityTypes: string[]) => {
+      await createSavedSearch({
+        variables: { input: { name: '', description: '', query, entityTypes, tags: [] } },
+      });
+      toast.success('Search saved');
+    },
+    [createSavedSearch, toast],
+  );
+
   const [{ isOpen: isCaptureModalOpen }, { open: openCaptureModal, close: closeCaptureModal }] =
     useModalControls();
   const [{ isOpen: isUploadModalOpen }, { open: openUploadModal, close: closeUploadModal }] =
@@ -73,7 +139,7 @@ export function PrimaryNavigation() {
     };
   }, []);
 
-  useKeyboardShortcut('/', openSearchModal);
+  useKeyboardShortcut('/', () => searchInputRef.current?.focus());
 
   const handleUpload = (files: FileList) => {
     return upload(Array.from(files));
@@ -81,29 +147,31 @@ export function PrimaryNavigation() {
 
   return (
     <>
-      <header className="flex flex-row items-center justify-between p-2 px-4">
-        <section className="flex flex-row items-center">
+      <header className="flex flex-row items-center gap-4 p-2 px-4">
+        <section className="flex flex-row items-center shrink-0">
           <Portal id="breadcrumbs" />
         </section>
 
-        <section className="flex flex-row items-center gap-4">
+        <div className="flex-1 min-w-0">
+          <SearchBox
+            ref={searchInputRef}
+            variant="compact"
+            placeholder="Search your memory…"
+            autoSubmit={isOnMemory}
+            displayDropdown
+            defaultQuery={searchParams.get('search') || ''}
+            onSearch={handleSearch}
+            onClear={handleClearSearch}
+            onSave={handleSaveSearch}
+          />
+        </div>
+
+        <section className="flex flex-row items-center gap-4 shrink-0">
           <Portal ref={actionsRef} id="actions" className="flex flex-row items-center" />
 
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}
 
           <div className="flex flex-row items-center gap-2">
-            <Button
-              variant="outline"
-              className="items-center justify-between flex p-2! gap-3"
-              onClick={openSearchModal}
-            >
-              <Search className="h-4 w-4" strokeWidth={1.25} />
-
-              <div className="pr-4 text-muted-foreground">Search</div>
-
-              <Kbd>/</Kbd>
-            </Button>
-
             <div className="flex items-center">
               <Button variant="ghost" size="icon" aria-label="More Options">
                 <Link to="/tags">
@@ -207,8 +275,6 @@ export function PrimaryNavigation() {
           </div>
         </section>
       </header>
-
-      <SearchModal open={isSearchModalOpen} onClose={closeSearchModal} />
 
       <UploadModal
         open={isUploadModalOpen}

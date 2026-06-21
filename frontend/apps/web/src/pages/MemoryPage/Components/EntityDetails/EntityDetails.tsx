@@ -5,6 +5,8 @@ import type { EntityItem } from '../../../MemoryPage/useEntityService';
 import { BrowserActivityDetails } from './BrowserActivityDetails';
 import { CommunicationDetails } from './CommunicationDetails';
 import { EventDetails } from './EventDetails';
+import { GenericDetails } from './GenericDetails';
+import { PlaceDetails } from './PlaceDetails';
 
 export interface Props {
   entity: EntityItem;
@@ -18,8 +20,10 @@ function getCategoryComponent({ entity }: Props) {
       return <CommunicationDetails entity={entity} />;
     case 'EventType':
       return <EventDetails entity={entity} />;
+    case 'PlaceType':
+      return <PlaceDetails entity={entity} />;
     default:
-      return null;
+      return <GenericDetails entity={entity} />;
   }
 }
 

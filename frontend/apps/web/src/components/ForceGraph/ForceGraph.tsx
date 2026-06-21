@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 import type { GraphLink, GraphNode } from '@/api/useGraphOverview';
+import { colorForRawType } from '@/components/entities/entityVisuals';
 
 type ForceNode = GraphNode & {
   x: number;
@@ -68,33 +69,10 @@ const MAX_TICKS = 240;
 const MIN_ALPHA = 0.02;
 const ALPHA_DECAY = 0.96;
 
-const TYPE_COLOR_PALETTE = [
-  '#38bdf8', // sky-400
-  '#a855f7', // purple-500
-  '#f97316', // orange-500
-  '#22c55e', // green-500
-  '#facc15', // yellow-400
-  '#ec4899', // pink-500
-  '#14b8a6', // teal-500
-  '#60a5fa', // blue-400
-  '#f87171', // red-400
-  '#c084fc', // purple-400
-];
-
+// Colour nodes by entity type from the shared LifeScope palette so the graph
+// matches the map/list/gallery.
 function getTypeColor(entityType: string): string {
-  if (!entityType) {
-    return TYPE_COLOR_PALETTE[0];
-  }
-
-  let hash = 0;
-  for (let i = 0; i < entityType.length; i += 1) {
-    hash = (hash << 5) - hash + entityType.charCodeAt(i);
-    hash |= 0; // Convert to 32bit integer
-  }
-
-  const index = Math.abs(hash) % TYPE_COLOR_PALETTE.length;
-
-  return TYPE_COLOR_PALETTE[index];
+  return colorForRawType(entityType);
 }
 
 function clampRelationshipStrength(value: number): number {

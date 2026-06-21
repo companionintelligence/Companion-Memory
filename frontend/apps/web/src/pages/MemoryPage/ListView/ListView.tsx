@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 
 import { GlobalUID } from '@ci/common';
 import { Images } from '@ci/shadcn/icons';
-import { useNavigate } from 'react-router-dom';
 
 import { FileModal } from '@/components/modals/FileModal';
 import { InventoryItemModal, type InventoryItem } from '@/components/modals/InventoryItemModal';
@@ -29,14 +28,12 @@ import { SearchTable } from './SearchTable';
 const PAGE_SIZE = 40;
 
 export function ListView() {
-  const navigate = useNavigate();
-
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
   const [activeItem, setActiveItem] = useState<string | null>(null);
 
   const clearActiveItem = () => setActiveItem(null);
 
-  const [{ data }] = useEntityService();
+  const [{ data, loading }, { setActiveEntity }] = useEntityService();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -76,6 +73,16 @@ export function ListView() {
     return () => observer.disconnect();
   }, [hasMore, data.length]);
 
+  if (loading && data.length === 0) {
+    return (
+      <div className="min-h-0 flex-1 overflow-hidden px-4 pb-2">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <div key={i} className="my-2 h-12 animate-pulse rounded-md bg-accent/30" />
+        ))}
+      </div>
+    );
+  }
+
   if (data.length === 0) {
     return (
       <Empty
@@ -101,110 +108,60 @@ export function ListView() {
         <SearchTable>
           <SearchTable.RowGroup>
             {data.slice(0, visibleCount).map((item) => {
-            switch (item.__typename) {
-              case 'AnswerType':
-                return <AnswerRow key={item.id} answer={item} onClick={() => {}} />;
+              // In-place details Sheet for entity rows; richer dedicated modals
+              // for media (File) and inventory (Item).
+              switch (item.__typename) {
+                case 'AnswerType':
+                  return <AnswerRow key={item.id} answer={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'BrowserActivityType':
-                return <BrowserActivityRow key={item.id} browserActivity={item} onClick={() => {}} />;
+                case 'BrowserActivityType':
+                  return (
+                    <BrowserActivityRow
+                      key={item.id}
+                      browserActivity={item}
+                      onClick={() => setActiveEntity(item)}
+                    />
+                  );
 
-              case 'CommunicationType':
-                return (
-                  <CommunicationRow
-                    key={item.id}
-                    communication={item}
-                    onClick={() => {
-                      navigate(`/communications/${GlobalUID.parse('communication', item.id)}`);
-                    }}
-                  />
-                );
+                case 'CommunicationType':
+                  return (
+                    <CommunicationRow
+                      key={item.id}
+                      communication={item}
+                      onClick={() => setActiveEntity(item)}
+                    />
+                  );
 
-              case 'ConceptType':
-                return (
-                  <ConceptRow
-                    key={item.id}
-                    concept={item}
-                    onClick={() => {
-                      navigate(`/concepts/${GlobalUID.parse('concept', item.id)}`);
-                    }}
-                  />
-                );
+                case 'ConceptType':
+                  return <ConceptRow key={item.id} concept={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'ContentType':
-                return (
-                  <ContentRow
-                    key={item.id}
-                    content={item}
-                    onClick={() => {
-                      navigate(`/contents/${GlobalUID.parse('content', item.id)}`);
-                    }}
-                  />
-                );
+                case 'ContentType':
+                  return <ContentRow key={item.id} content={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'EventType':
-                return (
-                  <EventRow
-                    key={item.id}
-                    event={item}
-                    onClick={() => {
-                      navigate(`/events/${GlobalUID.parse('event', item.id)}`);
-                    }}
-                  />
-                );
+                case 'EventType':
+                  return <EventRow key={item.id} event={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'FileType':
-                return <FileRow key={item.id} file={item} onClick={() => setActiveItem(item.id)} />;
+                case 'FileType':
+                  return <FileRow key={item.id} file={item} onClick={() => setActiveItem(item.id)} />;
 
-              case 'ItemType':
-                return <ItemRow key={item.id} item={item} onSelectInventoryItem={openInventoryModal} />;
+                case 'ItemType':
+                  return <ItemRow key={item.id} item={item} onSelectInventoryItem={openInventoryModal} />;
 
-              case 'NoteType':
-                return (
-                  <NoteRow
-                    key={item.id}
-                    note={item}
-                    onClick={() => {
-                      navigate(`/notes/${GlobalUID.parse('note', item.id)}`);
-                    }}
-                  />
-                );
+                case 'NoteType':
+                  return <NoteRow key={item.id} note={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'PersonType':
-                return (
-                  <PersonRow
-                    key={item.id}
-                    person={item}
-                    onClick={() => {
-                      navigate(`/people/${GlobalUID.parse('person', item.id)}`);
-                    }}
-                  />
-                );
+                case 'PersonType':
+                  return <PersonRow key={item.id} person={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'PlaceType':
-                return (
-                  <PlaceRow
-                    key={item.id}
-                    place={item}
-                    onClick={() => {
-                      navigate(`/places/${GlobalUID.parse('place', item.id)}`);
-                    }}
-                  />
-                );
+                case 'PlaceType':
+                  return <PlaceRow key={item.id} place={item} onClick={() => setActiveEntity(item)} />;
 
-              case 'ThreadType':
-                return (
-                  <ThreadRow
-                    key={item.id}
-                    thread={item}
-                    onClick={() => {
-                      navigate(`/chat/${GlobalUID.parse('thread', item.id)}`);
-                    }}
-                  />
-                );
+                case 'ThreadType':
+                  return <ThreadRow key={item.id} thread={item} onClick={() => setActiveEntity(item)} />;
 
-              default:
-                return null;
-            }
+                default:
+                  return null;
+              }
             })}
           </SearchTable.RowGroup>
         </SearchTable>

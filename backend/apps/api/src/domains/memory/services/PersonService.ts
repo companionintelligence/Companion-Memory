@@ -7,6 +7,7 @@ import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/c
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 import { CreatePersonDto, UpdatePersonDto } from '../types';
@@ -111,6 +112,39 @@ export class PersonService {
     const map = new Map(entities.map((entity) => [entity.id, PersonEntity.toEgressType(entity)]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  /**
+   * Lightweight identifiers for the most-recent people, for the unified
+   * search/explorer feed. Full entities are batch-resolved downstream.
+   */
+  async getEntitiesForPeople(
+    context: ServiceContext,
+    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.personRepository
+      .createQueryBuilder('person')
+      .select('person.id', 'id')
+      .where('person.entity_type = :entityType', { entityType: 'Person' })
+      .andWhere('person.owner_user_id = :userId', { userId: context.userId });
+
+    if (options.startTime) {
+      query = query.andWhere('person.created_at >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('person.created_at <= :endTime', { endTime: options.endTime });
+    }
+
+    query = query.orderBy('person.created_at', options.order ?? 'DESC');
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+
+    return rows.map((row) => ({ id: row.id, type: 'person' as IndexableEntity }));
   }
 
   async findById(context: ServiceContext, id: string): Promise<Person | null> {

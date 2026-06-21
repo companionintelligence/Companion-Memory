@@ -49,6 +49,7 @@ export const Default: Story = {
       id: 'mock-id-1',
       name: args.name,
       description: args.description,
+      properties: { latitude: 37.7749, longitude: -122.4194 },
     };
 
     const maskedPlace = makeFragmentData(place, PLACE_FRAGMENT);

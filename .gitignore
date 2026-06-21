@@ -50,3 +50,6 @@ backend/apps/hbpe/src/ci/model/__pycache__/
 backend/apps/hbpe/src/ci/tokenizer/__pycache__/
 
 *.pyc
+
+# Local Cloudflare Tunnel config (holds credentials path); keep the example only
+infrastructure/cloudflare/config.yml

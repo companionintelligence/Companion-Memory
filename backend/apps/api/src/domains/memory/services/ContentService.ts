@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { EventService } from '@ci/domains/events';
 import { ContentCreatedEvent, ContentRemovedEvent, ContentUpdatedEvent } from '@ci/domains/memory/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { Content, ContentEntity } from '../entities/ContentEntity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
@@ -94,6 +95,38 @@ export class ContentService {
     const map = new Map(result.map((content) => [content.id, ContentEntity.toEgressType(content)]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  /**
+   * Lightweight identifiers for the most-recent content, for the unified
+   * search/explorer feed. Full entities are batch-resolved downstream.
+   */
+  async getEntitiesForContents(
+    context: ServiceContext,
+    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.contentRepository
+      .createQueryBuilder('content')
+      .select('content.id', 'id')
+      .where('content.user_id = :userId', { userId: context.userId });
+
+    if (options.startTime) {
+      query = query.andWhere('content.created_at >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('content.created_at <= :endTime', { endTime: options.endTime });
+    }
+
+    query = query.orderBy('content.created_at', options.order ?? 'DESC');
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+
+    return rows.map((row) => ({ id: row.id, type: 'content' as IndexableEntity }));
   }
 
   async update(context: ServiceContext, id: string, data: UpdateContentDto): Promise<Content | null> {

@@ -21,6 +21,7 @@ import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
 import { FileUpdatedEvent, FileUploadedEvent } from '@ci/domains/files/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { SignedFile, FileEntity } from '../entities/FileEntity';
 import { FileVariant, type CreateFileDto, type UpdateFileDto, type UploadFileDto } from '../types';
@@ -214,6 +215,40 @@ export class FileService implements OnModuleInit {
     const map = new Map(signedFiles.map((file) => [file.id, file]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  /**
+   * Lightweight identifiers for the most-recent original files, for the
+   * unified search/explorer feed. Restricted to ORIGINAL variants so
+   * thumbnails/derivatives don't surface. Full entities resolved downstream.
+   */
+  async getEntitiesForFiles(
+    context: ServiceContext,
+    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.fileRepository
+      .createQueryBuilder('file')
+      .select('file.id', 'id')
+      .where('file.user_id = :userId', { userId: context.userId })
+      .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.startTime) {
+      query = query.andWhere('file.created_at >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('file.created_at <= :endTime', { endTime: options.endTime });
+    }
+
+    query = query.orderBy('file.created_at', options.order ?? 'DESC');
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+
+    return rows.map((row) => ({ id: row.id, type: 'file' as IndexableEntity }));
   }
 
   async findByHash(context: UserServiceContext, fileHash: string): Promise<SignedFile | null> {

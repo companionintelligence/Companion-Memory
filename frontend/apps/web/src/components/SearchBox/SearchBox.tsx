@@ -57,6 +57,12 @@ interface Props {
   loading?: boolean;
   error?: unknown;
   placeholder?: string;
+  /**
+   * External query to reflect in the input (e.g. the `?search=` URL param when
+   * the box lives in the global header). Synced in while the box isn't focused
+   * so it never fights the user's typing.
+   */
+  defaultQuery?: string;
   results?: SearchResultItem[];
   autoSubmit?: boolean;
   autoSubmitDelay?: number;
@@ -83,6 +89,7 @@ function SearchBox(
     displayResults = false,
     displayDropdown = false,
     saveSupported = true,
+    defaultQuery,
     onSearch,
     onKeyDown,
     onClear,
@@ -93,8 +100,22 @@ function SearchBox(
 ) {
   const form = useForm<FormData>({
     resolver: formDataResolver(FormSchema),
-    defaultValues: EMPTY,
+    defaultValues: defaultQuery != null ? { query: defaultQuery } : EMPTY,
   });
+
+  const isFocusedRef = useRef(false);
+
+  // Reflect external query changes (e.g. URL `?search=` or saved-search restore)
+  // into the input, but only while it isn't focused so it never clobbers typing.
+  useEffect(() => {
+    if (defaultQuery === undefined || isFocusedRef.current) {
+      return;
+    }
+
+    if (defaultQuery !== form.getValues('query')) {
+      form.reset({ query: defaultQuery });
+    }
+  }, [defaultQuery, form]);
 
   const [{ isDropdownPanelVisible }, { toggleDropdownPanel }] = useDropdown();
 
@@ -423,6 +444,13 @@ function SearchBox(
                     placeholder={placeholder}
                     disabled={disabled}
                     onKeyDown={handleKeyDown}
+                    onFocus={() => {
+                      isFocusedRef.current = true;
+                    }}
+                    onBlur={() => {
+                      isFocusedRef.current = false;
+                      field.onBlur();
+                    }}
                     className="
                       !w-full
                       !flex-1

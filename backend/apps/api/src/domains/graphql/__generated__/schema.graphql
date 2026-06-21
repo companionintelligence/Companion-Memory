@@ -934,7 +934,10 @@ input SearchInput {
   endTime: String
   excludeTypes: [String!]
   includeTypes: [String!]
+  limit: Int
   query: String
+  sortBy: SearchSortBy
+  sortOrder: SearchSortOrder
   startTime: String
   tags: [String!]
 }
@@ -951,6 +954,20 @@ type SearchResultEdge {
 }
 
 union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+"""
+Field to sort search/explorer results by. RELEVANCE only applies to text queries.
+"""
+enum SearchSortBy {
+  NAME
+  RELEVANCE
+  TIME
+}
+
+enum SearchSortOrder {
+  ASC
+  DESC
+}
 
 type SummaryConnection implements Connection {
   edges: [SummaryEdge!]!

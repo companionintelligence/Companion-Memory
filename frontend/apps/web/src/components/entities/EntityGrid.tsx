@@ -11,7 +11,9 @@ export function EntityGrid({ className, children }: Props) {
   return (
     <div
       className={cn(
-        'grid w-full gap-4 justify-center grid-cols-[repeat(auto-fill,300px)] auto-rows-[300px]',
+        // Responsive masonry-ish grid: columns shrink to fit narrow viewports
+        // and fill the available width instead of a fixed 300px track.
+        'grid w-full gap-4 grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] auto-rows-[260px]',
         className,
       )}
     >

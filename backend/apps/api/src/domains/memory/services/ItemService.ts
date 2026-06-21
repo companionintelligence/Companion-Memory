@@ -7,6 +7,7 @@ import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/c
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 import { ItemCreatedEvent, ItemUpdatedEvent, ItemRemovedEvent } from '@ci/domains/memory/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type Item, ItemEntity } from '../entities/ItemEntity';
 import type { CreateItemDto, UpdateItemDto } from '../types';
@@ -74,6 +75,38 @@ export class ItemService {
     const map = new Map(entities.map((entity) => [entity.id, ItemEntity.toEgressType(entity)]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  /**
+   * Lightweight identifiers for the most-recent inventory items, for the
+   * unified search/explorer feed. Full entities are batch-resolved downstream.
+   */
+  async getEntitiesForItems(
+    context: ServiceContext,
+    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.itemRepository
+      .createQueryBuilder('item')
+      .select('item.id', 'id')
+      .where('item.user_id = :userId', { userId: context.userId });
+
+    if (options.startTime) {
+      query = query.andWhere('item.created_at >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('item.created_at <= :endTime', { endTime: options.endTime });
+    }
+
+    query = query.orderBy('item.created_at', options.order ?? 'DESC');
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+
+    return rows.map((row) => ({ id: row.id, type: 'item' as IndexableEntity }));
   }
 
   async findById(context: ServiceContext, id: string): Promise<Item | null> {

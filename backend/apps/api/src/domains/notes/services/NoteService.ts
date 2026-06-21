@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
+import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type Note, NoteEntity } from '../entities/NoteEntity';
 import { NoteCreatedEvent, NoteUpdatedEvent, NoteRemovedEvent } from '../events';
@@ -64,6 +65,38 @@ export class NoteService {
     const map = new Map(results.map((entity) => [entity.id, NoteEntity.toEgressType(entity)]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  /**
+   * Lightweight identifiers for the most-recent notes, for the unified
+   * search/explorer feed. Full entities are batch-resolved downstream.
+   */
+  async getEntitiesForNotes(
+    context: ServiceContext,
+    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    let query = this.noteRepository
+      .createQueryBuilder('note')
+      .select('note.id', 'id')
+      .where('note.user_id = :userId', { userId: context.userId });
+
+    if (options.startTime) {
+      query = query.andWhere('note.created_at >= :startTime', { startTime: options.startTime });
+    }
+
+    if (options.endTime) {
+      query = query.andWhere('note.created_at <= :endTime', { endTime: options.endTime });
+    }
+
+    query = query.orderBy('note.created_at', options.order ?? 'DESC');
+
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+
+    return rows.map((row) => ({ id: row.id, type: 'note' as IndexableEntity }));
   }
 
   async findAll(context: ServiceContext): Promise<Note[]> {

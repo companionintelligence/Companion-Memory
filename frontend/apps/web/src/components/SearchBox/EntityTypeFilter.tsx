@@ -40,7 +40,7 @@ export function EntityTypeFilter({ modal = true }: Props) {
   return (
     <DropdownMenu modal={modal} onOpenChange={() => setIsOpen(!isOpen)}>
       <Trigger>
-        <Button variant="outline">
+        <Button type="button" variant="outline">
           {getDisplayText()}
           <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </Button>

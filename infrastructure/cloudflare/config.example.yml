@@ -1,0 +1,32 @@
+# Cloudflare Tunnel config — expose a local CI-Server dev stack at
+# https://dev.companionintelligence.com.
+#
+# Copy to `config.yml`, fill in the tunnel UUID + credentials path, then run
+# `make tunnel`. See README.md for the one-time account/DNS setup.
+#
+# Topology: cloudflared terminates the public TLS at Cloudflare's edge and
+# forwards to this machine's shared Caddy on :443. It rewrites the Host header
+# to the stack's local host so Caddy's EXISTING route (/, /api, /graphql,
+# /static) serves the request unchanged — no Caddy/dev-stack changes required.
+
+tunnel: ci-dev
+credentials-file: /Users/REPLACE_ME/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  - hostname: dev.companionintelligence.com
+    service: https://localhost:443
+    originRequest:
+      # Caddy routes by Host. Rewrite to this worktree's stack host so the
+      # existing `make dev` route matches. The plain checkout is
+      # `ci-server.localhost`; a git worktree is `<repo>-<worktree>.localhost`
+      # (see the `make dev` banner / PROJECT_NAME). Override via `make tunnel
+      # TUNNEL_STACK_HOST=...` which regenerates this value.
+      httpHostHeader: ci-server.localhost
+      originServerName: ci-server.localhost
+      # The Caddy origin uses its internal (locally-trusted-only) CA over
+      # loopback, so skip verification for this hop. Edge<->browser TLS is
+      # Cloudflare's own public certificate and is unaffected.
+      noTLSVerify: true
+
+  # Required catch-all.
+  - service: http_status:404

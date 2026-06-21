@@ -10,6 +10,7 @@ export const PLACE_FRAGMENT = gql(`
     id
     name
     description
+    properties
   }
 `);
 

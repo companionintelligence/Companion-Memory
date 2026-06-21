@@ -15,6 +15,7 @@ import {
 } from 'three';
 
 import type { GraphLink, GraphNode } from '@/api/useGraphOverview';
+import { colorForRawType } from '@/components/entities/entityVisuals';
 import { useTheme } from '@/components/ThemePicker';
 
 export interface ForceGraph3DProps {
@@ -58,44 +59,15 @@ type GraphLinkObject = LinkObject & {
   properties: Record<string, unknown>;
 };
 
-const TYPE_COLOR_PALETTE = [
-  '#38bdf8',
-  '#a855f7',
-  '#f97316',
-  '#22c55e',
-  '#facc15',
-  '#ec4899',
-  '#14b8a6',
-  '#60a5fa',
-  '#f87171',
-  '#c084fc',
-];
-
 const MIN_LINK_DISTANCE = 20;
 const MAX_LINK_DISTANCE = 320;
 const MIN_LINK_STRENGTH = 0.015;
 const MAX_LINK_STRENGTH = 0.2;
 const STRENGTH_CURVE_EXPONENT = 2.2;
 
+// Colour nodes by entity type from the shared LifeScope palette.
 function getTypeColor(entityType: string): string {
-  if (!entityType) {
-    return TYPE_COLOR_PALETTE[0];
-  }
-
-  const normalized = entityType.toLowerCase();
-  if (normalized === 'location' || normalized === 'place') {
-    return '#22c55e';
-  }
-
-  let hash = 0;
-  for (let i = 0; i < entityType.length; i += 1) {
-    hash = (hash << 5) - hash + entityType.charCodeAt(i);
-    hash |= 0;
-  }
-
-  const index = Math.abs(hash) % TYPE_COLOR_PALETTE.length;
-
-  return TYPE_COLOR_PALETTE[index];
+  return colorForRawType(entityType);
 }
 
 function clampRelationshipStrength(value: number): number {

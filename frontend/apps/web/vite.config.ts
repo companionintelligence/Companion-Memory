@@ -123,7 +123,23 @@ export default defineConfig({
     // proxy forwards.
     port: Number(process.env.WEB_PORT) || 5173,
     strictPort: Boolean(process.env.WEB_PORT),
-    allowedHosts: ['.localhost', ...getAllowedHosts()],
+    // `.companionintelligence.com` allows serving a preview through a Cloudflare
+    // Tunnel (see infrastructure/cloudflare/). The tunnel normally rewrites the
+    // Host to <stack>.localhost, but this also permits preserving the public host.
+    allowedHosts: ['.localhost', '.companionintelligence.com', ...getAllowedHosts()],
+    // Dev-only: the app calls `/api/*` (and `/api/graphql`) as same-origin paths.
+    // Under `make dev`, the Caddy proxy strips the `/api` prefix and forwards to
+    // the API, so this block is never exercised there. When the Vite dev server
+    // is run standalone (e.g. the Claude preview), bridge `/api` to the local API
+    // the same way Caddy does — strip `/api`. Override the target per session with
+    // API_PROXY_TARGET (e.g. this worktree's API on its assigned port).
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY_TARGET || 'http://localhost:64669',
+        changeOrigin: true,
+        rewrite: (requestPath) => requestPath.replace(/^\/api/, ''),
+      },
+    },
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],
     },
