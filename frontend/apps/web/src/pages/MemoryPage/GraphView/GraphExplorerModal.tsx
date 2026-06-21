@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Badge, Button, Input, Separator, cn } from '@ci/shadcn';
 import { AlertCircle, Anchor, Loader2, Sparkles, Users } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { ForceGraph, ForceGraph3D } from '@/components/ForceGraph';
+import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { useAuth } from '@/hooks';
 import { Empty } from '@/pages/MemoryPage/Components';
 
@@ -111,6 +113,31 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const trimmedSearchQuery = searchParams?.get('search')?.trim() ?? '';
   const isSearchMode = trimmedSearchQuery.length > 0;
 
+  // Mirror the explorer's entity-type filter (shared via URL with List/Gallery/Map) onto the
+  // graph. Translates the explorer display types to the GraphQL vocabulary the graph endpoints
+  // expect. `undefined` => filter inactive (all types selected); an array (possibly empty) =>
+  // active filter forwarded to the backend.
+  const includedEntityTypesParam = searchParams?.get('includedEntityTypes') ?? '';
+  const excludedEntityTypesParam = searchParams?.get('excludedEntityTypes') ?? '';
+
+  const explorerIncludeTypes = useMemo<string[] | undefined>(() => {
+    const included = includedEntityTypesParam.split(',').filter(Boolean);
+    const excluded = excludedEntityTypesParam.split(',').filter(Boolean);
+
+    const selectedDisplayTypes =
+      included.length > 0
+        ? AVAILABLE_ENTITY_TYPES.filter((type) => included.includes(type))
+        : AVAILABLE_ENTITY_TYPES.filter((type) => !excluded.includes(type));
+
+    if (selectedDisplayTypes.length >= AVAILABLE_ENTITY_TYPES.length) {
+      return undefined;
+    }
+
+    return selectedDisplayTypes
+      .map((type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP])
+      .filter((type): type is string => Boolean(type));
+  }, [includedEntityTypesParam, excludedEntityTypesParam]);
+
   // Explorer's `tags` URL param (comma-separated labels). Present (even empty)
   // means the tag filter is active; absent leaves the graph unfiltered.
   const rawTags = searchParams?.get('tags');
@@ -124,7 +151,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const [{ authToken }] = useAuth();
   const { loading, error, subgraph, userEntityId, quickStats, tagMatchedEntityIds } = useGraphOverview(
     authToken,
-    { maxDepth: 3, tags: tagsParam },
+    { maxDepth: 3, includeTypes: explorerIncludeTypes, tags: tagsParam },
   );
   const isTagFilterActive = tagMatchedEntityIds != null;
 
@@ -227,6 +254,10 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         setSearchError(null);
 
         const params = new URLSearchParams({ query: trimmedSearchQuery, limit: '10' });
+        if (explorerIncludeTypes !== undefined) {
+          params.set('includeTypes', explorerIncludeTypes.join(','));
+        }
+
         const response = await fetch(`/api/graph/search?${params.toString()}`, {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -332,7 +363,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       cancelled = true;
       controller.abort();
     };
-  }, [authToken, isSearchMode, spawnLimit, trimmedSearchQuery]);
+  }, [authToken, isSearchMode, spawnLimit, trimmedSearchQuery, explorerIncludeTypes]);
 
   useEffect(() => {
     if (!isSearchMode) {

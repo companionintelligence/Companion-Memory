@@ -1,6 +1,19 @@
 // Google Maps utility functions
 
+// Optional build-time key. Route drawing relies on the billed Directions API,
+// so when this is unset the route layer stays disabled rather than flooding the
+// console with REQUEST_DENIED / "enable Billing" errors.
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
 let googleMapsLoadingPromise: Promise<void> | null = null;
+
+/**
+ * Whether a Google Maps API key is configured. Callers should gate on this
+ * before invoking loadGoogleMaps / the Directions API.
+ */
+export function isGoogleMapsConfigured(): boolean {
+  return typeof GOOGLE_MAPS_API_KEY === 'string' && GOOGLE_MAPS_API_KEY.length > 0;
+}
 
 /**
  * Load Google Maps API and return a promise that resolves when ready
@@ -22,8 +35,14 @@ export function loadGoogleMaps(): Promise<void> {
 
   // Create loading promise
   googleMapsLoadingPromise = new Promise((resolve, reject) => {
-    // Use the provided Google Maps API key
-    const apiKey = 'AIzaSyCPwiAuP9LNzBm9sePxdkD-kED5rZAv5WI';
+    // Bail out (without touching the network) when no key is configured.
+    if (!isGoogleMapsConfigured()) {
+      reject(new Error('Google Maps API key is not configured (VITE_GOOGLE_MAPS_API_KEY).'));
+
+      return;
+    }
+
+    const apiKey = GOOGLE_MAPS_API_KEY;
 
     // Check if script is already loading
     const existingScripts = document.querySelectorAll('script[src*="maps.googleapis.com"]');

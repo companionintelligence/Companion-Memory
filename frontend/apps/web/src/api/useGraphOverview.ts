@@ -111,6 +111,14 @@ function buildSubgraph(
 export interface GraphOverviewOptions {
   maxDepth?: number;
   refreshKey?: number | string;
+  /**
+   * Explorer entity types (GraphQL vocabulary, e.g. `person`, `place`) the user has selected.
+   * Forwarded to `/api/graph/data` so the graph honors the explorer's entity-type filter.
+   *
+   * `undefined` means the filter is inactive (show all). An array — even an empty one — means
+   * the filter is active; an empty array excludes every mappable type (keeping connective nodes).
+   */
+  includeTypes?: string[];
   // Comma-separated tag labels from the explorer's `tags` URL param. `undefined`
   // leaves the filter inactive; any string (including '') activates it, honoring
   // the "filter active = present, even if empty" contract.
@@ -123,6 +131,8 @@ export function useGraphOverview(
 ): GraphOverviewState {
   const maxDepth = options.maxDepth ?? 1;
   const refreshKey = options.refreshKey ?? 0;
+  const includeTypesActive = options.includeTypes !== undefined;
+  const includeTypesKey = (options.includeTypes ?? []).join(',');
   const tags = options.tags;
 
   const [state, setState] = useState<GraphOverviewState>({
@@ -149,10 +159,19 @@ export function useGraphOverview(
           credentials: 'include',
         };
 
-        // Send `tags` only when the filter is active (param present), so an
-        // absent param leaves the backend returning the whole graph.
-        const dataUrl =
-          tags !== undefined ? `/api/graph/data?tags=${encodeURIComponent(tags)}` : '/api/graph/data';
+        // Forward each filter only when active (param present), so absent params
+        // leave the backend returning the whole graph.
+        const dataParams = new URLSearchParams();
+        if (includeTypesActive) {
+          dataParams.set('includeTypes', includeTypesKey);
+        }
+
+        if (tags !== undefined) {
+          dataParams.set('tags', tags);
+        }
+
+        const dataQuery = dataParams.toString();
+        const dataUrl = dataQuery ? `/api/graph/data?${dataQuery}` : '/api/graph/data';
 
         const [contextResponse, graphResponse] = await Promise.all([
           fetchJson<GraphContextResponse>('/api/graph/context', { ...baseInit }),
@@ -213,7 +232,7 @@ export function useGraphOverview(
     return () => {
       cancelled = true;
     };
-  }, [authToken, maxDepth, refreshKey, tags]);
+  }, [authToken, maxDepth, refreshKey, includeTypesActive, includeTypesKey, tags]);
 
   return useMemo(() => state, [state]);
 }
