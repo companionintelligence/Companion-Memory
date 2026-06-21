@@ -18,6 +18,25 @@ import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { Paginator } from '../utils/Paginator';
 
+/**
+ * Resolve an event reference to the raw uuid stored in ci.content.event_id.
+ * Accepts either a relay global id (base64 "event:<uuid>", exactly what
+ * createEvent returns) or a bare uuid, so a client can link content using the
+ * same id it got back from createEvent.
+ */
+export function resolveEventId(eventId: string): string {
+  try {
+    const { type, id } = GlobalUID.decode(eventId);
+    if (type === 'event' && id) {
+      return id;
+    }
+  } catch {
+    // Not a global id — treat the input as an already-raw uuid.
+  }
+
+  return eventId;
+}
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => ContentType)
 export class ContentResolver {
@@ -43,7 +62,7 @@ export class ContentResolver {
       external_id: input.externalId,
       source_url: input.sourceUrl,
       source_data: input.sourceData,
-      event: input.eventId ? { id: input.eventId } : undefined,
+      event: input.eventId ? { id: resolveEventId(input.eventId) } : undefined,
     });
 
     return ContentType.toType(entity[0]);
