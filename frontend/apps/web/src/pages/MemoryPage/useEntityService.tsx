@@ -8,8 +8,8 @@ import { type ResultOf } from '@graphql-typed-document-node/core';
 import { gql } from '@/graphql';
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!]) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes }) {
+  query Search($query: String, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!]) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags }) {
       edges {
         node {
           __typename
@@ -72,15 +72,22 @@ function useEntityService({
   includeTypes,
   excludeTypes,
   eventTypes,
+  tags,
 }: {
   searchQuery: string;
   includeTypes?: string[];
   excludeTypes?: string[];
   eventTypes?: string[];
+  tags?: string[];
 }): ReturnType {
+  // The backend rejects sending both `query` and `tags`, so a free-text search
+  // takes precedence: tags only filter when there is no query.
+  const useTagSearch = (tags?.length ?? 0) > 0 && !searchQuery.trim();
+
   const { data, loading, error } = useQuery(SEARCH_QUERY, {
     variables: {
-      query: searchQuery,
+      query: useTagSearch ? null : searchQuery,
+      tags: useTagSearch ? tags : [],
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
       excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
       eventTypes: eventTypes || [],
