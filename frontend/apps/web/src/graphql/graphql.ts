@@ -338,6 +338,7 @@ export type CreateConnectionSyncJobPayload = {
 };
 
 export type CreateContentInput = {
+  eventId?: InputMaybe<Scalars['ID']['input']>;
   externalId?: InputMaybe<Scalars['String']['input']>;
   mimetype?: InputMaybe<Scalars['String']['input']>;
   sourceData?: InputMaybe<Scalars['JSON']['input']>;

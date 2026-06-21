@@ -43,6 +43,7 @@ export class ContentResolver {
       external_id: input.externalId,
       source_url: input.sourceUrl,
       source_data: input.sourceData,
+      event: input.eventId ? { id: input.eventId } : undefined,
     });
 
     return ContentType.toType(entity[0]);

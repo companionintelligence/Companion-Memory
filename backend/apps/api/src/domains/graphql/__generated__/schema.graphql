@@ -284,6 +284,7 @@ type CreateConnectionSyncJobPayload {
 }
 
 input CreateContentInput {
+  eventId: ID
   externalId: String
   mimetype: String
   sourceData: JSON
