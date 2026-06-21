@@ -23,6 +23,25 @@ export class ConceptService {
   }
 
   async create(context: UserServiceContext, data: CreateConceptDto): Promise<Concept> {
+    // Idempotency on the stable external key (see PersonService.create) — a
+    // re-synced concept (email thread, book, topic) must not duplicate.
+    const linkedWhere =
+      data.linkedTable && data.linkedId
+        ? {
+            entityType: 'Concept',
+            linkedTable: data.linkedTable,
+            linkedId: data.linkedId,
+            user: { id: context.userId },
+          }
+        : null;
+
+    if (linkedWhere) {
+      const existing = await this.conceptRepository.findOne({ where: linkedWhere });
+      if (existing) {
+        return ConceptEntity.toEgressType(existing);
+      }
+    }
+
     const instance = this.conceptRepository.create({
       id: data.id ?? uuid7(),
       name: data.name ?? null,
@@ -38,7 +57,19 @@ export class ConceptService {
       properties: data.properties ?? {},
     });
 
-    const entity = await this.conceptRepository.save(instance);
+    let entity: ConceptEntity;
+    try {
+      entity = await this.conceptRepository.save(instance);
+    } catch (err) {
+      if (linkedWhere && (err as { code?: string })?.code === '23505') {
+        const existing = await this.conceptRepository.findOne({ where: linkedWhere });
+        if (existing) {
+          return ConceptEntity.toEgressType(existing);
+        }
+      }
+
+      throw err;
+    }
 
     await this.eventService.send(ConceptCreatedEvent, {
       conceptId: entity.id,

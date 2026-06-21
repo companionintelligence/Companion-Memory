@@ -238,6 +238,8 @@ input CreateAnswerInput {
 
 input CreateConceptInput {
   description: String
+  linkedId: String
+  linkedTable: String
   name: String!
 }
 
@@ -344,6 +346,8 @@ type CreateNotePayload {
 
 input CreatePersonInput {
   description: String
+  linkedId: String
+  linkedTable: String
   name: String!
 }
 

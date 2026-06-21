@@ -82,6 +82,8 @@ export class ConceptResolver {
     const entity = await this.conceptService.create(serviceContext, {
       name: input.name,
       description: input.description,
+      linkedTable: input.linkedTable,
+      linkedId: input.linkedId,
     });
 
     if (entity == null) {

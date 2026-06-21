@@ -23,7 +23,27 @@ export class PersonService {
   }
 
   async create(context: UserServiceContext, data: CreatePersonDto): Promise<Person> {
-    const instance = await this.personRepository.create({
+    // Idempotency: (owner_user_id, entity_type, linked_table, linked_id) is the
+    // stable external key a capture source carries. Resolving-or-creating the
+    // same linked person (a re-sync, a retry) must NOT duplicate it.
+    const linkedWhere =
+      data.linkedTable && data.linkedId
+        ? {
+            entityType: 'Person',
+            linkedTable: data.linkedTable,
+            linkedId: data.linkedId,
+            user: { id: context.userId },
+          }
+        : null;
+
+    if (linkedWhere) {
+      const existing = await this.personRepository.findOne({ where: linkedWhere });
+      if (existing) {
+        return PersonEntity.toEgressType(existing);
+      }
+    }
+
+    const instance = this.personRepository.create({
       id: data.id || uuid7(),
       name: data.name,
       description: data.description,
@@ -38,10 +58,24 @@ export class PersonService {
       properties: data.properties || {},
     });
 
-    const entity = await this.personRepository.save(instance);
+    let entity: PersonEntity;
+    try {
+      entity = await this.personRepository.save(instance);
+    } catch (err) {
+      // Lost a race to a concurrent insert of the same linked key (23505) —
+      // return the winner.
+      if (linkedWhere && (err as { code?: string })?.code === '23505') {
+        const existing = await this.personRepository.findOne({ where: linkedWhere });
+        if (existing) {
+          return PersonEntity.toEgressType(existing);
+        }
+      }
+
+      throw err;
+    }
 
     await this.eventService.send(PersonCreatedEvent, {
-      personId: instance.id,
+      personId: entity.id,
     });
 
     return PersonEntity.toEgressType(entity);

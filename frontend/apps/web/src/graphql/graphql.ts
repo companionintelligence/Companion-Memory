@@ -289,6 +289,8 @@ export type CreateAnswerInput = {
 
 export type CreateConceptInput = {
   description?: InputMaybe<Scalars['String']['input']>;
+  linkedId?: InputMaybe<Scalars['String']['input']>;
+  linkedTable?: InputMaybe<Scalars['String']['input']>;
   name: Scalars['String']['input'];
 };
 
@@ -400,6 +402,8 @@ export type CreateNotePayload = {
 
 export type CreatePersonInput = {
   description?: InputMaybe<Scalars['String']['input']>;
+  linkedId?: InputMaybe<Scalars['String']['input']>;
+  linkedTable?: InputMaybe<Scalars['String']['input']>;
   name: Scalars['String']['input'];
 };
 
