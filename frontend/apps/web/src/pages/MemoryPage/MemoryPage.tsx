@@ -7,6 +7,8 @@ import { ResponsiveLoader } from '@/components/ResponsiveLoader';
 
 import { EntityServiceProvider } from '../MemoryPage/useEntityService';
 
+import { parseBbox } from './bbox';
+
 const DesktopPage = lazy(() => import('./DesktopMemoryPage'));
 const MobilePage = lazy(() => import('./MobileMemoryPage'));
 
@@ -32,6 +34,7 @@ export function MemoryPage() {
           people: searchParams.get('people')?.split(',').filter(Boolean) || undefined,
           places: searchParams.get('places')?.split(',').filter(Boolean) || undefined,
           hasLocation: searchParams.get('hasLocation') === '1' || undefined,
+          bbox: parseBbox(searchParams.get('bbox')),
           semantic: searchParams.get('semantic') === '1' || undefined,
         },
       ]}

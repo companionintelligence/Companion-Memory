@@ -1,4 +1,4 @@
-import { Field, Int, InputType } from '@nestjs/graphql';
+import { Field, Float, Int, InputType } from '@nestjs/graphql';
 
 import { IndexableEntity } from '@ci/domains/search-next';
 
@@ -63,6 +63,14 @@ export class SearchInput {
   /** "Where" — when true, only events carrying geographic coordinates are returned (located only). */
   @Field(() => Boolean, { nullable: true })
   hasLocation?: boolean;
+
+  /**
+   * "Where" (viewport) — geographic bounding box as [minLon, minLat, maxLon, maxLat]
+   * in WGS84 / EPSG:4326. When set, only events whose coordinates fall inside the box
+   * are returned (the map view's "Search this area"). Implies located-only.
+   */
+  @Field(() => [Float], { nullable: true })
+  bbox?: number[];
 
   /** Force conceptual (embedding) ranking for the free-text query instead of the auto heuristic. */
   @Field(() => Boolean, { nullable: true })
