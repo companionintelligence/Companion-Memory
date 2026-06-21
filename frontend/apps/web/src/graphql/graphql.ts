@@ -106,6 +106,13 @@ export type AnswerType = Node & {
   question: QuestionType;
 };
 
+export type ApproveAppletPairingPayload = {
+  __typename?: 'ApproveAppletPairingPayload';
+  deviceId?: Maybe<Scalars['String']['output']>;
+  errorMessage?: Maybe<Scalars['String']['output']>;
+  success: Scalars['Boolean']['output'];
+};
+
 export type BrowserActivityConnection = Connection & {
   __typename?: 'BrowserActivityConnection';
   edges: Array<BrowserActivityEdge>;
@@ -607,6 +614,25 @@ export type ForecastType = {
   systemStatus: Scalars['String']['output'];
 };
 
+export type IngestUserSnapshotInput = {
+  cwd?: InputMaybe<Scalars['String']['input']>;
+  deviceId: Scalars['String']['input'];
+  focusApp?: InputMaybe<Scalars['String']['input']>;
+  focusTitle?: InputMaybe<Scalars['String']['input']>;
+  fsEventCount: Scalars['Int']['input'];
+  monotonicMs: Scalars['Float']['input'];
+  observedAt: Scalars['String']['input'];
+  payload: Scalars['JSON']['input'];
+  sessionId: Scalars['String']['input'];
+  snapshotKind: Scalars['String']['input'];
+};
+
+export type IngestUserSnapshotPayload = {
+  __typename?: 'IngestUserSnapshotPayload';
+  errorMessage?: Maybe<Scalars['String']['output']>;
+  success: Scalars['Boolean']['output'];
+};
+
 export type InsightItemType = {
   __typename?: 'InsightItemType';
   keyActions: Array<Scalars['String']['output']>;
@@ -682,6 +708,7 @@ export type MessageType = Node & {
 
 export type Mutation = {
   __typename?: 'Mutation';
+  approveAppletPairing: ApproveAppletPairingPayload;
   createAnswer: AnswerType;
   createConcept: CreateConceptPayload;
   createConnection: CreateConnectionPayload;
@@ -705,6 +732,7 @@ export type Mutation = {
   deleteProviderKey: Scalars['Boolean']['output'];
   deleteRelationship: DeleteByIdPayload;
   deleteSavedSearch: DeleteByIdPayload;
+  ingestUserSnapshot: IngestUserSnapshotPayload;
   /** Mark an action as dismissed */
   markActionAsDismissed?: Maybe<ActionType>;
   /** Mark an action as seen */
@@ -718,6 +746,7 @@ export type Mutation = {
   removeEvent: Scalars['Boolean']['output'];
   removePlace: Scalars['Boolean']['output'];
   removeQuestion: Scalars['Boolean']['output'];
+  startPairing: StartPairingPayload;
   tagEntities: Array<TaggableEntityType>;
   /** Manually trigger the HBPE pipeline for the current user */
   triggerHbpe: Scalars['String']['output'];
@@ -736,6 +765,11 @@ export type Mutation = {
   updateQuestion?: Maybe<QuestionType>;
   updateRelationship: UpdateRelationshipPayload;
   updateSavedSearch: UpdateSavedSearchPayload;
+};
+
+
+export type MutationApproveAppletPairingArgs = {
+  pairingToken: Scalars['String']['input'];
 };
 
 
@@ -851,6 +885,11 @@ export type MutationDeleteRelationshipArgs = {
 
 export type MutationDeleteSavedSearchArgs = {
   input: DeleteByIdInput;
+};
+
+
+export type MutationIngestUserSnapshotArgs = {
+  input: IngestUserSnapshotInput;
 };
 
 
@@ -1014,6 +1053,18 @@ export type PageInfo = {
   startCursor?: Maybe<Scalars['String']['output']>;
 };
 
+export type PairingStatusPayload = {
+  __typename?: 'PairingStatusPayload';
+  appletAccessToken?: Maybe<Scalars['String']['output']>;
+  deviceId?: Maybe<Scalars['String']['output']>;
+  errorMessage?: Maybe<Scalars['String']['output']>;
+  status: Scalars['String']['output'];
+  success: Scalars['Boolean']['output'];
+  userEmail?: Maybe<Scalars['String']['output']>;
+  userId?: Maybe<Scalars['String']['output']>;
+  userName?: Maybe<Scalars['String']['output']>;
+};
+
 export type PersonConnection = Connection & {
   __typename?: 'PersonConnection';
   edges: Array<PersonEdge>;
@@ -1170,6 +1221,7 @@ export type Query = {
   note?: Maybe<NoteType>;
   notes: NoteConnection;
   oAuthCallbackUrl: Scalars['String']['output'];
+  pairingStatus: PairingStatusPayload;
   people: PersonConnection;
   person?: Maybe<PersonType>;
   place?: Maybe<PlaceType>;
@@ -1363,6 +1415,12 @@ export type QueryNotesArgs = {
   before?: InputMaybe<Scalars['String']['input']>;
   first?: InputMaybe<Scalars['Int']['input']>;
   last?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type QueryPairingStatusArgs = {
+  pairingToken: Scalars['String']['input'];
+  pollKey: Scalars['String']['input'];
 };
 
 
@@ -1586,6 +1644,15 @@ export type SearchResultEdge = {
 };
 
 export type SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType;
+
+export type StartPairingPayload = {
+  __typename?: 'StartPairingPayload';
+  errorMessage?: Maybe<Scalars['String']['output']>;
+  pairingPath?: Maybe<Scalars['String']['output']>;
+  pairingToken?: Maybe<Scalars['String']['output']>;
+  pollKey?: Maybe<Scalars['String']['output']>;
+  success: Scalars['Boolean']['output'];
+};
 
 export type SummaryConnection = Connection & {
   __typename?: 'SummaryConnection';
