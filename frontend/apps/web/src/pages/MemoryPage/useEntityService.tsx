@@ -26,6 +26,23 @@ const SEARCH_QUERY = gql(`
             id
           }
 
+          # Unmasked media fields so the gallery can build real thumbnails and a
+          # cross-item lightbox without per-item useFragment calls. Aliased to
+          # stay clear of the grid fragments' own selections.
+          ... on FileType {
+            galleryContentType: contentType
+            galleryFilename: filename
+            galleryPreviewUrl: previewUrl
+            gallerySourceUrl: sourceUrl
+          }
+
+          ... on ContentType {
+            galleryMimetype: mimetype
+            galleryTitle: title
+            galleryContentUrl: url
+            galleryContentSourceUrl: sourceUrl
+          }
+
           ...AnswerGridItemData
           ...BrowserActivityGridItemData
           ...CommunicationGridItemData
