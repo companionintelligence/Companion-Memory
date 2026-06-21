@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
+import { DataSource, In, IsNull, Repository, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -83,9 +83,30 @@ export class EventService {
           toCreate.sharingLevel = item.sharing_level;
         }
 
+        // Idempotency: (source_type, source_system, source_id) is the stable
+        // provenance triple capture sources carry. Re-ingesting the same event
+        // — flaky-client retries, a full importer re-sync — must NOT create a
+        // duplicate. When the triple is present, return the existing row.
+        const sourceWhere: FindOptionsWhere<EventEntity> | null =
+          item.source_type && item.source_id
+            ? {
+                sourceType: item.source_type,
+                sourceSystem: item.source_system ?? IsNull(),
+                sourceId: item.source_id,
+                user: { id: context.userId },
+              }
+            : null;
+
+        if (sourceWhere) {
+          const existing = await this.eventRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return EventEntity.toEgressType(existing);
+          }
+        }
+
         const id = item.id ?? uuidv7();
 
-        const event = await this.eventRepository.create({
+        const event = this.eventRepository.create({
           ...toCreate,
           id,
           user: {
@@ -93,7 +114,21 @@ export class EventService {
           },
         });
 
-        const eventResult = await this.eventRepository.save(event);
+        let eventResult: EventEntity;
+        try {
+          eventResult = await this.eventRepository.save(event);
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple (the partial-
+          // unique index raised 23505) — fetch and return the winner.
+          if (sourceWhere && (err as { code?: string })?.code === '23505') {
+            const existing = await this.eventRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return EventEntity.toEgressType(existing);
+            }
+          }
+
+          throw err;
+        }
 
         await this.signallingEventService.send(EventCreatedEvent, {
           eventId: eventResult.id,
