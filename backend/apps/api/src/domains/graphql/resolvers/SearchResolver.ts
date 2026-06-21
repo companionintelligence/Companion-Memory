@@ -23,6 +23,7 @@ import { ConceptType } from '../types/ConceptType';
 import { ContentType } from '../types/ContentType';
 import { EventType } from '../types/EventType';
 import { FileType } from '../types/FileType';
+import { GlobalUID } from '../types/GlobalUID';
 import { ItemType } from '../types/ItemType';
 import { NoteType } from '../types/NoteType';
 import { PersonType } from '../types/PersonType';
@@ -65,7 +66,7 @@ export class SearchResolver {
     if (input.tags && input.tags.length > 0) {
       const tagResults = await this.searchByTags(serviceContext, input.tags);
 
-      results.push(...tagResults);
+      results.push(...this.filterEventsByType(tagResults, input.eventTypes));
     } else if (input.query != null && input.query.length > 0) {
       const queryResults = await this.searchByQuery(serviceContext, {
         query: input.query,
@@ -73,7 +74,7 @@ export class SearchResolver {
         excludeTypes: input.excludeTypes,
       });
 
-      results.push(...queryResults);
+      results.push(...this.filterEventsByType(queryResults, input.eventTypes));
     } else {
       const noInputs =
         (!input.includeTypes || input.includeTypes.length === 0) &&
@@ -85,6 +86,7 @@ export class SearchResolver {
         excludeTypes: input.excludeTypes,
         startTime: input.startTime ? new Date(input.startTime) : undefined,
         endTime: noInputs ? new Date() : input.endTime ? new Date(input.endTime) : undefined,
+        eventTypes: input.eventTypes,
       });
 
       results.push(...queryResults);
@@ -150,11 +152,13 @@ export class SearchResolver {
       excludeTypes,
       startTime,
       endTime,
+      eventTypes,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       startTime?: Date;
       endTime?: Date;
+      eventTypes?: string[];
     },
   ): Promise<SearchResult[]> {
     const eventOptions: {
@@ -162,10 +166,15 @@ export class SearchResolver {
       order: FindOptionsOrder<EventEntity>;
       startTime?: Date;
       endTime?: Date;
+      eventTypes?: string[];
     } = {
       limit: 25,
       order: { startTime: 'DESC' },
     };
+
+    if (eventTypes && eventTypes.length > 0) {
+      eventOptions.eventTypes = eventTypes;
+    }
 
     const browserActivityOptions: {
       limit: number;
@@ -227,6 +236,32 @@ export class SearchResolver {
         'time' in b && b.time ? b.time : 'startTime' in b && b.startTime ? b.startTime : new Date();
 
       return bTime.getTime() - aTime.getTime();
+    });
+  }
+
+  /**
+   * Narrows already-resolved results to the requested event types ("how things
+   * happened"). Only entities of type `event` are affected — every other entity
+   * type passes through untouched. Used by the query/tags paths, where the event
+   * filter can't be pushed down into the source query.
+   */
+  private filterEventsByType(results: SearchResult[], eventTypes?: string[]): SearchResult[] {
+    if (!eventTypes || eventTypes.length === 0) {
+      return results;
+    }
+
+    const allowed = new Set(eventTypes);
+
+    return results.filter((result) => {
+      const { type } = GlobalUID.decode((result as { id: string }).id);
+
+      if (type !== 'event') {
+        return true;
+      }
+
+      const { eventType } = result as EventType;
+
+      return eventType != null && allowed.has(eventType);
     });
   }
 

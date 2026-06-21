@@ -102,6 +102,14 @@ function buildSubgraph(
 export interface GraphOverviewOptions {
   maxDepth?: number;
   refreshKey?: number | string;
+  /**
+   * Explorer entity types (GraphQL vocabulary, e.g. `person`, `place`) the user has selected.
+   * Forwarded to `/api/graph/data` so the graph honors the explorer's entity-type filter.
+   *
+   * `undefined` means the filter is inactive (show all). An array — even an empty one — means
+   * the filter is active; an empty array excludes every mappable type (keeping connective nodes).
+   */
+  includeTypes?: string[];
 }
 
 export function useGraphOverview(
@@ -110,6 +118,8 @@ export function useGraphOverview(
 ): GraphOverviewState {
   const maxDepth = options.maxDepth ?? 1;
   const refreshKey = options.refreshKey ?? 0;
+  const includeTypesActive = options.includeTypes !== undefined;
+  const includeTypesKey = (options.includeTypes ?? []).join(',');
 
   const [state, setState] = useState<GraphOverviewState>({
     loading: true,
@@ -134,9 +144,13 @@ export function useGraphOverview(
           credentials: 'include',
         };
 
+        const dataUrl = includeTypesActive
+          ? `/api/graph/data?includeTypes=${encodeURIComponent(includeTypesKey)}`
+          : '/api/graph/data';
+
         const [contextResponse, graphResponse] = await Promise.all([
           fetchJson<GraphContextResponse>('/api/graph/context', { ...baseInit }),
-          fetchJson<GraphDataResponse>('/api/graph/data', { ...baseInit }),
+          fetchJson<GraphDataResponse>(dataUrl, { ...baseInit }),
         ]);
 
         if (!contextResponse?.success || !contextResponse.context) {
@@ -189,7 +203,7 @@ export function useGraphOverview(
     return () => {
       cancelled = true;
     };
-  }, [authToken, maxDepth, refreshKey]);
+  }, [authToken, maxDepth, refreshKey, includeTypesActive, includeTypesKey]);
 
   return useMemo(() => state, [state]);
 }

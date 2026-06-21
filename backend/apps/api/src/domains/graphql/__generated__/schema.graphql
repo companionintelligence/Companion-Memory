@@ -826,6 +826,9 @@ type Query {
   content(id: ID!): ContentType
   contents(after: String, before: String, first: Int, last: Int): ContentConnection!
   event(id: ID!): EventType
+
+  """Distinct event types ("how things happened") present for the user."""
+  eventTypes: [String!]!
   events(after: String, before: String, first: Int, last: Int): EventConnection!
 
   """Get actions for the feed, prioritizing unseen actions"""
@@ -932,6 +935,7 @@ type SavedSearchType implements Node {
 
 input SearchInput {
   endTime: String
+  eventTypes: [String!]
   excludeTypes: [String!]
   includeTypes: [String!]
   query: String

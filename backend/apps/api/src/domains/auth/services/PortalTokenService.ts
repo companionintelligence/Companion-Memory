@@ -52,7 +52,12 @@ export class PortalTokenService implements PortalTokenVerifier {
     try {
       ({ payload } = await jwtVerify(token, this.getJwks(), {
         issuer: config.auth.portal.issuer,
-        audience: config.auth.portal.audience,
+        // The portal issues per-client tokens (aud === client_id), so accept any
+        // first-party client audience. PORTAL_OIDC_AUDIENCE is a comma-separated list.
+        audience: config.auth.portal.audience
+          .split(',')
+          .map((a) => a.trim())
+          .filter(Boolean),
       }));
     } catch {
       // Wrong signer / issuer / audience / expired — not a valid portal token.
