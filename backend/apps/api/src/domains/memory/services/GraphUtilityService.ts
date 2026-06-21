@@ -82,6 +82,7 @@ export class GraphUtilityService {
     ownerUserId: string,
     filters: {
       entityType?: string;
+      excludeEntityTypes?: string[];
       nameContains?: string;
       propertyEquals?: Record<string, string | number | boolean>;
     } = {},
@@ -99,6 +100,12 @@ export class GraphUtilityService {
 
     if (filters.entityType) {
       query = query.andWhere('entity.entity_type = :entityType', { entityType: filters.entityType });
+    }
+
+    if (filters.excludeEntityTypes && filters.excludeEntityTypes.length > 0) {
+      query = query.andWhere('entity.entity_type NOT IN (:...excludeEntityTypes)', {
+        excludeEntityTypes: filters.excludeEntityTypes,
+      });
     }
 
     if (filters.nameContains) {
