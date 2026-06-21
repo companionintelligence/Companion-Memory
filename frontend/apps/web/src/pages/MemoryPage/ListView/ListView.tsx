@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { GlobalUID } from '@ci/common';
 import { Images } from '@ci/shadcn/icons';
@@ -24,6 +24,10 @@ import { PlaceRow } from './rows/PlaceRow';
 import { ThreadRow } from './rows/ThreadRow';
 import { SearchTable } from './SearchTable';
 
+// Render the fetched set in pages, growing as the user scrolls, so the DOM
+// stays light and the list feels responsive even with hundreds of results.
+const PAGE_SIZE = 40;
+
 export function ListView() {
   const navigate = useNavigate();
 
@@ -33,6 +37,44 @@ export function ListView() {
   const clearActiveItem = () => setActiveItem(null);
 
   const [{ data }] = useEntityService();
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset paging whenever the underlying result set changes (e.g. a new search).
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [data]);
+
+  const hasMore = visibleCount < data.length;
+
+  // Reveal the next page when the sentinel scrolls into view.
+  useEffect(() => {
+    if (!hasMore) {
+      return;
+    }
+
+    const sentinel = sentinelRef.current;
+
+    if (!sentinel) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((count) => Math.min(count + PAGE_SIZE, data.length));
+        }
+      },
+      { root: scrollRef.current, rootMargin: '400px' },
+    );
+
+    observer.observe(sentinel);
+
+    return () => observer.disconnect();
+  }, [hasMore, data.length]);
 
   if (data.length === 0) {
     return (
@@ -55,9 +97,10 @@ export function ListView() {
 
   return (
     <>
-      <SearchTable className="p-4 pt-0">
-        <SearchTable.RowGroup>
-          {data.map((item) => {
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+        <SearchTable>
+          <SearchTable.RowGroup>
+            {data.slice(0, visibleCount).map((item) => {
             switch (item.__typename) {
               case 'AnswerType':
                 return <AnswerRow key={item.id} answer={item} onClick={() => {}} />;
@@ -162,9 +205,16 @@ export function ListView() {
               default:
                 return null;
             }
-          })}
-        </SearchTable.RowGroup>
-      </SearchTable>
+            })}
+          </SearchTable.RowGroup>
+        </SearchTable>
+
+        {hasMore && <div ref={sentinelRef} className="h-8" />}
+
+        <div className="py-3 text-center text-xs text-muted-foreground">
+          Showing {Math.min(visibleCount, data.length)} of {data.length}
+        </div>
+      </div>
 
       <FileModal fileId={activeItem ?? null} onClose={clearActiveItem} />
 
