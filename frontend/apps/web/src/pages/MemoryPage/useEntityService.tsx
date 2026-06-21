@@ -8,8 +8,8 @@ import { type ResultOf } from '@graphql-typed-document-node/core';
 import { gql } from '@/graphql';
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!]) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!]) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes }) {
       edges {
         node {
           __typename
@@ -71,16 +71,19 @@ function useEntityService({
   searchQuery,
   includeTypes,
   excludeTypes,
+  eventTypes,
 }: {
   searchQuery: string;
   includeTypes?: string[];
   excludeTypes?: string[];
+  eventTypes?: string[];
 }): ReturnType {
   const { data, loading, error } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
       excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
+      eventTypes: eventTypes || [],
     },
     fetchPolicy: 'cache-and-network',
   });

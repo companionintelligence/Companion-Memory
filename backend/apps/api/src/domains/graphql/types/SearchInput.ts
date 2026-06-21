@@ -16,6 +16,11 @@ export class SearchInput {
   @Field(() => [String], { nullable: true })
   tags?: string[];
 
+  // "How things happened" — narrows event results to these event types
+  // (visited, messaged, called, ...). Only affects entities of type `event`.
+  @Field(() => [String], { nullable: true })
+  eventTypes?: string[];
+
   @Field(() => String, { nullable: true })
   startTime?: string;
 

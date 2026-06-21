@@ -4,6 +4,7 @@ import { Save } from '@ci/shadcn/icons';
 import { useDropdown } from '@/components/SearchBox/useDropdown';
 
 import { EntityTypeFilter } from './EntityTypeFilter';
+import { HowFilter } from './HowFilter';
 
 interface Props {
   saveSupported?: boolean;
@@ -18,7 +19,10 @@ export function DropdownContent({ onSave, saveSupported = true }: Props) {
       <div className="p-4">
         <h3 className="text-xs font-bold uppercase">Filters</h3>
 
-        <EntityTypeFilter modal={false} />
+        <div className="flex flex-wrap items-center gap-2">
+          <EntityTypeFilter modal={false} />
+          <HowFilter modal={false} />
+        </div>
       </div>
       {saveSupported && (
         <Button
