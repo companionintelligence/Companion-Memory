@@ -10,8 +10,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, first: $first, after: $after }) {
       pageInfo {
         hasNextPage
         endCursor
@@ -62,6 +62,25 @@ const SEARCH_QUERY = gql(`
 
 export type EntityItem = ResultOf<typeof SEARCH_QUERY>['search']['edges'][number]['node'];
 
+/**
+ * Lightweight entity shape for sources that lack full GraphQL entity data —
+ * e.g. graph nodes from the REST `/api/graph/*` endpoints. Routed to
+ * GenericDetails in the shared EntityDetails sheet. The `__typename` sentinel
+ * is intentionally not a real GraphQL type so it never collides with the
+ * EntityItem union members (which all end in `Type`).
+ */
+export interface GenericEntity {
+  __typename: 'GenericEntity';
+  id: string;
+  name?: string | null;
+  entityType?: string | null;
+  description?: string | null;
+  properties?: Record<string, unknown> | null;
+}
+
+/** Anything that can populate the shared EntityDetails sheet. */
+export type MemoryEntity = EntityItem | GenericEntity;
+
 type ReturnType = [
   {
     data: Array<EntityItem>;
@@ -69,11 +88,11 @@ type ReturnType = [
     loadingMore: boolean;
     hasNextPage: boolean;
     error: ApolloError | undefined;
-    activeEntity: EntityItem | null;
+    activeEntity: MemoryEntity | null;
     loadMore: () => void;
   },
   {
-    setActiveEntity: (entity: EntityItem | null) => void;
+    setActiveEntity: (entity: MemoryEntity | null) => void;
   },
 ];
 
@@ -81,23 +100,41 @@ function useEntityService({
   searchQuery,
   includeTypes,
   excludeTypes,
+  eventTypes,
+  tags,
+  startTime,
+  endTime,
+  sortBy,
+  sortOrder,
 }: {
   searchQuery: string;
   includeTypes?: string[];
   excludeTypes?: string[];
+  eventTypes?: string[];
+  tags?: string[];
+  startTime?: string;
+  endTime?: string;
+  sortBy?: string;
+  sortOrder?: string;
 }): ReturnType {
   const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
       excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
+      eventTypes: eventTypes || [],
+      tags: tags && tags.length > 0 ? tags : undefined,
+      startTime: startTime || undefined,
+      endTime: endTime || undefined,
+      sortBy: sortBy || undefined,
+      sortOrder: sortOrder || undefined,
       first: PAGE_SIZE,
     },
     fetchPolicy: 'cache-and-network',
     notifyOnNetworkStatusChange: true,
   });
 
-  const [activeEntity, setActiveEntity] = useState<EntityItem | null>(null);
+  const [activeEntity, setActiveEntity] = useState<MemoryEntity | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   const pageInfo = data?.search?.pageInfo;

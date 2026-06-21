@@ -7,6 +7,11 @@ type ReturnType = [
   {
     isDropdownPanelVisible: boolean;
     selectedEntityTypes: string[];
+    tags: string[];
+    dateFrom: string;
+    dateTo: string;
+    sortBy: string;
+    sortOrder: string;
   },
   {
     toggleDropdownPanel: () => void;
@@ -14,6 +19,9 @@ type ReturnType = [
     clearEntityTypes: () => void;
     toggleEntityType: (type: string) => void;
     setSelectedEntityTypes: (type: string[]) => void;
+    setTags: (tags: string[]) => void;
+    setDateRange: (from?: string, to?: string) => void;
+    setSort: (sortBy?: string, sortOrder?: string) => void;
   },
 ];
 
@@ -119,10 +127,92 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
     setDropdownPanelVisible((prev) => !prev);
   }, []);
 
+  // Date range, tags, and sort are read straight from the URL (no inversion logic like entity
+  // types), so derive them per-render and write through setters that update the search params.
+  const tags = searchParams.get('tags')?.split(',').filter(Boolean) || [];
+  const dateFrom = searchParams.get('from') || '';
+  const dateTo = searchParams.get('to') || '';
+  const sortBy = searchParams.get('sortBy') || '';
+  const sortOrder = searchParams.get('sortOrder') || '';
+
+  const setTags = useCallback(
+    (next: string[]) => {
+      if (!changeSearchParams) {
+        return;
+      }
+
+      setSearchParams((params) => {
+        if (next.length === 0) {
+          params.delete('tags');
+        } else {
+          params.set('tags', next.join(','));
+        }
+
+        return params;
+      });
+    },
+    [changeSearchParams, setSearchParams],
+  );
+
+  const setDateRange = useCallback(
+    (from?: string, to?: string) => {
+      if (!changeSearchParams) {
+        return;
+      }
+
+      setSearchParams((params) => {
+        if (from) {
+          params.set('from', from);
+        } else {
+          params.delete('from');
+        }
+
+        if (to) {
+          params.set('to', to);
+        } else {
+          params.delete('to');
+        }
+
+        return params;
+      });
+    },
+    [changeSearchParams, setSearchParams],
+  );
+
+  const setSort = useCallback(
+    (nextSortBy?: string, nextSortOrder?: string) => {
+      if (!changeSearchParams) {
+        return;
+      }
+
+      setSearchParams((params) => {
+        if (nextSortBy) {
+          params.set('sortBy', nextSortBy);
+        } else {
+          params.delete('sortBy');
+        }
+
+        if (nextSortOrder) {
+          params.set('sortOrder', nextSortOrder);
+        } else {
+          params.delete('sortOrder');
+        }
+
+        return params;
+      });
+    },
+    [changeSearchParams, setSearchParams],
+  );
+
   return [
     {
       isDropdownPanelVisible,
       selectedEntityTypes,
+      tags,
+      dateFrom,
+      dateTo,
+      sortBy,
+      sortOrder,
     },
     {
       toggleDropdownPanel,
@@ -130,6 +220,9 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
       clearEntityTypes,
       toggleEntityType,
       setSelectedEntityTypes,
+      setTags,
+      setDateRange,
+      setSort,
     },
   ];
 }
