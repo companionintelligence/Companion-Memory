@@ -941,6 +941,7 @@ input SearchInput {
   first: Int
   includeTypes: [String!]
   query: String
+  semantic: Boolean
   sortBy: String
   sortOrder: String
   startTime: String

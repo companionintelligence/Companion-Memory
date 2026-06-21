@@ -42,4 +42,11 @@ export class SearchInput {
   /** 'asc' | 'desc'. Defaults to desc. */
   @Field(() => String, { nullable: true })
   sortOrder?: string;
+
+  /**
+   * When true, run the text query as conceptual (embedding) search instead of
+   * the default keyword/auto strategy. Only affects the query candidate path.
+   */
+  @Field({ nullable: true })
+  semantic?: boolean;
 }

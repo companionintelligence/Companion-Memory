@@ -68,8 +68,20 @@ interface Props {
   autoSubmitDelay?: number;
   displayResults?: boolean;
   displayDropdown?: boolean;
+  /**
+   * Keep the results dropdown open while the input is focused even when it's
+   * empty — used to surface recent searches / suggestions before the user types.
+   */
+  openOnFocus?: boolean;
+  /** Sticky node rendered at the top of the results dropdown (e.g. a mode toggle). */
+  resultsHeader?: ReactNode;
   saveSupported?: boolean;
   onSearch?: (data: FormData & { entityDropdowns?: string[] }) => boolean | void | Promise<boolean | void>;
+  /**
+   * Explicit submit (Enter with no result highlighted). Falls back to `onSearch`
+   * when omitted, so existing callers keep their submit behavior.
+   */
+  onSubmit?: (data: FormData) => void;
   onKeyDown?: (query: string, e: React.KeyboardEvent<HTMLInputElement>) => void;
   onClear?: () => void;
   onResultSelect?: (result: SearchResultItem) => void;
@@ -88,9 +100,12 @@ function SearchBox(
     autoSubmitDelay = 300,
     displayResults = false,
     displayDropdown = false,
+    openOnFocus = false,
+    resultsHeader,
     saveSupported = true,
     defaultQuery,
     onSearch,
+    onSubmit,
     onKeyDown,
     onClear,
     onResultSelect,
@@ -104,6 +119,7 @@ function SearchBox(
   });
 
   const isFocusedRef = useRef(false);
+  const [isFocused, setIsFocused] = useState(false);
 
   // Reflect external query changes (e.g. URL `?search=` or saved-search restore)
   // into the input, but only while it isn't focused so it never clobbers typing.
@@ -170,6 +186,26 @@ function SearchBox(
       }
     },
     [form, onSearch, disabled],
+  );
+
+  // Form submit (Enter with no result highlighted). Prefer the explicit `onSubmit`
+  // callback; fall back to the live `onSearch` so callers that only pass the latter
+  // keep their existing behavior.
+  const handleFormSubmit = useCallback(
+    async (data: FormData) => {
+      if (disabled) {
+        return;
+      }
+
+      if (onSubmit) {
+        onSubmit(data);
+
+        return;
+      }
+
+      await handleSubmit(data);
+    },
+    [disabled, onSubmit, handleSubmit],
   );
 
   const handleClear = useCallback(() => {
@@ -362,26 +398,36 @@ function SearchBox(
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [isDropdownPanelVisible, toggleDropdownPanel]);
 
+  const hasQuery = queryValue.length > 0;
+  // Default: show the dropdown whenever there's a query. With `openOnFocus`, gate
+  // it on focus instead — so it can surface recent searches before the user types
+  // and won't auto-open just because the input reflects an external `?search` value.
+  const resultsPanelOpen = displayResults && !disabled && (openOnFocus ? isFocused : hasQuery);
+
+  const showingFilterPanel = displayDropdown && isDropdownPanelVisible;
+
   let resultsNode: ReactNode | null = null;
 
-  if (displayDropdown && isDropdownPanelVisible) {
+  if (showingFilterPanel) {
     resultsNode = <DropdownContent onSave={handleSaveSearch} saveSupported={saveSupported} />;
-  } else if (queryValue.length > 0 && !disabled && displayResults) {
-    if (isLoading) {
-      resultsNode = (
+  } else if (resultsPanelOpen) {
+    let body: ReactNode | null = null;
+
+    if (hasQuery && isLoading) {
+      body = (
         <div className="flex items-center justify-center p-8">
           <Spinner size={32} variant="circle" color="rgb(6,108,128)" />
         </div>
       );
-    } else if (error) {
-      resultsNode = (
+    } else if (hasQuery && error) {
+      body = (
         <div className="flex flex-col items-center justify-center p-8">
           <p className="text-muted-foreground font-medium">Something went wrong.</p>
           <p className="text-sm text-muted-foreground">Please try your search again.</p>
         </div>
       );
     } else if (results.length > 0) {
-      resultsNode = (
+      body = (
         <div className="flex max-h-[60vh]">
           {selectedResult && selectedResult.preview && (
             <div className="flex-1 p-4 overflow-hidden">{selectedResult.preview}</div>
@@ -398,6 +444,8 @@ function SearchBox(
                         p-2 cursor-pointer border-l-4
                         ${index === selectedIndex ? 'bg-accent text-accent-foreground border-blue-500' : 'hover:bg-muted/50 border-transparent'}
                       `}
+                  // Keep the input focused so the focus-driven panel doesn't close before the click lands.
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onResultSelect?.(result)}
                 >
                   {result.content}
@@ -408,19 +456,29 @@ function SearchBox(
           </ScrollArea>
         </div>
       );
-    } else {
-      resultsNode = (
+    } else if (hasQuery) {
+      body = (
         <div className="flex flex-col items-center justify-center p-8">
           <p className="text-muted-foreground font-medium">No results found.</p>
           <p className="text-sm text-muted-foreground">Try a different search.</p>
         </div>
       );
     }
+
+    // Only mount the panel when there's a header or a body to show.
+    if (resultsHeader || body) {
+      resultsNode = (
+        <>
+          {resultsHeader && <div onMouseDown={(e) => e.preventDefault()}>{resultsHeader}</div>}
+          {body}
+        </>
+      );
+    }
   }
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(handleSubmit)}>
+      <form onSubmit={form.handleSubmit(handleFormSubmit)}>
         <div className="relative" ref={wrapperRef}>
           <div
             className={cn(
@@ -461,9 +519,11 @@ function SearchBox(
                     onKeyDown={handleKeyDown}
                     onFocus={() => {
                       isFocusedRef.current = true;
+                      setIsFocused(true);
                     }}
                     onBlur={() => {
                       isFocusedRef.current = false;
+                      setIsFocused(false);
                       field.onBlur();
                     }}
                     className="
@@ -544,7 +604,14 @@ function SearchBox(
           </div>
 
           {resultsNode && (
-            <div className="absolute top-full left-0 right-0 z-50 bg-background border border-t-0 rounded-b-md shadow-xs">
+            <div
+              className={cn(
+                'absolute top-full z-50 bg-background border border-t-0 rounded-b-md shadow-xs',
+                // The filter panel needs more room than a narrow (e.g. header) input;
+                // widen and right-align it so the controls don't wrap awkwardly.
+                showingFilterPanel ? 'right-0 w-[34rem] max-w-[90vw]' : 'left-0 right-0',
+              )}
+            >
               {resultsNode}
             </div>
           )}

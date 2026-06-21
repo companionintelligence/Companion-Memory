@@ -122,6 +122,8 @@ export class SearchResolver {
         query,
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
+        // Opt-in conceptual search; otherwise let the service auto-pick a strategy.
+        mode: input.semantic ? 'semantic' : undefined,
         // Widen the candidate pool when post-filters will shrink it.
         maxResults: tags != null || hasDate || eventTypes != null ? 100 : 25,
       });
@@ -228,16 +230,19 @@ export class SearchResolver {
       includeTypes,
       excludeTypes,
       maxResults,
+      mode,
     }: {
       query: string;
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       maxResults?: number;
+      mode?: 'semantic' | 'keyword' | 'boosted' | 'hybrid' | 'auto';
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     const options = {
       query,
       maxResults: maxResults ?? 25,
+      ...(mode ? { mode } : {}),
     };
     if (excludeTypes && excludeTypes.length > 0) {
       Object.assign(options, { excludeTypes });

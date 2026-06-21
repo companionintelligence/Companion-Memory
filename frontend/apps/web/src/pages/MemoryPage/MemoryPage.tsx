@@ -27,6 +27,7 @@ export function MemoryPage() {
           endTime: searchParams.get('to') || undefined,
           sortBy: searchParams.get('sortBy') || undefined,
           sortOrder: searchParams.get('sortOrder') || undefined,
+          semantic: searchParams.get('semantic') === '1',
         },
       ]}
     >

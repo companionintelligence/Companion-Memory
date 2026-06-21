@@ -10,8 +10,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $semantic: Boolean, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, semantic: $semantic, first: $first, after: $after }) {
       pageInfo {
         hasNextPage
         endCursor
@@ -106,6 +106,7 @@ function useEntityService({
   endTime,
   sortBy,
   sortOrder,
+  semantic,
 }: {
   searchQuery: string;
   includeTypes?: string[];
@@ -116,6 +117,7 @@ function useEntityService({
   endTime?: string;
   sortBy?: string;
   sortOrder?: string;
+  semantic?: boolean;
 }): ReturnType {
   const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
     variables: {
@@ -128,6 +130,7 @@ function useEntityService({
       endTime: endTime || undefined,
       sortBy: sortBy || undefined,
       sortOrder: sortOrder || undefined,
+      semantic: semantic || undefined,
       first: PAGE_SIZE,
     },
     fetchPolicy: 'cache-and-network',
