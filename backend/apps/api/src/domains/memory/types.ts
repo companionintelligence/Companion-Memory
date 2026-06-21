@@ -58,6 +58,7 @@ export interface CreateEventDto {
   energy_level?: number;
   productivity_impact?: number;
   status?: string;
+  sharing_level?: string;
   is_deleted?: boolean;
   external_sync_status?: string;
   last_synced_at?: Date;
@@ -106,6 +107,7 @@ export interface UpdateEventDto {
   energy_level?: number;
   productivity_impact?: number;
   status?: string;
+  sharing_level?: string;
   is_deleted?: boolean;
   external_sync_status?: string;
   last_synced_at?: Date;

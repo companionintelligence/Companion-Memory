@@ -79,6 +79,10 @@ export class EventService {
           toCreate.sourceId = item.source_id;
         }
 
+        if (item.sharing_level) {
+          toCreate.sharingLevel = item.sharing_level;
+        }
+
         const id = item.id ?? uuidv7();
 
         const event = await this.eventRepository.create({

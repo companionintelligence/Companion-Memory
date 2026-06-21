@@ -61,6 +61,7 @@ export class EventResolver {
       is_all_day: input.isAllDay,
       metadata: input.metadata,
       status: input.status,
+      sharing_level: input.sharingLevel,
     });
 
     return EventType.toType(entity[0]);

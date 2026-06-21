@@ -65,4 +65,9 @@ export class CreateEventInput {
 
   @Field(() => String, { nullable: true })
   status?: string;
+
+  // Consent scope for this event (e.g. 'private', 'household', 'public').
+  // Defaults to 'private' server-side when omitted.
+  @Field(() => String, { nullable: true })
+  sharingLevel?: string;
 }
