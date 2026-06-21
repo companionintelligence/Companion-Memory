@@ -25,6 +25,8 @@ interface Options {
   places?: string[];
   /** "Where": when true, only events with geographic coordinates are returned. */
   hasLocation?: boolean;
+  /** "Where" (viewport): bounding box [minLon, minLat, maxLon, maxLat] (EPSG:4326). */
+  bbox?: number[];
 }
 
 @Injectable()
@@ -451,6 +453,21 @@ export class EventService {
     // "Where" (located only): the event must carry geographic coordinates.
     if (options.hasLocation) {
       query = query.andWhere('event.location_coordinates IS NOT NULL');
+    }
+
+    // "Where" (viewport): the event's coordinates fall inside the bounding box
+    // [minLon, minLat, maxLon, maxLat] (EPSG:4326). The geography column is cast
+    // to geometry so the planar ST_MakeEnvelope / ST_Within pair applies (and the
+    // functional GIST index on the cast can serve it). NULL coordinates are
+    // excluded by ST_Within, so this also implies located-only. Ignored unless
+    // exactly four finite numbers are supplied.
+    if (options.bbox && options.bbox.length === 4 && options.bbox.every((value) => Number.isFinite(value))) {
+      const [minLon, minLat, maxLon, maxLat] = options.bbox;
+
+      query = query.andWhere(
+        'ST_Within(event.location_coordinates::geometry, ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
+        { minLon, minLat, maxLon, maxLat },
+      );
     }
 
     // "Who": the event's participants/organizer resolve to a Person entity whose

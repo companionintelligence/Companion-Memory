@@ -113,9 +113,15 @@ export class SearchResolver {
     const people = input.people && input.people.length > 0 ? input.people : undefined;
     const places = input.places && input.places.length > 0 ? input.places : undefined;
     const hasLocation = input.hasLocation === true ? true : undefined;
+    // Map "Search this area" viewport box [minLon, minLat, maxLon, maxLat]; ignored
+    // unless it carries exactly four finite numbers.
+    const bbox =
+      input.bbox && input.bbox.length === 4 && input.bbox.every((value) => Number.isFinite(value))
+        ? input.bbox
+        : undefined;
     const eventFilter =
-      connectors != null || people != null || places != null || hasLocation != null
-        ? { connectors, people, places, hasLocation }
+      connectors != null || people != null || places != null || hasLocation != null || bbox != null
+        ? { connectors, people, places, hasLocation, bbox }
         : undefined;
 
     // No filter signal at all -> fall back to recent timed entities (preserves prior behavior).
@@ -321,7 +327,13 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
       eventTypes?: string[];
-      eventFilter?: { connectors?: string[]; people?: string[]; places?: string[]; hasLocation?: boolean };
+      eventFilter?: {
+        connectors?: string[];
+        people?: string[];
+        places?: string[];
+        hasLocation?: boolean;
+        bbox?: number[];
+      };
       limit?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
@@ -340,6 +352,7 @@ export class SearchResolver {
       people?: string[];
       places?: string[];
       hasLocation?: boolean;
+      bbox?: number[];
     } = {
       limit,
       order: { startTime: 'DESC' },
