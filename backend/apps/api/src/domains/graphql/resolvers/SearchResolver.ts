@@ -105,8 +105,21 @@ export class SearchResolver {
     const startTime = input.startTime ? new Date(input.startTime) : undefined;
     const endTime = input.endTime ? new Date(input.endTime) : undefined;
     const hasDate = startTime != null || endTime != null;
+
+    // LifeScope-parity event-scoped dimensions (who / where / connector). When
+    // any is set the result is restricted to matching events (these dimensions
+    // only exist on the event timeline).
+    const connectors = input.connectors && input.connectors.length > 0 ? input.connectors : undefined;
+    const people = input.people && input.people.length > 0 ? input.people : undefined;
+    const places = input.places && input.places.length > 0 ? input.places : undefined;
+    const hasLocation = input.hasLocation === true ? true : undefined;
+    const eventFilter =
+      connectors != null || people != null || places != null || hasLocation != null
+        ? { connectors, people, places, hasLocation }
+        : undefined;
+
     // No filter signal at all -> fall back to recent timed entities (preserves prior behavior).
-    const noInputs = query == null && tags == null && !hasTypes && !hasDate;
+    const noInputs = query == null && tags == null && !hasTypes && !hasDate && eventFilter == null;
 
     // Build a candidate identifier set from the strongest available signal, then AND the
     // remaining filter dimensions on as post-filters so all filters combine (LifeScope parity).
@@ -122,8 +135,10 @@ export class SearchResolver {
         query,
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
+        // Force conceptual ranking when the caller asked for semantic search.
+        semantic: input.semantic === true,
         // Widen the candidate pool when post-filters will shrink it.
-        maxResults: tags != null || hasDate || eventTypes != null ? 100 : 25,
+        maxResults: tags != null || hasDate || eventTypes != null || eventFilter != null ? 100 : 25,
       });
     } else if (tags != null) {
       candidateSource = 'tags';
@@ -140,6 +155,9 @@ export class SearchResolver {
         endTime: afterCursor?.time ?? endTime ?? (noInputs ? new Date() : undefined),
         // "How" filter — pushed down to the event query for the timed path.
         eventTypes,
+        // who / where / connector — pushed down to the event query. When set, the
+        // timed path is restricted to events (the only type carrying these dims).
+        eventFilter,
         // Over-fetch per type so the merged page holds the globally newest `first` rows.
         limit: first * FETCH_MULTIPLIER,
       });
@@ -158,6 +176,26 @@ export class SearchResolver {
       const taggedKeys = new Set(tagged.map((entity) => `${entity.type}:${entity.id}`));
 
       identifiers = identifiers.filter((identifier) => taggedKeys.has(`${identifier.type}:${identifier.id}`));
+    }
+
+    // who / where / connector (when not the timed path, which pushes these down
+    // to SQL): restrict the candidate set to events matching the structured
+    // predicates. Non-event candidates drop out — these dimensions are
+    // event-only — matching the behaviour of selecting a person/place/source.
+    if (eventFilter != null && candidateSource !== 'timed') {
+      const allowedEvents = await this.eventService.getEntitiesForEvents(serviceContext, {
+        ...eventFilter,
+        startTime,
+        endTime,
+        eventTypes,
+        order: { startTime: 'DESC' },
+        limit: 5000,
+      });
+      const allowedIds = new Set(allowedEvents.map((event) => event.id));
+
+      identifiers = identifiers.filter(
+        (identifier) => identifier.type === 'event' && allowedIds.has(identifier.id),
+      );
     }
 
     let entries = await this.resolveToEntries(serviceContext, identifiers);
@@ -227,11 +265,13 @@ export class SearchResolver {
       query,
       includeTypes,
       excludeTypes,
+      semantic,
       maxResults,
     }: {
       query: string;
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
+      semantic?: boolean;
       maxResults?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
@@ -239,6 +279,11 @@ export class SearchResolver {
       query,
       maxResults: maxResults ?? 25,
     };
+    // Conceptual ranking on request; otherwise SearchService picks a mode by heuristic.
+    if (semantic) {
+      Object.assign(options, { mode: 'semantic' });
+    }
+
     if (excludeTypes && excludeTypes.length > 0) {
       Object.assign(options, { excludeTypes });
     } else if (includeTypes && includeTypes.length > 0) {
@@ -268,6 +313,7 @@ export class SearchResolver {
       startTime,
       endTime,
       eventTypes,
+      eventFilter,
       limit = 25,
     }: {
       includeTypes?: IndexableEntity[];
@@ -275,10 +321,14 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
       eventTypes?: string[];
+      eventFilter?: { connectors?: string[]; people?: string[]; places?: string[]; hasLocation?: boolean };
       limit?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
-    const wants = (type: IndexableEntity) => this.matchesTypeFilter(type, includeTypes, excludeTypes);
+    // who / where / connector are event-only dimensions; restrict to events when set.
+    const eventsOnly = eventFilter != null;
+    const wants = (type: IndexableEntity) =>
+      this.matchesTypeFilter(type, includeTypes, excludeTypes) && (!eventsOnly || type === 'event');
 
     const eventOptions: {
       limit: number;
@@ -286,9 +336,14 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
       eventTypes?: string[];
+      connectors?: string[];
+      people?: string[];
+      places?: string[];
+      hasLocation?: boolean;
     } = {
       limit,
       order: { startTime: 'DESC' },
+      ...(eventFilter ?? {}),
     };
 
     if (eventTypes && eventTypes.length > 0) {

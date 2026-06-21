@@ -10,8 +10,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $semantic: Boolean, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, semantic: $semantic, first: $first, after: $after }) {
       pageInfo {
         hasNextPage
         endCursor
@@ -106,6 +106,11 @@ function useEntityService({
   endTime,
   sortBy,
   sortOrder,
+  connectors,
+  people,
+  places,
+  hasLocation,
+  semantic,
 }: {
   searchQuery: string;
   includeTypes?: string[];
@@ -116,6 +121,11 @@ function useEntityService({
   endTime?: string;
   sortBy?: string;
   sortOrder?: string;
+  connectors?: string[];
+  people?: string[];
+  places?: string[];
+  hasLocation?: boolean;
+  semantic?: boolean;
 }): ReturnType {
   const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
     variables: {
@@ -128,6 +138,11 @@ function useEntityService({
       endTime: endTime || undefined,
       sortBy: sortBy || undefined,
       sortOrder: sortOrder || undefined,
+      connectors: connectors && connectors.length > 0 ? connectors : undefined,
+      people: people && people.length > 0 ? people : undefined,
+      places: places && places.length > 0 ? places : undefined,
+      hasLocation: hasLocation || undefined,
+      semantic: semantic || undefined,
       first: PAGE_SIZE,
     },
     fetchPolicy: 'cache-and-network',
