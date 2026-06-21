@@ -14,6 +14,7 @@ import { gql } from '@/graphql';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components/EntityDetails';
+import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
@@ -117,10 +118,13 @@ export default function DesktopMemoryPage() {
       </Portal.Slot>
 
       <PageContent className="p-0 gap-0">
-        <div className="flex items-center gap-2 p-4">
-          {/* Free-text search + entity-type filters live in the global top bar
-              (PrimaryNavigation). These are the explorer-local controls. */}
-          <div className="flex-1" />
+        <div className="flex items-start gap-2 p-4">
+          {/* Always-visible explorer toolbar: search + when + sort + a Filters
+              toggle that reveals the full LifeScope-parity filter set, with an
+              active-filter chip row and result count. */}
+          <div className="flex-1">
+            <ExplorerToolbar />
+          </div>
 
           {/* View Toggle */}
           <Tooltip.Provider>
