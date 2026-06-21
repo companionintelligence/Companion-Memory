@@ -21,4 +21,12 @@ export class SearchInput {
 
   @Field(() => String, { nullable: true })
   endTime?: string;
+
+  /** 'relevance' | 'time' | 'name'. Defaults to relevance when a query is present, else time. */
+  @Field(() => String, { nullable: true })
+  sortBy?: string;
+
+  /** 'asc' | 'desc'. Defaults to desc. */
+  @Field(() => String, { nullable: true })
+  sortOrder?: string;
 }

@@ -8,8 +8,8 @@ import { type ResultOf } from '@graphql-typed-document-node/core';
 import { gql } from '@/graphql';
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!]) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder }) {
       edges {
         node {
           __typename
@@ -71,16 +71,31 @@ function useEntityService({
   searchQuery,
   includeTypes,
   excludeTypes,
+  tags,
+  startTime,
+  endTime,
+  sortBy,
+  sortOrder,
 }: {
   searchQuery: string;
   includeTypes?: string[];
   excludeTypes?: string[];
+  tags?: string[];
+  startTime?: string;
+  endTime?: string;
+  sortBy?: string;
+  sortOrder?: string;
 }): ReturnType {
   const { data, loading, error } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
       excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
+      tags: tags && tags.length > 0 ? tags : undefined,
+      startTime: startTime || undefined,
+      endTime: endTime || undefined,
+      sortBy: sortBy || undefined,
+      sortOrder: sortOrder || undefined,
     },
     fetchPolicy: 'cache-and-network',
   });

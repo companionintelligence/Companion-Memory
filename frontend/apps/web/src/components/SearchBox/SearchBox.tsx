@@ -314,6 +314,12 @@ function SearchBox(
         return;
       }
 
+      // Date-range, tag, and sort controls open Radix poppers in a portal outside this wrapper;
+      // clicks inside them must not close the filter panel.
+      if (target instanceof Element && target.closest('[data-radix-popper-content-wrapper]')) {
+        return;
+      }
+
       if (wrapperRef.current.contains(target)) {
         return;
       }
