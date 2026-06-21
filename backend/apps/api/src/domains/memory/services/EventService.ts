@@ -16,6 +16,7 @@ interface Options {
   order?: FindOptionsOrder<EventEntity>;
   startTime?: Date;
   endTime?: Date;
+  eventTypes?: string[];
 }
 
 @Injectable()
@@ -426,11 +427,35 @@ export class EventService {
       });
     }
 
+    if (options.eventTypes && options.eventTypes.length > 0) {
+      query = query.andWhere('event.event_type IN (:...eventTypes)', {
+        eventTypes: options.eventTypes,
+      });
+    }
+
     const results = await query.getRawMany();
 
     return results.map((row: { event_id: string; type: IndexableEntity }) => ({
       id: row.event_id,
       type: 'event' as IndexableEntity,
     }));
+  }
+
+  /**
+   * Returns the distinct, non-null event types present for the user (the "how"
+   * dimension: visited, messaged, called, ...). Used to populate the activity
+   * filter picker in the memory explorer.
+   */
+  async getDistinctEventTypes(context: ServiceContext): Promise<string[]> {
+    const results = await this.dataSource
+      .getRepository(EventEntity)
+      .createQueryBuilder('event')
+      .select('DISTINCT event.event_type', 'event_type')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.event_type IS NOT NULL')
+      .orderBy('event.event_type', 'ASC')
+      .getRawMany();
+
+    return results.map((row: { event_type: string }) => row.event_type);
   }
 }

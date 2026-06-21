@@ -24,6 +24,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { BrowserActivityModule, BrowserActivityEntity } from '@ci/domains/browser-activity';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { EventsIngestController } from './controllers/EventsIngestController';
@@ -79,6 +80,7 @@ import { UserContextService } from './services/UserContextService';
     EventsModule,
     FilesModule,
     BrowserActivityModule,
+    SearchNextModule,
   ],
   providers: [
     CommunicationService,

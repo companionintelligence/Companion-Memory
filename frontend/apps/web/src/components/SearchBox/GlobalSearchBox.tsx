@@ -1,10 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { GlobalUID } from '@ci/common';
-import { Dialog } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
-import { SearchBox } from '@/components/SearchBox';
+import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
 
 import { CommunicationResult } from './results/CommunicationResult';
 import { ConceptResult } from './results/ConceptResult';
@@ -16,18 +15,23 @@ import { NoteResult } from './results/NoteResult';
 import { PersonResult } from './results/PersonResult';
 import { PlaceResult } from './results/PlaceResult';
 import { ThreadResult } from './results/ThreadResult';
+import { SearchBox } from './SearchBox';
 import { useSearchService } from './useSearchService';
 
-interface Props {
-  open?: boolean;
-  onClose?: (open?: boolean) => void;
-}
-
-export function SearchModal({ open, onClose }: Props) {
+/**
+ * Inline global search rendered in the primary navigation header.
+ *
+ * Replaces the former command-palette `SearchModal`: it runs the same search
+ * service, renders the same result components, and navigates to the selected
+ * entity — but lives directly in the header instead of a dialog.
+ */
+export function GlobalSearchBox() {
   const navigate = useNavigate();
 
   const [query, setQuery] = useState<string | null>(null);
-  const queryValueRef = useRef<string>('');
+  // Bumped on result select to remount SearchBox, clearing its input + dropdown.
+  const [resetKey, setResetKey] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const { data, loading, error } = useSearchService({
     searchQuery: query ?? '',
@@ -115,7 +119,9 @@ export function SearchModal({ open, onClose }: Props) {
     ({ id }: { id: string }) => {
       const { type, id: decodedId } = GlobalUID.decode(id);
 
-      onClose?.();
+      // Clear the input + close the results dropdown after navigating.
+      setQuery(null);
+      setResetKey((key) => key + 1);
 
       switch (type) {
         case 'communication':
@@ -158,42 +164,24 @@ export function SearchModal({ open, onClose }: Props) {
           break;
       }
     },
-    [onClose, navigate],
+    [navigate],
   );
 
-  const handleKeyDown = useCallback((query: string) => {
-    queryValueRef.current = query;
-  }, []);
-
-  const handleEscape = useCallback(
-    (e: KeyboardEvent) => {
-      if (queryValueRef.current !== '') {
-        e.preventDefault();
-      }
-    },
-    [onClose],
-  );
+  useKeyboardShortcut('/', () => inputRef.current?.focus());
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <Dialog.Content
-        className="bg-transparent border-none shadow-none p-0 top-[15%] translate-y-0 sm:max-w-2xl"
-        showCloseButton={false}
-        onEscapeKeyDown={handleEscape}
-      >
-        <Dialog.Title className="sr-only">Search through your Companion data</Dialog.Title>
-        <SearchBox
-          onSearch={handleSearch}
-          onResultSelect={handleResultSelect}
-          onKeyDown={handleKeyDown}
-          variant="compact"
-          autoSubmit
-          displayResults
-          loading={loading}
-          error={error}
-          results={results}
-        />
-      </Dialog.Content>
-    </Dialog>
+    <SearchBox
+      key={resetKey}
+      ref={inputRef}
+      onSearch={handleSearch}
+      onResultSelect={handleResultSelect}
+      variant="compact"
+      placeholder="Search"
+      autoSubmit
+      displayResults
+      loading={loading}
+      error={error}
+      results={results}
+    />
   );
 }

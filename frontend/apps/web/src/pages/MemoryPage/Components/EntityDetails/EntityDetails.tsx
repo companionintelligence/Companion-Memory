@@ -1,15 +1,16 @@
 import '../styles.css';
 
-import type { EntityItem } from '../../../MemoryPage/useEntityService';
+import type { MemoryEntity } from '../../../MemoryPage/useEntityService';
 
 import { BrowserActivityDetails } from './BrowserActivityDetails';
 import { CommunicationDetails } from './CommunicationDetails';
 import { EventDetails } from './EventDetails';
+import { FallbackDetails } from './FallbackDetails';
 import { GenericDetails } from './GenericDetails';
 import { PlaceDetails } from './PlaceDetails';
 
 export interface Props {
-  entity: EntityItem;
+  entity: MemoryEntity;
 }
 
 function getCategoryComponent({ entity }: Props) {
@@ -22,8 +23,12 @@ function getCategoryComponent({ entity }: Props) {
       return <EventDetails entity={entity} />;
     case 'PlaceType':
       return <PlaceDetails entity={entity} />;
-    default:
+    // Graph nodes (REST) arrive as a synthetic GenericEntity.
+    case 'GenericEntity':
       return <GenericDetails entity={entity} />;
+    // Remaining explorer union members (Person, Content, Note, Concept, Item, …).
+    default:
+      return <FallbackDetails entity={entity} />;
   }
 }
 

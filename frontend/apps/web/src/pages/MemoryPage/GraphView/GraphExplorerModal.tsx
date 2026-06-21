@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { Badge, Button, Input, Separator, cn } from '@ci/shadcn';
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
+import { Badge, Button, Input, Separator, Slider, cn } from '@ci/shadcn';
 import { AlertCircle, Anchor, Loader2, Sparkles, Users } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { colorForRawType } from '@/components/entities/entityVisuals';
 import { ForceGraph, ForceGraph3D } from '@/components/ForceGraph';
+import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { useAuth } from '@/hooks';
 import { Empty } from '@/pages/MemoryPage/Components';
+import { useEntityService } from '@/pages/MemoryPage/useEntityService';
 
 const DEFAULT_SPAWN_LIMIT = 10;
 const DEFAULT_HOP_DEPTH = 2;
 const MIN_HOP_DEPTH = 1;
-const MAX_HOP_DEPTH = 5;
+const MAX_HOP_DEPTH = 7;
 
 // Colour nodes/badges by entity type from the shared LifeScope palette.
 function getTypeColor(entityType: string): string {
@@ -83,13 +86,48 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const trimmedSearchQuery = searchParams?.get('search')?.trim() ?? '';
   const isSearchMode = trimmedSearchQuery.length > 0;
 
+  // Mirror the explorer's entity-type filter (shared via URL with List/Gallery/Map) onto the
+  // graph. Translates the explorer display types to the GraphQL vocabulary the graph endpoints
+  // expect. `undefined` => filter inactive (all types selected); an array (possibly empty) =>
+  // active filter forwarded to the backend.
+  const includedEntityTypesParam = searchParams?.get('includedEntityTypes') ?? '';
+  const excludedEntityTypesParam = searchParams?.get('excludedEntityTypes') ?? '';
+
+  const explorerIncludeTypes = useMemo<string[] | undefined>(() => {
+    const included = includedEntityTypesParam.split(',').filter(Boolean);
+    const excluded = excludedEntityTypesParam.split(',').filter(Boolean);
+
+    const selectedDisplayTypes =
+      included.length > 0
+        ? AVAILABLE_ENTITY_TYPES.filter((type) => included.includes(type))
+        : AVAILABLE_ENTITY_TYPES.filter((type) => !excluded.includes(type));
+
+    if (selectedDisplayTypes.length >= AVAILABLE_ENTITY_TYPES.length) {
+      return undefined;
+    }
+
+    return selectedDisplayTypes
+      .map((type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP])
+      .filter((type): type is string => Boolean(type));
+  }, [includedEntityTypesParam, excludedEntityTypesParam]);
+
+  // Explorer's `tags` URL param (comma-separated labels). Present (even empty)
+  // means the tag filter is active; absent leaves the graph unfiltered.
+  const rawTags = searchParams?.get('tags');
+  const tagsParam = rawTags ?? undefined;
+
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchNodes, setSearchNodes] = useState<Array<GraphNode & { score?: number | null }>>([]);
   const [searchLinks, setSearchLinks] = useState<GraphLink[]>([]);
 
   const [{ authToken }] = useAuth();
-  const { loading, error, subgraph, userEntityId, quickStats } = useGraphOverview(authToken, { maxDepth: 3 });
+  const { loading, error, subgraph, userEntityId, quickStats, tagMatchedEntityIds } = useGraphOverview(
+    authToken,
+    { maxDepth: 3, includeTypes: explorerIncludeTypes, tags: tagsParam },
+  );
+  const isTagFilterActive = tagMatchedEntityIds != null;
+  const [, { setActiveEntity }] = useEntityService();
 
   const spawnLimit = useMemo(() => {
     const parsed = Number.parseInt(spawnLimitInput, 10);
@@ -109,12 +147,11 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     }
   }, [spawnLimitInput]);
 
-  const increaseHopDepth = useCallback(() => {
-    setHopDepth((prev) => Math.min(MAX_HOP_DEPTH, prev + 1));
-  }, []);
-
-  const decreaseHopDepth = useCallback(() => {
-    setHopDepth((prev) => Math.max(MIN_HOP_DEPTH, prev - 1));
+  const handleHopDepthChange = useCallback((values: number[]) => {
+    const [next] = values;
+    if (typeof next === 'number') {
+      setHopDepth(Math.min(MAX_HOP_DEPTH, Math.max(MIN_HOP_DEPTH, next)));
+    }
   }, []);
 
   const baseNodes = subgraph?.nodes ?? [];
@@ -190,6 +227,10 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         setSearchError(null);
 
         const params = new URLSearchParams({ query: trimmedSearchQuery, limit: '10' });
+        if (explorerIncludeTypes !== undefined) {
+          params.set('includeTypes', explorerIncludeTypes.join(','));
+        }
+
         const response = await fetch(`/api/graph/search?${params.toString()}`, {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -295,7 +336,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       cancelled = true;
       controller.abort();
     };
-  }, [authToken, isSearchMode, spawnLimit, trimmedSearchQuery]);
+  }, [authToken, isSearchMode, spawnLimit, trimmedSearchQuery, explorerIncludeTypes]);
 
   useEffect(() => {
     if (!isSearchMode) {
@@ -669,7 +710,15 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     const visibilitySet = new Set(visibility.ids);
 
     for (const node of rawNodes) {
-      if (!visibilitySet.has(node.id)) {
+      // When the tag filter is active, scope to the tag-matched nodes directly
+      // (the backend already resolved tags → graph entity_ids), bypassing the
+      // click-driven visibility gate so every loaded tagged node is shown.
+      // Otherwise fall back to the interactive visibility set.
+      if (tagMatchedEntityIds) {
+        if (!tagMatchedEntityIds.has(node.id)) {
+          continue;
+        }
+      } else if (!visibilitySet.has(node.id)) {
         continue;
       }
 
@@ -689,7 +738,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     }
 
     return allowed;
-  }, [entityTypeFilterSet, isEntityFilterActive, rawNodes, visibility.ids]);
+  }, [entityTypeFilterSet, isEntityFilterActive, tagMatchedEntityIds, rawNodes, visibility.ids]);
 
   const entityTypesAllSelected = includedEntityTypes.length === availableEntityTypes.length;
   const relationshipTypesAllSelected = includedRelationshipTypes.length === availableRelationshipTypes.length;
@@ -808,6 +857,22 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       setSelectedNodeId(nodeId);
       setExpandedNodes((prev) => (prev.includes(nodeId) ? prev : [...prev, nodeId]));
 
+      // Open the shared EntityDetails sheet, consistent with the List/Gallery/Map
+      // views. Graph nodes are REST objects, so map them to the GenericEntity
+      // shape that GenericDetails renders. The in-panel sidebar below stays as a
+      // secondary preview.
+      const node = rawNodes.find((item) => item.id === nodeId);
+      if (node) {
+        setActiveEntity({
+          __typename: 'GenericEntity',
+          id: node.id,
+          name: node.name,
+          entityType: node.entity_type,
+          description: node.description,
+          properties: node.properties,
+        });
+      }
+
       setNodeClickCounts((prev) => {
         const totalNeighbors = adjacencyMap.get(nodeId)?.size ?? 0;
         if (totalNeighbors === 0) {
@@ -826,7 +891,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         return { ...prev, [nodeId]: nextValue };
       });
     },
-    [adjacencyMap, spawnLimit],
+    [adjacencyMap, rawNodes, setActiveEntity, spawnLimit],
   );
 
   const detailGridClass = variant === 'desktop' ? 'grid gap-4 md:grid-cols-3' : 'grid gap-4 grid-cols-1';
@@ -853,10 +918,14 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   if (visibleNodes.length === 0) {
     const title = isSearchMode
       ? `No graph nodes found for "${trimmedSearchQuery}"`
-      : 'No graph data available yet';
+      : isTagFilterActive
+        ? 'No graph nodes match the selected tags'
+        : 'No graph data available yet';
     const description = isSearchMode
       ? 'Try another search'
-      : 'Start connecting memories to build your knowledge graph.';
+      : isTagFilterActive
+        ? 'Try different tags or clear the tag filter.'
+        : 'Start connecting memories to build your knowledge graph.';
 
     return (
       <div className="flex h-[540px] flex-col items-center justify-center rounded-lg border border-dashed border-muted px-4 py-6">
@@ -991,32 +1060,29 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               <span className="text-sm text-muted-foreground">nodes</span>
             </div>
             <div className="mt-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Hop depth</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Hop depth
+                </p>
+                <span className="text-sm font-medium tabular-nums">
+                  {hopDepth} {hopDepth === 1 ? 'hop' : 'hops'}
+                </span>
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Increase or decrease how many relationship hops are visible from expanded nodes.
+                Drag to reveal nodes {MIN_HOP_DEPTH}–{MAX_HOP_DEPTH} hops away from your query results.
               </p>
-              <div className="mt-2 inline-flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={decreaseHopDepth}
-                  disabled={hopDepth <= MIN_HOP_DEPTH}
-                  aria-label="Decrease hop depth"
-                >
-                  -
-                </Button>
-                <span className="w-10 text-center text-sm font-medium">{hopDepth}</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={increaseHopDepth}
-                  disabled={hopDepth >= MAX_HOP_DEPTH}
-                  aria-label="Increase hop depth"
-                >
-                  +
-                </Button>
+              <div className="mt-3 flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">{MIN_HOP_DEPTH}</span>
+                <Slider
+                  value={[hopDepth]}
+                  min={MIN_HOP_DEPTH}
+                  max={MAX_HOP_DEPTH}
+                  step={1}
+                  onValueChange={handleHopDepthChange}
+                  aria-label="Hop depth"
+                  className="flex-1"
+                />
+                <span className="text-xs text-muted-foreground">{MAX_HOP_DEPTH}</span>
               </div>
             </div>
             <div className="mt-3 flex flex-col gap-2">

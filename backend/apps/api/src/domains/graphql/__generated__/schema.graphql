@@ -826,6 +826,9 @@ type Query {
   content(id: ID!): ContentType
   contents(after: String, before: String, first: Int, last: Int): ContentConnection!
   event(id: ID!): EventType
+
+  """Distinct event types ("how things happened") present for the user."""
+  eventTypes: [String!]!
   events(after: String, before: String, first: Int, last: Int): EventConnection!
 
   """Get actions for the feed, prioritizing unseen actions"""
@@ -932,12 +935,12 @@ type SavedSearchType implements Node {
 
 input SearchInput {
   endTime: String
+  eventTypes: [String!]
   excludeTypes: [String!]
   includeTypes: [String!]
-  limit: Int
   query: String
-  sortBy: SearchSortBy
-  sortOrder: SearchSortOrder
+  sortBy: String
+  sortOrder: String
   startTime: String
   tags: [String!]
 }
@@ -954,20 +957,6 @@ type SearchResultEdge {
 }
 
 union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
-
-"""
-Field to sort search/explorer results by. RELEVANCE only applies to text queries.
-"""
-enum SearchSortBy {
-  NAME
-  RELEVANCE
-  TIME
-}
-
-enum SearchSortOrder {
-  ASC
-  DESC
-}
 
 type SummaryConnection implements Connection {
   edges: [SummaryEdge!]!

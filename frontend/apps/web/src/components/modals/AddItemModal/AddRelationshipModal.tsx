@@ -5,17 +5,17 @@ import { GlobalUID } from '@ci/common';
 import { Button, Calendar, Dialog, Label, Select } from '@ci/shadcn';
 import { X } from '@ci/shadcn/icons';
 
-import { CommunicationResult } from '@/components/modals/SearchModal/results/CommunicationResult.tsx';
-import { ConceptResult } from '@/components/modals/SearchModal/results/ConceptResult.tsx';
-import { ContentResult } from '@/components/modals/SearchModal/results/ContentResult.tsx';
-import { EventResult } from '@/components/modals/SearchModal/results/EventResult.tsx';
-import { ItemResult } from '@/components/modals/SearchModal/results/ItemResult.tsx';
-import { NoteResult } from '@/components/modals/SearchModal/results/NoteResult.tsx';
-import { PersonResult } from '@/components/modals/SearchModal/results/PersonResult.tsx';
-import { PlaceResult } from '@/components/modals/SearchModal/results/PlaceResult.tsx';
-import { ThreadResult } from '@/components/modals/SearchModal/results/ThreadResult.tsx';
-import { useSearchService } from '@/components/modals/SearchModal/useSearchService.ts';
 import { type SearchResultItem, SearchBox } from '@/components/SearchBox';
+import { CommunicationResult } from '@/components/SearchBox/results/CommunicationResult.tsx';
+import { ConceptResult } from '@/components/SearchBox/results/ConceptResult.tsx';
+import { ContentResult } from '@/components/SearchBox/results/ContentResult.tsx';
+import { EventResult } from '@/components/SearchBox/results/EventResult.tsx';
+import { ItemResult } from '@/components/SearchBox/results/ItemResult.tsx';
+import { NoteResult } from '@/components/SearchBox/results/NoteResult.tsx';
+import { PersonResult } from '@/components/SearchBox/results/PersonResult.tsx';
+import { PlaceResult } from '@/components/SearchBox/results/PlaceResult.tsx';
+import { ThreadResult } from '@/components/SearchBox/results/ThreadResult.tsx';
+import { useSearchService } from '@/components/SearchBox/useSearchService.ts';
 import { gql } from '@/graphql';
 
 const CREATE_RELATIONSHIP = gql(`

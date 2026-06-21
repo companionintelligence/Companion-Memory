@@ -10,6 +10,7 @@ import { GraphUtilityService } from './GraphUtilityService';
 
 export interface GraphNodeQueryOptions {
   entityType?: string;
+  excludeEntityTypes?: string[];
   nameContains?: string;
   propertyEquals?: Record<string, string | number | boolean>;
   limit?: number;
@@ -34,6 +35,7 @@ export class GraphQueryService {
       ownerId,
       {
         entityType: filters.entityType,
+        excludeEntityTypes: filters.excludeEntityTypes,
         nameContains: filters.nameContains,
         propertyEquals: filters.propertyEquals,
       },
@@ -43,6 +45,15 @@ export class GraphQueryService {
 
   getNodesByIds(ownerId: string, entityIds: string[]): Promise<GraphNodeEntity[]> {
     return this.graphUtility.getNodesByIds(entityIds, ownerId);
+  }
+
+  /**
+   * Resolve the graph-node `entity_id`s for a set of tag source-record ids
+   * (matching either the node's own `entity_id` or its `linked_id`). See
+   * {@link GraphUtilityService.getEntityIdsByLinkedOrEntityIds}.
+   */
+  getEntityIdsByTagSources(ownerId: string, sourceIds: string[]): Promise<string[]> {
+    return this.graphUtility.getEntityIdsByLinkedOrEntityIds(ownerId, sourceIds);
   }
 
   getNodeByLinkedRecord(ownerId: string, linkedTable: string, linkedId: string) {

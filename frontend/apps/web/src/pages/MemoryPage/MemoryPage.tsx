@@ -21,11 +21,12 @@ export function MemoryPage() {
           searchQuery: searchParams.get('search') || '',
           includeTypes: searchParams.get('includedEntityTypes')?.split(',').filter(Boolean) || undefined,
           excludeTypes: searchParams.get('excludedEntityTypes')?.split(',').filter(Boolean) || undefined,
+          eventTypes: searchParams.get('eventTypes')?.split(',').filter(Boolean) || undefined,
           tags: searchParams.get('tags')?.split(',').filter(Boolean) || undefined,
           startTime: searchParams.get('from') || undefined,
           endTime: searchParams.get('to') || undefined,
-          sortBy: (searchParams.get('sortBy') as 'time' | 'name' | 'relevance' | null) || undefined,
-          sortOrder: (searchParams.get('sortOrder') as 'ASC' | 'DESC' | null) || undefined,
+          sortBy: searchParams.get('sortBy') || undefined,
+          sortOrder: searchParams.get('sortOrder') || undefined,
         },
       ]}
     >
