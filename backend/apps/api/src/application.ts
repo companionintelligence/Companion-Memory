@@ -24,6 +24,7 @@ import config from '@ci/configuration';
 import { AgentModule } from '@ci/domains/agent';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
+import { PortalAuthModule } from '@ci/domains/auth/PortalAuthModule';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConnectionsModule } from '@ci/domains/connections';
 import { DeviceModule } from '@ci/domains/devices';
@@ -65,6 +66,7 @@ import { UserModule } from '@ci/domains/user';
     AgentModule,
     AuditModule,
     AuthModule,
+    PortalAuthModule,
     BrowserActivityModule,
     ConnectionsModule,
     DeviceModule,

@@ -59,6 +59,12 @@
     "oidc": {
       "issuerUrl": "",
       "callbackUrl": "https://memory.ci.localhost/api/authenticate/oidc/callback"
+    },
+    "portal": {
+      "enabled": false,
+      "issuer": "https://hub.ci.computer",
+      "jwksUri": "https://hub.ci.computer/api/auth/jwks",
+      "audience": "ci-server"
     }
   },
   "db": {

@@ -32,6 +32,16 @@ export const ConfigSchema = z.object({
       refreshTokenSecret: z.string(),
       refreshTokenExpiration: z.string(),
     }),
+    // CI-Portal as the OIDC identity provider. When enabled, CI-Server accepts
+    // portal-issued JWTs (validated via the portal JWKS) alongside its own
+    // tokens, and JIT-provisions the matching user. See
+    // CI-Engineering/architecture/unified-identity-pipeline.md.
+    portal: z.object({
+      enabled: z.boolean(),
+      issuer: z.string(),
+      jwksUri: z.string(),
+      audience: z.string(),
+    }),
     session: z.object({
       fieldPepper: z.string(),
       duration: z.string(),

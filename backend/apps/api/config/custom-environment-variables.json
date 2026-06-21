@@ -1,6 +1,9 @@
 {
   "hostname": "HOSTNAME",
-  "port": { "__name": "PORT", "__format": "json" },
+  "port": {
+    "__name": "PORT",
+    "__format": "json"
+  },
   "auth": {
     "jwt": {
       "authTokenSecret": "AUTH_TOKEN_SECRET",
@@ -20,6 +23,15 @@
     },
     "oidc": {
       "issuerUrl": "OIDC_ISSUER_URL"
+    },
+    "portal": {
+      "enabled": {
+        "__name": "PORTAL_OIDC_ENABLED",
+        "__format": "boolean"
+      },
+      "issuer": "PORTAL_OIDC_ISSUER",
+      "jwksUri": "PORTAL_OIDC_JWKS_URI",
+      "audience": "PORTAL_OIDC_AUDIENCE"
     }
   },
   "db": {
