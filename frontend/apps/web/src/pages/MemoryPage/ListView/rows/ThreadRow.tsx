@@ -1,9 +1,9 @@
-import { type MouseEvent } from 'react';
+import { type MouseEvent, type ReactNode } from 'react';
 
 import { ThreadIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
-import { SearchTable } from '../SearchTable';
+import { EntityRow } from './EntityRow';
 
 export const THREAD_FRAGMENT = gql(`
   fragment TableThreadRowData on ThreadType {
@@ -15,21 +15,20 @@ export const THREAD_FRAGMENT = gql(`
 
 interface Props {
   thread: FragmentType<typeof THREAD_FRAGMENT>;
+  time?: ReactNode;
   onClick?: (e: MouseEvent<HTMLDivElement>) => void;
 }
 
-export function ThreadRow({ thread, onClick }: Props) {
+export function ThreadRow({ thread, time, onClick }: Props) {
   const data = useFragment(THREAD_FRAGMENT, thread);
 
   return (
-    <SearchTable.Row onClick={onClick}>
-      <SearchTable.Cell className="align-middle w-0 px-2.5">
-        <ThreadIcon />
-      </SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle w-100">{data.name}</SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle">{data.description}</SearchTable.Cell>
-    </SearchTable.Row>
+    <EntityRow
+      icon={<ThreadIcon />}
+      title={data.name}
+      subtitle={data.description}
+      time={time}
+      onClick={onClick}
+    />
   );
 }

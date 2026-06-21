@@ -1,4 +1,4 @@
-import { type MouseEvent } from 'react';
+import { type MouseEvent, type ReactNode } from 'react';
 
 import DOMPurify from 'dompurify';
 import parse from 'html-react-parser';
@@ -6,7 +6,7 @@ import parse from 'html-react-parser';
 import { NoteIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
-import { SearchTable } from '../SearchTable';
+import { EntityRow } from './EntityRow';
 
 export const NOTE_FRAGMENT = gql(`
   fragment TableNoteRowData on NoteType {
@@ -18,23 +18,20 @@ export const NOTE_FRAGMENT = gql(`
 
 interface Props {
   note: FragmentType<typeof NOTE_FRAGMENT>;
+  time?: ReactNode;
   onClick?: (e: MouseEvent<HTMLDivElement>) => void;
 }
 
-export function NoteRow({ note, onClick }: Props) {
+export function NoteRow({ note, time, onClick }: Props) {
   const data = useFragment(NOTE_FRAGMENT, note);
 
   return (
-    <SearchTable.Row onClick={onClick}>
-      <SearchTable.Cell className="align-middle w-0 px-2.5">
-        <NoteIcon />
-      </SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle w-100">{data.title}</SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle truncate">
-        {data.content ? parse(DOMPurify.sanitize(data.content, { ALLOWED_TAGS: [] })) : null}
-      </SearchTable.Cell>
-    </SearchTable.Row>
+    <EntityRow
+      icon={<NoteIcon />}
+      title={data.title}
+      subtitle={data.content ? parse(DOMPurify.sanitize(data.content, { ALLOWED_TAGS: [] })) : null}
+      time={time}
+      onClick={onClick}
+    />
   );
 }

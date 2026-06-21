@@ -1,13 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { GlobalUID } from '@ci/common';
-import { Images } from '@ci/shadcn/icons';
 
 import { FileModal } from '@/components/modals/FileModal';
 import { InventoryItemModal, type InventoryItem } from '@/components/modals/InventoryItemModal';
-import { Empty } from '@/pages/MemoryPage/Components';
+import {
+  DateGroupHeader,
+  Empty,
+  ErrorState,
+  ListSkeleton,
+  formatRowTime,
+  getEntityTimestamp,
+  groupEntitiesByBucket,
+} from '@/pages/MemoryPage/Components';
 
-import { useEntityService } from '../useEntityService';
+import { useEntityService, type EntityItem } from '../useEntityService';
 
 import { AnswerRow } from './rows/AnswerRow';
 import { BrowserActivityRow } from './rows/BrowserActivityRow';
@@ -21,7 +28,6 @@ import { NoteRow } from './rows/NoteRow';
 import { PersonRow } from './rows/PersonRow';
 import { PlaceRow } from './rows/PlaceRow';
 import { ThreadRow } from './rows/ThreadRow';
-import { SearchTable } from './SearchTable';
 
 export function ListView() {
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
@@ -29,7 +35,8 @@ export function ListView() {
 
   const clearActiveItem = () => setActiveItem(null);
 
-  const [{ data, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
+  const [{ data, loading, hasNextPage, loadingMore, loadMore, error, refetch }, { setActiveEntity }] =
+    useEntityService();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -56,15 +63,8 @@ export function ListView() {
     return () => observer.disconnect();
   }, [hasNextPage, loadMore]);
 
-  if (data.length === 0) {
-    return (
-      <Empty
-        title="No results found"
-        description="Connect your data sources or try a different search to see content here"
-        icon={Images}
-      />
-    );
-  }
+  // Segment the chronological results into Today / Yesterday / This Week / … groups.
+  const groups = useMemo(() => groupEntitiesByBucket(data), [data]);
 
   const openInventoryModal = (item: ItemInventoryPreview) => {
     setSelectedInventoryItem({
@@ -75,69 +75,106 @@ export function ListView() {
     });
   };
 
+  const renderRow = (item: EntityItem) => {
+    const time = formatRowTime(getEntityTimestamp(item));
+
+    switch (item.__typename) {
+      case 'AnswerType':
+        return <AnswerRow key={item.id} answer={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'BrowserActivityType':
+        return (
+          <BrowserActivityRow
+            key={item.id}
+            browserActivity={item}
+            time={time}
+            onClick={() => setActiveEntity(item)}
+          />
+        );
+
+      case 'CommunicationType':
+        return (
+          <CommunicationRow
+            key={item.id}
+            communication={item}
+            time={time}
+            onClick={() => setActiveEntity(item)}
+          />
+        );
+
+      case 'ConceptType':
+        return <ConceptRow key={item.id} concept={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'ContentType':
+        return <ContentRow key={item.id} content={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'EventType':
+        return <EventRow key={item.id} event={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'FileType':
+        return <FileRow key={item.id} file={item} time={time} onClick={() => setActiveItem(item.id)} />;
+
+      case 'ItemType':
+        return <ItemRow key={item.id} item={item} time={time} onSelectInventoryItem={openInventoryModal} />;
+
+      case 'NoteType':
+        return <NoteRow key={item.id} note={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'PersonType':
+        return <PersonRow key={item.id} person={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'PlaceType':
+        return <PlaceRow key={item.id} place={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'ThreadType':
+        return <ThreadRow key={item.id} thread={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      default:
+        return null;
+    }
+  };
+
+  // First load (no data yet): skeletons over a bare spinner.
+  if (loading && data.length === 0) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+        <ListSkeleton count={10} />
+      </div>
+    );
+  }
+
+  // Hard error with nothing to show.
+  if (error && data.length === 0) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+        <ErrorState onRetry={refetch} />
+      </div>
+    );
+  }
+
+  if (data.length === 0) {
+    return (
+      <Empty
+        title="No results"
+        description="Try clearing your filters or searching for something else."
+        icon="🔍"
+      />
+    );
+  }
+
   return (
     <>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
-        <SearchTable>
-          <SearchTable.RowGroup>
-            {data.map((item) => {
-              // In-place details Sheet for entity rows; richer dedicated modals
-              // for media (File) and inventory (Item).
-              switch (item.__typename) {
-                case 'AnswerType':
-                  return <AnswerRow key={item.id} answer={item} onClick={() => setActiveEntity(item)} />;
+        <div className="flex flex-col">
+          {groups.map((group) => (
+            <section key={group.key} className="pb-1">
+              <DateGroupHeader label={group.label} count={group.entities.length} />
+              <div className="flex flex-col">{group.entities.map(renderRow)}</div>
+            </section>
+          ))}
+        </div>
 
-                case 'BrowserActivityType':
-                  return (
-                    <BrowserActivityRow
-                      key={item.id}
-                      browserActivity={item}
-                      onClick={() => setActiveEntity(item)}
-                    />
-                  );
-
-                case 'CommunicationType':
-                  return (
-                    <CommunicationRow
-                      key={item.id}
-                      communication={item}
-                      onClick={() => setActiveEntity(item)}
-                    />
-                  );
-
-                case 'ConceptType':
-                  return <ConceptRow key={item.id} concept={item} onClick={() => setActiveEntity(item)} />;
-
-                case 'ContentType':
-                  return <ContentRow key={item.id} content={item} onClick={() => setActiveEntity(item)} />;
-
-                case 'EventType':
-                  return <EventRow key={item.id} event={item} onClick={() => setActiveEntity(item)} />;
-
-                case 'FileType':
-                  return <FileRow key={item.id} file={item} onClick={() => setActiveItem(item.id)} />;
-
-                case 'ItemType':
-                  return <ItemRow key={item.id} item={item} onSelectInventoryItem={openInventoryModal} />;
-
-                case 'NoteType':
-                  return <NoteRow key={item.id} note={item} onClick={() => setActiveEntity(item)} />;
-
-                case 'PersonType':
-                  return <PersonRow key={item.id} person={item} onClick={() => setActiveEntity(item)} />;
-
-                case 'PlaceType':
-                  return <PlaceRow key={item.id} place={item} onClick={() => setActiveEntity(item)} />;
-
-                case 'ThreadType':
-                  return <ThreadRow key={item.id} thread={item} onClick={() => setActiveEntity(item)} />;
-
-                default:
-                  return null;
-              }
-            })}
-          </SearchTable.RowGroup>
-        </SearchTable>
+        {loadingMore && <ListSkeleton count={3} showHeader={false} />}
 
         {hasNextPage && <div ref={sentinelRef} className="h-8" />}
 

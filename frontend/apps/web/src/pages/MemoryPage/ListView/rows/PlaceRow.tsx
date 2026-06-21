@@ -1,9 +1,9 @@
-import { type MouseEvent } from 'react';
+import { type MouseEvent, type ReactNode } from 'react';
 
 import { PlaceIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
-import { SearchTable } from '../SearchTable';
+import { EntityRow } from './EntityRow';
 
 export const PLACE_FRAGMENT = gql(`
   fragment TablePlaceRowData on PlaceType {
@@ -15,21 +15,20 @@ export const PLACE_FRAGMENT = gql(`
 
 interface Props {
   place: FragmentType<typeof PLACE_FRAGMENT>;
+  time?: ReactNode;
   onClick?: (e: MouseEvent<HTMLDivElement>) => void;
 }
 
-export function PlaceRow({ place, onClick }: Props) {
+export function PlaceRow({ place, time, onClick }: Props) {
   const data = useFragment(PLACE_FRAGMENT, place);
 
   return (
-    <SearchTable.Row onClick={onClick}>
-      <SearchTable.Cell className="align-middle w-0 px-2.5">
-        <PlaceIcon />
-      </SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle w-100">{data.name}</SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle">{data.description}</SearchTable.Cell>
-    </SearchTable.Row>
+    <EntityRow
+      icon={<PlaceIcon />}
+      title={data.name}
+      subtitle={data.description}
+      time={time}
+      onClick={onClick}
+    />
   );
 }

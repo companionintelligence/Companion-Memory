@@ -43,7 +43,7 @@ export function EventCard({ entity }: Props) {
   return (
     <Card
       className="!gap-2 !py-4 px-6 cursor-pointer hover:shadow-lg transition-shadow duration-200"
-      onClick={() => setActiveEntity({ ...data, __typename: 'EventType' })}
+      onClick={() => setActiveEntity({ ...data, __typename: 'EventType', bucketStartTime: data.startTime })}
     >
       <div className="flex items-start gap-3">
         <Calendar className="h-6 w-6 flex-shrink-0 mt-1 text-[var(--primary)]" />
