@@ -1,6 +1,8 @@
 import { Field, Float, ID, Int, InputType } from '@nestjs/graphql';
 import GraphQLJSONObject from 'graphql-type-json';
 
+import { EventMediaInput } from './EventMediaInput';
+
 @InputType()
 export class CreateEventInput {
   @Field(() => String, { nullable: true })
@@ -70,4 +72,8 @@ export class CreateEventInput {
   // Defaults to 'private' server-side when omitted.
   @Field(() => String, { nullable: true })
   sharingLevel?: string;
+
+  // Media files (already uploaded to ci.files) to link to this event.
+  @Field(() => [EventMediaInput], { nullable: true })
+  media?: EventMediaInput[];
 }

@@ -72,6 +72,9 @@ export interface CreateEventDto {
     id: string;
   };
   content?: CreateContentDto[];
+  // Media files to link to the event (already uploaded to ci.files). Linked via
+  // ci.event_files, idempotent on (event_id, file_id).
+  media?: { file_id: string; role?: string }[];
 }
 
 export interface UpdateEventDto {
@@ -118,6 +121,9 @@ export interface UpdateEventDto {
   user_id?: string;
   duration_minutes?: number;
   content?: CreateContentDto[];
+  // Media files to link to the event (already uploaded to ci.files). Linked via
+  // ci.event_files, idempotent on (event_id, file_id).
+  media?: { file_id: string; role?: string }[];
 }
 
 export interface SearchEventDto {

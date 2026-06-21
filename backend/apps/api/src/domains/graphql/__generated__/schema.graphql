@@ -306,6 +306,7 @@ input CreateEventInput {
   locationCoordinates: JSON
   locationEntityId: ID
   locationName: String
+  media: [EventMediaInput!]
   metadata: JSON
   organizerEntityId: ID
   participantEntityIds: [ID!]
@@ -441,6 +442,11 @@ type EventConnection implements Connection {
 type EventEdge implements Edge {
   cursor: String!
   node: EventType!
+}
+
+input EventMediaInput {
+  fileId: ID!
+  role: String
 }
 
 type EventType implements Node & Taggable {

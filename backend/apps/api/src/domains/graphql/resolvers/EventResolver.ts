@@ -62,6 +62,7 @@ export class EventResolver {
       metadata: input.metadata,
       status: input.status,
       sharing_level: input.sharingLevel,
+      media: input.media?.map((m) => ({ file_id: m.fileId, role: m.role })),
     });
 
     return EventType.toType(entity[0]);

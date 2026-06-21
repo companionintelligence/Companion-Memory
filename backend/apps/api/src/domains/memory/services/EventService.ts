@@ -130,6 +130,23 @@ export class EventService {
           throw err;
         }
 
+        // Link any media files to the event (G1 `media[]`). Idempotent on the
+        // (event_id, file_id) primary key so a re-sync doesn't duplicate links.
+        if (item.media?.length) {
+          for (const m of item.media) {
+            if (!m.file_id) {
+              continue;
+            }
+
+            await this.dataSource.query(
+              `INSERT INTO ci.event_files (event_id, file_id, role)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (event_id, file_id) DO NOTHING`,
+              [eventResult.id, m.file_id, m.role ?? null],
+            );
+          }
+        }
+
         await this.signallingEventService.send(EventCreatedEvent, {
           eventId: eventResult.id,
         });

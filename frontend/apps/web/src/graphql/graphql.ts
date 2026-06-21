@@ -360,6 +360,7 @@ export type CreateEventInput = {
   locationCoordinates?: InputMaybe<Scalars['JSON']['input']>;
   locationEntityId?: InputMaybe<Scalars['ID']['input']>;
   locationName?: InputMaybe<Scalars['String']['input']>;
+  media?: InputMaybe<Array<EventMediaInput>>;
   metadata?: InputMaybe<Scalars['JSON']['input']>;
   organizerEntityId?: InputMaybe<Scalars['ID']['input']>;
   participantEntityIds?: InputMaybe<Array<Scalars['ID']['input']>>;
@@ -499,6 +500,11 @@ export type EventEdge = Edge & {
   __typename?: 'EventEdge';
   cursor: Scalars['String']['output'];
   node: EventType;
+};
+
+export type EventMediaInput = {
+  fileId: Scalars['ID']['input'];
+  role?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type EventType = Node & Taggable & {
