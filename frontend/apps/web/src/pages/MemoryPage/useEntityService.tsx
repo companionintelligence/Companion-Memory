@@ -12,6 +12,7 @@ const PAGE_SIZE = 30;
 const SEARCH_QUERY = gql(`
   query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $semantic: Boolean, $first: Int, $after: String) {
     search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, semantic: $semantic, first: $first, after: $after }) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
@@ -87,6 +88,7 @@ type ReturnType = [
     loading: boolean;
     loadingMore: boolean;
     hasNextPage: boolean;
+    totalCount: number;
     error: ApolloError | undefined;
     activeEntity: MemoryEntity | null;
     loadMore: () => void;
@@ -154,6 +156,7 @@ function useEntityService({
 
   const pageInfo = data?.search?.pageInfo;
   const hasNextPage = pageInfo?.hasNextPage ?? false;
+  const totalCount = data?.search?.totalCount ?? 0;
 
   // Append the next server page (cursor-based) onto the accumulated results.
   const loadMore = useCallback(() => {
@@ -192,6 +195,7 @@ function useEntityService({
       loading,
       loadingMore,
       hasNextPage,
+      totalCount,
       error,
       activeEntity,
       loadMore,

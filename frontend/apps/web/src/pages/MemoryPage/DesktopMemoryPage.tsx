@@ -118,10 +118,10 @@ export default function DesktopMemoryPage() {
       </Portal.Slot>
 
       <PageContent className="p-0 gap-0">
-        <div className="flex items-center gap-2 p-4">
-          {/* Always-visible explorer toolbar: free-text search + the full
-              LifeScope-parity filter set (what / how / connector / who / where /
-              when), sort, semantic toggle, and tags. */}
+        <div className="flex items-start gap-2 p-4">
+          {/* Always-visible explorer toolbar: search + when + sort + a Filters
+              toggle that reveals the full LifeScope-parity filter set, with an
+              active-filter chip row and result count. */}
           <div className="flex-1">
             <ExplorerToolbar />
           </div>

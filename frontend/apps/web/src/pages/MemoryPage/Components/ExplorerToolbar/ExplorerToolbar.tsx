@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { Badge, Button, Calendar, Input, Popover, Select } from '@ci/shadcn';
-import { Calendar as CalendarIcon, MapPin, Search, Sparkles, X } from '@ci/shadcn/icons';
+import { Calendar as CalendarIcon, MapPin, Search, SlidersHorizontal, Sparkles, X } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
@@ -9,6 +9,10 @@ import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
 import { HowFilter } from '@/components/SearchBox/HowFilter';
 import { DropdownProvider, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
+
+import { useEntityService } from '../../useEntityService';
+
+import { ActiveFilterChips, countActiveFilters } from './ActiveFilterChips';
 
 // Single-select sort presets that map to the backend's sortBy + sortOrder pair.
 const SORT_OPTIONS = [
@@ -174,6 +178,11 @@ function ToggleChip({ param, label, icon }: { param: string; label: string; icon
 
 function ExplorerToolbarInner() {
   const [{ tags, dateFrom, dateTo, sortBy, sortOrder }, { setTags, setDateRange, setSort }] = useDropdown();
+  const [{ data, hasNextPage, loading }] = useEntityService();
+  const [searchParams] = useSearchParams();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const activeCount = countActiveFilters(searchParams);
 
   const selectedRange =
     dateFrom || dateTo
@@ -185,89 +194,118 @@ function ExplorerToolbarInner() {
     'default';
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <SearchField />
+    <div className="flex flex-col gap-2">
+      {/* Primary row — always visible: search, when, sort, the Filters toggle, and the result count. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SearchField />
 
-      <EntityTypeFilter modal={false} />
-      <HowFilter modal={false} />
-      <ConnectorFilter modal={false} />
+        <Popover>
+          <Popover.Trigger asChild>
+            <Button variant="outline">
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {formatDateLabel(dateFrom, dateTo)}
+            </Button>
+          </Popover.Trigger>
+          <Popover.Content className="w-auto p-0" align="start">
+            <Calendar
+              mode="range"
+              selected={selectedRange}
+              onSelect={(range) => {
+                const from = range?.from ? range.from.toISOString() : undefined;
+                let to: string | undefined;
 
-      <ChipFilter param="people" placeholder="Who…" />
-      <ChipFilter param="places" placeholder="Where…" />
-      <ToggleChip param="hasLocation" label="Located" icon={<MapPin className="h-4 w-4" />} />
-      <ToggleChip param="semantic" label="Semantic" icon={<Sparkles className="h-4 w-4" />} />
+                if (range?.to) {
+                  const end = new Date(range.to);
+                  end.setHours(23, 59, 59, 999);
+                  to = end.toISOString();
+                }
 
-      <Popover>
-        <Popover.Trigger asChild>
-          <Button variant="outline">
-            <CalendarIcon className="mr-2 h-4 w-4" />
-            {formatDateLabel(dateFrom, dateTo)}
-          </Button>
-        </Popover.Trigger>
-        <Popover.Content className="w-auto p-0" align="start">
-          <Calendar
-            mode="range"
-            selected={selectedRange}
-            onSelect={(range) => {
-              const from = range?.from ? range.from.toISOString() : undefined;
-              let to: string | undefined;
+                setDateRange(from, to);
+              }}
+              numberOfMonths={1}
+            />
+            {(dateFrom || dateTo) && (
+              <div className="border-t p-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setDateRange(undefined, undefined)}
+                >
+                  Clear dates
+                </Button>
+              </div>
+            )}
+          </Popover.Content>
+        </Popover>
 
-              if (range?.to) {
-                const end = new Date(range.to);
-                end.setHours(23, 59, 59, 999);
-                to = end.toISOString();
-              }
+        <Select
+          value={currentSort}
+          onValueChange={(value) => {
+            const option = SORT_OPTIONS.find((item) => item.value === value);
 
-              setDateRange(from, to);
-            }}
-            numberOfMonths={1}
-          />
-          {(dateFrom || dateTo) && (
-            <div className="border-t p-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full"
-                onClick={() => setDateRange(undefined, undefined)}
-              >
-                Clear dates
-              </Button>
-            </div>
-          )}
-        </Popover.Content>
-      </Popover>
-
-      <Select
-        value={currentSort}
-        onValueChange={(value) => {
-          const option = SORT_OPTIONS.find((item) => item.value === value);
-
-          setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
-        }}
-      >
-        <Select.Trigger className="w-[150px]">
-          <Select.Value placeholder="Sort" />
-        </Select.Trigger>
-        <Select.Content>
-          {SORT_OPTIONS.map((option) => (
-            <Select.Item key={option.value} value={option.value}>
-              {option.label}
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select>
-
-      <div className="min-w-[160px]">
-        <TagInput
-          tags={tags}
-          onTagAdded={(tag) => {
-            setTags([...tags, tag]);
-
-            return true;
+            setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
           }}
-          onTagRemoved={(tag) => setTags(tags.filter((value) => value !== tag))}
-        />
+        >
+          <Select.Trigger className="w-[150px]">
+            <Select.Value placeholder="Sort" />
+          </Select.Trigger>
+          <Select.Content>
+            {SORT_OPTIONS.map((option) => (
+              <Select.Item key={option.value} value={option.value}>
+                {option.label}
+              </Select.Item>
+            ))}
+          </Select.Content>
+        </Select>
+
+        <Button
+          type="button"
+          variant={filtersOpen ? 'secondary' : 'outline'}
+          onClick={() => setFiltersOpen((open) => !open)}
+        >
+          <SlidersHorizontal className="mr-2 h-4 w-4" />
+          Filters
+          {activeCount > 0 && (
+            <Badge variant="secondary" className="ml-2 h-5 px-1.5">
+              {activeCount}
+            </Badge>
+          )}
+        </Button>
+
+        <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
+          {loading && data.length === 0
+            ? 'Searching…'
+            : `Showing ${data.length.toLocaleString()}${hasNextPage ? '+' : ''}`}
+        </span>
       </div>
+
+      {/* Advanced filters — collapsed by default to keep the bar uncluttered. */}
+      {filtersOpen && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2">
+          <EntityTypeFilter modal={false} />
+          <HowFilter modal={false} />
+          <ConnectorFilter modal={false} />
+          <ChipFilter param="people" placeholder="Who…" />
+          <ChipFilter param="places" placeholder="Where…" />
+          <ToggleChip param="hasLocation" label="Located" icon={<MapPin className="h-4 w-4" />} />
+          <ToggleChip param="semantic" label="Semantic" icon={<Sparkles className="h-4 w-4" />} />
+          <div className="min-w-[160px]">
+            <TagInput
+              tags={tags}
+              onTagAdded={(tag) => {
+                setTags([...tags, tag]);
+
+                return true;
+              }}
+              onTagRemoved={(tag) => setTags(tags.filter((value) => value !== tag))}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Applied filters as removable chips — always visible when any are set. */}
+      <ActiveFilterChips />
     </div>
   );
 }
