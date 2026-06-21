@@ -48,12 +48,23 @@ export class GraphQueryService {
   }
 
   /**
-   * Resolve the graph-node `entity_id`s for a set of tag source-record ids
-   * (matching either the node's own `entity_id` or its `linked_id`). See
+   * Resolve the graph-node `entity_id`s for a set of source-record ids,
+   * matching either the node's own `entity_id` or its `linked_id`. Source
+   * records map onto graph nodes by `entity_id` (Person/Concept/Place/File) or
+   * `linked_id` (Content/Event/Item/…). See
    * {@link GraphUtilityService.getEntityIdsByLinkedOrEntityIds}.
    */
-  getEntityIdsByTagSources(ownerId: string, sourceIds: string[]): Promise<string[]> {
+  getEntityIdsBySourceRecordIds(ownerId: string, sourceIds: string[]): Promise<string[]> {
     return this.graphUtility.getEntityIdsByLinkedOrEntityIds(ownerId, sourceIds);
+  }
+
+  /**
+   * Resolve the graph-node `entity_id`s for a set of tag source-record ids.
+   * Thin alias over {@link getEntityIdsBySourceRecordIds} kept for the tag-filter
+   * call site's readability.
+   */
+  getEntityIdsByTagSources(ownerId: string, sourceIds: string[]): Promise<string[]> {
+    return this.getEntityIdsBySourceRecordIds(ownerId, sourceIds);
   }
 
   getNodeByLinkedRecord(ownerId: string, linkedTable: string, linkedId: string) {
