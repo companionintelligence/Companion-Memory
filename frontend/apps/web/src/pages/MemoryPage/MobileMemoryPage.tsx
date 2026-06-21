@@ -10,6 +10,7 @@ import { PageContent } from '@/components/layout';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components';
+import { ExplorerFilterSummary } from './Components/ExplorerToolbar/ExplorerFilterSummary';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { MobileMapView } from './MapView';
@@ -63,6 +64,12 @@ export default function MobileMemoryPage() {
     }
   };
 
+  // Keep the search box in sync when the URL changes externally — e.g. the
+  // filter summary's "Search" chip or "Clear all" removing the `search` param.
+  useEffect(() => {
+    setSearchQuery(searchParams.get('search') || '');
+  }, [searchParams]);
+
   useEffect(() => {
     setDetailsOpen(activeEntity != null);
   }, [activeEntity]);
@@ -110,6 +117,10 @@ export default function MobileMemoryPage() {
               </button>
             )}
           </div>
+
+          {/* At-a-glance summary of the applied filters: result count, removable
+              chips, and one-click clear-all (shared with the desktop page). */}
+          <ExplorerFilterSummary />
 
           {/* Mobile Tab Navigation */}
           <div className="flex items-center justify-between">

@@ -14,6 +14,7 @@ import { gql } from '@/graphql';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components/EntityDetails';
+import { ExplorerFilterSummary } from './Components/ExplorerToolbar/ExplorerFilterSummary';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
@@ -118,53 +119,59 @@ export default function DesktopMemoryPage() {
       </Portal.Slot>
 
       <PageContent className="p-0 gap-0">
-        <div className="flex items-center gap-2 p-4">
-          {/* Always-visible explorer toolbar: free-text search + the full
-              LifeScope-parity filter set (what / how / connector / who / where /
-              when), sort, semantic toggle, and tags. */}
-          <div className="flex-1">
-            <ExplorerToolbar />
+        <div className="flex flex-col gap-2 p-4">
+          <div className="flex items-center gap-2">
+            {/* Always-visible explorer toolbar: free-text search + the full
+                LifeScope-parity filter set (what / how / connector / who / where /
+                when), sort, semantic toggle, and tags. */}
+            <div className="flex-1">
+              <ExplorerToolbar />
+            </div>
+
+            {/* View Toggle */}
+            <Tooltip.Provider>
+              <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
+                <Tabs.List className="flex items-center justify-center h-11.5 border-1">
+                  <Tabs.Trigger value="map">
+                    <Tooltip delayDuration={600}>
+                      <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
+                        <MapPin />
+                      </Tooltip.Trigger>
+                      <Tooltip.Content side="bottom">Map view</Tooltip.Content>
+                    </Tooltip>
+                  </Tabs.Trigger>
+                  <Tabs.Trigger value="list">
+                    <Tooltip delayDuration={600}>
+                      <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
+                        <List />
+                      </Tooltip.Trigger>
+                      <Tooltip.Content side="bottom">List view</Tooltip.Content>
+                    </Tooltip>
+                  </Tabs.Trigger>
+                  <Tabs.Trigger value="gallery">
+                    <Tooltip delayDuration={600}>
+                      <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
+                        <Images />
+                      </Tooltip.Trigger>
+                      <Tooltip.Content side="bottom">Gallery view</Tooltip.Content>
+                    </Tooltip>
+                  </Tabs.Trigger>
+                  <Tabs.Trigger value="graph">
+                    <Tooltip delayDuration={600}>
+                      <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
+                        <Share2 />
+                      </Tooltip.Trigger>
+                      <Tooltip.Content side="bottom">Graph view</Tooltip.Content>
+                    </Tooltip>
+                  </Tabs.Trigger>
+                </Tabs.List>
+              </Tabs>
+            </Tooltip.Provider>
           </div>
 
-          {/* View Toggle */}
-          <Tooltip.Provider>
-            <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
-              <Tabs.List className="flex items-center justify-center h-11.5 border-1">
-                <Tabs.Trigger value="map">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <MapPin />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">Map view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-                <Tabs.Trigger value="list">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <List />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">List view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-                <Tabs.Trigger value="gallery">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <Images />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">Gallery view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-                <Tabs.Trigger value="graph">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <Share2 />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">Graph view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-              </Tabs.List>
-            </Tabs>
-          </Tooltip.Provider>
+          {/* At-a-glance summary of the applied filters: result count, removable
+              chips, and one-click clear-all. */}
+          <ExplorerFilterSummary />
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">

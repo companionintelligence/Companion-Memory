@@ -12,6 +12,7 @@ const PAGE_SIZE = 30;
 const SEARCH_QUERY = gql(`
   query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $semantic: Boolean, $first: Int, $after: String) {
     search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, semantic: $semantic, first: $first, after: $after }) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
@@ -84,6 +85,7 @@ export type MemoryEntity = EntityItem | GenericEntity;
 type ReturnType = [
   {
     data: Array<EntityItem>;
+    totalCount: number | undefined;
     loading: boolean;
     loadingMore: boolean;
     hasNextPage: boolean;
@@ -177,6 +179,10 @@ function useEntityService({
         return {
           search: {
             ...fetchMoreResult.search,
+            // Keep the first page's totalCount: each cursor page re-windows the
+            // candidate set by time and reports a smaller count, so the initial
+            // (now-anchored) total is the stable "N results" to show.
+            totalCount: prev.search?.totalCount ?? fetchMoreResult.search.totalCount,
             edges: [...prevEdges, ...nextEdges],
           },
         };
@@ -185,10 +191,12 @@ function useEntityService({
   }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);
 
   const results = useMemo(() => (data?.search?.edges ?? []).map((edge) => edge.node), [data]);
+  const totalCount = data?.search?.totalCount;
 
   return [
     {
       data: results,
+      totalCount,
       loading,
       loadingMore,
       hasNextPage,

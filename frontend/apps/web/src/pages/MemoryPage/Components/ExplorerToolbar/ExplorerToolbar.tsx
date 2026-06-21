@@ -10,33 +10,7 @@ import { HowFilter } from '@/components/SearchBox/HowFilter';
 import { DropdownProvider, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
 
-// Single-select sort presets that map to the backend's sortBy + sortOrder pair.
-const SORT_OPTIONS = [
-  { value: 'default', label: 'Default', sortBy: '', sortOrder: '' },
-  { value: 'relevance', label: 'Relevance', sortBy: 'relevance', sortOrder: 'desc' },
-  { value: 'newest', label: 'Newest first', sortBy: 'time', sortOrder: 'desc' },
-  { value: 'oldest', label: 'Oldest first', sortBy: 'time', sortOrder: 'asc' },
-  { value: 'name-asc', label: 'Name (A–Z)', sortBy: 'name', sortOrder: 'asc' },
-  { value: 'name-desc', label: 'Name (Z–A)', sortBy: 'name', sortOrder: 'desc' },
-] as const;
-
-function formatDateLabel(dateFrom: string, dateTo: string): string {
-  const fmt = (value: string) => new Date(value).toLocaleDateString();
-
-  if (dateFrom && dateTo) {
-    return `${fmt(dateFrom)} – ${fmt(dateTo)}`;
-  }
-
-  if (dateFrom) {
-    return `After ${fmt(dateFrom)}`;
-  }
-
-  if (dateTo) {
-    return `Before ${fmt(dateTo)}`;
-  }
-
-  return 'Any time';
-}
+import { formatDateLabel, SORT_OPTIONS } from './constants';
 
 /** Debounced free-text search bound to the `?search` URL param. */
 function SearchField() {
