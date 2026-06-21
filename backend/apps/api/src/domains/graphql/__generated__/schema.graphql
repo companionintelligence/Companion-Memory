@@ -931,8 +931,10 @@ type SavedSearchType implements Node {
 }
 
 input SearchInput {
+  after: String
   endTime: String
   excludeTypes: [String!]
+  first: Int
   includeTypes: [String!]
   query: String
   startTime: String

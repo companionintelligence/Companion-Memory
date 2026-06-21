@@ -10,7 +10,7 @@ export function TimelineView() {
   const hasInitialScrolledRef = useRef(false);
   const previousScrollHeightRef = useRef<number>(0);
 
-  const [{ data, loading }] = useEntityService();
+  const [{ data, loading, loadingMore, hasNextPage, loadMore }] = useEntityService();
 
   const groupedEntitiesRaw = groupEntitiesByDate(data);
 
@@ -123,21 +123,16 @@ export function TimelineView() {
     const handleScroll = () => {
       clearTimeout(scrollTimeout);
       scrollTimeout = setTimeout(() => {
-        if (loading) {
+        if (loadingMore || !hasNextPage) {
           return;
         }
 
-        // const { scrollTop, scrollHeight, clientHeight } = container;
+        // Scrolling toward the bottom loads older memories (the next server page).
+        const { scrollTop, scrollHeight, clientHeight } = container;
 
-        // After reversing: scrolling down (toward bottom) loads past events (older memories)
-        // Scrolling up (toward top) loads future events (newer memories)
-        // if (scrollTop + clientHeight > scrollHeight - 100) {
-        //   loadPastEvents();
-        // }
-
-        // if (scrollTop < 100) {
-        //   loadFutureEvents();
-        // }
+        if (scrollTop + clientHeight > scrollHeight - 400) {
+          loadMore();
+        }
       }, 50);
     };
 
@@ -147,7 +142,7 @@ export function TimelineView() {
       container.removeEventListener('scroll', handleScroll);
       clearTimeout(scrollTimeout);
     };
-  }, [loading]);
+  }, [loadingMore, hasNextPage, loadMore]);
 
   if (groupedEntities.length === 0 && !loading) {
     return (
