@@ -134,7 +134,7 @@ echo "[ci/setup-database] Bootstrapping database roles and databases..."
 create_role     "$COMPANION_USERNAME"  "$COMPANION_PASSWORD"
 create_database "$COMPANION_DATABASE"  "$COMPANION_USERNAME"
 enable_extensions "$COMPANION_DATABASE" \
-  pg_uuidv7 timescaledb postgis vector pg_stat_statements btree_gist
+  timescaledb postgis vector pg_stat_statements btree_gist
 
 # Orchestrator (Temporal)
 create_role     "$ORCHESTRATOR_USERNAME"             "$ORCHESTRATOR_PASSWORD"

@@ -27,6 +27,7 @@ import { EventsModule } from '@ci/domains/events';
 import {
   ClientFactory,
   FacebookClient,
+  GitHubClient,
   GoogleClient,
   MicrosoftClient,
   SpotifyClient,
@@ -50,6 +51,7 @@ import { ProviderService } from './services/ProviderService';
   providers: [
     ClientFactory,
     FacebookClient,
+    GitHubClient,
     GoogleClient,
     CloudOAuthProxyService,
     ConnectionService,
@@ -67,6 +69,7 @@ import { ProviderService } from './services/ProviderService';
     ProviderService,
     ProviderKeyService,
     FacebookClient,
+    GitHubClient,
     GoogleClient,
     MicrosoftClient,
     SpotifyClient,
@@ -83,7 +86,7 @@ export { ConnectionService, ProviderService, ProviderKeyService, CloudOAuthProxy
 export { ClientFactory } from './clients';
 
 // Clients
-export { FacebookClient, GoogleClient, MicrosoftClient, SpotifyClient, SteamClient };
+export { FacebookClient, GitHubClient, GoogleClient, MicrosoftClient, SpotifyClient, SteamClient };
 
 // Types
 export type { BaseClient } from './clients/BaseClient';

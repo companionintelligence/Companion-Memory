@@ -2,7 +2,7 @@ services:
   database:
     image: ci/database
     volumes:
-      - db-data:/home/postgres/pgdata/data
+      - db-data:/var/lib/postgresql
     networks:
       - ci
     restart: unless-stopped

@@ -43,7 +43,7 @@ export function useThreadService(id: string | null): ReturnType {
         },
       });
 
-      setThread(thread);
+      setThread(thread ?? null);
     } catch (err) {
       setError(err);
     } finally {

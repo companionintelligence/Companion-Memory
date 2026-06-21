@@ -5,6 +5,7 @@ import { Button, Card, Dialog, Input, Label } from '@ci/shadcn';
 import { Eye, EyeOff, Save, Trash } from '@ci/shadcn/icons';
 
 import type { Provider } from '@/pages/ConnectionsPage/ConnectionsPage.tsx';
+import { GET_PROVIDERS } from '@/queries';
 
 export interface ProviderKey {
   readonly id: string;
@@ -13,28 +14,6 @@ export interface ProviderKey {
   readonly providerId: string;
   readonly userId: string;
 }
-
-const GET_PROVIDERS = gql(`
-  query GetProviders {
-    providers {
-      edges {
-        cursor
-        node {
-          id
-          name
-          description
-          logoUrl
-          authType
-          providerKeys {
-            id
-            clientId
-            clientSecret
-          }
-        }
-      }
-    }
-  }
-`);
 
 const CREATE_PROVIDER_KEY = gql(`
   mutation CreateProviderKey($input: CreateProviderKeyInput!) {
@@ -64,7 +43,7 @@ const DELETE_PROVIDER_KEY = gql(`
   }
 `);
 
-type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify';
+type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify' | 'github';
 
 interface OAuthState {
   oauth: Record<
@@ -84,6 +63,7 @@ export function OAuthSection() {
       microsoft: { clientId: '', clientSecret: '' },
       facebook: { clientId: '', clientSecret: '' },
       spotify: { clientId: '', clientSecret: '' },
+      github: { clientId: '', clientSecret: '' },
     },
   });
 
@@ -96,6 +76,8 @@ export function OAuthSection() {
     facebookClientSecret: false,
     spotifyClientId: false,
     spotifyClientSecret: false,
+    githubClientId: false,
+    githubClientSecret: false,
   });
 
   const [originalValues, setOriginalValues] = useState<
@@ -105,6 +87,7 @@ export function OAuthSection() {
     microsoft: { clientId: '', clientSecret: '' },
     facebook: { clientId: '', clientSecret: '' },
     spotify: { clientId: '', clientSecret: '' },
+    github: { clientId: '', clientSecret: '' },
   });
 
   const [validationErrors, setValidationErrors] = useState<
@@ -114,6 +97,7 @@ export function OAuthSection() {
     microsoft: {},
     facebook: {},
     spotify: {},
+    github: {},
   });
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -136,6 +120,7 @@ export function OAuthSection() {
       microsoft: { clientId: '', clientSecret: '' },
       facebook: { clientId: '', clientSecret: '' },
       spotify: { clientId: '', clientSecret: '' },
+      github: { clientId: '', clientSecret: '' },
     };
 
     setSettings((prev) => {
@@ -438,9 +423,10 @@ export function OAuthSection() {
       </div>
 
       <div className="space-y-4">
+        {renderProvider('facebook', 'Facebook')}
+        {renderProvider('github', 'GitHub')}
         {renderProvider('google', 'Google')}
         {renderProvider('microsoft', 'Microsoft')}
-        {renderProvider('facebook', 'Facebook')}
         {renderProvider('spotify', 'Spotify')}
       </div>
 

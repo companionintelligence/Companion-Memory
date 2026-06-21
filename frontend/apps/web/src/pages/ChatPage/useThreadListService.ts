@@ -37,7 +37,7 @@ export function useThreadListService(): ReturnType {
         },
       });
 
-      setThreads(data);
+      setThreads(data ?? []);
     } catch (err) {
       setError(err);
     } finally {

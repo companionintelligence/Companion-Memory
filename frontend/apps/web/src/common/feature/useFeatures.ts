@@ -37,9 +37,10 @@ function useFeatures(): ReturnValue {
           },
         });
 
-        setFeatures(data);
-
-        hasFetched.current = true;
+        if (data) {
+          setFeatures(data);
+          hasFetched.current = true;
+        }
       } catch (err) {
         console.error('Failed to fetch features', err);
       }
@@ -55,9 +56,10 @@ function useFeatures(): ReturnValue {
     try {
       const data = await fetchJson<Features>('/api/_internal/features/global');
 
-      setGlobalFeatures(data);
-
-      hasFetchedGlobal.current = true;
+      if (data) {
+        setGlobalFeatures(data);
+        hasFetchedGlobal.current = true;
+      }
     } catch (err) {
       console.error('Failed to fetch features', err);
     }

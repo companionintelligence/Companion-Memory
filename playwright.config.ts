@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 dotenv.config({
   path: path.resolve(__dirname, '.env'),
+  quiet: true,
 });
 
 /**

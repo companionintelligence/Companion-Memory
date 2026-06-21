@@ -94,7 +94,7 @@ export function useJobsDashboard(refreshIntervalMs = 15000) {
         },
       });
 
-      setData(response);
+      setData(response ?? null);
       setLoading(false);
       setError(null);
       isInitialLoad.current = false;

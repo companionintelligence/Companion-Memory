@@ -308,9 +308,18 @@ function SearchBox(
       }
 
       const target = e.target as Node;
-      const entityTypeFilter = document.getElementById('entity-type-filters');
 
-      if (entityTypeFilter && entityTypeFilter.contains(target)) {
+      // Filter dropdowns portal to document.body (outside wrapperRef), so treat
+      // clicks within them as inside-panel clicks rather than closing the panel.
+      const portaledFilterIds = ['entity-type-filters', 'how-filters'];
+
+      if (
+        portaledFilterIds.some((id) => {
+          const el = document.getElementById(id);
+
+          return el != null && el.contains(target);
+        })
+      ) {
         return;
       }
 

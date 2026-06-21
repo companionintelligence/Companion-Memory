@@ -30,7 +30,7 @@ export function useActionService(id: string | null) {
           },
         });
 
-        setData(data);
+        setData(data ?? null);
       } catch (err) {
         setError(err);
       } finally {

@@ -224,10 +224,12 @@ export default function DesktopMemoryPage() {
           </Tooltip.Provider>
         </div>
 
-        {activeTab === 'list' && <ListView />}
-        {activeTab === 'map' && <DesktopMapView />}
-        {activeTab === 'gallery' && <GalleryView />}
-        {activeTab === 'graph' && <GraphView variant="desktop" />}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {activeTab === 'list' && <ListView />}
+          {activeTab === 'map' && <DesktopMapView />}
+          {activeTab === 'gallery' && <GalleryView />}
+          {activeTab === 'graph' && <GraphView variant="desktop" />}
+        </div>
       </PageContent>
 
       {activeEntity && (

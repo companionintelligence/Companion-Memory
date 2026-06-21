@@ -2,7 +2,7 @@ interface Opts extends RequestInit {
   timeout?: number;
 }
 
-export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T> {
+export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T | undefined> {
   const { timeout, ...rest } = init ?? {};
 
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -23,5 +23,7 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T> 
     throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
   }
 
-  return res.json() as Promise<T>;
+  const text = await res.text();
+
+  return text ? (JSON.parse(text) as T) : undefined;
 }

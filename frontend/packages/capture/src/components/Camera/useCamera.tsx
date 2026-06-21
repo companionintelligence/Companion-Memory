@@ -1,6 +1,7 @@
 import type { Device } from './types';
 import { useInputDevices } from './useInputDevices';
 import { useRecorder } from './useRecorder';
+import type { RecordingMode } from './useRecordingMode';
 import { useStream } from './useStream';
 
 type ReturnType = [
@@ -16,7 +17,7 @@ type ReturnType = [
   {
     startCamera: () => void;
     stopCamera: () => void;
-    captureFrame: () => void;
+    captureFrame: (mode: RecordingMode) => void;
   },
 ];
 

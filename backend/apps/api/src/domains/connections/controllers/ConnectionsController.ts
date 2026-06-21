@@ -3,6 +3,7 @@ import {
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   InternalServerErrorException,
@@ -295,7 +296,25 @@ export class ConnectionsController {
 
     const conn = await this.connectionService.findById(serviceContext, connectionId);
 
-    const externalId = await client.getAccountIdentifier(conn!);
+    let externalId: string;
+    try {
+      externalId = await client.getAccountIdentifier(conn!);
+    } catch (error) {
+      this.logger.error('Failed to retrieve account identifier after token exchange', {
+        connectionId,
+        error: (error as Error).message,
+      });
+      await this.connectionService.update(serviceContext, connectionId, {
+        needsReauth: true,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((error as any).details?.code === 403) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        throw new ForbiddenException((error as any).details.message);
+      } else {
+        throw error;
+      }
+    }
 
     const existingConnection = await this.connectionService.search(serviceContext, {
       providerId: conn!.providerId,

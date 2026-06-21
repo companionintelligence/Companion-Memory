@@ -1,7 +1,7 @@
 import { createHookContext } from '@ci/common';
 import { useCallback, useState } from 'react';
 
-type RecordingMode = 'photo' | 'video' | 'inventory';
+export type RecordingMode = 'photo' | 'video' | 'inventory';
 
 type ReturnType = [
   {

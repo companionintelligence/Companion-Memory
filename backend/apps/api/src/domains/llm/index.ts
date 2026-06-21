@@ -37,14 +37,11 @@ import { OllamaService } from './services/OllamaService';
  */
 @Module({
   imports: [ConversationModule, EventsModule, FilesModule, IntelligenceModule, MemoryModule, ToolsModule],
-  providers: [
-    AnswerInferenceCron,
-    AnswerInferenceCron,
-    ImageDescriptionListener,
-    InventoryListener,
-    OllamaService,
-  ],
+  providers: [AnswerInferenceCron, ImageDescriptionListener, InventoryListener, OllamaService],
   controllers: [OllamaController],
-  exports: [],
+  exports: [OllamaService],
 })
 export class LLMModule {}
+
+export { OllamaService };
+export { PROMPT_MODEL } from './services/OllamaService';

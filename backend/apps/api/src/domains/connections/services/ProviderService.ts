@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { type ServiceContext } from '@ci/common/context';
+import config from '@ci/configuration';
 
 import { ProviderEntity, type Provider } from '../entities/ProviderEntity';
 
@@ -40,5 +41,13 @@ export class ProviderService {
     const map = new Map(entities.map((entity) => [entity.id, ProviderEntity.toEgressType(entity)]));
 
     return ids.map((id) => map.get(id) ?? null);
+  }
+
+  getOAuthCallbackUrl(): string {
+    return (
+      config.auth.oauth.callbackUrl ||
+      `${process.env.APP_PUBLIC_URL}/oauth/callback` ||
+      `https://${config.hostname}/oauth/callback`
+    );
   }
 }

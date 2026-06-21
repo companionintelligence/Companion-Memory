@@ -20,6 +20,7 @@ import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Clie
 import { ClientFactory } from '../clients';
 import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
+import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
 
@@ -30,6 +31,7 @@ export class ProvidersController {
     private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly connectionService: ConnectionService,
     private readonly providerService: ProviderService,
+    private readonly providerKeyService: ProviderKeyService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(ProvidersController.name);
@@ -98,6 +100,15 @@ export class ProvidersController {
       return {
         authorizationUrl,
       };
+    }
+
+    if (provider.localOnly) {
+      const providerKeys = await this.providerKeyService.findByProviderId(serviceContext, provider.id);
+
+      if (!providerKeys) {
+        this.logger.error('Missing provider keys for local-only provider', { providerId: id });
+        throw new InternalServerErrorException('Provider keys not configured for local-only provider');
+      }
     }
 
     const oauthClient = client as BaseOAuth2Client;

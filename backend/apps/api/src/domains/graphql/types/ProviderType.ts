@@ -56,8 +56,17 @@ export class ProviderType {
   @Field(() => String, { nullable: true })
   openidKeyLink!: string | null;
 
+  @Field(() => String, { nullable: true })
+  appSetupUrl!: string | null;
+
   @Field(() => ProviderThemeType, { nullable: true })
   theme!: ProviderThemeType | null;
+
+  @Field(() => Boolean)
+  localOnly!: boolean;
+
+  @Field(() => [String], { nullable: true })
+  scopes?: string[];
 
   static toType(provider: Provider): ProviderType {
     return {
@@ -70,7 +79,9 @@ export class ProviderType {
       logoUrl: provider.logoUrl,
       authType: provider.authType,
       openidKeyLink: provider.openidKeyLink,
+      appSetupUrl: provider.appSetupUrl,
       theme: provider.theme,
+      localOnly: provider.localOnly,
     };
   }
 }

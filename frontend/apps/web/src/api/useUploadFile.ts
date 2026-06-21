@@ -61,7 +61,7 @@ export function useUploadFile(): ReturnType {
           body: formData,
         });
 
-        setFiles(data);
+        setFiles(data ?? []);
 
         success = true;
       } catch (err) {

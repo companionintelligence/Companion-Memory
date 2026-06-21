@@ -230,15 +230,19 @@ export class SearchService {
 
     const typeFilter = this.buildTypeFilter(options, 4);
 
+    // Cosine distance (<=>), NOT L2 (<->): embeddings are unnormalised, so the
+    // L2 distance is ~22 and never < 0.5 — the threshold made semantic search
+    // return nothing, and 1 - L2 produced large-negative "scores". With <=>,
+    // (embedding <=> $2) is cosine distance in [0,2] and 1 - it is cosine sim.
     const sql = `
       SELECT
         entity_id,
         entity_type,
-        1 - (embedding <-> $2) as score
+        1 - (embedding <=> $2) as score
       FROM
         ci_search.embeddings
       WHERE user_id = $1
-        AND (embedding <-> $2) < $3::double precision
+        AND (embedding <=> $2) < $3::double precision
         ${typeFilter.clause}
       ORDER BY score DESC
       LIMIT ${maxResults}
@@ -267,15 +271,26 @@ export class SearchService {
 
     const typeFilter = this.buildTypeFilter(options, 3);
 
+    // Same OR-rewriting as boostedKeywordSearch: turn the AND-joined tsquery
+    // from websearch_to_tsquery into an OR-joined one so a 2-3 word query like
+    // "dog breed" matches an entity whose vector has only one of the tokens
+    // (e.g. Mochi's vector has 'dog' but not 'breed').  ts_rank still rewards
+    // entities matching more terms.  Single-term queries are unaffected
+    // (no '&' to replace).
     const sql = `
+      WITH q AS (
+        SELECT replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery AS tq
+      )
       SELECT
         entity_id,
         entity_type,
-        ts_rank('${TS_RANK_WEIGHTS}', vector, websearch_to_tsquery('english', $2)) as score
+        ts_rank('${TS_RANK_WEIGHTS}', vector, q.tq) as score
       FROM
         ci_search.vectors
+        CROSS JOIN q
       WHERE user_id = $1
-        AND vector @@ websearch_to_tsquery('english', $2)
+        AND q.tq <> ''::tsquery
+        AND vector @@ q.tq
         ${typeFilter.clause}
       ORDER BY score DESC
       LIMIT ${maxResults}
@@ -315,22 +330,34 @@ export class SearchService {
     // Use 'v' table alias since we're joining vectors and embeddings
     const typeFilter = this.buildTypeFilter(options, 4, 'v');
 
-    // Single query that joins vectors and embeddings
-    // Keyword match is required, embedding similarity is used as a boost
+    // The natural-language questions we get from clients ("Where does Jordan
+    // live?") are routed here, but `websearch_to_tsquery` builds an AND-joined
+    // tsquery — every non-stopword has to appear in the SAME entity's vector,
+    // which almost never holds: "jordan" lives in the Person entity, "live"
+    // lives in the Place entity.  Flip the join from `&` to `|` so any token
+    // match qualifies and ts_rank still rewards entities matching more terms,
+    // with the embedding boost discriminating among them.  Single-term queries
+    // are unaffected (no `&` to replace) and phrase queries (`<->`) and
+    // negations (`!`) are preserved by the literal string replace.
     const sql = `
+      WITH q AS (
+        SELECT replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery AS tq
+      )
       SELECT
         v.entity_id,
         v.entity_type,
-        ts_rank('${TS_RANK_WEIGHTS}', v.vector, websearch_to_tsquery('english', $2))
-          * (1 + ${EMBEDDING_BOOST_FACTOR} * COALESCE(1 - (e.embedding <-> $3::vector), 0)) as score
+        ts_rank('${TS_RANK_WEIGHTS}', v.vector, q.tq)
+          * (1 + ${EMBEDDING_BOOST_FACTOR} * COALESCE(1 - (e.embedding <=> $3::vector), 0)) as score
       FROM
         ci_search.vectors v
+        CROSS JOIN q
       LEFT JOIN ci_search.embeddings e
         ON e.entity_type = v.entity_type
         AND e.entity_id = v.entity_id
         AND e.user_id = $1
       WHERE v.user_id = $1
-        AND v.vector @@ websearch_to_tsquery('english', $2)
+        AND q.tq <> ''::tsquery
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
       ORDER BY score DESC
       LIMIT ${maxResults}

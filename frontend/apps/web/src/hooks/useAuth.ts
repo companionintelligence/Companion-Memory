@@ -76,7 +76,7 @@ function useAuth(): ReturnValue {
           credentials: 'include',
         });
 
-        const data: AuthResponse = await fetchJson('/api/authenticate', {
+        const data = await fetchJson<AuthResponse>('/api/authenticate', {
           method: 'POST',
           headers: withCsrfHeader({
             'Content-Type': 'application/json',
@@ -88,7 +88,7 @@ function useAuth(): ReturnValue {
           }),
         });
 
-        setAccessToken(data.accessToken);
+        setAccessToken(data?.accessToken ?? null);
 
         const returnTo = (location.state as { from?: string })?.from ?? '/';
         navigate(returnTo, { replace: true });
@@ -136,7 +136,7 @@ function useAuth(): ReturnValue {
           credentials: 'include',
         });
 
-        const data: AuthResponse = await fetchJson('/api/signup', {
+        const data = await fetchJson<AuthResponse>('/api/signup', {
           method: 'POST',
           headers: withCsrfHeader({
             'Content-Type': 'application/json',
@@ -150,7 +150,7 @@ function useAuth(): ReturnValue {
           }),
         });
 
-        setAccessToken(data.accessToken);
+        setAccessToken(data?.accessToken ?? null);
 
         navigate('/');
       } catch (err: unknown) {
@@ -166,13 +166,13 @@ function useAuth(): ReturnValue {
     setRefreshError(null);
 
     try {
-      const data: AuthResponse = await fetchJson('/api/authenticate/refresh', {
+      const data = await fetchJson<AuthResponse>('/api/authenticate/refresh', {
         method: 'POST',
         headers: withCsrfHeader(),
         credentials: 'include',
       });
 
-      setAccessToken(data.accessToken);
+      setAccessToken(data?.accessToken ?? null);
     } catch (err: unknown) {
       setRefreshError(err);
       setAccessToken(null);
@@ -182,13 +182,13 @@ function useAuth(): ReturnValue {
   useEffect(() => {
     (async () => {
       try {
-        const data: AuthResponse = await fetchJson('/api/authenticate/refresh', {
+        const data = await fetchJson<AuthResponse>('/api/authenticate/refresh', {
           method: 'POST',
           headers: withCsrfHeader(),
           credentials: 'include',
         });
 
-        setAccessToken(data.accessToken);
+        setAccessToken(data?.accessToken ?? null);
       } catch {
         // No valid session cookie, user will need to log in
       } finally {

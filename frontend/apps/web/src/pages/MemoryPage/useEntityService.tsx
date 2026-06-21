@@ -8,8 +8,8 @@ import { type ResultOf } from '@graphql-typed-document-node/core';
 import { gql } from '@/graphql';
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder }) {
       edges {
         node {
           __typename
@@ -71,6 +71,7 @@ function useEntityService({
   searchQuery,
   includeTypes,
   excludeTypes,
+  eventTypes,
   tags,
   startTime,
   endTime,
@@ -80,6 +81,7 @@ function useEntityService({
   searchQuery: string;
   includeTypes?: string[];
   excludeTypes?: string[];
+  eventTypes?: string[];
   tags?: string[];
   startTime?: string;
   endTime?: string;
@@ -91,6 +93,7 @@ function useEntityService({
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
       excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
+      eventTypes: eventTypes || [],
       tags: tags && tags.length > 0 ? tags : undefined,
       startTime: startTime || undefined,
       endTime: endTime || undefined,

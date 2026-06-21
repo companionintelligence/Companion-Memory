@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
+import { DataSource, In, IsNull, Repository, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -16,6 +16,7 @@ interface Options {
   order?: FindOptionsOrder<EventEntity>;
   startTime?: Date;
   endTime?: Date;
+  eventTypes?: string[];
 }
 
 @Injectable()
@@ -75,9 +76,38 @@ export class EventService {
           toCreate.locationName = item.location_name;
         }
 
+        if (item.source_id) {
+          toCreate.sourceId = item.source_id;
+        }
+
+        if (item.sharing_level) {
+          toCreate.sharingLevel = item.sharing_level;
+        }
+
+        // Idempotency: (source_type, source_system, source_id) is the stable
+        // provenance triple capture sources carry. Re-ingesting the same event
+        // — flaky-client retries, a full importer re-sync — must NOT create a
+        // duplicate. When the triple is present, return the existing row.
+        const sourceWhere: FindOptionsWhere<EventEntity> | null =
+          item.source_type && item.source_id
+            ? {
+                sourceType: item.source_type,
+                sourceSystem: item.source_system ?? IsNull(),
+                sourceId: item.source_id,
+                user: { id: context.userId },
+              }
+            : null;
+
+        if (sourceWhere) {
+          const existing = await this.eventRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return EventEntity.toEgressType(existing);
+          }
+        }
+
         const id = item.id ?? uuidv7();
 
-        const event = await this.eventRepository.create({
+        const event = this.eventRepository.create({
           ...toCreate,
           id,
           user: {
@@ -85,7 +115,21 @@ export class EventService {
           },
         });
 
-        const eventResult = await this.eventRepository.save(event);
+        let eventResult: EventEntity;
+        try {
+          eventResult = await this.eventRepository.save(event);
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple (the partial-
+          // unique index raised 23505) — fetch and return the winner.
+          if (sourceWhere && (err as { code?: string })?.code === '23505') {
+            const existing = await this.eventRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return EventEntity.toEgressType(existing);
+            }
+          }
+
+          throw err;
+        }
 
         await this.signallingEventService.send(EventCreatedEvent, {
           eventId: eventResult.id,
@@ -373,11 +417,20 @@ export class EventService {
     }
 
     if (options.startTime) {
-      query = query.andWhere('event.start_time >= :startTime', { startDate: options.startTime });
+      query = query.andWhere('event.start_time >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('event.end_time >= :endTime', { endTime: options.endTime });
+      query = query.andWhere('event.start_time <= :endTime', { startTime: options.endTime });
+      query = query.andWhere('(event.end_time IS NULL OR (event.end_time <= :endTime))', {
+        endTime: options.endTime,
+      });
+    }
+
+    if (options.eventTypes && options.eventTypes.length > 0) {
+      query = query.andWhere('event.event_type IN (:...eventTypes)', {
+        eventTypes: options.eventTypes,
+      });
     }
 
     const results = await query.getRawMany();
@@ -386,5 +439,23 @@ export class EventService {
       id: row.event_id,
       type: 'event' as IndexableEntity,
     }));
+  }
+
+  /**
+   * Returns the distinct, non-null event types present for the user (the "how"
+   * dimension: visited, messaged, called, ...). Used to populate the activity
+   * filter picker in the memory explorer.
+   */
+  async getDistinctEventTypes(context: ServiceContext): Promise<string[]> {
+    const results = await this.dataSource
+      .getRepository(EventEntity)
+      .createQueryBuilder('event')
+      .select('DISTINCT event.event_type', 'event_type')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.event_type IS NOT NULL')
+      .orderBy('event.event_type', 'ASC')
+      .getRawMany();
+
+    return results.map((row: { event_type: string }) => row.event_type);
   }
 }

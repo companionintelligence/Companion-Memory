@@ -66,11 +66,11 @@ export function EventCard({ entity }: Props) {
         <div className="flex items-center gap-5">
           <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
           <div className="min-w-0">
-            <span className="text-sm font-medium text-muted-foreground">Start:</span>
+            {hasEndDate && <span className="text-sm font-medium text-muted-foreground">Start:</span>}
             <span className="ml-2 text-sm text-card-foreground">
               {formatDateTime(
-                'startDate' in data ? (data.startDate as string) : '',
-                'startTime' in data ? (data.startTime as string) : undefined,
+                new Date(data.startTime).toDateString(),
+                new Date(data.startTime).toTimeString(),
               )}
             </span>
           </div>
@@ -83,10 +83,7 @@ export function EventCard({ entity }: Props) {
           <div className="min-w-0">
             <span className="text-sm font-medium text-muted-foreground">End:</span>
             <span className="ml-2 text-sm text-card-foreground">
-              {formatDateTime(
-                'endDate' in data ? (data.endDate as string) : '',
-                'endTime' in data ? (data.endTime as string) : undefined,
-              )}
+              {formatDateTime(new Date(data.endTime).toDateString(), new Date(data.endTime).toTimeString())}
             </span>
           </div>
         </div>

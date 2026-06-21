@@ -17,6 +17,8 @@ export interface Provider {
     description: string;
   }[];
   readonly providerKeys?: ProviderKeys | null;
+  readonly localOnly?: boolean;
+  readonly appSetupUrl?: string;
 }
 
 export interface ProviderKeys {
@@ -59,6 +61,7 @@ const GET_CONNECTIONS = gql(`
           provider {
             id
             name
+            localOnly
             endpoints {
               name
               description

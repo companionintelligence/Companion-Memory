@@ -7,14 +7,14 @@ import { FacingModeProvider, useFacingMode } from './useFacingMode';
 import { InputDevicesProvider } from './useInputDevices';
 import { MuteControlsProvider } from './useMuteControls';
 import { RecorderProvider } from './useRecorder';
-import { RecordingModeProvider } from './useRecordingMode';
+import { RecordingModeProvider, type RecordingMode } from './useRecordingMode';
 import { StreamProvider, useStream } from './useStream';
 import { DesktopControls, MobileControls } from './Controls';
 import { Information } from './Information';
 
 interface CameraProps {
-  onFrameCaptured?: (file: File) => void;
-  onRecordingFinished?: (file: File) => void;
+  onFrameCaptured?: (file: File, mode: RecordingMode) => void;
+  onRecordingFinished?: (file: File, mode: RecordingMode) => void;
   children: ReactNode;
   className?: string;
 }

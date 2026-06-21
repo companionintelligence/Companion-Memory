@@ -2,39 +2,27 @@ services:
   database:
     environment:
       PASSWORD: ${DATABASE_ADMIN_PASSWORD}
+    # Host ports are chosen by scripts/dev-stack.ts: the conventional default
+    # when free, else an ephemeral port — so concurrent worktrees never collide.
+    # A plain `docker compose up` (no dev-stack) still binds the defaults.
     ports:
-      - 5432:5432
-
-  gateway:
-    image: nginx:stable
-    ports:
-      - 8642:8642
-    volumes:
-      - ./infrastructure/dev-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
-    networks:
-      - ci
-    extra_hosts:
-      - host.docker.internal:host-gateway
-    depends_on:
-      object-store:
-        condition: service_healthy
-    restart: unless-stopped
-    profiles: [ "local" ]
+      - ${DB_HOST_PORT:-5432}:5432
 
   hbpe-service:
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
-      API_URL: http://host.docker.internal:3000
+      # The host api is reachable from this container at the dev-stack-chosen port.
+      API_URL: http://host.docker.internal:${API_HOST_PORT:-3030}
       API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
     ports:
-      - 8002:8002
+      - ${HBPE_HOST_PORT:-8002}:8002
 
   object-store:
     environment:
       USERNAME: ${OBJECT_STORE_USERNAME}
       PASSWORD: ${OBJECT_STORE_PASSWORD}
     ports:
-      - 9000:9000
+      - ${OBJECT_STORE_HOST_PORT:-9000}:9000
 
   orchestrator:
     environment:
@@ -43,11 +31,11 @@ services:
     volumes:
       - ./infrastructure/orchestrator/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/local.yaml:ro
     ports:
-      - 7233:7233
+      - ${ORCHESTRATOR_HOST_PORT:-7233}:7233
 
   summary-service:
     ports:
-      - 8001:8001
+      - ${SUMMARY_HOST_PORT:-8001}:8001
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
 
@@ -67,10 +55,10 @@ services:
 
 volumes:
   db-data:
-    name: ci-server-local-db-data
+    name: ${COMPOSE_PROJECT_NAME}-local-db-data
   object-data:
-    name: ci-server-local-object-data
+    name: ${COMPOSE_PROJECT_NAME}-local-object-data
   hbpe-models:
-    name: ci-server-local-hbpe-models
+    name: ${COMPOSE_PROJECT_NAME}-local-hbpe-models
   hbpe-corpus:
-    name: ci-server-local-hbpe-corpus
+    name: ${COMPOSE_PROJECT_NAME}-local-hbpe-corpus

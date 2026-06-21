@@ -1,5 +1,9 @@
 {
   "hostname": "HOSTNAME",
+  "port": {
+    "__name": "PORT",
+    "__format": "json"
+  },
   "auth": {
     "jwt": {
       "authTokenSecret": "AUTH_TOKEN_SECRET",
@@ -16,6 +20,18 @@
     },
     "oauth": {
       "callbackUrl": "OAUTH_CALLBACK_URL"
+    },
+    "oidc": {
+      "issuerUrl": "OIDC_ISSUER_URL"
+    },
+    "portal": {
+      "enabled": {
+        "__name": "PORTAL_OIDC_ENABLED",
+        "__format": "boolean"
+      },
+      "issuer": "PORTAL_OIDC_ISSUER",
+      "jwksUri": "PORTAL_OIDC_JWKS_URI",
+      "audience": "PORTAL_OIDC_AUDIENCE"
     }
   },
   "db": {
@@ -50,7 +66,8 @@
     "new.insights.page": "ENABLE_NEW_INSIGHTS_PAGE",
     "require.signup.codes": "ENABLE_REQUIRE_SIGNUP_CODES",
     "files.page": "ENABLE_FILES_PAGE",
-    "hbpe": "ENABLE_HBPE"
+    "hbpe": "ENABLE_HBPE",
+    "agent.memory.compaction": "ENABLE_AGENT_MEMORY_COMPACTION"
   },
   "environment": {
     "database.query.logging": "DATABASE_QUERY_LOGGING"

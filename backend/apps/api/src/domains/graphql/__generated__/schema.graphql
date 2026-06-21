@@ -238,6 +238,8 @@ input CreateAnswerInput {
 
 input CreateConceptInput {
   description: String
+  linkedId: String
+  linkedTable: String
   name: String!
 }
 
@@ -284,6 +286,7 @@ type CreateConnectionSyncJobPayload {
 }
 
 input CreateContentInput {
+  eventId: ID
   externalId: String
   mimetype: String
   sourceData: JSON
@@ -309,6 +312,7 @@ input CreateEventInput {
   metadata: JSON
   organizerEntityId: ID
   participantEntityIds: [ID!]
+  sharingLevel: String
   sourceId: ID
   sourceSystem: String
   sourceType: String
@@ -343,6 +347,8 @@ type CreateNotePayload {
 
 input CreatePersonInput {
   description: String
+  linkedId: String
+  linkedTable: String
   name: String!
 }
 
@@ -788,14 +794,17 @@ type ProviderThemeType {
 }
 
 type ProviderType implements Node {
+  appSetupUrl: String
   authType: String
   description: String
   endpoints: [ProviderEndpointType!]!
   id: ID!
+  localOnly: Boolean!
   logoUrl: String
   name: String
   openidKeyLink: String
   providerKeys: ProviderKeyType
+  scopes: [String!]
   theme: ProviderThemeType
 }
 
@@ -817,6 +826,9 @@ type Query {
   content(id: ID!): ContentType
   contents(after: String, before: String, first: Int, last: Int): ContentConnection!
   event(id: ID!): EventType
+
+  """Distinct event types ("how things happened") present for the user."""
+  eventTypes: [String!]!
   events(after: String, before: String, first: Int, last: Int): EventConnection!
 
   """Get actions for the feed, prioritizing unseen actions"""
@@ -832,6 +844,7 @@ type Query {
   node(id: ID!): Node
   note(id: ID!): NoteType
   notes(after: String, before: String, first: Int, last: Int): NoteConnection!
+  oAuthCallbackUrl: String!
   people(after: String, before: String, first: Int, last: Int): PersonConnection!
   person(id: ID!): PersonType
   place(id: ID!): PlaceType
@@ -922,6 +935,7 @@ type SavedSearchType implements Node {
 
 input SearchInput {
   endTime: String
+  eventTypes: [String!]
   excludeTypes: [String!]
   includeTypes: [String!]
   query: String

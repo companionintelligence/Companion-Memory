@@ -145,6 +145,40 @@ export class UserContextService {
   }
 
   /**
+   * Resolve the canonical "self" node for a user, plus the name aliases that
+   * refer to them.
+   *
+   * Used by compaction to anchor first-person facts to ONE node (the account's
+   * canonical Person, via ci.users.entity_id) instead of minting duplicate
+   * "the user" / "User" / "<name>" entities per stateless extraction batch.
+   */
+  async getSelfIdentity(userId: string): Promise<{ entityId: string; aliases: string[] } | null> {
+    const entity = await this.resolveUserEntity(userId);
+    if (!entity) {
+      return null;
+    }
+
+    const aliases = new Set<string>(['the user', 'user', 'me', 'myself', 'i', 'self']);
+    const add = (value: unknown): void => {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        aliases.add(value.trim().toLowerCase());
+      }
+    };
+
+    add(entity.name);
+    if (entity.name) {
+      add(entity.name.trim().split(/\s+/)[0]); // first name, e.g. "Alex" from "Alex Rivera"
+    }
+
+    add(await this.getUsernameFromUsersTable(userId));
+    const props = (entity.properties ?? {}) as Record<string, unknown>;
+    add(props['first_name']);
+    add(props['last_name']);
+
+    return { entityId: entity.entity_id, aliases: [...aliases] };
+  }
+
+  /**
    * Format user context as markdown for system prompt
    */
   formatContextForSystemPrompt(context: UserContext): string {

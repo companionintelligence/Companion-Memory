@@ -15,5 +15,15 @@ export abstract class BaseClient {
 
   abstract request<T>(connection: Connection, endpoint: string, options?: RequestInit): Promise<T>;
 
+  abstract requestRaw(connection: Connection, endpoint: string, options?: RequestInit): Promise<Response>;
+
   abstract getAccountIdentifier(connection: Connection): Promise<string>;
+
+  /**
+   * The OAuth scopes this provider requests. Returns `null` for providers that
+   * don't use scopes (e.g. OpenID providers like Steam).
+   */
+  getScopes(): string[] | null {
+    return null;
+  }
 }

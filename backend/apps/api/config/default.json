@@ -43,6 +43,9 @@
       "spotify": {
         "id": "019cbaf2-d789-7723-aada-7e3d709663f5"
       },
+      "github": {
+        "id": "019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04"
+      },
       "steam": {
         "id": "019d6470-f9e1-720f-a3ce-299842abaece"
       }
@@ -52,6 +55,16 @@
     },
     "openid": {
       "callbackUrl": "https://memory.ci.localhost/openid/callback"
+    },
+    "oidc": {
+      "issuerUrl": "",
+      "callbackUrl": "https://memory.ci.localhost/api/authenticate/oidc/callback"
+    },
+    "portal": {
+      "enabled": false,
+      "issuer": "https://hub.ci.computer",
+      "jwksUri": "https://hub.ci.computer/api/auth/jwks",
+      "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension"
     }
   },
   "db": {
@@ -96,7 +109,8 @@
     "new.insights.page": false,
     "require.signup.codes": true,
     "files.page": false,
-    "hbpe": false
+    "hbpe": false,
+    "agent.memory.compaction": false
   },
   "environment": {
     "database.query.logging": false

@@ -45,19 +45,19 @@ export function DesktopControls({ onRecordingModeChange }: Props) {
   function handleToggleRecording() {
     setVideoMode();
     onRecordingModeChange?.('video');
-    toggleRecording();
+    toggleRecording('video');
   }
 
   function handlePhotoCapture() {
     setPhotoMode();
     onRecordingModeChange?.('photo');
-    captureFrame();
+    captureFrame('photo');
   }
 
   function handleInventoryCapture() {
     setInventoryMode();
     onRecordingModeChange?.('inventory');
-    captureFrame();
+    captureFrame('inventory');
   }
 
   return (

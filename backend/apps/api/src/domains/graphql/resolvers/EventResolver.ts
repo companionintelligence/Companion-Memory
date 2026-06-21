@@ -61,6 +61,7 @@ export class EventResolver {
       is_all_day: input.isAllDay,
       metadata: input.metadata,
       status: input.status,
+      sharing_level: input.sharingLevel,
     });
 
     return EventType.toType(entity[0]);
@@ -134,6 +135,15 @@ export class EventResolver {
       pageInfo,
       totalCount,
     };
+  }
+
+  @Query(() => [String], {
+    description: 'Distinct event types ("how things happened") present for the user.',
+  })
+  async eventTypes(@Context() context: RequestContext): Promise<string[]> {
+    const serviceContext = toServiceContext(context);
+
+    return this.eventService.getDistinctEventTypes(serviceContext);
   }
 
   @Query(() => EventType, { nullable: true })

@@ -22,7 +22,7 @@ import { type Relationship, RelationshipEntity } from '../entities/RelationshipE
 import {
   type CreateRelationshipDto,
   type UpdateRelationshipDto,
-  type RelationshipType,
+  RelationshipType,
   RelationshipMap,
 } from '../types';
 
@@ -72,6 +72,30 @@ export class RelationshipService {
       default:
         throw new Error(`Unknown node type: ${nodeType}`);
     }
+  }
+
+  /**
+   * Maps a free-form relationship-type string onto the RelationshipType enum
+   * and verifies the resulting type is allowed between the given from/to node
+   * types per RelationshipMap. Returns null if the type is unknown or not
+   * permitted for the endpoint pair.
+   */
+  resolveType(raw: string, fromType: string, toType: string): keyof typeof RelationshipType | null {
+    const key = raw.trim().toUpperCase() as keyof typeof RelationshipType;
+
+    if (!(key in RelationshipType)) {
+      return null;
+    }
+
+    const fromMap = RelationshipMap[fromType as keyof typeof RelationshipMap];
+
+    if (!fromMap || !(toType in fromMap)) {
+      return null;
+    }
+
+    const allowed = fromMap[toType as keyof typeof fromMap] as readonly RelationshipType[];
+
+    return allowed.includes(RelationshipType[key]) ? key : null;
   }
 
   async create(context: UserServiceContext, data: CreateRelationshipDto): Promise<Relationship | null> {

@@ -1,70 +1,40 @@
-# PostgreSQL with TimescaleDB, PostGIS, Apache AGE, and pgvector
-# Pinned to 16.11-ts2.23.0 for stability; :pg16 tag is frequently updated,
-# which leads to deletion of existing database and replacement with a new empty one.
+# PostgreSQL 18 with TimescaleDB, PostGIS, and pgvector.
+#
+# Based on the official postgres:18-bookworm image which already has
+# the PGDG apt repository configured. We layer the Timescale apt
+# repository on top so every extension is installed from an official
+# upstream package.
+#
+# UUIDv7 generation uses PG18's native uuidv7() builtin, so no
+# pg_uuidv7 extension is required.
 
-# Build stage for compiling extensions
-FROM timescale/timescaledb-ha:pg16.11-ts2.23.0 AS builder
+FROM postgres:18.4-bookworm
 
-USER root
-
-# Install build dependencies (separate layer for caching)
-RUN mkdir -p /var/lib/apt/lists/partial && \
-    chown -R _apt:root /var/lib/apt/lists && \
-    apt-get update && \
+# Add the Timescale apt repository, then install every extension from
+# official upstream packages in a single layer.
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    git \
-    build-essential \
-    postgresql-server-dev-16 \
-    ca-certificates \
-    flex \
-    bison \
-    libreadline-dev \
-    libedit-dev \
+      ca-certificates \
+      curl \
+      gnupg \
+    && install -d /etc/apt/keyrings \
+    && curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey \
+       | gpg --dearmor -o /etc/apt/keyrings/timescaledb.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/timescaledb.gpg] https://packagecloud.io/timescale/timescaledb/debian/ bookworm main" \
+       > /etc/apt/sources.list.d/timescaledb.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      postgresql-18-postgis-3 \
+      postgresql-18-pgvector \
+      timescaledb-2-postgresql-18 \
+    && apt-get purge -y curl gnupg \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
-
-# Pin versions for reproducible builds and better caching
-ARG PGVECTOR_VERSION=v0.6.0
-ARG PG_UUIDV7_VERSION=v1.6.0
-
-# Build pgvector
-RUN cd /tmp && \
-    git clone --branch ${PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git && \
-    cd pgvector && \
-    make && \
-    make install DESTDIR=/tmp/install
-
-# Build pg_uuidv7
-RUN cd /tmp && \
-    git clone --branch ${PG_UUIDV7_VERSION} --depth 1 https://github.com/fboulnois/pg_uuidv7.git && \
-    cd pg_uuidv7 && \
-    make && \
-    make install DESTDIR=/tmp/install
-
-# Final stage - runtime image
-FROM timescale/timescaledb-ha:pg16.11-ts2.23.0
-
-USER root
-
-# Install runtime dependencies only (rarely changes)
-RUN mkdir -p /var/lib/apt/lists/partial && \
-    chown -R _apt:root /var/lib/apt/lists && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-    postgresql-16-postgis-3 \
-    postgresql-16-postgis-3-scripts \
-    libyaml-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy compiled extensions from builder
-COPY --from=builder /tmp/install/ /
 
 COPY LICENSE.md /LICENSE.md
 
 # Install secrets-aware entrypoint wrapper
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
-
-# Switch back to postgres user
-USER postgres
 
 # ──────────────────────────────────────────────────
 # Environment Variables
@@ -81,12 +51,14 @@ USER postgres
 #   USERNAME                   PostgreSQL superuser name [postgres]
 # ──────────────────────────────────────────────────
 
-ENV PGDATA=/home/postgres/pgdata/data \
-    DEFAULT_USERNAME=postgres \
+ENV DEFAULT_USERNAME=postgres \
     DEFAULT_DATABASE=postgres
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["postgres"]
 
-# Expose PostgreSQL port
+# shared_preload_libraries is required for TimescaleDB. Passing it via
+# the postgres CLI applies regardless of whether postgresql.conf has
+# been previously initialised on the persistent volume.
+CMD ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+
 EXPOSE 5432

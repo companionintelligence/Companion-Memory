@@ -16,7 +16,9 @@ import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
 
 import type { OllamaModel } from '../types';
 
-const PROMPT_MODEL = 'gemma3:1b';
+/** Default model used for background inference tasks (extraction, Q&A, etc.).
+ *  Import this constant rather than hardcoding the model name. */
+export const PROMPT_MODEL = 'gemma3:1b';
 const DEMO_VISION_MODEL = 'gemma3:27b';
 const DEMO_TEXT_MODEL = 'qwen3:14b';
 const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);

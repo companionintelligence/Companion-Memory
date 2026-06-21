@@ -10,6 +10,7 @@ import { GraphUtilityService } from './GraphUtilityService';
 
 export interface GraphNodeQueryOptions {
   entityType?: string;
+  excludeEntityTypes?: string[];
   nameContains?: string;
   propertyEquals?: Record<string, string | number | boolean>;
   limit?: number;
@@ -34,6 +35,7 @@ export class GraphQueryService {
       ownerId,
       {
         entityType: filters.entityType,
+        excludeEntityTypes: filters.excludeEntityTypes,
         nameContains: filters.nameContains,
         propertyEquals: filters.propertyEquals,
       },

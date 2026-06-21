@@ -54,6 +54,7 @@ export class SearchResolver {
 
     const query = input.query != null && input.query.length > 0 ? input.query : undefined;
     const tags = input.tags && input.tags.length > 0 ? input.tags : undefined;
+    const eventTypes = input.eventTypes && input.eventTypes.length > 0 ? input.eventTypes : undefined;
     const hasTypes =
       (input.includeTypes != null && input.includeTypes.length > 0) ||
       (input.excludeTypes != null && input.excludeTypes.length > 0);
@@ -75,7 +76,7 @@ export class SearchResolver {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
         // Widen the candidate pool when post-filters will shrink it.
-        maxResults: tags != null || hasDate ? 100 : 25,
+        maxResults: tags != null || hasDate || eventTypes != null ? 100 : 25,
       });
     } else if (tags != null) {
       candidateSource = 'tags';
@@ -88,6 +89,8 @@ export class SearchResolver {
         startTime,
         // With no filters at all, bound to "now" so we return recent items, not the entire history.
         endTime: endTime ?? (noInputs ? new Date() : undefined),
+        // "How" filter — pushed down to the event query for the timed path.
+        eventTypes,
       });
     }
 
@@ -127,6 +130,22 @@ export class SearchResolver {
         }
 
         return true;
+      });
+    }
+
+    // "How" filter (when not the timed path, which pushes it down to SQL): narrow event entries
+    // to the requested event types; every other entity type passes through untouched.
+    if (eventTypes != null && candidateSource !== 'timed') {
+      const allowed = new Set(eventTypes);
+
+      entries = entries.filter((entry) => {
+        if (entry.type !== 'event') {
+          return true;
+        }
+
+        const eventType = (entry.entity as { eventType?: string | null }).eventType;
+
+        return eventType != null && allowed.has(eventType);
       });
     }
 
@@ -195,11 +214,13 @@ export class SearchResolver {
       excludeTypes,
       startTime,
       endTime,
+      eventTypes,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       startTime?: Date;
       endTime?: Date;
+      eventTypes?: string[];
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     const wants = (type: IndexableEntity) => this.matchesTypeFilter(type, includeTypes, excludeTypes);
@@ -209,10 +230,15 @@ export class SearchResolver {
       order: FindOptionsOrder<EventEntity>;
       startTime?: Date;
       endTime?: Date;
+      eventTypes?: string[];
     } = {
       limit: 25,
       order: { startTime: 'DESC' },
     };
+
+    if (eventTypes && eventTypes.length > 0) {
+      eventOptions.eventTypes = eventTypes;
+    }
 
     const browserActivityOptions: {
       limit: number;
@@ -242,8 +268,8 @@ export class SearchResolver {
 
     if (endTime) {
       eventOptions.endTime = endTime;
-      browserActivityOptions.startTime = endTime;
-      communicationOptions.startTime = endTime;
+      browserActivityOptions.endTime = endTime;
+      communicationOptions.endTime = endTime;
     }
 
     const [eventResults, browserActivityResults, communicationResults] = await Promise.all([

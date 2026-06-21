@@ -127,6 +127,16 @@ export class UserService {
     return !!result;
   }
 
+  async findByEmail(email: string): Promise<User | null> {
+    const result = await this.userRepository.findOne({
+      where: {
+        email,
+      },
+    });
+
+    return result ? UserEntity.toEgressType(result) : null;
+  }
+
   async onboard(id: string): Promise<void> {
     await this.userRepository.update(id, {
       onboarded: true,

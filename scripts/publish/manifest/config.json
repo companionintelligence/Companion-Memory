@@ -1,9 +1,9 @@
 {
   "$schema": "https://schemas.runtipi.io/v2/app-info.json",
   "id": "companion",
-  "name": "Companion",
+  "name": "Companion Memory",
   "version": "0.0.0",
-  "short_desc": "Your private AI companion — on your own hardware.",
+  "short_desc": "Personal database, RAG, and behavioral prediction — on your own hardware.",
   "author": "Companion Intelligence",
   "source": "https://github.com/companionintelligence/CI-Server",
   "port": 8642,
@@ -11,9 +11,15 @@
   "available": true,
   "supported_architectures": ["amd64", "arm64"],
   "tipi_version": 1,
-  "description": "Companion Intelligence server with speech-to-text, text-to-speech, LLM summarization, and a full API backend — all running locally.",
+  "description": "Companion Memory is a fully self-hosted personal database and memory engine for Companion Intelligence: a NestJS REST/LLM API, retrieval-augmented search (RAG) over your own data, automatic summarization, and the HBPE behavioral-prediction engine — all running locally with Ollama and PostgreSQL. No cloud, no data brokers.",
   "website": "https://companionintelligence.com",
   "exposable": true,
+  "demo_video": "./metadata/media/companion-memory-demo.mp4",
+  "screenshots": [
+    "https://github.com/user-attachments/assets/ba285919-36cd-435f-946c-912dfbbad034",
+    "https://github.com/user-attachments/assets/e85091a4-3169-40c4-933a-5deabff679ca",
+    "https://github.com/user-attachments/assets/aba17970-b2d2-4842-b268-495bffdde2c8"
+  ],
   "pricing": {
     "type": "free"
   }

@@ -48,7 +48,7 @@ export function useConnectService(): ReturnType {
           body: JSON.stringify({ endpoints: endpoints || [], apiKey: apiKey || undefined }),
         });
 
-        setAuthorizationUrl(response.authorizationUrl);
+        setAuthorizationUrl(response?.authorizationUrl ?? null);
       } catch (err: unknown) {
         setError(err);
       } finally {

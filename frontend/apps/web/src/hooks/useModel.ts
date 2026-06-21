@@ -94,13 +94,14 @@ function useModel(): Value {
     setError(null);
 
     try {
-      const data: Model[] = await fetchJson('/api/llm/models', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
-        },
-      });
+      const data =
+        (await fetchJson<Model[]>('/api/llm/models', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+        })) ?? [];
 
       setActiveModels(data);
 

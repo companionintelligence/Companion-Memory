@@ -33,8 +33,6 @@ export function CaptureModal({ open = false, onClose }: Props) {
 
   const [files, setFiles] = useState<FileData[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [mobileCaptureMode, setMobileCaptureMode] = useState<CaptureMode>('photo');
-  const [desktopCaptureMode, setDesktopCaptureMode] = useState<CaptureMode>('photo');
   const [selectedModelSupportsVision, setSelectedModelSupportsVision] = useState<boolean | null>(null);
   const [isCheckingModelCapabilities, setIsCheckingModelCapabilities] = useState(false);
   const [capabilityCheckFailed, setCapabilityCheckFailed] = useState(false);
@@ -52,8 +50,6 @@ export function CaptureModal({ open = false, onClose }: Props) {
   const handleClose = useCallback(() => {
     setFiles([]);
     setThreadId(null);
-    setMobileCaptureMode('photo');
-    setDesktopCaptureMode('photo');
     resetUploader();
     stopChatRequest();
 
@@ -64,8 +60,6 @@ export function CaptureModal({ open = false, onClose }: Props) {
     if (!open) {
       setFiles([]);
       setThreadId(null);
-      setMobileCaptureMode('photo');
-      setDesktopCaptureMode('photo');
     }
   }, [open]);
 
@@ -106,7 +100,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
           },
         });
 
-        if (canceled) {
+        if (canceled || !response) {
           return;
         }
 
@@ -160,14 +154,14 @@ export function CaptureModal({ open = false, onClose }: Props) {
   }, [capabilityCheckFailed, isCheckingModelCapabilities, selectedModel, selectedModelSupportsVision, toast]);
 
   const handleCapturedMedia = useCallback(
-    async (file: File) => {
+    async (file: File, mode: CaptureMode) => {
       const isImage = file.type.startsWith('image/');
 
       if (isImage && !ensureImageModelSupported()) {
         return;
       }
 
-      const inventoryCapture = isImage && desktopCaptureMode === 'inventory';
+      const inventoryCapture = isImage && mode === 'inventory';
       const uploaded = await upload([file], {
         inventoryCapture,
         model: selectedModel ?? undefined,
@@ -177,16 +171,16 @@ export function CaptureModal({ open = false, onClose }: Props) {
         toast.success('Inventory analysis started. This may take a moment.');
       }
     },
-    [desktopCaptureMode, ensureImageModelSupported, selectedModel, toast, upload],
+    [ensureImageModelSupported, selectedModel, toast, upload],
   );
 
   const handleMobileFrameCaptured = useCallback(
-    async (file: File) => {
+    async (file: File, mode: CaptureMode) => {
       if (!ensureImageModelSupported()) {
         return;
       }
 
-      const inventoryCapture = mobileCaptureMode === 'inventory';
+      const inventoryCapture = mode === 'inventory';
       const uploaded = await upload([file], {
         inventoryCapture,
         model: selectedModel ?? undefined,
@@ -196,7 +190,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
         toast.success('Inventory analysis started. This may take a moment.');
       }
     },
-    [ensureImageModelSupported, mobileCaptureMode, selectedModel, toast, upload],
+    [ensureImageModelSupported, selectedModel, toast, upload],
   );
 
   const createFileThread = useCallback(async () => {
@@ -211,7 +205,9 @@ export function CaptureModal({ open = false, onClose }: Props) {
       }),
     });
 
-    setThreadId(thread.id);
+    if (thread) {
+      setThreadId(thread.id);
+    }
   }, [authToken, selectedModel]);
 
   useEffect(() => {
@@ -295,10 +291,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
           >
             <Camera.Feed />
             <div className="absolute w-full bottom-0">
-              <Camera.MobileControls
-                onSelectLastCapture={handleSelectLastCapture}
-                onRecordingModeChange={setMobileCaptureMode}
-              />
+              <Camera.MobileControls onSelectLastCapture={handleSelectLastCapture} />
             </div>
           </Camera>
         </InlineModal>
@@ -375,7 +368,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
           >
             <Camera.Information />
             <Camera.Feed />
-            <Camera.DesktopControls onRecordingModeChange={setDesktopCaptureMode} />
+            <Camera.DesktopControls />
           </Camera>
         )}
 

@@ -21,12 +21,12 @@ export function MobileControls({ onSelectLastCapture, onRecordingModeChange }: P
 
   const handleRecordClick = useCallback(() => {
     if (recordingMode === 'video') {
-      toggleRecording();
+      toggleRecording('video');
 
       return;
     }
 
-    captureFrame();
+    captureFrame(recordingMode);
   }, [captureFrame, toggleRecording, recordingMode]);
 
   const handleSetPhotoMode = useCallback(() => {

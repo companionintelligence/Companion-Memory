@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryColumn,
   Column,
   CreateDateColumn,
@@ -12,6 +13,13 @@ import {
 import { UserEntity, User } from '@ci/domains/user';
 
 @Entity({ schema: 'ci', name: 'events' })
+// Idempotency key for captured/imported events. Created by migration
+// 20260620213807_add_events_source_idempotency; declared here so TypeORM is
+// aware of it (schema sync stays off — the migration is the source of truth).
+@Index('events_source_triple_uniq', ['sourceType', 'sourceSystem', 'sourceId'], {
+  unique: true,
+  where: '"source_id" IS NOT NULL',
+})
 export class EventEntity {
   @PrimaryColumn('uuid', { name: 'event_id' })
   id!: string;
@@ -118,6 +126,23 @@ export class EventEntity {
   @Column({ type: 'text', default: 'confirmed' })
   status!: string;
 
+  // Retrieval ranking (managed by enrichment + the read path, not at ingest).
+  // salience starts at 1.0 and decays / is reinforced over time; access_count
+  // and last_accessed feed recency+frequency boosting for agent recall.
+  @Column({ type: 'double precision', default: 1.0 })
+  salience!: number;
+
+  @Column({ type: 'integer', default: 0, name: 'access_count' })
+  accessCount!: number;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'last_accessed' })
+  lastAccessed!: Date | null;
+
+  // Consent / sharing scope (mirrors ci.answers.sharing_level). Stored raw at
+  // ingest; redaction happens at read based on the consumer's scope (G2).
+  @Column({ type: 'text', default: 'private', name: 'sharing_level' })
+  sharingLevel!: string;
+
   @Column({ type: 'boolean', default: false, name: 'is_deleted' })
   isDeleted!: boolean;
 
@@ -193,6 +218,10 @@ export class EventEntity {
       parentEventId: entity.parentEventId,
       relatedEventIds: entity.relatedEventIds,
       supersedesEventId: entity.supersedesEventId,
+      salience: entity.salience,
+      accessCount: entity.accessCount,
+      lastAccessed: entity.lastAccessed,
+      sharingLevel: entity.sharingLevel,
       createdBy: entity.createdBy,
       userId: entity.userId,
       createdAt: entity.createdAt,

@@ -59,13 +59,14 @@ export default defineConfig({
         ],
       },
       devOptions: {
-        enabled: true,
+        enabled: false,
         type: 'module',
       },
       workbox: {
         // Pre-caches all matching assets.
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
 
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             // Match any request that ends with .png, .jpg, .jpeg or .svg.
@@ -82,8 +83,8 @@ export default defineConfig({
             },
           },
           {
-            // Match any request where the path matches /api
-            urlPattern: /\/api\//,
+            // Match API requests, excluding OIDC auth redirects which cross origins
+            urlPattern: /\/api\/(?!authenticate\/oidc)/,
             handler: 'NetworkOnly',
             options: {
               backgroundSync: {
@@ -110,10 +111,27 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 5173,
-    allowedHosts: getAllowedHosts(),
+    // When WEB_PORT is set, bind exactly that port and fail rather than
+    // drifting to the next free one, which is Vite's default. A reverse proxy
+    // in front routes to this exact port, so a silent fallback would leave it
+    // pointing at nothing. A plain `yarn dev` has no WEB_PORT and keeps the
+    // auto-increment fallback.
+    //
+    // allowedHosts permits any *.localhost, since the app is served behind the
+    // proxy at https://<name>.localhost rather than one fixed hostname. HMR
+    // needs no extra config. Vite connects to the page's own origin, which the
+    // proxy forwards.
+    port: Number(process.env.WEB_PORT) || 5173,
+    strictPort: Boolean(process.env.WEB_PORT),
+    allowedHosts: ['.localhost', ...getAllowedHosts()],
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],
     },
+    warmup: {
+      clientFiles: ['./src/main.tsx'],
+    },
+  },
+  optimizeDeps: {
+    include: ['@ci/shadcn', 'react', 'react-dom', 'react-router-dom'],
   },
 });

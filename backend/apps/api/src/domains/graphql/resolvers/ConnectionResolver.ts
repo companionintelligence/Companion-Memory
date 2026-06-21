@@ -146,7 +146,6 @@ export class ConnectionResolver {
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) id: string,
   ): Promise<ConnectionType | null> {
-    console.log('external connection GET', id);
     const serviceContext = toServiceContext(context);
     const { id: decodedId } = GlobalUID.decode(id);
 

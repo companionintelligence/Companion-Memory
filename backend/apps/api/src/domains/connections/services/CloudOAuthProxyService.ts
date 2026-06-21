@@ -43,6 +43,7 @@ export class CloudOAuthProxyService {
       [providers.microsoft.id]: 'microsoft',
       [providers.facebook.id]: 'facebook',
       [providers.spotify.id]: 'spotify',
+      [providers.github.id]: 'github',
     };
 
     return map[providerId];
@@ -143,7 +144,9 @@ export class CloudOAuthProxyService {
         'Content-Type': 'application/json',
         Authorization: this.authorizationHeader,
       },
-      body: JSON.stringify({ refresh_token: proxyRefreshToken }),
+      body: JSON.stringify({
+        refresh_token: proxyRefreshToken,
+      }),
     });
 
     if (!response.ok) {

@@ -109,6 +109,6 @@ services:
 
 volumes:
   db-data:
-    name: ci-server-staging-db-data
+    name: ${COMPOSE_PROJECT_NAME}-staging-db-data
   object-data:
-    name: ci-server-staging-object-data
+    name: ${COMPOSE_PROJECT_NAME}-staging-object-data

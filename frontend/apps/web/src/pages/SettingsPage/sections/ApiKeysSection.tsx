@@ -62,7 +62,7 @@ export function ApiKeysSection() {
       setLoading(true);
       setError(null);
       const data = await fetchJson<ApiKeyResponse[]>('/api/keys', { headers: headers() });
-      setKeys(data);
+      setKeys(data ?? []);
     } catch {
       setError('Failed to load API keys');
     } finally {
@@ -92,7 +92,7 @@ export function ApiKeysSection() {
         body: JSON.stringify(body),
       });
 
-      setRevealedKey(data.key);
+      setRevealedKey(data?.key ?? null);
       setCreateOpen(false);
       setCreateName('');
       setCreateExpiresAt(undefined);

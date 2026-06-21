@@ -3,7 +3,7 @@ import { useEffect, useMemo } from 'react';
 import L from 'leaflet';
 import { useMap as useLeafletMap } from 'react-leaflet';
 
-import { loadGoogleMaps } from './googleMaps';
+import { isGoogleMapsConfigured, loadGoogleMaps } from './googleMaps';
 import { useMap } from './useMap';
 
 class RouteEngine extends L.LayerGroup {
@@ -82,27 +82,44 @@ export function RouteLayer() {
 
   const engine = useMemo(() => new RouteEngine(), []);
 
+  // Route drawing depends on the billed Google Directions API. When no key is
+  // configured, skip the layer entirely so we never hit the API (which would
+  // otherwise emit a REQUEST_DENIED / billing error per location pair on load).
+  const configured = isGoogleMapsConfigured();
+
   useEffect(() => {
+    if (!configured) {
+      return;
+    }
+
     map.addLayer(engine);
 
     return () => {
       map.removeLayer(engine);
     };
-  }, [map, engine]);
+  }, [map, engine, configured]);
 
   useEffect(() => {
+    if (!configured) {
+      return;
+    }
+
     const latLngs = locations.map((loc) => L.latLng(loc));
 
     engine.update(latLngs);
-  }, [locations, engine]);
+  }, [locations, engine, configured]);
 
   useEffect(() => {
+    if (!configured) {
+      return;
+    }
+
     if (displayRoutes) {
       map.addLayer(engine);
     } else {
       map.removeLayer(engine);
     }
-  }, [displayRoutes, engine]);
+  }, [displayRoutes, engine, map, configured]);
 
   return null;
 }
