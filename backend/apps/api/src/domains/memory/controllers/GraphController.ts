@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
+import { graphTypesToExclude } from '../graph.types';
 import { GraphEventService } from '../services/GraphEventService';
 import { GraphQueryService } from '../services/GraphQueryService';
 import { GraphUtilityService } from '../services/GraphUtilityService';
@@ -17,12 +18,33 @@ const getNodeDetailsSchema = z.object({
   maxNodes: z.coerce.number().int().min(1).max(250).optional(),
   maxEdges: z.coerce.number().int().min(1).max(500).optional(),
 });
+
+// CSV of explorer entity types the user currently has selected (e.g. "person,place").
+// Absent => no entity-type filter (show all). Present (even empty "") => filter active; an
+// empty selection excludes every mappable type. See graphTypesToExclude.
+const explorerTypesParam = z
+  .string()
+  .optional()
+  .transform((value) =>
+    value === undefined
+      ? undefined
+      : value
+          .split(',')
+          .map((type) => type.trim())
+          .filter(Boolean),
+  );
+
+const graphDataSchema = z.object({
+  includeTypes: explorerTypesParam,
+});
 const graphSearchSchema = z.object({
   query: z.string().min(1),
   limit: z.coerce.number().int().positive().max(50).optional(),
+  includeTypes: explorerTypesParam,
 });
 
 type GetNodeDetailsDto = z.infer<typeof getNodeDetailsSchema>;
+type GraphDataDto = z.infer<typeof graphDataSchema>;
 type GraphSearchDto = z.infer<typeof graphSearchSchema>;
 
 @Controller('graph')
@@ -55,16 +77,46 @@ export class GraphController {
   }
 
   @Get('data')
-  async getGraphData(@Context() ctx: RequestContext) {
+  async getGraphData(
+    @Context() ctx: RequestContext,
+    @Query(new ValidationPipe(graphDataSchema)) query: GraphDataDto,
+  ) {
     const ownerId = this.ensureUserId(ctx);
 
-    const nodes = await this.graphQuery.getNodes(ownerId, { limit: 200 });
+    // Translate the explorer's entity-type selection into graph entity_type values to exclude.
+    // Connective NER types (Concept/Goal/Tag) are never excluded so the graph stays connected.
+    const excludeEntityTypes =
+      query.includeTypes === undefined ? [] : graphTypesToExclude(query.includeTypes);
+    const isFiltered = excludeEntityTypes.length > 0;
+
+    const nodes = await this.graphQuery.getNodes(ownerId, { limit: 200, excludeEntityTypes });
     const relationships = await this.graphQuery.getRelationships(ownerId, {});
+
+    // The frontend seeds its subgraph from the owner's entity node. A type filter can exclude it
+    // (e.g. the user is a Person and Person is deselected), which would collapse the graph to
+    // empty — so always keep the anchor node regardless of the filter.
+    const nodeMap = new Map(nodes.map((node) => [node.entity_id, node]));
+    if (isFiltered) {
+      const userEntity = await this.graphQuery.getUserEntity(ownerId);
+      if (userEntity && !nodeMap.has(userEntity.entity_id)) {
+        nodeMap.set(userEntity.entity_id, userEntity);
+      }
+    }
+
+    const survivingNodes = Array.from(nodeMap.values());
+    const survivingIds = new Set(survivingNodes.map((node) => node.entity_id));
+
+    // Drop links dangling against excluded nodes when filtering; otherwise preserve prior behavior.
+    const links = isFiltered
+      ? relationships.filter(
+          (rel) => survivingIds.has(rel.from_entity_id) && survivingIds.has(rel.to_entity_id),
+        )
+      : relationships;
 
     return {
       success: true,
       data: {
-        nodes: nodes.map((node) => ({
+        nodes: survivingNodes.map((node) => ({
           id: node.entity_id,
           entity_id: node.entity_id,
           entity_type: node.entity_type,
@@ -72,7 +124,7 @@ export class GraphController {
           description: node.description,
           properties: node.properties || {},
         })),
-        links: relationships.map((rel) => ({
+        links: links.map((rel) => ({
           id: rel.relationship_id,
           relationship_id: rel.relationship_id,
           source: rel.from_entity_id,
@@ -98,6 +150,12 @@ export class GraphController {
       return { success: true, nodes: [] };
     }
 
+    // Same entity-type filter as /data: skip nodes whose graph type maps to a deselected
+    // explorer type, while keeping connective NER types.
+    const excludeEntityTypes = new Set(
+      query.includeTypes === undefined ? [] : graphTypesToExclude(query.includeTypes),
+    );
+
     const textMatches = await this.graphQuery.searchNodesByText(ownerId, trimmedQuery, { limit });
     const prefixMatches = await this.graphQuery.searchNodesByPrefix(ownerId, trimmedQuery, { limit });
 
@@ -105,7 +163,7 @@ export class GraphController {
     const seen = new Set<string>();
 
     for (const candidate of prefixMatches) {
-      if (seen.has(candidate.entity_id)) {
+      if (seen.has(candidate.entity_id) || excludeEntityTypes.has(candidate.entity_type)) {
         continue;
       }
 
@@ -117,7 +175,7 @@ export class GraphController {
     }
 
     for (const candidate of textMatches) {
-      if (seen.has(candidate.node.entity_id)) {
+      if (seen.has(candidate.node.entity_id) || excludeEntityTypes.has(candidate.node.entity_type)) {
         continue;
       }
 
