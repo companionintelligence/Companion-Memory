@@ -1,4 +1,4 @@
-import { Field, InputType } from '@nestjs/graphql';
+import { Field, Int, InputType } from '@nestjs/graphql';
 
 import { IndexableEntity } from '@ci/domains/search-next';
 
@@ -6,6 +6,14 @@ import { IndexableEntity } from '@ci/domains/search-next';
 export class SearchInput {
   @Field({ nullable: true })
   query?: string;
+
+  // Forward cursor pagination: number of results per page.
+  @Field(() => Int, { nullable: true })
+  first?: number;
+
+  // Opaque cursor (PageInfo.endCursor) to fetch the page after.
+  @Field(() => String, { nullable: true })
+  after?: string;
 
   @Field(() => [String], { nullable: true })
   excludeTypes?: IndexableEntity[];

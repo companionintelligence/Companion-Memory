@@ -23,46 +23,29 @@ import { PlaceRow } from './rows/PlaceRow';
 import { ThreadRow } from './rows/ThreadRow';
 import { SearchTable } from './SearchTable';
 
-// Render the fetched set in pages, growing as the user scrolls, so the DOM
-// stays light and the list feels responsive even with hundreds of results.
-const PAGE_SIZE = 40;
-
 export function ListView() {
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
   const [activeItem, setActiveItem] = useState<string | null>(null);
 
   const clearActiveItem = () => setActiveItem(null);
 
-  const [{ data, loading }, { setActiveEntity }] = useEntityService();
+  const [{ data, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  // Reset paging whenever the underlying result set changes (e.g. a new search).
+  // Fetch the next server page (cursor-based) when the sentinel scrolls into view.
   useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-    scrollRef.current?.scrollTo({ top: 0 });
-  }, [data]);
-
-  const hasMore = visibleCount < data.length;
-
-  // Reveal the next page when the sentinel scrolls into view.
-  useEffect(() => {
-    if (!hasMore) {
-      return;
-    }
-
     const sentinel = sentinelRef.current;
 
-    if (!sentinel) {
+    if (!sentinel || !hasNextPage) {
       return;
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
-          setVisibleCount((count) => Math.min(count + PAGE_SIZE, data.length));
+          loadMore();
         }
       },
       { root: scrollRef.current, rootMargin: '400px' },
@@ -71,17 +54,7 @@ export function ListView() {
     observer.observe(sentinel);
 
     return () => observer.disconnect();
-  }, [hasMore, data.length]);
-
-  if (loading && data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-hidden px-4 pb-2">
-        {Array.from({ length: 10 }).map((_, i) => (
-          <div key={i} className="my-2 h-12 animate-pulse rounded-md bg-accent/30" />
-        ))}
-      </div>
-    );
-  }
+  }, [hasNextPage, loadMore]);
 
   if (data.length === 0) {
     return (
@@ -107,7 +80,7 @@ export function ListView() {
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
         <SearchTable>
           <SearchTable.RowGroup>
-            {data.slice(0, visibleCount).map((item) => {
+            {data.map((item) => {
               // In-place details Sheet for entity rows; richer dedicated modals
               // for media (File) and inventory (Item).
               switch (item.__typename) {
@@ -166,10 +139,10 @@ export function ListView() {
           </SearchTable.RowGroup>
         </SearchTable>
 
-        {hasMore && <div ref={sentinelRef} className="h-8" />}
+        {hasNextPage && <div ref={sentinelRef} className="h-8" />}
 
         <div className="py-3 text-center text-xs text-muted-foreground">
-          Showing {Math.min(visibleCount, data.length)} of {data.length}
+          {data.length} loaded{loadingMore ? ' · loading…' : hasNextPage ? '' : ' · end'}
         </div>
       </div>
 

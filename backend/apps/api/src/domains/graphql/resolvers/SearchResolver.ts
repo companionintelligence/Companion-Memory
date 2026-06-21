@@ -33,6 +33,50 @@ import { type SearchResult } from '../types/SearchResultType';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
+const DEFAULT_PAGE_SIZE = 30;
+const MAX_PAGE_SIZE = 100;
+// Over-fetch per type so the merged page is guaranteed to contain the globally
+// newest `first` rows even when one type dominates a time window (a single type
+// can contribute at most `first` of them, so any multiplier >= 1 is correct;
+// the margin also absorbs same-timestamp boundary ties).
+const FETCH_MULTIPLIER = 4;
+
+/** The time a result is ordered by (events use startTime, others use time). */
+function timeOf(result: SearchResult): Date {
+  if ('time' in result && result.time) {
+    return new Date(result.time as string | Date);
+  }
+
+  if ('startTime' in result && result.startTime) {
+    return new Date(result.startTime as string | Date);
+  }
+
+  return new Date(0);
+}
+
+/** Opaque, time-ordered cursor: base64(`<iso-time>::<id>`). */
+function searchCursorOf(result: SearchResult): string {
+  return Buffer.from(`${timeOf(result).toISOString()}::${result.id}`).toString('base64');
+}
+
+/** Decode a cursor back to the timestamp used to window the next DB page. */
+function decodeSearchCursor(cursor?: string | null): { time: Date } | null {
+  if (!cursor) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(cursor, 'base64').toString('utf8');
+    const separator = decoded.indexOf('::');
+    const iso = separator >= 0 ? decoded.slice(0, separator) : decoded;
+    const time = new Date(iso);
+
+    return Number.isNaN(time.getTime()) ? null : { time };
+  } catch {
+    return null;
+  }
+}
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver()
 export class SearchResolver {
@@ -69,6 +113,9 @@ export class SearchResolver {
     let candidateSource: 'query' | 'tags' | 'timed';
     let identifiers: EntityIdentifier<IndexableEntity | TaggableEntity>[];
 
+    const first = Math.min(Math.max(input.first ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+    const afterCursor = decodeSearchCursor(input.after);
+
     if (query != null) {
       candidateSource = 'query';
       identifiers = await this.searchByQuery(serviceContext, {
@@ -87,10 +134,14 @@ export class SearchResolver {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
         startTime,
+        // Page backward through time: each page ends at the cursor's timestamp
+        // (inclusive), so the cursor row is re-fetched and Paginator slices past it.
         // With no filters at all, bound to "now" so we return recent items, not the entire history.
-        endTime: endTime ?? (noInputs ? new Date() : undefined),
+        endTime: afterCursor?.time ?? endTime ?? (noInputs ? new Date() : undefined),
         // "How" filter — pushed down to the event query for the timed path.
         eventTypes,
+        // Over-fetch per type so the merged page holds the globally newest `first` rows.
+        limit: first * FETCH_MULTIPLIER,
       });
     }
 
@@ -153,12 +204,14 @@ export class SearchResolver {
     const results = sorted.map((entry) => this.toSearchResult(entry));
 
     const { slice, pageInfo, totalCount } = Paginator.paginate(results, {
-      getId: (result) => result.id,
+      getId: searchCursorOf,
+      first,
+      after: input.after ?? undefined,
     });
 
     const edges = slice.map((result) => ({
       node: result,
-      cursor: result.id,
+      cursor: searchCursorOf(result),
     }));
 
     return {
@@ -215,12 +268,14 @@ export class SearchResolver {
       startTime,
       endTime,
       eventTypes,
+      limit = 25,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       startTime?: Date;
       endTime?: Date;
       eventTypes?: string[];
+      limit?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     const wants = (type: IndexableEntity) => this.matchesTypeFilter(type, includeTypes, excludeTypes);
@@ -232,7 +287,7 @@ export class SearchResolver {
       endTime?: Date;
       eventTypes?: string[];
     } = {
-      limit: 25,
+      limit,
       order: { startTime: 'DESC' },
     };
 
@@ -246,7 +301,7 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
     } = {
-      limit: 25,
+      limit,
       order: { time: 'DESC' },
     };
 
@@ -256,7 +311,7 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
     } = {
-      limit: 25,
+      limit,
       order: { time: 'DESC' },
     };
 

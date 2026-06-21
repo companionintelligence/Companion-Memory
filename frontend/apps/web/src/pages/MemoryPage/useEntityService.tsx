@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import type { ApolloError } from '@apollo/client';
 import { useQuery } from '@apollo/client';
@@ -7,10 +7,17 @@ import { type ResultOf } from '@graphql-typed-document-node/core';
 
 import { gql } from '@/graphql';
 
+const PAGE_SIZE = 30;
+
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, first: $first, after: $after }) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       edges {
+        cursor
         node {
           __typename
 
@@ -78,8 +85,11 @@ type ReturnType = [
   {
     data: Array<EntityItem>;
     loading: boolean;
+    loadingMore: boolean;
+    hasNextPage: boolean;
     error: ApolloError | undefined;
     activeEntity: MemoryEntity | null;
+    loadMore: () => void;
   },
   {
     setActiveEntity: (entity: MemoryEntity | null) => void;
@@ -107,7 +117,7 @@ function useEntityService({
   sortBy?: string;
   sortOrder?: string;
 }): ReturnType {
-  const { data, loading, error } = useQuery(SEARCH_QUERY, {
+  const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
@@ -118,11 +128,46 @@ function useEntityService({
       endTime: endTime || undefined,
       sortBy: sortBy || undefined,
       sortOrder: sortOrder || undefined,
+      first: PAGE_SIZE,
     },
     fetchPolicy: 'cache-and-network',
+    notifyOnNetworkStatusChange: true,
   });
 
   const [activeEntity, setActiveEntity] = useState<MemoryEntity | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const pageInfo = data?.search?.pageInfo;
+  const hasNextPage = pageInfo?.hasNextPage ?? false;
+
+  // Append the next server page (cursor-based) onto the accumulated results.
+  const loadMore = useCallback(() => {
+    if (!hasNextPage || loadingMore || !pageInfo?.endCursor) {
+      return;
+    }
+
+    setLoadingMore(true);
+
+    fetchMore({
+      variables: { after: pageInfo.endCursor },
+      updateQuery: (prev, { fetchMoreResult }) => {
+        if (!fetchMoreResult?.search) {
+          return prev;
+        }
+
+        const prevEdges = prev.search?.edges ?? [];
+        const seen = new Set(prevEdges.map((edge) => edge.cursor));
+        const nextEdges = fetchMoreResult.search.edges.filter((edge) => !seen.has(edge.cursor));
+
+        return {
+          search: {
+            ...fetchMoreResult.search,
+            edges: [...prevEdges, ...nextEdges],
+          },
+        };
+      },
+    }).finally(() => setLoadingMore(false));
+  }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);
 
   const results = useMemo(() => (data?.search?.edges ?? []).map((edge) => edge.node), [data]);
 
@@ -130,8 +175,11 @@ function useEntityService({
     {
       data: results,
       loading,
+      loadingMore,
+      hasNextPage,
       error,
       activeEntity,
+      loadMore,
     },
     {
       setActiveEntity,
