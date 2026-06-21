@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
-import { Badge, Button, Input, Separator, cn } from '@ci/shadcn';
+import { Badge, Button, Input, Separator, Slider, cn } from '@ci/shadcn';
 import { AlertCircle, Anchor, Loader2, Sparkles, Users } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
@@ -10,6 +10,7 @@ import { ForceGraph, ForceGraph3D } from '@/components/ForceGraph';
 import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { useAuth } from '@/hooks';
 import { Empty } from '@/pages/MemoryPage/Components';
+import { useEntityService } from '@/pages/MemoryPage/useEntityService';
 
 const TYPE_COLOR_PALETTE = [
   '#38bdf8',
@@ -27,7 +28,7 @@ const TYPE_COLOR_PALETTE = [
 const DEFAULT_SPAWN_LIMIT = 10;
 const DEFAULT_HOP_DEPTH = 2;
 const MIN_HOP_DEPTH = 1;
-const MAX_HOP_DEPTH = 5;
+const MAX_HOP_DEPTH = 7;
 
 function getTypeColor(entityType: string): string {
   if (!entityType) {
@@ -154,6 +155,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     { maxDepth: 3, includeTypes: explorerIncludeTypes, tags: tagsParam },
   );
   const isTagFilterActive = tagMatchedEntityIds != null;
+  const [, { setActiveEntity }] = useEntityService();
 
   const spawnLimit = useMemo(() => {
     const parsed = Number.parseInt(spawnLimitInput, 10);
@@ -173,12 +175,11 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     }
   }, [spawnLimitInput]);
 
-  const increaseHopDepth = useCallback(() => {
-    setHopDepth((prev) => Math.min(MAX_HOP_DEPTH, prev + 1));
-  }, []);
-
-  const decreaseHopDepth = useCallback(() => {
-    setHopDepth((prev) => Math.max(MIN_HOP_DEPTH, prev - 1));
+  const handleHopDepthChange = useCallback((values: number[]) => {
+    const [next] = values;
+    if (typeof next === 'number') {
+      setHopDepth(Math.min(MAX_HOP_DEPTH, Math.max(MIN_HOP_DEPTH, next)));
+    }
   }, []);
 
   const baseNodes = subgraph?.nodes ?? [];
@@ -884,6 +885,22 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       setSelectedNodeId(nodeId);
       setExpandedNodes((prev) => (prev.includes(nodeId) ? prev : [...prev, nodeId]));
 
+      // Open the shared EntityDetails sheet, consistent with the List/Gallery/Map
+      // views. Graph nodes are REST objects, so map them to the GenericEntity
+      // shape that GenericDetails renders. The in-panel sidebar below stays as a
+      // secondary preview.
+      const node = rawNodes.find((item) => item.id === nodeId);
+      if (node) {
+        setActiveEntity({
+          __typename: 'GenericEntity',
+          id: node.id,
+          name: node.name,
+          entityType: node.entity_type,
+          description: node.description,
+          properties: node.properties,
+        });
+      }
+
       setNodeClickCounts((prev) => {
         const totalNeighbors = adjacencyMap.get(nodeId)?.size ?? 0;
         if (totalNeighbors === 0) {
@@ -902,7 +919,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         return { ...prev, [nodeId]: nextValue };
       });
     },
-    [adjacencyMap, spawnLimit],
+    [adjacencyMap, rawNodes, setActiveEntity, spawnLimit],
   );
 
   const detailGridClass = variant === 'desktop' ? 'grid gap-4 md:grid-cols-3' : 'grid gap-4 grid-cols-1';
@@ -1071,32 +1088,29 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               <span className="text-sm text-muted-foreground">nodes</span>
             </div>
             <div className="mt-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Hop depth</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Hop depth
+                </p>
+                <span className="text-sm font-medium tabular-nums">
+                  {hopDepth} {hopDepth === 1 ? 'hop' : 'hops'}
+                </span>
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Increase or decrease how many relationship hops are visible from expanded nodes.
+                Drag to reveal nodes {MIN_HOP_DEPTH}–{MAX_HOP_DEPTH} hops away from your query results.
               </p>
-              <div className="mt-2 inline-flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={decreaseHopDepth}
-                  disabled={hopDepth <= MIN_HOP_DEPTH}
-                  aria-label="Decrease hop depth"
-                >
-                  -
-                </Button>
-                <span className="w-10 text-center text-sm font-medium">{hopDepth}</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={increaseHopDepth}
-                  disabled={hopDepth >= MAX_HOP_DEPTH}
-                  aria-label="Increase hop depth"
-                >
-                  +
-                </Button>
+              <div className="mt-3 flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">{MIN_HOP_DEPTH}</span>
+                <Slider
+                  value={[hopDepth]}
+                  min={MIN_HOP_DEPTH}
+                  max={MAX_HOP_DEPTH}
+                  step={1}
+                  onValueChange={handleHopDepthChange}
+                  aria-label="Hop depth"
+                  className="flex-1"
+                />
+                <span className="text-xs text-muted-foreground">{MAX_HOP_DEPTH}</span>
               </div>
             </div>
             <div className="mt-3 flex flex-col gap-2">
