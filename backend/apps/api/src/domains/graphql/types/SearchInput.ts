@@ -42,4 +42,29 @@ export class SearchInput {
   /** 'asc' | 'desc'. Defaults to desc. */
   @Field(() => String, { nullable: true })
   sortOrder?: string;
+
+  // ── LifeScope-parity dimensions (event-scoped) ────────────────────────────
+  // who / where / connector narrow the timeline events; combined with the other
+  // filters they AND together (candidate-set + post-filter), and when any of
+  // them is set the result is restricted to matching events.
+
+  /** "Connector" — data sources (event.source_system) to include, e.g. 'gmail','imessage','spotify'. */
+  @Field(() => [String], { nullable: true })
+  connectors?: string[];
+
+  /** "Who" — person name patterns; matched (ILIKE) against Person entities the event involves. */
+  @Field(() => [String], { nullable: true })
+  people?: string[];
+
+  /** "Where" — place name patterns; matched (ILIKE) against the event's Location entity / location name. */
+  @Field(() => [String], { nullable: true })
+  places?: string[];
+
+  /** "Where" — when true, only events carrying geographic coordinates are returned (located only). */
+  @Field(() => Boolean, { nullable: true })
+  hasLocation?: boolean;
+
+  /** Force conceptual (embedding) ranking for the free-text query instead of the auto heuristic. */
+  @Field(() => Boolean, { nullable: true })
+  semantic?: boolean;
 }

@@ -827,6 +827,11 @@ type Query {
   contents(after: String, before: String, first: Int, last: Int): ContentConnection!
   event(id: ID!): EventType
 
+  """
+  Distinct data sources / connectors (event.source_system) present for the user.
+  """
+  eventSources: [String!]!
+
   """Distinct event types ("how things happened") present for the user."""
   eventTypes: [String!]!
   events(after: String, before: String, first: Int, last: Int): EventConnection!
@@ -935,12 +940,17 @@ type SavedSearchType implements Node {
 
 input SearchInput {
   after: String
+  connectors: [String!]
   endTime: String
   eventTypes: [String!]
   excludeTypes: [String!]
   first: Int
+  hasLocation: Boolean
   includeTypes: [String!]
+  people: [String!]
+  places: [String!]
   query: String
+  semantic: Boolean
   sortBy: String
   sortOrder: String
   startTime: String
