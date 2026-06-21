@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Portal } from '@ci/common';
-import { Button, DropdownMenu, Kbd, Separator, useToast } from '@ci/shadcn';
+import { Button, DropdownMenu, Separator, useToast } from '@ci/shadcn';
 import {
   NotebookPen,
   Upload,
@@ -21,10 +21,9 @@ import { AddPersonModal } from '@/components/modals/AddItemModal';
 import { AddConceptModal } from '@/components/modals/AddItemModal/AddConceptModal.tsx';
 import { CaptureModal } from '@/components/modals/CaptureModal';
 import { InventoryItemModal } from '@/components/modals/InventoryItemModal';
-import { SearchModal } from '@/components/modals/SearchModal';
 import { UploadModal } from '@/components/modals/UploadModal';
+import { GlobalSearchBox } from '@/components/SearchBox';
 import { useModalControls } from '@/hooks';
-import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
 
 import { NavUser } from './NavUser';
 
@@ -33,8 +32,6 @@ export function PrimaryNavigation() {
   const { toast } = useToast();
   const [, { trigger }] = useTriggerHbpe();
 
-  const [{ isOpen: isSearchModalOpen }, { open: openSearchModal, close: closeSearchModal }] =
-    useModalControls();
   const [{ isOpen: isCaptureModalOpen }, { open: openCaptureModal, close: closeCaptureModal }] =
     useModalControls();
   const [{ isOpen: isUploadModalOpen }, { open: openUploadModal, close: closeUploadModal }] =
@@ -73,8 +70,6 @@ export function PrimaryNavigation() {
     };
   }, []);
 
-  useKeyboardShortcut('/', openSearchModal);
-
   const handleUpload = (files: FileList) => {
     return upload(Array.from(files));
   };
@@ -92,17 +87,9 @@ export function PrimaryNavigation() {
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}
 
           <div className="flex flex-row items-center gap-2">
-            <Button
-              variant="outline"
-              className="items-center justify-between flex p-2! gap-3"
-              onClick={openSearchModal}
-            >
-              <Search className="h-4 w-4" strokeWidth={1.25} />
-
-              <div className="pr-4 text-muted-foreground">Search</div>
-
-              <Kbd>/</Kbd>
-            </Button>
+            <div className="w-64">
+              <GlobalSearchBox />
+            </div>
 
             <div className="flex items-center">
               <Button variant="ghost" size="icon" aria-label="More Options">
@@ -207,8 +194,6 @@ export function PrimaryNavigation() {
           </div>
         </section>
       </header>
-
-      <SearchModal open={isSearchModalOpen} onClose={closeSearchModal} />
 
       <UploadModal
         open={isUploadModalOpen}
