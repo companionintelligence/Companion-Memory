@@ -309,6 +309,7 @@ input CreateEventInput {
   metadata: JSON
   organizerEntityId: ID
   participantEntityIds: [ID!]
+  sharingLevel: String
   sourceId: ID
   sourceSystem: String
   sourceType: String
