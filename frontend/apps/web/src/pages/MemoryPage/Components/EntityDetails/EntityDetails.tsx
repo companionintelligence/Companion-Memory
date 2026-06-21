@@ -1,13 +1,14 @@
 import '../styles.css';
 
-import type { EntityItem } from '../../../MemoryPage/useEntityService';
+import type { MemoryEntity } from '../../../MemoryPage/useEntityService';
 
 import { BrowserActivityDetails } from './BrowserActivityDetails';
 import { CommunicationDetails } from './CommunicationDetails';
 import { EventDetails } from './EventDetails';
+import { GenericDetails } from './GenericDetails';
 
 export interface Props {
-  entity: EntityItem;
+  entity: MemoryEntity;
 }
 
 function getCategoryComponent({ entity }: Props) {
@@ -18,6 +19,8 @@ function getCategoryComponent({ entity }: Props) {
       return <CommunicationDetails entity={entity} />;
     case 'EventType':
       return <EventDetails entity={entity} />;
+    case 'GenericEntity':
+      return <GenericDetails entity={entity} />;
     default:
       return null;
   }
