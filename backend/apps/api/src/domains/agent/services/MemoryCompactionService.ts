@@ -555,11 +555,34 @@ export class MemoryCompactionService {
   ): Promise<string | null> {
     switch (type) {
       case 'person': {
+        // 1. Exact (case-insensitive) name match — cheapest and safest.
         const matches = await this.personService.search(context, { name });
         const existing = matches.find((p) => p.name?.toLowerCase() === name.toLowerCase());
 
         if (existing) {
           return existing.id;
+        }
+
+        // 2. Name-variant match: "Priya" <-> "Priya Sharma". PersonService.search
+        //    only does exact equality, so it can never surface a variant; scan
+        //    the user's people and reuse the node when there is an UNAMBIGUOUS
+        //    token-subset relation. This consolidates every fact and edge about
+        //    a person onto one node instead of fragmenting across name forms.
+        //
+        //    A relational descriptor ("Priya's brother") is its OWN person — it
+        //    is never a variant of the head name, so we neither fold it into
+        //    another node nor let it block a real merge.
+        if (!this.isRelationalDescriptor(name)) {
+          const variant = this.resolvePersonVariant(name, await this.personService.findAll(context));
+
+          if (variant) {
+            // Promote the surviving node to the fuller form ("Priya" ->
+            // "Priya Sharma") so it carries the most complete identifier for
+            // keyword recall. Best-effort; the shared id is what matters.
+            await this.promotePersonName(context, variant, name);
+
+            return variant.id;
+          }
         }
 
         const created = await this.personService.create(context, {
@@ -632,6 +655,111 @@ export class MemoryCompactionService {
 
   private entityKey(type: string, name: string): string {
     return `${(type ?? '').toLowerCase()}:${(name ?? '').toLowerCase()}`;
+  }
+
+  /**
+   * Lower-cases a name and splits it into a set of word tokens, dropping
+   * punctuation. "Priya Sharma" -> {priya, sharma}.
+   */
+  private nameTokens(name: string | null | undefined): Set<string> {
+    return new Set(
+      (name ?? '')
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+  }
+
+  /**
+   * True when a name describes a person by their relation to someone else
+   * ("Priya's brother", "Jordan's manager") rather than naming them directly.
+   * The possessive 's is the signal. Such nodes are distinct people: they must
+   * never be merged into the head name, nor block the head name from merging
+   * (a bare "Priya" is a token-subset of "Priya's brother" and would otherwise
+   * make every real "Priya" merge ambiguous).
+   */
+  private isRelationalDescriptor(name: string): boolean {
+    return /['’]s(?=\s|$)/i.test(name ?? '');
+  }
+
+  /**
+   * Resolve a person name against existing nodes by token-subset relation
+   * ("Priya" <-> "Priya Sharma"), returning the matched node or null.
+   *
+   * Only an UNAMBIGUOUS match is accepted: if a bare first name fits several
+   * full names (e.g. "John" against both "John Smith" and "John Doe") we return
+   * null and let the caller create a fresh node rather than collapse two people.
+   * Names of length two or more tokens are only merged when one word-set fully
+   * contains the other, so "Priya Sharma" and "Priya Patel" never merge.
+   * Relational descriptors are excluded so they neither match nor cause
+   * ambiguity (see isRelationalDescriptor).
+   */
+  private resolvePersonVariant(
+    name: string,
+    candidates: { id: string; name?: string | null }[],
+  ): { id: string; name?: string | null } | null {
+    const target = this.nameTokens(name);
+
+    if (target.size === 0) {
+      return null;
+    }
+
+    const matches = candidates.filter((candidate) => {
+      if (!candidate.name || this.isRelationalDescriptor(candidate.name)) {
+        return false;
+      }
+
+      const tokens = this.nameTokens(candidate.name);
+
+      if (tokens.size === 0 || this.setsEqual(tokens, target)) {
+        return false; // exact matches are handled before this is called
+      }
+
+      return this.isSubset(target, tokens) || this.isSubset(tokens, target);
+    });
+
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  /**
+   * Rename an existing person node to a fuller incoming form when the incoming
+   * name is a strict token-superset ("Priya" -> "Priya Sharma"). Only ever
+   * extends, never shrinks or renames sideways. Best-effort: a failed update
+   * leaves the (correct, shared) node in place.
+   */
+  private async promotePersonName(
+    context: UserServiceContext,
+    node: { id: string; name?: string | null },
+    incomingName: string,
+  ): Promise<void> {
+    const current = this.nameTokens(node.name);
+    const incoming = this.nameTokens(incomingName);
+
+    if (incoming.size <= current.size || !this.isSubset(current, incoming)) {
+      return;
+    }
+
+    try {
+      await this.personService.update(context, node.id, { name: incomingName });
+      node.name = incomingName;
+    } catch {
+      // Promotion is cosmetic; the merge (shared id) is the real win.
+    }
+  }
+
+  private isSubset(a: Set<string>, b: Set<string>): boolean {
+    for (const value of a) {
+      if (!b.has(value)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private setsEqual(a: Set<string>, b: Set<string>): boolean {
+    return a.size === b.size && this.isSubset(a, b);
   }
 
   private parseExtractionResult(content: string): ExtractionResult {
