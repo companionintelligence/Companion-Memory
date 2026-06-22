@@ -56,6 +56,12 @@ export function ItemDetails({ entity }: Props) {
         },
       ]}
       onSave={async (values) => {
+        // Clearing the field should null out the value, not persist $0. Guard
+        // against unparseable input by treating it as cleared too.
+        const trimmedValue = values.currentValue?.trim() ?? '';
+        const parsedValue = trimmedValue === '' ? null : Number(trimmedValue);
+        const currentValue = parsedValue == null || Number.isNaN(parsedValue) ? null : parsedValue;
+
         await updateItem({
           variables: {
             input: {
@@ -65,7 +71,7 @@ export function ItemDetails({ entity }: Props) {
               category: values.category,
               brand: values.brand,
               model: values.model,
-              currentValue: values.currentValue ? Number(values.currentValue) : 0,
+              currentValue,
             },
           },
         });

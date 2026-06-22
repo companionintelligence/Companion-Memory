@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { GlobalUID, Portal } from '@ci/common';
@@ -82,13 +82,43 @@ export default function DesktopMemoryPage() {
     }
   }, [searchId, savedSearchData]);
 
+  // Matches the Sheet's `data-[state=closed]:duration-300` close animation.
+  const CLOSE_ANIMATION_MS = 300;
+  const closeTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
-    setDetailsOpen(activeEntity != null);
+    if (activeEntity != null) {
+      // A (possibly new) entity is active — cancel any pending unmount and open.
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+
+      setDetailsOpen(true);
+    }
   }, [activeEntity]);
 
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
+
   const toggleactiveEntity = (active: boolean) => {
+    setDetailsOpen(active);
+
     if (!active) {
-      setActiveEntity(null);
+      // Keep the Sheet mounted while it animates out, then drop the entity.
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+
+      closeTimerRef.current = window.setTimeout(() => {
+        setActiveEntity(null);
+        closeTimerRef.current = null;
+      }, CLOSE_ANIMATION_MS);
     }
   };
 
