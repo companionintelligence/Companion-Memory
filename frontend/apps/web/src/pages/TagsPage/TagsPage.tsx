@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { EmptyState, GlobalUID, LoadingPage, Portal, usePageTitle } from '@ci/common';
+import { EmptyState, LoadingPage, Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Input } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
@@ -60,7 +60,7 @@ export function TagsPage() {
 
         <div className="flex flex-wrap gap-2">
           {filteredTags.map(({ node: tag }) => (
-            <Link key={tag.id} to={`/tags/${GlobalUID.parse('tag', tag.id)}`}>
+            <Link key={tag.id} to={`/memory?tags=${encodeURIComponent(tag.label)}`}>
               <Tag text={tag.label} className="cursor-pointer" />
             </Link>
           ))}

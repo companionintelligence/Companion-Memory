@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useState, useCallback } from 'react';
+import { type KeyboardEvent, useState, useCallback, useMemo } from 'react';
 
 import { Form, Input, useForm, formDataResolver, formDataSchema as s, cn } from '@ci/shadcn';
 import { X, Tag as TagIcon } from '@ci/shadcn/icons';
@@ -15,9 +15,18 @@ const EMPTY: FormData = {
   label: '',
 };
 
+const MAX_SUGGESTIONS = 8;
+
 interface Props {
   tags?: string[];
   readOnly?: boolean;
+  /**
+   * Existing tag labels to autocomplete from. When provided, a dropdown of
+   * matching tags surfaces as you type — this is what unifies the explorer's tag
+   * filter with the tag vocabulary the Tags page browses. Free-text entry still
+   * works (you can add a tag that isn't in the list).
+   */
+  suggestions?: string[];
   onTagAdded?: (tag: string) => boolean | Promise<boolean>;
   /**
    * Called when a tag is removed. The removal is applied optimistically; resolve
@@ -26,37 +35,66 @@ interface Props {
   onTagRemoved?: (tag: string) => void | boolean | Promise<void | boolean>;
 }
 
-export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTagRemoved }: Props) {
+export function TagInput({
+  tags: initialTags,
+  readOnly = false,
+  suggestions,
+  onTagAdded,
+  onTagRemoved,
+}: Props) {
   const [tags, setTags] = useState<string[]>(initialTags ?? []);
   const [lowercaseTags, setLowercaseTags] = useState<Set<string>>(
     new Set(initialTags?.map((t) => t.toLowerCase()) ?? []),
   );
+  const [focused, setFocused] = useState(false);
 
   const form = useForm<FormData>({
     resolver: formDataResolver(FormSchema),
     defaultValues: EMPTY,
   });
 
-  const handleSubmit = useCallback(
-    async (data: FormData) => {
-      if (lowercaseTags.has(data.label.toLowerCase())) {
+  const draft = form.watch('label');
+
+  // Existing tags matching the draft (case-insensitive), minus already-applied
+  // ones — the autocomplete list shown beneath the input while focused.
+  const matches = useMemo(() => {
+    if (!suggestions?.length || !focused) {
+      return [];
+    }
+
+    const query = draft.trim().toLowerCase();
+
+    if (query === '') {
+      return [];
+    }
+
+    return suggestions
+      .filter((label) => !lowercaseTags.has(label.toLowerCase()) && label.toLowerCase().includes(query))
+      .slice(0, MAX_SUGGESTIONS);
+  }, [suggestions, focused, draft, lowercaseTags]);
+
+  const addTag = useCallback(
+    async (label: string) => {
+      const trimmed = label.trim();
+
+      if (trimmed === '' || lowercaseTags.has(trimmed.toLowerCase())) {
+        form.reset(EMPTY);
+
         return;
       }
 
-      if (data.label.trim() === '') {
-        return;
-      }
-
-      const success = await onTagAdded?.(data.label);
+      const success = await onTagAdded?.(trimmed);
 
       if (success === true) {
-        setTags((prev) => [...prev, data.label]);
-        setLowercaseTags((prev) => new Set(prev).add(data.label.toLowerCase()));
+        setTags((prev) => [...prev, trimmed]);
+        setLowercaseTags((prev) => new Set(prev).add(trimmed.toLowerCase()));
         form.reset(EMPTY);
       }
     },
-    [form, onTagAdded, tags],
+    [form, lowercaseTags, onTagAdded],
   );
+
+  const handleSubmit = useCallback((data: FormData) => addTag(data.label), [addTag]);
 
   const restoreTag = useCallback((value: string, index: number) => {
     setTags((prev) => {
@@ -127,7 +165,7 @@ export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTa
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(handleSubmit)}>
+      <form onSubmit={form.handleSubmit(handleSubmit)} className="relative">
         <div
           className={cn(
             'w-full flex flex-col p-2',
@@ -166,6 +204,10 @@ export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTa
                   <Input
                     {...field}
                     onKeyDown={handleKeyDown}
+                    onFocus={() => setFocused(true)}
+                    // Delay so a suggestion click registers before the list unmounts.
+                    onBlur={() => setTimeout(() => setFocused(false), 120)}
+                    placeholder={suggestions && tags.length === 0 ? 'Add tags…' : undefined}
                     className={cn(
                       'min-w-35 !flex-1 !bg-transparent !border-0 !outline-none !ring-0 !shadow-none !rounded-none',
                       '!p-0 h-5',
@@ -179,6 +221,24 @@ export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTa
             )}
           </div>
         </div>
+
+        {matches.length > 0 && (
+          <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-auto rounded-md border bg-popover p-1 shadow-md">
+            {matches.map((label) => (
+              <button
+                key={label}
+                type="button"
+                // Keep focus on the input so the list stays open between picks.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => addTag(label)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+              >
+                <TagIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                <span className="truncate">{label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </form>
     </Form>
   );

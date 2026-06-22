@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Badge, Button, Calendar, Dialog, Input, Label, Popover, Select, useToast } from '@ci/shadcn';
 import {
@@ -49,6 +49,21 @@ const CREATE_SAVED_SEARCH = gql(`
         query
         entityTypes
         tags
+      }
+    }
+  }
+`);
+
+// The user's existing tags, used to autocomplete the drawer's tag filter — the
+// same vocabulary the Tags page browses, so the two stay unified.
+const EXPLORER_TAGS = gql(`
+  query ExplorerTags {
+    tags {
+      edges {
+        node {
+          id
+          label
+        }
       }
     }
   }
@@ -308,6 +323,9 @@ function WhereFilter() {
 function AdvancedFilters({ modal }: { modal: boolean }) {
   const [{ tags }, { setTags }] = useDropdown();
 
+  const { data: tagData } = useQuery(EXPLORER_TAGS);
+  const tagSuggestions = useMemo(() => tagData?.tags.edges.map((edge) => edge.node.label) ?? [], [tagData]);
+
   return (
     <>
       <WhoFilter />
@@ -321,6 +339,7 @@ function AdvancedFilters({ modal }: { modal: boolean }) {
       <div className="w-44">
         <TagInput
           tags={tags}
+          suggestions={tagSuggestions}
           onTagAdded={(tag) => {
             setTags([...tags, tag]);
 
