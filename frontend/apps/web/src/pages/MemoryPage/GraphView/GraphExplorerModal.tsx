@@ -1033,16 +1033,23 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       ? `No graph nodes found for "${trimmedSearchQuery}"`
       : isFilterActive
         ? 'No graph nodes match the current filters'
-        : 'No graph data available yet';
+        : 'Your knowledge graph is still taking shape';
     const description = isSearchMode
-      ? 'Try another search'
+      ? 'Try a different name or keyword — search matches people, places, and concepts.'
       : isFilterActive
-        ? 'Try adjusting or clearing the explorer filters.'
-        : 'Start connecting memories to build your knowledge graph.';
+        ? 'No entities match the active explorer filters. Try broadening or clearing them.'
+        : 'The graph links the entities — people, places, and concepts — drawn out of your memories. It fills in as your imports are processed.';
 
     return (
-      <div className="flex h-[540px] flex-col items-center justify-center rounded-lg border border-dashed border-muted px-4 py-6">
+      <div className="flex h-[540px] flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-muted px-4 py-6 text-center">
         <Empty title={title} description={description} icon={Sparkles} />
+        {!isSearchMode && !isFilterActive && (
+          <p className="max-w-md text-xs text-muted-foreground">
+            Imported emails, messages, and events appear in the <span className="font-medium">List</span>,{' '}
+            <span className="font-medium">Gallery</span>, and <span className="font-medium">Search</span>{' '}
+            views right away — the graph focuses on the people and things they connect.
+          </p>
+        )}
       </div>
     );
   }
@@ -1159,6 +1166,35 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             </dl>
           </div>
 
+          {availableEntityTypes.length > 0 && (
+            <div className="rounded-lg border bg-muted/20 p-4 overflow-hidden">
+              <h3 className="text-sm font-semibold">How to read this graph</h3>
+              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                <li>Each dot is an entity — a person, place, or concept.</li>
+                <li>Lines connect entities that share a relationship.</li>
+                <li>
+                  Click a node to pull in its connections; drag <span className="font-medium">Hop depth</span>{' '}
+                  for a wider view.
+                </li>
+                <li>Search to jump straight to an entity, or switch between 2D and 3D.</li>
+              </ul>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Legend
+              </p>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1.5">
+                {availableEntityTypes.map((type) => (
+                  <span key={type} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span
+                      className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                      style={{ backgroundColor: getTypeColor(type) }}
+                    />
+                    {type}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="rounded-lg border bg-muted/20 p-4 overflow-hidden">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Neighbors per click
@@ -1259,6 +1295,10 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
                         onClick={() => handleEntityTypeToggle(type)}
                         aria-pressed={isActive}
                       >
+                        <span
+                          className="mr-1.5 h-2 w-2 flex-shrink-0 rounded-full"
+                          style={{ backgroundColor: getTypeColor(type) }}
+                        />
                         {type}
                       </Button>
                     );
