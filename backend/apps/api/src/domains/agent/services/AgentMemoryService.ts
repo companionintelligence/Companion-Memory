@@ -5,8 +5,10 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { EventService } from '@ci/domains/events';
 
 import { AgentMemoryEntity, type AgentMemory } from '../entities/AgentMemoryEntity';
+import { AgentMemoryCreatedEvent } from '../events';
 
 export interface CreateAgentMemoryDto {
   content: string;
@@ -20,6 +22,7 @@ export class AgentMemoryService {
   constructor(
     @InjectRepository(AgentMemoryEntity)
     private readonly repository: Repository<AgentMemoryEntity>,
+    private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(AgentMemoryService.name);
@@ -39,6 +42,15 @@ export class AgentMemoryService {
     });
 
     const saved = await this.repository.save(entity);
+
+    // Index the raw fragment for the recall message channel (naive-RAG half of
+    // the hybrid). Async via the search-index queue; the content is carried in
+    // the payload because fragments are immutable.
+    await this.eventService.send(AgentMemoryCreatedEvent, {
+      memoryId: saved.id,
+      userId: saved.userId,
+      content: saved.content,
+    });
 
     return AgentMemoryEntity.toEgressType(saved);
   }
@@ -102,5 +114,24 @@ export class AgentMemoryService {
       },
       { processedAt: new Date() },
     );
+  }
+
+  /**
+   * Fetch a batch of memory fragments by id (owner-scoped). Used by the recall
+   * message channel to turn message-embedding hits back into their raw text.
+   */
+  async findByIds(context: ServiceContext, ids: string[]): Promise<AgentMemory[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const rows = await this.repository.find({
+      where: {
+        id: In(ids),
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+    });
+
+    return rows.map(AgentMemoryEntity.toEgressType);
   }
 }

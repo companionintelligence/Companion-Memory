@@ -15,6 +15,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EntityResolutionModule } from '@ci/domains/entity-resolution';
+import { EventsModule } from '@ci/domains/events';
 import { GraphModule } from '@ci/domains/graph';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
@@ -34,6 +35,7 @@ import { SerializerService } from './services/SerializerService';
   imports: [
     TypeOrmModule.forFeature([AgentMemoryEntity]),
     EntityResolutionModule,
+    EventsModule,
     GraphModule,
     LLMModule,
     MemoryModule,

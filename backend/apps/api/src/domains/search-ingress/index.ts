@@ -26,6 +26,7 @@ import { ContentSearchIndexListener } from './listeners/ContentSearchIndexListen
 import { EventSearchIndexListener } from './listeners/EventSearchIndexListener';
 import { FileSearchIndexListener } from './listeners/FileSearchIndexListener';
 import { ItemSearchIndexListener } from './listeners/ItemSearchIndexListener';
+import { MessageSearchIndexListener } from './listeners/MessageSearchIndexListener';
 import { NoteSearchIndexListener } from './listeners/NoteSearchIndexListener';
 import { PersonSearchIndexListener } from './listeners/PersonSearchIndexListener';
 import { PlaceSearchIndexListener } from './listeners/PlaceSearchIndexListener';
@@ -57,6 +58,7 @@ import { VectorService } from './services/VectorService';
     EventSearchIndexListener,
     FileSearchIndexListener,
     ItemSearchIndexListener,
+    MessageSearchIndexListener,
     NoteSearchIndexListener,
     PersonSearchIndexListener,
     PlaceSearchIndexListener,

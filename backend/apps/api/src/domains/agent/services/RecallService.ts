@@ -8,9 +8,15 @@ import { SearchService } from '@ci/domains/search-next';
 
 import type { RecallDto, RecallResult } from '../types';
 
+import { AgentMemoryService } from './AgentMemoryService';
 import { SerializerService } from './SerializerService';
 
 const DEFAULT_MAX_RESULTS = 5;
+
+// Raw-message ("naive RAG") channel: how many source fragments to vector-search
+// and union into the recall block alongside the graph nodes + expansion. Full
+// union, no cap on the merge — tuning showed capping/re-ranking only hurts.
+const MESSAGE_RESULTS = 10;
 
 /**
  * L1 — per-turn keyword/semantic search against the knowledge graph.
@@ -29,6 +35,7 @@ export class RecallService {
     private readonly entityResolution: EntityResolutionService,
     private readonly serializer: SerializerService,
     private readonly graphExpansion: GraphExpansionService,
+    private readonly agentMemory: AgentMemoryService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(RecallService.name);
@@ -53,6 +60,7 @@ export class RecallService {
         query,
         mode: 'boosted',
         maxResults,
+        excludeTypes: ['message'],
       });
 
       if (results.length === 0) {
@@ -60,6 +68,7 @@ export class RecallService {
           query,
           mode: 'semantic',
           maxResults,
+          excludeTypes: ['message'],
         });
       }
 
@@ -106,6 +115,36 @@ export class RecallService {
 
         lines.push(neighbour.line);
         includedIds.add(neighbour.entityId);
+      }
+
+      // Naive-RAG channel. The graph lines above are terse, lossy serialisations
+      // ("Priya Sharma — lives in Phoenix"); the source sentences carry detail
+      // the extraction dropped ("moved from Eugene last spring, lives with her
+      // husband Arjun"). Vector-search the raw messages and union their text in.
+      // Use the original (unsanitised) query — natural language embeds better.
+      try {
+        const messageHits = await this.searchService.searchMessages(context, dto.query, MESSAGE_RESULTS);
+
+        if (messageHits.length > 0) {
+          const memories = await this.agentMemory.findByIds(
+            context,
+            messageHits.map((hit) => hit.id),
+          );
+          const contentById = new Map(memories.map((memory) => [memory.id, memory.content]));
+          const seenText = new Set(lines);
+
+          for (const hit of messageHits) {
+            const text = contentById.get(hit.id)?.trim();
+
+            if (text && !seenText.has(text)) {
+              lines.push(text);
+              seenText.add(text);
+            }
+          }
+        }
+      } catch (err) {
+        // The graph result still stands if the message channel fails.
+        this.logger.warn(`Message-channel retrieval failed for user ${context.userId}: ${err}`);
       }
 
       const block = `## Relevant context\n${lines.join('\n')}`;
