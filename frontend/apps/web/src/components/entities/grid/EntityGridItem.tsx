@@ -55,6 +55,41 @@ function Footer({ children, className }: FooterProps) {
   return <div className={cn('flex items-center gap-2', className)}>{children}</div>;
 }
 
+interface MetaProps {
+  children: ReactNode;
+  className?: string;
+}
+
+/**
+ * Compact, single-line metadata row for the card footer: small muted chips
+ * (date · source · location …) separated by a dot. Children that are falsy are
+ * skipped so each card only shows the facets it actually has.
+ */
+function Meta({ children, className }: MetaProps) {
+  const items = (Array.isArray(children) ? children : [children]).filter(Boolean);
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-1.5 text-xs text-muted-foreground min-w-0 overflow-hidden',
+        className,
+      )}
+    >
+      {items.map((item, i) => (
+        <span key={i} className="flex items-center gap-1 min-w-0 truncate">
+          {i > 0 && <span className="text-muted-foreground/40">·</span>}
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 EntityGridItem.Header = Header;
 EntityGridItem.Content = Content;
 EntityGridItem.Footer = Footer;
+EntityGridItem.Meta = Meta;

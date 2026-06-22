@@ -49,6 +49,10 @@ export const Default: Story = {
       id: 'mock-id-1',
       subject: args.subject,
       preview: args.preview,
+      time: '2026-01-15T09:00:00Z',
+      type: 'email',
+      direction: 'incoming',
+      from: { __typename: 'PersonType' as const, id: 'mock-person-1', name: 'Alex Rivera' },
     };
 
     const maskedCommunication = makeFragmentData(communication, COMMUNICATION_FRAGMENT);

@@ -49,6 +49,10 @@ export const Default: Story = {
       id: 'mock-id-1',
       title: args.title,
       description: args.description,
+      startTime: '2026-01-15T09:00:00Z',
+      eventType: 'activity',
+      locationName: 'New York City',
+      sourceSystem: 'apple_calendar',
     };
 
     const maskedEvent = makeFragmentData(event, EVENT_FRAGMENT);

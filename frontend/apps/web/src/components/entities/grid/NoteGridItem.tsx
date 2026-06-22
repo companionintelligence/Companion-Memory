@@ -5,6 +5,7 @@ import parse from 'html-react-parser';
 
 import { NoteIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { formatDateTime } from '@/pages/MemoryPage/Components/utils';
 
 import { EntityGridItem } from './EntityGridItem';
 
@@ -13,6 +14,7 @@ export const NOTE_FRAGMENT = gql(`
     id
     title
     content
+    createdAt
   }
 `);
 
@@ -33,13 +35,16 @@ export function NoteGridItem({ note, onClick }: Props) {
       </EntityGridItem.Header>
 
       <EntityGridItem.Content>
-        <div className="line-clamp-3 leading-tight">
+        <div className="line-clamp-3 leading-tight text-sm text-muted-foreground">
           {data.content ? parse(DOMPurify.sanitize(data.content)) : null}
         </div>
       </EntityGridItem.Content>
 
-      <EntityGridItem.Footer className="self-end">
-        <div className="text-sm text-muted-foreground">Note</div>
+      <EntityGridItem.Footer className="justify-between">
+        <EntityGridItem.Meta>
+          {data.createdAt && <span className="truncate">{formatDateTime(data.createdAt)}</span>}
+        </EntityGridItem.Meta>
+        <div className="text-xs text-muted-foreground">Note</div>
       </EntityGridItem.Footer>
     </EntityGridItem>
   );

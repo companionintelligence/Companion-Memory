@@ -1,4 +1,4 @@
-export const MOCK_COMMUNICATIONS = [
+const MOCK_COMMUNICATIONS_BASE = [
   {
     __typename: 'CommunicationType' as const,
     id: 'communication-0',
@@ -73,3 +73,13 @@ export const MOCK_COMMUNICATIONS = [
     preview: 'Please join me in welcoming our new team members starting today!',
   },
 ];
+
+const COMMUNICATION_TYPES = ['email', 'sms', 'email', 'imessage'];
+
+export const MOCK_COMMUNICATIONS = MOCK_COMMUNICATIONS_BASE.map((communication, i) => ({
+  ...communication,
+  time: `2026-0${(i % 9) + 1}-12T14:30:00Z`,
+  type: COMMUNICATION_TYPES[i % COMMUNICATION_TYPES.length],
+  direction: i % 2 === 0 ? 'incoming' : 'outgoing',
+  from: { __typename: 'PersonType' as const, id: `person-${i}`, name: 'Sample Sender' },
+}));

@@ -1,4 +1,4 @@
-export const MOCK_EVENTS = [
+const MOCK_EVENTS_BASE = [
   {
     __typename: 'EventType' as const,
     id: 'event-0',
@@ -73,3 +73,13 @@ export const MOCK_EVENTS = [
     description: 'Company-sponsored run to raise funds for local charities.',
   },
 ];
+
+const EVENT_SOURCES = ['google_calendar', 'apple_calendar', 'spotify', 'amazon'];
+
+export const MOCK_EVENTS = MOCK_EVENTS_BASE.map((event, i) => ({
+  ...event,
+  startTime: `2026-0${(i % 9) + 1}-15T09:00:00Z`,
+  eventType: 'event',
+  locationName: i % 3 === 0 ? 'San Francisco, CA' : null,
+  sourceSystem: EVENT_SOURCES[i % EVENT_SOURCES.length],
+}));

@@ -41,13 +41,13 @@ type Documents = {
     "\n  fragment ActionGridItemData on ActionType {\n    id\n    actionTitle: title\n    actionText: text\n  }\n": typeof types.ActionGridItemDataFragmentDoc,
     "\n  fragment AnswerGridItemData on AnswerType {\n    id\n    answer\n    question {\n      id\n      text\n    }\n  }\n": typeof types.AnswerGridItemDataFragmentDoc,
     "\n  fragment BrowserActivityGridItemData on BrowserActivityType {\n    id\n    title\n    url\n  }\n": typeof types.BrowserActivityGridItemDataFragmentDoc,
-    "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n  }\n": typeof types.CommunicationGridItemDataFragmentDoc,
+    "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n  }\n": typeof types.CommunicationGridItemDataFragmentDoc,
     "\n  fragment ConceptGridItemData on ConceptType {\n    id\n    name\n    description\n  }\n": typeof types.ConceptGridItemDataFragmentDoc,
     "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    mimetype\n  }\n": typeof types.ContentGridItemDataFragmentDoc,
-    "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n  }\n": typeof types.EventGridItemDataFragmentDoc,
+    "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n    startTime\n    eventType\n    locationName\n    sourceSystem\n  }\n": typeof types.EventGridItemDataFragmentDoc,
     "\n  fragment FileGridItemData on FileType {\n    id\n    filename\n    previewUrl\n    contentType\n    sourceUrl\n    title\n    description\n    size\n    createdAt\n  }\n": typeof types.FileGridItemDataFragmentDoc,
     "\n  fragment ItemGridItemData on ItemType {\n    id\n    name\n    description\n    category\n    brand\n    model\n    currentValue\n    file {\n      id\n      sourceUrl\n    }\n  }\n": typeof types.ItemGridItemDataFragmentDoc,
-    "\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n  }\n": typeof types.NoteGridItemDataFragmentDoc,
+    "\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n    createdAt\n  }\n": typeof types.NoteGridItemDataFragmentDoc,
     "\n  fragment PersonGridItemData on PersonType {\n    id\n    name\n    description\n    avatarUrl\n  }\n": typeof types.PersonGridItemDataFragmentDoc,
     "\n  fragment PlaceGridItemData on PlaceType {\n    id\n    name\n    description\n    properties\n  }\n": typeof types.PlaceGridItemDataFragmentDoc,
     "\n  fragment ThreadGridItemData on ThreadType {\n    id\n    name\n    description\n  }\n": typeof types.ThreadGridItemDataFragmentDoc,
@@ -156,13 +156,13 @@ const documents: Documents = {
     "\n  fragment ActionGridItemData on ActionType {\n    id\n    actionTitle: title\n    actionText: text\n  }\n": types.ActionGridItemDataFragmentDoc,
     "\n  fragment AnswerGridItemData on AnswerType {\n    id\n    answer\n    question {\n      id\n      text\n    }\n  }\n": types.AnswerGridItemDataFragmentDoc,
     "\n  fragment BrowserActivityGridItemData on BrowserActivityType {\n    id\n    title\n    url\n  }\n": types.BrowserActivityGridItemDataFragmentDoc,
-    "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n  }\n": types.CommunicationGridItemDataFragmentDoc,
+    "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n  }\n": types.CommunicationGridItemDataFragmentDoc,
     "\n  fragment ConceptGridItemData on ConceptType {\n    id\n    name\n    description\n  }\n": types.ConceptGridItemDataFragmentDoc,
     "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    mimetype\n  }\n": types.ContentGridItemDataFragmentDoc,
-    "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n  }\n": types.EventGridItemDataFragmentDoc,
+    "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n    startTime\n    eventType\n    locationName\n    sourceSystem\n  }\n": types.EventGridItemDataFragmentDoc,
     "\n  fragment FileGridItemData on FileType {\n    id\n    filename\n    previewUrl\n    contentType\n    sourceUrl\n    title\n    description\n    size\n    createdAt\n  }\n": types.FileGridItemDataFragmentDoc,
     "\n  fragment ItemGridItemData on ItemType {\n    id\n    name\n    description\n    category\n    brand\n    model\n    currentValue\n    file {\n      id\n      sourceUrl\n    }\n  }\n": types.ItemGridItemDataFragmentDoc,
-    "\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n  }\n": types.NoteGridItemDataFragmentDoc,
+    "\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n    createdAt\n  }\n": types.NoteGridItemDataFragmentDoc,
     "\n  fragment PersonGridItemData on PersonType {\n    id\n    name\n    description\n    avatarUrl\n  }\n": types.PersonGridItemDataFragmentDoc,
     "\n  fragment PlaceGridItemData on PlaceType {\n    id\n    name\n    description\n    properties\n  }\n": types.PlaceGridItemDataFragmentDoc,
     "\n  fragment ThreadGridItemData on ThreadType {\n    id\n    name\n    description\n  }\n": types.ThreadGridItemDataFragmentDoc,
@@ -357,7 +357,7 @@ export function gql(source: "\n  fragment BrowserActivityGridItemData on Browser
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n  }\n"): (typeof documents)["\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n  }\n"];
+export function gql(source: "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n  }\n"): (typeof documents)["\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -369,7 +369,7 @@ export function gql(source: "\n  fragment ContentGridItemData on ContentType {\n
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n  }\n"): (typeof documents)["\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n  }\n"];
+export function gql(source: "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n    startTime\n    eventType\n    locationName\n    sourceSystem\n  }\n"): (typeof documents)["\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n    startTime\n    eventType\n    locationName\n    sourceSystem\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -381,7 +381,7 @@ export function gql(source: "\n  fragment ItemGridItemData on ItemType {\n    id
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n  }\n"): (typeof documents)["\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n  }\n"];
+export function gql(source: "\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n    createdAt\n  }\n"): (typeof documents)["\n  fragment NoteGridItemData on NoteType {\n    id\n    title\n    content\n    createdAt\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
