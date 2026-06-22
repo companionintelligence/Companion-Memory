@@ -95,6 +95,46 @@ export function getEntityTimestamp(entity: EntityItem): Date | null {
   return null;
 }
 
+/**
+ * Compact event time for timeline cards: just the time range for a same-day
+ * event ("8:00 AM – 5:00 PM"), a single time when there's no end, and short
+ * dates only when the event spans multiple days. The day/month otherwise comes
+ * from the timeline's date-group header, so the card stays uncluttered.
+ */
+export function formatEventTimeRange(start: string, end?: string | null, now: Date = new Date()): string {
+  const startDate = new Date(start);
+
+  if (isNaN(startDate.getTime())) {
+    return '';
+  }
+
+  const time = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const dateTime = (d: Date) => {
+    const opts: Intl.DateTimeFormatOptions =
+      d.getFullYear() === now.getFullYear()
+        ? { month: 'short', day: 'numeric' }
+        : { month: 'short', day: 'numeric', year: 'numeric' };
+
+    return `${d.toLocaleDateString('en-US', opts)}, ${time(d)}`;
+  };
+
+  if (!end) {
+    return time(startDate);
+  }
+
+  const endDate = new Date(end);
+
+  if (isNaN(endDate.getTime())) {
+    return time(startDate);
+  }
+
+  if (startDate.toDateString() === endDate.toDateString()) {
+    return `${time(startDate)} – ${time(endDate)}`;
+  }
+
+  return `${dateTime(startDate)} – ${dateTime(endDate)}`;
+}
+
 interface DateBucket {
   key: string;
   label: string;

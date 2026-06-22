@@ -4,7 +4,7 @@ import { Calendar, Clock, MapPin } from '@ci/shadcn/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { useEntityService } from '../../useEntityService';
-import { formatDateTime } from '../utils';
+import { formatEventTimeRange } from '../utils';
 
 interface Props {
   entity: FragmentType<typeof EVENT_FRAGMENT>;
@@ -35,7 +35,6 @@ export function EventCard({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
   const [, { setActiveEntity }] = useEntityService();
   const hasStartDate = data.startTime;
-  const hasEndDate = data.endTime;
   // const hasOrganizer = data.organizer;
   // const hasRepeating = data.repeatingFrequency;
   // const hasDuration = data.duration;
@@ -67,29 +66,11 @@ export function EventCard({ entity }: Props) {
       </div>
 
       {hasStartDate && (
-        <div className="flex items-center gap-5">
-          <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-          <div className="min-w-0">
-            {hasEndDate && <span className="text-sm font-medium text-muted-foreground">Start:</span>}
-            <span className="ml-2 text-sm text-card-foreground">
-              {formatDateTime(
-                new Date(data.startTime).toDateString(),
-                new Date(data.startTime).toTimeString(),
-              )}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {hasEndDate && (
-        <div className="flex items-center gap-5">
-          <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-          <div className="min-w-0">
-            <span className="text-sm font-medium text-muted-foreground">End:</span>
-            <span className="ml-2 text-sm text-card-foreground">
-              {formatDateTime(new Date(data.endTime).toDateString(), new Date(data.endTime).toTimeString())}
-            </span>
-          </div>
+        <div className="flex items-center gap-2">
+          <Clock className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          <span className="text-sm tabular-nums text-card-foreground">
+            {formatEventTimeRange(data.startTime, data.endTime)}
+          </span>
         </div>
       )}
 
