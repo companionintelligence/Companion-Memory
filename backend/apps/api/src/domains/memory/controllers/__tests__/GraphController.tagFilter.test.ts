@@ -37,6 +37,9 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
   function setup(
     overrides: {
+      getNodes?: jest.Mock;
+      getNodesByIds?: jest.Mock;
+      getUserEntity?: jest.Mock;
       getEntitiesForTags?: jest.Mock;
       getEntityIdsByTagSources?: jest.Mock;
       getEntityIdsBySourceRecordIds?: jest.Mock;
@@ -45,7 +48,9 @@ describe('GraphController — explorer filters (graph parity)', () => {
     } = {},
   ) {
     const graphQuery = {
-      getNodes: jest.fn(async () => []),
+      getNodes: overrides.getNodes ?? jest.fn(async () => []),
+      getNodesByIds: overrides.getNodesByIds ?? jest.fn(async () => []),
+      getUserEntity: overrides.getUserEntity ?? jest.fn(async () => null),
       getRelationships: overrides.getRelationships ?? jest.fn(async () => []),
       getEntityIdsByTagSources: overrides.getEntityIdsByTagSources ?? jest.fn(async () => []),
       getEntityIdsBySourceRecordIds: overrides.getEntityIdsBySourceRecordIds ?? jest.fn(async () => []),
@@ -177,6 +182,75 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
       expect(res.eventMatch).toEqual({ active: true, entityIds: [] });
       expect(getEntityIdsBySourceRecordIds).not.toHaveBeenCalled();
+    });
+  });
+
+  // The unfiltered overview is capped at 200 nodes with no inherent ordering, so
+  // a tag/event match beyond the cap would be absent from the node payload even
+  // though the client scopes to its id. The controller recovers those by id.
+  describe('filter-match node payload', () => {
+    it('unions filter-matched nodes the capped overview missed, fetched by id', async () => {
+      const getEntitiesForTags = jest.fn(async () => [
+        { type: 'person', id: '00000000-0000-0000-0000-000000000001' },
+      ]);
+      const getEntityIdsByTagSources = jest.fn(async () => ['node-a', 'node-b']);
+      // The cap returned node-a but dropped node-b; node-b must be recovered.
+      const getNodes = jest.fn(async () => [
+        { entity_id: 'node-a', entity_type: 'Person', name: 'A', description: null, properties: {} },
+      ]);
+      const getNodesByIds = jest.fn(async () => [
+        { entity_id: 'node-b', entity_type: 'Person', name: 'B', description: null, properties: {} },
+      ]);
+
+      const { controller } = setup({
+        getEntitiesForTags,
+        getEntityIdsByTagSources,
+        getNodes,
+        getNodesByIds,
+      });
+
+      const res = await controller.getGraphData(ctx, dataDto({ tags: 'work' }));
+
+      expect(getNodesByIds).toHaveBeenCalledWith('user-1', ['node-b']);
+      expect(res.data.nodes.map((node) => node.id).sort()).toEqual(['node-a', 'node-b']);
+    });
+
+    it('does not reintroduce a type-excluded node via the by-id fetch', async () => {
+      const getEntitiesForTags = jest.fn(async () => [
+        { type: 'person', id: '00000000-0000-0000-0000-000000000001' },
+      ]);
+      const getEntityIdsByTagSources = jest.fn(async () => ['person-node', 'place-node']);
+      const getNodes = jest.fn(async () => []); // cap missed both matches
+      const getNodesByIds = jest.fn(async () => [
+        { entity_id: 'person-node', entity_type: 'Person', name: 'P', description: null, properties: {} },
+        { entity_id: 'place-node', entity_type: 'Place', name: 'Q', description: null, properties: {} },
+      ]);
+
+      const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources, getNodes, getNodesByIds });
+
+      // Selecting only `person` excludes Place from the graph; the tag-matched
+      // place node must stay dropped even though it matches the tag filter.
+      const res = await controller.getGraphData(ctx, dataDto({ includeTypes: ['person'], tags: 'work' }));
+
+      expect(res.data.nodes.map((node) => node.id)).toEqual(['person-node']);
+    });
+
+    it('flags truncated only when the overview hits the node cap', async () => {
+      const cappedNodes = Array.from({ length: 200 }, (_, index) => ({
+        entity_id: `n-${index}`,
+        entity_type: 'Person',
+        name: null,
+        description: null,
+        properties: {},
+      }));
+
+      const { controller: capped } = setup({ getNodes: jest.fn(async () => cappedNodes) });
+      const cappedRes = await capped.getGraphData(ctx, dataDto());
+      expect(cappedRes.truncated).toBe(true);
+
+      const { controller: small } = setup();
+      const smallRes = await small.getGraphData(ctx, dataDto());
+      expect(smallRes.truncated).toBe(false);
     });
   });
 });
