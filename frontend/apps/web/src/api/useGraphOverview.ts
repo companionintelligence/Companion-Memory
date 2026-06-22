@@ -33,6 +33,10 @@ type GraphDataResponse = {
     links: GraphLink[];
   };
   tagMatch?: TagMatch;
+  // Graph `entity_id`s matching the event-scoped explorer filters (connectors /
+  // who / where / how / date range), with `active` following the same
+  // param-presence contract as `tagMatch`.
+  eventMatch?: TagMatch;
 };
 
 type GraphContextDetails = {
@@ -59,6 +63,10 @@ type Subgraph = {
   links: GraphLink[];
 };
 
+// Which restrictive explorer filters contributed to the active match scope.
+// Drives empty-state messaging ("no nodes match the filters" vs "no data yet").
+type FilterScope = { tags: boolean; events: boolean };
+
 type GraphOverviewState = {
   loading: boolean;
   error: string | null;
@@ -66,10 +74,30 @@ type GraphOverviewState = {
   subgraph: Subgraph | null;
   quickStats: GraphContextDetails['quickStats'] | null;
   currentUser: GraphContextDetails['currentUser'] | null;
-  // Graph `entity_id`s carrying the active tag filter, or null when the filter
-  // is inactive (no `tags` param requested).
-  tagMatchedEntityIds: Set<string> | null;
+  // Graph `entity_id`s the visible graph should scope to — the intersection of
+  // every active restrictive filter (tags ∩ event-scoped dimensions). `null`
+  // when no restrictive filter is active (show the whole interactive graph).
+  filterMatchedEntityIds: Set<string> | null;
+  // Which restrictive dimensions are active, for empty-state messaging.
+  filterScope: FilterScope;
 };
+
+/**
+ * Combine the server's per-dimension match sets into a single scope. Each active
+ * filter restricts the graph; multiple active filters AND together (intersection),
+ * matching the Search path's combinable-filter semantics. Returns `null` when no
+ * restrictive filter is active.
+ */
+function combineMatches(tagMatch?: TagMatch, eventMatch?: TagMatch): Set<string> | null {
+  const tagSet = tagMatch?.active ? new Set(tagMatch.entityIds) : null;
+  const eventSet = eventMatch?.active ? new Set(eventMatch.entityIds) : null;
+
+  if (tagSet && eventSet) {
+    return new Set([...tagSet].filter((id) => eventSet.has(id)));
+  }
+
+  return tagSet ?? eventSet ?? null;
+}
 
 function buildSubgraph(
   data: { nodes: GraphNode[]; links: GraphLink[] },
@@ -123,6 +151,17 @@ export interface GraphOverviewOptions {
   // leaves the filter inactive; any string (including '') activates it, honoring
   // the "filter active = present, even if empty" contract.
   tags?: string;
+  // Event-scoped LifeScope dimensions, mirroring the explorer's Search filters.
+  // Each is forwarded to `/api/graph/data` only when it carries a value, so an
+  // absent/empty dimension leaves the graph unrestricted by it.
+  connectors?: string[];
+  people?: string[];
+  places?: string[];
+  eventTypes?: string[];
+  hasLocation?: boolean;
+  // Date range (`from`/`to` URL params, ISO strings).
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export function useGraphOverview(
@@ -135,6 +174,17 @@ export function useGraphOverview(
   const includeTypesKey = (options.includeTypes ?? []).join(',');
   const tags = options.tags;
 
+  // Stable CSV keys for the event-scoped dimensions: arrays change identity each
+  // render, so the effect depends on these joined keys (a change ⇔ a content
+  // change), and the request reads the keys directly. Mirrors `includeTypesKey`.
+  const connectorsKey = (options.connectors ?? []).join(',');
+  const peopleKey = (options.people ?? []).join(',');
+  const placesKey = (options.places ?? []).join(',');
+  const eventTypesKey = (options.eventTypes ?? []).join(',');
+  const hasLocation = options.hasLocation ?? false;
+  const dateFrom = options.dateFrom;
+  const dateTo = options.dateTo;
+
   const [state, setState] = useState<GraphOverviewState>({
     loading: true,
     error: null,
@@ -142,7 +192,8 @@ export function useGraphOverview(
     subgraph: null,
     quickStats: null,
     currentUser: null,
-    tagMatchedEntityIds: null,
+    filterMatchedEntityIds: null,
+    filterScope: { tags: false, events: false },
   });
 
   useEffect(() => {
@@ -170,6 +221,36 @@ export function useGraphOverview(
           dataParams.set('tags', tags);
         }
 
+        // Event-scoped dimensions: forward only when set, so an unused dimension
+        // leaves the graph unrestricted by it.
+        if (connectorsKey) {
+          dataParams.set('connectors', connectorsKey);
+        }
+
+        if (peopleKey) {
+          dataParams.set('people', peopleKey);
+        }
+
+        if (placesKey) {
+          dataParams.set('places', placesKey);
+        }
+
+        if (eventTypesKey) {
+          dataParams.set('eventTypes', eventTypesKey);
+        }
+
+        if (hasLocation) {
+          dataParams.set('hasLocation', '1');
+        }
+
+        if (dateFrom) {
+          dataParams.set('from', dateFrom);
+        }
+
+        if (dateTo) {
+          dataParams.set('to', dateTo);
+        }
+
         const dataQuery = dataParams.toString();
         const dataUrl = dataQuery ? `/api/graph/data?${dataQuery}` : '/api/graph/data';
 
@@ -189,8 +270,11 @@ export function useGraphOverview(
         const context = contextResponse.context!;
         const userEntityId = context.currentUser.entityId;
         const subgraph = buildSubgraph(graphResponse.data, userEntityId, maxDepth);
-        const tagMatch = graphResponse.tagMatch;
-        const tagMatchedEntityIds = tagMatch && tagMatch.active ? new Set(tagMatch.entityIds) : null;
+        const filterMatchedEntityIds = combineMatches(graphResponse.tagMatch, graphResponse.eventMatch);
+        const filterScope: FilterScope = {
+          tags: graphResponse.tagMatch?.active === true,
+          events: graphResponse.eventMatch?.active === true,
+        };
 
         if (!cancelled) {
           setState({
@@ -200,7 +284,8 @@ export function useGraphOverview(
             subgraph,
             quickStats: context.quickStats,
             currentUser: context.currentUser,
-            tagMatchedEntityIds,
+            filterMatchedEntityIds,
+            filterScope,
           });
         }
       } catch (error) {
@@ -222,7 +307,8 @@ export function useGraphOverview(
           quickStats: null,
           currentUser: null,
           error: message,
-          tagMatchedEntityIds: null,
+          filterMatchedEntityIds: null,
+          filterScope: { tags: false, events: false },
         });
       }
     }
@@ -232,7 +318,21 @@ export function useGraphOverview(
     return () => {
       cancelled = true;
     };
-  }, [authToken, maxDepth, refreshKey, includeTypesActive, includeTypesKey, tags]);
+  }, [
+    authToken,
+    maxDepth,
+    refreshKey,
+    includeTypesActive,
+    includeTypesKey,
+    tags,
+    connectorsKey,
+    peopleKey,
+    placesKey,
+    eventTypesKey,
+    hasLocation,
+    dateFrom,
+    dateTo,
+  ]);
 
   return useMemo(() => state, [state]);
 }
