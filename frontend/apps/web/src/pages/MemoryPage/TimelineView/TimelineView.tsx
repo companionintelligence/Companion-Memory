@@ -121,7 +121,7 @@ export function TimelineView() {
       {groups
         ? groups.map((group) => (
             <section key={group.key}>
-              <DateGroupHeader label={group.label} count={group.entities.length} />
+              <DateGroupHeader label={group.label} count={group.entities.length} align="right" />
               {renderTimeline(group.entities)}
             </section>
           ))

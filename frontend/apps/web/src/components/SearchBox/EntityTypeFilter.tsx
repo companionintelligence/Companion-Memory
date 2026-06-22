@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { Button, DropdownMenu } from '@ci/shadcn';
-import { ChevronDown } from '@ci/shadcn/icons';
+import { ChevronDown, Shapes } from '@ci/shadcn/icons';
 
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from './useDropdown';
 
@@ -59,8 +59,11 @@ export function EntityTypeFilter({ modal = true, label }: Props) {
     <DropdownMenu modal={modal} onOpenChange={() => setIsOpen(!isOpen)}>
       <Trigger asChild>
         <Button type="button" variant="outline">
+          {label && <Shapes className="mr-2 h-4 w-4 text-muted-foreground" />}
           {getDisplayText()}
-          <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          <ChevronDown
+            className={`ml-2 h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          />
         </Button>
       </Trigger>
 

@@ -5,13 +5,21 @@ interface DateGroupHeaderProps {
   /** Optional count of items in this group, shown as a muted suffix. */
   count?: number;
   className?: string;
+  /**
+   * Which side the label sits on. `left` (default) keeps the label first with a
+   * trailing rule (List view); `right` puts the rule first so the label hugs the
+   * right edge — used by the Timeline rail.
+   */
+  align?: 'left' | 'right';
 }
 
 /**
  * Sticky date-group header shared by the List and Timeline views so both
  * segment chronological results identically (Today / Yesterday / This Week / …).
  */
-export function DateGroupHeader({ label, count, className }: DateGroupHeaderProps) {
+export function DateGroupHeader({ label, count, className, align = 'left' }: DateGroupHeaderProps) {
+  const rule = <div className="h-px flex-1 bg-border" />;
+
   return (
     <div
       className={cn(
@@ -19,9 +27,10 @@ export function DateGroupHeader({ label, count, className }: DateGroupHeaderProp
         className,
       )}
     >
+      {align === 'right' && rule}
       <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</h3>
       {count != null && <span className="text-xs tabular-nums text-muted-foreground/70">{count}</span>}
-      <div className="h-px flex-1 bg-border" />
+      {align === 'left' && rule}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Badge, Button, Calendar, Dialog, Input, Label, Popover, Select, useToast } from '@ci/shadcn';
 import {
+  ArrowUpDown,
   Calendar as CalendarIcon,
   ChevronDown,
   ChevronUp,
@@ -12,6 +13,7 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
+  Users,
   X,
 } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
@@ -169,8 +171,9 @@ function DateControl() {
     <Popover>
       <Popover.Trigger asChild>
         <Button variant="outline">
-          <CalendarIcon className="mr-2 h-4 w-4" />
+          <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
           When: {dateFrom || dateTo ? formatDateLabel(dateFrom, dateTo) : 'all'}
+          <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
         </Button>
       </Popover.Trigger>
       <Popover.Content className="w-auto p-0" align="start">
@@ -226,6 +229,7 @@ function SortControl() {
       }}
     >
       <Select.Trigger className="w-[150px]">
+        <ArrowUpDown className="mr-2 h-4 w-4 text-muted-foreground" />
         <Select.Value placeholder="Sort" />
       </Select.Trigger>
       <Select.Content>
@@ -249,8 +253,9 @@ function WhoFilter() {
     <Popover>
       <Popover.Trigger asChild>
         <Button variant="outline">
+          <Users className="mr-2 h-4 w-4 text-muted-foreground" />
           Who: {value}
-          <ChevronDown className="ml-2 h-4 w-4" />
+          <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
         </Button>
       </Popover.Trigger>
       <Popover.Content align="start" className="w-72 space-y-2">
@@ -279,8 +284,9 @@ function WhereFilter() {
     <Popover>
       <Popover.Trigger asChild>
         <Button variant="outline">
+          <MapPin className="mr-2 h-4 w-4 text-muted-foreground" />
           Where: {value}
-          <ChevronDown className="ml-2 h-4 w-4" />
+          <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
         </Button>
       </Popover.Trigger>
       <Popover.Content align="start" className="w-72 space-y-3">
@@ -310,9 +316,9 @@ function AdvancedFilters({ modal }: { modal: boolean }) {
       <WhereFilter />
       <ConnectorFilter modal={modal} label="How" />
 
-      <span className="mx-1 hidden h-6 w-px self-center bg-border sm:block" />
+      <span className="mx-1 h-6 w-px self-center bg-border" />
 
-      <div className="min-w-[160px]">
+      <div className="w-44">
         <TagInput
           tags={tags}
           onTagAdded={(tag) => {
@@ -325,7 +331,7 @@ function AdvancedFilters({ modal }: { modal: boolean }) {
       </div>
       <ToggleChip param="semantic" label="Semantic" icon={<Sparkles className="h-4 w-4" />} />
 
-      <span className="mx-1 hidden h-6 w-px self-center bg-border sm:block" />
+      <span className="mx-1 h-6 w-px self-center bg-border" />
 
       <SortControl />
       <SaveSearchButton />
@@ -536,7 +542,7 @@ function ExplorerToolbarInner({ open }: { open: boolean }) {
       {/* The advanced-search drawer: plain Who / What / When / Where / How, then
           tags + semantic, then sort + save. Opened from the header toggle. */}
       {open && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-3">
           <AdvancedFilters modal={false} />
         </div>
       )}
