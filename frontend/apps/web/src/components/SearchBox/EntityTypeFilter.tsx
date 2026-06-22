@@ -7,9 +7,15 @@ import { AVAILABLE_ENTITY_TYPES, useDropdown } from './useDropdown';
 
 interface Props {
   modal?: boolean;
+  /**
+   * When set, renders a plain "{label}: {value}" trigger (e.g. "What: all") for
+   * the explorer's Who/What/When/Where/How bar. Omit to keep the standalone
+   * "All Entity Types" wording used elsewhere (e.g. the saved-search editor).
+   */
+  label?: string;
 }
 
-export function EntityTypeFilter({ modal = true }: Props) {
+export function EntityTypeFilter({ modal = true, label }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [{ selectedEntityTypes }, { clearEntityTypes, selectAllEntityTypes, toggleEntityType }] =
     useDropdown();
@@ -22,6 +28,18 @@ export function EntityTypeFilter({ modal = true }: Props) {
   const isNoneSelected = selectedCount === 0;
 
   const getDisplayText = () => {
+    if (label) {
+      const value = isAllSelected
+        ? 'all'
+        : isNoneSelected
+          ? 'none'
+          : selectedCount === 1
+            ? selectedEntityTypes[0]
+            : `${selectedCount} selected`;
+
+      return `${label}: ${value}`;
+    }
+
     if (isAllSelected) {
       return 'All Entity Types';
     }

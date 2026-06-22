@@ -87,7 +87,7 @@ export function PrimaryNavigation() {
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}
 
           <div className="flex flex-row items-center gap-2">
-            <div className="w-64">
+            <div className="w-64 lg:w-96">
               <GlobalSearchBox />
             </div>
 

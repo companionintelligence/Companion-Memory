@@ -24,19 +24,19 @@ const RECENT_PREFIX = 'recent:';
 const SEARCH_ACTION_ID = 'action:search';
 
 /**
- * Global search in the primary navigation header (desktop). It's a "jump to"
- * launcher that complements the in-page `ExplorerToolbar` — which owns the
- * explorer's live search + filter set (who/where/connector/date/tags/sort/
- * semantic). To avoid two competing live search states, the header does NOT
- * write `?search` as you type; instead:
+ * The unified search in the primary navigation header — visible on every page
+ * and the single free-text search for the Memory explorer (the explorer no
+ * longer renders its own search box; its toolbar holds only the advanced
+ * Who/What/When/Where/How filters).
  *
- * - Entity suggestions navigate to the matching detail route.
+ * - On `/memory`, typing writes `?search` live (debounced) so results filter as
+ *   you type, and the input mirrors `?search` via `defaultQuery` (so external
+ *   clears / saved searches keep it in sync — the sync only fires while
+ *   unfocused, so it never clobbers typing).
+ * - Off `/memory`, it's a "jump to" launcher: entity suggestions navigate to the
+ *   matching detail route, and committing a free-text query opens it in the
+ *   explorer at `/memory?search=…` (carrying the semantic mode).
  * - Recent searches (locally persisted) surface on focus.
- * - Committing a free-text query (Enter / the "Search Memory" row / a recent)
- *   opens it in the explorer at `/memory?search=…` — preserving existing
- *   filters when already on `/memory`, otherwise navigating there (carrying the
- *   semantic mode). So the header bridges into the explorer rather than holding
- *   a second copy of its state.
  */
 export function GlobalSearchBox() {
   const navigate = useNavigate();
@@ -45,6 +45,9 @@ export function GlobalSearchBox() {
 
   const onMemory = location.pathname === '/memory';
   const semantic = searchParams.get('semantic') === '1';
+  // On /memory the input mirrors the live `?search` param; elsewhere it stays a
+  // transient launcher value, so we don't seed it from the URL.
+  const urlSearch = searchParams.get('search') ?? '';
 
   // Drives the suggestion query; debounced via SearchBox's autoSubmit.
   const [query, setQuery] = useState<string | null>(null);
@@ -184,14 +187,46 @@ export function GlobalSearchBox() {
     }));
   }, [onMemory, query, recentSearches, removeRecentSearch, suggestions]);
 
-  // Live, debounced — only updates the suggestion query (no ?search writes).
-  const handleSearch = useCallback(({ query: searchQuery }: { query: string }) => {
-    setQuery(searchQuery);
-  }, []);
+  // Live, debounced. Drives the suggestion query everywhere, and on /memory also
+  // writes `?search` so the explorer filters as you type (replace: keep history clean).
+  const handleSearch = useCallback(
+    ({ query: searchQuery }: { query: string }) => {
+      setQuery(searchQuery);
+
+      if (onMemory) {
+        const trimmed = searchQuery.trim();
+
+        setSearchParams(
+          (params) => {
+            if (trimmed) {
+              params.set('search', trimmed);
+            } else {
+              params.delete('search');
+            }
+
+            return params;
+          },
+          { replace: true },
+        );
+      }
+    },
+    [onMemory, setSearchParams],
+  );
 
   const handleClear = useCallback(() => {
     setQuery(null);
-  }, []);
+
+    if (onMemory) {
+      setSearchParams(
+        (params) => {
+          params.delete('search');
+
+          return params;
+        },
+        { replace: true },
+      );
+    }
+  }, [onMemory, setSearchParams]);
 
   const handleResultSelect = useCallback(
     ({ id }: { id: string }) => {
@@ -266,12 +301,13 @@ export function GlobalSearchBox() {
     <SearchBox
       key={resetKey}
       ref={inputRef}
+      defaultQuery={onMemory ? urlSearch : undefined}
       onSearch={handleSearch}
       onSubmit={({ query: submitted }) => commitSearch(submitted)}
       onClear={handleClear}
       onResultSelect={handleResultSelect}
       variant="compact"
-      placeholder="Search"
+      placeholder="Search your memory…"
       autoSubmit
       displayResults
       openOnFocus
