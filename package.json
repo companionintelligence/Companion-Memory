@@ -14,17 +14,34 @@
     "frontend/packages/*"
   ],
   "resolutions": {
+    "@protobufjs/utf8": "^1.1.1",
+    "@vitest/browser": "^3.2.5",
+    "dompurify": "^3.4.11",
     "fast-xml-parser": "4.5.5",
-    "multer": "2.1.1",
-    "path-to-regexp": "^8.4.0",
-    "immutable@npm:~3.7.6": "3.8.3",
+    "flatted": "^3.4.2",
+    "form-data": "^4.0.6",
     "glob@npm:11.0.1": "11.1.0",
-    "picomatch@npm:4.0.2": "4.0.4"
+    "immutable@npm:~3.7.6": "3.8.3",
+    "ip-address": "^10.1.1",
+    "js-yaml": "^4.2.0",
+    "markdown-it": "^14.2.0",
+    "mdast-util-to-hast": "^13.2.1",
+    "multer": "2.2.0",
+    "path-to-regexp": "^8.4.0",
+    "picomatch@npm:4.0.2": "4.0.4",
+    "postcss": "^8.5.10",
+    "serialize-javascript": "^7.0.5",
+    "shell-quote": "^1.8.4",
+    "smol-toml": "^1.6.1",
+    "tar": "^7.5.16",
+    "tmp": "^0.2.6",
+    "undici": "^8.5.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
     "@playwright/test": "^1.57.0",
-    "@storybook/react-vite": "^9.0.8",
+    "@storybook/react-vite": "^9.1.19",
     "@types/node": "^25.0.1",
     "@types/pg": "^8",
     "dotenv": "^17.2.3",
@@ -37,10 +54,10 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.1.2",
     "prettier": "^3.5.3",
-    "storybook": "^9.0.8",
+    "storybook": "^9.1.19",
     "tsx": "^4.7.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.32.1",
-    "vite": "^6.3.5"
+    "vite": "^6.4.3"
   }
 }
