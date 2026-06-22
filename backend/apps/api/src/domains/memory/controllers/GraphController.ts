@@ -299,6 +299,29 @@ export class GraphController {
     };
   }
 
+  /**
+   * Resolve a graph node by its `entity_id`, falling back to a source-record
+   * (`linked_id`) lookup. Lets callers pass either the graph entity id OR a
+   * source id (e.g. an event/content/item id from the explorer drawer or a
+   * detail page) — for separate-table records the source id is the node's
+   * `linked_id`, not its `entity_id`. Non-uuid ids can't match a uuid column, so
+   * we skip the DB to avoid a Postgres cast error (returns null → 404).
+   */
+  private async resolveNode(ownerId: string, id: string): Promise<GraphNodeEntity | null> {
+    if (!UUID_PATTERN.test(id)) {
+      return null;
+    }
+
+    const direct = await this.graphQuery.getNode(ownerId, id);
+    if (direct) {
+      return direct;
+    }
+
+    const [linkedEntityId] = await this.graphQuery.getEntityIdsByTagSources(ownerId, [id]);
+
+    return linkedEntityId ? this.graphQuery.getNode(ownerId, linkedEntityId) : null;
+  }
+
   @Get('node')
   async getNodeDetails(
     @Context() ctx: RequestContext,
@@ -306,7 +329,7 @@ export class GraphController {
   ) {
     const ownerId = this.ensureUserId(ctx);
 
-    const node = await this.graphQuery.getNode(ownerId, query.entityId);
+    const node = await this.resolveNode(ownerId, query.entityId);
     if (!node) {
       throw new NotFoundException(`Node ${query.entityId} not found`);
     }

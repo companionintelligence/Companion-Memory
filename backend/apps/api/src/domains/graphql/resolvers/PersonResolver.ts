@@ -61,7 +61,9 @@ export class PersonResolver {
   ): Promise<UpdatePersonPayload> {
     const serviceContext = toServiceContext(context);
 
-    const entity = await this.personService.update(serviceContext, input.id, {
+    const id = GlobalUID.parse('person', input.id);
+
+    const entity = await this.personService.update(serviceContext, id, {
       name: input.name,
       description: input.description,
     });

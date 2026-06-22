@@ -17,6 +17,9 @@ export const BROWSER_ACTIVITY_FRAGMENT = gql(`
     actionType
     duration
     time
+    tags {
+      label
+    }
   }
 `);
 

@@ -1,35 +1,50 @@
-import { Input, Label, Sheet } from '@ci/shadcn';
+import { useMutation } from '@apollo/client';
 
-import { type FragmentType, useFragment } from '@/graphql';
+import { gql, useFragment } from '@/graphql';
 
+import type { MemoryEntityOf } from '../../useEntityService';
 import { BROWSER_ACTIVITY_FRAGMENT } from '../EntityCard/BrowserActivityCard';
 
+import { EntityDetailScaffold } from './EntityDetailScaffold';
+
+const UPDATE_BROWSER_ACTIVITY = gql(`
+  mutation UpdateBrowserActivityDetail($input: UpdateBrowserActivityInput!) {
+    updateBrowserActivity(input: $input) {
+      id
+      title
+      url
+    }
+  }
+`);
+
 interface Props {
-  entity: FragmentType<typeof BROWSER_ACTIVITY_FRAGMENT>;
+  entity: MemoryEntityOf<'BrowserActivityType'>;
 }
 
 export function BrowserActivityDetails({ entity }: Props) {
   const data = useFragment(BROWSER_ACTIVITY_FRAGMENT, entity);
+  const [updateBrowserActivity] = useMutation(UPDATE_BROWSER_ACTIVITY);
 
   return (
-    <Sheet.Content className="z-index-1000">
-      <Sheet.Header>
-        <Sheet.Title>
-          {data.actionType ? data.actionType[0].toUpperCase() + data.actionType.slice(1) + ' - ' : ''}
-          {data.title}
-        </Sheet.Title>
-        <Sheet.Description>
-          <div className="hover:text-blue-500 cursor-pointer" onClick={() => window.open(data.url, '_blank')}>
-            {data.url}
-          </div>
-        </Sheet.Description>
-      </Sheet.Header>
-      <div className="grid flex-1 auto-rows-min gap-6 px-4">
-        <div className="grid gap-3">
-          <Label htmlFor="startTime">Start Time</Label>
-          <Input id="startTime" disabled defaultValue={new Date(data.time).toLocaleString()} />
-        </div>
-      </div>
-    </Sheet.Content>
+    <EntityDetailScaffold
+      entity={entity}
+      title={data.title || 'Browser activity'}
+      subtitle={data.actionType ?? undefined}
+      taggable
+      editFields={[
+        { key: 'title', label: 'Title', value: data.title ?? '' },
+        { key: 'url', label: 'URL', value: data.url ?? '', inputType: 'url' },
+      ]}
+      onSave={async (values) => {
+        await updateBrowserActivity({
+          variables: { input: { id: entity.id, title: values.title, url: values.url } },
+        });
+      }}
+      metaItems={[
+        { label: 'Action', value: data.actionType },
+        { label: 'When', value: data.time ? new Date(data.time).toLocaleString() : null },
+      ]}
+      rawData={data}
+    />
   );
 }

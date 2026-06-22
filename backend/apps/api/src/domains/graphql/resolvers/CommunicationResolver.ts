@@ -1,5 +1,5 @@
 import { UseGuards } from '@nestjs/common';
-import { Args, ID, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -17,6 +17,7 @@ import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonConnection } from '../types/PersonConnection';
 import { PersonEdge } from '../types/PersonEdge';
 import { PersonType } from '../types/PersonType';
+import { UpdateCommunicationInput } from '../types/UpdateCommunicationInput';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -68,6 +69,23 @@ export class CommunicationResolver {
     const id = GlobalUID.parse('communication', gid);
 
     const entity = await this.communicationService.findById(serviceContext, id);
+
+    return entity ? CommunicationType.toType(entity) : null;
+  }
+
+  @Mutation(() => CommunicationType, { nullable: true })
+  async updateCommunication(
+    @Context() context: RequestContext,
+    @Args('input') input: UpdateCommunicationInput,
+  ): Promise<CommunicationType | null> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('communication', input.id);
+
+    const entity = await this.communicationService.update(serviceContext, id, {
+      subject: input.subject,
+      content: input.content ?? '',
+    });
 
     return entity ? CommunicationType.toType(entity) : null;
   }

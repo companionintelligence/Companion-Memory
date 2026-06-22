@@ -1,11 +1,22 @@
-import { Input, Label, Sheet } from '@ci/shadcn';
+import { useMutation } from '@apollo/client';
 
 import { PLACE_FRAGMENT } from '@/components/entities/grid/PlaceGridItem';
-import { useFragment, type FragmentType } from '@/graphql';
+import { gql, useFragment } from '@/graphql';
 
-interface Props {
-  entity: FragmentType<typeof PLACE_FRAGMENT>;
-}
+import type { MemoryEntityOf } from '../../useEntityService';
+
+import { EntityDetailScaffold } from './EntityDetailScaffold';
+
+const UPDATE_PLACE = gql(`
+  mutation UpdatePlaceDetail($input: UpdatePlaceInput!) {
+    updatePlace(input: $input) {
+      id
+      name
+      description
+      properties
+    }
+  }
+`);
 
 type PlaceProperties = {
   address?: string | null;
@@ -13,36 +24,48 @@ type PlaceProperties = {
   longitude?: number | null;
 };
 
+interface Props {
+  entity: MemoryEntityOf<'PlaceType'>;
+}
+
 export function PlaceDetails({ entity }: Props) {
   const data = useFragment(PLACE_FRAGMENT, entity);
-  const properties = (data.properties ?? {}) as PlaceProperties;
+  const [updatePlace] = useMutation(UPDATE_PLACE);
 
+  const properties = (data.properties ?? {}) as PlaceProperties;
   const hasCoordinates = properties.latitude != null && properties.longitude != null;
 
   return (
-    <Sheet.Content className="z-index-1000">
-      <Sheet.Header>
-        <Sheet.Title>{data.name || 'Place'}</Sheet.Title>
-        {data.description && <Sheet.Description>{data.description}</Sheet.Description>}
-      </Sheet.Header>
-      <div className="grid flex-1 auto-rows-min gap-6 px-4">
-        {properties.address && (
-          <div className="grid gap-3">
-            <Label htmlFor="address">Address</Label>
-            <Input id="address" disabled defaultValue={properties.address} />
-          </div>
-        )}
-        {hasCoordinates && (
-          <div className="grid gap-3">
-            <Label htmlFor="coordinates">Coordinates</Label>
-            <Input
-              id="coordinates"
-              disabled
-              defaultValue={`Latitude: ${properties.latitude}, Longitude: ${properties.longitude}`}
-            />
-          </div>
-        )}
-      </div>
-    </Sheet.Content>
+    <EntityDetailScaffold
+      entity={entity}
+      title={data.name || 'Place'}
+      subtitle="Place"
+      taggable
+      editFields={[
+        { key: 'name', label: 'Name', value: data.name ?? '' },
+        { key: 'description', label: 'Description', value: data.description ?? '', multiline: true },
+        { key: 'address', label: 'Address', value: properties.address ?? '' },
+      ]}
+      onSave={async (values) => {
+        await updatePlace({
+          variables: {
+            input: {
+              id: entity.id,
+              name: values.name,
+              description: values.description,
+              properties: { ...properties, address: values.address },
+            },
+          },
+        });
+      }}
+      metaItems={[
+        {
+          label: 'Where',
+          value: hasCoordinates ? `${properties.latitude}, ${properties.longitude}` : null,
+        },
+        { label: 'Type', value: 'Place' },
+      ]}
+      rawData={data}
+    />
   );
 }

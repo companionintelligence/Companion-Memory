@@ -6,6 +6,7 @@ export const MOCK_FILES = [
     title: 'Notes App Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-0/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -14,6 +15,7 @@ export const MOCK_FILES = [
     title: 'Dashboard Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-1/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -22,6 +24,7 @@ export const MOCK_FILES = [
     title: 'Charts Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-2/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -30,6 +33,7 @@ export const MOCK_FILES = [
     title: 'Code Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-3/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -38,6 +42,7 @@ export const MOCK_FILES = [
     title: 'Presentation Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-4/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -46,6 +51,7 @@ export const MOCK_FILES = [
     title: 'Prototype Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-5/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -54,6 +60,7 @@ export const MOCK_FILES = [
     title: 'Analytics Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-6/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -62,6 +69,7 @@ export const MOCK_FILES = [
     title: 'Coding Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-7/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -70,6 +78,7 @@ export const MOCK_FILES = [
     title: 'Security Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-8/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -78,6 +87,7 @@ export const MOCK_FILES = [
     title: 'Planning Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-9/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -86,6 +96,7 @@ export const MOCK_FILES = [
     title: 'Meeting Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-10/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
   {
     __typename: 'FileType' as const,
@@ -94,5 +105,6 @@ export const MOCK_FILES = [
     title: 'Team Screenshot',
     contentType: 'image/jpeg',
     previewUrl: '/files/file-11/preview',
+    createdAt: '2024-01-01T00:00:00.000Z',
   },
 ];

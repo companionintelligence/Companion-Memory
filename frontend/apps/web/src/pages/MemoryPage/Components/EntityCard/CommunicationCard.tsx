@@ -43,6 +43,9 @@ export const COMMUNICATION_FRAGMENT = gql(`
         }
       }
     }
+    tags {
+      label
+    }
   }
 `);
 

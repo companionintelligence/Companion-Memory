@@ -108,7 +108,9 @@ export class PlaceResolver {
       properties.uploaded = input.uploaded;
     }
 
-    const entity = await this.placeService.update(serviceContext, input.id, {
+    const id = GlobalUID.parse('place', input.id);
+
+    const entity = await this.placeService.update(serviceContext, id, {
       name: input.name,
       properties,
       description: input.description,

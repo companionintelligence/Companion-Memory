@@ -75,7 +75,9 @@ export class ContentResolver {
   ): Promise<ContentType | null> {
     const serviceContext = toServiceContext(context);
 
-    const entity = await this.contentService.update(serviceContext, input.id, {
+    const id = GlobalUID.parse('content', input.id);
+
+    const entity = await this.contentService.update(serviceContext, id, {
       type: input.type,
       title: input.title,
       text: input.text,

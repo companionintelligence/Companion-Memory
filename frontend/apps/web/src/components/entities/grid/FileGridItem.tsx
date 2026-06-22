@@ -10,6 +10,12 @@ export const FILE_FRAGMENT = gql(`
     id
     filename
     previewUrl
+    contentType
+    sourceUrl
+    title
+    description
+    size
+    createdAt
   }
 `);
 

@@ -74,7 +74,9 @@ export class EventResolver {
   ): Promise<EventType | null> {
     const serviceContext = toServiceContext(context);
 
-    const entity = await this.eventService.update(serviceContext, input.id, {
+    const id = GlobalUID.parse('event', input.id);
+
+    const entity = await this.eventService.update(serviceContext, id, {
       title: input.title,
       description: input.description,
       event_type: input.eventType,

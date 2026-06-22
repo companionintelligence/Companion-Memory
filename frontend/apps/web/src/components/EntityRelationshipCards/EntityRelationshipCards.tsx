@@ -200,7 +200,7 @@ function getVisibleCardCount(width: number): number {
   return Math.min(MAX_VISIBLE_CARDS, cardsPerRow);
 }
 
-function getEntityDetailPath(entityType: string, entityId: string): string | null {
+export function getEntityDetailPath(entityType: string, entityId: string): string | null {
   switch (entityType.toLowerCase()) {
     case 'person':
       return `/people/${entityId}`;

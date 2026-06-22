@@ -105,7 +105,9 @@ export class ConceptResolver {
   ): Promise<UpdateConceptPayload> {
     const serviceContext = toServiceContext(context);
 
-    const entity = await this.conceptService.update(serviceContext, input.id, {
+    const id = GlobalUID.parse('concept', input.id);
+
+    const entity = await this.conceptService.update(serviceContext, id, {
       name: input.name,
       description: input.description,
     });

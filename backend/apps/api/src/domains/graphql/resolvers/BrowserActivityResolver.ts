@@ -1,5 +1,5 @@
 import { UseGuards } from '@nestjs/common';
-import { Args, ID, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -12,6 +12,7 @@ import { BrowserActivityType } from '../types/BrowserActivityType';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
+import { UpdateBrowserActivityInput } from '../types/UpdateBrowserActivityInput';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -62,6 +63,23 @@ export class BrowserActivityResolver {
     const id = GlobalUID.parse('browser-activity', gid);
 
     const entity = await this.browserActivityService.findById(serviceContext, id);
+
+    return entity ? BrowserActivityType.toType(entity) : null;
+  }
+
+  @Mutation(() => BrowserActivityType, { nullable: true })
+  async updateBrowserActivity(
+    @Context() context: RequestContext,
+    @Args('input') input: UpdateBrowserActivityInput,
+  ): Promise<BrowserActivityType | null> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('browser-activity', input.id);
+
+    const entity = await this.browserActivityService.update(serviceContext, id, {
+      title: input.title,
+      url: input.url,
+    });
 
     return entity ? BrowserActivityType.toType(entity) : null;
   }

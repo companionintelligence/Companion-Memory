@@ -10,6 +10,10 @@ export const ITEM_FRAGMENT = gql(`
     id
     name
     description
+    category
+    brand
+    model
+    currentValue
     file {
       id
       sourceUrl

@@ -1,79 +1,66 @@
-import { Input, Label, Sheet } from '@ci/shadcn';
+import { useMutation } from '@apollo/client';
 
-import { type FragmentType, useFragment } from '@/graphql';
+import { gql, useFragment } from '@/graphql';
 
+import type { MemoryEntityOf } from '../../useEntityService';
 import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
 
+import { EntityDetailScaffold } from './EntityDetailScaffold';
+
+const UPDATE_EVENT = gql(`
+  mutation UpdateEventDetail($input: UpdateEventInput!) {
+    updateEvent(input: $input) {
+      id
+      title
+      description
+    }
+  }
+`);
+
+type LocationProperties = {
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+};
+
 interface Props {
-  entity: FragmentType<typeof EVENT_FRAGMENT>;
+  entity: MemoryEntityOf<'EventType'>;
 }
 
 export function EventDetails({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
+  const [updateEvent] = useMutation(UPDATE_EVENT);
+
+  const props = (data.location?.properties ?? {}) as LocationProperties;
+  const coordinates =
+    props.latitude != null && props.longitude != null ? `${props.latitude}, ${props.longitude}` : null;
+  const where = [data.location?.name, props.address, coordinates].filter(Boolean).join(' · ');
 
   return (
-    <Sheet.Content className="z-index-1000">
-      <Sheet.Header>
-        <Sheet.Title>{data.title}</Sheet.Title>
-        <Sheet.Description>{data.description}</Sheet.Description>
-      </Sheet.Header>
-      <div className="grid flex-1 auto-rows-min gap-6 px-4">
-        {data?.location != null && (
-          <div className="grid flex-1 auto-rows-min gap-6">
-            <Label className="text-xl">Location</Label>
-            {data.location.name && (
-              <div className="grid gap-3">
-                <Label htmlFor="address">Name</Label>
-                <Input id="address" disabled defaultValue={data.location.name} />
-              </div>
-            )}
-            <div className="grid gap-3">
-              <Label htmlFor="address">Address</Label>
-              <Input id="address" disabled defaultValue={data.location.properties.address} />
-            </div>
-
-            <div className="grid gap-3">
-              <Label htmlFor="coordinates">Coordinates</Label>
-              <Input
-                id="coordinates"
-                disabled
-                defaultValue={`Latitude: ${data.location.properties.latitude}, Longitude: ${data.location.properties.longitude}`}
-              />
-            </div>
-          </div>
-        )}
-        {/*{data.metadata?.sourceSystem != null && (*/}
-        {/*  <div className="grid flex-1 auto-rows-min gap-6 px-4">*/}
-        {/*    <div className="grid gap-3">*/}
-        {/*      <Label htmlFor="sourceSystem">Platform</Label>*/}
-        {/*      <Input id="sourceSystem" disabled defaultValue={data.metadata.sourceSystem as string} />*/}
-        {/*    </div>*/}
-        {/*    )*/}
-        {/*  </div>*/}
-        {/*)}*/}
-        {data?.startTime != null && (
-          <div className="grid gap-3">
-            <Label htmlFor="startTime">Start Time</Label>
-            <Input id="startTime" disabled defaultValue={new Date(data.startTime).toLocaleString()} />
-          </div>
-        )}
-        {data?.endTime != null && (
-          <div className="grid gap-3">
-            <Label htmlFor="endTime">End Time</Label>
-            <Input id="endTime" disabled defaultValue={new Date(data.endTime).toLocaleString()} />
-          </div>
-        )}
-        {/*{entity?.durationMinutes != null && (*/}
-        {/*  <div className="grid gap-3">*/}
-        {/*    <Label htmlFor="duration">Duration</Label>*/}
-        {/*    <Input*/}
-        {/*      id="duration"*/}
-        {/*      disabled*/}
-        {/*      defaultValue={`${Math.floor((data.durationMinutes as number) / 60)} hours, ${(data.durationMinutes as number) % 60} minutes`}*/}
-        {/*    />*/}
-        {/*  </div>*/}
-        {/*)}*/}
-      </div>
-    </Sheet.Content>
+    <EntityDetailScaffold
+      entity={entity}
+      title={data.title || 'Event'}
+      subtitle="Event"
+      taggable
+      editFields={[
+        { key: 'title', label: 'Title', value: data.title ?? '' },
+        { key: 'description', label: 'Description', value: data.description ?? '', multiline: true },
+      ]}
+      onSave={async (values) => {
+        await updateEvent({
+          variables: {
+            input: { id: entity.id, title: values.title, description: values.description },
+          },
+        });
+      }}
+      metaItems={[
+        { label: 'Source', value: data.sourceSystem },
+        { label: 'Start', value: data.startTime ? new Date(data.startTime).toLocaleString() : null },
+        { label: 'End', value: data.endTime ? new Date(data.endTime).toLocaleString() : null },
+        { label: 'Where', value: where || null },
+        { label: 'Type', value: 'Event' },
+      ]}
+      rawData={data}
+    />
   );
 }

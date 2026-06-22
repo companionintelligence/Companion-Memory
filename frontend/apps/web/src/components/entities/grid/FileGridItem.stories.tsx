@@ -41,7 +41,11 @@ export const Default: Story = {
     const file = {
       __typename: 'FileType' as const,
       id: 'mock-id-1',
-      url: 'https://images.unsplash.com/photo-1656543802898-41c8c46683a7?q=80&w=1471&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D',
+      filename: 'sample.jpg',
+      contentType: 'image/jpeg',
+      previewUrl:
+        'https://images.unsplash.com/photo-1656543802898-41c8c46683a7?q=80&w=1471&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D',
+      createdAt: '2024-01-01T00:00:00.000Z',
     };
 
     const maskedFile = makeFragmentData(file, FILE_FRAGMENT);

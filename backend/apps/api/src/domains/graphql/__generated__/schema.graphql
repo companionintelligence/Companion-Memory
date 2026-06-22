@@ -652,11 +652,14 @@ type Mutation {
   triggerHbpe: String!
   untagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
   updateAnswer(input: UpdateAnswerInput!): AnswerType
+  updateBrowserActivity(input: UpdateBrowserActivityInput!): BrowserActivityType
+  updateCommunication(input: UpdateCommunicationInput!): CommunicationType
   updateConcept(input: UpdateConceptInput!): UpdateConceptPayload!
   updateConnection(input: UpdateConnectionInput!): UpdateConnectionPayload!
   updateConnectionSyncJob(input: UpdateConnectionSyncJobInput!): UpdateConnectionSyncJobPayload!
   updateContent(input: UpdateContentInput!): ContentType
   updateEvent(input: UpdateEventInput!): EventType
+  updateFile(input: UpdateFileInput!): FileType
   updateItem(input: UpdateItemInput!): UpdateItemPayload!
   updateNote(input: UpdateNoteInput!): UpdateNotePayload!
   updatePerson(input: UpdatePersonInput!): UpdatePersonPayload!
@@ -1062,6 +1065,18 @@ input UpdateAnswerInput {
   id: String!
 }
 
+input UpdateBrowserActivityInput {
+  id: ID!
+  title: String
+  url: String
+}
+
+input UpdateCommunicationInput {
+  content: String
+  id: ID!
+  subject: String
+}
+
 input UpdateConceptInput {
   description: String
   id: String!
@@ -1144,6 +1159,12 @@ input UpdateEventInput {
   sourceType: String
   startTime: DateTime
   status: String
+  title: String
+}
+
+input UpdateFileInput {
+  description: String
+  id: ID!
   title: String
 }
 

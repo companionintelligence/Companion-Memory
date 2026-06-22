@@ -15,6 +15,7 @@ export const EVENT_FRAGMENT = gql(`
     id
     title
     description
+    sourceSystem
     startTime
     endTime
     location {
@@ -23,6 +24,9 @@ export const EVENT_FRAGMENT = gql(`
         name
         properties
       }
+    }
+    tags {
+      label
     }
   }
 `);

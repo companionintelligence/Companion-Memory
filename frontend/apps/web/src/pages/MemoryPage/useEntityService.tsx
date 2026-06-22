@@ -25,6 +25,12 @@ const SEARCH_QUERY = gql(`
             id
           }
 
+          ... on Taggable {
+            tags {
+              label
+            }
+          }
+
           ...AnswerGridItemData
           ...BrowserActivityGridItemData
           ...CommunicationGridItemData
@@ -80,6 +86,12 @@ export interface GenericEntity {
 
 /** Anything that can populate the shared EntityDetails sheet. */
 export type MemoryEntity = EntityItem | GenericEntity;
+
+/** Narrow {@link MemoryEntity} to a single `__typename` (used by detail bodies). */
+export type MemoryEntityOf<TName extends MemoryEntity['__typename']> = Extract<
+  MemoryEntity,
+  { __typename: TName }
+>;
 
 type ReturnType = [
   {

@@ -1,5 +1,5 @@
 import { UseGuards } from '@nestjs/common';
-import { Query, ResolveField, Resolver, Args, ID, Parent } from '@nestjs/graphql';
+import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -17,6 +17,7 @@ import { ItemConnection } from '../types/ItemConnection';
 import { ItemEdge } from '../types/ItemEdge';
 import { ItemType } from '../types/ItemType';
 import { PaginationArgs } from '../types/PaginationArgs';
+import { UpdateFileInput } from '../types/UpdateFileInput';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -69,6 +70,23 @@ export class FileResolver {
     const id = GlobalUID.parse('file', gid);
 
     const entity = await this.fileService.findById(serviceContext, id);
+
+    return entity ? FileType.toType(entity) : null;
+  }
+
+  @Mutation(() => FileType, { nullable: true })
+  async updateFile(
+    @Context() context: RequestContext,
+    @Args('input') input: UpdateFileInput,
+  ): Promise<FileType | null> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('file', input.id);
+
+    const entity = await this.fileService.update(serviceContext, id, {
+      title: input.title,
+      description: input.description,
+    });
 
     return entity ? FileType.toType(entity) : null;
   }
