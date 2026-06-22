@@ -20,6 +20,15 @@ export class NodeEntity {
   @Column({ name: 'owner_user_id', type: 'uuid' })
   userId!: string;
 
+  // External provenance for idempotent ingest (e.g. the importer). The partial
+  // unique index entities_linked_uniq(owner_user_id, entity_type, linked_table,
+  // linked_id) WHERE linked_table IS NOT NULL is the upsert key.
+  @Column({ name: 'linked_table', type: 'text', nullable: true })
+  linkedTable!: string | null;
+
+  @Column({ name: 'linked_id', type: 'uuid', nullable: true })
+  linkedId!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -34,6 +43,8 @@ export class NodeEntity {
       description: entity.description,
       properties: entity.properties,
       userId: entity.userId,
+      linkedTable: entity.linkedTable,
+      linkedId: entity.linkedId,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };
