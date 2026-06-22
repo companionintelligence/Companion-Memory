@@ -1,9 +1,9 @@
-import { type MouseEvent } from 'react';
+import { type MouseEvent, type ReactNode } from 'react';
 
 import { EventIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
-import { SearchTable } from '../SearchTable';
+import { EntityRow } from './EntityRow';
 
 export const EVENT_FRAGMENT = gql(`
   fragment TableEventRowData on EventType {
@@ -15,21 +15,20 @@ export const EVENT_FRAGMENT = gql(`
 
 interface Props {
   event: FragmentType<typeof EVENT_FRAGMENT>;
+  time?: ReactNode;
   onClick?: (e: MouseEvent<HTMLDivElement>) => void;
 }
 
-export function EventRow({ event, onClick }: Props) {
+export function EventRow({ event, time, onClick }: Props) {
   const data = useFragment(EVENT_FRAGMENT, event);
 
   return (
-    <SearchTable.Row onClick={onClick}>
-      <SearchTable.Cell className="align-middle w-0 px-2.5">
-        <EventIcon />
-      </SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle w-100">{data.title}</SearchTable.Cell>
-
-      <SearchTable.Cell className="align-middle">{data.description}</SearchTable.Cell>
-    </SearchTable.Row>
+    <EntityRow
+      icon={<EventIcon />}
+      title={data.title}
+      subtitle={data.description}
+      time={time}
+      onClick={onClick}
+    />
   );
 }
