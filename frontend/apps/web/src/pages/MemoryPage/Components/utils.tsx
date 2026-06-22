@@ -150,14 +150,26 @@ export interface EntityDateGroup {
 
 /**
  * Whether the active sort keeps results in date order, so contiguous date-group
- * headers stay meaningful. Only the default (server) order and the explicit time
- * sorts are chronological; relevance and name sorts interleave dates, so the
- * contiguous grouping below would emit repeated, out-of-order headers — callers
- * render a flat, header-less list in those cases. Mirrors the `sortBy` values
- * produced by the explorer toolbar's SORT_OPTIONS.
+ * headers stay meaningful. Explicit time sorts are chronological; relevance and
+ * name sorts interleave dates, so the contiguous grouping below would emit
+ * repeated, out-of-order headers — callers render a flat, header-less list then.
+ *
+ * The "Default" (no explicit sort) case depends on whether a free-text query is
+ * active: the server orders by relevance when one is present and by time
+ * otherwise (SearchResolver: `candidateSource === 'query' ? 'relevance' :
+ * 'time'`). Pass `hasQuery` so we only group when the data is actually
+ * time-ordered. Mirrors the `sortBy` values from the toolbar's SORT_OPTIONS.
  */
-export function isChronologicalSort(sortBy: string | null | undefined): boolean {
-  return !sortBy || sortBy === 'time';
+export function isChronologicalSort(sortBy: string | null | undefined, hasQuery = false): boolean {
+  if (sortBy === 'time') {
+    return true;
+  }
+
+  if (sortBy === 'relevance' || sortBy === 'name') {
+    return false;
+  }
+
+  return !hasQuery;
 }
 
 /**

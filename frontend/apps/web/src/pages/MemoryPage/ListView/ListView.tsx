@@ -61,7 +61,10 @@ export function ListView() {
   // Relevance/name sorts interleave dates, so we fall back to a flat list there
   // (grouping then would emit repeated, out-of-order headers).
   const [searchParams] = useSearchParams();
-  const grouped = isChronologicalSort(searchParams.get('sortBy'));
+  const grouped = isChronologicalSort(
+    searchParams.get('sortBy'),
+    Boolean(searchParams.get('search')?.trim()),
+  );
   const groups = useMemo(() => (grouped ? groupEntitiesByBucket(data) : null), [grouped, data]);
 
   // Every row opens the same shared details drawer (incl. File/Item media).

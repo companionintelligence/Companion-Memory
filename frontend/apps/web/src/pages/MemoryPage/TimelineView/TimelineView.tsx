@@ -34,7 +34,10 @@ export function TimelineView() {
   // order. Relevance/name sorts interleave dates, so we render one continuous,
   // header-less timeline there instead of repeated, out-of-order headers.
   const [searchParams] = useSearchParams();
-  const grouped = isChronologicalSort(searchParams.get('sortBy'));
+  const grouped = isChronologicalSort(
+    searchParams.get('sortBy'),
+    Boolean(searchParams.get('search')?.trim()),
+  );
   const groups = useMemo(
     () => (grouped ? groupEntitiesByBucket(timelineData) : null),
     [grouped, timelineData],
