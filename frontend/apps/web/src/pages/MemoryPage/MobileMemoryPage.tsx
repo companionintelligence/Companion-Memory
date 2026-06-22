@@ -52,11 +52,11 @@ export default function MobileMemoryPage() {
 
       <PageContent>
         <div className="space-y-3">
-          {/* The same explorer search + filter toolbar as desktop, so the two
-              stay in sync and the URL params (search / filters / semantic) are
-              written non-destructively. The global header search isn't shown on
-              mobile, so this is the primary search surface here. */}
-          <ExplorerToolbar />
+          {/* Same explorer search + filters as desktop, in its mobile layout: the
+              search field stays inline and the date/sort/filter controls + Save
+              search live in a slide-out drawer behind a Filters button. The global
+              header search isn't shown on mobile, so this is the primary surface. */}
+          <ExplorerToolbar variant="mobile" />
 
           {/* Tab Navigation */}
           <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>
