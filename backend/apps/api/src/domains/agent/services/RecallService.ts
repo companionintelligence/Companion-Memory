@@ -144,14 +144,20 @@ export class RecallService {
         }
       } catch (err) {
         // The graph result still stands if the message channel fails.
-        this.logger.warn(`Message-channel retrieval failed for user ${context.userId}: ${err}`);
+        this.logger.warn('Message-channel retrieval failed', {
+          userId: context.userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
 
       const block = `## Relevant context\n${lines.join('\n')}`;
 
       return { block, resultCount: lines.length };
     } catch (err) {
-      this.logger.warn(`Recall failed for user ${context.userId}: ${err}`);
+      this.logger.warn('Recall failed', {
+        userId: context.userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
 
       return { block: '', resultCount: 0 };
     }

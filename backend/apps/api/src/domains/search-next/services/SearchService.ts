@@ -72,30 +72,31 @@ export class SearchService {
     context: UserServiceContext,
     options: SearchOptions,
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
-    const { mode = 'auto' } = options;
+    const resolvedOptions = this.applyDefaultTypeExclusions(options);
+    const { mode = 'auto' } = resolvedOptions;
 
     let results: EntityIdentifier<IndexableEntity>[];
 
     switch (mode) {
       case 'semantic':
-        results = await this.semanticSearch(context, options);
+        results = await this.semanticSearch(context, resolvedOptions);
         break;
 
       case 'keyword':
-        results = await this.keywordSearch(context, options);
+        results = await this.keywordSearch(context, resolvedOptions);
         break;
 
       case 'boosted':
-        results = await this.boostedKeywordSearch(context, options);
+        results = await this.boostedKeywordSearch(context, resolvedOptions);
         break;
 
       case 'hybrid':
-        results = await this.hybridSearch(context, options);
+        results = await this.hybridSearch(context, resolvedOptions);
         break;
 
       case 'auto':
       default:
-        results = await this.autoSearch(context, options);
+        results = await this.autoSearch(context, resolvedOptions);
         break;
     }
 
@@ -136,6 +137,17 @@ export class SearchService {
       id: row.entity_id,
       score: parseFloat(row.score),
     }));
+  }
+
+  private applyDefaultTypeExclusions(options: SearchOptions): SearchOptions {
+    if (options.includeTypes || options.excludeTypes) {
+      return options;
+    }
+
+    return {
+      ...options,
+      excludeTypes: ['message'],
+    };
   }
 
   /**

@@ -46,11 +46,15 @@ export class AgentMemoryService {
     // Index the raw fragment for the recall message channel (naive-RAG half of
     // the hybrid). Async via the search-index queue; the content is carried in
     // the payload because fragments are immutable.
-    await this.eventService.send(AgentMemoryCreatedEvent, {
-      memoryId: saved.id,
-      userId: saved.userId,
-      content: saved.content,
-    });
+    await this.eventService.send(
+      AgentMemoryCreatedEvent,
+      {
+        memoryId: saved.id,
+        userId: saved.userId,
+        content: saved.content,
+      },
+      { queue: 'search-index' },
+    );
 
     return AgentMemoryEntity.toEgressType(saved);
   }

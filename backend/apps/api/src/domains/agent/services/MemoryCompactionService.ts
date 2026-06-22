@@ -182,6 +182,12 @@ interface ExtractionResult {
   relationships: ExtractedRelationship[];
 }
 
+type PersonVariantCandidate = { id: string; name?: string | null };
+
+type CompactionCache = {
+  personCandidatesByUserId: Map<string, PersonVariantCandidate[]>;
+};
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -228,6 +234,9 @@ export class MemoryCompactionService {
     // ------------------------------------------------------------------
 
     const entityMap = new Map<string, string>();
+    const cache: CompactionCache = {
+      personCandidatesByUserId: new Map(),
+    };
 
     // Resolve the canonical "self" node so first-person facts ("my sister",
     // "I live in…") anchor to the ONE user entity instead of minting duplicate
@@ -265,6 +274,7 @@ export class MemoryCompactionService {
           userId,
           context,
           entityMap,
+          cache,
           self?.entityId ?? null,
           selfAliases,
         );
@@ -431,6 +441,7 @@ export class MemoryCompactionService {
     userId: string,
     context: UserServiceContext,
     entityMap: Map<string, string>,
+    cache: CompactionCache,
     selfEntityId: string | null,
     selfAliases: Set<string>,
   ): Promise<void> {
@@ -456,7 +467,13 @@ export class MemoryCompactionService {
       }
 
       try {
-        const entityId = await this.upsertEntity(context, entity.type, name, entity.description ?? null);
+        const entityId = await this.upsertEntity(
+          context,
+          entity.type,
+          name,
+          entity.description ?? null,
+          cache,
+        );
 
         if (entityId != null) {
           entityMap.set(this.entityKey(entity.type, name), entityId);
@@ -552,6 +569,7 @@ export class MemoryCompactionService {
     type: string,
     name: string,
     description: string | null,
+    cache: CompactionCache,
   ): Promise<string | null> {
     switch (type) {
       case 'person': {
@@ -573,7 +591,8 @@ export class MemoryCompactionService {
         //    is never a variant of the head name, so we neither fold it into
         //    another node nor let it block a real merge.
         if (!this.isRelationalDescriptor(name)) {
-          const variant = this.resolvePersonVariant(name, await this.personService.findAll(context));
+          const candidates = await this.getPersonCandidates(context, cache);
+          const variant = this.resolvePersonVariant(name, candidates);
 
           if (variant) {
             // Promote the surviving node to the fuller form ("Priya" ->
@@ -589,6 +608,7 @@ export class MemoryCompactionService {
           name,
           description: description ?? undefined,
         });
+        this.addPersonCandidate(context, cache, created.id, created.name ?? null);
 
         return created.id;
       }
@@ -746,6 +766,35 @@ export class MemoryCompactionService {
     } catch {
       // Promotion is cosmetic; the merge (shared id) is the real win.
     }
+  }
+
+  private async getPersonCandidates(
+    context: UserServiceContext,
+    cache: CompactionCache,
+  ): Promise<PersonVariantCandidate[]> {
+    const cached = cache.personCandidatesByUserId.get(context.userId);
+    if (cached) {
+      return cached;
+    }
+
+    const candidates = await this.personService.findAll(context);
+    cache.personCandidatesByUserId.set(context.userId, candidates);
+
+    return candidates;
+  }
+
+  private addPersonCandidate(
+    context: UserServiceContext,
+    cache: CompactionCache,
+    id: string,
+    name: string | null,
+  ): void {
+    const candidates = cache.personCandidatesByUserId.get(context.userId);
+    if (!candidates) {
+      return;
+    }
+
+    candidates.push({ id, name });
   }
 
   private isSubset(a: Set<string>, b: Set<string>): boolean {
