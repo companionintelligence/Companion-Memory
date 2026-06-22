@@ -21,6 +21,9 @@ interface Options {
   order?: FindOptionsOrder<BrowserActivityEntity>;
   startTime?: Date;
   endTime?: Date;
+  /** Composite keyset cursor for the timed search path (see EventService). */
+  afterTime?: Date;
+  afterId?: string;
 }
 
 @Injectable()
@@ -212,6 +215,17 @@ export class BrowserActivityService {
       for (const [field, direction] of Object.entries(options.order)) {
         query = query.orderBy(`browser-activity.${field}`, direction as 'ASC' | 'DESC');
       }
+
+      // Deterministic tiebreak so same-timestamp rows page consistently.
+      query = query.addOrderBy('browser-activity.id', 'DESC');
+    }
+
+    // Composite keyset: page strictly past (afterTime, afterId) in (time DESC, id DESC).
+    if (options.afterTime && options.afterId) {
+      query = query.andWhere(
+        '(browser-activity.time < :afterTime OR (browser-activity.time = :afterTime AND browser-activity.id < :afterId))',
+        { afterTime: options.afterTime, afterId: options.afterId },
+      );
     }
 
     if (options.startTime) {
