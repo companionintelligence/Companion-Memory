@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 
 import { Button } from '@ci/shadcn';
-import { Search as SearchIcon, X } from '@ci/shadcn/icons';
+import { Loader2, MapPin, Search as SearchIcon, X } from '@ci/shadcn/icons';
 import L from 'leaflet';
 import { Marker as LeafletMarker, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 import { useSearchParams } from 'react-router-dom';
@@ -315,8 +315,58 @@ function SearchAreaControl() {
   );
 }
 
+// ── "Load more pins" control ────────────────────────────────────────────────
+// The timeline panel's IntersectionObserver only pages in more results when its
+// own cards scroll into view. Places (and other located-but-untimed entities)
+// render no timeline card, so a Places-dominated result set leaves the panel too
+// short to ever trip that sentinel — capping the map at the first page even
+// though more located entities exist server-side. This explicit control pages in
+// more results independently of the timeline, mirroring mobile's
+// LoadMorePinsControl.
+function LoadMorePinsControl({
+  shown,
+  hasNextPage,
+  loadingMore,
+  onLoadMore,
+}: {
+  shown: number;
+  hasNextPage: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  const stopPropagation = useCallback((el: HTMLDivElement | null) => {
+    if (el) {
+      L.DomEvent.disableClickPropagation(el);
+      L.DomEvent.disableScrollPropagation(el);
+    }
+  }, []);
+
+  if (!hasNextPage) {
+    return null;
+  }
+
+  return (
+    <div ref={stopPropagation} className="absolute bottom-4 left-1/2 z-400 -translate-x-1/2">
+      <Button
+        size="sm"
+        onClick={onLoadMore}
+        disabled={loadingMore}
+        className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
+      >
+        {loadingMore ? (
+          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+        ) : (
+          <MapPin className="mr-1 h-4 w-4" />
+        )}
+        {loadingMore ? 'Loading…' : `Load more pins (${shown} shown)`}
+      </Button>
+    </div>
+  );
+}
+
 export function DesktopMapView() {
-  const { located, routeLocations, setActiveEntity } = useLocatedEntities();
+  const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
+    useLocatedEntities();
 
   return (
     // TODO: This default leads to some map jittering. It's OK for now, but let's think about tracking the user's last location and use that for the default center.
@@ -328,6 +378,12 @@ export function DesktopMapView() {
       </Map.Panel>
 
       <SearchAreaControl />
+      <LoadMorePinsControl
+        shown={located.length}
+        hasNextPage={hasNextPage}
+        loadingMore={loadingMore}
+        onLoadMore={loadMore}
+      />
       <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
     </Map>
@@ -347,50 +403,12 @@ export function MobileMapView() {
       {/* Mobile has no timeline panel to scroll, so markers would otherwise be
           stuck on the first page — give an explicit way to pull more pins. */}
       <LoadMorePinsControl
-        pinCount={located.length}
+        shown={located.length}
         hasNextPage={hasNextPage}
         loadingMore={loadingMore}
         onLoadMore={loadMore}
       />
     </Map>
-  );
-}
-
-// Explicit "load more" affordance for the mobile map: each tap appends the next
-// server page onto the accumulated result set, which re-clusters into more pins.
-function LoadMorePinsControl({
-  pinCount,
-  hasNextPage,
-  loadingMore,
-  onLoadMore,
-}: {
-  pinCount: number;
-  hasNextPage: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
-}) {
-  const stopPropagation = useCallback((el: HTMLDivElement | null) => {
-    if (el) {
-      L.DomEvent.disableClickPropagation(el);
-      L.DomEvent.disableScrollPropagation(el);
-    }
-  }, []);
-
-  if (!hasNextPage) {
-    return null;
-  }
-
-  return (
-    <div ref={stopPropagation} className="absolute bottom-6 left-1/2 z-400 -translate-x-1/2">
-      <Button
-        size="sm"
-        onClick={onLoadMore}
-        disabled={loadingMore}
-        className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
-      >
-        {loadingMore ? 'Loading…' : `Load more pins (${pinCount})`}
-      </Button>
-    </div>
   );
 }
 

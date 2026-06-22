@@ -39,6 +39,11 @@ export function MediaTile({ media, onClick }: Props) {
           alt={media.title}
           loading="lazy"
           decoding="async"
+          // Intrinsic-size hints (≈ the grid track) let the browser reserve the
+          // tile box and downscale to it — important when a thumbUrl is the
+          // full-resolution source (e.g. ContentType has no resized preview).
+          width={240}
+          height={260}
           onError={() => setBroken(true)}
           className="h-full w-full object-cover"
         />

@@ -147,7 +147,9 @@ export function EventPage() {
 
                       return true;
                     }}
-                    onTagRemoved={(label) => untagEntities([GlobalUID.encode('event', id!)], [label])}
+                    onTagRemoved={(label) => {
+                      void untagEntities([GlobalUID.encode('event', id!)], [label]);
+                    }}
                   />
                 </div>
 

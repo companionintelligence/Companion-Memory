@@ -13,8 +13,8 @@ import { EntityDetails } from './Components';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
+import { ListView } from './ListView';
 import { MobileMapView } from './MapView';
-import { TimelineView } from './TimelineView';
 
 export default function MobileMemoryPage() {
   const [{ activeEntity }, { setActiveEntity }] = useEntityService();
@@ -83,7 +83,7 @@ export default function MobileMemoryPage() {
 
         {/* Content */}
         <>
-          {activeTab === 'list' && <TimelineView />}
+          {activeTab === 'list' && <ListView />}
 
           {activeTab === 'map' && <MobileMapView />}
 

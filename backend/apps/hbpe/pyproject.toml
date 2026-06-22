@@ -27,7 +27,7 @@ dependencies = [
 
     # ── App GraphQL client ────────────────────────────────────────────────────
     "requests>=2.31",               # HTTP for GraphQL calls to application service
-    "PyJWT>=2.8",                   # self-sign service JWTs with shared secret
+    "PyJWT>=2.13.0",                 # self-sign service JWTs with shared secret
 
     # ── API & config ──────────────────────────────────────────────────────────
     "fastapi",

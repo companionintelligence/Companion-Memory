@@ -81,10 +81,24 @@ const graphDataSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
 });
+// Graph search mirrors /data's restrictive filters so a search run with the
+// explorer's tag/event-scoped dimensions active returns the same scoped subset
+// the rest of the explorer honors. Shapes match graphDataSchema field-for-field.
 const graphSearchSchema = z.object({
   query: z.string().min(1),
   limit: z.coerce.number().int().positive().max(50).optional(),
   includeTypes: explorerTypesParam,
+  tags: z.string().optional(),
+  connectors: csvListParam,
+  people: csvListParam,
+  places: csvListParam,
+  eventTypes: csvListParam,
+  hasLocation: z
+    .string()
+    .optional()
+    .transform((value) => value === '1'),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
 
 type GetNodeDetailsDto = z.infer<typeof getNodeDetailsSchema>;
@@ -106,6 +120,20 @@ interface FilterMatch {
  * broad filter can't produce an unbounded match set / response. Matches the
  * id-resolution cap in {@link GraphUtilityService.getEntityIdsByLinkedOrEntityIds}. */
 const EVENT_MATCH_EVENT_LIMIT = 2000;
+
+/** Intersect the active filter matches into a single allowed-id set, mirroring
+ * the client's `combineMatches`: each active filter ANDs together, and an
+ * inactive filter contributes no constraint. Returns `null` when no filter is
+ * active, so callers leave the result unrestricted. */
+function intersectActiveMatches(matches: FilterMatch[]): Set<string> | null {
+  const activeSets = matches.filter((match) => match.active).map((match) => new Set(match.entityIds));
+
+  if (activeSets.length === 0) {
+    return null;
+  }
+
+  return activeSets.reduce((acc, set) => new Set([...acc].filter((id) => set.has(id))));
+}
 
 @Controller('graph')
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -381,14 +409,63 @@ export class GraphController {
       query.includeTypes === undefined ? [] : graphTypesToExclude(query.includeTypes),
     );
 
-    const textMatches = await this.graphQuery.searchNodesByText(ownerId, trimmedQuery, { limit });
-    const prefixMatches = await this.graphQuery.searchNodesByPrefix(ownerId, trimmedQuery, { limit });
+    // Mirror the explorer's restrictive filters (tags + the event-scoped
+    // dimensions) onto search, so a search run with filters active returns the
+    // same scoped subset List/Gallery/Map and /api/graph/data honor. When any
+    // filter is active we intersect the lexical candidates against the resolved
+    // match set; an inactive filter adds no constraint. The event-scoped match
+    // reuses resolveEventMatch's one-hop expansion over the full relationship
+    // set, exactly as /data does.
+    const tagMatch = await this.resolveTagMatch(ctx, ownerId, query.tags);
+
+    const hasEventFilter =
+      (query.connectors?.length ?? 0) > 0 ||
+      (query.people?.length ?? 0) > 0 ||
+      (query.places?.length ?? 0) > 0 ||
+      (query.eventTypes?.length ?? 0) > 0 ||
+      query.hasLocation === true ||
+      query.from !== undefined ||
+      query.to !== undefined;
+
+    const eventMatch: FilterMatch = hasEventFilter
+      ? await this.resolveEventMatch(
+          ctx,
+          ownerId,
+          {
+            connectors: query.connectors,
+            people: query.people,
+            places: query.places,
+            eventTypes: query.eventTypes,
+            hasLocation: query.hasLocation,
+            from: query.from,
+            to: query.to,
+          },
+          await this.graphQuery.getRelationships(ownerId, {}),
+        )
+      : { active: false, entityIds: [] };
+
+    const filterAllowedIds = intersectActiveMatches([tagMatch, eventMatch]);
+
+    // With a filter active the lexical candidates must survive the intersection,
+    // so over-fetch (bounded) to preserve recall before slicing back to `limit`.
+    const candidateLimit = filterAllowedIds ? Math.min(50, limit * 5) : limit;
+
+    const textMatches = await this.graphQuery.searchNodesByText(ownerId, trimmedQuery, {
+      limit: candidateLimit,
+    });
+    const prefixMatches = await this.graphQuery.searchNodesByPrefix(ownerId, trimmedQuery, {
+      limit: candidateLimit,
+    });
 
     const merged: Array<{ node: GraphNodeEntity; score: number | null }> = [];
     const seen = new Set<string>();
 
     for (const candidate of prefixMatches) {
-      if (seen.has(candidate.entity_id) || excludeEntityTypes.has(candidate.entity_type)) {
+      if (
+        seen.has(candidate.entity_id) ||
+        excludeEntityTypes.has(candidate.entity_type) ||
+        (filterAllowedIds !== null && !filterAllowedIds.has(candidate.entity_id))
+      ) {
         continue;
       }
 
@@ -400,7 +477,11 @@ export class GraphController {
     }
 
     for (const candidate of textMatches) {
-      if (seen.has(candidate.node.entity_id) || excludeEntityTypes.has(candidate.node.entity_type)) {
+      if (
+        seen.has(candidate.node.entity_id) ||
+        excludeEntityTypes.has(candidate.node.entity_type) ||
+        (filterAllowedIds !== null && !filterAllowedIds.has(candidate.node.entity_id))
+      ) {
         continue;
       }
 

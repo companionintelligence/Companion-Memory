@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 
 import { Button } from '@ci/shadcn';
-import { ChevronLeft, ChevronRight, Download, X } from '@ci/shadcn/icons';
+import { ChevronLeft, ChevronRight, Download, ExternalLink, X } from '@ci/shadcn/icons';
 
 import type { EntityMedia } from './media';
 
@@ -10,6 +10,18 @@ interface Props {
   index: number;
   onClose: () => void;
   onIndexChange: (index: number) => void;
+}
+
+// The `download` attribute is silently ignored for cross-origin URLs — the
+// browser navigates/opens the file instead of saving it. So we only offer a real
+// "Download" for same-origin media (our /static object store) and fall back to an
+// "Open original" affordance for external sources.
+function isSameOrigin(url: string): boolean {
+  try {
+    return new URL(url, window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -50,6 +62,7 @@ export function MediaLightbox({ entries, index, onClose, onIndexChange }: Props)
 
   const hasPrev = index > 0;
   const hasNext = index < count - 1;
+  const canDownload = isSameOrigin(current.fullUrl);
 
   return (
     <div
@@ -68,14 +81,20 @@ export function MediaLightbox({ entries, index, onClose, onIndexChange }: Props)
           {index + 1} / {count}
         </span>
         <div className="flex items-center gap-1">
-          <a href={current.fullUrl} download target="_blank" rel="noopener noreferrer">
+          <a
+            href={current.fullUrl}
+            {...(canDownload ? { download: true } : {})}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             <Button
               variant="ghost"
               size="icon"
               className="text-white hover:bg-white/15 hover:text-white"
-              aria-label="Download"
+              aria-label={canDownload ? 'Download' : 'Open original'}
+              title={canDownload ? 'Download' : 'Open original'}
             >
-              <Download />
+              {canDownload ? <Download /> : <ExternalLink />}
             </Button>
           </a>
           <Button

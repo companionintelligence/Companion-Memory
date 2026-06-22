@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { GlobalUID, Portal } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
-import { Breadcrumb, Tabs, Sheet, Tooltip } from '@ci/shadcn';
+import { Breadcrumb, Tabs, Sheet } from '@ci/shadcn';
 import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
 import { useSearchParams, Link } from 'react-router-dom';
 
@@ -82,13 +82,43 @@ export default function DesktopMemoryPage() {
     }
   }, [searchId, savedSearchData]);
 
+  // Matches the Sheet's `data-[state=closed]:duration-300` close animation.
+  const CLOSE_ANIMATION_MS = 300;
+  const closeTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
-    setDetailsOpen(activeEntity != null);
+    if (activeEntity != null) {
+      // A (possibly new) entity is active — cancel any pending unmount and open.
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+
+      setDetailsOpen(true);
+    }
   }, [activeEntity]);
 
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
+
   const toggleactiveEntity = (active: boolean) => {
+    setDetailsOpen(active);
+
     if (!active) {
-      setActiveEntity(null);
+      // Keep the Sheet mounted while it animates out, then drop the entity.
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+
+      closeTimerRef.current = window.setTimeout(() => {
+        setActiveEntity(null);
+        closeTimerRef.current = null;
+      }, CLOSE_ANIMATION_MS);
     }
   };
 
@@ -126,45 +156,39 @@ export default function DesktopMemoryPage() {
             <ExplorerToolbar />
           </div>
 
-          {/* View Toggle */}
-          <Tooltip.Provider>
-            <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
-              <Tabs.List className="flex items-center justify-center h-11.5 border-1">
-                <Tabs.Trigger value="map">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <MapPin />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">Map view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-                <Tabs.Trigger value="list">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <List />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">List view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-                <Tabs.Trigger value="gallery">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <Images />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">Gallery view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-                <Tabs.Trigger value="graph">
-                  <Tooltip delayDuration={600}>
-                    <Tooltip.Trigger className="flex items-center justify-center h-4 w-6">
-                      <Share2 />
-                    </Tooltip.Trigger>
-                    <Tooltip.Content side="bottom">Graph view</Tooltip.Content>
-                  </Tooltip>
-                </Tabs.Trigger>
-              </Tabs.List>
-            </Tabs>
-          </Tooltip.Provider>
+          {/* View Toggle. Native `title` for the hover label rather than a Radix
+              Tooltip: wrapping Tabs.Trigger in Tooltip.Trigger renders a button
+              inside a button (invalid HTML + hydration error), and merging them
+              (asChild) makes the tooltip's data-state clobber the tab's
+              active/inactive state, killing the active-tab highlight. */}
+          <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
+            <Tabs.List className="flex items-center justify-center h-11.5 border-1">
+              <Tabs.Trigger value="map" title="Map view" className="flex items-center justify-center h-4 w-6">
+                <MapPin />
+              </Tabs.Trigger>
+              <Tabs.Trigger
+                value="list"
+                title="List view"
+                className="flex items-center justify-center h-4 w-6"
+              >
+                <List />
+              </Tabs.Trigger>
+              <Tabs.Trigger
+                value="gallery"
+                title="Gallery view"
+                className="flex items-center justify-center h-4 w-6"
+              >
+                <Images />
+              </Tabs.Trigger>
+              <Tabs.Trigger
+                value="graph"
+                title="Graph view"
+                className="flex items-center justify-center h-4 w-6"
+              >
+                <Share2 />
+              </Tabs.Trigger>
+            </Tabs.List>
+          </Tabs>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">

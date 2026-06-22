@@ -431,10 +431,16 @@ export class EventService {
     }
 
     if (options.endTime) {
-      query = query.andWhere('event.start_time <= :endTime', { startTime: options.endTime });
-      query = query.andWhere('(event.end_time IS NULL OR (event.end_time <= :endTime))', {
-        endTime: options.endTime,
-      });
+      // Filter on the event's START instant only — "starts within the window".
+      // This keeps the SQL timed path consistent with the in-memory post-filter
+      // (SearchResolver.getEntityTimestamp, which keys off time ?? startTime) and
+      // with the communication/browser-activity services (single `time` instant).
+      // An earlier `event.end_time <= :endTime` clause additionally required the
+      // event to END in-window, which excluded multi-day events that start in the
+      // range but end after it and disagreed with the post-filter path.
+      // (Bind under :endTime; binding `{ startTime: ... }` here previously
+      // clobbered the lower bound since TypeORM merges all andWhere params.)
+      query = query.andWhere('event.start_time <= :endTime', { endTime: options.endTime });
     }
 
     if (options.eventTypes && options.eventTypes.length > 0) {

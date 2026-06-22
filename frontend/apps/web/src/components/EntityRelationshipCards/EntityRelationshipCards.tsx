@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { gql as apolloGql, useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
-import { Card } from '@ci/shadcn';
+import { Button, Card } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
 import { useNodeGraphService } from '@/api/useNodeGraphService';
@@ -21,7 +21,16 @@ type RelationshipCard = {
   otherEntityType: string;
   otherEntityTags: string[];
   relationshipDetails: Array<{ label: string; value: string }>;
+  /** Relationship weight (graph link strength), used for stable ordering. */
+  strength: number;
+  /** Most recent timestamp on the link, used as a secondary sort key. */
+  recency: number;
 };
+
+type NodeTags = {
+  __typename?: string;
+  tags?: Array<{ label?: string | null } | null> | null;
+} | null;
 
 interface Props {
   entityId: string;
@@ -51,25 +60,26 @@ type GlobalResourceType =
   | 'thread'
   | 'user';
 
-type NodeTagsResponse = {
-  node?: {
-    __typename?: string;
-    tags?: Array<{ label?: string | null } | null> | null;
-  } | null;
-};
+/** Response shape for the dynamically-aliased batched tags query (n0, n1, …). */
+type BatchNodeTagsResponse = Record<string, NodeTags>;
 
-const GET_NODE_TAGS = apolloGql`
-  query GetNodeTagsForRelationshipCard($id: ID!) {
-    node(id: $id) {
-      __typename
-      ... on Taggable {
-        tags {
-          label
-        }
-      }
-    }
+/**
+ * Build a single query that fetches tags for many nodes at once via aliased
+ * `node(id:)` selections — one request instead of one per card (avoids N+1).
+ */
+function buildBatchNodeTagsQuery(count: number) {
+  const variableDefs = Array.from({ length: count }, (_, i) => `$id${i}: ID!`).join(', ');
+  const selections = Array.from(
+    { length: count },
+    (_, i) => `n${i}: node(id: $id${i}) { __typename ... on Taggable { tags { label } } }`,
+  ).join('\n    ');
+
+  return apolloGql(`
+  query GetNodeTagsForRelationshipCards(${variableDefs}) {
+    ${selections}
   }
-`;
+`);
+}
 
 const IGNORED_RELATIONSHIP_PROPERTIES = new Set([
   'id',
@@ -173,17 +183,29 @@ function extractRelationshipDetails(
   return details;
 }
 
-function shuffleItems<T>(items: T[]): T[] {
-  const shuffled = [...items];
-
-  for (let i = shuffled.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const temp = shuffled[i];
-    shuffled[i] = shuffled[j];
-    shuffled[j] = temp;
+/** Pull the most recent timestamp from a link's properties for stable ordering. */
+function extractRecency(properties: Record<string, unknown> | undefined): number {
+  if (!properties) {
+    return 0;
   }
 
-  return shuffled;
+  for (const key of ['updated_at', 'last_seen', 'created_at', 'timestamp', 'time']) {
+    const value = properties[key];
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return 0;
 }
 
 function getVisibleCardCount(width: number): number {
@@ -292,6 +314,7 @@ export function EntityRelationshipCards({ entityId }: Props) {
   const apolloClient = useApolloClient();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [visibleCardCount, setVisibleCardCount] = useState(DEFAULT_VISIBLE_CARDS);
+  const [expanded, setExpanded] = useState(false);
   const [tagsByEntityKey, setTagsByEntityKey] = useState<Record<string, string[]>>({});
 
   const { data, loading } = useNodeGraphService({
@@ -340,14 +363,35 @@ export function EntityRelationshipCards({ entityId }: Props) {
           otherEntityType: otherNode?.entity_type ?? 'unknown',
           otherEntityTags: extractTagsFromProperties(otherNode?.properties),
           relationshipDetails: extractRelationshipDetails(link.properties),
+          strength: typeof link.strength === 'number' ? link.strength : 0,
+          recency: extractRecency(link.properties),
         };
       });
   }, [data, entityId]);
 
-  const shuffledCards = useMemo(() => shuffleItems(relationshipCards), [relationshipCards]);
+  // Deterministic ordering: strongest first, then most recent, then a stable
+  // id tiebreak — so the same relationships always surface (no random subset).
+  const sortedCards = useMemo(
+    () =>
+      [...relationshipCards].sort((a, b) => {
+        if (b.strength !== a.strength) {
+          return b.strength - a.strength;
+        }
+
+        if (b.recency !== a.recency) {
+          return b.recency - a.recency;
+        }
+
+        return a.relationshipId.localeCompare(b.relationshipId);
+      }),
+    [relationshipCards],
+  );
+
+  const collapsedCount = Math.min(visibleCardCount, sortedCards.length);
+  const hasMore = sortedCards.length > collapsedCount;
   const visibleCards = useMemo(
-    () => shuffledCards.slice(0, visibleCardCount),
-    [shuffledCards, visibleCardCount],
+    () => (expanded ? sortedCards : sortedCards.slice(0, collapsedCount)),
+    [sortedCards, expanded, collapsedCount],
   );
 
   useEffect(() => {
@@ -358,52 +402,58 @@ export function EntityRelationshipCards({ entityId }: Props) {
     let cancelled = false;
 
     const loadTags = async () => {
-      const results = await Promise.all(
-        visibleCards.map(async (card) => {
+      // Collect the cards whose type maps to a tag-bearing node, then fetch all
+      // of their tags in a single batched query rather than one request per card.
+      const targets = visibleCards
+        .map((card) => {
           const resourceType = toGlobalResourceType(card.otherEntityType);
           if (!resourceType) {
-            return {
-              key: getEntityLookupKey(card.otherEntityType, card.otherEntityId),
-              labels: [],
-            };
+            return null;
           }
 
-          try {
-            const gid = GlobalUID.encode(resourceType, card.otherEntityId);
-            const response = await apolloClient.query<NodeTagsResponse>({
-              query: GET_NODE_TAGS,
-              variables: { id: gid },
-              fetchPolicy: 'cache-first',
-            });
-            const labels = (response.data?.node?.tags ?? [])
-              .map((tag) => tag?.label?.trim() ?? '')
-              .filter((label): label is string => label.length > 0);
+          return {
+            key: getEntityLookupKey(card.otherEntityType, card.otherEntityId),
+            gid: GlobalUID.encode(resourceType, card.otherEntityId),
+          };
+        })
+        .filter((target): target is { key: string; gid: string } => target !== null);
 
-            return { key: getEntityLookupKey(card.otherEntityType, card.otherEntityId), labels };
-          } catch {
-            return {
-              key: getEntityLookupKey(card.otherEntityType, card.otherEntityId),
-              labels: [],
-            };
-          }
-        }),
-      );
-
-      if (cancelled) {
+      if (targets.length === 0) {
         return;
       }
 
-      setTagsByEntityKey((prev) => {
-        const next = { ...prev };
+      const query = buildBatchNodeTagsQuery(targets.length);
+      const variables = Object.fromEntries(targets.map((target, i) => [`id${i}`, target.gid]));
 
-        for (const result of results) {
-          if (result.labels.length > 0) {
-            next[result.key] = result.labels;
-          }
+      try {
+        const response = await apolloClient.query<BatchNodeTagsResponse>({
+          query,
+          variables,
+          fetchPolicy: 'cache-first',
+        });
+
+        if (cancelled) {
+          return;
         }
 
-        return next;
-      });
+        setTagsByEntityKey((prev) => {
+          const next = { ...prev };
+
+          targets.forEach((target, i) => {
+            const labels = (response.data?.[`n${i}`]?.tags ?? [])
+              .map((tag) => tag?.label?.trim() ?? '')
+              .filter((label): label is string => label.length > 0);
+
+            if (labels.length > 0) {
+              next[target.key] = labels;
+            }
+          });
+
+          return next;
+        });
+      } catch {
+        // Leave the graph-node fallback tags in place if the batch fetch fails.
+      }
     };
 
     void loadTags();
@@ -461,12 +511,31 @@ export function EntityRelationshipCards({ entityId }: Props) {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Relationship Cards
         </h2>
+        {!loading && sortedCards.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              Showing {visibleCards.length} of {sortedCards.length}
+            </span>
+            {(hasMore || expanded) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={() => setExpanded((prev) => !prev)}
+              >
+                {expanded ? 'Show less' : 'Show more'}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       <div
         className="grid gap-3"
         style={{
-          gridTemplateColumns: `repeat(${Math.max(1, visibleCards.length)}, minmax(0, 1fr))`,
+          gridTemplateColumns: expanded
+            ? `repeat(auto-fill, minmax(${CARD_MIN_WIDTH}px, 1fr))`
+            : `repeat(${Math.max(1, loading ? visibleCardCount : visibleCards.length)}, minmax(0, 1fr))`,
         }}
       >
         {loading &&

@@ -13,6 +13,7 @@ const UPDATE_COMMUNICATION = gql(`
       id
       subject
       preview
+      communicationContent: content
     }
   }
 `);

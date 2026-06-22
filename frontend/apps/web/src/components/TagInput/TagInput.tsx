@@ -19,7 +19,11 @@ interface Props {
   tags?: string[];
   readOnly?: boolean;
   onTagAdded?: (tag: string) => boolean | Promise<boolean>;
-  onTagRemoved?: (tag: string) => void;
+  /**
+   * Called when a tag is removed. The removal is applied optimistically; resolve
+   * (or return) `false` to signal the removal failed so the tag is restored.
+   */
+  onTagRemoved?: (tag: string) => void | boolean | Promise<void | boolean>;
 }
 
 export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTagRemoved }: Props) {
@@ -54,8 +58,30 @@ export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTa
     [form, onTagAdded, tags],
   );
 
+  const restoreTag = useCallback((value: string, index: number) => {
+    setTags((prev) => {
+      if (prev.includes(value)) {
+        return prev;
+      }
+
+      const next = [...prev];
+
+      next.splice(Math.min(index, next.length), 0, value);
+
+      return next;
+    });
+    setLowercaseTags((prev) => new Set(prev).add(value.toLowerCase()));
+  }, []);
+
   const handleRemove = useCallback(
     (value: string) => {
+      const index = tags.indexOf(value);
+
+      if (index === -1) {
+        return;
+      }
+
+      // Remove optimistically, then roll the tag back if the handler reports failure.
       setTags((prev) => prev.filter((s) => s !== value));
 
       setLowercaseTags((prev) => {
@@ -66,9 +92,18 @@ export function TagInput({ tags: initialTags, readOnly = false, onTagAdded, onTa
         return next;
       });
 
-      onTagRemoved?.(value);
+      void Promise.resolve()
+        .then(() => onTagRemoved?.(value))
+        .then((result) => {
+          if (result === false) {
+            restoreTag(value, index);
+          }
+        })
+        .catch(() => {
+          restoreTag(value, index);
+        });
     },
-    [onTagRemoved],
+    [onTagRemoved, restoreTag, tags],
   );
 
   const handleKeyDown = useCallback(

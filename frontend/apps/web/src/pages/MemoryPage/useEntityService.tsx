@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { ApolloError } from '@apollo/client';
 import { useQuery } from '@apollo/client';
 import { createHookContext } from '@ci/common';
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { type ResultOf } from '@graphql-typed-document-node/core';
 
 import { gql } from '@/graphql';
@@ -179,8 +180,17 @@ function useEntityService({
   const { data, loading, error, fetchMore, refetch } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
-      includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
-      excludeTypes: excludeTypes?.map((type) => type.toLowerCase()) || [],
+      // Map display names to the backend IndexableEntity values via the shared
+      // map — naive toLowerCase() turned 'Browser'/'Thing' into 'browser'/'thing'
+      // (not 'browser-activity'/'item'), so those two filters silently no-op'd.
+      includeTypes:
+        includeTypes?.map(
+          (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP] ?? type.toLowerCase(),
+        ) || [],
+      excludeTypes:
+        excludeTypes?.map(
+          (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP] ?? type.toLowerCase(),
+        ) || [],
       eventTypes: eventTypes || [],
       tags: tags && tags.length > 0 ? tags : undefined,
       startTime: startTime || undefined,

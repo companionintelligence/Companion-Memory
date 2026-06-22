@@ -25,7 +25,6 @@ type Documents = {
     "\n  mutation TagEntities($input: TagEntitiesInput!) {\n    tagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": typeof types.TagEntitiesDocument,
     "\n  mutation UntagEntities($input: TagEntitiesInput!) {\n    untagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": typeof types.UntagEntitiesDocument,
     "\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n": typeof types.TriggerHbpeDocument,
-    "\n  query GetNodeTagsForRelationshipCard($id: ID!) {\n    node(id: $id) {\n      __typename\n      ... on Taggable {\n        tags {\n          label\n        }\n      }\n    }\n  }\n": typeof types.GetNodeTagsForRelationshipCardDocument,
     "\n  query EventSources {\n    eventSources\n  }\n": typeof types.EventSourcesDocument,
     "\n  query EventTypes {\n    eventTypes\n  }\n": typeof types.EventTypesDocument,
     "\n  fragment SearchResultCommunicationData on CommunicationType {\n    id\n    preview\n    time\n  }\n": typeof types.SearchResultCommunicationDataFragmentDoc,
@@ -86,7 +85,7 @@ type Documents = {
     "\n  fragment TimelineCommunicationCardData on CommunicationType {\n    id\n    subject\n    preview\n    communicationContent: content\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n    to {\n      edges {\n        node {\n          id\n          name\n        }\n      }\n    }\n    tags {\n      label\n    }\n  }\n": typeof types.TimelineCommunicationCardDataFragmentDoc,
     "\n  fragment TimelineEventCardData on EventType {\n    id\n    title\n    description\n    sourceSystem\n    startTime\n    endTime\n    location {\n      ... on PlaceType {\n        id\n        name\n        properties\n      }\n    }\n    tags {\n      label\n    }\n  }\n": typeof types.TimelineEventCardDataFragmentDoc,
     "\n  mutation UpdateBrowserActivityDetail($input: UpdateBrowserActivityInput!) {\n    updateBrowserActivity(input: $input) {\n      id\n      title\n      url\n    }\n  }\n": typeof types.UpdateBrowserActivityDetailDocument,
-    "\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n    }\n  }\n": typeof types.UpdateCommunicationDetailDocument,
+    "\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n      communicationContent: content\n    }\n  }\n": typeof types.UpdateCommunicationDetailDocument,
     "\n  mutation UpdateConceptDetail($input: UpdateConceptInput!) {\n    updateConcept(input: $input) {\n      success\n      concept {\n        id\n        name\n        description\n      }\n    }\n  }\n": typeof types.UpdateConceptDetailDocument,
     "\n  mutation UpdateContentDetail($input: UpdateContentInput!) {\n    updateContent(input: $input) {\n      id\n      title\n      text\n    }\n  }\n": typeof types.UpdateContentDetailDocument,
     "\n  mutation UpdateEventDetail($input: UpdateEventInput!) {\n    updateEvent(input: $input) {\n      id\n      title\n      description\n    }\n  }\n": typeof types.UpdateEventDetailDocument,
@@ -142,7 +141,6 @@ const documents: Documents = {
     "\n  mutation TagEntities($input: TagEntitiesInput!) {\n    tagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": types.TagEntitiesDocument,
     "\n  mutation UntagEntities($input: TagEntitiesInput!) {\n    untagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": types.UntagEntitiesDocument,
     "\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n": types.TriggerHbpeDocument,
-    "\n  query GetNodeTagsForRelationshipCard($id: ID!) {\n    node(id: $id) {\n      __typename\n      ... on Taggable {\n        tags {\n          label\n        }\n      }\n    }\n  }\n": types.GetNodeTagsForRelationshipCardDocument,
     "\n  query EventSources {\n    eventSources\n  }\n": types.EventSourcesDocument,
     "\n  query EventTypes {\n    eventTypes\n  }\n": types.EventTypesDocument,
     "\n  fragment SearchResultCommunicationData on CommunicationType {\n    id\n    preview\n    time\n  }\n": types.SearchResultCommunicationDataFragmentDoc,
@@ -203,7 +201,7 @@ const documents: Documents = {
     "\n  fragment TimelineCommunicationCardData on CommunicationType {\n    id\n    subject\n    preview\n    communicationContent: content\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n    to {\n      edges {\n        node {\n          id\n          name\n        }\n      }\n    }\n    tags {\n      label\n    }\n  }\n": types.TimelineCommunicationCardDataFragmentDoc,
     "\n  fragment TimelineEventCardData on EventType {\n    id\n    title\n    description\n    sourceSystem\n    startTime\n    endTime\n    location {\n      ... on PlaceType {\n        id\n        name\n        properties\n      }\n    }\n    tags {\n      label\n    }\n  }\n": types.TimelineEventCardDataFragmentDoc,
     "\n  mutation UpdateBrowserActivityDetail($input: UpdateBrowserActivityInput!) {\n    updateBrowserActivity(input: $input) {\n      id\n      title\n      url\n    }\n  }\n": types.UpdateBrowserActivityDetailDocument,
-    "\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n    }\n  }\n": types.UpdateCommunicationDetailDocument,
+    "\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n      communicationContent: content\n    }\n  }\n": types.UpdateCommunicationDetailDocument,
     "\n  mutation UpdateConceptDetail($input: UpdateConceptInput!) {\n    updateConcept(input: $input) {\n      success\n      concept {\n        id\n        name\n        description\n      }\n    }\n  }\n": types.UpdateConceptDetailDocument,
     "\n  mutation UpdateContentDetail($input: UpdateContentInput!) {\n    updateContent(input: $input) {\n      id\n      title\n      text\n    }\n  }\n": types.UpdateContentDetailDocument,
     "\n  mutation UpdateEventDetail($input: UpdateEventInput!) {\n    updateEvent(input: $input) {\n      id\n      title\n      description\n    }\n  }\n": types.UpdateEventDetailDocument,
@@ -294,10 +292,6 @@ export function gql(source: "\n  mutation UntagEntities($input: TagEntitiesInput
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n"): (typeof documents)["\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n"];
-/**
- * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function gql(source: "\n  query GetNodeTagsForRelationshipCard($id: ID!) {\n    node(id: $id) {\n      __typename\n      ... on Taggable {\n        tags {\n          label\n        }\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetNodeTagsForRelationshipCard($id: ID!) {\n    node(id: $id) {\n      __typename\n      ... on Taggable {\n        tags {\n          label\n        }\n      }\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -541,7 +535,7 @@ export function gql(source: "\n  mutation UpdateBrowserActivityDetail($input: Up
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n    }\n  }\n"): (typeof documents)["\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n    }\n  }\n"];
+export function gql(source: "\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n      communicationContent: content\n    }\n  }\n"): (typeof documents)["\n  mutation UpdateCommunicationDetail($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      preview\n      communicationContent: content\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

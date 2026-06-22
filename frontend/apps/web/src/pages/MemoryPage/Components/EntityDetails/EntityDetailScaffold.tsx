@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState } from 'react';
 
 import { GlobalUID } from '@ci/common';
-import { Button, Card, Input, Label, Sheet, Textarea, cn } from '@ci/shadcn';
+import { Button, Card, Input, Label, Sheet, Textarea, cn, useToast } from '@ci/shadcn';
 import { Loader2, Pencil } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
@@ -178,10 +178,13 @@ export function EntityDetailScaffold({
   const ref = useMemo(() => resolveEntityRef(entity), [entity]);
   const currentTags = useMemo(() => readTags(entity), [entity]);
   const { tagEntities, untagEntities } = useTagEntityService();
+  const { toast } = useToast();
 
   const canEdit = Boolean(onSave && editFields && editFields.length > 0);
 
-  const seed = useMemo(() => {
+  // The current persisted values, rebuilt from props every render so external
+  // cache updates are always reflected (read-only display + edit seeding).
+  const liveValues = useMemo(() => {
     const next: Record<string, string> = {};
 
     for (const field of editFields ?? []) {
@@ -189,23 +192,31 @@ export function EntityDetailScaffold({
     }
 
     return next;
-    // Re-seed only when the open entity changes (by id), not on every keystroke-driven
-    // re-render — `editFields` is rebuilt each render and is intentionally excluded.
-  }, [ref.globalId, ref.rawId]);
+  }, [editFields]);
 
-  const [values, setValues] = useState<Record<string, string>>(seed);
-  const [committed, setCommitted] = useState<Record<string, string>>(seed);
+  const [values, setValues] = useState<Record<string, string>>(liveValues);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // `seed` identity changes only when the entity changes — reset local state then.
-  const [seedRef, setSeedRef] = useState(seed);
-  if (seedRef !== seed) {
-    setSeedRef(seed);
-    setValues(seed);
-    setCommitted(seed);
+  // Abandon any in-progress edit when the open entity changes (by id), so one
+  // entity's edits can never be persisted onto another.
+  const entityKey = ref.globalId ?? ref.rawId ?? '';
+  const [activeKey, setActiveKey] = useState(entityKey);
+  if (activeKey !== entityKey) {
+    setActiveKey(entityKey);
     setEditing(false);
+    setSaving(false);
+    setSaveError(null);
   }
+
+  const startEditing = () => {
+    // Seed the editor from the latest persisted values each time we enter edit
+    // mode so a stale buffer can't clobber an external update.
+    setValues(liveValues);
+    setSaveError(null);
+    setEditing(true);
+  };
 
   const handleSave = async () => {
     if (!onSave) {
@@ -213,19 +224,26 @@ export function EntityDetailScaffold({
     }
 
     setSaving(true);
+    setSaveError(null);
 
     try {
       await onSave(values);
-      setCommitted(values);
       setEditing(false);
+    } catch (error) {
+      // Keep editing open so the user can retry without losing their changes.
+      const message = error instanceof Error && error.message ? error.message : 'Failed to save changes.';
+
+      setSaveError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
   };
 
   const handleCancel = () => {
-    setValues(committed);
+    setValues(liveValues);
     setEditing(false);
+    setSaveError(null);
   };
 
   const detailPath = ref.resourceType && ref.rawId ? getEntityDetailPath(ref.resourceType, ref.rawId) : null;
@@ -245,13 +263,19 @@ export function EntityDetailScaffold({
               size="icon"
               className="-mt-1 size-8 shrink-0"
               aria-label="Edit"
-              onClick={() => setEditing(true)}
+              onClick={startEditing}
             >
               <Pencil className="size-4" />
             </Button>
           )}
         </div>
-        {subtitle != null && subtitle !== '' && <Sheet.Description>{subtitle}</Sheet.Description>}
+        {/* Always render a description so Radix has an accessible description to
+            point `aria-describedby` at (otherwise it logs a console warning). */}
+        {subtitle != null && subtitle !== '' ? (
+          <Sheet.Description>{subtitle}</Sheet.Description>
+        ) : (
+          <Sheet.Description className="sr-only">{`Details for ${title}`}</Sheet.Description>
+        )}
       </Sheet.Header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
@@ -286,10 +310,8 @@ export function EntityDetailScaffold({
                       }
                     />
                   )
-                ) : committed[field.key] ? (
-                  <p className="whitespace-pre-wrap break-words text-sm text-foreground/90">
-                    {committed[field.key]}
-                  </p>
+                ) : field.value ? (
+                  <p className="whitespace-pre-wrap break-words text-sm text-foreground/90">{field.value}</p>
                 ) : (
                   <p className="text-sm italic text-muted-foreground">—</p>
                 )}
@@ -326,11 +348,22 @@ export function EntityDetailScaffold({
 
                   return true;
                 } catch {
+                  toast.error(`Couldn't add tag “${label}”.`);
+
                   return false;
                 }
               }}
               onTagRemoved={async (label) => {
-                await untagEntities([ref.globalId!], [label]);
+                try {
+                  await untagEntities([ref.globalId!], [label]);
+
+                  return true;
+                } catch {
+                  // Returning false tells the TagInput to roll back its optimistic removal.
+                  toast.error(`Couldn't remove tag “${label}”.`);
+
+                  return false;
+                }
               }}
             />
           </div>
@@ -351,14 +384,21 @@ export function EntityDetailScaffold({
       </div>
 
       {editing && (
-        <Sheet.Footer className="flex-row justify-end gap-2 border-t">
-          <Button variant="outline" onClick={handleCancel} disabled={saving}>
-            Cancel
-          </Button>
-          <Button onClick={handleSave} disabled={saving} className={cn(saving && 'opacity-80')}>
-            {saving && <Loader2 className="size-4 animate-spin" />}
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
+        <Sheet.Footer className="gap-2 border-t">
+          {saveError && (
+            <p role="alert" className="text-sm text-destructive">
+              {saveError}
+            </p>
+          )}
+          <div className="flex flex-row justify-end gap-2">
+            <Button variant="outline" onClick={handleCancel} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving} className={cn(saving && 'opacity-80')}>
+              {saving && <Loader2 className="size-4 animate-spin" />}
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
         </Sheet.Footer>
       )}
     </Sheet.Content>

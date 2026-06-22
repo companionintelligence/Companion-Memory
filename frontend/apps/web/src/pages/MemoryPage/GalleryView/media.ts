@@ -90,6 +90,10 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
         entityId: entity.id,
         kind,
         contentType,
+        // ContentType exposes no resized/preview variant (unlike FileType's
+        // previewUrl), so the grid thumbnail reuses the full-resolution source.
+        // MediaTile lazy-loads, decodes async, and constrains it to the tile box
+        // to limit the cost; swap in a derived preview here if one is ever added.
         thumbUrl: url,
         fullUrl: url,
         title: entity.galleryTitle ?? 'Untitled',

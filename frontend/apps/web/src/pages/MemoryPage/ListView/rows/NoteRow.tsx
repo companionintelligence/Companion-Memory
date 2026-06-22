@@ -28,7 +28,7 @@ export function NoteRow({ note, time, onClick }: Props) {
   return (
     <EntityRow
       icon={<NoteIcon />}
-      title={data.title}
+      title={data.title || 'Untitled note'}
       subtitle={data.content ? parse(DOMPurify.sanitize(data.content, { ALLOWED_TAGS: [] })) : null}
       time={time}
       onClick={onClick}
