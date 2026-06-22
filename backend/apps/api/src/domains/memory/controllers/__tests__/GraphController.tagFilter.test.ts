@@ -3,29 +3,60 @@ import type { RequestContext } from '@ci/common/context';
 import { GraphController } from '../GraphController';
 
 /**
- * Covers the `tags` URL-param contract for the graph data endpoint: an absent
- * param leaves the filter inactive (whole graph), while a present param — even
- * empty or resolving to nothing — is active with a (possibly empty) match set.
- * Also verifies the relay-id/linked-id reconciliation handoff: tagged source
- * ids are forwarded to the graph lookup, with non-uuid ids dropped.
+ * Covers the explorer filter contracts the graph `data` endpoint honors so the
+ * graph reflects the same subset as List/Gallery/Map:
+ *
+ *  - `tags`: an absent param leaves the filter inactive (whole graph), while a
+ *    present param — even empty or resolving to nothing — is active with a
+ *    (possibly empty) match set. Also verifies the relay-id/linked-id
+ *    reconciliation: tagged source ids are forwarded to the graph lookup, with
+ *    non-uuid ids dropped.
+ *  - event-scoped dimensions (connectors / who / where / how / date range):
+ *    when set, the matching events are resolved to graph nodes and expanded one
+ *    hop, so the graph keeps the people/places the events connect to.
  */
-describe('GraphController — tag filter (graph parity)', () => {
+describe('GraphController — explorer filters (graph parity)', () => {
   const ctx = { userId: 'user-1' } as RequestContext;
+
+  // A full, valid GraphDataDto with every dimension off; tests turn on the
+  // dimension under test via overrides.
+  function dataDto(overrides: Record<string, unknown> = {}) {
+    return {
+      includeTypes: undefined,
+      tags: undefined,
+      connectors: undefined,
+      people: undefined,
+      places: undefined,
+      eventTypes: undefined,
+      hasLocation: false,
+      from: undefined,
+      to: undefined,
+      ...overrides,
+    } as Parameters<GraphController['getGraphData']>[1];
+  }
 
   function setup(
     overrides: {
       getEntitiesForTags?: jest.Mock;
       getEntityIdsByTagSources?: jest.Mock;
+      getEntityIdsBySourceRecordIds?: jest.Mock;
+      getRelationships?: jest.Mock;
+      getEntitiesForEvents?: jest.Mock;
     } = {},
   ) {
     const graphQuery = {
       getNodes: jest.fn(async () => []),
-      getRelationships: jest.fn(async () => []),
+      getRelationships: overrides.getRelationships ?? jest.fn(async () => []),
       getEntityIdsByTagSources: overrides.getEntityIdsByTagSources ?? jest.fn(async () => []),
+      getEntityIdsBySourceRecordIds: overrides.getEntityIdsBySourceRecordIds ?? jest.fn(async () => []),
     };
 
     const tagService = {
       getEntitiesForTags: overrides.getEntitiesForTags ?? jest.fn(async () => []),
+    };
+
+    const eventService = {
+      getEntitiesForEvents: overrides.getEntitiesForEvents ?? jest.fn(async () => []),
     };
 
     const controller = new GraphController(
@@ -34,62 +65,118 @@ describe('GraphController — tag filter (graph parity)', () => {
       {} as never, // graphUtility
       {} as never, // userContext
       tagService as never,
+      eventService as never,
     );
 
-    return { controller, graphQuery, tagService };
+    return { controller, graphQuery, tagService, eventService };
   }
 
-  it('leaves the filter inactive when the tags param is absent', async () => {
-    const { controller, graphQuery, tagService } = setup();
+  describe('tags', () => {
+    it('leaves the filter inactive when the tags param is absent', async () => {
+      const { controller, graphQuery, tagService } = setup();
 
-    const res = await controller.getGraphData(ctx, { tags: undefined });
+      const res = await controller.getGraphData(ctx, dataDto({ tags: undefined }));
 
-    expect(res.tagMatch).toEqual({ active: false, entityIds: [] });
-    expect(tagService.getEntitiesForTags).not.toHaveBeenCalled();
-    expect(graphQuery.getEntityIdsByTagSources).not.toHaveBeenCalled();
+      expect(res.tagMatch).toEqual({ active: false, entityIds: [] });
+      expect(tagService.getEntitiesForTags).not.toHaveBeenCalled();
+      expect(graphQuery.getEntityIdsByTagSources).not.toHaveBeenCalled();
+    });
+
+    it('treats a present-but-empty param as active with an empty match set', async () => {
+      const { controller, tagService } = setup();
+
+      const res = await controller.getGraphData(ctx, dataDto({ tags: '' }));
+
+      expect(res.tagMatch).toEqual({ active: true, entityIds: [] });
+      expect(tagService.getEntitiesForTags).not.toHaveBeenCalled();
+    });
+
+    it('resolves labels to graph entity_ids and drops non-uuid source ids', async () => {
+      const personId = '00000000-0000-0000-0000-000000000001';
+      const contentId = '00000000-0000-0000-0000-000000000002';
+
+      const getEntitiesForTags = jest.fn(async () => [
+        { type: 'person', id: personId }, // tag id == graph entity_id
+        { type: 'content', id: contentId }, // tag id == graph linked_id
+        { type: 'communication', id: 'composite:not-a-uuid' }, // never a graph node
+      ]);
+      const getEntityIdsByTagSources = jest.fn(async () => ['node-a', 'node-b']);
+
+      const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources });
+
+      const res = await controller.getGraphData(ctx, dataDto({ tags: 'work, urgent ' }));
+
+      expect(getEntitiesForTags).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), [
+        'work',
+        'urgent',
+      ]);
+      expect(getEntityIdsByTagSources).toHaveBeenCalledWith('user-1', [personId, contentId]);
+      expect(res.tagMatch).toEqual({ active: true, entityIds: ['node-a', 'node-b'] });
+    });
+
+    it('stays active-but-empty (no node lookup) when no tagged id is a uuid', async () => {
+      const getEntitiesForTags = jest.fn(async () => [{ type: 'communication', id: 'composite-id' }]);
+      const getEntityIdsByTagSources = jest.fn(async () => ['unexpected']);
+
+      const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources });
+
+      const res = await controller.getGraphData(ctx, dataDto({ tags: 'phone' }));
+
+      expect(res.tagMatch).toEqual({ active: true, entityIds: [] });
+      expect(getEntityIdsByTagSources).not.toHaveBeenCalled();
+    });
   });
 
-  it('treats a present-but-empty param as active with an empty match set', async () => {
-    const { controller, tagService } = setup();
+  describe('event-scoped dimensions', () => {
+    it('leaves the event match inactive when no event dimension is set', async () => {
+      const { controller, eventService } = setup();
 
-    const res = await controller.getGraphData(ctx, { tags: '' });
+      const res = await controller.getGraphData(ctx, dataDto());
 
-    expect(res.tagMatch).toEqual({ active: true, entityIds: [] });
-    expect(tagService.getEntitiesForTags).not.toHaveBeenCalled();
-  });
+      expect(res.eventMatch).toEqual({ active: false, entityIds: [] });
+      expect(eventService.getEntitiesForEvents).not.toHaveBeenCalled();
+    });
 
-  it('resolves labels to graph entity_ids and drops non-uuid source ids', async () => {
-    const personId = '00000000-0000-0000-0000-000000000001';
-    const contentId = '00000000-0000-0000-0000-000000000002';
+    it('resolves matching events to graph nodes and expands one hop', async () => {
+      const eventId = '00000000-0000-0000-0000-0000000000aa';
 
-    const getEntitiesForTags = jest.fn(async () => [
-      { type: 'person', id: personId }, // tag id == graph entity_id
-      { type: 'content', id: contentId }, // tag id == graph linked_id
-      { type: 'communication', id: 'composite:not-a-uuid' }, // never a graph node
-    ]);
-    const getEntityIdsByTagSources = jest.fn(async () => ['node-a', 'node-b']);
+      const getEntitiesForEvents = jest.fn(async () => [{ id: eventId, type: 'event' }]);
+      const getEntityIdsBySourceRecordIds = jest.fn(async () => ['evt-node']);
+      // The matching event connects to a person and a place — both should be
+      // pulled into the scope by the one-hop expansion.
+      const getRelationships = jest.fn(async () => [
+        { from_entity_id: 'evt-node', to_entity_id: 'person-node', relationship_id: 'r1' },
+        { from_entity_id: 'place-node', to_entity_id: 'evt-node', relationship_id: 'r2' },
+        { from_entity_id: 'unrelated-a', to_entity_id: 'unrelated-b', relationship_id: 'r3' },
+      ]);
 
-    const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources });
+      const { controller, eventService } = setup({
+        getEntitiesForEvents,
+        getEntityIdsBySourceRecordIds,
+        getRelationships,
+      });
 
-    const res = await controller.getGraphData(ctx, { tags: 'work, urgent ' });
+      const res = await controller.getGraphData(ctx, dataDto({ connectors: ['gmail'] }));
 
-    expect(getEntitiesForTags).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), [
-      'work',
-      'urgent',
-    ]);
-    expect(getEntityIdsByTagSources).toHaveBeenCalledWith('user-1', [personId, contentId]);
-    expect(res.tagMatch).toEqual({ active: true, entityIds: ['node-a', 'node-b'] });
-  });
+      expect(eventService.getEntitiesForEvents).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1' }),
+        expect.objectContaining({ connectors: ['gmail'] }),
+      );
+      expect(getEntityIdsBySourceRecordIds).toHaveBeenCalledWith('user-1', [eventId]);
+      expect(res.eventMatch.active).toBe(true);
+      expect(new Set(res.eventMatch.entityIds)).toEqual(new Set(['evt-node', 'person-node', 'place-node']));
+    });
 
-  it('stays active-but-empty (no node lookup) when no tagged id is a uuid', async () => {
-    const getEntitiesForTags = jest.fn(async () => [{ type: 'communication', id: 'composite-id' }]);
-    const getEntityIdsByTagSources = jest.fn(async () => ['unexpected']);
+    it('is active with an empty match set when the filters match no events', async () => {
+      const getEntitiesForEvents = jest.fn(async () => []);
+      const getEntityIdsBySourceRecordIds = jest.fn(async () => ['unexpected']);
 
-    const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources });
+      const { controller } = setup({ getEntitiesForEvents, getEntityIdsBySourceRecordIds });
 
-    const res = await controller.getGraphData(ctx, { tags: 'phone' });
+      const res = await controller.getGraphData(ctx, dataDto({ people: ['Ada'] }));
 
-    expect(res.tagMatch).toEqual({ active: true, entityIds: [] });
-    expect(getEntityIdsByTagSources).not.toHaveBeenCalled();
+      expect(res.eventMatch).toEqual({ active: true, entityIds: [] });
+      expect(getEntityIdsBySourceRecordIds).not.toHaveBeenCalled();
+    });
   });
 });

@@ -10,8 +10,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $semantic: Boolean, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, semantic: $semantic, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, first: $first, after: $after }) {
       totalCount
       pageInfo {
         hasNextPage
@@ -129,6 +129,7 @@ function useEntityService({
   people,
   places,
   hasLocation,
+  bbox,
   semantic,
 }: {
   searchQuery: string;
@@ -144,6 +145,7 @@ function useEntityService({
   people?: string[];
   places?: string[];
   hasLocation?: boolean;
+  bbox?: number[];
   semantic?: boolean;
 }): ReturnType {
   const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
@@ -161,6 +163,7 @@ function useEntityService({
       people: people && people.length > 0 ? people : undefined,
       places: places && places.length > 0 ? places : undefined,
       hasLocation: hasLocation || undefined,
+      bbox: bbox && bbox.length === 4 ? bbox : undefined,
       semantic: semantic || undefined,
       first: PAGE_SIZE,
     },

@@ -940,6 +940,7 @@ type SavedSearchType implements Node {
 
 input SearchInput {
   after: String
+  bbox: [Float!]
   connectors: [String!]
   endTime: String
   eventTypes: [String!]
