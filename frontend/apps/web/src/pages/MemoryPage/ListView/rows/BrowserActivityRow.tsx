@@ -35,7 +35,7 @@ export function BrowserActivityRow({ browserActivity, time, onClick }: Props) {
   return (
     <EntityRow
       icon={<BrowserActivityIcon />}
-      title={data.title}
+      title={data.title || 'Untitled page'}
       subtitle={
         <a
           href={data.url}

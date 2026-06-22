@@ -75,12 +75,6 @@ export function BrowserActivityCard({ entity }: Props) {
         </div>
       </div>
 
-      {data.title && (
-        <div className="pt-3 pb-3">
-          <p className="text-sm text-muted-foreground leading-relaxed">{data.title}</p>
-        </div>
-      )}
-
       {/* Browser Activity Specific Metadata */}
       <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
         {actionType && (

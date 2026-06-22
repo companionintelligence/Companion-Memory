@@ -23,6 +23,12 @@ export function ContentRow({ content, time, onClick }: Props) {
   const data = useFragment(CONTENT_FRAGMENT, content);
 
   return (
-    <EntityRow icon={<ContentIcon />} title={data.title} subtitle={data.text} time={time} onClick={onClick} />
+    <EntityRow
+      icon={<ContentIcon />}
+      title={data.title || 'Untitled content'}
+      subtitle={data.text}
+      time={time}
+      onClick={onClick}
+    />
   );
 }

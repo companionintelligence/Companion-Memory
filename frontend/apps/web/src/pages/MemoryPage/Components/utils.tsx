@@ -136,9 +136,28 @@ export function getDateBucket(date: Date, now: Date = new Date()): DateBucket {
 }
 
 export interface EntityDateGroup {
+  /**
+   * Unique React key: the bucket id plus the group's ordinal. The ordinal keeps
+   * keys distinct even if a bucket recurs non-contiguously (which can happen
+   * under a relevance/name sort), avoiding duplicate-key collisions.
+   */
   key: string;
+  /** Coarse bucket id used to merge adjacent entities of the same day-bucket. */
+  bucket: string;
   label: string;
   entities: EntityItem[];
+}
+
+/**
+ * Whether the active sort keeps results in date order, so contiguous date-group
+ * headers stay meaningful. Only the default (server) order and the explicit time
+ * sorts are chronological; relevance and name sorts interleave dates, so the
+ * contiguous grouping below would emit repeated, out-of-order headers — callers
+ * render a flat, header-less list in those cases. Mirrors the `sortBy` values
+ * produced by the explorer toolbar's SORT_OPTIONS.
+ */
+export function isChronologicalSort(sortBy: string | null | undefined): boolean {
+  return !sortBy || sortBy === 'time';
 }
 
 /**
@@ -147,20 +166,27 @@ export interface EntityDateGroup {
  * group starts whenever the bucket changes, so appended pages merge seamlessly
  * into the trailing group. Used by both List and Timeline for a consistent
  * Today / Yesterday / This Week / … layout.
+ *
+ * Only meaningful when the results are in chronological order (see
+ * {@link isChronologicalSort}); under a relevance/name sort a bucket can recur
+ * non-contiguously, so each group carries a unique `key` (bucket + ordinal)
+ * distinct from the `bucket` used to merge adjacent same-day entities.
  */
 export function groupEntitiesByBucket(entities: EntityItem[], now: Date = new Date()): EntityDateGroup[] {
   const groups: EntityDateGroup[] = [];
 
   for (const entity of entities) {
     const timestamp = getEntityTimestamp(entity);
-    const { key, label } = timestamp ? getDateBucket(timestamp, now) : { key: 'undated', label: 'No date' };
+    const { key: bucket, label } = timestamp
+      ? getDateBucket(timestamp, now)
+      : { key: 'undated', label: 'No date' };
 
     const current = groups[groups.length - 1];
 
-    if (current && current.key === key) {
+    if (current && current.bucket === bucket) {
       current.entities.push(entity);
     } else {
-      groups.push({ key, label, entities: [entity] });
+      groups.push({ key: `${bucket}-${groups.length}`, bucket, label, entities: [entity] });
     }
   }
 

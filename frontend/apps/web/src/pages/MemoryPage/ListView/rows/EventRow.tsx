@@ -25,7 +25,7 @@ export function EventRow({ event, time, onClick }: Props) {
   return (
     <EntityRow
       icon={<EventIcon />}
-      title={data.title}
+      title={data.title || 'Untitled event'}
       subtitle={data.description}
       time={time}
       onClick={onClick}

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react';
 
-import { useEntityService } from '../../MemoryPage/useEntityService';
+import { useSearchParams } from 'react-router-dom';
+
+import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
 import {
   DateGroupHeader,
   Empty,
@@ -8,6 +10,7 @@ import {
   ErrorState,
   TimelineSkeleton,
   groupEntitiesByBucket,
+  isChronologicalSort,
 } from '../Components';
 
 // Only these entity types render as timeline cards (EntityCard returns null for
@@ -27,8 +30,15 @@ export function TimelineView() {
   const timelineData = useMemo(() => data.filter((entity) => TIMELINE_TYPES.has(entity.__typename)), [data]);
 
   // Shared bucketing keeps the Today / Yesterday / This Week / … headers
-  // identical to the List view.
-  const groups = useMemo(() => groupEntitiesByBucket(timelineData), [timelineData]);
+  // identical to the List view — but only while results stay in chronological
+  // order. Relevance/name sorts interleave dates, so we render one continuous,
+  // header-less timeline there instead of repeated, out-of-order headers.
+  const [searchParams] = useSearchParams();
+  const grouped = isChronologicalSort(searchParams.get('sortBy'));
+  const groups = useMemo(
+    () => (grouped ? groupEntitiesByBucket(timelineData) : null),
+    [grouped, timelineData],
+  );
 
   // Load the next server page when the sentinel nears the viewport. Using the
   // viewport as root keeps this working regardless of which ancestor scrolls.
@@ -65,7 +75,7 @@ export function TimelineView() {
     return <ErrorState onRetry={refetch} />;
   }
 
-  if (groups.length === 0) {
+  if (timelineData.length === 0) {
     return (
       <Empty
         title="No memories yet"
@@ -75,26 +85,32 @@ export function TimelineView() {
     );
   }
 
+  // One timeline segment: the vertical rail plus a dotted card per entity.
+  const renderTimeline = (entities: EntityItem[]) => (
+    <div className="relative pl-8 pt-2">
+      <div className="absolute top-0 bottom-0 left-[14px] w-0.5 bg-border" />
+
+      <div className="space-y-4">
+        {entities.map((entity) => (
+          <div key={entity.id} className="relative">
+            <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-[#179298]" />
+            <EntityCard entity={entity} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6 py-2">
-      {groups.map((group) => (
-        <section key={group.key}>
-          <DateGroupHeader label={group.label} count={group.entities.length} />
-
-          <div className="relative pl-8 pt-2">
-            <div className="absolute top-0 bottom-0 left-[14px] w-0.5 bg-border" />
-
-            <div className="space-y-4">
-              {group.entities.map((entity) => (
-                <div key={entity.id} className="relative">
-                  <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-[#179298]" />
-                  <EntityCard entity={entity} />
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      ))}
+      {groups
+        ? groups.map((group) => (
+            <section key={group.key}>
+              <DateGroupHeader label={group.label} count={group.entities.length} />
+              {renderTimeline(group.entities)}
+            </section>
+          ))
+        : renderTimeline(timelineData)}
 
       {loadingMore && <TimelineSkeleton count={2} className="pt-2" />}
 

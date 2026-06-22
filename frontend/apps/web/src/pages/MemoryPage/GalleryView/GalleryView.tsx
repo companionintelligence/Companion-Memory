@@ -18,7 +18,7 @@ import {
   ThreadGridItem,
 } from '@/components/entities';
 
-import { Empty } from '../Components';
+import { Empty, ErrorState } from '../Components';
 import { useEntityService } from '../useEntityService';
 
 import { getEntityMedia, type EntityMedia } from './media';
@@ -28,7 +28,8 @@ import { MediaTile } from './MediaTile';
 export function GalleryView() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
-  const [{ data, loading, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
+  const [{ data, loading, hasNextPage, loadingMore, loadMore, error, refetch }, { setActiveEntity }] =
+    useEntityService();
 
   // Ordered list of media-bearing entities (images/video). It drives the
   // lightbox and lets a tile look up its position for arrow navigation.
@@ -75,6 +76,16 @@ export function GalleryView() {
             <div key={i} className="h-full w-full animate-pulse rounded-lg border bg-card" />
           ))}
         </EntityGrid>
+      </div>
+    );
+  }
+
+  // Hard error with nothing to show — mirror List/Timeline rather than letting a
+  // query failure read as "No results found".
+  if (error && data.length === 0) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+        <ErrorState onRetry={refetch} />
       </div>
     );
   }
@@ -161,6 +172,15 @@ export function GalleryView() {
                 return null;
             }
           })}
+
+          {/* Pulsing placeholders for the page being fetched (mirrors ListView). */}
+          {loadingMore &&
+            Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={`loading-more-${i}`}
+                className="h-full w-full animate-pulse rounded-lg border bg-card"
+              />
+            ))}
         </EntityGrid>
 
         {hasNextPage && <div ref={sentinelRef} className="h-8" />}

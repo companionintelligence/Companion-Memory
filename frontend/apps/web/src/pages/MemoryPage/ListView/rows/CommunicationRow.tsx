@@ -25,7 +25,7 @@ export function CommunicationRow({ communication, time, onClick }: Props) {
   return (
     <EntityRow
       icon={<CommunicationIcon />}
-      title={data.subject}
+      title={data.subject || 'Untitled communication'}
       subtitle={data.preview}
       time={time}
       onClick={onClick}

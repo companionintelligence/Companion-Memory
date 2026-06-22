@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 
+import { useSearchParams } from 'react-router-dom';
+
 import {
   DateGroupHeader,
   Empty,
@@ -8,6 +10,7 @@ import {
   formatRowTime,
   getEntityTimestamp,
   groupEntitiesByBucket,
+  isChronologicalSort,
 } from '@/pages/MemoryPage/Components';
 
 import { useEntityService, type EntityItem } from '../useEntityService';
@@ -54,8 +57,12 @@ export function ListView() {
     return () => observer.disconnect();
   }, [hasNextPage, loadMore]);
 
-  // Segment the chronological results into Today / Yesterday / This Week / … groups.
-  const groups = useMemo(() => groupEntitiesByBucket(data), [data]);
+  // Date-group headers only make sense while results are in chronological order.
+  // Relevance/name sorts interleave dates, so we fall back to a flat list there
+  // (grouping then would emit repeated, out-of-order headers).
+  const [searchParams] = useSearchParams();
+  const grouped = isChronologicalSort(searchParams.get('sortBy'));
+  const groups = useMemo(() => (grouped ? groupEntitiesByBucket(data) : null), [grouped, data]);
 
   // Every row opens the same shared details drawer (incl. File/Item media).
   const renderRow = (item: EntityItem) => {
@@ -148,12 +155,14 @@ export function ListView() {
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
       <div className="flex flex-col">
-        {groups.map((group) => (
-          <section key={group.key} className="pb-1">
-            <DateGroupHeader label={group.label} count={group.entities.length} />
-            <div className="flex flex-col">{group.entities.map(renderRow)}</div>
-          </section>
-        ))}
+        {groups
+          ? groups.map((group) => (
+              <section key={group.key} className="pb-1">
+                <DateGroupHeader label={group.label} count={group.entities.length} />
+                <div className="flex flex-col">{group.entities.map(renderRow)}</div>
+              </section>
+            ))
+          : data.map(renderRow)}
       </div>
 
       {loadingMore && <ListSkeleton count={3} showHeader={false} />}
