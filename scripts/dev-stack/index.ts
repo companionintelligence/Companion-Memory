@@ -160,7 +160,14 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
         {
           handler: 'reverse_proxy',
           upstreams: [{ dial: `localhost:${p.objPort}` }],
-          headers: { request: { set: { Host: [`localhost:${p.objPort}`] } } },
+          // Forward the Host the presigned URLs were SIGNED against, not the
+          // dial target. The API signs S3 GET URLs with config.staticfiles.auth
+          // .signatureUrl, which is the fixed `object-store:9000` (never
+          // overridden to the dynamic dev port). SigV4 presigned URLs sign the
+          // `host` header, so MinIO recomputes the signature against whatever
+          // Host it receives; sending `localhost:${objPort}` here yields
+          // SignatureDoesNotMatch (403). Dialing still goes to the local port.
+          headers: { request: { set: { Host: ['object-store:9000'] } } },
         },
       ],
     },
