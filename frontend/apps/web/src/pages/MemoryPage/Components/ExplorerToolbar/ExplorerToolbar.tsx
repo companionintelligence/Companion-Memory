@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
@@ -9,6 +9,7 @@ import {
   ChevronUp,
   MapPin,
   Save,
+  Search,
   SlidersHorizontal,
   Sparkles,
   X,
@@ -449,69 +450,120 @@ function ResultCount() {
   );
 }
 
-function ExplorerToolbarInner({ variant }: { variant: 'desktop' | 'mobile' }) {
+/**
+ * The "Advanced" toggle. Lives in the global header (desktop) or above the mobile
+ * tabs; it controls the toolbar drawer via the page's lifted `open` state and
+ * surfaces the active-filter count with an up/down chevron.
+ */
+export function AdvancedSearchToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const [searchParams] = useSearchParams();
-  const [filtersOpen, setFiltersOpen] = useState(false);
-
   const activeCount = countActiveFilters(searchParams);
 
-  // An up/down chevron toggles the advanced-search drawer that sits under the
-  // (now header-level) search bar. Free-text search no longer lives here.
-  const filtersToggle = (
+  return (
     <Button
       type="button"
-      variant={filtersOpen || activeCount > 0 ? 'secondary' : 'outline'}
-      onClick={() => setFiltersOpen((open) => !open)}
-      aria-expanded={filtersOpen}
+      variant={open || activeCount > 0 ? 'secondary' : 'outline'}
+      onClick={onToggle}
+      aria-expanded={open}
     >
       <SlidersHorizontal className="mr-2 h-4 w-4" />
-      Advanced search
+      Advanced
       {activeCount > 0 && (
         <Badge variant="secondary" className="ml-2 h-5 px-1.5">
           {activeCount}
         </Badge>
       )}
-      {filtersOpen ? <ChevronUp className="ml-2 h-4 w-4" /> : <ChevronDown className="ml-2 h-4 w-4" />}
+      {open ? <ChevronUp className="ml-2 h-4 w-4" /> : <ChevronDown className="ml-2 h-4 w-4" />}
     </Button>
   );
+}
 
-  // The drawer body: the plain Who / What / When / Where / How dimensions, then
-  // tags + semantic, then sort + save. Modal portaling is only needed in the
-  // (non-existent here) Sheet case, so the inline drawer passes modal={false}.
-  const drawer = filtersOpen && (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2">
-      <AdvancedFilters modal={false} />
-    </div>
-  );
+/**
+ * Debounced free-text search bound to the `?search` URL param. Used on mobile,
+ * where the unified header search bar isn't shown; desktop uses the header
+ * GlobalSearchBox instead.
+ */
+export function MemorySearchField() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlValue = searchParams.get('search') ?? '';
+  const [value, setValue] = useState(urlValue);
+
+  // Keep the input in sync when the URL changes externally (clear, saved search).
+  useEffect(() => {
+    setValue(urlValue);
+  }, [urlValue]);
+
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      if (value === urlValue) {
+        return;
+      }
+
+      setSearchParams(
+        (params) => {
+          if (value) {
+            params.set('search', value);
+          } else {
+            params.delete('search');
+          }
+
+          return params;
+        },
+        { replace: true },
+      );
+    }, 350);
+
+    return () => clearTimeout(handle);
+  }, [value, urlValue, setSearchParams]);
 
   return (
+    <div className="relative w-full">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        type="search"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder="Search your memory…"
+        className="pl-8"
+      />
+    </div>
+  );
+}
+
+function ExplorerToolbarInner({ open }: { open: boolean }) {
+  return (
     <div className="flex flex-col gap-2">
-      <div className={`flex items-center gap-2 ${variant === 'mobile' ? 'justify-between' : 'flex-wrap'}`}>
-        {filtersToggle}
+      {/* The advanced-search drawer: plain Who / What / When / Where / How, then
+          tags + semantic, then sort + save. Opened from the header toggle. */}
+      {open && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2">
+          <AdvancedFilters modal={false} />
+        </div>
+      )}
 
-        <span className={variant === 'mobile' ? undefined : 'ml-auto'}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <ActiveFilterChips />
+        </div>
+        <div className="shrink-0">
           <ResultCount />
-        </span>
+        </div>
       </div>
-
-      {drawer}
-
-      <ActiveFilterChips />
     </div>
   );
 }
 
 /**
- * The explorer toolbar: an "Advanced search" chevron that reveals a drawer of
- * the plain LifeScope-parity dimensions — Who / What / When / Where / How — plus
- * tags, a semantic toggle, sort, and Save search. Free-text search lives in the
- * unified header bar (GlobalSearchBox), not here. Wrapped in DropdownProvider so
- * the useDropdown URL-param setters (entity types, date, sort, tags) work.
+ * The explorer toolbar body that sits under the unified header bar: the
+ * advanced-search drawer (Who / What / When / Where / How + tags, semantic, sort,
+ * save) plus the active-filter chips and result count. `open` is controlled by
+ * the page — the AdvancedSearchToggle that flips it lives in the header. Wrapped
+ * in DropdownProvider so the useDropdown URL-param setters work.
  */
-export function ExplorerToolbar({ variant = 'desktop' }: { variant?: 'desktop' | 'mobile' }) {
+export function ExplorerToolbar({ open }: { open: boolean }) {
   return (
     <DropdownProvider args={[{ changeSearchParams: true }]}>
-      <ExplorerToolbarInner variant={variant} />
+      <ExplorerToolbarInner open={open} />
     </DropdownProvider>
   );
 }

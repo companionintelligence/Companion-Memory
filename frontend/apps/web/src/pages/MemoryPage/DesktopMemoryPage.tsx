@@ -14,7 +14,7 @@ import { gql } from '@/graphql';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components/EntityDetails';
-import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
+import { AdvancedSearchToggle, ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
@@ -40,6 +40,7 @@ export default function DesktopMemoryPage() {
   const [searchId, setSearchId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState('map');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const { data: savedSearchData } = useQuery(GET_SAVED_SEARCH, {
     variables: { id: GlobalUID.encode('saved-search', searchId!) },
@@ -147,48 +148,48 @@ export default function DesktopMemoryPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <PageContent className="p-0 gap-0">
-        <div className="flex items-start gap-2 p-4">
-          {/* Always-visible explorer toolbar: search + when + sort + a Filters
-              toggle that reveals the full LifeScope-parity filter set, with an
-              active-filter chip row and result count. */}
-          <div className="flex-1">
-            <ExplorerToolbar />
-          </div>
+      {/* View toggles sit in the unified header bar, left of the stretched search.
+          Native `title` for the hover label rather than a Radix Tooltip: wrapping
+          Tabs.Trigger in Tooltip.Trigger renders a button inside a button (invalid
+          HTML + hydration error), and merging them (asChild) makes the tooltip's
+          data-state clobber the tab's active/inactive state. */}
+      <Portal.Slot id="nav-views">
+        <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
+          <Tabs.List className="flex h-9 items-center border">
+            <Tabs.Trigger value="map" title="Map view" className="flex h-7 w-8 items-center justify-center">
+              <MapPin className="h-4 w-4" />
+            </Tabs.Trigger>
+            <Tabs.Trigger value="list" title="List view" className="flex h-7 w-8 items-center justify-center">
+              <List className="h-4 w-4" />
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              value="gallery"
+              title="Gallery view"
+              className="flex h-7 w-8 items-center justify-center"
+            >
+              <Images className="h-4 w-4" />
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              value="graph"
+              title="Graph view"
+              className="flex h-7 w-8 items-center justify-center"
+            >
+              <Share2 className="h-4 w-4" />
+            </Tabs.Trigger>
+          </Tabs.List>
+        </Tabs>
+      </Portal.Slot>
 
-          {/* View Toggle. Native `title` for the hover label rather than a Radix
-              Tooltip: wrapping Tabs.Trigger in Tooltip.Trigger renders a button
-              inside a button (invalid HTML + hydration error), and merging them
-              (asChild) makes the tooltip's data-state clobber the tab's
-              active/inactive state, killing the active-tab highlight. */}
-          <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
-            <Tabs.List className="flex items-center justify-center h-11.5 border-1">
-              <Tabs.Trigger value="map" title="Map view" className="flex items-center justify-center h-4 w-6">
-                <MapPin />
-              </Tabs.Trigger>
-              <Tabs.Trigger
-                value="list"
-                title="List view"
-                className="flex items-center justify-center h-4 w-6"
-              >
-                <List />
-              </Tabs.Trigger>
-              <Tabs.Trigger
-                value="gallery"
-                title="Gallery view"
-                className="flex items-center justify-center h-4 w-6"
-              >
-                <Images />
-              </Tabs.Trigger>
-              <Tabs.Trigger
-                value="graph"
-                title="Graph view"
-                className="flex items-center justify-center h-4 w-6"
-              >
-                <Share2 />
-              </Tabs.Trigger>
-            </Tabs.List>
-          </Tabs>
+      {/* The Advanced toggle sits in the header, right of the search; it controls
+          the toolbar drawer below via the lifted `advancedOpen` state. */}
+      <Portal.Slot id="nav-tools">
+        <AdvancedSearchToggle open={advancedOpen} onToggle={() => setAdvancedOpen((open) => !open)} />
+      </Portal.Slot>
+
+      <PageContent className="p-0 gap-0">
+        {/* Advanced-search drawer (when open) + active-filter chips + result count. */}
+        <div className="px-4 pt-3">
+          <ExplorerToolbar open={advancedOpen} />
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">

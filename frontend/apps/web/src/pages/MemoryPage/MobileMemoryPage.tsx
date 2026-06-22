@@ -10,7 +10,11 @@ import { PageContent } from '@/components/layout';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components';
-import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
+import {
+  AdvancedSearchToggle,
+  ExplorerToolbar,
+  MemorySearchField,
+} from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
@@ -21,6 +25,7 @@ export default function MobileMemoryPage() {
 
   const [activeTab, setActiveTab] = useState('list');
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const toggleactiveEntity = (active: boolean) => {
     if (!active) {
@@ -52,11 +57,17 @@ export default function MobileMemoryPage() {
 
       <PageContent>
         <div className="space-y-3">
-          {/* Same explorer search + filters as desktop, in its mobile layout: the
-              search field stays inline and the date/sort/filter controls + Save
-              search live in a slide-out drawer behind a Filters button. The global
-              header search isn't shown on mobile, so this is the primary surface. */}
-          <ExplorerToolbar variant="mobile" />
+          {/* The global header search isn't shown on mobile, so the search field
+              lives here inline, next to the Advanced toggle; the advanced drawer
+              (Who/What/When/Where/How + tags, semantic, sort, save), chips and
+              result count render below via the shared ExplorerToolbar. */}
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <MemorySearchField />
+            </div>
+            <AdvancedSearchToggle open={advancedOpen} onToggle={() => setAdvancedOpen((open) => !open)} />
+          </div>
+          <ExplorerToolbar open={advancedOpen} />
 
           {/* Tab Navigation */}
           <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>

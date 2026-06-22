@@ -76,123 +76,126 @@ export function PrimaryNavigation() {
 
   return (
     <>
-      <header className="flex flex-row items-center justify-between p-2 px-4">
-        <section className="flex flex-row items-center">
+      <header className="flex flex-row items-center gap-3 p-2 px-4">
+        {/* Left: breadcrumb + (on Memory) the view toggles */}
+        <div className="flex shrink-0 flex-row items-center gap-2">
           <Portal id="breadcrumbs" />
-        </section>
+          <Portal id="nav-views" className="flex flex-row items-center" />
+        </div>
 
-        <section className="flex flex-row items-center gap-4">
+        {/* Center: the unified search, stretched to fill the bar */}
+        <div className="min-w-0 flex-1">
+          <GlobalSearchBox />
+        </div>
+
+        {/* Right: (on Memory) the Advanced toggle, page actions, tags, new, account */}
+        <div className="flex shrink-0 flex-row items-center gap-2">
+          <Portal id="nav-tools" className="flex flex-row items-center" />
           <Portal ref={actionsRef} id="actions" className="flex flex-row items-center" />
 
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}
 
-          <div className="flex flex-row items-center gap-2">
-            <div className="w-64 lg:w-96">
-              <GlobalSearchBox />
-            </div>
+          <div className="flex items-center">
+            <Button variant="ghost" size="icon" aria-label="More Options">
+              <Link to="/tags">
+                <Tags strokeWidth={1.5} />
+              </Link>
+            </Button>
 
-            <div className="flex items-center">
-              <Button variant="ghost" size="icon" aria-label="More Options">
-                <Link to="/tags">
-                  <Tags strokeWidth={1.5} />
-                </Link>
-              </Button>
+            <DropdownMenu modal={false}>
+              <DropdownMenu.Trigger asChild>
+                <Button variant="ghost" size="icon" aria-label="More Options">
+                  <Plus strokeWidth={1.5} />
+                </Button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content className="rounded-lg p-2" side="bottom" align="end" sideOffset={4}>
+                <div className="text-center text-sm font-semibold mb-3 mt-1">Add</div>
+                <div className="grid grid-cols-4 gap-2">
+                  <DropdownMenu.Item
+                    onSelect={() => navigate('/notes/new')}
+                    className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                  >
+                    <NotebookPen className="h-6! w-6!" strokeWidth={1.25} />
+                    <span className="text-xs">Note</span>
+                  </DropdownMenu.Item>
 
-              <DropdownMenu modal={false}>
-                <DropdownMenu.Trigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="More Options">
-                    <Plus strokeWidth={1.5} />
-                  </Button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content className="rounded-lg p-2" side="bottom" align="end" sideOffset={4}>
-                  <div className="text-center text-sm font-semibold mb-3 mt-1">Add</div>
+                  <DropdownMenu.Item
+                    onSelect={openAddPersonModal}
+                    className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                  >
+                    <User className="h-6! w-6!" strokeWidth={1.25} />
+                    <span className="text-xs text-center">Person</span>
+                  </DropdownMenu.Item>
+
+                  <DropdownMenu.Item
+                    onSelect={openAddConceptModal}
+                    className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                  >
+                    <Lightbulb className="h-6! w-6!" strokeWidth={1.25} />
+                    <span className="text-xs text-center">Concept</span>
+                  </DropdownMenu.Item>
+
+                  <DropdownMenu.Item
+                    onSelect={openItemModal}
+                    className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                  >
+                    <Package className="h-6! w-6!" strokeWidth={1.25} />
+                    <span className="text-xs text-center">Item</span>
+                  </DropdownMenu.Item>
+                </div>
+                <div className="mt-2 -mx-2 -mb-2 bg-muted/50 p-4 rounded-b-lg">
+                  <div className="text-center text-sm font-semibold mb-3">Actions</div>
                   <div className="grid grid-cols-4 gap-2">
                     <DropdownMenu.Item
-                      onSelect={() => navigate('/notes/new')}
-                      className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                      onSelect={openUploadModal}
+                      className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
                     >
-                      <NotebookPen className="h-6! w-6!" strokeWidth={1.25} />
-                      <span className="text-xs">Note</span>
+                      <Upload className="h-6! w-6!" strokeWidth={1.25} />
+                      <span className="text-xs text-center">Upload</span>
                     </DropdownMenu.Item>
 
                     <DropdownMenu.Item
-                      onSelect={openAddPersonModal}
-                      className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                      onSelect={openCaptureModal}
+                      className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
                     >
-                      <User className="h-6! w-6!" strokeWidth={1.25} />
-                      <span className="text-xs text-center">Person</span>
+                      <Camera className="h-6! w-6!" strokeWidth={1.25} />
+                      <span className="text-xs text-center">Capture</span>
                     </DropdownMenu.Item>
 
                     <DropdownMenu.Item
-                      onSelect={openAddConceptModal}
+                      onSelect={() => navigate('/connect')}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
-                      <Lightbulb className="h-6! w-6!" strokeWidth={1.25} />
-                      <span className="text-xs text-center">Concept</span>
+                      <Cable className="h-6! w-6!" strokeWidth={1.25} />
+                      <span className="text-xs text-center">Connect</span>
                     </DropdownMenu.Item>
 
                     <DropdownMenu.Item
-                      onSelect={openItemModal}
+                      onSelect={async (e) => {
+                        e.preventDefault();
+                        const status = await trigger();
+                        if (status === 'already_running') {
+                          toast.info('Prediction pipeline is already running');
+                        } else if (status === 'triggered') {
+                          toast.success('Prediction pipeline started');
+                        } else if (status === 'error' || !status) {
+                          toast.error('Failed to trigger prediction pipeline');
+                        } else {
+                          toast.success('Prediction pipeline started');
+                        }
+                      }}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
-                      <Package className="h-6! w-6!" strokeWidth={1.25} />
-                      <span className="text-xs text-center">Item</span>
+                      <Search className="h-6! w-6!" strokeWidth={1.25} />
+                      <span className="text-xs text-center">Predict</span>
                     </DropdownMenu.Item>
                   </div>
-                  <div className="mt-2 -mx-2 -mb-2 bg-muted/50 p-4 rounded-b-lg">
-                    <div className="text-center text-sm font-semibold mb-3">Actions</div>
-                    <div className="grid grid-cols-4 gap-2">
-                      <DropdownMenu.Item
-                        onSelect={openUploadModal}
-                        className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
-                      >
-                        <Upload className="h-6! w-6!" strokeWidth={1.25} />
-                        <span className="text-xs text-center">Upload</span>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={openCaptureModal}
-                        className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
-                      >
-                        <Camera className="h-6! w-6!" strokeWidth={1.25} />
-                        <span className="text-xs text-center">Capture</span>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={() => navigate('/connect')}
-                        className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
-                      >
-                        <Cable className="h-6! w-6!" strokeWidth={1.25} />
-                        <span className="text-xs text-center">Connect</span>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={async (e) => {
-                          e.preventDefault();
-                          const status = await trigger();
-                          if (status === 'already_running') {
-                            toast.info('Prediction pipeline is already running');
-                          } else if (status === 'triggered') {
-                            toast.success('Prediction pipeline started');
-                          } else if (status === 'error' || !status) {
-                            toast.error('Failed to trigger prediction pipeline');
-                          } else {
-                            toast.success('Prediction pipeline started');
-                          }
-                        }}
-                        className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
-                      >
-                        <Search className="h-6! w-6!" strokeWidth={1.25} />
-                        <span className="text-xs text-center">Predict</span>
-                      </DropdownMenu.Item>
-                    </div>
-                  </div>
-                </DropdownMenu.Content>
-              </DropdownMenu>
-            </div>
-            <NavUser />
+                </div>
+              </DropdownMenu.Content>
+            </DropdownMenu>
           </div>
-        </section>
+          <NavUser />
+        </div>
       </header>
 
       <UploadModal
