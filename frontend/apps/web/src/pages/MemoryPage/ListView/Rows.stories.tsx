@@ -25,7 +25,6 @@ import { ItemRow, ITEM_FRAGMENT } from './rows/ItemRow';
 import { PersonRow, PERSON_FRAGMENT } from './rows/PersonRow';
 import { PlaceRow, PLACE_FRAGMENT } from './rows/PlaceRow';
 import { ThreadRow, THREAD_FRAGMENT } from './rows/ThreadRow';
-import { SearchTable } from './SearchTable';
 
 const items: (
   | (typeof MOCK_PEOPLE)[number]
@@ -106,7 +105,7 @@ const meta: Meta = {
 
   render: (args) => {
     return (
-      <SearchTable>
+      <div className="flex flex-col">
         {items.map((item) => {
           switch (item.__typename) {
             case 'PersonType':
@@ -203,7 +202,7 @@ const meta: Meta = {
               return null;
           }
         })}
-      </SearchTable>
+      </div>
     );
   },
 };

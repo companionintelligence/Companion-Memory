@@ -55,92 +55,138 @@ export function formatDateTime(dateStr: string, timeStr?: string): string {
   }
 }
 
-export function formatDateForDisplay(dateStr: string): string {
-  const date = new Date(dateStr + 'T12:00:00');
-  if (isNaN(date.getTime())) {
-    return dateStr;
+/**
+ * The canonical timestamp for an entity, matching the server's ordering logic
+ * (`SearchResolver.getEntityTimestamp`, which keys off `time ?? startTime`).
+ * Keeping the same field priority here ensures the date-group headers we render
+ * line up with the chronological order the API already returned. Entities with
+ * no domain timestamp (people, places, concepts, …) return null and fall into
+ * the trailing "No date" bucket.
+ *
+ * Reads the aliased `bucketTime`/`bucketStartTime` fields selected directly on
+ * the search query's node so access is type-safe under fragment masking (rather
+ * than casting through the masked spread fragments).
+ */
+export function getEntityTimestamp(entity: EntityItem): Date | null {
+  let raw: unknown;
+
+  switch (entity.__typename) {
+    case 'CommunicationType':
+    case 'BrowserActivityType':
+      raw = entity.bucketTime;
+      break;
+    case 'EventType':
+      raw = entity.bucketStartTime;
+      break;
+    default:
+      return null;
   }
 
-  // Compare using local dates to match user's timezone
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (raw instanceof Date) {
+    return isNaN(raw.getTime()) ? null : raw;
+  }
+
+  if (typeof raw === 'string') {
+    const date = new Date(raw);
+
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  return null;
+}
+
+interface DateBucket {
+  key: string;
+  label: string;
+}
+
+/** Coarse, human-friendly bucket for a date: Today / Yesterday / This Week / This Month / "Month Year". */
+export function getDateBucket(date: Date, now: Date = new Date()): DateBucket {
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  const today = startOfDay(now);
   const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const entityDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  yesterday.setDate(today.getDate() - 1);
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - today.getDay()); // back to Sunday
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  if (entityDate.getTime() === today.getTime()) {
-    return 'Today';
+  const day = startOfDay(date).getTime();
+
+  if (day >= today.getTime()) {
+    return { key: 'today', label: 'Today' };
   }
 
-  if (entityDate.getTime() === yesterday.getTime()) {
-    return 'Yesterday';
+  if (day >= yesterday.getTime()) {
+    return { key: 'yesterday', label: 'Yesterday' };
   }
 
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
+  if (day >= weekStart.getTime()) {
+    return { key: 'week', label: 'This Week' };
+  }
+
+  if (day >= monthStart.getTime()) {
+    return { key: 'month', label: 'This Month' };
+  }
+
+  return {
+    key: `${date.getFullYear()}-${date.getMonth()}`,
+    label: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+  };
 }
 
-export function sortEntitiesByTime(entities: EntityItem[][]): EntityItem[][] {
-  return [...entities].sort((a, b) => {
-    const dateA =
-      'time' in a
-        ? new Date(a.time as string)
-        : 'startTime' in a
-          ? new Date(a.startTime as string)
-          : new Date();
-    const dateB =
-      'time' in b
-        ? new Date(b.time as string)
-        : 'startTime' in b
-          ? new Date(b.startTime as string)
-          : new Date();
-    if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
-      return 0;
-    }
-
-    return dateA.getTime() - dateB.getTime();
-  });
-}
-
-export function groupEntitiesByDate(entities: EntityItem[]): Array<{
-  date: string;
+export interface EntityDateGroup {
+  key: string;
+  label: string;
   entities: EntityItem[];
-}> {
-  const groups: Record<string, EntityItem[]> = {};
+}
 
-  entities.forEach((entity) => {
-    if (!('time' in entity) && !('startTime' in entity)) {
-      return;
+/**
+ * Segment an already-ordered list of entities into contiguous date groups,
+ * preserving the incoming (server-provided) order rather than re-sorting. A new
+ * group starts whenever the bucket changes, so appended pages merge seamlessly
+ * into the trailing group. Used by both List and Timeline for a consistent
+ * Today / Yesterday / This Week / … layout.
+ */
+export function groupEntitiesByBucket(entities: EntityItem[], now: Date = new Date()): EntityDateGroup[] {
+  const groups: EntityDateGroup[] = [];
+
+  for (const entity of entities) {
+    const timestamp = getEntityTimestamp(entity);
+    const { key, label } = timestamp ? getDateBucket(timestamp, now) : { key: 'undated', label: 'No date' };
+
+    const current = groups[groups.length - 1];
+
+    if (current && current.key === key) {
+      current.entities.push(entity);
+    } else {
+      groups.push({ key, label, entities: [entity] });
     }
+  }
 
-    const entityDate =
-      'time' in entity
-        ? new Date(entity.time as string)
-        : 'startTime' in entity
-          ? new Date(entity.startTime as string)
-          : new Date();
-    if (!isNaN(entityDate.getTime())) {
-      // Use local date instead of UTC to match user's timezone
-      const year = entityDate.getFullYear();
-      const month = String(entityDate.getMonth() + 1).padStart(2, '0');
-      const day = String(entityDate.getDate()).padStart(2, '0');
-      const dateKey = `${year}-${month}-${day}`;
+  return groups;
+}
 
-      if (!groups[dateKey]) {
-        groups[dateKey] = [];
-      }
+/** Compact per-row timestamp: time-of-day for today, "Mon D" this year, otherwise "Mon D, YYYY". */
+export function formatRowTime(date: Date | null, now: Date = new Date()): string {
+  if (!date) {
+    return '';
+  }
 
-      groups[dateKey].push(entity);
-    }
-  });
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
 
-  return Object.entries(groups)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, entities]) => ({ date, entities }));
+  if (sameDay) {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export function getEntityTypeIcon(type: string) {

@@ -94,7 +94,7 @@ export function CommunicationCard({ entity }: Props) {
   return (
     <Card
       className="!gap-2 !py-4 px-6 cursor-pointer hover:shadow-lg transition-shadow duration-200"
-      onClick={() => setActiveEntity({ ...data, __typename: 'CommunicationType' })}
+      onClick={() => setActiveEntity({ ...data, __typename: 'CommunicationType', bucketTime: data.time })}
     >
       <div className="flex items-start gap-3">
         {getDirectionIcon()}

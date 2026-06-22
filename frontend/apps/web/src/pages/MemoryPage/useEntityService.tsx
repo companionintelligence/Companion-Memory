@@ -72,6 +72,21 @@ const SEARCH_QUERY = gql(`
           ...TimelineBrowserActivityCardData
           ...TimelineCommunicationCardData
           ...TimelineEventCardData
+
+          # Aliased timestamps so date-grouping (getEntityTimestamp) can read the
+          # field the server sorts by without unmasking spread fragments. Mirrors
+          # SearchResolver.getEntityTimestamp (time ?? startTime).
+          ... on CommunicationType {
+            bucketTime: time
+          }
+
+          ... on BrowserActivityType {
+            bucketTime: time
+          }
+
+          ... on EventType {
+            bucketStartTime: startTime
+          }
         }
       }
     }
@@ -109,6 +124,7 @@ type ReturnType = [
     error: ApolloError | undefined;
     activeEntity: MemoryEntity | null;
     loadMore: () => void;
+    refetch: () => void;
   },
   {
     setActiveEntity: (entity: MemoryEntity | null) => void;
@@ -148,7 +164,7 @@ function useEntityService({
   bbox?: number[];
   semantic?: boolean;
 }): ReturnType {
-  const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
+  const { data, loading, error, fetchMore, refetch } = useQuery(SEARCH_QUERY, {
     variables: {
       query: searchQuery,
       includeTypes: includeTypes?.map((type) => type.toLowerCase()) || [],
@@ -209,6 +225,10 @@ function useEntityService({
 
   const results = useMemo(() => (data?.search?.edges ?? []).map((edge) => edge.node), [data]);
 
+  const refetchSearch = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
   return [
     {
       data: results,
@@ -219,6 +239,7 @@ function useEntityService({
       error,
       activeEntity,
       loadMore,
+      refetch: refetchSearch,
     },
     {
       setActiveEntity,
