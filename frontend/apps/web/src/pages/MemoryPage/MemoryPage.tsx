@@ -33,7 +33,12 @@ export function MemoryPage() {
           connectors: searchParams.get('connectors')?.split(',').filter(Boolean) || undefined,
           people: searchParams.get('people')?.split(',').filter(Boolean) || undefined,
           places: searchParams.get('places')?.split(',').filter(Boolean) || undefined,
-          hasLocation: searchParams.get('hasLocation') === '1' || undefined,
+          // The map (`?view=map`) is a located-events surface, so it derives
+          // hasLocation here rather than the map writing its own `?hasLocation`
+          // param (whose unmount cleanup reverted navigation away from /memory).
+          // A user-set Located filter still works via the explicit param.
+          hasLocation:
+            searchParams.get('hasLocation') === '1' || searchParams.get('view') === 'map' || undefined,
           bbox: parseBbox(searchParams.get('bbox')),
           semantic: searchParams.get('semantic') === '1' || undefined,
         },

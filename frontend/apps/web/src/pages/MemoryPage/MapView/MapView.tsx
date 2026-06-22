@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '@ci/shadcn';
 import { Loader2, MapPin, Search as SearchIcon, X } from '@ci/shadcn/icons';
@@ -55,14 +55,49 @@ function readCoordinates(props: unknown): { lat: number; lng: number } | null {
   return { lat: latitude, lng: longitude };
 }
 
+/** GeoJSON Point: `{ type: 'Point', coordinates: [lng, lat] }`. */
+function readGeoJsonPoint(value: unknown): { lat: number; lng: number } | null {
+  if (value == null || typeof value !== 'object') {
+    return null;
+  }
+
+  const coords = (value as { coordinates?: unknown }).coordinates;
+
+  if (!Array.isArray(coords) || coords.length < 2) {
+    return null;
+  }
+
+  const [lng, lat] = coords;
+
+  if (
+    typeof lat !== 'number' ||
+    typeof lng !== 'number' ||
+    isNaN(lat) ||
+    isNaN(lng) ||
+    (lat === 0 && lng === 0)
+  ) {
+    return null;
+  }
+
+  return { lat, lng };
+}
+
 /**
- * Resolve a marker position for any entity in the explorer result set.
- * Places carry their coordinates directly in `properties`; events (and other
- * entities) carry them on a resolved `location` PlaceType.
+ * Resolve a marker position for any entity in the explorer result set. Events
+ * carry a PostGIS Point in `mapCoordinates` (GeoJSON) — often with no resolved
+ * `location` PlaceType, which is why reading `location.properties` alone yielded
+ * "0 pins". Places carry lat/lng in `mapProperties`; a resolved `location`
+ * PlaceType is the final fallback.
  */
 function getEntityCoordinates(entity: EntityItem): { lat: number; lng: number } | null {
-  if (entity.__typename === 'PlaceType' && 'properties' in entity) {
-    return readCoordinates((entity as { properties?: unknown }).properties);
+  const point = readGeoJsonPoint((entity as { mapCoordinates?: unknown }).mapCoordinates);
+
+  if (point) {
+    return point;
+  }
+
+  if (entity.__typename === 'PlaceType') {
+    return readCoordinates((entity as { mapProperties?: unknown }).mapProperties);
   }
 
   if ('location' in entity && entity.location) {
@@ -83,51 +118,16 @@ function entityTime(entity: EntityItem): number {
 
 type LocatedEntity = { entity: EntityItem; coords: { lat: number; lng: number } };
 
-/**
- * Scope `?hasLocation=1` to the map tab. The EntityServiceProvider is shared by
- * every view, so the map can't pass its own query variables — it steers the
- * shared query through the URL instead. Without this, the default result set is
- * dominated by un-located rows (browser activity, communications, …): a page of
- * 30 can yield 0 pins, so "Load more pins" pages in results yet adds nothing
- * ("Load more pins (0 shown)"). Requesting hasLocation:true makes every fetched
- * page entities that actually drop a pin. The flag is cleared on unmount so the
- * list/gallery/graph views still see every entity.
- *
- * NB: the server routes hasLocation (and bbox) through its event filter, so the
- * map is an events-only surface — hence the "Search events in this area" control.
- */
-function useMapHasLocationScope() {
-  const [, setSearchParams] = useSearchParams();
-
-  useEffect(() => {
-    setSearchParams(
-      (params) => {
-        if (params.get('hasLocation') !== '1') {
-          params.set('hasLocation', '1');
-        }
-
-        return params;
-      },
-      { replace: true },
-    );
-
-    return () => {
-      setSearchParams(
-        (params) => {
-          params.delete('hasLocation');
-
-          return params;
-        },
-        { replace: true },
-      );
-    };
-  }, [setSearchParams]);
-}
+// The map needs hasLocation:true so every fetched page yields pins (the shared
+// result set is otherwise dominated by un-located rows). This is now derived
+// from `?view=map` in MemoryPage rather than written here as a separate
+// `?hasLocation` param: a URL write with an unmount cleanup reverted navigation
+// away from /memory (the cleanup's setSearchParams fired mid-route-change and
+// snapped the route back). The server still routes hasLocation through its event
+// filter, so the map is an events-only surface — hence "Search events in this area".
 
 function useLocatedEntities() {
   const [{ data, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
-
-  useMapHasLocationScope();
 
   const located = useMemo<LocatedEntity[]>(() => {
     return data
@@ -417,6 +417,28 @@ function LoadMorePinsControl({
   );
 }
 
+// Fit the viewport to the located entities the first time they arrive, so the
+// pins are actually on screen — they're often scattered far from the default
+// center (different cities/countries), which is what made the map look empty.
+// Fits once: later pagination or the user's own panning won't yank the view.
+function FitBoundsOnce({ located }: { located: LocatedEntity[] }) {
+  const map = useLeafletMap();
+  const fitted = useRef(false);
+
+  useEffect(() => {
+    if (fitted.current || located.length === 0) {
+      return;
+    }
+
+    const points = located.map((item) => [item.coords.lat, item.coords.lng] as [number, number]);
+
+    map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 13 });
+    fitted.current = true;
+  }, [located, map]);
+
+  return null;
+}
+
 export function DesktopMapView() {
   const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
     useLocatedEntities();
@@ -439,6 +461,7 @@ export function DesktopMapView() {
       />
       <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
+      <FitBoundsOnce located={located} />
     </Map>
   );
 }
@@ -459,6 +482,7 @@ export function MobileMapView() {
       />
       <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
+      <FitBoundsOnce located={located} />
     </Map>
   );
 }

@@ -39,8 +39,31 @@ export default function DesktopMemoryPage() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [searchId, setSearchId] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState('map');
+  // The active view lives in the URL (`?view=`) so a query is shareable and
+  // restores in the same view; map is the desktop default.
+  const activeTab = searchParams.get('view') ?? 'map';
+  const setActiveTab = (next: string) =>
+    setSearchParams((params) => {
+      params.set('view', next);
+
+      return params;
+    });
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Make the default view explicit in the URL so the query is shareable and so
+  // MemoryPage can derive the map's hasLocation scope from `?view=map`.
+  useEffect(() => {
+    if (!searchParams.get('view')) {
+      setSearchParams(
+        (params) => {
+          params.set('view', 'map');
+
+          return params;
+        },
+        { replace: true },
+      );
+    }
+  }, [searchParams, setSearchParams]);
 
   const { data: savedSearchData } = useQuery(GET_SAVED_SEARCH, {
     variables: { id: GlobalUID.encode('saved-search', searchId!) },

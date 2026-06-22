@@ -93,6 +93,15 @@ const SEARCH_QUERY = gql(`
 
           ... on EventType {
             bucketStartTime: startTime
+            # Coordinates for the map. Events carry a PostGIS Point in
+            # locationCoordinates (GeoJSON [lng, lat]) even with no resolved
+            # location PlaceType; aliased + unmasked so the map can read it
+            # without unmasking the card fragment.
+            mapCoordinates: locationCoordinates
+          }
+
+          ... on PlaceType {
+            mapProperties: properties
           }
         }
       }

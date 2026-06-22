@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { Portal } from '@ci/common';
 import { Breadcrumb, Tabs, Sheet } from '@ci/shadcn';
 import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 
@@ -22,10 +22,33 @@ import { MobileMapView } from './MapView';
 
 export default function MobileMemoryPage() {
   const [{ activeEntity }, { setActiveEntity }] = useEntityService();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState('list');
+  // The active view lives in the URL (`?view=`) so a query is shareable and
+  // restores in the same view; list is the mobile default.
+  const activeTab = searchParams.get('view') ?? 'list';
+  const setActiveTab = (next: string) =>
+    setSearchParams((params) => {
+      params.set('view', next);
+
+      return params;
+    });
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Reflect the default view in the URL so the query is shareable/restorable.
+  useEffect(() => {
+    if (!searchParams.get('view')) {
+      setSearchParams(
+        (params) => {
+          params.set('view', 'list');
+
+          return params;
+        },
+        { replace: true },
+      );
+    }
+  }, [searchParams, setSearchParams]);
 
   const toggleactiveEntity = (active: boolean) => {
     if (!active) {
