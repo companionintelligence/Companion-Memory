@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@ci/shadcn';
 import { Loader2, MapPin, Search as SearchIcon, X } from '@ci/shadcn/icons';
-import L from 'leaflet';
+import L, { type LatLngExpression } from 'leaflet';
 import { Marker as LeafletMarker, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 import { useSearchParams } from 'react-router-dom';
 
@@ -83,8 +83,51 @@ function entityTime(entity: EntityItem): number {
 
 type LocatedEntity = { entity: EntityItem; coords: { lat: number; lng: number } };
 
+/**
+ * Scope `?hasLocation=1` to the map tab. The EntityServiceProvider is shared by
+ * every view, so the map can't pass its own query variables — it steers the
+ * shared query through the URL instead. Without this, the default result set is
+ * dominated by un-located rows (browser activity, communications, …): a page of
+ * 30 can yield 0 pins, so "Load more pins" pages in results yet adds nothing
+ * ("Load more pins (0 shown)"). Requesting hasLocation:true makes every fetched
+ * page entities that actually drop a pin. The flag is cleared on unmount so the
+ * list/gallery/graph views still see every entity.
+ *
+ * NB: the server routes hasLocation (and bbox) through its event filter, so the
+ * map is an events-only surface — hence the "Search events in this area" control.
+ */
+function useMapHasLocationScope() {
+  const [, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    setSearchParams(
+      (params) => {
+        if (params.get('hasLocation') !== '1') {
+          params.set('hasLocation', '1');
+        }
+
+        return params;
+      },
+      { replace: true },
+    );
+
+    return () => {
+      setSearchParams(
+        (params) => {
+          params.delete('hasLocation');
+
+          return params;
+        },
+        { replace: true },
+      );
+    };
+  }, [setSearchParams]);
+}
+
 function useLocatedEntities() {
   const [{ data, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
+
+  useMapHasLocationScope();
 
   const located = useMemo<LocatedEntity[]>(() => {
     return data
@@ -93,7 +136,16 @@ function useLocatedEntities() {
       .sort((a, b) => entityTime(a.entity) - entityTime(b.entity));
   }, [data]);
 
-  return { located, setActiveEntity, hasNextPage, loadingMore, loadMore };
+  // Route polyline input: each located entity's own coordinates, in visit-time
+  // order (`located` is already time-sorted). Driving routes from these points —
+  // rather than the markers Leaflet has on the map — keeps cluster centroids out
+  // of the path and orders segments by time instead of latitude.
+  const routeLocations = useMemo<LatLngExpression[]>(
+    () => located.map((item) => [item.coords.lat, item.coords.lng]),
+    [located],
+  );
+
+  return { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore };
 }
 
 // ── Marker clustering ───────────────────────────────────────────────────────
@@ -232,9 +284,13 @@ function ClusteredMarkers({
   );
 }
 
-// ── "Search this area" viewport filter ──────────────────────────────────────
+// ── "Search events in this area" viewport filter ─────────────────────────────
 // Writes the current Leaflet viewport to the `?bbox` URL param, which flows
-// through MemoryPage into the Search query (server-side ST_Within filter).
+// through MemoryPage into the Search query (server-side ST_Within filter). The
+// server applies bbox through its event filter, so — like the map's
+// hasLocation:true scope (useMapHasLocationScope) — it narrows to events within
+// the box; the control is labelled "Search events in this area" to make that
+// scope explicit rather than silently dropping non-event pins.
 // Panning fully away from the searched area drops the filter again.
 function SearchAreaControl() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -292,7 +348,7 @@ function SearchAreaControl() {
           className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
         >
           <SearchIcon className="mr-1 h-4 w-4" />
-          Search this area
+          Search events in this area
         </Button>
       )}
 
@@ -312,13 +368,14 @@ function SearchAreaControl() {
 }
 
 // ── "Load more pins" control ────────────────────────────────────────────────
-// The timeline panel's IntersectionObserver only pages in more results when its
-// own cards scroll into view. Places (and other located-but-untimed entities)
-// render no timeline card, so a Places-dominated result set leaves the panel too
-// short to ever trip that sentinel — capping the map at the first page even
-// though more located entities exist server-side. This explicit control pages in
-// more results independently of the timeline, mirroring mobile's
-// LoadMorePinsControl.
+// Desktop's timeline panel pages in more results via an IntersectionObserver,
+// but only when its own cards scroll into view. Located-but-untimed entities
+// render no timeline card, so a result set short on timeline cards leaves the
+// panel too short to ever trip that sentinel — capping the map at the first page
+// even though more located entities exist server-side. Mobile has no timeline
+// panel at all, so without this it is hard-capped at page 1. This explicit
+// control pages in more results independently of the timeline; both the desktop
+// and mobile map views render it.
 function LoadMorePinsControl({
   shown,
   hasNextPage,
@@ -361,7 +418,8 @@ function LoadMorePinsControl({
 }
 
 export function DesktopMapView() {
-  const { located, setActiveEntity, hasNextPage, loadingMore, loadMore } = useLocatedEntities();
+  const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
+    useLocatedEntities();
 
   return (
     // TODO: This default leads to some map jittering. It's OK for now, but let's think about tracking the user's last location and use that for the default center.
@@ -379,20 +437,27 @@ export function DesktopMapView() {
         loadingMore={loadingMore}
         onLoadMore={loadMore}
       />
-      <Map.RouteLayer />
+      <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
     </Map>
   );
 }
 
 export function MobileMapView() {
-  const { located, setActiveEntity } = useLocatedEntities();
+  const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
+    useLocatedEntities();
 
   return (
     <Map center={[37.7749, -122.4194]}>
       <Map.Controls position="bottom-right" />
       <SearchAreaControl />
-      <Map.RouteLayer />
+      <LoadMorePinsControl
+        shown={located.length}
+        hasNextPage={hasNextPage}
+        loadingMore={loadingMore}
+        onLoadMore={loadMore}
+      />
+      <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
     </Map>
   );
