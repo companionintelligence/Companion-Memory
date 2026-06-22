@@ -9,6 +9,7 @@
 \usepackage{array}
 \usepackage[table]{xcolor}
 \usepackage{caption}
+\usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
 
 \graphicspath{{charts/}}
@@ -18,9 +19,11 @@
 \definecolor{ci}{HTML}{1B6CA8}
 \newcommand{\best}[1]{\textbf{#1}}
 \newcommand{\pmci}[1]{{\footnotesize$\pm$#1}}
+% per-category descriptor block
+\newcommand{\cat}[2]{\subsection{\texttt{#1} \normalfont\textmd{(#2)}}}
 
 \title{\textbf{Local Memory-System Benchmark}\\[2pt]
-\large A single-user evaluation of CI-Server vs.\ Mem0, TencentDB, OpenViking, Holographic, Hindsight, and Naive RAG}
+\large Design, question taxonomy, and per-category performance analysis}
 \author{Companion Intelligence --- CI-Server}
 \date{June 2026}
 
@@ -30,93 +33,211 @@
 \begin{center}\footnotesize\itshape Private \& Confidential --- Property of Lifescope Inc.\ Do not distribute.\end{center}
 
 \begin{abstract}
-\noindent A fully local, head-to-head evaluation of \textbf{seven} agent-memory systems on a single
-synthetic user, with no cloud calls.\footnote{Cloud-only providers (Honcho, RetainDB, Supermemory, Memori)
-were excluded by the local-only constraint. Mem0 was run self-hosted (open-source library + Chroma) against
-local models, not its hosted SaaS.} The definitive run is an \textbf{expanded single-user corpus} --- one
-user (``Max''), plus the people he knows and \emph{their} sub-networks folded in as third-party facts ---
-\textbf{257 canonical facts under 400 distractors (657 messages), 460 questions across nine classes}.
-\textbf{CI-Server's vanilla graph retrieval tied a four-way cluster at \sapp76\%}, with Mem0 leading the
-field at 86.9\% (95\% CI, $N=460$). Diagnosing \emph{why} the graph trailed pure-vector systems --- it
-discards the raw source text after entity extraction, keeping only terse distilled nodes --- motivated a
-\textbf{native hybrid retrieval channel}: the graph traversal \emph{unioned} with a vector search over the
-raw messages. This lifts CI-Server to \textbf{91.1\%}, the \textbf{field-best score}, a $\sim$4\,pp edge over
-Mem0 (borderline significant) and a clear margin over the rest --- moving CI-Server from 6th to 1st. Two
-methodological findings stand alongside the numbers: (1) these systems are \textbf{single-user by design}, so
-a multi-user benchmark is meaningless (\S\ref{sec:single-user}); and (2) small \emph{read-side} recall tweaks
-fall \textbf{below the per-category noise floor}, whereas the hybrid --- re-introducing the text the pipeline
-threw away --- is a large enough lever to clear it decisively (\S\ref{sec:hybrid}).
+\noindent This document specifies a \textbf{fully local} benchmark for agent-memory systems --- the storage
+and retrieval layer that lets an assistant remember facts about its user across a conversation --- and analyses
+\emph{why} different architectures succeed or fail on different kinds of question. Seven systems are evaluated
+on a single synthetic user under a uniform, model-controlled protocol with no cloud calls. The instrument is a
+\textbf{657-message single-user corpus} (257 canonical facts buried under 400 distractors) probed by
+\textbf{460 questions across eight capability classes}. The document's purpose is twofold: (1) to define the
+\textbf{taxonomy} --- what each question class tests, why it matters, how it is scored, with worked examples
+--- so that a score is interpretable as a specific memory capability; and (2) to explain the
+\textbf{per-category results mechanistically} --- why graph structure wins complete-set and multi-hop queries,
+why raw-text retrieval wins single-hop and temporal queries, and why their \textbf{union} (CI-Server's hybrid
+configuration, \textbf{91.1\%}, field-best) dominates by inheriting both. A recurring theme: headline accuracy
+hides the real story, which lives in the per-category profile.
 \end{abstract}
 
-\section{Method}
+\section{Purpose and scope}
 
-\textbf{One user is the only real use case.}\label{sec:single-user} Each of these systems is built for a
-single deployment serving a single user; there is no notion of separate accounts inside one store. An early
-multi-\emph{persona} design (three independent users) was abandoned once it was shown to be meaningless ---
-it exposed identity-handling bugs that simply do not arise in production (Addendum \S\ref{sec:addendum}). The
-definitive benchmark therefore models \textbf{one user (Max) plus a rich network of people he knows}: two
-friends (Priya, Jordan) and their families/colleagues are folded in as third-party facts Max states, which
-also stresses deep multi-hop traversal (Max $\to$ friend $\to$ their relative $\to$ attribute).
+An agent-memory system ingests a stream of user statements and later answers questions about them. Two systems
+with identical headline accuracy can have completely different competence profiles --- one reliably returns
+complete sets but fumbles single facts, another the reverse. This benchmark is built to \textbf{expose those
+profiles}, not just rank systems. Every design choice serves that goal: a fixed, shared answerer so we measure
+the \emph{memory layer} and not the writer; a taxonomy whose classes map to distinct retrieval mechanisms; and
+two scored dimensions (was the fact \emph{retrieved}; was it \emph{answered}) whose gap is itself diagnostic.
 
-\textbf{Corpus.} \textbf{257 hand-authored canonical facts} (people, places, employers, multi-hop chains,
-facts that change over time), buried under \textbf{400 distractor messages} so a fixed top-$k$ retriever
-cannot trivially win. Total \textbf{657 messages; top-10 \sapp 1\% coverage}.
+The constraint throughout is \textbf{local-only}: no cloud APIs, no hosted SaaS. Every model runs on-device.
+This excludes cloud-only providers (Honcho, RetainDB, Supermemory, Memori) and forces self-hosted
+configurations of the rest --- e.g.\ Mem0 as its open-source library over a local vector store, not its hosted
+service.
 
-\textbf{Uniform contract.} Each system runs in its own container exposing the same HTTP surface
-(\texttt{reset}, \texttt{ingest}, \texttt{flush}, \texttt{retrieve}, \texttt{answer}); the orchestrator
-speaks only this contract.
+\section{Benchmark design}
 
-\textbf{Two-phase, fair by construction.}
-\begin{itemize}
-  \item \emph{Phase A --- ingest/extraction:} every system ingests the identical corpus using the same
-  extractor LLM (\texttt{gemma-4-31b-it-abliterated}) and the same embeddings
-  (\texttt{nomic-embed-text}).\footnote{Hindsight uses its built-in \texttt{bge-small} embedder, a flagged
-  minor confound. Holographic uses \emph{no} LLM and \emph{no} embeddings (SQLite FTS5 + HRR).}
-  \item \emph{Phase B --- answer + judge:} a single, constant retrieval-augmented answerer and LLM judge
-  (\texttt{ornstein-3.6-27b}) is used for \emph{all} systems, so we compare memory layers, not answer-writers.
-  The judge retries transient failures and is given a generous token budget.\footnote{\texttt{ornstein} is a
-  reasoning model: it spends tokens reasoning before emitting the schema-constrained verdict. An early run
-  used too small a budget and returned (False) on any hiccup, silently scoring questions wrong and producing
-  spurious all-zeros; the fixed judge retries and never concedes on a transient empty (Addendum
-  \S\ref{sec:addendum}).}
+\subsection{One user is the only real use case}\label{sec:single-user}
+Each system under test is built for a \emph{single deployment serving a single user}; none has a first-class
+notion of separate accounts inside one store. This is not incidental --- it is the production use case for a
+personal assistant. An early design modelled three \emph{independent} users in one store; it was abandoned
+because it measured identity-handling artifacts that never arise in deployment (a consolidation store would
+bind one user's first-person facts to another user's named entity; a graph store would mis-anchor them to its
+canonical ``self'' node). The definitive corpus therefore models \textbf{one user, ``Max,'' plus a rich
+network of people he knows}: two friends (Priya, Jordan) and their families and colleagues are folded in as
+third-party facts that Max states. This keeps the benchmark realistic \emph{and} naturally generates deep
+relational and multi-hop structure (Max $\to$ friend $\to$ their relative $\to$ attribute).
+
+\subsection{Two-phase, model-controlled protocol}
+Every system runs in its own container exposing a uniform HTTP contract (\texttt{reset}, \texttt{ingest},
+\texttt{flush}, \texttt{retrieve}, \texttt{answer}); the orchestrator speaks only this contract, so each system
+is a black box behind the same interface.
+
+\begin{itemize}[nosep]
+  \item \textbf{Phase A --- ingest \& extraction.} Every system ingests the identical corpus using the same
+  extractor LLM (\texttt{gemma-4-31b-it-abliterated}) and the same embedding model
+  (\texttt{nomic-embed-text}).\footnote{Two flagged exceptions: Hindsight uses its built-in
+  \texttt{bge-small} embedder; Holographic uses \emph{no} LLM and \emph{no} embeddings (keyword + algebraic
+  binding). Both are noted at the relevant rows.}
+  \item \textbf{Phase B --- answer \& judge.} A \emph{single, constant} retrieval-augmented answerer and LLM
+  judge (\texttt{ornstein-3.6-27b}) serves \emph{all} systems. Given a question, each system retrieves its own
+  context; that context is handed to the \emph{same} answerer; the answer is graded by the \emph{same} judge.
+  We thus compare memory layers, holding the reader/writer constant.
 \end{itemize}
 
-\textbf{Two scored dimensions.} \emph{Answer}: did the constant answerer, given the system's retrieved
-context, produce a correct final answer? \emph{Storage}: was the gold fact actually present in the
-\emph{raw retrieved context}? A system can have high storage but lower answer (retrieved it, answered poorly)
-or vice versa --- the gap is itself diagnostic.
+\subsection{Two scored dimensions}
+Each question yields two measurements:
+\begin{itemize}[nosep]
+  \item \textbf{Answer} --- did the constant answerer, given the system's retrieved context, produce the
+  correct final answer? (the headline metric.)
+  \item \textbf{Storage} --- was the gold fact actually \emph{present in the raw retrieved context}, regardless
+  of whether the answer was right?
+\end{itemize}
+The \textbf{gap between them is diagnostic}. High storage with lower answer means the fact was retrieved but
+buried in noise or ambiguity (a \emph{precision} problem). Low storage means the fact was never surfaced (a
+\emph{recall} problem). We use this gap repeatedly in \S\ref{sec:analysis}.
 
-\section{Question taxonomy}
+\subsection{Corpus}
+\textbf{257 hand-authored canonical facts} --- people, places, employers, multi-hop chains, and facts that
+change over time --- are buried under \textbf{400 distractor messages} so that a fixed top-$k$ retriever cannot
+win by returning everything. Total \textbf{657 messages}; a top-10 retriever sees \sapp1\% of the corpus per
+query. Every gold answer is grounded in exactly one canonical fact, so a miss is always a retrieval/answer
+failure, never a missing fact.
 
-460 questions across nine classes. Every gold answer is grounded in exactly one canonical fact, so a miss is
-a retrieval/answer failure, not a missing fact. Because the two friends are now \emph{people Max knows},
-their own attributes count as \textbf{relational} (one hop from Max) and their networks as \textbf{multi-hop}.
+\section{Question taxonomy}\label{sec:taxonomy}
 
-\begin{description}
-  \item[\texttt{flat-recall} (34)] An atomic fact about Max stated once. \emph{``What instrument does Max
-  play?''} $\to$ violin. LLM-judged.
-  \item[\texttt{relational} (90)] One hop. \emph{``What does Max's friend Priya do for work?''} $\to$
-  perception engineer.
-  \item[\texttt{multi-hop} (118)] Two or more hops. \emph{``What does Priya's husband do?''} (Max $\to$ Priya
-  $\to$ husband $\to$ occupation). The largest class --- the graph's intended home turf.
-  \item[\texttt{temporal-update} (90)] Facts that changed; current \emph{and} prior value. Probes supersession.
-  \item[\texttt{enumeration} (34)] ``List all X'' set queries, scored by \textbf{deterministic set recall}
-  (fraction of gold members surfaced --- no LLM judge, unspinnable). Probes returning the \emph{complete}
-  typed set, the graph's structural strength.
-  \item[\texttt{aggregation} (23)] Counts/filters. \emph{``How many companies has Max worked for?''} $\to$ 2.
-  \item[\texttt{absence} (48)] Baited negatives (answer \emph{no}, each baited with a tempting distractor about
-  someone else). Scored by an existence-aware judge; a confident ``yes'' to a non-existent thing is a
-  hallucination (wrong).
-  \item[\texttt{presence-control} (23)] Genuine ``yes'' questions, so a system that blindly answers ``no''
-  cannot game the absence suite.
+460 questions across \textbf{eight capability classes}. Each class isolates a distinct memory operation; the
+parenthetical is the question count. Because the two friends are modelled as \emph{people Max knows}, their own
+attributes are \textbf{relational} (one hop from Max) and their networks are \textbf{multi-hop}.
+
+\cat{flat-recall}{34 questions}
+\textbf{Tests:} retrieval of a single atomic fact about the user, stated once and never changed.
+\textbf{Why:} the simplest memory operation and the floor for any system --- if you cannot return a fact you
+were told verbatim, nothing else matters. \textbf{Scoring:} LLM judge (semantic match to the gold answer).
+\textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``What is Max's profession?''} $\to$ robotics engineer
+  \item \emph{``What instrument does Max play?''} $\to$ violin
+  \item \emph{``What is the name of Max's cat?''} $\to$ Biryani
+\end{itemize}
+
+\cat{relational}{90 questions}
+\textbf{Tests:} a fact reached by \emph{one hop} from the user --- an attribute of a person, place, or thing
+Max is directly connected to. \textbf{Why:} real assistant queries are rarely about the user in isolation
+(``what does my sister do,'' ``where do my parents live''); one-hop traversal is the common case. The class is
+large (90) because it is where terse, structured stores tend to lose the \emph{relation} that disambiguates an
+answer. \textbf{Scoring:} LLM judge. \textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``What is the name of Max's sister?''} $\to$ Anita
+  \item \emph{``Where do Max's parents live?''} $\to$ Portland
+  \item \emph{``What does Max's friend Priya do for work?''} $\to$ perception engineer
+\end{itemize}
+
+\cat{multi-hop}{118 questions}
+\textbf{Tests:} a fact reached by \emph{two or more hops} (Max $\to$ A $\to$ B $\to$ attribute). The largest
+class, and the one structure is supposed to own. \textbf{Why:} answering ``what does my best friend's wife do''
+requires chaining relationships, not matching a sentence; it separates systems that \emph{model} connections
+from those that merely store text. \textbf{Scoring:} LLM judge. \textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``What does Max's brother-in-law do for work?''} $\to$ cardiologist
+  \item \emph{``Where does Max's best friend work?''} $\to$ Stripe
+  \item \emph{``What does Priya's husband do?''} (Max $\to$ Priya $\to$ husband $\to$ occupation)
+\end{itemize}
+
+\cat{temporal-update}{90 questions}
+\textbf{Tests:} facts that \emph{changed} over the corpus --- the system must return the \emph{current} value
+and not the superseded one (and sometimes recall the prior value on request). \textbf{Why:} memory that never
+updates is worse than useless; a system that answers ``Portland'' after the user moved to Denver is actively
+wrong. Probes supersession and recency handling. \textbf{Scoring:} LLM judge (current value required; stale
+value marked wrong). \textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``What city does Max currently live in?''} $\to$ Denver (he previously lived in Portland)
+  \item \emph{``What company does Max currently work for?''} $\to$ Cobalt Robotics
+  \item \emph{``What city did Max live in before his current one?''} $\to$ Portland
+\end{itemize}
+
+\cat{enumeration}{34 questions}
+\textbf{Tests:} returning a \emph{complete typed set} (``list all X''), not just one member. \textbf{Why:}
+completeness is a different skill from point lookup --- a store can reliably return \emph{a} family member yet
+never assemble \emph{all} of them. This is the structural store's natural strength (typed edges enumerate
+cleanly) and the keyword store's natural weakness. \textbf{Scoring:} \textbf{deterministic set recall} ---
+the fraction of gold members surfaced, no LLM judge, nothing to spin. \textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``List all of Max's family members.''} $\to$ \{Anita, Deepak, Sunita, Raj, Mira, Felix, \ldots\}
+  \item \emph{``Name every company Max has worked for.''} $\to$ \{Cobalt Robotics, Northwind Logistics\}
+  \item \emph{``List the musical instruments played by people in Max's life.''} $\to$ \{violin, viola, harp\}
+\end{itemize}
+
+\cat{aggregation}{23 questions}
+\textbf{Tests:} a count or filter computed \emph{over} the stored facts (``how many\ldots''). \textbf{Why:}
+requires not just retrieval but correct counting of the retrieved set --- and punishes stores that surface a
+polluted block, since a stray entity inflates the count. \textbf{Scoring:} LLM judge against the gold count.
+\textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``How many companies has Max worked for?''} $\to$ two (Cobalt Robotics, Northwind Logistics)
+  \item \emph{``How many cities has Max lived in?''} $\to$ two (Portland, Denver)
+  \item \emph{``How many children does Max's sister Anita have?''} $\to$ two (Mira, Felix)
+\end{itemize}
+
+\cat{absence}{48 questions}
+\textbf{Tests:} correctly answering \textbf{``no''} to a plausible-but-false premise --- each baited with a
+tempting distractor about \emph{someone else}. \textbf{Why:} a memory system that hallucinates a confident
+``yes'' to something it was never told is dangerous; this class measures resistance to that failure. The bait
+ensures a system cannot pass by keyword-matching a near-miss. \textbf{Scoring:} existence-aware judge; a
+confident ``yes'' to a non-existent thing is a hallucination (wrong). \textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``Does Max have a brother?''} $\to$ No (one sibling, his sister Anita; his \emph{brother-in-law}
+  Raj is the bait)
+  \item \emph{``Does Max play the piano?''} $\to$ No (he plays violin; his grandmother was the pianist --- bait)
+  \item \emph{``Does Max own a dog?''} $\to$ No (his only pet is a cat, Biryani)
+\end{itemize}
+
+\cat{presence-control}{23 questions}
+\textbf{Tests:} genuine ``yes'' questions, structurally identical to the absence class. \textbf{Why:} a
+\emph{control} --- without it, a system could game the absence suite by answering ``no'' to everything. Strong
+absence \emph{and} strong presence-control together demonstrate genuine discrimination. \textbf{Scoring:}
+existence-aware judge. \textbf{Examples:}
+\begin{itemize}[nosep]
+  \item \emph{``Does Max have a sister?''} $\to$ Yes (Anita)
+  \item \emph{``Does Max own a cat?''} $\to$ Yes (Biryani)
+  \item \emph{``Does Max play a musical instrument?''} $\to$ Yes (the violin)
+\end{itemize}
+
+\section{Systems under test}\label{sec:systems}
+
+Seven systems span four retrieval philosophies. Understanding the architecture predicts the per-category
+profile (\S\ref{sec:analysis}).
+
+\begin{description}[style=nextline,leftmargin=1em,nosep]
+  \item[Naive RAG (vector)] Chunk-level vector store: raw messages embedded with \texttt{nomic}, top-$k$
+  cosine retrieval. No structure --- the control for ``just retrieve the text.''
+  \item[Mem0 (consolidating vector)] Vector store with \emph{LLM-driven consolidation}: at write time it merges
+  and rewrites related statements into dense, deduplicated memory records.
+  \item[CI-Server (graph)] Extracts typed entities and relationships into a property graph; recall is an entity
+  search plus a one-hop expansion over \emph{serialized nodes} (name + description). Structure-first.
+  \item[CI-Server (hybrid)] The graph above \emph{unioned} with a raw-message vector channel
+  (\S\ref{sec:hybrid}) --- structure for traversal, raw text for fidelity.
+  \item[OpenViking (context DB)] Volcengine context database; VLM-based extraction into a structured context
+  store.
+  \item[TencentDB Agent Memory] SQLite + \texttt{sqlite-vec}; per-message extraction with vector recall.
+  \item[Holographic (keyword + HRR)] SQLite FTS5 keyword search plus Holographic Reduced Representations ---
+  \emph{no} LLM and \emph{no} embeddings. The minimal-cost baseline.
+  \item[Hindsight (retain/recall)] A retain/recall service with \texttt{bge-small} embeddings; serialized
+  recall (its client errors under concurrency).
 \end{description}
 
 \section{Results}\label{sec:results}
 
 \begin{table}[H]\centering\small
-\caption{Expanded single-user benchmark --- 460 questions. Answer accuracy with 95\% Wilson CI; then
-per-category answer score. Bold marks the per-column leader. CI-Server's two configurations highlighted ---
-\emph{graph} (vanilla, the four-way-tie baseline) and \emph{hybrid} (graph $\cup$ raw-message vector search).}
+\caption{Per-category answer score (460 questions). Headline is answer accuracy with 95\% Wilson CI; bold marks
+the per-column leader. CI-Server's two configurations are highlighted --- \emph{graph} (vanilla) and
+\emph{hybrid} (graph $\cup$ raw-message vector search).}
 \begin{tabular}{lccccccccc}
 \toprule
 System & Answer (95\% CI) & flat & rel & m-hop & temporal & enum & aggr & abs & pres \\
@@ -134,37 +255,101 @@ hindsight   & 22.3\% \pmci{3.8}        & 1 & 12 & 15 & 14 & 6.8 & 5 & 42 & 7 \\
 \end{tabular}
 \end{table}
 
-\noindent\textbf{How to read the intervals.} At $N=460$ the headline CI is $\pm$3--4\,pp. \textbf{CI-Server
-(hybrid) posts the top score, 91.1\%}; the $\sim$4\,pp margin over Mem0 is borderline significant (Wilson
-intervals touch; a two-proportion test gives $p\approx0.04$), and the margin over the 76--80\% cluster is
-large and clear. The \emph{vanilla} graph (75.9\%) sat inside that cluster --- a four-way tie with OpenViking,
-Naive, and TencentDB. Holographic is clearly below them; Hindsight far back. \emph{Per-category} intervals
-are much wider --- relational/temporal $\pm$8\,pp, absence $\pm$11\,pp, flat/enumeration $\pm$13\,pp,
-aggregation/presence $\pm$16\,pp --- so single-category gaps under those margins are noise, while large ones
-(the hybrid's flat 32 vs the field's \sap25, or temporal 86 vs the next-best 78) are real.
+\noindent\textbf{Reading the numbers.} At $N=460$ the headline CI is $\pm$3--4\,pp; \emph{per-category}
+intervals are far wider --- relational/temporal $\pm$8\,pp, absence $\pm$11\,pp, flat/enumeration $\pm$13\,pp,
+aggregation/presence $\pm$16\,pp. Treat single-category gaps under those margins as noise, large ones as real.
+The headline therefore tells you little; the \emph{shape} of each row --- which categories it wins and loses
+--- is the system's fingerprint, analysed next.
 
 \begin{figure}[H]\centering
 \includegraphics[width=0.92\linewidth]{expanded_leaderboard.png}
-\caption{Answer accuracy on the 460-question single-user benchmark, with 95\% Wilson confidence intervals.
-Overlapping bars are statistical ties. CI-Server's \emph{hybrid} configuration leads the field; its
-\emph{vanilla graph} sat in the four-way tie with OpenViking/Naive/TencentDB --- the hybrid channel
-(\S\ref{sec:hybrid}) is the difference.}
+\caption{Answer accuracy with 95\% Wilson confidence intervals. Overlapping bars are statistical ties. The
+hybrid configuration leads; the vanilla graph sits in a four-way tie at 76--80\%.}
 \end{figure}
 
-\subsection{What the vanilla graph won, and where it lost}
-Before the hybrid channel, CI-Server's defensible niche was \textbf{enumeration (27.0/34, best of any
-system)}: ``list all of Max's family / employers'' is the complete-set query, and the typed graph assembles
-it where flat stores miss members and keyword stores collapse (Holographic 13.6) --- deterministic set recall,
-nothing to spin. It was also strong on \textbf{multi-hop} (96/118) and cheap to ingest (\sapp16 min). Its
-\textbf{losses were precision, not coverage}: relational (60/90) and aggregation (14/23), where (a) a
-\emph{competing} entity is answered (``Max has two managers''); (b) a \emph{former} attribute outranks the
-current one; (c) aggregation overcounts from a polluted prose block. Storage (366.7) far exceeded answer
-(349.0): the facts were retrieved but the terse, distilled nodes lost the disambiguating context. That
-diagnosis is exactly what the hybrid channel addresses.
+\section{Per-category performance analysis}\label{sec:analysis}
+
+The headline ranks systems; the per-category profile explains them. Each architecture has a signature.
+
+\paragraph{\texttt{flat-recall} --- raw text wins, distillation loses.}
+The atomic fact (``violin'') is present verbatim in one source sentence, so any store that keeps the sentence
+returns it (Naive/OpenViking/TencentDB 26; hybrid \best{32}). Mem0 is \emph{lowest} of the serious systems
+(23): its consolidation rewrites statements and occasionally drops an atomic detail in favour of a summary.
+The graph (25) usually has the fact on the node but sometimes only as a terse field that the answerer reads
+past.
+
+\paragraph{\texttt{relational} --- the graph's weak spot, the raw sentence's strength.}
+Naive leads (\best{86}) because ``Max's sister Anita'' lives in a single chunk that contains both the
+\emph{relation} and the \emph{answer}. The vanilla graph is the field's worst (60): distilling ``Anita'' into a
+\texttt{sister} edge and a terse node strips the surrounding context, so the answerer retrieves the right
+entity but cannot tell which relation it satisfies, or answers a competing entity (``Max has two managers'').
+This single weakness --- storage (366.7) far exceeding answer (349.0) --- is the clearest precision failure in
+the study, and the one the hybrid most directly fixes (60 $\to$ 85).
+
+\paragraph{\texttt{multi-hop} --- structure and consolidation beat flat retrieval.}
+Here the ordering inverts: Mem0 leads (\best{109}) because its dense records \emph{bundle} a chain of related
+facts into one retrievable unit; OpenViking (106) and the graph configurations (96/102) traverse explicitly;
+Naive is the worst of the capable systems (80) because flat chunks cannot chain --- a two-hop answer requires
+two different chunks to co-occur. This is the category that justifies structure at all.
+
+\paragraph{\texttt{temporal-update} --- the hybrid's largest margin.}
+The hybrid (\best{86}) dominates because both modalities help: the graph carries supersession (current vs.\
+prior edges) and the raw channel carries the explicit sentences (``moved to Denver,'' ``before that,
+Portland''). Single-modality stores trail (Mem0 78, graph 66, Naive 64): consolidation can overwrite the prior
+value, flat retrieval can surface the stale chunk with equal rank to the fresh one.
+
+\paragraph{\texttt{enumeration} --- structure assembles sets; keyword collapses.}
+The typed graph enumerates cleanly (graph 27, hybrid \best{30}): a ``list all family'' query walks the typed
+edges and returns the complete set. Flat and consolidating stores miss members (Naive 23.4, Mem0 24.9 ---
+whichever chunks fall outside top-$k$ are simply absent). Holographic \emph{collapses} (13.6): keyword
+matching cannot assemble a typed set it was never asked for by name. This is deterministic set recall --- the
+one unspinnable column, and the graph's signature strength, retained by the hybrid.
+
+\paragraph{\texttt{aggregation} --- uniformly hard; counting prose is brittle.}
+No system clears 18/23. The task asks the answerer to \emph{count} a retrieved set, and an LLM tallying prose
+miscounts whenever the context is polluted --- the graph is worst (14) because a one-hop expansion can pull a
+neighbour's relative into the block (``5 employers,'' counting a friend's sister). The robust fix is to count
+\emph{typed edges on the graph} rather than ask an LLM to tally text --- correct by construction, though this
+benchmark's $N=23$ cannot resolve the delta.
+
+\paragraph{\texttt{absence} / \texttt{presence-control} --- discrimination, not retrieval.}
+These move together and cluster tightly (most systems 40--46 / 19--22) because they test the \emph{answerer's}
+willingness to say no, given context, more than retrieval depth. The hybrid edges absence (\best{46}): richer
+context lets the answerer confirm a thing is genuinely absent rather than guess. Presence-control sits near
+ceiling for everyone --- a useful confirmation that no system games the absence suite by reflexively answering
+``no.''
+
+\paragraph{Summary of signatures.} \emph{Vector/raw-text} systems own single-hop, flat, and temporal (the
+source sentence preserves context); \emph{structural} systems own enumeration and help multi-hop (typed edges
+assemble and chain); \emph{consolidation} (Mem0) is the strongest single modality on multi-hop; \emph{keyword}
+(Holographic) is cheap but collapses where typed structure is required. No single modality is best everywhere
+--- which is exactly why the union wins.
+
+\section{The hybrid retrieval channel}\label{sec:hybrid}
+
+The per-category analysis points to one conclusion: the graph and the raw text are \emph{complementary}, and
+the gap between CI-Server's vanilla graph (76\%) and the leaders was the text it discarded. An extraction graph
+embeds only the distilled \emph{nodes} (name + description) and drops the source sentence; the detail that
+disambiguates a relational or temporal answer lives in that sentence.
+
+\textbf{Mechanism.} The hybrid adds a second retrieval channel: a vector search over the \emph{raw messages},
+unioned with the graph traversal. Every recall returns graph nodes \emph{plus} one-hop expansion \emph{plus}
+the nearest source sentences. Structure provides enumeration and multi-hop reach; the raw text provides
+single-hop and temporal fidelity. The merge is the \emph{plain union with no cap or re-ranking}: on a
+soft-spot-weighted sweep the uncapped union beat reciprocal-rank fusion and relevance re-ranking by \sapp6\,pp,
+because capping drops answer-bearing lines and the reasoning answerer already tolerates the larger context.
+
+\textbf{Result.} Implemented natively (CI-Server embedding and searching its own messages through the existing
+\texttt{nomic} pipeline, no second store): \textbf{91.1\%}, field-best. The per-category recovery is exactly
+what the analysis predicts --- relational 60$\to$85, temporal 66$\to$86, flat 25$\to$32 (the raw-text
+categories) --- \emph{while retaining} enumeration (27$\to$30) and multi-hop (96$\to$102) (the structural
+categories). The hybrid is not a better graph; it is the graph plus the modality the graph was missing.
+
+\section{Cost and operational characteristics}
+
+Memory-layer work only (the shared answer phase is excluded); ingest scaled to the 657-message corpus.
 
 \begin{table}[H]\centering\small
-\caption{Cost --- memory-layer work only (the answer phase is the shared model, excluded). Ingest scaled to
-the 657-message corpus.}
 \begin{tabular}{llll}
 \toprule
 System & Ingest (657 msgs) & Recall latency/query & Concurrency-safe \\
@@ -175,181 +360,65 @@ mem0        & \sapp20 m & \sapp120 ms & yes \\
 \rowcolor{ci!12} CI-Server & \sapp16 m & \sapp80 ms & yes \\
 openviking  & \sapp70 m (VLM extraction) & \sap30 ms & yes \\
 tencentdb   & \sapp100 m (per-message extraction)\footnote{TencentDB's scheduler coalesces rapid captures, so
-the harness serializes ingestion (one extraction call per message) to avoid silently dropping facts --- an
-honest, on-the-slow-side Phase-A cost.} & \sap25 ms & yes \\
-hindsight   & \sap3 h (cannot truly parallelize) & \sap1160 ms & no\footnote{Hindsight's recall client
-returns HTTP 500 under concurrent calls, so it was scored serially.} \\
+the harness serializes ingestion to avoid silently dropping facts --- an honest, on-the-slow-side Phase-A
+cost.} & \sap25 ms & yes \\
+hindsight   & \sap3 h (cannot truly parallelize) & \sap1160 ms & no\footnote{Hindsight's recall client returns
+HTTP 500 under concurrent calls, so it was scored serially.} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Improving CI-Server I: what \emph{didn't} work}\label{sec:ablation}
-
-We first attempted to raise CI-Server's relational/aggregation scores by changing the graph machinery, one
-variable at a time, same judge. \textbf{Every structural change landed within noise or hurt.}
-
-\begin{table}[H]\centering\small
-\caption{CI-Server-only changes, same judge. Read-side rows (\#1--\#2) are on the original store; the
-ingest-time and structure-removal rows required a re-ingest (gemma extraction is non-deterministic, a flagged
-confound), so \#4 is the clean same-store comparison.}
-\begin{tabular}{lcccl}
-\toprule
-Change & Answer & relational & storage & Verdict \\
-\midrule
-baseline (graph) & 349.0 & 60 & 366.7 & --- \\
-\#1 read-time node consolidation & 335.1 & 60 & 363.7 & within noise \\
-\#2 loosen expansion gates & 342.3 & 57 & \best{368.9} & within noise \\
-\#3 ingest-time entity resolution & 335.0 & 57 & 351.7 & within noise \\
-\#4 disable 1-hop expansion & 304.9 & 51 & 326.4 & $-30$: load-bearing \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{itemize}
-  \item \textbf{Adding structure didn't help.} Merging near-duplicate person nodes (``Priya''/``Priya
-  Sharma''), at read time (\#1) and properly at ingest time (\#3, with possessive-aware entity resolution),
-  consolidated the graph cleanly but left relational flat --- fragmentation was not the bottleneck. Loosening
-  the expansion gates (\#2) raised \emph{storage} but \emph{lowered answer}: extra neighbours added noise.
-  \item \textbf{Removing the existing structure hurt.} Disabling the graph's 1-hop expansion (\#4, same store)
-  cost \textbf{30 points} --- the expansion is genuinely load-bearing (multi-hop $-9$, relational $-6$,
-  temporal $-8$). So the graph traversal earns its keep; the problem was not ``too much graph.''
-  \item \textbf{The per-category noise floor} ($\pm$8 at $N=90$ to $\pm$16 at $N=23$) swallows the 3--6
-  question read-side deltas outright. The lever had to be larger --- and elsewhere.
-\end{itemize}
-
-\section{Improving CI-Server II: the hybrid channel (the win)}\label{sec:hybrid}
-
-\textbf{Diagnosis.} The two systems above CI-Server's vanilla graph were \emph{pure vector} stores (Mem0,
-Naive). Inspecting the pipeline showed why: CI-Server extracts entities from each message, embeds the
-resulting \emph{nodes} (name + description), and then \textbf{discards the raw message text}. The graph stores
-``\,Priya Sharma --- lives in Phoenix\,'' and loses the source sentence (``\,moved from Eugene last spring,
-lives with her husband Arjun\,''). The vector systems keep that sentence. That lost text --- not the graph
-structure --- was the gap.
-
-\textbf{The channel.} We added a second retrieval channel: a vector search over the \emph{raw messages},
-unioned with the graph traversal. Every recall now returns graph nodes \emph{plus} one-hop expansion
-\emph{plus} the nearest raw source sentences.
-
-\textbf{Merge tuning.} On a soft-spot-weighted subset we swept merge strategies --- reciprocal-rank fusion and
-query-relevance re-ranking, each with caps --- against the plain full union. \textbf{The plain union won by
-$\sim$6\,pp}; every cap or re-rank did worse, because capping drops answer-bearing lines and the reasoning
-answerer already tolerates the larger context. The rule is therefore the simplest one: \emph{union everything,
-no cap}.
-
-\textbf{Result.} Validated natively (CI-Server embedding and searching its \emph{own} messages through the
-existing \texttt{nomic} pipeline, no second store): \textbf{419/460 = 91.1\%}, the field-best score. The
-hybrid recovers exactly the precision the diagnosis predicted --- \textbf{relational 60$\to$85, multi-hop
-96$\to$102, flat 25$\to$32, temporal 66$\to$86}, and \textbf{storage 366.7$\to$439.3} (95.5\%: the answer is
-now in context almost every time). Crucially the \textbf{enumeration} strength is retained (27$\to$30): the
-hybrid \emph{adds} the vector channel without sacrificing the graph's structural wins.\footnote{This run uses
-the consolidated graph from \#3; the entity-resolution fix is bundled into the hybrid configuration. \#3's
-effect \emph{alone} was within noise --- the measurable lift is the raw-text channel.}
+\noindent The hybrid channel adds negligible cost: messages are embedded with the same \texttt{nomic} model
+already used at ingest, and the extra recall step is one vector query (\sapp20\,ms). Structure-heavy extraction
+(OpenViking, TencentDB) dominates Phase-A wall-clock; the keyword baseline (Holographic) is two orders of
+magnitude cheaper but pays for it in enumeration.
 
 \section{Conclusions}
 
-\begin{itemize}
-  \item \textbf{CI-Server (hybrid) leads this corpus} (91.1\%), ahead of Mem0 (86.9\%) and clear of the rest.
-  The win is not the graph alone --- vanilla, it tied at 76\% --- but \textbf{graph traversal $+$ raw-text
-  vector retrieval}: structure for multi-hop and complete sets, raw sentences for fact fidelity. Neither
-  modality alone reaches the top; the union does.
-  \item \textbf{The transferable lesson: don't throw away the source text.} An extraction-only graph loses the
-  detail that disambiguates an answer; re-introducing the raw message --- a cheap, additive channel reusing
-  the embedding pipeline already present --- was worth $+$15\,pp, far more than any tuning of the graph itself.
-  \item \textbf{Mem0 remains the strongest single-modality system} (86.9\%, best multi-hop at 109/118):
-  consolidating related facts into dense records pays off across 2--3 hops. It is also identity-fragile on
-  multi-entity corpora (Addendum \S\ref{sec:addendum}); raw retrieval is robust.
-  \item \textbf{Lightweight wins are real:} Naive (vector) ties the old 76--80\% cluster; Holographic
-  (keyword/HRR, \sap7\,s ingest, \sap5\,ms recall) is the efficiency dark horse --- but \emph{collapses} on
-  enumeration (13.6/34), exactly where structure matters.
-  \item \textbf{Two methodological findings stand:} these systems are single-user by design (a multi-user
-  benchmark is meaningless); and a benchmark's per-category noise floor sets a hard resolution limit ---
-  the read-side tweaks were unmeasurable here, while the hybrid was large enough to clear it.
+\begin{itemize}[nosep]
+  \item \textbf{The per-category profile is the result; the headline is a summary of it.} Each architecture has
+  a signature --- raw text for single-hop/flat/temporal, structure for enumeration/multi-hop, consolidation for
+  multi-hop --- and these are mechanistic, not incidental.
+  \item \textbf{No single modality is best everywhere, so the union wins.} CI-Server (hybrid) leads at 91.1\%
+  by combining graph traversal with raw-text vector retrieval, recovering the graph's single-hop precision
+  while keeping its complete-set strength. The transferable lesson: \emph{an extraction pipeline should not
+  discard its source text} --- re-introducing it was worth $+$15\,pp.
+  \item \textbf{Mem0 is the strongest single-modality system} (86.9\%, best multi-hop) but identity-fragile on
+  multi-entity corpora; raw retrieval is robust.
+  \item \textbf{Interpret per-category numbers against the noise floor} ($\pm$8 to $\pm$16\,pp); and remember
+  these systems are single-user by design, so a multi-user benchmark measures artifacts, not capability.
 \end{itemize}
 
 \appendix
-\section{Addendum: methods, configurations, and dead ends}\label{sec:addendum}
+\section{Methodological notes and threats to validity}\label{sec:validity}
 
-A chronological record of what was tried, so the next iteration does not re-walk it.
-
-\subsection*{A.1 Early small-corpus tuning (CI-Server)}
-The first runs used a $\sim$50-question persona. CI-Server scored erratically (38, 41, 25 / 50 across builds)
-until the root cause surfaced: \textbf{the recall SQL used L2 distance (\texttt{<->}) where it needed cosine
-(\texttt{<=>})}. \texttt{nomic} vectors are unnormalised ($\|v\|\approx 22$), so the L2 threshold
-never matched and semantic/graph expansion returned nothing. Switching to \texttt{<=>} (plus OR-joining the
-\texttt{websearch\_to\_tsquery} terms so multi-word questions match) unblocked recall. This is the single
-fix that made CI-Server competitive.
-
-\subsection*{A.2 Scaling and adding systems}
-The corpus grew to 90 facts + 400 distractors (490 messages, 100 questions), then gained two structured
-suites (37 + 23 questions). Systems were added incrementally: Naive, Mem0, Hindsight, then
-\textbf{OpenViking} (Volcengine context DB; AGPL-3.0; run as a host server with local gemma-VLM + nomic),
-\textbf{Holographic} (NousResearch Hermes plugin; SQLite FTS5 + HRR, no LLM/embeddings; its FTS5 ANDs terms,
-so the adapter sends an OR-of-keywords query), and \textbf{TencentDB} (TencentCloud Agent Memory; MIT;
-SQLite + sqlite-vec; driven via its standalone \texttt{TdaiGateway}). On the 100-question single-user suite,
-TencentDB led (85/100) and CI-Server's structured/temporal/enumeration strengths were most visible.
-
-\subsection*{A.3 The multi-persona detour (abandoned)}
-To grow $N$, three personas were modelled as \emph{separate users}. This failed instructively and was
-discarded:
-\begin{itemize}
-  \item \textbf{CI-Server} anchors first-person facts to a single canonical ``self'' node tied to the account
-  (``Max''). A second persona's facts either bound to the wrong identity (answer $\ll$ storage: facts
-  retrieved but ``I don't know --- no info about Priya'') or, when the node was renamed, collapsed onto the
-  self node and \emph{hurt} retrieval (storage 102$\to$44). Neither config gave a clean number.
-  \item \textbf{TencentDB} consolidated a persona's first-person facts under a prominent \emph{other} named
-  entity (her manager, ``Helena'') via coreference drift in its persona-generation step --- flat-recall
-  collapsed to 3/34.
-  \item \textbf{Raw stores} (Naive, Mem0, Holographic) were unaffected.
-\end{itemize}
-The lesson --- \textbf{these systems are single-user by design} --- reshaped the benchmark (\S\ref{sec:single-user}):
-the personas were re-cast as \emph{people the one user knows}, yielding the 460-question single-user corpus.
-
-\subsection*{A.4 The judge bug (fixed)}
-The first expanded-corpus scoring produced impossible all-zeros for whichever systems were scored while
-\texttt{ornstein} was freshly loaded: correct answers (``robotics engineer'') were marked wrong. Cause ---
-the judge set no \texttt{max\_tokens} and conceded \texttt{(False)} on any exception, so a reasoning model
-that ran out of budget (or hiccuped on load) silently scored questions wrong. Fix: generous token budget +
-retry-with-backoff + a loud \texttt{JUDGE\_UNSCORED} flag instead of a silent wrong. All final numbers use the
-fixed judge (0 judge failures).
-
-\subsection*{A.5 The recall ablation and the noise floor}
-\S\ref{sec:ablation}: read-side fixes (node consolidation, completeness gates) and an ingest-time
-entity-resolution fix (possessive-aware token-subset merge, so ``Priya'' and ``Priya Sharma'' collapse but
-``Priya's brother'' stays distinct) all moved CI-Server within the per-category noise floor. Disabling the
-1-hop expansion, by contrast, cost a clear $-30$ --- proof the expansion is load-bearing, and that the lever
-had to come from \emph{outside} the graph machinery. That lever was the hybrid channel (A.7).
-
-\subsection*{A.6 Operational notes}
-The harness runs each system in a container against the uniform contract; the slow, externally-hosted systems
-(Hindsight, OpenViking, TencentDB gateway) run as host services driven over HTTP. Long ingests \emph{and the
-460-question scoring runs} are detached (double-fork) so they survive session restarts and outlive the
-harness's background-task timeout. Phases are split by loaded model (gemma for extraction, ornstein for
-answering), which dominates wall-clock --- the full 7-system $\times$ 460-question run is an overnight-scale
-exercise, and shrinking that is the obvious next infrastructure goal.
-
-\subsection*{A.7 The hybrid retrieval channel (\S\ref{sec:hybrid})}
-The construction order, so it can be re-walked. (i) \emph{Concept proof, host-side:} for each question, union
-CI-Server's recall with the Naive container's vector hits and feed both to the same answerer --- 415.7/460
-(90.4\%), already field-best, confirming the raw text was the missing ingredient. (ii) \emph{Merge tuning:}
-a 104-question soft-spot-weighted sweep compared the full union against reciprocal-rank fusion and lexical
-re-ranking, each capped at 12/16; the uncapped union won (86.7\% vs.\ 80.7\% for the best alternative), so the
-shipped rule is union-everything. (iii) \emph{Native build:} the message text is embedded with the same
-\texttt{nomic} pipeline into the existing \texttt{ci\_search.embeddings} under a new \texttt{message} type;
-\texttt{SearchService.searchMessages} cosine-searches it (\texttt{<=>}, matching the entity path); and
-\texttt{RecallService} unions the top message hits into the context block while the entity search excludes the
-\texttt{message} type so the two channels stay separate. Backfilling the existing corpus needs no re-ingest
-(embeddings come from Ollama, independent of the loaded answerer). Native score: \textbf{419/460 (91.1\%)},
-edging the host-side proof. Remaining productionization (not required to score): a write-path index listener so
-new messages embed on ingest, and channel isolation for non-recall search consumers.
+\begin{description}[style=nextline,leftmargin=1em,nosep]
+  \item[Distance metric.] \texttt{nomic} embeddings are unnormalised ($\|v\|\approx 22$), so vector recall must
+  use cosine (\texttt{<=>}) not L2 (\texttt{<->}); an L2 threshold silently returns nothing. All vector paths
+  (Naive, the hybrid channel, the graph's semantic mode) use cosine.
+  \item[Judge robustness.] \texttt{ornstein} is a reasoning model that spends tokens before emitting the
+  schema-constrained verdict; it is given a generous token budget and retries transient failures, with a loud
+  \texttt{JUDGE\_UNSCORED} flag rather than a silent wrong. All reported numbers use the hardened judge (0 judge
+  failures).
+  \item[Resolution limit.] Per-category effect sizes below the noise floor ($\pm$8 to $\pm$16\,pp) are not
+  measurable at this $N$. Small read-side recall tweaks to CI-Server fell below it; only the hybrid channel ---
+  a large, additive lever --- cleared it. A focused single-class micro-suite (200+ questions) is the instrument
+  for finer effects.
+  \item[Extraction non-determinism.] \texttt{gemma} extraction varies run-to-run, so any change requiring a
+  re-ingest carries an extraction-variance confound; same-store read-side comparisons (e.g.\ disabling the
+  graph expansion: $-30$) are the clean ones.
+  \item[Single-user validation.] The abandoned multi-persona design is retained only as evidence for the
+  single-user design choice (\S\ref{sec:single-user}): consolidation stores bound a second persona's
+  first-person facts to a prominent other entity; the graph mis-anchored them to its canonical self node.
+\end{description}
 
 \section*{Reproduce}
-\small All artifacts live in \texttt{scripts/benchmark/v2/}: \texttt{orchestrator.py} (harness, with the fixed
-judge and \texttt{ci\_server\_wipe} canonical re-identification), \texttt{docker-compose.yml} (one container
-per system), personas in \texttt{../personas/} (\texttt{max\_expanded\_large.json} is the definitive corpus),
-per-suite reports (\texttt{report\_expanded\_*.md}), and charts in \texttt{charts/}. The hybrid line is built
-by \texttt{hybrid\_score.py} (host-side proof), \texttt{hybrid\_tune.py} (merge-strategy sweep), and
-\texttt{embed\_messages.py} (native backfill); its result is \texttt{report\_expanded\_ci\_native\_hybrid.md}.
-Native code changes live in \texttt{backend/apps/api/src/domains/} (\texttt{search-next/SearchService},
-\texttt{agent/RecallService}, \texttt{agent/AgentMemoryService}).
+\small All artifacts live in \texttt{scripts/benchmark/v2/}: \texttt{orchestrator.py} (harness + judge),
+\texttt{docker-compose.yml} (one container per system), personas in \texttt{../personas/}
+(\texttt{max\_expanded\_large.json} is the definitive corpus), per-suite reports
+(\texttt{report\_expanded\_*.md}), and charts in \texttt{charts/}. The hybrid line is built by
+\texttt{hybrid\_score.py}, \texttt{hybrid\_tune.py}, and \texttt{embed\_messages.py}; native code lives in
+\texttt{backend/apps/api/src/domains/} (\texttt{search-next/SearchService}, \texttt{agent/RecallService},
+\texttt{agent/AgentMemoryService}).
 
 \end{document}

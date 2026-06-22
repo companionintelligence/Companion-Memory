@@ -2,21 +2,43 @@
 \providecommand\hyper@newdestlabel[2]{}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
-\@writefile{toc}{\contentsline {section}{\numberline {1}Method}{1}{section.1}\protected@file@percent }
-\newlabel{sec:single-user}{{1}{1}{Method}{section.1}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {2}Question taxonomy}{2}{section.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Results}{3}{section.3}\protected@file@percent }
-\newlabel{sec:results}{{3}{3}{Results}{section.3}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Expanded single-user benchmark --- 460 questions. Answer accuracy with 95\% Wilson CI; then per-category answer score. Bold marks the per-column leader. CI-Server's two configurations highlighted --- \emph  {graph} (vanilla, the four-way-tie baseline) and \emph  {hybrid} (graph $\cup $ raw-message vector search).}}{3}{table.caption.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Answer accuracy on the 460-question single-user benchmark, with 95\% Wilson confidence intervals. Overlapping bars are statistical ties. CI-Server's \emph  {hybrid} configuration leads the field; its \emph  {vanilla graph} sat in the four-way tie with OpenViking/Naive/TencentDB --- the hybrid channel (\S  \ref {sec:hybrid}) is the difference.}}{3}{figure.caption.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}What the vanilla graph won, and where it lost}{4}{subsection.3.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Cost --- memory-layer work only (the answer phase is the shared model, excluded). Ingest scaled to the 657-message corpus.}}{4}{table.caption.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Improving CI-Server I: what \emph  {didn't} work}{4}{section.4}\protected@file@percent }
-\newlabel{sec:ablation}{{4}{4}{Improving CI-Server I: what \emph {didn't} work}{section.4}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces CI-Server-only changes, same judge. Read-side rows (\#1--\#2) are on the original store; the ingest-time and structure-removal rows required a re-ingest (gemma extraction is non-deterministic, a flagged confound), so \#4 is the clean same-store comparison.}}{4}{table.caption.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Improving CI-Server II: the hybrid channel (the win)}{5}{section.5}\protected@file@percent }
-\newlabel{sec:hybrid}{{5}{5}{Improving CI-Server II: the hybrid channel (the win)}{section.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusions}{5}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {A}Addendum: methods, configurations, and dead ends}{6}{appendix.A}\protected@file@percent }
-\newlabel{sec:addendum}{{A}{6}{Addendum: methods, configurations, and dead ends}{appendix.A}{}}
-\gdef \@abspage@last{8}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Purpose and scope}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Benchmark design}{1}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}One user is the only real use case}{1}{subsection.2.1}\protected@file@percent }
+\newlabel{sec:single-user}{{2.1}{1}{One user is the only real use case}{subsection.2.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Two-phase, model-controlled protocol}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Two scored dimensions}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Corpus}{2}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Question taxonomy}{2}{section.3}\protected@file@percent }
+\newlabel{sec:taxonomy}{{3}{2}{Question taxonomy}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}\texttt  {flat-recall} \normalfont  \textmd  {(34 questions)}}{3}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}\texttt  {relational} \normalfont  \textmd  {(90 questions)}}{3}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}\texttt  {multi-hop} \normalfont  \textmd  {(118 questions)}}{3}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}\texttt  {temporal-update} \normalfont  \textmd  {(90 questions)}}{3}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}\texttt  {enumeration} \normalfont  \textmd  {(34 questions)}}{3}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}\texttt  {aggregation} \normalfont  \textmd  {(23 questions)}}{4}{subsection.3.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}\texttt  {absence} \normalfont  \textmd  {(48 questions)}}{4}{subsection.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}\texttt  {presence-control} \normalfont  \textmd  {(23 questions)}}{4}{subsection.3.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Systems under test}{4}{section.4}\protected@file@percent }
+\newlabel{sec:systems}{{4}{4}{Systems under test}{section.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Results}{5}{section.5}\protected@file@percent }
+\newlabel{sec:results}{{5}{5}{Results}{section.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Per-category answer score (460 questions). Headline is answer accuracy with 95\% Wilson CI; bold marks the per-column leader. CI-Server's two configurations are highlighted --- \emph  {graph} (vanilla) and \emph  {hybrid} (graph $\cup $ raw-message vector search).}}{5}{table.caption.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Answer accuracy with 95\% Wilson confidence intervals. Overlapping bars are statistical ties. The hybrid configuration leads; the vanilla graph sits in a four-way tie at 76--80\%.}}{6}{figure.caption.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Per-category performance analysis}{6}{section.6}\protected@file@percent }
+\newlabel{sec:analysis}{{6}{6}{Per-category performance analysis}{section.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {flat-recall} --- raw text wins, distillation loses.}{6}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {relational} --- the graph's weak spot, the raw sentence's strength.}{6}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {multi-hop} --- structure and consolidation beat flat retrieval.}{6}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {temporal-update} --- the hybrid's largest margin.}{7}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {enumeration} --- structure assembles sets; keyword collapses.}{7}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {aggregation} --- uniformly hard; counting prose is brittle.}{7}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {absence} / \texttt  {presence-control} --- discrimination, not retrieval.}{7}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Summary of signatures.}{7}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}The hybrid retrieval channel}{7}{section.7}\protected@file@percent }
+\newlabel{sec:hybrid}{{7}{7}{The hybrid retrieval channel}{section.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Cost and operational characteristics}{8}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusions}{8}{section.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {A}Methodological notes and threats to validity}{8}{appendix.A}\protected@file@percent }
+\newlabel{sec:validity}{{A}{8}{Methodological notes and threats to validity}{appendix.A}{}}
+\gdef \@abspage@last{9}
