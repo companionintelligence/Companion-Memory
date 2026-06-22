@@ -9,6 +9,7 @@ import { useTagEntityService } from '@/api';
 import {
   EntityRelationshipCards,
   getEntityDetailPath,
+  toGlobalResourceType,
 } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { TagInput } from '@/components/TagInput';
 
@@ -47,6 +48,13 @@ interface EntityDetailScaffoldProps {
   rawData?: unknown;
   /** Whether the entity supports tag editing (renders a TagInput bound to its global id). */
   taggable?: boolean;
+  /**
+   * Allow tags to be edited even without field editing — opens an edit affordance
+   * driven purely by tags. Used by graph-node drawers (GenericDetails) so they
+   * reach tag parity with the same entity opened from list/gallery/map, while
+   * read-only fallbacks keep their tags read-only.
+   */
+  tagsEditable?: boolean;
 }
 
 interface EntityRef {
@@ -63,10 +71,15 @@ interface EntityRef {
  */
 function resolveEntityRef(entity: MemoryEntity): EntityRef {
   if (entity.__typename === 'GenericEntity') {
+    // Reconstruct the GraphQL global id for known taggable node types so a
+    // graph-node drawer can read/edit tags like the same entity opened from
+    // list/gallery/map (mirrors EntityRelationshipCards' GlobalUID.encode).
+    const globalType = entity.entityType ? toGlobalResourceType(entity.entityType) : null;
+
     return {
       resourceType: entity.entityType ? entity.entityType.toLowerCase().replace(/_/g, '-') : null,
       rawId: entity.id ?? null,
-      globalId: null,
+      globalId: globalType && entity.id ? GlobalUID.encode(globalType, entity.id) : null,
     };
   }
 
@@ -79,9 +92,35 @@ function resolveEntityRef(entity: MemoryEntity): EntityRef {
   }
 }
 
+/** Best-effort read of tag labels carried in a graph node's free-form properties. */
+function readTagsFromProperties(properties: Record<string, unknown> | null | undefined): string[] {
+  if (!properties) {
+    return [];
+  }
+
+  for (const key of ['tags', 'tagLabels', 'tag_labels', 'tagNames', 'tag_names']) {
+    const value = properties[key];
+
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((label): label is string => label.length > 0);
+    }
+
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value
+        .split(',')
+        .map((label) => label.trim())
+        .filter((label) => label.length > 0);
+    }
+  }
+
+  return [];
+}
+
 function readTags(entity: MemoryEntity): string[] {
   if (entity.__typename === 'GenericEntity') {
-    return [];
+    return readTagsFromProperties(entity.properties);
   }
 
   const tags = (entity as { tags?: Array<{ label?: string | null } | null> | null }).tags;
@@ -174,6 +213,7 @@ export function EntityDetailScaffold({
   onSave,
   rawData,
   taggable = false,
+  tagsEditable = false,
 }: EntityDetailScaffoldProps) {
   const ref = useMemo(() => resolveEntityRef(entity), [entity]);
   const currentTags = useMemo(() => readTags(entity), [entity]);
@@ -181,6 +221,10 @@ export function EntityDetailScaffold({
   const { toast } = useToast();
 
   const canEdit = Boolean(onSave && editFields && editFields.length > 0);
+  // Tags-only edit mode: no persisted fields, just an editable TagInput. Lets
+  // graph-node drawers manage tags without the field-editing wiring.
+  const canManageTags = Boolean(tagsEditable && taggable && ref.globalId);
+  const canEnterEditMode = canEdit || canManageTags;
 
   // The current persisted values, rebuilt from props every render so external
   // cache updates are always reflected (read-only display + edit seeding).
@@ -257,7 +301,7 @@ export function EntityDetailScaffold({
       <Sheet.Header className="gap-1.5 border-b p-4 pr-12">
         <div className="flex items-start justify-between gap-2">
           <Sheet.Title className="text-lg leading-tight">{title}</Sheet.Title>
-          {canEdit && !editing && (
+          {canEnterEditMode && !editing && (
             <Button
               variant="ghost"
               size="icon"
@@ -369,7 +413,7 @@ export function EntityDetailScaffold({
           </div>
         )}
 
-        {ref.rawId && <EntityRelationshipCards entityId={ref.rawId} />}
+        {ref.rawId && <EntityRelationshipCards key={ref.rawId} entityId={ref.rawId} />}
 
         {rawData != null && <RawDataDetails data={rawData} />}
 
@@ -391,13 +435,17 @@ export function EntityDetailScaffold({
             </p>
           )}
           <div className="flex flex-row justify-end gap-2">
+            {/* Tags-only mode persists each tag immediately, so its footer just
+                exits edit mode ("Done") with no separate Save step. */}
             <Button variant="outline" onClick={handleCancel} disabled={saving}>
-              Cancel
+              {canEdit ? 'Cancel' : 'Done'}
             </Button>
-            <Button onClick={handleSave} disabled={saving} className={cn(saving && 'opacity-80')}>
-              {saving && <Loader2 className="size-4 animate-spin" />}
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
+            {canEdit && (
+              <Button onClick={handleSave} disabled={saving} className={cn(saving && 'opacity-80')}>
+                {saving && <Loader2 className="size-4 animate-spin" />}
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            )}
           </div>
         </Sheet.Footer>
       )}

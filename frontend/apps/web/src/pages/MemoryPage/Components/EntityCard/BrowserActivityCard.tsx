@@ -64,11 +64,11 @@ export function BrowserActivityCard({ entity }: Props) {
           <Tooltip>
             <Tooltip.Trigger asChild>
               <h3 className="text-lg font-semibold text-card-foreground truncate cursor-default">
-                {data.title}
+                {data.title || 'Untitled page'}
               </h3>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>{data.title}</p>
+              <p>{data.title || 'Untitled page'}</p>
             </Tooltip.Content>
           </Tooltip>
           <p className="text-sm text-muted-foreground">{data.actionType}</p>

@@ -28,11 +28,34 @@ function fmtDate(value: string): string {
   return new Date(value).toLocaleDateString();
 }
 
+/**
+ * Entity types are filtered either by an exclude-list (the toolbar's own type
+ * picker) or by an externally-applied include-list (e.g. a graph-explorer deep
+ * link). The include-list takes precedence, mirroring the search dropdown's URL
+ * sync. Returns the number of types still selected when a type filter narrows
+ * the set, or null when no type filter is active.
+ */
+function selectedEntityTypeCount(params: URLSearchParams): number | null {
+  const total = AVAILABLE_ENTITY_TYPES.length;
+  const included = params.get('includedEntityTypes')?.split(',').filter(Boolean) ?? [];
+
+  if (included.length) {
+    const selected = AVAILABLE_ENTITY_TYPES.filter((type) => included.includes(type)).length;
+
+    return selected < total ? selected : null;
+  }
+
+  const excluded = params.get('excludedEntityTypes')?.split(',').filter(Boolean) ?? [];
+  const excludedSelected = AVAILABLE_ENTITY_TYPES.filter((type) => excluded.includes(type)).length;
+
+  return excludedSelected > 0 ? total - excludedSelected : null;
+}
+
 /** Number of distinct active filter dimensions (for the "Filters (N)" badge). */
 export function countActiveFilters(params: URLSearchParams): number {
   let count = 0;
 
-  if (params.get('excludedEntityTypes')) {
+  if (selectedEntityTypeCount(params) !== null) {
     count += 1;
   }
 
@@ -86,14 +109,14 @@ export function ActiveFilterChips() {
 
   const chips: Chip[] = [];
 
-  // Entity types use an inverted (exclude-list) representation; show the count of
-  // still-selected types when not everything is selected.
-  const excluded = searchParams.get('excludedEntityTypes')?.split(',').filter(Boolean) ?? [];
-  if (excluded.length) {
-    const selected = AVAILABLE_ENTITY_TYPES.length - excluded.length;
+  // Entity types use either an exclude-list (the toolbar's picker) or an
+  // externally-applied include-list; surface the count of still-selected types
+  // whenever the active representation narrows the set below "all".
+  const selectedTypes = selectedEntityTypeCount(searchParams);
+  if (selectedTypes !== null) {
     chips.push({
       key: 'types',
-      label: `Types: ${selected} of ${AVAILABLE_ENTITY_TYPES.length}`,
+      label: `Types: ${selectedTypes} of ${AVAILABLE_ENTITY_TYPES.length}`,
       onRemove: deleteKey('excludedEntityTypes', 'includedEntityTypes'),
     });
   }
