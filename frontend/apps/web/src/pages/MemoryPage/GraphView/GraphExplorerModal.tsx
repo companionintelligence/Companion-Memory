@@ -116,17 +116,48 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const rawTags = searchParams?.get('tags');
   const tagsParam = rawTags ?? undefined;
 
+  // Event-scoped LifeScope dimensions, shared via URL with List/Gallery/Map.
+  // Forwarded to the graph data fetch so the graph reflects the same filtered
+  // subset. Memoized so the hook's effect only re-runs on a real value change.
+  const connectorsParam = searchParams?.get('connectors') ?? '';
+  const peopleParamRaw = searchParams?.get('people') ?? '';
+  const placesParamRaw = searchParams?.get('places') ?? '';
+  const eventTypesParamRaw = searchParams?.get('eventTypes') ?? '';
+  const hasLocationParam = searchParams?.get('hasLocation') === '1';
+  const dateFromParam = searchParams?.get('from') || undefined;
+  const dateToParam = searchParams?.get('to') || undefined;
+
+  const explorerConnectors = useMemo(() => connectorsParam.split(',').filter(Boolean), [connectorsParam]);
+  const explorerPeople = useMemo(() => peopleParamRaw.split(',').filter(Boolean), [peopleParamRaw]);
+  const explorerPlaces = useMemo(() => placesParamRaw.split(',').filter(Boolean), [placesParamRaw]);
+  const explorerEventTypes = useMemo(
+    () => eventTypesParamRaw.split(',').filter(Boolean),
+    [eventTypesParamRaw],
+  );
+
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchNodes, setSearchNodes] = useState<Array<GraphNode & { score?: number | null }>>([]);
   const [searchLinks, setSearchLinks] = useState<GraphLink[]>([]);
 
   const [{ authToken }] = useAuth();
-  const { loading, error, subgraph, userEntityId, quickStats, tagMatchedEntityIds } = useGraphOverview(
-    authToken,
-    { maxDepth: 3, includeTypes: explorerIncludeTypes, tags: tagsParam },
-  );
-  const isTagFilterActive = tagMatchedEntityIds != null;
+  const { loading, error, subgraph, userEntityId, quickStats, filterMatchedEntityIds, filterScope } =
+    useGraphOverview(authToken, {
+      maxDepth: 3,
+      includeTypes: explorerIncludeTypes,
+      tags: tagsParam,
+      connectors: explorerConnectors,
+      people: explorerPeople,
+      places: explorerPlaces,
+      eventTypes: explorerEventTypes,
+      hasLocation: hasLocationParam,
+      dateFrom: dateFromParam,
+      dateTo: dateToParam,
+    });
+  // A restrictive explorer filter (tags and/or the event-scoped dimensions) is
+  // engaged — the graph scopes to the matched subset instead of the click-driven
+  // interactive view.
+  const isFilterActive = filterScope.tags || filterScope.events;
   const [, { setActiveEntity }] = useEntityService();
 
   const spawnLimit = useMemo(() => {
@@ -710,12 +741,13 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     const visibilitySet = new Set(visibility.ids);
 
     for (const node of rawNodes) {
-      // When the tag filter is active, scope to the tag-matched nodes directly
-      // (the backend already resolved tags → graph entity_ids), bypassing the
-      // click-driven visibility gate so every loaded tagged node is shown.
-      // Otherwise fall back to the interactive visibility set.
-      if (tagMatchedEntityIds) {
-        if (!tagMatchedEntityIds.has(node.id)) {
+      // When a restrictive explorer filter is active (tags and/or the
+      // event-scoped dimensions), scope to the backend-resolved match set
+      // directly, bypassing the click-driven visibility gate so every loaded
+      // matching node is shown. Otherwise fall back to the interactive
+      // visibility set.
+      if (filterMatchedEntityIds) {
+        if (!filterMatchedEntityIds.has(node.id)) {
           continue;
         }
       } else if (!visibilitySet.has(node.id)) {
@@ -738,7 +770,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     }
 
     return allowed;
-  }, [entityTypeFilterSet, isEntityFilterActive, tagMatchedEntityIds, rawNodes, visibility.ids]);
+  }, [entityTypeFilterSet, isEntityFilterActive, filterMatchedEntityIds, rawNodes, visibility.ids]);
 
   const entityTypesAllSelected = includedEntityTypes.length === availableEntityTypes.length;
   const relationshipTypesAllSelected = includedRelationshipTypes.length === availableRelationshipTypes.length;
@@ -918,13 +950,13 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   if (visibleNodes.length === 0) {
     const title = isSearchMode
       ? `No graph nodes found for "${trimmedSearchQuery}"`
-      : isTagFilterActive
-        ? 'No graph nodes match the selected tags'
+      : isFilterActive
+        ? 'No graph nodes match the current filters'
         : 'No graph data available yet';
     const description = isSearchMode
       ? 'Try another search'
-      : isTagFilterActive
-        ? 'Try different tags or clear the tag filter.'
+      : isFilterActive
+        ? 'Try adjusting or clearing the explorer filters.'
         : 'Start connecting memories to build your knowledge graph.';
 
     return (

@@ -7,7 +7,9 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { TagService } from '@ci/domains/search-next';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
+import { RelationshipEntity } from '../entities/RelationshipEntity';
 import { graphTypesToExclude } from '../graph.types';
+import { EventService } from '../services/EventService';
 import { GraphEventService } from '../services/GraphEventService';
 import { GraphQueryService } from '../services/GraphQueryService';
 import { GraphUtilityService } from '../services/GraphUtilityService';
@@ -40,12 +42,44 @@ const explorerTypesParam = z
           .filter(Boolean),
   );
 
+// CSV of values for the LifeScope event-scoped dimensions (connectors / who /
+// where / how). Absent => undefined (dimension off); present => the trimmed,
+// non-empty values. Unlike `tags`, these are additive predicates, so an empty
+// list means "no constraint", not "match nothing".
+const csvListParam = z
+  .string()
+  .optional()
+  .transform((value) =>
+    value === undefined
+      ? undefined
+      : value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+  );
+
 // `tags` is a comma-separated list of tag labels. Presence of the key (even
 // when empty) marks the filter as active, mirroring the explorer's "filter
 // active = present, even if empty" param contract.
+//
+// The remaining params mirror the explorer's Search dimensions so the graph
+// reflects the same filtered subset as List/Gallery/Map: `connectors` (data
+// source), `people` (who), `places` + `hasLocation` (where), `eventTypes`
+// (how) and the `from`/`to` date range. They are event-scoped — resolved
+// through the event timeline — exactly as the Search path treats them.
 const graphDataSchema = z.object({
   includeTypes: explorerTypesParam,
   tags: z.string().optional(),
+  connectors: csvListParam,
+  people: csvListParam,
+  places: csvListParam,
+  eventTypes: csvListParam,
+  hasLocation: z
+    .string()
+    .optional()
+    .transform((value) => value === '1'),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
 const graphSearchSchema = z.object({
   query: z.string().min(1),
@@ -57,13 +91,21 @@ type GetNodeDetailsDto = z.infer<typeof getNodeDetailsSchema>;
 type GraphDataDto = z.infer<typeof graphDataSchema>;
 type GraphSearchDto = z.infer<typeof graphSearchSchema>;
 
-/** Reports whether the tag filter is engaged and which graph `entity_id`s match
- * it. `active` follows the param-presence contract; `entityIds` is empty when
- * the filter is active but matches nothing (e.g. `?tags=` or unknown labels). */
-interface TagMatch {
+/** Reports whether a restrictive id-filter (tags, or the event-scoped
+ * dimensions) is engaged and which graph `entity_id`s match it. `active`
+ * follows the param-presence contract; `entityIds` is empty when the filter is
+ * active but matches nothing (e.g. `?tags=` or filters resolving to no events).
+ * The client scopes the visible graph to the intersection of all active
+ * matches. */
+interface FilterMatch {
   active: boolean;
   entityIds: string[];
 }
+
+/** Upper bound on events scanned when resolving the event-scoped filters, so a
+ * broad filter can't produce an unbounded match set / response. Matches the
+ * id-resolution cap in {@link GraphUtilityService.getEntityIdsByLinkedOrEntityIds}. */
+const EVENT_MATCH_EVENT_LIMIT = 2000;
 
 @Controller('graph')
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -74,6 +116,7 @@ export class GraphController {
     private readonly graphUtility: GraphUtilityService,
     private readonly userContext: UserContextService,
     private readonly tagService: TagService,
+    private readonly eventService: EventService,
   ) {}
 
   private ensureUserId(ctx: RequestContext): string {
@@ -104,7 +147,7 @@ export class GraphController {
     ctx: RequestContext,
     ownerId: string,
     tagsParam: string | undefined,
-  ): Promise<TagMatch> {
+  ): Promise<FilterMatch> {
     if (tagsParam === undefined) {
       return { active: false, entityIds: [] };
     }
@@ -131,6 +174,103 @@ export class GraphController {
     const entityIds = await this.graphQuery.getEntityIdsByTagSources(ownerId, sourceIds);
 
     return { active: true, entityIds };
+  }
+
+  /**
+   * Resolve the explorer's event-scoped filters (connectors / who / where / how
+   * / date range) into the set of graph `entity_id`s the graph view should
+   * scope to — the same dimensions the Search path uses, so the graph reflects
+   * the same filtered subset as List/Gallery/Map.
+   *
+   * These dimensions live on the event timeline, so we resolve the matching
+   * events (bounded by {@link EVENT_MATCH_EVENT_LIMIT}), translate their source
+   * ids to graph nodes, then expand one hop over the already-loaded
+   * `relationships` so the result keeps the people/places/things the events
+   * connect to instead of collapsing to isolated event dots. No extra query —
+   * the expansion reuses the relationship set the caller already fetched.
+   *
+   * Contract mirrors {@link resolveTagMatch}: inactive when no event dimension
+   * is set; otherwise active with a (possibly empty) match set.
+   */
+  private async resolveEventMatch(
+    ctx: RequestContext,
+    ownerId: string,
+    filters: {
+      connectors?: string[];
+      people?: string[];
+      places?: string[];
+      eventTypes?: string[];
+      hasLocation?: boolean;
+      from?: string;
+      to?: string;
+    },
+    relationships: RelationshipEntity[],
+  ): Promise<FilterMatch> {
+    const connectors = filters.connectors?.length ? filters.connectors : undefined;
+    const people = filters.people?.length ? filters.people : undefined;
+    const places = filters.places?.length ? filters.places : undefined;
+    const eventTypes = filters.eventTypes?.length ? filters.eventTypes : undefined;
+    const hasLocation = filters.hasLocation === true ? true : undefined;
+
+    const parsedStart = filters.from ? new Date(filters.from) : undefined;
+    const parsedEnd = filters.to ? new Date(filters.to) : undefined;
+    const startTime = parsedStart && !Number.isNaN(parsedStart.getTime()) ? parsedStart : undefined;
+    const endTime = parsedEnd && !Number.isNaN(parsedEnd.getTime()) ? parsedEnd : undefined;
+
+    const active =
+      connectors != null ||
+      people != null ||
+      places != null ||
+      eventTypes != null ||
+      hasLocation != null ||
+      startTime != null ||
+      endTime != null;
+
+    if (!active) {
+      return { active: false, entityIds: [] };
+    }
+
+    const events = await this.eventService.getEntitiesForEvents(toServiceContext(ctx), {
+      connectors,
+      people,
+      places,
+      hasLocation,
+      eventTypes,
+      startTime,
+      endTime,
+      order: { startTime: 'DESC' },
+      limit: EVENT_MATCH_EVENT_LIMIT,
+    });
+
+    const sourceIds = Array.from(
+      new Set(events.map((event) => event.id).filter((id) => UUID_PATTERN.test(id))),
+    );
+
+    if (sourceIds.length === 0) {
+      return { active: true, entityIds: [] };
+    }
+
+    const eventNodeIds = await this.graphQuery.getEntityIdsBySourceRecordIds(ownerId, sourceIds);
+
+    if (eventNodeIds.length === 0) {
+      return { active: true, entityIds: [] };
+    }
+
+    // Expand one hop so the filtered graph keeps the entities the matching
+    // events connect to (people, places, things), not just the event nodes.
+    const seeds = new Set(eventNodeIds);
+    const scoped = new Set(eventNodeIds);
+    for (const rel of relationships) {
+      if (seeds.has(rel.from_entity_id)) {
+        scoped.add(rel.to_entity_id);
+      }
+
+      if (seeds.has(rel.to_entity_id)) {
+        scoped.add(rel.from_entity_id);
+      }
+    }
+
+    return { active: true, entityIds: Array.from(scoped) };
   }
 
   @Get('context')
@@ -160,6 +300,20 @@ export class GraphController {
     const nodes = await this.graphQuery.getNodes(ownerId, { limit: 200, excludeEntityTypes });
     const relationships = await this.graphQuery.getRelationships(ownerId, {});
     const tagMatch = await this.resolveTagMatch(ctx, ownerId, query.tags);
+    const eventMatch = await this.resolveEventMatch(
+      ctx,
+      ownerId,
+      {
+        connectors: query.connectors,
+        people: query.people,
+        places: query.places,
+        eventTypes: query.eventTypes,
+        hasLocation: query.hasLocation,
+        from: query.from,
+        to: query.to,
+      },
+      relationships,
+    );
 
     // The frontend seeds its subgraph from the owner's entity node. A type filter can exclude it
     // (e.g. the user is a Person and Person is deselected), which would collapse the graph to
@@ -204,6 +358,7 @@ export class GraphController {
         })),
       },
       tagMatch,
+      eventMatch,
     };
   }
 
