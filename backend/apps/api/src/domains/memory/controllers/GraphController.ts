@@ -7,7 +7,6 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { TagService } from '@ci/domains/search-next';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
-import { RelationshipEntity } from '../entities/RelationshipEntity';
 import { graphTypesToExclude } from '../graph.types';
 import { EventService } from '../services/EventService';
 import { GraphEventService } from '../services/GraphEventService';
@@ -121,6 +120,11 @@ interface FilterMatch {
  * id-resolution cap in {@link GraphUtilityService.getEntityIdsByLinkedOrEntityIds}. */
 const EVENT_MATCH_EVENT_LIMIT = 2000;
 
+/** Upper bound on nodes returned for the unfiltered graph overview. Filter
+ * matches beyond this cap are recovered by an explicit by-id fetch (see
+ * `getGraphData`); a full page signals the overview is truncated. */
+const NODE_LIMIT = 200;
+
 /** Intersect the active filter matches into a single allowed-id set, mirroring
  * the client's `combineMatches`: each active filter ANDs together, and an
  * inactive filter contributes no constraint. Returns `null` when no filter is
@@ -212,10 +216,11 @@ export class GraphController {
    *
    * These dimensions live on the event timeline, so we resolve the matching
    * events (bounded by {@link EVENT_MATCH_EVENT_LIMIT}), translate their source
-   * ids to graph nodes, then expand one hop over the already-loaded
-   * `relationships` so the result keeps the people/places/things the events
-   * connect to instead of collapsing to isolated event dots. No extra query —
-   * the expansion reuses the relationship set the caller already fetched.
+   * ids to graph nodes, then expand one hop so the result keeps the
+   * people/places/things the events connect to instead of collapsing to
+   * isolated event dots. The expansion fetches only the relationships touching
+   * the matched event nodes (`getRelationships` scoped to `eventNodeIds`),
+   * rather than scanning the whole relationship table.
    *
    * Contract mirrors {@link resolveTagMatch}: inactive when no event dimension
    * is set; otherwise active with a (possibly empty) match set.
@@ -232,7 +237,6 @@ export class GraphController {
       from?: string;
       to?: string;
     },
-    relationships: RelationshipEntity[],
   ): Promise<FilterMatch> {
     const connectors = filters.connectors?.length ? filters.connectors : undefined;
     const people = filters.people?.length ? filters.people : undefined;
@@ -286,6 +290,13 @@ export class GraphController {
 
     // Expand one hop so the filtered graph keeps the entities the matching
     // events connect to (people, places, things), not just the event nodes.
+    // Fetch only the relationships touching the matched event nodes instead of
+    // scanning the entire relationship table.
+    const relationships = await this.graphQuery.getRelationships(ownerId, {
+      entityIds: eventNodeIds,
+      direction: 'both',
+    });
+
     const seeds = new Set(eventNodeIds);
     const scoped = new Set(eventNodeIds);
     for (const rel of relationships) {
@@ -325,23 +336,25 @@ export class GraphController {
       query.includeTypes === undefined ? [] : graphTypesToExclude(query.includeTypes);
     const isFiltered = excludeEntityTypes.length > 0;
 
-    const nodes = await this.graphQuery.getNodes(ownerId, { limit: 200, excludeEntityTypes });
+    const nodes = await this.graphQuery.getNodes(ownerId, { limit: NODE_LIMIT, excludeEntityTypes });
     const relationships = await this.graphQuery.getRelationships(ownerId, {});
     const tagMatch = await this.resolveTagMatch(ctx, ownerId, query.tags);
-    const eventMatch = await this.resolveEventMatch(
-      ctx,
-      ownerId,
-      {
-        connectors: query.connectors,
-        people: query.people,
-        places: query.places,
-        eventTypes: query.eventTypes,
-        hasLocation: query.hasLocation,
-        from: query.from,
-        to: query.to,
-      },
-      relationships,
-    );
+    const eventMatch = await this.resolveEventMatch(ctx, ownerId, {
+      connectors: query.connectors,
+      people: query.people,
+      places: query.places,
+      eventTypes: query.eventTypes,
+      hasLocation: query.hasLocation,
+      from: query.from,
+      to: query.to,
+    });
+
+    // The base overview is capped at NODE_LIMIT with no inherent ordering, so a
+    // restrictive filter match that sits beyond the cap would be absent from the
+    // node payload even though the client knows (via tagMatch/eventMatch) it
+    // should render. `truncated` reports the cap was hit so the client can
+    // surface that the overview is partial.
+    const truncated = nodes.length >= NODE_LIMIT;
 
     // The frontend seeds its subgraph from the owner's entity node. A type filter can exclude it
     // (e.g. the user is a Person and Person is deselected), which would collapse the graph to
@@ -351,6 +364,29 @@ export class GraphController {
       const userEntity = await this.graphQuery.getUserEntity(ownerId);
       if (userEntity && !nodeMap.has(userEntity.entity_id)) {
         nodeMap.set(userEntity.entity_id, userEntity);
+      }
+    }
+
+    // Union in any filter-matched nodes the capped overview missed. The
+    // tag/event match sets are resolved independently of the NODE_LIMIT cap, so
+    // fetch the matched nodes the cap dropped explicitly by id — otherwise the
+    // client scopes to ids whose node objects never arrived and they vanish.
+    const filterMatchedIds = intersectActiveMatches([tagMatch, eventMatch]);
+    if (filterMatchedIds && filterMatchedIds.size > 0) {
+      const missingIds = Array.from(filterMatchedIds).filter((id) => !nodeMap.has(id));
+      if (missingIds.length > 0) {
+        const excludedTypes = new Set(excludeEntityTypes);
+        const matchedNodes = await this.graphQuery.getNodesByIds(ownerId, missingIds);
+        for (const node of matchedNodes) {
+          // Respect the explorer's entity-type filter: getNodes already excluded
+          // these types, so don't reintroduce a type-excluded node via the by-id
+          // fetch just because it matches the tag/event filter.
+          if (excludedTypes.has(node.entity_type)) {
+            continue;
+          }
+
+          nodeMap.set(node.entity_id, node);
+        }
       }
     }
 
@@ -387,6 +423,7 @@ export class GraphController {
       },
       tagMatch,
       eventMatch,
+      truncated,
     };
   }
 
@@ -428,20 +465,15 @@ export class GraphController {
       query.to !== undefined;
 
     const eventMatch: FilterMatch = hasEventFilter
-      ? await this.resolveEventMatch(
-          ctx,
-          ownerId,
-          {
-            connectors: query.connectors,
-            people: query.people,
-            places: query.places,
-            eventTypes: query.eventTypes,
-            hasLocation: query.hasLocation,
-            from: query.from,
-            to: query.to,
-          },
-          await this.graphQuery.getRelationships(ownerId, {}),
-        )
+      ? await this.resolveEventMatch(ctx, ownerId, {
+          connectors: query.connectors,
+          people: query.people,
+          places: query.places,
+          eventTypes: query.eventTypes,
+          hasLocation: query.hasLocation,
+          from: query.from,
+          to: query.to,
+        })
       : { active: false, entityIds: [] };
 
     const filterAllowedIds = intersectActiveMatches([tagMatch, eventMatch]);

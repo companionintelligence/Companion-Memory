@@ -55,11 +55,11 @@ export function EventCard({ entity }: Props) {
           <Tooltip>
             <Tooltip.Trigger asChild>
               <h3 className="text-lg font-semibold text-card-foreground truncate cursor-default">
-                {data.title}
+                {data.title || 'Untitled event'}
               </h3>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>{data.title}</p>
+              <p>{data.title || 'Untitled event'}</p>
             </Tooltip.Content>
           </Tooltip>
           {/*<p className="text-sm text-muted-foreground">{data.category}</p>*/}

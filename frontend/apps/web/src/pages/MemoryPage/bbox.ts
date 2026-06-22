@@ -5,8 +5,8 @@ export type Bbox = [number, number, number, number];
 
 /**
  * Parse the `?bbox=minLon,minLat,maxLon,maxLat` URL param (set by the map's
- * "Search this area" button) into a tuple, returning undefined for anything that
- * isn't exactly four finite numbers.
+ * "Search events in this area" button) into a tuple, returning undefined for
+ * anything that isn't exactly four finite numbers.
  */
 export function parseBbox(raw: string | null | undefined): Bbox | undefined {
   if (!raw) {

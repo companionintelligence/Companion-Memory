@@ -274,7 +274,7 @@ function normalizeGraphEntityType(entityType: string): string {
   return entityType.toLowerCase().replace(/_/g, '-');
 }
 
-function toGlobalResourceType(entityType: string): GlobalResourceType | null {
+export function toGlobalResourceType(entityType: string): GlobalResourceType | null {
   const normalized = normalizeGraphEntityType(entityType);
 
   switch (normalized) {

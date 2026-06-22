@@ -79,6 +79,18 @@ export function TimelineView() {
   }
 
   if (timelineData.length === 0) {
+    // Results exist but none are timeline-renderable types — distinguish this
+    // from a truly empty result so the user knows to switch to the List view.
+    if (data.length > 0) {
+      return (
+        <Empty
+          title="No timeline events match this search"
+          description="These results aren't time-based. Switch to List to see them."
+          icon="🗂️"
+        />
+      );
+    }
+
     return (
       <Empty
         title="No memories yet"

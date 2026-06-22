@@ -455,103 +455,6 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     });
   }, [isSearchMode, searchSeedKey]);
 
-  const availableEntityTypes = useMemo(() => {
-    const types = new Set<string>();
-
-    for (const node of rawNodes) {
-      if (node.entity_type) {
-        types.add(node.entity_type);
-      }
-    }
-
-    return Array.from(types).sort((a, b) => a.localeCompare(b));
-  }, [rawNodes]);
-  const availableEntityTypesKey = useMemo(() => JSON.stringify(availableEntityTypes), [availableEntityTypes]);
-
-  const availableRelationshipTypes = useMemo(() => {
-    const types = new Set<string>();
-
-    for (const link of rawLinks) {
-      if (link.relationship_type) {
-        types.add(link.relationship_type);
-      }
-    }
-
-    return Array.from(types).sort((a, b) => a.localeCompare(b));
-  }, [rawLinks]);
-  const availableRelationshipTypesKey = useMemo(
-    () => JSON.stringify(availableRelationshipTypes),
-    [availableRelationshipTypes],
-  );
-
-  useEffect(() => {
-    if (entityTypesKeyRef.current === availableEntityTypesKey) {
-      return;
-    }
-
-    entityTypesKeyRef.current = availableEntityTypesKey;
-
-    setIncludedEntityTypes((prev) => {
-      if (availableEntityTypes.length === 0) {
-        return prev.length === 0 ? prev : [];
-      }
-
-      const nextSet = new Set(prev.filter((type) => availableEntityTypes.includes(type)));
-
-      if (nextSet.size === 0) {
-        availableEntityTypes.forEach((type) => nextSet.add(type));
-      } else {
-        for (const type of availableEntityTypes) {
-          if (!nextSet.has(type)) {
-            nextSet.add(type);
-          }
-        }
-      }
-
-      const next = availableEntityTypes.filter((type) => nextSet.has(type));
-
-      if (next.length === prev.length && next.every((type, index) => prev[index] === type)) {
-        return prev;
-      }
-
-      return next;
-    });
-  }, [availableEntityTypes, availableEntityTypesKey]);
-
-  useEffect(() => {
-    if (relationshipTypesKeyRef.current === availableRelationshipTypesKey) {
-      return;
-    }
-
-    relationshipTypesKeyRef.current = availableRelationshipTypesKey;
-
-    setIncludedRelationshipTypes((prev) => {
-      if (availableRelationshipTypes.length === 0) {
-        return prev.length === 0 ? prev : [];
-      }
-
-      const nextSet = new Set(prev.filter((type) => availableRelationshipTypes.includes(type)));
-
-      if (nextSet.size === 0) {
-        availableRelationshipTypes.forEach((type) => nextSet.add(type));
-      } else {
-        for (const type of availableRelationshipTypes) {
-          if (!nextSet.has(type)) {
-            nextSet.add(type);
-          }
-        }
-      }
-
-      const next = availableRelationshipTypes.filter((type) => nextSet.has(type));
-
-      if (next.length === prev.length && next.every((type, index) => prev[index] === type)) {
-        return prev;
-      }
-
-      return next;
-    });
-  }, [availableRelationshipTypes, availableRelationshipTypesKey]);
-
   const adjacencyMap = useMemo(() => {
     const map = new Map<string, Set<string>>();
 
@@ -763,6 +666,141 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     previousVisibleRef.current = new Set(visibility.ids);
   }, [visibility.ids]);
 
+  // Nodes passing the visibility + explorer-filter gate, BEFORE the in-graph
+  // node-type toggle. The "Node types" / "Relationship types" chips derive from
+  // this set so they reflect the filtered visible graph rather than every loaded
+  // node — yet stay stable under the chip toggles themselves. Deriving them from
+  // the post-toggle visible set would let a deselected type drop out of the chip
+  // list and never come back (a feedback loop), which is why this is pre-toggle.
+  const filterScopedNodeIds = useMemo(() => {
+    const scoped = new Set<string>();
+    const visibilitySet = new Set(visibility.ids);
+
+    for (const node of rawNodes) {
+      if (filterMatchedEntityIds) {
+        if (isSearchMode) {
+          if (!visibilitySet.has(node.id) || !filterMatchedEntityIds.has(node.id)) {
+            continue;
+          }
+        } else if (!filterMatchedEntityIds.has(node.id)) {
+          continue;
+        }
+      } else if (!visibilitySet.has(node.id)) {
+        continue;
+      }
+
+      scoped.add(node.id);
+    }
+
+    return scoped;
+  }, [filterMatchedEntityIds, isSearchMode, rawNodes, visibility.ids]);
+
+  const availableEntityTypes = useMemo(() => {
+    const types = new Set<string>();
+
+    for (const node of rawNodes) {
+      if (filterScopedNodeIds.has(node.id) && node.entity_type) {
+        types.add(node.entity_type);
+      }
+    }
+
+    return Array.from(types).sort((a, b) => a.localeCompare(b));
+  }, [filterScopedNodeIds, rawNodes]);
+  const availableEntityTypesKey = useMemo(() => JSON.stringify(availableEntityTypes), [availableEntityTypes]);
+
+  const availableRelationshipTypes = useMemo(() => {
+    const types = new Set<string>();
+
+    for (const link of rawLinks) {
+      const sourceId = resolveEndpointId(link.source);
+      const targetId = resolveEndpointId(link.target);
+
+      if (
+        link.relationship_type &&
+        sourceId &&
+        targetId &&
+        filterScopedNodeIds.has(sourceId) &&
+        filterScopedNodeIds.has(targetId)
+      ) {
+        types.add(link.relationship_type);
+      }
+    }
+
+    return Array.from(types).sort((a, b) => a.localeCompare(b));
+  }, [filterScopedNodeIds, rawLinks]);
+  const availableRelationshipTypesKey = useMemo(
+    () => JSON.stringify(availableRelationshipTypes),
+    [availableRelationshipTypes],
+  );
+
+  useEffect(() => {
+    if (entityTypesKeyRef.current === availableEntityTypesKey) {
+      return;
+    }
+
+    entityTypesKeyRef.current = availableEntityTypesKey;
+
+    setIncludedEntityTypes((prev) => {
+      if (availableEntityTypes.length === 0) {
+        return prev.length === 0 ? prev : [];
+      }
+
+      const nextSet = new Set(prev.filter((type) => availableEntityTypes.includes(type)));
+
+      if (nextSet.size === 0) {
+        availableEntityTypes.forEach((type) => nextSet.add(type));
+      } else {
+        for (const type of availableEntityTypes) {
+          if (!nextSet.has(type)) {
+            nextSet.add(type);
+          }
+        }
+      }
+
+      const next = availableEntityTypes.filter((type) => nextSet.has(type));
+
+      if (next.length === prev.length && next.every((type, index) => prev[index] === type)) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [availableEntityTypes, availableEntityTypesKey]);
+
+  useEffect(() => {
+    if (relationshipTypesKeyRef.current === availableRelationshipTypesKey) {
+      return;
+    }
+
+    relationshipTypesKeyRef.current = availableRelationshipTypesKey;
+
+    setIncludedRelationshipTypes((prev) => {
+      if (availableRelationshipTypes.length === 0) {
+        return prev.length === 0 ? prev : [];
+      }
+
+      const nextSet = new Set(prev.filter((type) => availableRelationshipTypes.includes(type)));
+
+      if (nextSet.size === 0) {
+        availableRelationshipTypes.forEach((type) => nextSet.add(type));
+      } else {
+        for (const type of availableRelationshipTypes) {
+          if (!nextSet.has(type)) {
+            nextSet.add(type);
+          }
+        }
+      }
+
+      const next = availableRelationshipTypes.filter((type) => nextSet.has(type));
+
+      if (next.length === prev.length && next.every((type, index) => prev[index] === type)) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [availableRelationshipTypes, availableRelationshipTypesKey]);
+
   const entityTypeFilterSet = useMemo(() => new Set(includedEntityTypes), [includedEntityTypes]);
   const relationshipTypeFilterSet = useMemo(
     () => new Set(includedRelationshipTypes),
@@ -787,25 +825,13 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
 
   const allowedNodeIds = useMemo(() => {
     const allowed = new Set<string>();
-    const visibilitySet = new Set(visibility.ids);
 
     for (const node of rawNodes) {
-      // When a restrictive explorer filter is active (tags and/or the
-      // event-scoped dimensions), scope to the backend-resolved match set
-      // directly, bypassing the click-driven visibility gate so every loaded
-      // matching node is shown. Otherwise fall back to the interactive
-      // visibility set.
-      //
-      // Search mode is the exception: the /api/graph/search results already
-      // honor the same filters (resolved server-side) and seed the visibility
-      // set, so applying the /data-derived `filterMatchedEntityIds` on top would
-      // drop search hits that aren't in the unfiltered overview. In search mode
-      // we always defer to the visibility set.
-      if (!isSearchMode && filterMatchedEntityIds) {
-        if (!filterMatchedEntityIds.has(node.id)) {
-          continue;
-        }
-      } else if (!visibilitySet.has(node.id)) {
+      // `filterScopedNodeIds` already encodes the visibility + explorer-filter
+      // gate (including the search-mode "visibility AND filter match" rule that
+      // drops non-matching expanded neighbors). Here we only layer the in-graph
+      // node-type toggle on top.
+      if (!filterScopedNodeIds.has(node.id)) {
         continue;
       }
 
@@ -825,14 +851,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     }
 
     return allowed;
-  }, [
-    entityTypeFilterSet,
-    isEntityFilterActive,
-    isSearchMode,
-    filterMatchedEntityIds,
-    rawNodes,
-    visibility.ids,
-  ]);
+  }, [entityTypeFilterSet, isEntityFilterActive, filterScopedNodeIds, rawNodes]);
 
   const entityTypesAllSelected = includedEntityTypes.length === availableEntityTypes.length;
   const relationshipTypesAllSelected = includedRelationshipTypes.length === availableRelationshipTypes.length;

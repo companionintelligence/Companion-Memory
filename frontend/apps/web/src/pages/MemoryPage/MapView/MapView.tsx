@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@ci/shadcn';
 import { Loader2, MapPin, Search as SearchIcon, X } from '@ci/shadcn/icons';
-import L from 'leaflet';
+import L, { type LatLngExpression } from 'leaflet';
 import { Marker as LeafletMarker, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 import { useSearchParams } from 'react-router-dom';
 
@@ -11,7 +11,6 @@ import { type MarkerVariant } from '@/components/Map/Marker';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
 import { boundsToBbox, bboxCenter, formatBbox, parseBbox } from '../bbox';
-import { getEntityTimestamp } from '../Components/utils';
 import { TimelineView } from '../TimelineView';
 
 // Colour/icon-code each marker by what it represents, like the old LifeScope map.
@@ -73,15 +72,62 @@ function getEntityCoordinates(entity: EntityItem): { lat: number; lng: number } 
   return null;
 }
 
-/** Sort key matching the server's chronological order; undated entities sink to 0. */
 function entityTime(entity: EntityItem): number {
-  return getEntityTimestamp(entity)?.getTime() ?? 0;
+  const value =
+    'time' in entity ? (entity.time as string) : 'startTime' in entity ? (entity.startTime as string) : null;
+
+  const date = value ? new Date(value) : null;
+
+  return date && !isNaN(date.getTime()) ? date.getTime() : 0;
 }
 
 type LocatedEntity = { entity: EntityItem; coords: { lat: number; lng: number } };
 
+/**
+ * Scope `?hasLocation=1` to the map tab. The EntityServiceProvider is shared by
+ * every view, so the map can't pass its own query variables — it steers the
+ * shared query through the URL instead. Without this, the default result set is
+ * dominated by un-located rows (browser activity, communications, …): a page of
+ * 30 can yield 0 pins, so "Load more pins" pages in results yet adds nothing
+ * ("Load more pins (0 shown)"). Requesting hasLocation:true makes every fetched
+ * page entities that actually drop a pin. The flag is cleared on unmount so the
+ * list/gallery/graph views still see every entity.
+ *
+ * NB: the server routes hasLocation (and bbox) through its event filter, so the
+ * map is an events-only surface — hence the "Search events in this area" control.
+ */
+function useMapHasLocationScope() {
+  const [, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    setSearchParams(
+      (params) => {
+        if (params.get('hasLocation') !== '1') {
+          params.set('hasLocation', '1');
+        }
+
+        return params;
+      },
+      { replace: true },
+    );
+
+    return () => {
+      setSearchParams(
+        (params) => {
+          params.delete('hasLocation');
+
+          return params;
+        },
+        { replace: true },
+      );
+    };
+  }, [setSearchParams]);
+}
+
 function useLocatedEntities() {
   const [{ data, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
+
+  useMapHasLocationScope();
 
   const located = useMemo<LocatedEntity[]>(() => {
     return data
@@ -90,10 +136,12 @@ function useLocatedEntities() {
       .sort((a, b) => entityTime(a.entity) - entityTime(b.entity));
   }, [data]);
 
-  // Route waypoints in travel order, fed from the located entities (not the
-  // scraped map markers, which include cluster centroids).
-  const routeLocations = useMemo<[number, number][]>(
-    () => located.map(({ coords }) => [coords.lat, coords.lng]),
+  // Route polyline input: each located entity's own coordinates, in visit-time
+  // order (`located` is already time-sorted). Driving routes from these points —
+  // rather than the markers Leaflet has on the map — keeps cluster centroids out
+  // of the path and orders segments by time instead of latitude.
+  const routeLocations = useMemo<LatLngExpression[]>(
+    () => located.map((item) => [item.coords.lat, item.coords.lng]),
     [located],
   );
 
@@ -236,9 +284,13 @@ function ClusteredMarkers({
   );
 }
 
-// ── "Search this area" viewport filter ──────────────────────────────────────
+// ── "Search events in this area" viewport filter ─────────────────────────────
 // Writes the current Leaflet viewport to the `?bbox` URL param, which flows
-// through MemoryPage into the Search query (server-side ST_Within filter).
+// through MemoryPage into the Search query (server-side ST_Within filter). The
+// server applies bbox through its event filter, so — like the map's
+// hasLocation:true scope (useMapHasLocationScope) — it narrows to events within
+// the box; the control is labelled "Search events in this area" to make that
+// scope explicit rather than silently dropping non-event pins.
 // Panning fully away from the searched area drops the filter again.
 function SearchAreaControl() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -296,7 +348,7 @@ function SearchAreaControl() {
           className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
         >
           <SearchIcon className="mr-1 h-4 w-4" />
-          Search this area
+          Search events in this area
         </Button>
       )}
 
@@ -316,13 +368,14 @@ function SearchAreaControl() {
 }
 
 // ── "Load more pins" control ────────────────────────────────────────────────
-// The timeline panel's IntersectionObserver only pages in more results when its
-// own cards scroll into view. Places (and other located-but-untimed entities)
-// render no timeline card, so a Places-dominated result set leaves the panel too
-// short to ever trip that sentinel — capping the map at the first page even
-// though more located entities exist server-side. This explicit control pages in
-// more results independently of the timeline, mirroring mobile's
-// LoadMorePinsControl.
+// Desktop's timeline panel pages in more results via an IntersectionObserver,
+// but only when its own cards scroll into view. Located-but-untimed entities
+// render no timeline card, so a result set short on timeline cards leaves the
+// panel too short to ever trip that sentinel — capping the map at the first page
+// even though more located entities exist server-side. Mobile has no timeline
+// panel at all, so without this it is hard-capped at page 1. This explicit
+// control pages in more results independently of the timeline; both the desktop
+// and mobile map views render it.
 function LoadMorePinsControl({
   shown,
   hasNextPage,
@@ -398,16 +451,14 @@ export function MobileMapView() {
     <Map center={[37.7749, -122.4194]}>
       <Map.Controls position="bottom-right" />
       <SearchAreaControl />
-      <Map.RouteLayer locations={routeLocations} />
-      <ClusteredMarkers located={located} onSelect={setActiveEntity} />
-      {/* Mobile has no timeline panel to scroll, so markers would otherwise be
-          stuck on the first page — give an explicit way to pull more pins. */}
       <LoadMorePinsControl
         shown={located.length}
         hasNextPage={hasNextPage}
         loadingMore={loadingMore}
         onLoadMore={loadMore}
       />
+      <Map.RouteLayer locations={routeLocations} />
+      <ClusteredMarkers located={located} onSelect={setActiveEntity} />
     </Map>
   );
 }

@@ -28,6 +28,8 @@ export function GenericDetails({ entity }: Props) {
       entity={entity}
       title={entity.name ?? 'Untitled Entity'}
       subtitle={entity.description ?? undefined}
+      taggable
+      tagsEditable
       metaItems={metaItems}
       rawData={entity.properties}
     />

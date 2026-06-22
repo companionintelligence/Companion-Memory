@@ -122,10 +122,14 @@ export class GraphUtilityService {
     const limit = Math.min(options.limit ?? 25, 200);
     const offset = options.offset ?? 0;
 
+    // Deterministic order so the capped page (and any offset paging) is stable
+    // across requests; `entity_id` breaks ties on identical timestamps.
     let query = this.entityRepo
       .createQueryBuilder('entity')
       .where('entity.owner_user_id = :ownerUserId', { ownerUserId })
       .andWhere('entity.is_active = true')
+      .orderBy('entity.created_at', 'DESC')
+      .addOrderBy('entity.entity_id', 'ASC')
       .limit(limit)
       .offset(offset);
 
