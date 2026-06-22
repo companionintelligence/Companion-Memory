@@ -25,7 +25,6 @@ function getTypeColor(entityType: string): string {
 
 interface GraphTabPanelProps {
   variant: 'desktop' | 'mobile';
-  searchQuery?: string;
 }
 
 type GraphSearchResponseNode = {
@@ -262,6 +261,42 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
           params.set('includeTypes', explorerIncludeTypes.join(','));
         }
 
+        // Forward the explorer's restrictive filters so search returns the same
+        // scoped subset as /data and the rest of the explorer. Mirrors the param
+        // contract in useGraphOverview: `tags` present (even empty) marks the tag
+        // filter active; the event-scoped dimensions forward only when set.
+        if (tagsParam !== undefined) {
+          params.set('tags', tagsParam);
+        }
+
+        if (explorerConnectors.length > 0) {
+          params.set('connectors', explorerConnectors.join(','));
+        }
+
+        if (explorerPeople.length > 0) {
+          params.set('people', explorerPeople.join(','));
+        }
+
+        if (explorerPlaces.length > 0) {
+          params.set('places', explorerPlaces.join(','));
+        }
+
+        if (explorerEventTypes.length > 0) {
+          params.set('eventTypes', explorerEventTypes.join(','));
+        }
+
+        if (hasLocationParam) {
+          params.set('hasLocation', '1');
+        }
+
+        if (dateFromParam) {
+          params.set('from', dateFromParam);
+        }
+
+        if (dateToParam) {
+          params.set('to', dateToParam);
+        }
+
         const response = await fetch(`/api/graph/search?${params.toString()}`, {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -367,7 +402,21 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       cancelled = true;
       controller.abort();
     };
-  }, [authToken, isSearchMode, spawnLimit, trimmedSearchQuery, explorerIncludeTypes]);
+  }, [
+    authToken,
+    isSearchMode,
+    spawnLimit,
+    trimmedSearchQuery,
+    explorerIncludeTypes,
+    tagsParam,
+    explorerConnectors,
+    explorerPeople,
+    explorerPlaces,
+    explorerEventTypes,
+    hasLocationParam,
+    dateFromParam,
+    dateToParam,
+  ]);
 
   useEffect(() => {
     if (!isSearchMode) {
@@ -746,7 +795,13 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       // directly, bypassing the click-driven visibility gate so every loaded
       // matching node is shown. Otherwise fall back to the interactive
       // visibility set.
-      if (filterMatchedEntityIds) {
+      //
+      // Search mode is the exception: the /api/graph/search results already
+      // honor the same filters (resolved server-side) and seed the visibility
+      // set, so applying the /data-derived `filterMatchedEntityIds` on top would
+      // drop search hits that aren't in the unfiltered overview. In search mode
+      // we always defer to the visibility set.
+      if (!isSearchMode && filterMatchedEntityIds) {
         if (!filterMatchedEntityIds.has(node.id)) {
           continue;
         }
@@ -770,7 +825,14 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     }
 
     return allowed;
-  }, [entityTypeFilterSet, isEntityFilterActive, filterMatchedEntityIds, rawNodes, visibility.ids]);
+  }, [
+    entityTypeFilterSet,
+    isEntityFilterActive,
+    isSearchMode,
+    filterMatchedEntityIds,
+    rawNodes,
+    visibility.ids,
+  ]);
 
   const entityTypesAllSelected = includedEntityTypes.length === availableEntityTypes.length;
   const relationshipTypesAllSelected = includedRelationshipTypes.length === availableRelationshipTypes.length;
@@ -1053,6 +1115,14 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               </div>
               {quickStats && (
                 <>
+                  {/* Account totals from /api/graph/context — not scoped to the
+                      filtered/searched view above, so label them to avoid
+                      conflating them with the current Nodes/Relationships counts. */}
+                  <div className="border-t border-border/60 pt-2">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Account-wide
+                    </p>
+                  </div>
                   <div className="flex items-center justify-between">
                     <dt className="text-muted-foreground">Preferences</dt>
                     <dd className="font-medium">{quickStats.totalPreferences}</dd>

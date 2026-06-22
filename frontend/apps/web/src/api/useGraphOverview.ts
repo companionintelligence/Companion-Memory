@@ -269,12 +269,22 @@ export function useGraphOverview(
 
         const context = contextResponse.context!;
         const userEntityId = context.currentUser.entityId;
-        const subgraph = buildSubgraph(graphResponse.data, userEntityId, maxDepth);
         const filterMatchedEntityIds = combineMatches(graphResponse.tagMatch, graphResponse.eventMatch);
         const filterScope: FilterScope = {
           tags: graphResponse.tagMatch?.active === true,
           events: graphResponse.eventMatch?.active === true,
         };
+
+        // The user-seeded BFS prunes anything beyond `maxDepth` hops from the
+        // owner — fine for the click-driven interactive view, but it would drop
+        // filter-matched nodes that sit farther out before the filter is even
+        // applied. When a restrictive filter is active the view scopes to
+        // `filterMatchedEntityIds` directly, so hand the full node/link set
+        // through unpruned and let the client do the scoping.
+        const subgraph =
+          filterScope.tags || filterScope.events
+            ? { nodes: graphResponse.data.nodes, links: graphResponse.data.links }
+            : buildSubgraph(graphResponse.data, userEntityId, maxDepth);
 
         if (!cancelled) {
           setState({
