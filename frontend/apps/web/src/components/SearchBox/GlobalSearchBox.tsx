@@ -309,6 +309,7 @@ export function GlobalSearchBox() {
       variant="compact"
       placeholder="Search your memory…"
       autoSubmit
+      autoSubmitEmpty={onMemory}
       displayResults
       openOnFocus
       loading={loading}

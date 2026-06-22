@@ -66,6 +66,12 @@ interface Props {
   results?: SearchResultItem[];
   autoSubmit?: boolean;
   autoSubmitDelay?: number;
+  /**
+   * By default auto-submit fires only for non-empty queries. Set this when the
+   * caller needs to react to the input being cleared by typing/backspace too
+   * (e.g. the header search clearing the `?search` URL param on /memory).
+   */
+  autoSubmitEmpty?: boolean;
   displayResults?: boolean;
   displayDropdown?: boolean;
   /**
@@ -96,6 +102,7 @@ function SearchBox(
     results = [],
     autoSubmit = false,
     autoSubmitDelay = 300,
+    autoSubmitEmpty = false,
     displayResults = false,
     displayDropdown = false,
     openOnFocus = false,
@@ -298,9 +305,10 @@ function SearchBox(
     [onSave, queryValue],
   );
 
-  // Auto-submit with debounce
+  // Auto-submit with debounce. By default empty queries are skipped; with
+  // autoSubmitEmpty the caller is also notified when the input clears.
   useEffect(() => {
-    if (!autoSubmit || !queryValue.trim() || disabled) {
+    if (!autoSubmit || disabled || (!queryValue.trim() && !autoSubmitEmpty)) {
       setIsAutoSubmitPending(false);
 
       return;
@@ -325,7 +333,7 @@ function SearchBox(
 
       setIsAutoSubmitPending(false);
     };
-  }, [queryValue, autoSubmit, autoSubmitDelay, disabled, handleSubmit]);
+  }, [queryValue, autoSubmit, autoSubmitEmpty, autoSubmitDelay, disabled, handleSubmit]);
 
   // Reset selection when results change
   useEffect(() => {

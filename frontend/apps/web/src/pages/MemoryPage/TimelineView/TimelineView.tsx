@@ -12,6 +12,7 @@ import {
   groupEntitiesByBucket,
   isChronologicalSort,
 } from '../Components';
+import { countActiveFilters } from '../Components/ExplorerToolbar/ActiveFilterChips';
 
 // Only these entity types render as timeline cards (EntityCard returns null for
 // the rest), and all of them carry a domain timestamp — so filtering here keeps
@@ -87,6 +88,20 @@ export function TimelineView() {
           title="No timeline events match this search"
           description="These results aren't time-based. Switch to List to see them."
           icon="🗂️"
+        />
+      );
+    }
+
+    // Distinguish a genuinely empty memory from one the user has filtered down to
+    // nothing — on the map, the auto-applied "Located" filter is a common cause.
+    const hasFilters = countActiveFilters(searchParams) > 0 || Boolean(searchParams.get('search')?.trim());
+
+    if (hasFilters) {
+      return (
+        <Empty
+          title="No memories match these filters"
+          description="Try removing a filter (or the Located filter on the map) to see more."
+          icon="🔍"
         />
       );
     }

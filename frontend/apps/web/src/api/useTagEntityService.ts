@@ -75,26 +75,13 @@ export function useTagEntityService() {
         },
       },
       update(cache) {
-        // For untagging, we don't have access to the removed tag IDs (they're
-        // no longer in the entity's tags list). We need to evict the `entities`
-        // field from all TagType objects in the cache to ensure stale data is
-        // never shown.
+        // Refresh the root `tags` list so a tag that no longer has any entities
+        // drops out of the explorer's filter suggestions. (The old per-TagType
+        // `entities` eviction is gone with the Tags page — nothing queries it.)
         cache.evict({
           id: 'ROOT_QUERY',
-          fieldName: 'tag',
+          fieldName: 'tags',
         });
-
-        // Also evict all TagType entities fields
-        const cacheData = cache.extract();
-
-        for (const key of Object.keys(cacheData)) {
-          if (key.startsWith('TagType:')) {
-            cache.evict({
-              id: key,
-              fieldName: 'entities',
-            });
-          }
-        }
 
         cache.gc();
       },

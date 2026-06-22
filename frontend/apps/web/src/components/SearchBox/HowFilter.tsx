@@ -70,7 +70,9 @@ export function HowFilter({ modal = true }: Props) {
       <Trigger asChild>
         <Button type="button" variant="outline">
           {getDisplayText()}
-          <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          <ChevronDown
+            className={`ml-2 h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          />
         </Button>
       </Trigger>
 
