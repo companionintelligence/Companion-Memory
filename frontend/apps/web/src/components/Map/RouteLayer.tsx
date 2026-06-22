@@ -1,30 +1,43 @@
 import { useEffect, useMemo } from 'react';
 
-import L from 'leaflet';
+import L, { type LatLngExpression } from 'leaflet';
 import { useMap as useLeafletMap } from 'react-leaflet';
 
 import { isGoogleMapsConfigured, loadGoogleMaps } from './googleMaps';
 import { useMap } from './useMap';
 
 class RouteEngine extends L.LayerGroup {
+  // Monotonic token identifying the latest update() call. Each segment awaits the
+  // (async) Directions API, so a fresh update() can start before the previous one
+  // finishes; comparing against this token lets a superseded run bail out instead
+  // of interleaving polylines from two different result sets onto the map.
+  private runId = 0;
+
+  // `locations` arrive pre-ordered by entity timestamp, so connect them in the
+  // given order — drawing the actual path travelled rather than a latitude sort.
   async update(locations: L.LatLng[]): Promise<void> {
+    const runId = ++this.runId;
+
     this.clearLayers();
 
     if (locations.length < 2) {
       return;
     }
 
-    const sortedLocations = [...locations].sort((a, b) => b.lat - a.lat);
+    for (let i = 0; i < locations.length - 1; i++) {
+      const polyline = await this.createRoadRoute(locations[i], locations[i + 1]);
 
-    for (let i = 0; i < sortedLocations.length - 1; i++) {
-      const start = sortedLocations[i];
-      const end = sortedLocations[i + 1];
+      // A newer update() superseded this run while we awaited the Directions API
+      // (or it was removed) — discard this segment so stale routes never appear.
+      if (runId !== this.runId) {
+        return;
+      }
 
-      await this.createRoadRoute(start, end);
+      this.addLayer(polyline);
     }
   }
 
-  private async createRoadRoute(start: L.LatLng, end: L.LatLng): Promise<void> {
+  private async createRoadRoute(start: L.LatLng, end: L.LatLng): Promise<L.Polyline> {
     try {
       await loadGoogleMaps();
 
@@ -43,42 +56,47 @@ class RouteEngine extends L.LayerGroup {
           (p: google.maps.LatLng) => new L.LatLng(p.lat(), p.lng()),
         );
 
-        const polyline = L.polyline(waypoints, {
+        return L.polyline(waypoints, {
           color: 'rgb(21, 93, 252)',
           weight: 5,
           opacity: 1,
           interactive: false,
         });
-
-        this.addLayer(polyline);
-      } else {
-        this.createFallbackRoute(start, end);
       }
+
+      return this.createFallbackRoute(start, end);
     } catch (error) {
       console.warn('Google Maps Directions API failed, creating fallback route.', error);
 
-      this.createFallbackRoute(start, end);
+      return this.createFallbackRoute(start, end);
     }
   }
 
-  private createFallbackRoute(start: L.LatLng, end: L.LatLng): void {
+  private createFallbackRoute(start: L.LatLng, end: L.LatLng): L.Polyline {
     const waypoints: L.LatLng[] = [start, end];
 
-    const polyline = L.polyline(waypoints, {
+    return L.polyline(waypoints, {
       color: 'rgb(21, 93, 252)',
       weight: 5,
       opacity: 0.8,
       interactive: false,
       dashArray: '15, 10',
     });
-
-    this.addLayer(polyline);
   }
 }
 
-export function RouteLayer() {
+interface Props {
+  /**
+   * Route waypoints in travel order (entity timestamp). Fed from the located
+   * entities themselves — never the scraped map markers, which include cluster
+   * centroids that would otherwise be stitched into the route.
+   */
+  locations?: LatLngExpression[];
+}
+
+export function RouteLayer({ locations = [] }: Props) {
   const map = useLeafletMap();
-  const [{ locations, displayRoutes }] = useMap();
+  const [{ displayRoutes }] = useMap();
 
   const engine = useMemo(() => new RouteEngine(), []);
 
@@ -106,7 +124,9 @@ export function RouteLayer() {
 
     const latLngs = locations.map((loc) => L.latLng(loc));
 
-    engine.update(latLngs);
+    engine.update(latLngs).catch((error) => {
+      console.warn('Failed to update route layer.', error);
+    });
   }, [locations, engine, configured]);
 
   useEffect(() => {

@@ -11,6 +11,7 @@ import { type MarkerVariant } from '@/components/Map/Marker';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
 import { boundsToBbox, bboxCenter, formatBbox, parseBbox } from '../bbox';
+import { getEntityTimestamp } from '../Components/utils';
 import { TimelineView } from '../TimelineView';
 
 // Colour/icon-code each marker by what it represents, like the old LifeScope map.
@@ -72,19 +73,15 @@ function getEntityCoordinates(entity: EntityItem): { lat: number; lng: number } 
   return null;
 }
 
+/** Sort key matching the server's chronological order; undated entities sink to 0. */
 function entityTime(entity: EntityItem): number {
-  const value =
-    'time' in entity ? (entity.time as string) : 'startTime' in entity ? (entity.startTime as string) : null;
-
-  const date = value ? new Date(value) : null;
-
-  return date && !isNaN(date.getTime()) ? date.getTime() : 0;
+  return getEntityTimestamp(entity)?.getTime() ?? 0;
 }
 
 type LocatedEntity = { entity: EntityItem; coords: { lat: number; lng: number } };
 
 function useLocatedEntities() {
-  const [{ data }, { setActiveEntity }] = useEntityService();
+  const [{ data, hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
 
   const located = useMemo<LocatedEntity[]>(() => {
     return data
@@ -93,7 +90,14 @@ function useLocatedEntities() {
       .sort((a, b) => entityTime(a.entity) - entityTime(b.entity));
   }, [data]);
 
-  return { located, setActiveEntity };
+  // Route waypoints in travel order, fed from the located entities (not the
+  // scraped map markers, which include cluster centroids).
+  const routeLocations = useMemo<[number, number][]>(
+    () => located.map(({ coords }) => [coords.lat, coords.lng]),
+    [located],
+  );
+
+  return { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore };
 }
 
 // ── Marker clustering ───────────────────────────────────────────────────────
@@ -312,7 +316,7 @@ function SearchAreaControl() {
 }
 
 export function DesktopMapView() {
-  const { located, setActiveEntity } = useLocatedEntities();
+  const { located, routeLocations, setActiveEntity } = useLocatedEntities();
 
   return (
     // TODO: This default leads to some map jittering. It's OK for now, but let's think about tracking the user's last location and use that for the default center.
@@ -324,22 +328,69 @@ export function DesktopMapView() {
       </Map.Panel>
 
       <SearchAreaControl />
-      <Map.RouteLayer />
+      <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
     </Map>
   );
 }
 
 export function MobileMapView() {
-  const { located, setActiveEntity } = useLocatedEntities();
+  const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
+    useLocatedEntities();
 
   return (
     <Map center={[37.7749, -122.4194]}>
       <Map.Controls position="bottom-right" />
       <SearchAreaControl />
-      <Map.RouteLayer />
+      <Map.RouteLayer locations={routeLocations} />
       <ClusteredMarkers located={located} onSelect={setActiveEntity} />
+      {/* Mobile has no timeline panel to scroll, so markers would otherwise be
+          stuck on the first page — give an explicit way to pull more pins. */}
+      <LoadMorePinsControl
+        pinCount={located.length}
+        hasNextPage={hasNextPage}
+        loadingMore={loadingMore}
+        onLoadMore={loadMore}
+      />
     </Map>
+  );
+}
+
+// Explicit "load more" affordance for the mobile map: each tap appends the next
+// server page onto the accumulated result set, which re-clusters into more pins.
+function LoadMorePinsControl({
+  pinCount,
+  hasNextPage,
+  loadingMore,
+  onLoadMore,
+}: {
+  pinCount: number;
+  hasNextPage: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  const stopPropagation = useCallback((el: HTMLDivElement | null) => {
+    if (el) {
+      L.DomEvent.disableClickPropagation(el);
+      L.DomEvent.disableScrollPropagation(el);
+    }
+  }, []);
+
+  if (!hasNextPage) {
+    return null;
+  }
+
+  return (
+    <div ref={stopPropagation} className="absolute bottom-6 left-1/2 z-400 -translate-x-1/2">
+      <Button
+        size="sm"
+        onClick={onLoadMore}
+        disabled={loadingMore}
+        className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
+      >
+        {loadingMore ? 'Loading…' : `Load more pins (${pinCount})`}
+      </Button>
+    </div>
   );
 }
 

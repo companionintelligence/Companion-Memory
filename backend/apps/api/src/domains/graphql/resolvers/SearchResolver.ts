@@ -40,6 +40,14 @@ const MAX_PAGE_SIZE = 100;
 // can contribute at most `first` of them, so any multiplier >= 1 is correct;
 // the margin also absorbs same-timestamp boundary ties).
 const FETCH_MULTIPLIER = 4;
+// Candidate pool for the ranked query path. Unlike the timed path (true cursor
+// paging pushed down to SQL), the query path is paged in-memory: the Paginator
+// slices this ranked list against the time::id cursor, so the pool must hold
+// enough rows to (a) span several client pages and (b) survive the tags/date/
+// event post-filters that shrink it further. Must stay >= a full client page so
+// a single page is never truncated — the old 25 cap fell short of the 30-row
+// client page, capping plain-text search and disabling load-more.
+const QUERY_CANDIDATE_LIMIT = 300;
 
 /** The time a result is ordered by (events use startTime, others use time). */
 function timeOf(result: SearchResult): Date {
@@ -143,8 +151,9 @@ export class SearchResolver {
         excludeTypes: input.excludeTypes,
         // Force conceptual ranking when the caller asked for semantic search.
         semantic: input.semantic === true,
-        // Widen the candidate pool when post-filters will shrink it.
-        maxResults: tags != null || hasDate || eventTypes != null || eventFilter != null ? 100 : 25,
+        // Always fetch a deep candidate pool so the in-memory Paginator can page
+        // past the first client window (>= `first` guarantees a full page).
+        maxResults: Math.max(first, QUERY_CANDIDATE_LIMIT),
       });
     } else if (tags != null) {
       candidateSource = 'tags';

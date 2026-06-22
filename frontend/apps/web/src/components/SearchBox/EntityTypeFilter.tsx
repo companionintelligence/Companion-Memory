@@ -73,6 +73,7 @@ export function EntityTypeFilter({ modal = true }: Props) {
 
           return (
             <CheckboxItem
+              key={entityType}
               checked={isChecked}
               onClick={(e) => {
                 e.stopPropagation();
