@@ -431,7 +431,11 @@ export class EventService {
     }
 
     if (options.endTime) {
-      query = query.andWhere('event.start_time <= :endTime', { startTime: options.endTime });
+      // Bind the :endTime placeholder under the matching key. Previously this
+      // bound `{ startTime: options.endTime }`, which (TypeORM merges all
+      // andWhere params into one name-keyed map) clobbered the lower-bound
+      // `:startTime` from above — so a start+end range queried start_time >= endTime.
+      query = query.andWhere('event.start_time <= :endTime', { endTime: options.endTime });
       query = query.andWhere('(event.end_time IS NULL OR (event.end_time <= :endTime))', {
         endTime: options.endTime,
       });

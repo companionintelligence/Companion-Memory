@@ -21,6 +21,7 @@ const FILTER_PARAMS = [
   'places',
   'hasLocation',
   'semantic',
+  'bbox',
 ] as const;
 
 function fmtDate(value: string): string {
@@ -48,6 +49,10 @@ export function countActiveFilters(params: URLSearchParams): number {
   }
 
   if (params.get('semantic') === '1') {
+    count += 1;
+  }
+
+  if (params.get('bbox')) {
     count += 1;
   }
 
@@ -130,6 +135,11 @@ export function ActiveFilterChips() {
 
   if (searchParams.get('semantic') === '1') {
     chips.push({ key: 'semantic', label: 'Semantic', onRemove: deleteKey('semantic') });
+  }
+
+  // The map's "Search this area" viewport filter (?bbox=...) — surface + clearable.
+  if (searchParams.get('bbox')) {
+    chips.push({ key: 'bbox', label: 'Map area', onRemove: deleteKey('bbox') });
   }
 
   if (chips.length === 0) {
