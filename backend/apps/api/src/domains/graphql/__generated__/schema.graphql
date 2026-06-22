@@ -608,7 +608,7 @@ input KnownPlaceCoordinatesInput {
 }
 
 type KnownPlaceType {
-  activeFrom: String!
+  activeFrom: String
   activeTo: String
   aliases: [String!]!
   confidence: Float!

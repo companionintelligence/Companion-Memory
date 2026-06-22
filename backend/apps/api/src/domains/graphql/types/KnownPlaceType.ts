@@ -1,6 +1,6 @@
 import { Field, Float, ID, ObjectType } from '@nestjs/graphql';
 
-import { type KnownPlaceLabel } from '@ci/domains/memory';
+import { type KnownPlace } from '@ci/domains/memory';
 
 /** A single [lng, lat] coordinate pair for a known place. */
 @ObjectType()
@@ -13,9 +13,9 @@ export class KnownPlaceCoordinates {
 }
 
 /**
- * GraphQL projection of a persisted ci.known_place_labels row — the
- * confidence-tracked, time-bounded assertion that a Location plays a role
- * (home/work/…) in the user's life.
+ * GraphQL projection of a known place — the user's confidence-tracked,
+ * time-bounded LIVES_IN / WORKS_AT / VISITED relationship to a `ci.entities`
+ * Location node (no bespoke table; the relationship + entity are the record).
  */
 @ObjectType()
 export class KnownPlaceType {
@@ -39,9 +39,9 @@ export class KnownPlaceType {
   @Field(() => Float)
   confidence!: number;
 
-  /** ISO date (inclusive lower bound of the era). */
-  @Field(() => String)
-  activeFrom!: string;
+  /** ISO date (inclusive lower bound of the era), or null when open-ended. */
+  @Field(() => String, { nullable: true })
+  activeFrom!: string | null;
 
   /** ISO date, or null when still current. */
   @Field(() => String, { nullable: true })
@@ -54,26 +54,18 @@ export class KnownPlaceType {
   @Field(() => String)
   source!: string;
 
-  static toType(label: KnownPlaceLabel): KnownPlaceType {
-    const coords = label.coordinates;
-    // PostGIS / GeoJSON store coordinates [lng, lat]; expose them as named lat/lng
-    // so consumers don't have to know the axis order.
-    const coordinates =
-      coords && Array.isArray(coords.coordinates) && coords.coordinates.length === 2
-        ? { lng: coords.coordinates[0], lat: coords.coordinates[1] }
-        : null;
-
+  static toType(place: KnownPlace): KnownPlaceType {
     return {
-      id: label.id,
-      locationId: label.locationId,
-      label: label.label,
-      kind: label.kind,
-      coordinates,
-      confidence: label.confidence,
-      activeFrom: String(label.activeFrom),
-      activeTo: label.activeTo === null ? null : String(label.activeTo),
-      aliases: label.aliases,
-      source: label.source,
+      id: place.id,
+      locationId: place.locationId,
+      label: place.label,
+      kind: place.kind,
+      coordinates: place.coordinates ? { lat: place.coordinates.lat, lng: place.coordinates.lng } : null,
+      confidence: place.confidence,
+      activeFrom: place.activeFrom,
+      activeTo: place.activeTo,
+      aliases: place.aliases,
+      source: place.source,
     };
   }
 }

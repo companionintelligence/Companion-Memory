@@ -23,7 +23,7 @@ function parseKind(value: string | undefined, fallback: KnownPlaceKind): KnownPl
 export class KnownPlacesResolver {
   constructor(private readonly knownPlacesService: KnownPlacesService) {}
 
-  /** Persisted known-place labels for the user, optionally filtered by kind. */
+  /** The user's confirmed known places (LIVES_IN/WORKS_AT/VISITED), optionally filtered by kind. */
   @Query(() => [KnownPlaceType])
   async knownPlaces(
     @Context() context: RequestContext,
@@ -52,7 +52,7 @@ export class KnownPlacesResolver {
     return candidates.map((candidate) => KnownPlaceCandidateType.toType(candidate));
   }
 
-  /** Confirm / update a known place, writing the label row and graph relationship. */
+  /** Confirm / update a known place, upserting the LIVES_IN/WORKS_AT/VISITED graph relationship. */
   @Mutation(() => KnownPlaceType)
   async updateKnownPlace(
     @Context() context: RequestContext,

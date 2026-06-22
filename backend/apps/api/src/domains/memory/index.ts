@@ -36,7 +36,6 @@ import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
 import { type Item, type InventoryCondition, ItemEntity } from './entities/ItemEntity';
-import { KnownPlaceLabelEntity } from './entities/KnownPlaceLabelEntity';
 import { type Person, PersonEntity } from './entities/PersonEntity';
 import { type Place, PlaceEntity } from './entities/PlaceEntity';
 import { RelationshipEntity } from './entities/RelationshipEntity';
@@ -72,7 +71,6 @@ import { UserContextService } from './services/UserContextService';
       ThingEntity,
       GraphNodeEntity,
       ItemEntity,
-      KnownPlaceLabelEntity,
       RelationshipEntity,
       FileEntity,
       BrowserActivityEntity,
@@ -128,7 +126,6 @@ export {
   EventEntity,
   FileEntity,
   ItemEntity,
-  KnownPlaceLabelEntity,
   PersonEntity,
   ConceptEntity,
   PlaceEntity,
@@ -157,8 +154,12 @@ export {
 
 export type { Content } from './entities/ContentEntity';
 export type { CreateEventDto, UpdateEventDto, CreateContentDto, UpdateContentDto } from './types';
-export type { KnownPlaceLabel, KnownPlaceKind, KnownPlaceSource } from './entities/KnownPlaceLabelEntity';
-export type { KnownPlaceCandidate } from './services/KnownPlacesService';
+export type {
+  KnownPlace,
+  KnownPlaceKind,
+  KnownPlaceSource,
+  KnownPlaceCandidate,
+} from './services/KnownPlacesService';
 export type { Concept, Event, Item, InventoryCondition, Person, Communication, Place };
 export {
   CommunicationDirection,
