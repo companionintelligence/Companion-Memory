@@ -123,8 +123,22 @@ brew install tmux
 
 [Overmind](https://github.com/DarthSim/overmind) is a process manager that reads the repo's `Procfile` and runs each declared process (the `api` and `web` dev servers) inside a single `tmux` session. `make dev` requires it on your `PATH` and will fail fast if it's missing.
 
+## MacOS
 ```bash
 brew install overmind
+```
+
+## Linux
+
+Install with Go:
+```bash
+go install github.com/DarthSim/overmind/v2@latest
+```
+
+Make sure to add the Go bin directory to your `PATH` if it's not already and start a new terminal:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
 Because Overmind multiplexes through `tmux`, the `tmux` prerequisite above must be installed first.
@@ -133,8 +147,29 @@ Because Overmind multiplexes through `tmux`, the `tmux` prerequisite above must 
 
 [Caddy](https://caddyserver.com) is the local reverse proxy. `make dev` configures it dynamically per worktree via its admin API — it terminates TLS for `*.localhost` and routes `/api`, `/graphql`, `/static`, and `/` to the right process.
 
+## MacOS
 ```bash
 brew install caddy
+```
+
+## Linux
+Follow the instructions [here](https://caddyserver.com/docs/install#linux) to install Caddy on Linux. The recommended method is via the official APT repository:
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+sudo chmod o+r /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+```
+
+You may need to disable the caddy service and enable caddy-api:
+
+```bash
+sudo systemctl disable caddy
+sudo systemctl enable caddy-api
 ```
 
 Run it as a background service so its admin API is always on `:2019` and it owns `:443`:
