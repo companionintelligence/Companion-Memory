@@ -1,8 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { GlobalUID } from '@ci/common';
-import { cn } from '@ci/shadcn';
-import { Clock, Search, Sparkles, Type, X } from '@ci/shadcn/icons';
+import { Clock, Search, X } from '@ci/shadcn/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useRecentSearches } from '@/hooks';
@@ -25,19 +24,19 @@ const RECENT_PREFIX = 'recent:';
 const SEARCH_ACTION_ID = 'action:search';
 
 /**
- * Inline global search rendered in the primary navigation header.
+ * Global search in the primary navigation header (desktop). It's a "jump to"
+ * launcher that complements the in-page `ExplorerToolbar` — which owns the
+ * explorer's live search + filter set (who/where/connector/date/tags/sort/
+ * semantic). To avoid two competing live search states, the header does NOT
+ * write `?search` as you type; instead:
  *
- * UX reconciliation (this is the single Memory search surface):
- * - **On `/memory`** the header search *is* the explorer search. Typing writes
- *   the debounced `?search=` URL param so the explorer grid filters live, and the
- *   input reflects that param. Picking an entity suggestion still jumps to its
- *   detail route ("jump to"); the explorer search is the primary filter.
- * - **Off `/memory`** it stays a global "jump to": entity suggestions navigate to
- *   detail routes, and committing a search (Enter / the "Search Memory" row)
- *   bridges to `/memory?search=…` so the same query opens in the explorer.
- *
- * It also offers locally-persisted recent searches and a keyword/semantic mode
- * toggle (the `?semantic` param, consumed by the explorer + suggestion queries).
+ * - Entity suggestions navigate to the matching detail route.
+ * - Recent searches (locally persisted) surface on focus.
+ * - Committing a free-text query (Enter / the "Search Memory" row / a recent)
+ *   opens it in the explorer at `/memory?search=…` — preserving existing
+ *   filters when already on `/memory`, otherwise navigating there (carrying the
+ *   semantic mode). So the header bridges into the explorer rather than holding
+ *   a second copy of its state.
  */
 export function GlobalSearchBox() {
   const navigate = useNavigate();
@@ -46,7 +45,6 @@ export function GlobalSearchBox() {
 
   const onMemory = location.pathname === '/memory';
   const semantic = searchParams.get('semantic') === '1';
-  const urlSearch = searchParams.get('search') ?? '';
 
   // Drives the suggestion query; debounced via SearchBox's autoSubmit.
   const [query, setQuery] = useState<string | null>(null);
@@ -56,6 +54,7 @@ export function GlobalSearchBox() {
 
   const [recentSearches, { addRecentSearch, removeRecentSearch }] = useRecentSearches();
 
+  // Suggestions follow the explorer's semantic mode so the two stay consistent.
   const { data, loading, error } = useSearchService({ searchQuery: query ?? '', semantic });
 
   const clearInput = useCallback(() => {
@@ -63,45 +62,9 @@ export function GlobalSearchBox() {
     setResetKey((key) => key + 1);
   }, []);
 
-  // Live, debounced reflection of the input while on /memory — keeps the explorer in sync.
-  const writeSearchParam = useCallback(
-    (value: string) => {
-      setSearchParams(
-        (params) => {
-          if (value.trim()) {
-            params.set('search', value.trim());
-          } else {
-            params.delete('search');
-          }
-
-          return params;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  const setSemanticMode = useCallback(
-    (next: boolean) => {
-      setSearchParams(
-        (params) => {
-          if (next) {
-            params.set('semantic', '1');
-          } else {
-            params.delete('semantic');
-          }
-
-          return params;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  // Commit a search: record it as recent and either filter the explorer in place
-  // (on /memory) or bridge to the explorer (everywhere else).
+  // Open a free-text query in the explorer. Keep existing filters when already on
+  // /memory (so the header doesn't wipe the toolbar's filters); otherwise navigate
+  // there, carrying the semantic mode if it's set.
   const commitSearch = useCallback(
     (rawQuery: string) => {
       const trimmed = rawQuery.trim();
@@ -118,19 +81,17 @@ export function GlobalSearchBox() {
 
           return params;
         });
-        clearInput();
+      } else {
+        const params = new URLSearchParams();
+        params.set('search', trimmed);
 
-        return;
+        if (semantic) {
+          params.set('semantic', '1');
+        }
+
+        navigate(`/memory?${params.toString()}`);
       }
 
-      const params = new URLSearchParams();
-      params.set('search', trimmed);
-
-      if (semantic) {
-        params.set('semantic', '1');
-      }
-
-      navigate(`/memory?${params.toString()}`);
       clearInput();
     },
     [addRecentSearch, clearInput, navigate, onMemory, semantic, setSearchParams],
@@ -223,39 +184,14 @@ export function GlobalSearchBox() {
     }));
   }, [onMemory, query, recentSearches, removeRecentSearch, suggestions]);
 
-  const handleSearch = useCallback(
-    ({ query: searchQuery }: { query: string }) => {
-      setQuery(searchQuery);
-
-      if (onMemory) {
-        writeSearchParam(searchQuery);
-      }
-    },
-    [onMemory, writeSearchParam],
-  );
+  // Live, debounced — only updates the suggestion query (no ?search writes).
+  const handleSearch = useCallback(({ query: searchQuery }: { query: string }) => {
+    setQuery(searchQuery);
+  }, []);
 
   const handleClear = useCallback(() => {
     setQuery(null);
-
-    if (onMemory) {
-      writeSearchParam('');
-    }
-  }, [onMemory, writeSearchParam]);
-
-  // Catches backspace-to-empty (autoSubmit doesn't fire on an empty query) so the
-  // explorer filter + suggestions clear as soon as the input is emptied.
-  const handleKeyDown = useCallback(
-    (value: string) => {
-      if (value.trim() === '') {
-        setQuery(null);
-
-        if (onMemory) {
-          writeSearchParam('');
-        }
-      }
-    },
-    [onMemory, writeSearchParam],
-  );
+  }, []);
 
   const handleResultSelect = useCallback(
     ({ id }: { id: string }) => {
@@ -324,38 +260,6 @@ export function GlobalSearchBox() {
     [addRecentSearch, clearInput, commitSearch, navigate, query],
   );
 
-  const modeToggle = (
-    <div className="flex items-center gap-2 border-b px-3 py-2">
-      <span className="text-xs font-medium text-muted-foreground">Search mode</span>
-      <div className="ml-auto inline-flex overflow-hidden rounded-md border">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setSemanticMode(false)}
-          className={cn(
-            'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
-            !semantic ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-muted/50',
-          )}
-        >
-          <Type className="h-3.5 w-3.5" />
-          Keyword
-        </button>
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setSemanticMode(true)}
-          className={cn(
-            'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
-            semantic ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-muted/50',
-          )}
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          Semantic
-        </button>
-      </div>
-    </div>
-  );
-
   useKeyboardShortcut('/', () => inputRef.current?.focus());
 
   return (
@@ -365,19 +269,12 @@ export function GlobalSearchBox() {
       onSearch={handleSearch}
       onSubmit={({ query: submitted }) => commitSearch(submitted)}
       onClear={handleClear}
-      onKeyDown={handleKeyDown}
       onResultSelect={handleResultSelect}
       variant="compact"
       placeholder="Search"
       autoSubmit
       displayResults
       openOnFocus
-      // The explorer filter panel (entity types / date / tags / sort) lives behind
-      // the dropdown toggle. Save-search isn't wired here yet, so hide that button.
-      displayDropdown
-      saveSupported={false}
-      resultsHeader={modeToggle}
-      defaultQuery={onMemory ? urlSearch : undefined}
       loading={loading}
       error={error}
       results={results}

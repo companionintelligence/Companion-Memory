@@ -10,8 +10,9 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $semantic: Boolean, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, semantic: $semantic, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $semantic: Boolean, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, semantic: $semantic, first: $first, after: $after }) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
@@ -23,6 +24,23 @@ const SEARCH_QUERY = gql(`
 
           ... on Node {
             id
+          }
+
+          # Unmasked media fields so the gallery can build real thumbnails and a
+          # cross-item lightbox without per-item useFragment calls. Aliased to
+          # stay clear of the grid fragments' own selections.
+          ... on FileType {
+            galleryContentType: contentType
+            galleryFilename: filename
+            galleryPreviewUrl: previewUrl
+            gallerySourceUrl: sourceUrl
+          }
+
+          ... on ContentType {
+            galleryMimetype: mimetype
+            galleryTitle: title
+            galleryContentUrl: url
+            galleryContentSourceUrl: sourceUrl
           }
 
           ...AnswerGridItemData
@@ -87,6 +105,7 @@ type ReturnType = [
     loading: boolean;
     loadingMore: boolean;
     hasNextPage: boolean;
+    totalCount: number;
     error: ApolloError | undefined;
     activeEntity: MemoryEntity | null;
     loadMore: () => void;
@@ -106,6 +125,10 @@ function useEntityService({
   endTime,
   sortBy,
   sortOrder,
+  connectors,
+  people,
+  places,
+  hasLocation,
   semantic,
 }: {
   searchQuery: string;
@@ -117,6 +140,10 @@ function useEntityService({
   endTime?: string;
   sortBy?: string;
   sortOrder?: string;
+  connectors?: string[];
+  people?: string[];
+  places?: string[];
+  hasLocation?: boolean;
   semantic?: boolean;
 }): ReturnType {
   const { data, loading, error, fetchMore } = useQuery(SEARCH_QUERY, {
@@ -130,6 +157,10 @@ function useEntityService({
       endTime: endTime || undefined,
       sortBy: sortBy || undefined,
       sortOrder: sortOrder || undefined,
+      connectors: connectors && connectors.length > 0 ? connectors : undefined,
+      people: people && people.length > 0 ? people : undefined,
+      places: places && places.length > 0 ? places : undefined,
+      hasLocation: hasLocation || undefined,
       semantic: semantic || undefined,
       first: PAGE_SIZE,
     },
@@ -142,6 +173,7 @@ function useEntityService({
 
   const pageInfo = data?.search?.pageInfo;
   const hasNextPage = pageInfo?.hasNextPage ?? false;
+  const totalCount = data?.search?.totalCount ?? 0;
 
   // Append the next server page (cursor-based) onto the accumulated results.
   const loadMore = useCallback(() => {
@@ -180,6 +212,7 @@ function useEntityService({
       loading,
       loadingMore,
       hasNextPage,
+      totalCount,
       error,
       activeEntity,
       loadMore,

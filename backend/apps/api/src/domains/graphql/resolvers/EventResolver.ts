@@ -146,6 +146,15 @@ export class EventResolver {
     return this.eventService.getDistinctEventTypes(serviceContext);
   }
 
+  @Query(() => [String], {
+    description: 'Distinct data sources / connectors (event.source_system) present for the user.',
+  })
+  async eventSources(@Context() context: RequestContext): Promise<string[]> {
+    const serviceContext = toServiceContext(context);
+
+    return this.eventService.getDistinctEventSources(serviceContext);
+  }
+
   @Query(() => EventType, { nullable: true })
   async event(
     @Context() context: RequestContext,

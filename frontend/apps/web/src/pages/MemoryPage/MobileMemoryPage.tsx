@@ -6,11 +6,11 @@ import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
-import { GlobalSearchBox } from '@/components/SearchBox';
 
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components';
+import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { MobileMapView } from './MapView';
@@ -52,11 +52,11 @@ export default function MobileMemoryPage() {
 
       <PageContent>
         <div className="space-y-3">
-          {/* Unified search — the same component as the desktop header. On /memory it
-              writes the `?search` param live and exposes recent searches, entity
-              suggestions, the keyword/semantic toggle, and the entity-type/date/tags/
-              sort filter panel, so mobile and desktop share one search experience. */}
-          <GlobalSearchBox />
+          {/* The same explorer search + filter toolbar as desktop, so the two
+              stay in sync and the URL params (search / filters / semantic) are
+              written non-destructively. The global header search isn't shown on
+              mobile, so this is the primary search surface here. */}
+          <ExplorerToolbar />
 
           {/* Tab Navigation */}
           <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>

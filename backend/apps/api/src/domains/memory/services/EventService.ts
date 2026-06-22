@@ -17,6 +17,14 @@ interface Options {
   startTime?: Date;
   endTime?: Date;
   eventTypes?: string[];
+  /** "Connector": event.source_system values to include (e.g. 'gmail','imessage'). */
+  connectors?: string[];
+  /** "Who": person name patterns matched (ILIKE) against linked Person entities. */
+  people?: string[];
+  /** "Where": place name patterns matched (ILIKE) against the linked Location entity / location_name. */
+  places?: string[];
+  /** "Where": when true, only events with geographic coordinates are returned. */
+  hasLocation?: boolean;
 }
 
 @Injectable()
@@ -433,12 +441,75 @@ export class EventService {
       });
     }
 
+    // "Connector": restrict to the selected data sources.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('event.source_system IN (:...connectors)', {
+        connectors: options.connectors,
+      });
+    }
+
+    // "Where" (located only): the event must carry geographic coordinates.
+    if (options.hasLocation) {
+      query = query.andWhere('event.location_coordinates IS NOT NULL');
+    }
+
+    // "Who": the event's participants/organizer resolve to a Person entity whose
+    // name matches any of the given patterns (case-insensitive substring).
+    if (options.people && options.people.length > 0) {
+      query = query.andWhere(
+        `(
+          event.participant_entity_ids && ARRAY(
+            SELECT entity_id FROM ci.entities
+            WHERE owner_user_id = :userId AND entity_type = 'Person' AND name ILIKE ANY(:peoplePatterns)
+          )::uuid[]
+          OR event.organizer_entity_id IN (
+            SELECT entity_id FROM ci.entities
+            WHERE owner_user_id = :userId AND entity_type = 'Person' AND name ILIKE ANY(:peoplePatterns)
+          )
+        )`,
+        { userId: context.userId, peoplePatterns: options.people.map((name) => `%${name}%`) },
+      );
+    }
+
+    // "Where" (by place): the event's Location entity (or denormalised
+    // location_name) matches any of the given place patterns.
+    if (options.places && options.places.length > 0) {
+      query = query.andWhere(
+        `(
+          event.location_entity_id IN (
+            SELECT entity_id FROM ci.entities
+            WHERE owner_user_id = :userId AND entity_type = 'Location' AND name ILIKE ANY(:placePatterns)
+          )
+          OR event.location_name ILIKE ANY(:placePatterns)
+        )`,
+        { userId: context.userId, placePatterns: options.places.map((name) => `%${name}%`) },
+      );
+    }
+
     const results = await query.getRawMany();
 
     return results.map((row: { event_id: string; type: IndexableEntity }) => ({
       id: row.event_id,
       type: 'event' as IndexableEntity,
     }));
+  }
+
+  /**
+   * Returns the distinct, non-null data sources / connectors
+   * (event.source_system) present for the user — e.g. 'gmail', 'imessage',
+   * 'spotify'. Populates the connector filter picker in the memory explorer.
+   */
+  async getDistinctEventSources(context: ServiceContext): Promise<string[]> {
+    const results = await this.dataSource
+      .getRepository(EventEntity)
+      .createQueryBuilder('event')
+      .select('DISTINCT event.source_system', 'source_system')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.source_system IS NOT NULL')
+      .orderBy('event.source_system', 'ASC')
+      .getRawMany();
+
+    return results.map((row: { source_system: string }) => row.source_system);
   }
 
   /**

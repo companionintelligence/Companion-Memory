@@ -73,8 +73,6 @@ interface Props {
    * empty — used to surface recent searches / suggestions before the user types.
    */
   openOnFocus?: boolean;
-  /** Sticky node rendered at the top of the results dropdown (e.g. a mode toggle). */
-  resultsHeader?: ReactNode;
   saveSupported?: boolean;
   onSearch?: (data: FormData & { entityDropdowns?: string[] }) => boolean | void | Promise<boolean | void>;
   /**
@@ -101,7 +99,6 @@ function SearchBox(
     displayResults = false,
     displayDropdown = false,
     openOnFocus = false,
-    resultsHeader,
     saveSupported = true,
     defaultQuery,
     onSearch,
@@ -404,11 +401,9 @@ function SearchBox(
   // and won't auto-open just because the input reflects an external `?search` value.
   const resultsPanelOpen = displayResults && !disabled && (openOnFocus ? isFocused : hasQuery);
 
-  const showingFilterPanel = displayDropdown && isDropdownPanelVisible;
-
   let resultsNode: ReactNode | null = null;
 
-  if (showingFilterPanel) {
+  if (displayDropdown && isDropdownPanelVisible) {
     resultsNode = <DropdownContent onSave={handleSaveSearch} saveSupported={saveSupported} />;
   } else if (resultsPanelOpen) {
     let body: ReactNode | null = null;
@@ -465,15 +460,7 @@ function SearchBox(
       );
     }
 
-    // Only mount the panel when there's a header or a body to show.
-    if (resultsHeader || body) {
-      resultsNode = (
-        <>
-          {resultsHeader && <div onMouseDown={(e) => e.preventDefault()}>{resultsHeader}</div>}
-          {body}
-        </>
-      );
-    }
+    resultsNode = body;
   }
 
   return (
@@ -604,14 +591,7 @@ function SearchBox(
           </div>
 
           {resultsNode && (
-            <div
-              className={cn(
-                'absolute top-full z-50 bg-background border border-t-0 rounded-b-md shadow-xs',
-                // The filter panel needs more room than a narrow (e.g. header) input;
-                // widen and right-align it so the controls don't wrap awkwardly.
-                showingFilterPanel ? 'right-0 w-[34rem] max-w-[90vw]' : 'left-0 right-0',
-              )}
-            >
+            <div className="absolute top-full left-0 right-0 z-50 bg-background border border-t-0 rounded-b-md shadow-xs">
               {resultsNode}
             </div>
           )}
