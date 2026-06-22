@@ -38,6 +38,11 @@
     "undici": "^8.5.0",
     "ws": "^8.21.0"
   },
+  "dependenciesMeta": {
+    "sharp@0.34.5": {
+      "built": false
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
     "@playwright/test": "^1.57.0",

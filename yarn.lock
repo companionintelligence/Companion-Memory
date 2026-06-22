@@ -3013,6 +3013,9 @@ __metadata:
     typescript: "npm:^5.8.3"
     typescript-eslint: "npm:^8.32.1"
     vite: "npm:^6.4.3"
+  dependenciesMeta:
+    sharp@0.34.5:
+      built: false
   languageName: unknown
   linkType: soft
 
