@@ -587,6 +587,39 @@ The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://
 """
 scalar JSON
 
+type KnownPlaceCandidateType {
+  confidence: Float!
+  eventCount: Int!
+  kind: String!
+  label: String!
+  lat: Float!
+  lng: Float!
+  locationId: String
+}
+
+type KnownPlaceCoordinates {
+  lat: Float!
+  lng: Float!
+}
+
+input KnownPlaceCoordinatesInput {
+  lat: Float!
+  lng: Float!
+}
+
+type KnownPlaceType {
+  activeFrom: String!
+  activeTo: String
+  aliases: [String!]!
+  confidence: Float!
+  coordinates: KnownPlaceCoordinates
+  id: ID!
+  kind: String!
+  label: String!
+  locationId: String
+  source: String!
+}
+
 type MessageConnection implements Connection {
   edges: [MessageEdge!]!
   pageInfo: PageInfo!
@@ -661,6 +694,7 @@ type Mutation {
   updateEvent(input: UpdateEventInput!): EventType
   updateFile(input: UpdateFileInput!): FileType
   updateItem(input: UpdateItemInput!): UpdateItemPayload!
+  updateKnownPlace(input: UpdateKnownPlaceInput!): KnownPlaceType!
   updateNote(input: UpdateNoteInput!): UpdateNotePayload!
   updatePerson(input: UpdatePersonInput!): UpdatePersonPayload!
   updatePlace(input: UpdatePlaceInput!): PlaceType
@@ -848,6 +882,8 @@ type Query {
   forecast(horizon: String = "24h"): ForecastType
   item(id: ID!): ItemType
   items(after: String, before: String, first: Int, last: Int): ItemConnection!
+  knownPlaceCandidates: [KnownPlaceCandidateType!]!
+  knownPlaces(kind: String): [KnownPlaceType!]!
   me: UserType
   node(id: ID!): Node
   note(id: ID!): NoteType
@@ -1192,6 +1228,18 @@ input UpdateItemInput {
 type UpdateItemPayload {
   item: ItemType
   success: Boolean!
+}
+
+input UpdateKnownPlaceInput {
+  activeFrom: String
+  activeTo: String
+  aliases: [String!]
+  confidence: Float
+  coordinates: KnownPlaceCoordinatesInput
+  kind: String!
+  label: String!
+  locationId: String
+  source: String
 }
 
 input UpdateNoteInput {

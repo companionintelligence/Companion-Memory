@@ -36,6 +36,7 @@ import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
 import { type Item, type InventoryCondition, ItemEntity } from './entities/ItemEntity';
+import { KnownPlaceLabelEntity } from './entities/KnownPlaceLabelEntity';
 import { type Person, PersonEntity } from './entities/PersonEntity';
 import { type Place, PlaceEntity } from './entities/PlaceEntity';
 import { RelationshipEntity } from './entities/RelationshipEntity';
@@ -51,6 +52,7 @@ import { GraphQueryService } from './services/GraphQueryService';
 import { GraphReadService } from './services/GraphReadService';
 import { GraphUtilityService } from './services/GraphUtilityService';
 import { ItemService } from './services/ItemService';
+import { KnownPlacesService } from './services/KnownPlacesService';
 import { PersonService } from './services/PersonService';
 import { PlaceService } from './services/PlaceService';
 import { UserContextService } from './services/UserContextService';
@@ -70,6 +72,7 @@ import { UserContextService } from './services/UserContextService';
       ThingEntity,
       GraphNodeEntity,
       ItemEntity,
+      KnownPlaceLabelEntity,
       RelationshipEntity,
       FileEntity,
       BrowserActivityEntity,
@@ -97,6 +100,7 @@ import { UserContextService } from './services/UserContextService';
     ConceptService,
     FileService,
     PlaceService,
+    KnownPlacesService,
   ],
   controllers: [GraphController, EventsIngestController],
   exports: [
@@ -113,6 +117,7 @@ import { UserContextService } from './services/UserContextService';
     GraphReadService,
     FileService,
     PlaceService,
+    KnownPlacesService,
   ],
 })
 export class MemoryModule {}
@@ -123,6 +128,7 @@ export {
   EventEntity,
   FileEntity,
   ItemEntity,
+  KnownPlaceLabelEntity,
   PersonEntity,
   ConceptEntity,
   PlaceEntity,
@@ -146,10 +152,13 @@ export {
   GraphReadService,
   FileService,
   PlaceService,
+  KnownPlacesService,
 };
 
 export type { Content } from './entities/ContentEntity';
 export type { CreateEventDto, UpdateEventDto, CreateContentDto, UpdateContentDto } from './types';
+export type { KnownPlaceLabel, KnownPlaceKind, KnownPlaceSource } from './entities/KnownPlaceLabelEntity';
+export type { KnownPlaceCandidate } from './services/KnownPlacesService';
 export type { Concept, Event, Item, InventoryCondition, Person, Communication, Place };
 export {
   CommunicationDirection,

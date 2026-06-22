@@ -22,6 +22,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConnectionsModule, ConnectionEntity } from '@ci/domains/connections';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
 import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
@@ -70,6 +71,7 @@ import { SteamOwnedGamesTransformService } from './services/Steam/transform/Tran
     ConnectionsModule,
     EventsModule,
     FilesModule,
+    GeocodeModule,
     GraphModule,
     MemoryModule,
     SearchNextModule,

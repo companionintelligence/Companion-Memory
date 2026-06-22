@@ -366,3 +366,39 @@ declare module '@ci/domains/events/registry' {
     [PlaceRemovedEvent]: PlaceDeletedPayload;
   }
 }
+
+/**
+ * Event emitted to enqueue a forward-geocode backfill batch (geodata-plan
+ * Phase 1). Handled by {@link GeocodeBatchListener}, which selects events
+ * carrying a location_name but no location_coordinates and resolves them via
+ * GeocodeService.
+ *
+ * @see {@link GeocodeBatchListener.handleBatch} - The listener that consumes this event
+ */
+export const GeocodeBatchRequestEvent = 'event.geocode-batch-request';
+
+/**
+ * Event payload of {@link GeocodeBatchRequestEvent}.
+ */
+export type GeocodeBatchRequestPayload = {
+  /** Owner whose events are geocoded. */
+  userId: string;
+  /** Optional explicit set of event ids to geocode; overrides the auto-selection. */
+  eventIds?: string[];
+  /** Max number of events to process in this batch. */
+  limit?: number;
+  /**
+   * When true, also (re)attempt events that have a location_name but whose prior
+   * geocode left coordinates null. Defaults to selecting only never-geocoded
+   * events (location_coordinates IS NULL).
+   */
+  retryNull?: boolean;
+};
+
+defineEvent<GeocodeBatchRequestPayload>(GeocodeBatchRequestEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [GeocodeBatchRequestEvent]: GeocodeBatchRequestPayload;
+  }
+}

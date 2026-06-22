@@ -119,5 +119,10 @@
     "url": "",
     "apiKey": "",
     "deviceId": ""
+  },
+  "geocoding": {
+    "apiKey": "",
+    "batchSize": 200,
+    "rateLimitPerSecond": 10
   }
 }

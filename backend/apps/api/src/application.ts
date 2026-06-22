@@ -31,10 +31,12 @@ import { DeviceModule } from '@ci/domains/devices';
 import { EtlModule } from '@ci/domains/etl';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
 import { GraphQLModule } from '@ci/domains/graphql';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
+import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
@@ -83,6 +85,8 @@ import { UserModule } from '@ci/domains/user';
     PredictionsModule,
     ToolsModule,
     MemoryModule,
+    GeocodeModule,
+    MaintenanceModule,
     NotesModule,
     SearchIngressModule,
     SearchNextModule,

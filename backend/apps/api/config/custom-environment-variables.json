@@ -76,5 +76,16 @@
     "url": "CI_CLOUD_URL",
     "deviceId": "HUB_DEVICE_ID",
     "apiKey": "HUB_API_KEY"
+  },
+  "geocoding": {
+    "apiKey": "GEOCODING_API_KEY",
+    "batchSize": {
+      "__name": "GEOCODING_BATCH_SIZE",
+      "__format": "json"
+    },
+    "rateLimitPerSecond": {
+      "__name": "GEOCODING_RATE_LIMIT_PER_SECOND",
+      "__format": "json"
+    }
   }
 }

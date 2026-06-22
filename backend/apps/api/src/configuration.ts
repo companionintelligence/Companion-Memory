@@ -143,6 +143,33 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
+  // Forward-geocoding (geodata-plan Phase 1). The key is read from
+  // GEOCODING_API_KEY, falling back to the legacy GOOGLE_MAPS_KEY (see
+  // custom-environment-variables.json + the fallback transform below).
+  geocoding: z.object({
+    apiKey: z.string().optional(),
+    batchSize: z.coerce.number().int().positive().default(200),
+    rateLimitPerSecond: z.coerce.number().int().positive().default(10),
+  }),
 });
 
-export default ConfigSchema.parse(config);
+const parsed = ConfigSchema.parse(config);
+
+// GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
+// existing deployments keep working until the billed key is supplied. (config's
+// custom-environment-variables.json maps one env var per field, not a fallback
+// chain — so the OR lives here.)
+if (!parsed.geocoding.apiKey && process.env.GOOGLE_MAPS_KEY) {
+  parsed.geocoding.apiKey = process.env.GOOGLE_MAPS_KEY;
+}
+
+if (!parsed.geocoding.apiKey) {
+  // Warn (don't throw): the server must still boot without a geocoding key; the
+  // backfill simply no-ops / returns REQUEST_DENIED until one is configured.
+  console.warn(
+    '[configuration] No geocoding API key configured (GEOCODING_API_KEY / GOOGLE_MAPS_KEY). ' +
+      'Forward-geocode backfills will be skipped until one is set.',
+  );
+}
+
+export default parsed;
