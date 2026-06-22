@@ -15,7 +15,7 @@ const EMPTY: FormData = {
   label: '',
 };
 
-const MAX_SUGGESTIONS = 8;
+const MAX_SUGGESTIONS = 50;
 
 interface Props {
   tags?: string[];
@@ -55,8 +55,9 @@ export function TagInput({
 
   const draft = form.watch('label');
 
-  // Existing tags matching the draft (case-insensitive), minus already-applied
-  // ones — the autocomplete list shown beneath the input while focused.
+  // The browsable tag list shown beneath the input while focused: all existing
+  // tags (minus already-applied ones) when empty — so focusing the field lets
+  // you browse every tag, the way the old Tags page did — narrowing as you type.
   const matches = useMemo(() => {
     if (!suggestions?.length || !focused) {
       return [];
@@ -64,12 +65,11 @@ export function TagInput({
 
     const query = draft.trim().toLowerCase();
 
-    if (query === '') {
-      return [];
-    }
-
     return suggestions
-      .filter((label) => !lowercaseTags.has(label.toLowerCase()) && label.toLowerCase().includes(query))
+      .filter(
+        (label) =>
+          !lowercaseTags.has(label.toLowerCase()) && (query === '' || label.toLowerCase().includes(query)),
+      )
       .slice(0, MAX_SUGGESTIONS);
   }, [suggestions, focused, draft, lowercaseTags]);
 

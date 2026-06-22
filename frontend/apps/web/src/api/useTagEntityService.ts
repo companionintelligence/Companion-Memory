@@ -53,30 +53,13 @@ export function useTagEntityService() {
           return;
         }
 
-        // Evict the root `tags` query so the TagsPage refetches the list. This
-        // handles the case where a new tag is created.
+        // Evict the root `tags` query so the explorer's tag filter (which
+        // autocompletes from the tag list) refetches — handles a freshly
+        // created tag showing up in suggestions.
         cache.evict({
           id: 'ROOT_QUERY',
           fieldName: 'tags',
         });
-
-        // Evict the `entities` field from the tags that were just added. This
-        // ensures that when navigating to a Tag page, the entities list will be
-        // refetched and include the newly tagged entity.
-        //
-        // Note that the mutation returns EntityTagType, but the TagPage queries
-        // TagType, but they share the same ID, so we construct the TagType
-        // cache key manually.
-        for (const entity of data.tagEntities) {
-          if ('tags' in entity && entity.tags) {
-            for (const tag of entity.tags) {
-              cache.evict({
-                id: `TagType:${tag.id}`,
-                fieldName: 'entities',
-              });
-            }
-          }
-        }
 
         cache.gc();
       },

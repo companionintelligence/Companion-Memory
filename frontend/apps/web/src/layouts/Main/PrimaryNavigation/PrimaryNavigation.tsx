@@ -2,19 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Portal } from '@ci/common';
 import { Button, DropdownMenu, Separator, useToast } from '@ci/shadcn';
-import {
-  NotebookPen,
-  Upload,
-  Camera,
-  Plus,
-  Cable,
-  Search,
-  Tags,
-  User,
-  Lightbulb,
-  Package,
-} from '@ci/shadcn/icons';
-import { Link, useNavigate } from 'react-router-dom';
+import { NotebookPen, Upload, Camera, Plus, Cable, Search, User, Lightbulb, Package } from '@ci/shadcn/icons';
+import { useNavigate } from 'react-router-dom';
 
 import { useUploadFile, useTriggerHbpe } from '@/api';
 import { AddPersonModal } from '@/components/modals/AddItemModal';
@@ -96,12 +85,6 @@ export function PrimaryNavigation() {
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}
 
           <div className="flex items-center">
-            <Button variant="ghost" size="icon" aria-label="More Options">
-              <Link to="/tags">
-                <Tags strokeWidth={1.5} />
-              </Link>
-            </Button>
-
             <DropdownMenu modal={false}>
               <DropdownMenu.Trigger asChild>
                 <Button variant="ghost" size="icon" aria-label="More Options">
