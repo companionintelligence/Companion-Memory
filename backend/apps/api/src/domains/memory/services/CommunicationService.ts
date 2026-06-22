@@ -17,6 +17,9 @@ interface Options {
   order?: FindOptionsOrder<CommunicationEntity>;
   startTime?: Date;
   endTime?: Date;
+  /** Composite keyset cursor for the timed search path (see EventService). */
+  afterTime?: Date;
+  afterId?: string;
 }
 
 @Injectable()
@@ -288,6 +291,17 @@ export class CommunicationService {
       for (const [field, direction] of Object.entries(options.order)) {
         query = query.orderBy(`communications.${field}`, direction as 'ASC' | 'DESC');
       }
+
+      // Deterministic tiebreak so same-timestamp rows page consistently.
+      query = query.addOrderBy('communications.id', 'DESC');
+    }
+
+    // Composite keyset: page strictly past (afterTime, afterId) in (time DESC, id DESC).
+    if (options.afterTime && options.afterId) {
+      query = query.andWhere(
+        '(communications.time < :afterTime OR (communications.time = :afterTime AND communications.id < :afterId))',
+        { afterTime: options.afterTime, afterId: options.afterId },
+      );
     }
 
     if (options.startTime) {

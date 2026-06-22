@@ -26,17 +26,22 @@ const schema = z.object({
   sslmode: z.string().optional().default('disable'),
 });
 
-let parsedDb;
+function databaseUrlFromConfig() {
+  let parsedDb;
 
-try {
-  parsedDb = schema.parse(config.get('db'));
-} catch (err) {
-  console.error('Invalid DB config:', err.errors);
-  process.exit(1);
+  try {
+    parsedDb = schema.parse(config.get('db'));
+  } catch (err) {
+    console.error('Invalid DB config:', err.errors);
+    process.exit(1);
+  }
+
+  const { type, host, port, database, username, password, sslmode } = parsedDb;
+
+  return `${type}://${username}:${password}@${host}:${port}/${database}?sslmode=${sslmode}`;
 }
 
-const { type, host, port, database, username, password, sslmode } = parsedDb;
-const DATABASE_URL = `${type}://${username}:${password}@${host}:${port}/${database}?sslmode=${sslmode}`;
+const DATABASE_URL = process.env.DATABASE_URL || databaseUrlFromConfig();
 
 async function waitForDatabase(maxRetries = 30, retryDelay = 1000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

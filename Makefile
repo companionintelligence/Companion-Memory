@@ -81,15 +81,30 @@ running_env = $(shell docker compose ls --format json 2>/dev/null \
 	| grep -E '^(local|staging|production)$$' \
 	| head -n1)
 
-# Host port the running stack published for Postgres, discovered from Docker so
-# DB-touching targets reach THIS worktree's database even when dev-stack.ts gave
-# it a dynamic (ephemeral) port. Falls back to 5432 (default / nothing running).
-db_host_port = $(shell p=$$(docker compose -f docker-compose.yml -f docker-compose.local.yml port database 5432 2>/dev/null | sed -n 's/.*://p' | head -n1); echo "$${p:-5432}")
+# Host port the running stack published for Postgres, read straight off this
+# project's running `database` container (the source of truth) so DB-touching
+# targets reach this worktree's database even on a dynamic (ephemeral) port. We
+# query the container by its compose labels rather than `docker compose port`,
+# which depends on resolving the compose model (file paths, active profiles) and
+# returns nothing for a profile-gated service on some Compose versions.
+#
+# Empty means no `database` container is running for this project. The primary
+# checkout may then assume the conventional 5432; a worktree must not. Silently
+# falling back to 5432 would point seed/migrate/dbclear at the primary stack's
+# database. So a worktree with no running stack errors out (see below).
+db_host_port = $(shell \
+	port=$$(docker ps \
+		--filter "label=com.docker.compose.project=$(COMPOSE_PROJECT_NAME)" \
+		--filter "label=com.docker.compose.service=database" \
+		--format '{{.Ports}}' 2>/dev/null \
+		| sed -n 's/.*:\([0-9]*\)->5432\/tcp.*/\1/p' | head -n1); \
+	if [ -n "$$port" ]; then echo "$$port"; \
+	elif [ "$(PROJECT_NAME)" = "$(REPO)" ]; then echo 5432; fi)
 
 # Point every local-DB target at that port. node-config reads DATABASE_PORT, and
 # dotenv won't override an already-set env var, so this wins over .env's 5432.
 # Evaluated lazily per target, so non-DB targets never pay the Docker lookup.
-seed migrate dbclear dbdestroy dbshell chatreset filereset gentoken signup userpw: export DATABASE_PORT = $(db_host_port)
+seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup userpw: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
 
 define switch_env
 	@CURRENT="$(running_env)"; \
@@ -260,6 +275,10 @@ dbdestroy: ## Drop all PostgreSQL data including tables
 .PHONY: dbshell
 dbshell: ## Open a psql shell to the PostgreSQL database
 	@yarn workspace @ci/be-api dbshell
+
+.PHONY: dburl
+dburl: ## Print this worktree's PostgreSQL connection URL (for DataGrip, psql, etc.)
+	@yarn workspace @ci/be-api dburl
 
 .PHONY: dev
 dev: ## Run the development environment locally

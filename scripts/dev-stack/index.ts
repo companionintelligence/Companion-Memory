@@ -402,6 +402,10 @@ async function up(key: string): Promise<void> {
       HBPE_HOST: `http://localhost:${hbpePort}`,
       HOSTNAME: host, // this stack's own origin (<key>.localhost); OAuth host is separate
       OVERMIND_SOCKET: overmindSocket,
+      // Overmind reloads .env over the environment we hand it, which would
+      // overwrite the dynamic per-worktree ports set above. This env already
+      // carries .env (loaded at top), so skip overmind's reload.
+      OVERMIND_SKIP_ENV: '1',
     };
 
     console.log('');

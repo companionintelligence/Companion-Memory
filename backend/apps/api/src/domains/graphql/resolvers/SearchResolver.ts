@@ -23,6 +23,7 @@ import { ConceptType } from '../types/ConceptType';
 import { ContentType } from '../types/ContentType';
 import { EventType } from '../types/EventType';
 import { FileType } from '../types/FileType';
+import { GlobalUID } from '../types/GlobalUID';
 import { ItemType } from '../types/ItemType';
 import { NoteType } from '../types/NoteType';
 import { PersonType } from '../types/PersonType';
@@ -67,8 +68,16 @@ function searchCursorOf(result: SearchResult): string {
   return Buffer.from(`${timeOf(result).toISOString()}::${result.id}`).toString('base64');
 }
 
-/** Decode a cursor back to the timestamp used to window the next DB page. */
-function decodeSearchCursor(cursor?: string | null): { time: Date } | null {
+/**
+ * Decode a cursor back to the (time, id) keyset used to window the next DB page.
+ * The id portion is the result's GlobalUID (`type:uuid`, base64); we decode it to
+ * the raw uuid so the timed path can break same-timestamp ties on the underlying
+ * primary key. Ids are uuidv7 (time-ordered) so a single raw-uuid tiebreak is a
+ * consistent total order across the merged entity types. `id` is null when the
+ * cursor predates this format or its GlobalUID can't be decoded — callers then
+ * fall back to the legacy time-only window.
+ */
+function decodeSearchCursor(cursor?: string | null): { time: Date; id: string | null } | null {
   if (!cursor) {
     return null;
   }
@@ -77,9 +86,23 @@ function decodeSearchCursor(cursor?: string | null): { time: Date } | null {
     const decoded = Buffer.from(cursor, 'base64').toString('utf8');
     const separator = decoded.indexOf('::');
     const iso = separator >= 0 ? decoded.slice(0, separator) : decoded;
+    const globalId = separator >= 0 ? decoded.slice(separator + 2) : '';
     const time = new Date(iso);
 
-    return Number.isNaN(time.getTime()) ? null : { time };
+    if (Number.isNaN(time.getTime())) {
+      return null;
+    }
+
+    let id: string | null = null;
+    if (globalId) {
+      try {
+        id = GlobalUID.decode(globalId).id;
+      } catch {
+        id = null;
+      }
+    }
+
+    return { time, id };
   } catch {
     return null;
   }
@@ -160,14 +183,22 @@ export class SearchResolver {
       identifiers = await this.searchByTags(serviceContext, tags);
     } else {
       candidateSource = 'timed';
+      // Prefer a precise (time, id) keyset cursor: it pages strictly *past* the
+      // cursor row, so a same-timestamp cluster larger than the over-fetch window
+      // no longer dead-ends pagination (the old time-only window kept re-fetching
+      // the same top-N rows). Fall back to the legacy inclusive-endTime window when
+      // the cursor lacks a decodable id (older cursors).
+      const keyset = afterCursor?.time != null && afterCursor.id != null;
       identifiers = await this.searchByTimedEntities(serviceContext, {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
         startTime,
-        // Page backward through time: each page ends at the cursor's timestamp
-        // (inclusive), so the cursor row is re-fetched and Paginator slices past it.
         // With no filters at all, bound to "now" so we return recent items, not the entire history.
-        endTime: afterCursor?.time ?? endTime ?? (noInputs ? new Date() : undefined),
+        endTime: keyset
+          ? (endTime ?? (noInputs ? new Date() : undefined))
+          : (afterCursor?.time ?? endTime ?? (noInputs ? new Date() : undefined)),
+        afterTime: keyset ? afterCursor!.time : undefined,
+        afterId: keyset ? afterCursor!.id! : undefined,
         // "How" filter — pushed down to the event query for the timed path.
         eventTypes,
         // who / where / connector — pushed down to the event query. When set, the
@@ -327,6 +358,8 @@ export class SearchResolver {
       excludeTypes,
       startTime,
       endTime,
+      afterTime,
+      afterId,
       eventTypes,
       eventFilter,
       limit = 25,
@@ -335,6 +368,10 @@ export class SearchResolver {
       excludeTypes?: IndexableEntity[];
       startTime?: Date;
       endTime?: Date;
+      // Composite keyset cursor: page strictly past (afterTime, afterId) in
+      // (time DESC, id DESC) order. Threaded down to each type's SQL query.
+      afterTime?: Date;
+      afterId?: string;
       eventTypes?: string[];
       eventFilter?: {
         connectors?: string[];
@@ -356,6 +393,8 @@ export class SearchResolver {
       order: FindOptionsOrder<EventEntity>;
       startTime?: Date;
       endTime?: Date;
+      afterTime?: Date;
+      afterId?: string;
       eventTypes?: string[];
       connectors?: string[];
       people?: string[];
@@ -377,6 +416,8 @@ export class SearchResolver {
       order: FindOptionsOrder<BrowserActivityEntity>;
       startTime?: Date;
       endTime?: Date;
+      afterTime?: Date;
+      afterId?: string;
     } = {
       limit,
       order: { time: 'DESC' },
@@ -387,6 +428,8 @@ export class SearchResolver {
       order: FindOptionsOrder<CommunicationEntity>;
       startTime?: Date;
       endTime?: Date;
+      afterTime?: Date;
+      afterId?: string;
     } = {
       limit,
       order: { time: 'DESC' },
@@ -402,6 +445,15 @@ export class SearchResolver {
       eventOptions.endTime = endTime;
       browserActivityOptions.endTime = endTime;
       communicationOptions.endTime = endTime;
+    }
+
+    if (afterTime && afterId) {
+      eventOptions.afterTime = afterTime;
+      eventOptions.afterId = afterId;
+      browserActivityOptions.afterTime = afterTime;
+      browserActivityOptions.afterId = afterId;
+      communicationOptions.afterTime = afterTime;
+      communicationOptions.afterId = afterId;
     }
 
     const [eventResults, browserActivityResults, communicationResults] = await Promise.all([
@@ -469,7 +521,17 @@ export class SearchResolver {
       const aTime = SearchResolver.getEntityTimestamp(a)?.getTime() ?? 0;
       const bTime = SearchResolver.getEntityTimestamp(b)?.getTime() ?? 0;
 
-      return direction * (aTime - bTime);
+      if (aTime !== bTime) {
+        return direction * (aTime - bTime);
+      }
+
+      // Deterministic same-timestamp tiebreak on the raw id (uuidv7 → time-ordered),
+      // mirroring the SQL keyset's `id DESC` so cursor pagination through a cluster
+      // of identical timestamps is stable across pages.
+      const aId = String((a.entity as { id?: unknown }).id ?? '');
+      const bId = String((b.entity as { id?: unknown }).id ?? '');
+
+      return direction * aId.localeCompare(bId);
     });
   }
 

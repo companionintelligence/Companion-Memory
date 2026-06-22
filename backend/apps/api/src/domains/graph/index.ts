@@ -15,6 +15,7 @@ import { UserModule } from '@ci/domains/user';
 import { type Node, NodeEntity } from './entities/NodeEntity';
 import { type Relationship, RelationshipEntity } from './entities/RelationshipEntity';
 import { GraphExpansionService } from './services/GraphExpansionService';
+import { GraphIngestService } from './services/GraphIngestService';
 import { GraphService } from './services/GraphService';
 import { NodeService } from './services/NodeService';
 import { RelationshipService } from './services/RelationshipService';
@@ -32,12 +33,12 @@ import { RelationshipService } from './services/RelationshipService';
     NotesModule,
     UserModule,
   ],
-  providers: [GraphExpansionService, GraphService, NodeService, RelationshipService],
-  exports: [GraphExpansionService, GraphService, NodeService, RelationshipService],
+  providers: [GraphExpansionService, GraphIngestService, GraphService, NodeService, RelationshipService],
+  exports: [GraphExpansionService, GraphIngestService, GraphService, NodeService, RelationshipService],
 })
 export class GraphModule {}
 
-export { GraphExpansionService, GraphService, NodeService, RelationshipService };
+export { GraphExpansionService, GraphIngestService, GraphService, NodeService, RelationshipService };
 export { NodeEntity, RelationshipEntity };
 export type { Node, Relationship };
 export { RelationshipMap, RelationshipType } from './types';

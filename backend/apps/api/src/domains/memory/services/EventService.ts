@@ -16,6 +16,14 @@ interface Options {
   order?: FindOptionsOrder<EventEntity>;
   startTime?: Date;
   endTime?: Date;
+  /**
+   * Composite keyset cursor for the timed search path: return only events
+   * strictly past (afterTime, afterId) in (start_time DESC, event_id DESC)
+   * order, so a cluster of identical start_times can be paged through (the
+   * time-only window dead-ended once a cluster exceeded one fetch).
+   */
+  afterTime?: Date;
+  afterId?: string;
   eventTypes?: string[];
   /** "Connector": event.source_system values to include (e.g. 'gmail','imessage'). */
   connectors?: string[];
@@ -424,6 +432,20 @@ export class EventService {
       for (const [field, direction] of Object.entries(options.order)) {
         query = query.orderBy(`event.${field}`, direction as 'ASC' | 'DESC');
       }
+
+      // Deterministic tiebreak so same-timestamp rows have a stable total order
+      // that the keyset cursor below can page through.
+      query = query.addOrderBy('event.event_id', 'DESC');
+    }
+
+    // Composite keyset: page strictly past (afterTime, afterId). Matches the
+    // (start_time DESC, event_id DESC) order so a same-timestamp cluster larger
+    // than one fetch is walked through instead of re-returning its top rows.
+    if (options.afterTime && options.afterId) {
+      query = query.andWhere(
+        '(event.start_time < :afterTime OR (event.start_time = :afterTime AND event.event_id < :afterId))',
+        { afterTime: options.afterTime, afterId: options.afterId },
+      );
     }
 
     if (options.startTime) {
