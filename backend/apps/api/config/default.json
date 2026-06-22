@@ -109,7 +109,7 @@
     "new.insights.page": false,
     "require.signup.codes": true,
     "files.page": false,
-    "hbpe": false,
+    "hbpe": true,
     "agent.memory.compaction": false
   },
   "environment": {
