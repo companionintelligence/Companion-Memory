@@ -338,6 +338,9 @@ input CreateContentInput {
   externalId: String
   mimetype: String
   sourceData: JSON
+  sourceId: String
+  sourceSystem: String
+  sourceType: String
   sourceUrl: String
   text: String
   title: String
@@ -728,6 +731,7 @@ type Mutation {
   createConnection(input: CreateConnectionInput!): CreateConnectionPayload!
   createConnectionSyncJob(input: CreateConnectionSyncJobInput!): CreateConnectionSyncJobPayload!
   createContent(input: CreateContentInput!): ContentType!
+  createContents(input: [CreateContentInput!]!): [ContentType!]!
   createEvent(input: CreateEventInput!): EventType!
   createInventoryItems(input: [CreateInventoryInput!]!): [ItemType!]!
   createItem(input: CreateItemInput!): CreateItemPayload!

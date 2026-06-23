@@ -1,14 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { isUniqueViolation } from '@ci/common/constants';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { EventService } from '@ci/domains/events';
 import { ContentCreatedEvent, ContentRemovedEvent, ContentUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { Content, ContentEntity } from '../entities/ContentEntity';
+import { EventEntity } from '../entities/EventEntity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
 @Injectable()
@@ -16,6 +18,8 @@ export class ContentService {
   constructor(
     @InjectRepository(ContentEntity)
     private readonly contentRepository: Repository<ContentEntity>,
+    @InjectRepository(EventEntity)
+    private readonly eventRepository: Repository<EventEntity>,
     private readonly eventService: EventService,
   ) {}
 
@@ -34,6 +38,9 @@ export class ContentService {
           externalId: item.external_id ?? undefined,
           sourceUrl: item.source_url ?? undefined,
           sourceData: item.source_data ?? undefined,
+          sourceType: item.source_type ?? undefined,
+          sourceSystem: item.source_system ?? undefined,
+          sourceId: item.source_id ?? undefined,
           user: {
             id: context.userId,
           },
@@ -48,6 +55,96 @@ export class ContentService {
         return ContentEntity.toEgressType(contentResult);
       }),
     );
+  }
+
+  /**
+   * Batch, idempotent content ingest for the importer. Each item dedupes on the
+   * provenance triple (user_id, source_type, source_system, source_id) — like
+   * EventService.create / ItemService.createMany — so a re-sync returns the
+   * existing row instead of inserting a duplicate. Paired with the
+   * content_source_triple_uniq partial unique index, which also catches a lost
+   * insert race (23505).
+   *
+   * Event link: an explicit `event.id` (e.g. the id returned by createEvent)
+   * wins. Otherwise, when the item carries a source triple, the matching event in
+   * ci.events with the SAME (user_id, source_type, source_system, source_id) is
+   * found and content.event_id is set to it, so a content row pushed with the same
+   * provenance as its event auto-links. If nothing matches, event_id stays null.
+   *
+   * Returns the created-or-existing rows in input order.
+   */
+  async createMany(context: UserServiceContext, data: CreateContentDto[]): Promise<Content[]> {
+    return Promise.all(
+      data.map(async (item) => {
+        // Idempotency: when the triple is present, return the existing row.
+        const sourceWhere: FindOptionsWhere<ContentEntity> | null =
+          item.source_type && item.source_id
+            ? {
+                userId: context.userId,
+                sourceType: item.source_type,
+                sourceSystem: item.source_system ?? IsNull(),
+                sourceId: item.source_id,
+              }
+            : null;
+
+        if (sourceWhere) {
+          const existing = await this.contentRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return ContentEntity.toEgressType(existing);
+          }
+        }
+
+        // Resolve the event link: explicit event wins; otherwise auto-link by the
+        // shared provenance triple.
+        const event = item.event ?? (await this.resolveEventByTriple(context, item));
+
+        try {
+          const [created] = await this.create(context, {
+            ...item,
+            event,
+          });
+
+          return created;
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple (the partial-
+          // unique index raised 23505) — fetch and return the winner.
+          if (sourceWhere && isUniqueViolation(err)) {
+            const existing = await this.contentRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return ContentEntity.toEgressType(existing);
+            }
+          }
+
+          throw err;
+        }
+      }),
+    );
+  }
+
+  /**
+   * Find the event sharing this content's provenance triple, scoped to the same
+   * user. Returns the `{ id }` relation shape ContentService.create expects, or
+   * undefined when no triple is present or no event matches.
+   */
+  private async resolveEventByTriple(
+    context: UserServiceContext,
+    item: CreateContentDto,
+  ): Promise<{ id: string } | undefined> {
+    if (!item.source_type || !item.source_id) {
+      return undefined;
+    }
+
+    const event = await this.eventRepository.findOne({
+      where: {
+        userId: context.userId,
+        sourceType: item.source_type,
+        sourceSystem: item.source_system ?? IsNull(),
+        sourceId: item.source_id,
+      },
+      select: { id: true },
+    });
+
+    return event ? { id: event.id } : undefined;
   }
 
   async findAll(context: UserServiceContext): Promise<Content[]> {

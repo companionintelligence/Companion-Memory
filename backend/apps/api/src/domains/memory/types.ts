@@ -172,6 +172,11 @@ export interface CreateContentDto {
   source_data?: Record<string, unknown>;
   user_id?: string;
   event_id?: string;
+  // Provenance triple for idempotent batch ingest and event auto-linking. See
+  // content_source_triple_uniq and ContentService.createMany.
+  source_type?: string;
+  source_system?: string;
+  source_id?: string;
   event?: {
     id: string;
   };

@@ -393,6 +393,9 @@ export type CreateContentInput = {
   externalId?: InputMaybe<Scalars['String']['input']>;
   mimetype?: InputMaybe<Scalars['String']['input']>;
   sourceData?: InputMaybe<Scalars['JSON']['input']>;
+  sourceId?: InputMaybe<Scalars['String']['input']>;
+  sourceSystem?: InputMaybe<Scalars['String']['input']>;
+  sourceType?: InputMaybe<Scalars['String']['input']>;
   sourceUrl?: InputMaybe<Scalars['String']['input']>;
   text?: InputMaybe<Scalars['String']['input']>;
   title?: InputMaybe<Scalars['String']['input']>;
@@ -808,6 +811,7 @@ export type Mutation = {
   createConnection: CreateConnectionPayload;
   createConnectionSyncJob: CreateConnectionSyncJobPayload;
   createContent: ContentType;
+  createContents: Array<ContentType>;
   createEvent: EventType;
   createInventoryItems: Array<ItemType>;
   createItem: CreateItemPayload;
@@ -902,6 +906,11 @@ export type MutationCreateConnectionSyncJobArgs = {
 
 export type MutationCreateContentArgs = {
   input: CreateContentInput;
+};
+
+
+export type MutationCreateContentsArgs = {
+  input: Array<CreateContentInput>;
 };
 
 

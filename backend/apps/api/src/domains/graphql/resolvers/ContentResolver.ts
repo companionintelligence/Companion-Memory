@@ -68,6 +68,42 @@ export class ContentResolver {
     return ContentType.toType(entity[0]);
   }
 
+  /**
+   * Batch, idempotent content ingest for the importer. Each input dedupes on the
+   * provenance triple (user, sourceType, sourceSystem, sourceId) so a re-sync
+   * returns the existing content instead of inserting a duplicate. Each row also
+   * links to its event: an explicit eventId wins, otherwise the event sharing the
+   * same provenance triple is auto-linked (see ContentService.createMany). Returns
+   * created-or-existing rows in input order.
+   */
+  @Mutation(() => [ContentType])
+  async createContents(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreateContentInput] }) input: CreateContentInput[],
+  ): Promise<ContentType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const contents = await this.contentService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        type: item.type,
+        title: item.title,
+        text: item.text,
+        url: item.url,
+        mimetype: item.mimetype,
+        external_id: item.externalId,
+        source_url: item.sourceUrl,
+        source_data: item.sourceData,
+        source_type: item.sourceType,
+        source_system: item.sourceSystem,
+        source_id: item.sourceId,
+        event: item.eventId ? { id: resolveEventId(item.eventId) } : undefined,
+      })),
+    );
+
+    return contents.map((content) => ContentType.toType(content));
+  }
+
   @Mutation(() => ContentType, { nullable: true })
   async updateContent(
     @Context() context: RequestContext,

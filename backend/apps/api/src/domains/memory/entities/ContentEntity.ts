@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryColumn,
   Column,
   CreateDateColumn,
@@ -13,6 +14,13 @@ import { UserEntity, type User } from '@ci/domains/user';
 import { EventEntity, Event } from './EventEntity';
 
 @Entity({ schema: 'ci', name: 'content' })
+// Idempotency key for captured/imported content. Created by migration
+// 20260623120300_add_content_provenance; declared here so TypeORM is aware of it
+// (schema sync stays off — the migration is the source of truth).
+@Index('content_source_triple_uniq', ['userId', 'sourceType', 'sourceSystem', 'sourceId'], {
+  unique: true,
+  where: '"source_id" IS NOT NULL',
+})
 export class ContentEntity {
   @PrimaryColumn('uuid')
   id!: string;
@@ -41,9 +49,30 @@ export class ContentEntity {
   @Column({ type: 'jsonb', nullable: true, name: 'source_data' })
   sourceData!: Record<string, unknown> | null;
 
+  // Provenance triple for imported content (importer / capture sources). Added by
+  // migration 20260623120300_add_content_provenance. Dedupe key for the batch
+  // createContents mutation; also used to auto-link content to the event sharing
+  // the same triple. Null for derived/manual rows.
+  @Column({ type: 'text', nullable: true, name: 'source_type' })
+  sourceType!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'source_system' })
+  sourceSystem!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'source_id' })
+  sourceId!: string | null;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
+
+  // Raw FK column backing the `user` relation above. Exposed so the provenance
+  // unique index (userId, sourceType, sourceSystem, sourceId) and triple lookups
+  // can reference it directly. insert/update disabled — the `user` relation owns
+  // writes to user_id. Nullable in TS because the column is only populated when
+  // selected; toEgressType still derives userId from the loaded `user` relation.
+  @Column({ type: 'uuid', name: 'user_id', insert: false, update: false })
+  userId!: string | null;
 
   @ManyToOne(() => EventEntity, { nullable: true })
   @JoinColumn({ name: 'event_id' })
@@ -66,6 +95,9 @@ export class ContentEntity {
       externalId: entity.externalId || null,
       sourceUrl: entity.sourceUrl || null,
       sourceData: entity.sourceData || null,
+      sourceType: entity.sourceType || null,
+      sourceSystem: entity.sourceSystem || null,
+      sourceId: entity.sourceId || null,
       userId: entity.user?.id || null,
       eventId: entity.event?.id || null,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
