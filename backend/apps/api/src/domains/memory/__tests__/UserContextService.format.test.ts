@@ -18,13 +18,25 @@ function makeService(): UserContextService {
 }
 
 function baseContext(overrides: Partial<UserContext> = {}): UserContext {
-  return {
-    currentUser: { entityId: 'u1', name: 'Hanzla Mateen', username: 'Hanzla Mateen' },
-    familyMembers: [],
-    topPreferences: [],
-    quickStats: { totalEntities: 4, totalPreferences: 3, totalDislikes: 0, familySize: 0 },
-    ...overrides,
+  const currentUser = overrides.currentUser ?? {
+    entityId: 'u1',
+    name: 'Hanzla Mateen',
+    username: 'Hanzla Mateen',
   };
+  const familyMembers = overrides.familyMembers ?? [];
+  const topPreferences = overrides.topPreferences ?? [];
+
+  // Mirror getUserContextForLLM: derive the counts from topPreferences so the
+  // fixture stays internally consistent (e.g. totalDislikes matches the number
+  // of DISLIKES rows) unless a test overrides quickStats explicitly.
+  const quickStats = overrides.quickStats ?? {
+    totalEntities: topPreferences.length + familyMembers.length + 1,
+    totalPreferences: topPreferences.filter((p) => p.relationship === 'PREFERS').length,
+    totalDislikes: topPreferences.filter((p) => p.relationship === 'DISLIKES').length,
+    familySize: familyMembers.length,
+  };
+
+  return { currentUser, familyMembers, topPreferences, quickStats };
 }
 
 describe('UserContextService.formatContextForSystemPrompt', () => {
