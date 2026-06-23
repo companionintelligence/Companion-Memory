@@ -131,6 +131,19 @@ export type BrowserActivityType = Node & Taggable & {
   url: Scalars['String']['output'];
 };
 
+export type BulkGraphInput = {
+  entities: Array<GraphEntityInput>;
+  relationships?: InputMaybe<Array<GraphRelationshipInput>>;
+};
+
+export type BulkGraphPayload = {
+  __typename?: 'BulkGraphPayload';
+  entitiesProcessed: Scalars['Int']['output'];
+  errors: Array<Scalars['String']['output']>;
+  relationshipsProcessed: Scalars['Int']['output'];
+  success: Scalars['Boolean']['output'];
+};
+
 export type CommunicationConnection = Connection & {
   __typename?: 'CommunicationConnection';
   edges: Array<CommunicationEdge>;
@@ -607,6 +620,22 @@ export type ForecastType = {
   systemStatus: Scalars['String']['output'];
 };
 
+export type GraphEntityInput = {
+  description?: InputMaybe<Scalars['String']['input']>;
+  entityType: Scalars['String']['input'];
+  key: Scalars['String']['input'];
+  name?: InputMaybe<Scalars['String']['input']>;
+  properties?: InputMaybe<Scalars['JSON']['input']>;
+  sourceSystem: Scalars['String']['input'];
+};
+
+export type GraphRelationshipInput = {
+  fromKey: Scalars['String']['input'];
+  properties?: InputMaybe<Scalars['JSON']['input']>;
+  toKey: Scalars['String']['input'];
+  type: Scalars['String']['input'];
+};
+
 export type InsightItemType = {
   __typename?: 'InsightItemType';
   keyActions: Array<Scalars['String']['output']>;
@@ -659,6 +688,42 @@ export type ItemType = Node & Taggable & {
   updatedAt: Scalars['DateTime']['output'];
 };
 
+export type KnownPlaceCandidateType = {
+  __typename?: 'KnownPlaceCandidateType';
+  confidence: Scalars['Float']['output'];
+  eventCount: Scalars['Int']['output'];
+  kind: Scalars['String']['output'];
+  label: Scalars['String']['output'];
+  lat: Scalars['Float']['output'];
+  lng: Scalars['Float']['output'];
+  locationId?: Maybe<Scalars['String']['output']>;
+};
+
+export type KnownPlaceCoordinates = {
+  __typename?: 'KnownPlaceCoordinates';
+  lat: Scalars['Float']['output'];
+  lng: Scalars['Float']['output'];
+};
+
+export type KnownPlaceCoordinatesInput = {
+  lat: Scalars['Float']['input'];
+  lng: Scalars['Float']['input'];
+};
+
+export type KnownPlaceType = {
+  __typename?: 'KnownPlaceType';
+  activeFrom?: Maybe<Scalars['String']['output']>;
+  activeTo?: Maybe<Scalars['String']['output']>;
+  aliases: Array<Scalars['String']['output']>;
+  confidence: Scalars['Float']['output'];
+  coordinates?: Maybe<KnownPlaceCoordinates>;
+  id: Scalars['ID']['output'];
+  kind: Scalars['String']['output'];
+  label: Scalars['String']['output'];
+  locationId?: Maybe<Scalars['String']['output']>;
+  source: Scalars['String']['output'];
+};
+
 export type MessageConnection = Connection & {
   __typename?: 'MessageConnection';
   edges: Array<MessageEdge>;
@@ -682,6 +747,7 @@ export type MessageType = Node & {
 
 export type Mutation = {
   __typename?: 'Mutation';
+  bulkIngestGraph: BulkGraphPayload;
   createAnswer: AnswerType;
   createConcept: CreateConceptPayload;
   createConnection: CreateConnectionPayload;
@@ -732,6 +798,7 @@ export type Mutation = {
   updateEvent?: Maybe<EventType>;
   updateFile?: Maybe<FileType>;
   updateItem: UpdateItemPayload;
+  updateKnownPlace: KnownPlaceType;
   updateNote: UpdateNotePayload;
   updatePerson: UpdatePersonPayload;
   updatePlace?: Maybe<PlaceType>;
@@ -739,6 +806,11 @@ export type Mutation = {
   updateQuestion?: Maybe<QuestionType>;
   updateRelationship: UpdateRelationshipPayload;
   updateSavedSearch: UpdateSavedSearchPayload;
+};
+
+
+export type MutationBulkIngestGraphArgs = {
+  input: BulkGraphInput;
 };
 
 
@@ -959,6 +1031,11 @@ export type MutationUpdateFileArgs = {
 
 export type MutationUpdateItemArgs = {
   input: UpdateItemInput;
+};
+
+
+export type MutationUpdateKnownPlaceArgs = {
+  input: UpdateKnownPlaceInput;
 };
 
 
@@ -1187,6 +1264,8 @@ export type Query = {
   forecast?: Maybe<ForecastType>;
   item?: Maybe<ItemType>;
   items: ItemConnection;
+  knownPlaceCandidates: Array<KnownPlaceCandidateType>;
+  knownPlaces: Array<KnownPlaceType>;
   me?: Maybe<UserType>;
   node?: Maybe<Node>;
   note?: Maybe<NoteType>;
@@ -1367,6 +1446,11 @@ export type QueryItemsArgs = {
   before?: InputMaybe<Scalars['String']['input']>;
   first?: InputMaybe<Scalars['Int']['input']>;
   last?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type QueryKnownPlacesArgs = {
+  kind?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -1869,6 +1953,18 @@ export type UpdateItemPayload = {
   __typename?: 'UpdateItemPayload';
   item?: Maybe<ItemType>;
   success: Scalars['Boolean']['output'];
+};
+
+export type UpdateKnownPlaceInput = {
+  activeFrom?: InputMaybe<Scalars['String']['input']>;
+  activeTo?: InputMaybe<Scalars['String']['input']>;
+  aliases?: InputMaybe<Array<Scalars['String']['input']>>;
+  confidence?: InputMaybe<Scalars['Float']['input']>;
+  coordinates?: InputMaybe<KnownPlaceCoordinatesInput>;
+  kind: Scalars['String']['input'];
+  label: Scalars['String']['input'];
+  locationId?: InputMaybe<Scalars['String']['input']>;
+  source?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type UpdateNoteInput = {

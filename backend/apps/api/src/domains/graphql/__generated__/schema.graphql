@@ -103,6 +103,18 @@ type BrowserActivityType implements Node & Taggable {
   url: String!
 }
 
+input BulkGraphInput {
+  entities: [GraphEntityInput!]!
+  relationships: [GraphRelationshipInput!]
+}
+
+type BulkGraphPayload {
+  entitiesProcessed: Int!
+  errors: [String!]!
+  relationshipsProcessed: Int!
+  success: Boolean!
+}
+
 type CommunicationConnection implements Connection {
   edges: [CommunicationEdge!]!
   pageInfo: PageInfo!
@@ -533,6 +545,22 @@ type ForecastType {
   systemStatus: String!
 }
 
+input GraphEntityInput {
+  description: String
+  entityType: String!
+  key: String!
+  name: String
+  properties: JSON
+  sourceSystem: String!
+}
+
+input GraphRelationshipInput {
+  fromKey: String!
+  properties: JSON
+  toKey: String!
+  type: String!
+}
+
 type InsightItemType {
   keyActions: [String!]!
   relatedEntityIds: [String!]
@@ -639,6 +667,7 @@ type MessageType implements Node {
 }
 
 type Mutation {
+  bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
   createAnswer(input: CreateAnswerInput!): AnswerType!
   createConcept(input: CreateConceptInput!): CreateConceptPayload!
   createConnection(input: CreateConnectionInput!): CreateConnectionPayload!
