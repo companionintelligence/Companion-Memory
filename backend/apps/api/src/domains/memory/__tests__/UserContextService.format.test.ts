@@ -5,9 +5,8 @@ import type { LoggerService } from '@ci/common/logging';
 import type { GraphQueryService } from '../services/GraphQueryService';
 import { UserContextService, type UserContext } from '../services/UserContextService';
 
-// formatContextForSystemPrompt is a pure transform over its UserContext arg
-// (it only uses this.renderList / this.logger.setContext), so it can be unit
-// tested without the DB-backed dependencies.
+// formatContextForSystemPrompt is a pure transform over its UserContext arg,
+// so it can be unit tested without the DB-backed dependencies.
 function makeService(): UserContextService {
   const logger = { setContext: () => undefined } as unknown as LoggerService;
 
