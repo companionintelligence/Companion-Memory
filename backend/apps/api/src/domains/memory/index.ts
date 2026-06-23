@@ -29,6 +29,7 @@ import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { EventsIngestController } from './controllers/EventsIngestController';
 import { GraphController } from './controllers/GraphController';
+import { BaseEntity } from './entities/BaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
@@ -62,6 +63,7 @@ import { UserContextService } from './services/UserContextService';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
+      BaseEntity,
       CommunicationEntity,
       ContentEntity,
       EventEntity,
