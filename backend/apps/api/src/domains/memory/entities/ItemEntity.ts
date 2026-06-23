@@ -102,6 +102,21 @@ export class ItemEntity {
   @Column('text', { name: 'user_id' })
   userId!: string;
 
+  @Column('text', { name: 'owner_user_id', nullable: true })
+  ownerUserId!: string | null;
+
+  // Provenance triple — the stable key capture sources carry. Lets the importer
+  // route timeline items into inventory and re-ingest idempotently (paired with
+  // the inventory_source_triple_uniq partial unique index).
+  @Column('text', { name: 'source_type', nullable: true })
+  sourceType!: string | null;
+
+  @Column('text', { name: 'source_system', nullable: true })
+  sourceSystem!: string | null;
+
+  @Column('text', { name: 'source_id', nullable: true })
+  sourceId!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -149,6 +164,10 @@ export class ItemEntity {
       metadata: entity.metadata,
 
       userId: entity.userId,
+      ownerUserId: entity.ownerUserId,
+      sourceType: entity.sourceType,
+      sourceSystem: entity.sourceSystem,
+      sourceId: entity.sourceId,
       sourceFileId: entity.sourceFileId,
 
       createdAt: entity.createdAt,

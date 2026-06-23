@@ -248,6 +248,42 @@ input CreateAnswerInput {
   questionId: String!
 }
 
+input CreateBrowserActivityInput {
+  actionType: String
+  category: String
+  containsSensitive: Boolean
+  deviceId: String
+  durationSeconds: Int
+  isIncognito: Boolean
+  pageSummary: String
+  productivityScore: Float
+  properties: JSON
+  scrollDepthPercent: Float
+  sourceId: String
+  sourceSystem: String
+  sourceType: String
+  time: DateTime!
+  title: String
+  url: String!
+}
+
+input CreateCommunicationInput {
+  attachments: [JSON!]
+  communicationType: String!
+  content: String!
+  direction: String
+  fromEntityId: String
+  participantsMetadata: JSON
+  preview: String
+  sourceId: String
+  sourceSystem: String
+  sourceType: String
+  subject: String
+  threadId: String
+  time: DateTime!
+  toEntityIds: [String!]
+}
+
 input CreateConceptInput {
   description: String
   linkedId: String
@@ -331,6 +367,23 @@ input CreateEventInput {
   startTime: DateTime!
   status: String
   title: String
+}
+
+input CreateInventoryInput {
+  acquiredAt: DateTime
+  brand: String
+  category: String
+  condition: ItemCondition
+  currency: String
+  currentValue: Float
+  description: String
+  identifierCodes: JSON
+  name: String!
+  purchasePrice: Float
+  sourceId: String
+  sourceSystem: String
+  sourceType: String
+  subcategory: String
 }
 
 input CreateItemInput {
@@ -669,11 +722,14 @@ type MessageType implements Node {
 type Mutation {
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
   createAnswer(input: CreateAnswerInput!): AnswerType!
+  createBrowserActivities(input: [CreateBrowserActivityInput!]!): [BrowserActivityType!]!
+  createCommunications(input: [CreateCommunicationInput!]!): [CommunicationType!]!
   createConcept(input: CreateConceptInput!): CreateConceptPayload!
   createConnection(input: CreateConnectionInput!): CreateConnectionPayload!
   createConnectionSyncJob(input: CreateConnectionSyncJobInput!): CreateConnectionSyncJobPayload!
   createContent(input: CreateContentInput!): ContentType!
   createEvent(input: CreateEventInput!): EventType!
+  createInventoryItems(input: [CreateInventoryInput!]!): [ItemType!]!
   createItem(input: CreateItemInput!): CreateItemPayload!
   createNote(input: CreateNoteInput!): CreateNotePayload!
   createPerson(input: CreatePersonInput!): CreatePersonPayload!

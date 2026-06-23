@@ -19,6 +19,19 @@ export enum PgErrorCode {
   UNIQUE_NO_INDEX = '42P07', // relation already exists
 }
 
+/**
+ * True when an error is a Postgres unique-constraint violation (23505). TypeORM
+ * surfaces the pg error code either directly on the thrown error or on its nested
+ * `driverError`; this checks both so callers can detect a lost insert race
+ * against a (partial) unique index and fall back to find-or-return.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string; driverError?: { code?: string } })?.code;
+  const driverCode = (err as { driverError?: { code?: string } })?.driverError?.code;
+
+  return code === PgErrorCode.UNIQUE_VIOLATION || driverCode === PgErrorCode.UNIQUE_VIOLATION;
+}
+
 export enum ContentType {
   PHOTO = 'Photo',
   VIDEO = 'Video',

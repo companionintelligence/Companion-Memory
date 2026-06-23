@@ -3,12 +3,13 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { BrowserActivityService } from '@ci/domains/browser-activity';
+import { BrowserActivityService, type CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 
 import { TagLoader } from '../loaders/TagLoader';
 import { BrowserActivityConnection } from '../types/BrowserActivityConnection';
 import { BrowserActivityEdge } from '../types/BrowserActivityEdge';
 import { BrowserActivityType } from '../types/BrowserActivityType';
+import { CreateBrowserActivityInput } from '../types/CreateBrowserActivityInput';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
@@ -65,6 +66,44 @@ export class BrowserActivityResolver {
     const entity = await this.browserActivityService.findById(serviceContext, id);
 
     return entity ? BrowserActivityType.toType(entity) : null;
+  }
+
+  /**
+   * Batch, idempotent browser-activity ingest for the importer. Each input dedupes
+   * on the provenance triple (user, sourceType, sourceSystem, sourceId) so a
+   * re-sync returns the existing activity instead of inserting a duplicate.
+   * Returns created-or-existing rows in input order.
+   */
+  @Mutation(() => [BrowserActivityType])
+  async createBrowserActivities(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreateBrowserActivityInput] }) input: CreateBrowserActivityInput[],
+  ): Promise<BrowserActivityType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const activities = await this.browserActivityService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        time: item.time.toISOString(),
+        url: item.url,
+        title: item.title,
+        action_type: item.actionType as CreateBrowserActivityDto['action_type'],
+        properties: item.properties,
+        duration_seconds: item.durationSeconds,
+        scroll_depth_percent: item.scrollDepthPercent,
+        page_summary: item.pageSummary,
+        category: item.category,
+        productivity_score: item.productivityScore,
+        is_incognito: item.isIncognito,
+        contains_sensitive: item.containsSensitive,
+        device_id: item.deviceId,
+        source_type: item.sourceType,
+        source_system: item.sourceSystem,
+        source_id: item.sourceId,
+      })),
+    );
+
+    return activities.map((activity) => BrowserActivityType.toType(activity));
   }
 
   @Mutation(() => BrowserActivityType, { nullable: true })

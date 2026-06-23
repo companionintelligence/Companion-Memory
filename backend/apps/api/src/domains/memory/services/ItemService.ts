@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
+import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
@@ -29,16 +30,23 @@ export class ItemService {
     const entity = this.itemRepository.create({
       id,
       userId: context.userId,
+      ownerUserId: context.userId,
       name: data.name,
       description: data.description ?? null,
       category: data.category ?? null,
       subcategory: data.subcategory ?? null,
       brand: data.brand ?? null,
       model: data.model ?? null,
+      purchasePrice: data.purchasePrice ?? null,
       currentValue: data.currentValue ?? null,
       currency: data.currency ?? 'USD',
+      acquiredAt: data.acquiredAt ?? null,
+      identifierCodes: data.identifierCodes ?? {},
       condition: data.condition ?? null,
       metadata: data.metadata ?? {},
+      sourceType: data.sourceType ?? null,
+      sourceSystem: data.sourceSystem ?? null,
+      sourceId: data.sourceId ?? null,
     });
 
     await this.itemRepository.save(entity);
@@ -48,6 +56,53 @@ export class ItemService {
     });
 
     return ItemEntity.toEgressType(entity);
+  }
+
+  /**
+   * Batch, idempotent inventory ingest for the importer. Each item dedupes on the
+   * provenance triple (owner_user_id, source_type, source_system, source_id) —
+   * identical to EventService.create — so a re-sync returns the existing row
+   * instead of inserting a duplicate. Paired with the inventory_source_triple_uniq
+   * partial unique index, which also catches a lost insert race (23505).
+   */
+  async createMany(context: UserServiceContext, data: CreateItemDto[]): Promise<Item[]> {
+    return Promise.all(
+      data.map(async (item) => {
+        // Idempotency: when the triple is present, return the existing row.
+        const sourceWhere: FindOptionsWhere<ItemEntity> | null =
+          item.sourceType && item.sourceId
+            ? {
+                ownerUserId: context.userId,
+                sourceType: item.sourceType,
+                sourceSystem: item.sourceSystem ?? IsNull(),
+                sourceId: item.sourceId,
+              }
+            : null;
+
+        if (sourceWhere) {
+          const existing = await this.itemRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return ItemEntity.toEgressType(existing);
+          }
+        }
+
+        try {
+          return await this.create(context, item);
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple (the partial-
+          // unique index raised 23505) — fetch and return the winner. TypeORM
+          // surfaces the pg code on the error or its nested driverError.
+          if (sourceWhere && isUniqueViolation(err)) {
+            const existing = await this.itemRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return ItemEntity.toEgressType(existing);
+            }
+          }
+
+          throw err;
+        }
+      }),
+    );
   }
 
   async findAll(context: ServiceContext): Promise<Item[]> {

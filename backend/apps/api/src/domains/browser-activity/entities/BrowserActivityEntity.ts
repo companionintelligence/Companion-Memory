@@ -25,8 +25,10 @@ export class BrowserActivityEntity {
   @Column({ type: 'uuid' })
   user_id!: string;
 
-  @Column({ type: 'uuid' })
-  device_id!: string;
+  // Nullable since the departition migration dropped the NOT NULL constraint:
+  // importer-ingested activity has no device.
+  @Column({ type: 'uuid', nullable: true })
+  device_id?: string | null;
 
   // URL and page data
   @Column({ type: 'text' })
@@ -65,6 +67,18 @@ export class BrowserActivityEntity {
   @Column({ type: 'boolean', default: false })
   contains_sensitive!: boolean;
 
+  // Provenance triple — the stable key capture sources carry. Lets the importer
+  // write browser activity and re-ingest idempotently (paired with the
+  // browser_activity_source_triple_uniq partial unique index).
+  @Column({ type: 'text', nullable: true })
+  source_type?: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  source_system?: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  source_id?: string | null;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity | undefined;
@@ -92,6 +106,9 @@ export class BrowserActivityEntity {
       productivity_score: entity.productivity_score,
       is_incognito: entity.is_incognito,
       contains_sensitive: entity.contains_sensitive,
+      source_type: entity.source_type,
+      source_system: entity.source_system,
+      source_id: entity.source_id,
       user: entity.user == null ? undefined : entity.user,
       updatedAt: entity.updatedAt,
       createdAt: entity.createdAt,

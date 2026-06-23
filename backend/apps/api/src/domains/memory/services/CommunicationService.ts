@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, type FindOptionsOrder } from 'typeorm';
+import { DataSource, Repository, In, IsNull, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { isUniqueViolation } from '@ci/common/constants';
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
@@ -61,6 +62,9 @@ export class CommunicationService {
       isEncrypted: data.is_encrypted || false,
       isArchived: data.is_archived || false,
       preview: data.preview ?? null,
+      sourceType: data.source_type ?? null,
+      sourceSystem: data.source_system ?? null,
+      sourceId: data.source_id ?? null,
     });
 
     // TODO: Build relationships using from_entity_id and to_entity_ids
@@ -72,6 +76,53 @@ export class CommunicationService {
     });
 
     return CommunicationEntity.toEgressType(communicationResult);
+  }
+
+  /**
+   * Batch, idempotent communication ingest for the importer. Each row dedupes on
+   * the provenance triple (user_id, source_type, source_system, source_id) — the
+   * same find-or-return pattern as EventService.create — so a re-sync returns the
+   * existing row instead of inserting a duplicate. Paired with the
+   * communications_source_triple_uniq partial unique index, which also catches a
+   * lost insert race (23505). (The index also carries `time`, a hypertable
+   * partition key the importer keeps stable per source row.)
+   */
+  async createMany(context: UserServiceContext, data: CreateCommunicationDto[]): Promise<Communication[]> {
+    return Promise.all(
+      data.map(async (item) => {
+        // Idempotency: when the triple is present, return the existing row.
+        const sourceWhere: FindOptionsWhere<CommunicationEntity> | null =
+          item.source_type && item.source_id
+            ? {
+                userId: context.userId,
+                sourceType: item.source_type,
+                sourceSystem: item.source_system ?? IsNull(),
+                sourceId: item.source_id,
+              }
+            : null;
+
+        if (sourceWhere) {
+          const existing = await this.communicationRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return CommunicationEntity.toEgressType(existing);
+          }
+        }
+
+        try {
+          return await this.create(context, item);
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple — fetch the winner.
+          if (sourceWhere && isUniqueViolation(err)) {
+            const existing = await this.communicationRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return CommunicationEntity.toEgressType(existing);
+            }
+          }
+
+          throw err;
+        }
+      }),
+    );
   }
 
   async findAll(context: UserServiceContext): Promise<Communication[]> {

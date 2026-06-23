@@ -20,3 +20,6 @@ export { BrowserActivityEntity, type BrowserActivity };
 
 // Services
 export { BrowserActivityService };
+
+// DTOs
+export type { CreateBrowserActivityDto, UpdateBrowserActivityDto } from './types';

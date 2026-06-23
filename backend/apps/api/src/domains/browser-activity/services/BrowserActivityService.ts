@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
+import { DataSource, In, IsNull, Repository, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
@@ -56,6 +57,7 @@ export class BrowserActivityService {
           id,
           time: new Date(item.time),
           user_id: userId,
+          device_id: item.device_id ?? null,
           url: item.url,
           title: item.title,
           action_type: item.action_type,
@@ -67,6 +69,9 @@ export class BrowserActivityService {
           productivity_score: item.productivity_score,
           is_incognito: item.is_incognito ?? false,
           contains_sensitive: item.contains_sensitive ?? false,
+          source_type: item.source_type ?? null,
+          source_system: item.source_system ?? null,
+          source_id: item.source_id ?? null,
         });
 
         const result = await this.browserActivityRepository.save(browserActivity);
@@ -80,6 +85,56 @@ export class BrowserActivityService {
     );
 
     return isSingle ? returned[0] : returned;
+  }
+
+  /**
+   * Batch, idempotent browser-activity ingest for the importer. Each row dedupes
+   * on the provenance triple (user_id, source_type, source_system, source_id) —
+   * the same find-or-return pattern as EventService.create — so a re-sync returns
+   * the existing row instead of inserting a duplicate. Paired with the
+   * browser_activity_source_triple_uniq partial unique index, which also catches a
+   * lost insert race (23505).
+   */
+  async createMany(
+    context: UserServiceContext,
+    data: CreateBrowserActivityDto[],
+  ): Promise<BrowserActivity[]> {
+    return Promise.all(
+      data.map(async (item) => {
+        // Idempotency: when the triple is present, return the existing row.
+        const sourceWhere: FindOptionsWhere<BrowserActivityEntity> | null =
+          item.source_type && item.source_id
+            ? {
+                user_id: context.userId,
+                source_type: item.source_type,
+                source_system: item.source_system ?? IsNull(),
+                source_id: item.source_id,
+              }
+            : null;
+
+        if (sourceWhere) {
+          const existing = await this.browserActivityRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return BrowserActivityEntity.toEgressType(existing);
+          }
+        }
+
+        try {
+          // A single (non-array) input yields a single BrowserActivity.
+          return (await this.create(context, item)) as BrowserActivity;
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple — fetch the winner.
+          if (sourceWhere && isUniqueViolation(err)) {
+            const existing = await this.browserActivityRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return BrowserActivityEntity.toEgressType(existing);
+            }
+          }
+
+          throw err;
+        }
+      }),
+    );
   }
 
   async findAll(context: ServiceContext): Promise<BrowserActivity[]> {
