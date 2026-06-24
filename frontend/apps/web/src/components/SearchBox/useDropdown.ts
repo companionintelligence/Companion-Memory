@@ -37,33 +37,39 @@ export const AVAILABLE_ENTITY_TYPES = [
   'Thing',
 ];
 
+function sameEntityTypes(a: string[], b: string[]) {
+  return a.length === b.length && a.every((type, index) => type === b[index]);
+}
+
 function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolean }): ReturnType {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [isDropdownPanelVisible, setDropdownPanelVisible] = useState(false);
   const [selectedEntityTypes, setSelectedEntityTypes] = useState<string[]>(AVAILABLE_ENTITY_TYPES);
+  const excludedEntityTypesParam = searchParams.get('excludedEntityTypes') ?? '';
+  const includedEntityTypesParam = searchParams.get('includedEntityTypes') ?? '';
 
   // Sync entity types with URL parameters
   useEffect(() => {
-    const excludedEntityTypes = searchParams.get('excludedEntityTypes')?.split(',').filter(Boolean) || [];
+    const excludedEntityTypes = excludedEntityTypesParam.split(',').filter(Boolean);
     const selectedTypes = AVAILABLE_ENTITY_TYPES.filter((type) => !excludedEntityTypes.includes(type));
 
     if (changeSearchParams) {
-      setSelectedEntityTypes(selectedTypes);
+      setSelectedEntityTypes((prev) => (sameEntityTypes(prev, selectedTypes) ? prev : selectedTypes));
     }
-  }, [searchParams]);
+  }, [changeSearchParams, excludedEntityTypesParam]);
 
   // Sync entity types with URL parameters
   useEffect(() => {
-    const includedEntityTypes = searchParams.get('includedEntityTypes')?.split(',').filter(Boolean) || [];
+    const includedEntityTypes = includedEntityTypesParam.split(',').filter(Boolean);
     if (includedEntityTypes.length > 0) {
       const selectedTypes = AVAILABLE_ENTITY_TYPES.filter((type) => includedEntityTypes.includes(type));
 
       if (changeSearchParams) {
-        setSelectedEntityTypes(selectedTypes);
+        setSelectedEntityTypes((prev) => (sameEntityTypes(prev, selectedTypes) ? prev : selectedTypes));
       }
     }
-  }, [searchParams]);
+  }, [changeSearchParams, includedEntityTypesParam]);
 
   const clearEntityTypes = useCallback(() => {
     setSelectedEntityTypes(AVAILABLE_ENTITY_TYPES);

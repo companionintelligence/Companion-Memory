@@ -257,7 +257,7 @@ function ClusterPopupContent({
   onZoom: () => void;
 }) {
   return (
-    <div className="w-72 overflow-hidden text-black" onClick={(event) => event.stopPropagation()}>
+    <div className="w-72 overflow-hidden text-card-foreground" onClick={(event) => event.stopPropagation()}>
       <div className="max-h-72 overflow-y-auto py-2">
         {cluster.items.map(({ entity }) => {
           const time = clusterItemTime(entity);
@@ -266,16 +266,14 @@ function ClusterPopupContent({
             <button
               key={entity.id}
               type="button"
-              className="flex w-full items-start gap-2 px-3 py-2 text-left text-black transition-colors hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+              className="flex w-full items-start gap-2 px-3 py-2 text-left text-card-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               onClick={() => onSelect(entity)}
             >
-              <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+              <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-black">
-                  {clusterItemTitle(entity)}
-                </span>
+                <span className="block truncate text-sm font-medium">{clusterItemTitle(entity)}</span>
                 {time && (
-                  <span className="mt-1 flex items-center gap-1 text-xs text-slate-600">
+                  <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                     <Clock className="h-3 w-3" />
                     {time}
                   </span>
@@ -286,13 +284,8 @@ function ClusterPopupContent({
         })}
       </div>
 
-      <div className="border-t border-slate-200 p-0">
-        <Button
-          type="button"
-          size="sm"
-          className="w-full rounded-none border-0 bg-black! text-white! hover:bg-black/90! hover:text-white!"
-          onClick={onZoom}
-        >
+      <div className="border-t border-border p-0">
+        <Button type="button" size="sm" className="w-full rounded-none border-0" onClick={onZoom}>
           Zoom to group
         </Button>
       </div>

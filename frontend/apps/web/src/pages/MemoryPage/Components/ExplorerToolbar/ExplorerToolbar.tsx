@@ -611,9 +611,6 @@ function PeopleFilterPicker() {
             </div>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Enter adds a narrowed match; choose a suggestion to keep the name exact.
-        </p>
       </div>
     </div>
   );
@@ -917,9 +914,6 @@ function PlaceFilterPicker() {
             </div>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Enter adds one narrowed match; choose a suggestion to validate the place.
-        </p>
       </div>
     </div>
   );

@@ -41,7 +41,7 @@ export function ListSkeleton({ count = 8, showHeader = true, className }: ListSk
 function TimelineCardSkeleton() {
   return (
     <div className="relative">
-      <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-muted" />
+      <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-[#58ebbf] shadow-glow-ci" />
       <div className="space-y-3 rounded-xl border border-border bg-card p-4">
         <div className="flex items-center gap-3">
           <Skeleton className="h-6 w-6 rounded-md" />

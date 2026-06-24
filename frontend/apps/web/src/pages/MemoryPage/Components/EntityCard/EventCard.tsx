@@ -45,7 +45,7 @@ export function EventCard({ entity }: Props) {
 
   return (
     <Card
-      className="!gap-2 !p-3 cursor-pointer hover:shadow-lg transition-shadow duration-200"
+      className="!gap-2 !px-6 !py-4 cursor-pointer transition-shadow duration-200 hover:shadow-lg"
       onClick={() => setActiveEntity({ ...data, __typename: 'EventType', bucketStartTime: data.startTime })}
     >
       <div className="flex items-start gap-3">
@@ -53,7 +53,7 @@ export function EventCard({ entity }: Props) {
         <div className="flex-1 min-w-0">
           <Tooltip>
             <Tooltip.Trigger asChild>
-              <h3 className="text-sm font-semibold text-card-foreground truncate cursor-default">
+              <h3 className="truncate text-lg font-semibold leading-4 text-card-foreground cursor-default">
                 {data.title || 'Untitled event'}
               </h3>
             </Tooltip.Trigger>
@@ -105,7 +105,7 @@ export function EventCard({ entity }: Props) {
       {/*)}*/}
 
       {hasLocation && (
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-2">
           <MapPin className="h-4 w-4 text-muted-foreground flex-shrink-0" />
           <div className="min-w-0">
             <span className="text-sm font-medium text-muted-foreground">Location:</span>
@@ -139,7 +139,7 @@ export function EventCard({ entity }: Props) {
       {/*)}*/}
 
       {hasDescription && (
-        <div className="pt-3 pb-3">
+        <div className="pt-2">
           <p className="text-sm text-muted-foreground leading-relaxed">{data.description}</p>
         </div>
       )}
