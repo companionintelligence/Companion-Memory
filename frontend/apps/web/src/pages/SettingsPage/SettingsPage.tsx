@@ -49,7 +49,7 @@ export function SettingsPage() {
   return (
     <Portal.Slot id="overlay-modal">
       <div
-        className="flex h-full bg-black/50 backdrop-blur-[2px] items-center justify-center"
+        className="flex h-full bg-black/70 backdrop-blur-[2px] items-center justify-center"
         onClick={handleClose}
       >
         <div

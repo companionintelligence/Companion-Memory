@@ -1,0 +1,24 @@
+- generic [ref=e3]:
+  - button "Switch to light mode" [ref=e6] [cursor=pointer]:
+    - img
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: Log In
+        - generic [ref=e11]: Enter your information to access your account
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - generic [ref=e14]:
+            - generic [ref=e15]: Email
+            - textbox "Email" [ref=e16]
+          - generic [ref=e17]:
+            - generic [ref=e18]: Password
+            - textbox "Password" [ref=e19]
+          - button "Log in" [ref=e20] [cursor=pointer]
+        - generic [ref=e24]: Or
+        - link "Sign in with CI Portal" [ref=e25] [cursor=pointer]:
+          - /url: /api/authenticate/oidc
+    - generic [ref=e26]:
+      - text: Don't have an account?
+      - link "Sign up" [ref=e27] [cursor=pointer]:
+        - /url: /signup

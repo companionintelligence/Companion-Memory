@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 
 import { Portal } from '@ci/common';
 import { Breadcrumb, Tabs, Sheet } from '@ci/shadcn';
-import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
+import { ChartNetwork, Images, List, Map as MapIcon } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -29,9 +29,10 @@ export default function MobileMemoryPage() {
   const activeTab = searchParams.get('view') ?? 'list';
   const setActiveTab = (next: string) =>
     setSearchParams((params) => {
-      params.set('view', next);
+      const nextParams = new URLSearchParams(params);
+      nextParams.set('view', next);
 
-      return params;
+      return nextParams;
     });
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -41,9 +42,10 @@ export default function MobileMemoryPage() {
     if (!searchParams.get('view')) {
       setSearchParams(
         (params) => {
-          params.set('view', 'list');
+          const nextParams = new URLSearchParams(params);
+          nextParams.set('view', 'list');
 
-          return params;
+          return nextParams;
         },
         { replace: true },
       );
@@ -100,7 +102,7 @@ export default function MobileMemoryPage() {
                 List
               </Tabs.Trigger>
               <Tabs.Trigger value="map" className="text-sm flex items-center gap-1">
-                <MapPin className="h-4 w-4" />
+                <MapIcon className="h-4 w-4" />
                 Map
               </Tabs.Trigger>
               <Tabs.Trigger value="gallery" className="text-sm flex items-center gap-1">
@@ -108,7 +110,7 @@ export default function MobileMemoryPage() {
                 Gallery
               </Tabs.Trigger>
               <Tabs.Trigger value="graph" className="text-sm flex items-center gap-1">
-                <Share2 className="h-4 w-4" />
+                <ChartNetwork className="h-4 w-4" />
                 Graph
               </Tabs.Trigger>
             </Tabs.List>

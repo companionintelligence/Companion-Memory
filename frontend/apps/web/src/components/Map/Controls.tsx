@@ -8,6 +8,9 @@ import { useMap } from './useMap';
 
 type Position = Exclude<ComponentProps<typeof Panel>['position'], 'top' | 'bottom' | 'left' | 'right'>;
 
+const mapControlButtonClassName =
+  'border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent';
+
 interface Props {
   className?: string;
   position?: Position;
@@ -15,6 +18,7 @@ interface Props {
 
 export function Controls({ className, position = 'top-left' }: Props) {
   const [{ displayRoutes }, { toggleRoutes, zoomIn, zoomOut, centerVisibleMarkers }] = useMap();
+  const tooltipSide = position.includes('right') ? 'left' : 'right';
 
   return (
     <Panel position={position} className={cn('p-2', className)}>
@@ -22,13 +26,13 @@ export function Controls({ className, position = 'top-left' }: Props) {
         <div className="flex flex-col gap-2">
           <ButtonGroup orientation="vertical">
             <Tooltip delayDuration={600}>
-              <Tooltip.Content side="right">Zoom in</Tooltip.Content>
+              <Tooltip.Content side={tooltipSide}>Zoom in</Tooltip.Content>
               <Tooltip.Trigger asChild>
                 <Button
                   variant="outline"
                   size="icon"
                   onClick={zoomIn}
-                  className="text-slate-700! bg-white! hover:bg-gray-100! border-gray-200!"
+                  className={mapControlButtonClassName}
                 >
                   <Plus />
                 </Button>
@@ -36,13 +40,13 @@ export function Controls({ className, position = 'top-left' }: Props) {
             </Tooltip>
 
             <Tooltip delayDuration={600}>
-              <Tooltip.Content side="right">Zoom out</Tooltip.Content>
+              <Tooltip.Content side={tooltipSide}>Zoom out</Tooltip.Content>
               <Tooltip.Trigger asChild>
                 <Button
                   variant="outline"
                   size="icon"
                   onClick={zoomOut}
-                  className="text-slate-700! bg-white! hover:bg-gray-100! border-gray-200!"
+                  className={mapControlButtonClassName}
                 >
                   <Minus />
                 </Button>
@@ -51,13 +55,13 @@ export function Controls({ className, position = 'top-left' }: Props) {
           </ButtonGroup>
 
           <Tooltip delayDuration={600}>
-            <Tooltip.Content side="right">Center visible pins</Tooltip.Content>
+            <Tooltip.Content side={tooltipSide}>Center visible pins</Tooltip.Content>
             <Tooltip.Trigger asChild>
               <Button
                 variant="outline"
                 size="icon"
                 onClick={centerVisibleMarkers}
-                className="text-slate-700! bg-white! hover:bg-gray-100! border-gray-200!"
+                className={mapControlButtonClassName}
               >
                 <Crosshair />
               </Button>
@@ -65,16 +69,16 @@ export function Controls({ className, position = 'top-left' }: Props) {
           </Tooltip>
 
           <Tooltip delayDuration={600}>
-            <Tooltip.Content side="right">Toggle routes</Tooltip.Content>
+            <Tooltip.Content side={tooltipSide}>Toggle routes</Tooltip.Content>
             <Tooltip.Trigger asChild>
               <Button
-                variant="outline"
+                variant={displayRoutes ? 'default' : 'outline'}
                 size="icon"
                 onClick={toggleRoutes}
                 className={cn(
                   displayRoutes
-                    ? 'bg-blue-500! text-white! hover:bg-blue-400! border-blue-400!'
-                    : 'text-slate-700! bg-white! hover:bg-gray-100! border-gray-200!',
+                    ? 'border-transparent dark:border-transparent'
+                    : mapControlButtonClassName,
                 )}
               >
                 <Route />

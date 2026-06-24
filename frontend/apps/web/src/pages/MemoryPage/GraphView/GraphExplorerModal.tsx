@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
-import { Badge, Button, Input, Separator, Slider, cn } from '@ci/shadcn';
+import { Badge, Button, Input, Label, Separator, Slider, cn } from '@ci/shadcn';
 import { AlertCircle, Anchor, Loader2, Sparkles, Users } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
@@ -1008,6 +1008,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   );
 
   const detailGridClass = variant === 'desktop' ? 'grid gap-4 md:grid-cols-3' : 'grid gap-4 grid-cols-1';
+  const graphHeight = variant === 'mobile' ? 440 : 640;
 
   if (dataLoading) {
     return (
@@ -1055,46 +1056,166 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Knowledge Graph</h2>
-        <p className="text-sm text-muted-foreground">
-          Explore how memories, people, places, and events interconnect. Click nodes to reveal additional{' '}
-          neighbors, adjust the batch size, and increase hop depth for wider context.
-        </p>
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <span>
+            <span className="font-medium text-foreground">{visibleNodes.length}</span> nodes
+          </span>
+          <span>
+            <span className="font-medium text-foreground">{visibleLinks.length}</span> relationships
+          </span>
+        </div>
+      </div>
+
+      <div className="rounded-lg border bg-muted/20 p-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1 rounded-md border bg-background p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === '2d' ? 'default' : 'ghost'}
+              onClick={() => setViewMode('2d')}
+              aria-pressed={viewMode === '2d'}
+            >
+              2D
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === '3d' ? 'default' : 'ghost'}
+              onClick={() => setViewMode('3d')}
+              aria-pressed={viewMode === '3d'}
+            >
+              3D
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label htmlFor="neighbor-limit" className="text-xs font-medium text-muted-foreground">
+              Neighbors
+            </Label>
+            <Input
+              id="neighbor-limit"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              className="h-8 w-20"
+              value={spawnLimitInput}
+              onChange={(event) => setSpawnLimitInput(event.target.value)}
+              onBlur={handleSpawnLimitBlur}
+            />
+          </div>
+
+          <div className="flex min-w-56 flex-1 items-center gap-3">
+            <Label className="whitespace-nowrap text-xs font-medium text-muted-foreground">Hop depth</Label>
+            <Slider
+              value={[hopDepth]}
+              min={MIN_HOP_DEPTH}
+              max={MAX_HOP_DEPTH}
+              step={1}
+              onValueChange={handleHopDepthChange}
+              aria-label="Hop depth"
+              className="min-w-32 flex-1"
+            />
+            <span className="w-10 text-right text-sm font-medium tabular-nums">{hopDepth}</span>
+          </div>
+
+          <Button
+            type="button"
+            size="sm"
+            variant={anchoringEnabled ? 'default' : 'secondary'}
+            onClick={() => setAnchoringEnabled((prev) => !prev)}
+            aria-pressed={anchoringEnabled}
+          >
+            <Anchor className="mr-2 h-4 w-4" />
+            Anchor
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={traversalEnabled ? 'default' : 'secondary'}
+            onClick={() => setTraversalEnabled((prev) => !prev)}
+            aria-pressed={traversalEnabled}
+          >
+            Traversal
+          </Button>
+        </div>
+
+        {(availableEntityTypes.length > 0 || availableRelationshipTypes.length > 0) && (
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-border/60 pt-3">
+            {availableEntityTypes.length > 0 && (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={entityTypesAllSelected ? 'default' : 'secondary'}
+                  onClick={handleEntityTypeSelectAll}
+                >
+                  All nodes
+                </Button>
+                {availableEntityTypes.map((type) => {
+                  const isActive = includedEntityTypes.includes(type);
+
+                  return (
+                    <Button
+                      key={type}
+                      type="button"
+                      size="sm"
+                      variant={isActive ? 'default' : 'secondary'}
+                      onClick={() => handleEntityTypeToggle(type)}
+                      aria-pressed={isActive}
+                    >
+                      <span
+                        className="mr-1.5 h-2 w-2 flex-shrink-0 rounded-full"
+                        style={{ backgroundColor: getTypeColor(type) }}
+                      />
+                      {type}
+                    </Button>
+                  );
+                })}
+              </>
+            )}
+
+            {availableRelationshipTypes.length > 0 && (
+              <>
+                <span className="mx-1 h-7 w-px self-center bg-border" />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={relationshipTypesAllSelected ? 'default' : 'secondary'}
+                  onClick={handleRelationshipTypeSelectAll}
+                >
+                  All links
+                </Button>
+                {availableRelationshipTypes.map((type) => {
+                  const isActive = includedRelationshipTypes.includes(type);
+
+                  return (
+                    <Button
+                      key={type}
+                      type="button"
+                      size="sm"
+                      variant={isActive ? 'default' : 'secondary'}
+                      onClick={() => handleRelationshipTypeToggle(type)}
+                      aria-pressed={isActive}
+                    >
+                      {type}
+                    </Button>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="relative overflow-hidden">
         <div
-          className={cn(
-            'absolute z-10 flex items-center gap-2 rounded-md border bg-background/95 p-1 shadow-sm',
-            variant === 'mobile' ? 'right-2 top-2' : 'right-6 top-6',
-          )}
-        >
-          <Button
-            type="button"
-            size="sm"
-            variant={viewMode === '2d' ? 'default' : 'secondary'}
-            onClick={() => setViewMode('2d')}
-            aria-pressed={viewMode === '2d'}
-          >
-            2D
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={viewMode === '3d' ? 'default' : 'secondary'}
-            onClick={() => setViewMode('3d')}
-            aria-pressed={viewMode === '3d'}
-          >
-            3D
-          </Button>
-        </div>
-        <div
-          className={cn(
-            variant === 'mobile' ? 'h-[400px]' : 'h-[520px]',
-            'rounded-lg border bg-background/90 p-2 overflow-hidden',
-          )}
+          className={cn('rounded-lg border bg-background/90 p-2 overflow-hidden')}
+          style={{ height: graphHeight }}
         >
           {viewMode === '2d' ? (
             <ForceGraph
@@ -1105,7 +1226,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               selectedNodeId={selectedNodeId ?? undefined}
               onNodeSelect={handleNodeSelect}
               anchoredNodeIds={anchoredNodeIds}
-              height={variant === 'mobile' ? 400 : 520}
+              height={graphHeight}
             />
           ) : (
             <ForceGraph3D
@@ -1115,7 +1236,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               selectedNodeId={selectedNodeId ?? undefined}
               onNodeSelect={handleNodeSelect}
               anchoredNodeIds={anchoredNodeIds}
-              height={variant === 'mobile' ? 400 : 520}
+              height={graphHeight}
             />
           )}
         </div>
@@ -1164,182 +1285,6 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
                 </>
               )}
             </dl>
-          </div>
-
-          {availableEntityTypes.length > 0 && (
-            <div className="rounded-lg border bg-muted/20 p-4 overflow-hidden">
-              <h3 className="text-sm font-semibold">How to read this graph</h3>
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                <li>Each dot is an entity — a person, place, or concept.</li>
-                <li>Lines connect entities that share a relationship.</li>
-                <li>
-                  Click a node to pull in its connections; drag <span className="font-medium">Hop depth</span>{' '}
-                  for a wider view.
-                </li>
-                <li>Search to jump straight to an entity, or switch between 2D and 3D.</li>
-              </ul>
-              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Legend
-              </p>
-              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1.5">
-                {availableEntityTypes.map((type) => (
-                  <span key={type} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span
-                      className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-                      style={{ backgroundColor: getTypeColor(type) }}
-                    />
-                    {type}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="rounded-lg border bg-muted/20 p-4 overflow-hidden">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Neighbors per click
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Control how many connected nodes load each time you click.
-            </p>
-            <div className="mt-3 flex items-center gap-2">
-              <Input
-                id="neighbor-limit"
-                type="number"
-                inputMode="numeric"
-                min={1}
-                step={1}
-                className="w-24"
-                value={spawnLimitInput}
-                onChange={(event) => setSpawnLimitInput(event.target.value)}
-                onBlur={handleSpawnLimitBlur}
-              />
-              <span className="text-sm text-muted-foreground">nodes</span>
-            </div>
-            <div className="mt-4">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Hop depth
-                </p>
-                <span className="text-sm font-medium tabular-nums">
-                  {hopDepth} {hopDepth === 1 ? 'hop' : 'hops'}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Drag to reveal nodes {MIN_HOP_DEPTH}–{MAX_HOP_DEPTH} hops away from your query results.
-              </p>
-              <div className="mt-3 flex items-center gap-3">
-                <span className="text-xs text-muted-foreground">{MIN_HOP_DEPTH}</span>
-                <Slider
-                  value={[hopDepth]}
-                  min={MIN_HOP_DEPTH}
-                  max={MAX_HOP_DEPTH}
-                  step={1}
-                  onValueChange={handleHopDepthChange}
-                  aria-label="Hop depth"
-                  className="flex-1"
-                />
-                <span className="text-xs text-muted-foreground">{MAX_HOP_DEPTH}</span>
-              </div>
-            </div>
-            <div className="mt-3 flex flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={anchoringEnabled ? 'default' : 'secondary'}
-                  onClick={() => setAnchoringEnabled((prev) => !prev)}
-                >
-                  <Anchor className="mr-2 h-4 w-4" />
-                  {anchoringEnabled ? 'Anchoring on' : 'Anchoring off'}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={traversalEnabled ? 'default' : 'secondary'}
-                  onClick={() => setTraversalEnabled((prev) => !prev)}
-                  aria-pressed={traversalEnabled}
-                >
-                  Traversal
-                </Button>
-              </div>
-              <span className="text-xs text-muted-foreground">
-                Toggle anchoring to keep the current layout steady or let the graph flow freely. Enable
-                traversal to recenter the graph on the node you select.
-              </span>
-            </div>
-            {availableEntityTypes.length > 0 && (
-              <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Node types
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={entityTypesAllSelected ? 'default' : 'secondary'}
-                    disabled={availableEntityTypes.length === 0}
-                    onClick={handleEntityTypeSelectAll}
-                  >
-                    All
-                  </Button>
-                  {availableEntityTypes.map((type) => {
-                    const isActive = includedEntityTypes.includes(type);
-
-                    return (
-                      <Button
-                        key={type}
-                        type="button"
-                        size="sm"
-                        variant={isActive ? 'default' : 'secondary'}
-                        onClick={() => handleEntityTypeToggle(type)}
-                        aria-pressed={isActive}
-                      >
-                        <span
-                          className="mr-1.5 h-2 w-2 flex-shrink-0 rounded-full"
-                          style={{ backgroundColor: getTypeColor(type) }}
-                        />
-                        {type}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {availableRelationshipTypes.length > 0 && (
-              <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Relationship types
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={relationshipTypesAllSelected ? 'default' : 'secondary'}
-                    disabled={availableRelationshipTypes.length === 0}
-                    onClick={handleRelationshipTypeSelectAll}
-                  >
-                    All
-                  </Button>
-                  {availableRelationshipTypes.map((type) => {
-                    const isActive = includedRelationshipTypes.includes(type);
-
-                    return (
-                      <Button
-                        key={type}
-                        type="button"
-                        size="sm"
-                        variant={isActive ? 'default' : 'secondary'}
-                        onClick={() => handleRelationshipTypeToggle(type)}
-                        aria-pressed={isActive}
-                      >
-                        {type}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         </div>
 

@@ -190,7 +190,7 @@ function makeClusterIcon(count: number): L.DivIcon {
 
   // Inline styles (not Tailwind) so the size can scale with the count without
   // relying on dynamically-generated utility classes.
-  const html = `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:9999px;background:rgba(37,99,235,0.92);color:#fff;font-weight:600;font-size:13px;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);">${count}</div>`;
+  const html = `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:9999px;background:var(--primary);color:var(--primary-foreground);font-weight:600;font-size:13px;border:3px solid var(--background);box-shadow:var(--shadow-glow-ci),0 1px 4px rgba(0,0,0,0.4);">${count}</div>`;
 
   return L.divIcon({
     html,
@@ -343,9 +343,10 @@ function SearchAreaControl() {
     <div ref={stopPropagation} className="absolute left-1/2 top-3 z-400 flex -translate-x-1/2 gap-2">
       {showSearch && (
         <Button
+          variant="outline"
           size="sm"
           onClick={() => setBbox(formatBbox(boundsToBbox(map.getBounds())))}
-          className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
+          className="border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent"
         >
           <SearchIcon className="mr-1 h-4 w-4" />
           Search events in this area
@@ -357,7 +358,7 @@ function SearchAreaControl() {
           size="sm"
           variant="outline"
           onClick={() => setBbox(null)}
-          className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
+          className="border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent"
         >
           <X className="mr-1 h-4 w-4" />
           Clear area
@@ -401,10 +402,11 @@ function LoadMorePinsControl({
   return (
     <div ref={stopPropagation} className="absolute bottom-4 left-1/2 z-400 -translate-x-1/2">
       <Button
+        variant="outline"
         size="sm"
         onClick={onLoadMore}
         disabled={loadingMore}
-        className="border border-gray-200! bg-white! text-slate-700! shadow-md hover:bg-gray-100!"
+        className="border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent"
       >
         {loadingMore ? (
           <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -446,7 +448,7 @@ export function DesktopMapView() {
   return (
     // TODO: This default leads to some map jittering. It's OK for now, but let's think about tracking the user's last location and use that for the default center.
     <Map center={[37.7749, -122.4194]}>
-      <Map.Controls position="bottom-right" />
+      <Map.Controls position="top-right" />
       <Map.Panel position="left" className="w-[300px] relative">
         <TimelineView />
         <SoftBlur />
@@ -472,7 +474,7 @@ export function MobileMapView() {
 
   return (
     <Map center={[37.7749, -122.4194]}>
-      <Map.Controls position="bottom-right" />
+      <Map.Controls position="top-right" />
       <SearchAreaControl />
       <LoadMorePinsControl
         shown={located.length}

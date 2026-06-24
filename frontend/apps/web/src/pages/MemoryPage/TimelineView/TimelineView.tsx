@@ -123,7 +123,7 @@ export function TimelineView() {
       <div className="space-y-4">
         {entities.map((entity) => (
           <div key={entity.id} className="relative">
-            <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-[#179298]" />
+            <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-[#58ebbf] shadow-glow-ci" />
             <EntityCard entity={entity} />
           </div>
         ))}

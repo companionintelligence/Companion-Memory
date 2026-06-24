@@ -26,9 +26,9 @@ export function NavLink({ to, label, children, badgeCount = 0, ...props }: NavLi
           to={to}
           aria-label={label}
           className={cn(
-            'relative p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition will-change-transform active:scale-95',
+            'relative border-l-2 border-transparent p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition will-change-transform active:scale-95',
             isActive &&
-              'bg-[#179298] hover:bg-[#1CAFB6] dark:bg-accent dark:hover:text-accent-foreground text-white hover:text-white',
+              'border-l-[#58ebbf] text-[#58ebbf] shadow-glow-ci hover:bg-accent hover:text-[#58ebbf]',
           )}
           {...props}
         >

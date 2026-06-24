@@ -66,20 +66,23 @@ export function PrimaryNavigation() {
   return (
     <>
       <header className="flex flex-row items-center gap-3 p-2 px-4">
-        {/* Left: breadcrumb + (on Memory) the view toggles */}
+        {/* Left: breadcrumb */}
         <div className="flex shrink-0 flex-row items-center gap-2">
           <Portal id="breadcrumbs" />
-          <Portal id="nav-views" className="flex flex-row items-center empty:hidden" />
         </div>
 
-        {/* Center: the unified search, stretched to fill the bar */}
-        <div className="min-w-0 flex-1">
-          <GlobalSearchBox />
+        {/* Center: the unified search, stretched to fill the bar. Memory's advanced
+            filter toggle attaches here, followed by Memory's view switcher. */}
+        <div className="flex min-w-0 flex-1 items-stretch">
+          <div className="min-w-0 flex-1">
+            <GlobalSearchBox />
+          </div>
+          <Portal id="nav-tools" className="flex flex-row items-stretch empty:hidden" />
+          <Portal id="nav-views" className="ml-2 flex flex-row items-center empty:hidden" />
         </div>
 
-        {/* Right: (on Memory) the Advanced toggle, page actions, tags, new, account */}
+        {/* Right: page actions, tags, new, account */}
         <div className="flex shrink-0 flex-row items-center gap-2">
-          <Portal id="nav-tools" className="flex flex-row items-center empty:hidden" />
           <Portal ref={actionsRef} id="actions" className="flex flex-row items-center" />
 
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}

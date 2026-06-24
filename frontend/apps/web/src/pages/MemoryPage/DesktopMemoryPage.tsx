@@ -4,7 +4,7 @@ import { useQuery } from '@apollo/client';
 import { GlobalUID, Portal } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { Breadcrumb, Tabs, Sheet } from '@ci/shadcn';
-import { MapPin, List, Images, Share2 } from '@ci/shadcn/icons';
+import { ChartNetwork, Images, List, Map as MapIcon, type LucideIcon } from '@ci/shadcn/icons';
 import { useSearchParams, Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -33,6 +33,18 @@ const GET_SAVED_SEARCH = gql(`
   }
 `);
 
+const VIEW_TABS: Array<{
+  value: string;
+  label: string;
+  title: string;
+  Icon: LucideIcon;
+}> = [
+  { value: 'map', label: 'Map', title: 'Map view', Icon: MapIcon },
+  { value: 'list', label: 'List', title: 'List view', Icon: List },
+  { value: 'gallery', label: 'Gallery', title: 'Gallery view', Icon: Images },
+  { value: 'graph', label: 'Graph', title: 'Graph view', Icon: ChartNetwork },
+];
+
 export default function DesktopMemoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [{ activeEntity }, { setActiveEntity }] = useEntityService();
@@ -44,9 +56,10 @@ export default function DesktopMemoryPage() {
   const activeTab = searchParams.get('view') ?? 'map';
   const setActiveTab = (next: string) =>
     setSearchParams((params) => {
-      params.set('view', next);
+      const nextParams = new URLSearchParams(params);
+      nextParams.set('view', next);
 
-      return params;
+      return nextParams;
     });
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -56,9 +69,10 @@ export default function DesktopMemoryPage() {
     if (!searchParams.get('view')) {
       setSearchParams(
         (params) => {
-          params.set('view', 'map');
+          const nextParams = new URLSearchParams(params);
+          nextParams.set('view', 'map');
 
-          return params;
+          return nextParams;
         },
         { replace: true },
       );
@@ -171,7 +185,7 @@ export default function DesktopMemoryPage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      {/* View toggles sit in the unified header bar, left of the stretched search.
+      {/* View toggles sit in the unified header bar, right of the stretched search.
           Native `title` for the hover label rather than a Radix Tooltip: wrapping
           Tabs.Trigger in Tooltip.Trigger renders a button inside a button (invalid
           HTML + hydration error), and merging them (asChild) makes the tooltip's
@@ -179,26 +193,22 @@ export default function DesktopMemoryPage() {
       <Portal.Slot id="nav-views">
         <Tabs defaultValue="map" onValueChange={setActiveTab} value={activeTab}>
           <Tabs.List className="flex h-9 items-center border">
-            <Tabs.Trigger value="map" title="Map view" className="flex h-7 w-8 items-center justify-center">
-              <MapPin className="h-4 w-4" />
-            </Tabs.Trigger>
-            <Tabs.Trigger value="list" title="List view" className="flex h-7 w-8 items-center justify-center">
-              <List className="h-4 w-4" />
-            </Tabs.Trigger>
-            <Tabs.Trigger
-              value="gallery"
-              title="Gallery view"
-              className="flex h-7 w-8 items-center justify-center"
-            >
-              <Images className="h-4 w-4" />
-            </Tabs.Trigger>
-            <Tabs.Trigger
-              value="graph"
-              title="Graph view"
-              className="flex h-7 w-8 items-center justify-center"
-            >
-              <Share2 className="h-4 w-4" />
-            </Tabs.Trigger>
+            {VIEW_TABS.map(({ value, label, title, Icon }) => {
+              const active = activeTab === value;
+
+              return (
+                <Tabs.Trigger
+                  key={value}
+                  value={value}
+                  title={title}
+                  aria-label={title}
+                  className="flex h-7 w-8 flex-none items-center justify-center px-0 data-[state=active]:w-auto data-[state=active]:px-2.5"
+                >
+                  <Icon className="h-4 w-4" />
+                  {active && <span>{label}</span>}
+                </Tabs.Trigger>
+              );
+            })}
           </Tabs.List>
         </Tabs>
       </Portal.Slot>
@@ -206,7 +216,11 @@ export default function DesktopMemoryPage() {
       {/* The Advanced toggle sits in the header, right of the search; it controls
           the toolbar drawer below via the lifted `advancedOpen` state. */}
       <Portal.Slot id="nav-tools">
-        <AdvancedSearchToggle open={advancedOpen} onToggle={() => setAdvancedOpen((open) => !open)} />
+        <AdvancedSearchToggle
+          open={advancedOpen}
+          onToggle={() => setAdvancedOpen((open) => !open)}
+          className="rounded-l-none border-l-0"
+        />
       </Portal.Slot>
 
       <PageContent className="p-0 gap-0">

@@ -50,6 +50,14 @@
 
 :root {
   --radius: 0.625rem;
+  --ci-mint: #58ebbf;
+  --ci-teal: #409b9b;
+  --ci-mint-hover: #82ffe1;
+  --ci-primary-ink: #041620;
+  --ci-primary-gradient: linear-gradient(135deg, var(--ci-mint), var(--ci-teal));
+  --ci-primary-gradient-hover: linear-gradient(135deg, var(--ci-mint-hover), var(--ci-mint));
+  --shadow-glow-ci: 0 0 20px -4px rgb(88 235 191 / 35%);
+  --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.5 0.03 220 / 5%), transparent 52%);
   --background: oklch(1 0 0);
   --foreground: oklch(0.129 0.042 264.695);
   --card: oklch(1 0 0);
@@ -84,6 +92,7 @@
 }
 
 .dark {
+  --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.34 0.04 220 / 14%), transparent 52%);
   --background: oklch(0.129 0.042 264.695);
   --foreground: oklch(0.984 0.003 247.858);
   --card: oklch(0.208 0.042 265.755);
@@ -124,6 +133,8 @@
   html,
   body {
     @apply font-sans bg-background text-foreground;
+    background-image: var(--ci-background-lift);
+    background-attachment: fixed;
     line-height: 1.0;
   }
   h1,
@@ -136,6 +147,65 @@
     font-weight: 200;
     line-height: 1.0;
   }
+}
+
+.ci-primary-surface {
+  background-color: var(--ci-mint);
+  background-image: var(--ci-primary-gradient);
+  border-color: transparent;
+  color: var(--ci-primary-ink);
+  box-shadow: var(--shadow-glow-ci);
+}
+
+.ci-primary-surface:hover {
+  background-image: var(--ci-primary-gradient-hover);
+  color: var(--ci-primary-ink);
+}
+
+.shadow-glow-ci {
+  box-shadow: var(--shadow-glow-ci);
+}
+
+[data-slot='checkbox'][data-state='checked'],
+[data-slot='switch'][data-state='checked'] {
+  background-color: var(--ci-mint);
+  background-image: var(--ci-primary-gradient);
+  border-color: transparent;
+  color: var(--ci-primary-ink);
+  box-shadow: var(--shadow-glow-ci);
+}
+
+* {
+  scrollbar-color: var(--accent) var(--muted);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--muted);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border: 2px solid var(--muted);
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 .texture-surface {
