@@ -24,8 +24,43 @@ const FILTER_PARAMS = [
   'bbox',
 ] as const;
 
-function fmtDate(value: string): string {
-  return new Date(value).toLocaleDateString();
+const START_OF_DAY_TIME = '00:00';
+const END_OF_DAY_TIME = '23:59';
+
+function timeInputValue(value: string, fallback: string): string {
+  if (!value) {
+    return fallback;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return fallback;
+  }
+
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function hasDetailedTime(from: string | null, to: string | null): boolean {
+  const fromHasTime = Boolean(from) && timeInputValue(from ?? '', START_OF_DAY_TIME) !== START_OF_DAY_TIME;
+  const toHasTime = Boolean(to) && timeInputValue(to ?? '', END_OF_DAY_TIME) !== END_OF_DAY_TIME;
+
+  return fromHasTime || toHasTime;
+}
+
+function fmtDate(value: string, includeTime = false): string {
+  const date = new Date(value);
+  const dateLabel = date.toLocaleDateString();
+
+  if (!includeTime) {
+    return dateLabel;
+  }
+
+  return `${dateLabel}, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+function formatChipValue(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
 }
 
 /**
@@ -128,9 +163,11 @@ export function ActiveFilterChips() {
     { key: 'places', prefix: 'Where' },
   ]) {
     for (const value of searchParams.get(key)?.split(',').filter(Boolean) ?? []) {
+      const labelValue = formatChipValue(value);
+
       chips.push({
         key: `${key}:${value}`,
-        label: `${prefix}: ${value}`,
+        label: `${prefix}: ${labelValue}`,
         onRemove: removeFromCsv(key, value),
       });
     }
@@ -143,12 +180,13 @@ export function ActiveFilterChips() {
   const from = searchParams.get('from');
   const to = searchParams.get('to');
   if (from || to) {
+    const includeTime = hasDetailedTime(from, to);
     const label =
       from && to
-        ? `${fmtDate(from)} – ${fmtDate(to)}`
+        ? `${fmtDate(from, includeTime)} – ${fmtDate(to, includeTime)}`
         : from
-          ? `After ${fmtDate(from)}`
-          : `Before ${fmtDate(to as string)}`;
+          ? `After ${fmtDate(from, includeTime)}`
+          : `Before ${fmtDate(to as string, includeTime)}`;
     chips.push({ key: 'date', label, onRemove: deleteKey('from', 'to') });
   }
 
@@ -180,9 +218,14 @@ export function ActiveFilterChips() {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {chips.map((chip) => (
-        <Badge key={chip.key} variant="secondary" className="gap-1">
-          {chip.label}
-          <button type="button" onClick={() => apply(chip.onRemove)} aria-label={`Remove ${chip.label}`}>
+        <Badge key={chip.key} variant="secondary" className="max-w-[260px] gap-1">
+          <span className="truncate">{chip.label}</span>
+          <button
+            type="button"
+            onClick={() => apply(chip.onRemove)}
+            aria-label={`Remove ${chip.label}`}
+            className="-mr-1 rounded p-0.5 hover:bg-background/60"
+          >
             <X className="h-3 w-3" />
           </button>
         </Badge>

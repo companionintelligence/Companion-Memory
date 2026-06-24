@@ -7,7 +7,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
 
-// "Connector" — the data-source dimension (gmail, imessage, spotify, ...).
+// "Source" — the data-source dimension (gmail, imessage, spotify, ...).
 // Populated from the distinct event sources present for the user.
 const EVENT_SOURCES_QUERY = gql(`
   query EventSources {
@@ -87,19 +87,21 @@ export function ConnectorFilter({ modal = true, label }: Props) {
 
       <Content
         id="connector-filters"
-        className="fixed bg-background border border-border rounded-md shadow-lg z-[9999] max-h-80 overflow-y-auto w-64"
+        align="start"
+        sideOffset={4}
+        className="z-[9999] max-h-80 w-64 overflow-y-auto rounded-md border border-border bg-background p-1 shadow-lg"
       >
-        <div className="flex gap-2">
-          <Label className="p-2 font-medium">Connector (Source)</Label>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              onClick={() => setConnectors([])}
-              className="text-xs px-4 py-1 bg-background text-primary hover:text-background"
-            >
-              Clear
-            </Button>
-          </div>
+        <div className="flex items-center justify-between gap-3 px-2 py-1.5">
+          <Label className="text-sm font-medium">Source</Label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setConnectors([])}
+            className="h-7 px-2 text-xs text-muted-foreground"
+          >
+            Clear
+          </Button>
         </div>
         <Separator />
         {availableSources.length === 0 ? (

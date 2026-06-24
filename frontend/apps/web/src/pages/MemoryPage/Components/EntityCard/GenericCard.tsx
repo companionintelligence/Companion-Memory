@@ -17,7 +17,7 @@ export interface Props {
 export function GenericCard({ title, subtitle, description, preview, tags, icon: Icon, onClick }: Props) {
   return (
     <Card
-      className="!gap-2 !py-4 px-6 cursor-pointer transition duration-200 active:scale-98 will-change-transform"
+      className="!gap-2 !px-6 !py-4 cursor-pointer transition-shadow duration-200 hover:shadow-lg"
       onClick={onClick}
     >
       {preview && <div className="mb-3 -mx-6 -mt-4">{preview}</div>}
@@ -25,7 +25,7 @@ export function GenericCard({ title, subtitle, description, preview, tags, icon:
       <div className="flex items-start gap-3">
         <Icon className="h-6 w-6 flex-shrink-0 mt-1" />
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-semibold text-card-foreground truncate">{title}</h3>
+          <h3 className="truncate text-lg font-semibold leading-4 text-card-foreground">{title}</h3>
           {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
         </div>
       </div>

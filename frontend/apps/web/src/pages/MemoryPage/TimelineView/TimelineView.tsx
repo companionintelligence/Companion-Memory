@@ -159,7 +159,7 @@ export function TimelineView({
   }
 
   const renderTimelineRows = (entities: EntityItem[]) => (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {entities.map((entity) => {
         const active = activeEntityId === entity.id;
 

@@ -87,17 +87,9 @@ export class ItemResolver {
       name: input.name,
       description: input.description,
       category: input.category,
-      subcategory: input.subcategory,
       brand: input.brand,
       model: input.model,
-      purchasePrice: input.purchasePrice,
       currentValue: input.currentValue,
-      currency: input.currency,
-      acquiredAt: input.acquiredAt,
-      metadata: input.metadata,
-      sourceType: input.sourceType,
-      sourceSystem: input.sourceSystem,
-      sourceId: input.sourceId,
     });
 
     if (entity == null) {

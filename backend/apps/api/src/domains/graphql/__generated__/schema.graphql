@@ -390,20 +390,12 @@ input CreateInventoryInput {
 }
 
 input CreateItemInput {
-  acquiredAt: DateTime
   brand: String
   category: String
-  currency: String
   currentValue: Float
   description: String
-  metadata: JSON
   model: String
   name: String!
-  purchasePrice: Float
-  sourceId: ID
-  sourceSystem: String
-  sourceType: String
-  subcategory: String
 }
 
 type CreateItemPayload {

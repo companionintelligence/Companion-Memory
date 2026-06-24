@@ -55,6 +55,8 @@ export function EntityTypeFilter({ modal = true, label }: Props) {
     return `${selectedCount} Entity Types`;
   };
 
+  const menuLabel = label ? 'Types' : 'Entity Types';
+
   return (
     <DropdownMenu modal={modal} onOpenChange={() => setIsOpen(!isOpen)}>
       <Trigger asChild>
@@ -67,24 +69,29 @@ export function EntityTypeFilter({ modal = true, label }: Props) {
         </Button>
       </Trigger>
 
-      <Content
-        id="entity-type-filters"
-        className="fixed bg-background border border-border rounded-md shadow-lg z-[9999] max-h-80 overflow-y-auto w-64"
-      >
-        <div className="flex gap-2">
-          <Label className="p-2 font-medium">Entity Types</Label>
-          <div className="flex gap-2">
+      <Content id="entity-type-filters" align="start" sideOffset={4} className="z-[9999] w-72 p-2">
+        <div className="flex items-center justify-between gap-3 px-1 pb-2">
+          <Label className="text-sm font-medium">{menuLabel}</Label>
+          <div className="flex gap-1.5">
             <Button
+              type="button"
+              variant="ghost"
+              size="sm"
               onClick={clearEntityTypes}
-              className="text-xs px-4 py-1 bg-background text-primary hover:text-background"
+              disabled={isAllSelected}
+              className="h-7 px-2 text-xs"
             >
-              All
+              Select all
             </Button>
             <Button
+              type="button"
+              variant="ghost"
+              size="sm"
               onClick={selectAllEntityTypes}
-              className="text-xs px-4 py-1 bg-background text-primary hover:text-background"
+              disabled={isNoneSelected}
+              className="h-7 px-2 text-xs"
             >
-              None
+              Clear all
             </Button>
           </div>
         </div>

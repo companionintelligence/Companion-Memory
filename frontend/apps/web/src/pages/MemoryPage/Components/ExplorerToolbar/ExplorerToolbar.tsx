@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { gql as apolloGql, useMutation, useQuery } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import {
   Badge,
@@ -19,7 +19,10 @@ import {
   ArrowUpDown,
   Calendar as CalendarIcon,
   ChevronDown,
+  Check,
+  Clock,
   MapPin,
+  Plus,
   Save,
   Search,
   SlidersHorizontal,
@@ -49,6 +52,11 @@ const SORT_OPTIONS = [
   { value: 'name-desc', label: 'Name (Z–A)', sortBy: 'name', sortOrder: 'desc' },
 ] as const;
 
+const MAX_PERSON_SUGGESTIONS = 8;
+const MAX_PLACE_SUGGESTIONS = 8;
+const START_OF_DAY_TIME = '00:00';
+const END_OF_DAY_TIME = '23:59';
+
 const CREATE_SAVED_SEARCH = gql(`
   mutation CreateSavedSearch($input: CreateSavedSearchInput!) {
     createSavedSearch(input: $input) {
@@ -65,6 +73,76 @@ const CREATE_SAVED_SEARCH = gql(`
   }
 `);
 
+const EXPLORER_PEOPLE = apolloGql`
+  query ExplorerPeople {
+    people(first: 100) {
+      edges {
+        node {
+          id
+          name
+          description
+        }
+      }
+    }
+  }
+`;
+
+const EXPLORER_PLACES = apolloGql`
+  query ExplorerPlaces {
+    places(first: 100) {
+      edges {
+        node {
+          id
+          name
+          description
+          type
+          properties
+        }
+      }
+    }
+  }
+`;
+
+interface ExplorerPeopleQuery {
+  people?: {
+    edges: Array<{
+      node: {
+        id: string;
+        name?: string | null;
+        description?: string | null;
+      };
+    }>;
+  };
+}
+
+interface ExplorerPlacesQuery {
+  places?: {
+    edges: Array<{
+      node: {
+        id: string;
+        name?: string | null;
+        description?: string | null;
+        type?: string | null;
+        properties?: Record<string, unknown> | null;
+      };
+    }>;
+  };
+}
+
+interface PersonOption {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+interface PlaceOption {
+  id: string;
+  name: string;
+  description?: string | null;
+  type?: string | null;
+  address?: string | null;
+}
+
 // The user's existing tags, used to autocomplete the drawer's tag filter — the
 // same vocabulary the Tags page browses, so the two stay unified.
 const EXPLORER_TAGS = gql(`
@@ -80,8 +158,96 @@ const EXPLORER_TAGS = gql(`
   }
 `);
 
+function localDateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function dateInputValue(value: string): string {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return localDateInputValue(date);
+}
+
+function timeInputValue(value: string, fallback: string): string {
+  if (!value) {
+    return fallback;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return fallback;
+  }
+
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function isCompleteTimeValue(value: string): boolean {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+
+  return Boolean(match);
+}
+
+function dateTimeIso(dateValue: string, timeValue: string, mode: 'start' | 'end'): string | undefined {
+  if (!dateValue) {
+    return undefined;
+  }
+
+  const [year, month, day] = dateValue.split('-').map(Number);
+  const [hours, minutes] = timeValue.split(':').map(Number);
+
+  if ([year, month, day, hours, minutes].some((part) => !Number.isFinite(part))) {
+    return undefined;
+  }
+
+  const date = new Date(
+    year,
+    month - 1,
+    day,
+    hours,
+    minutes,
+    mode === 'end' ? 59 : 0,
+    mode === 'end' ? 999 : 0,
+  );
+
+  if (!Number.isFinite(date.getTime())) {
+    return undefined;
+  }
+
+  return date.toISOString();
+}
+
+function rangeHasDetailedTime(dateFrom: string, dateTo: string): boolean {
+  const fromHasTime = Boolean(dateFrom) && timeInputValue(dateFrom, START_OF_DAY_TIME) !== START_OF_DAY_TIME;
+  const toHasTime = Boolean(dateTo) && timeInputValue(dateTo, END_OF_DAY_TIME) !== END_OF_DAY_TIME;
+
+  return fromHasTime || toHasTime;
+}
+
 function formatDateLabel(dateFrom: string, dateTo: string): string {
-  const fmt = (value: string) => new Date(value).toLocaleDateString();
+  const includeTime = rangeHasDetailedTime(dateFrom, dateTo);
+  const fmt = (value: string) => {
+    const date = new Date(value);
+    const dateLabel = date.toLocaleDateString();
+
+    if (!includeTime) {
+      return dateLabel;
+    }
+
+    return `${dateLabel}, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  };
 
   if (dateFrom && dateTo) {
     return `${fmt(dateFrom)} – ${fmt(dateTo)}`;
@@ -98,61 +264,657 @@ function formatDateLabel(dateFrom: string, dateTo: string): string {
   return 'Any time';
 }
 
-/** A comma-list URL param edited as removable chips (used for who/where). */
-function ChipFilter({ param, placeholder }: { param: string; placeholder: string }) {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const values = searchParams.get(param)?.split(',').filter(Boolean) ?? [];
-  const [draft, setDraft] = useState('');
+function normalizeFilterValue(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
 
-  const write = (next: string[]) => {
+function filterValueKey(value: string): string {
+  return normalizeFilterValue(value).toLocaleLowerCase();
+}
+
+function validatePersonFilterValue(value: string): string | null {
+  const normalized = normalizeFilterValue(value);
+
+  if (!normalized) {
+    return 'Enter a name first.';
+  }
+
+  if (normalized.includes(',')) {
+    return 'Names cannot include commas.';
+  }
+
+  if (normalized.length < 2) {
+    return 'Use at least 2 characters.';
+  }
+
+  if (normalized.length > 80) {
+    return 'Keep names under 80 characters.';
+  }
+
+  return null;
+}
+
+function validatePlaceFilterValue(value: string): string | null {
+  const normalized = normalizeFilterValue(value);
+
+  if (!normalized) {
+    return 'Search for a place first.';
+  }
+
+  if (normalized.includes(',')) {
+    return 'Place filters cannot include commas.';
+  }
+
+  if (normalized.length < 2) {
+    return 'Use at least 2 characters.';
+  }
+
+  if (normalized.length > 120) {
+    return 'Keep place names under 120 characters.';
+  }
+
+  return null;
+}
+
+function writeCsvFilterParam(params: URLSearchParams, key: string, next: string[]) {
+  const normalized = next.map(normalizeFilterValue).filter(Boolean);
+
+  if (normalized.length === 0) {
+    params.delete(key);
+  } else {
+    params.set(key, normalized.join(','));
+  }
+}
+
+function PeopleFilterPicker() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const people = useMemo(
+    () => searchParams.get('people')?.split(',').map(normalizeFilterValue).filter(Boolean) ?? [],
+    [searchParams],
+  );
+  const selectedKeys = useMemo(() => new Set(people.map(filterValueKey)), [people]);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const {
+    data,
+    loading,
+    error: peopleError,
+  } = useQuery<ExplorerPeopleQuery>(EXPLORER_PEOPLE, {
+    fetchPolicy: 'cache-and-network',
+  });
+
+  const knownPeople = useMemo<PersonOption[]>(() => {
+    const seen = new Set<string>();
+
+    return (data?.people?.edges ?? [])
+      .map(({ node }) => ({
+        id: node.id,
+        name: normalizeFilterValue(node.name ?? ''),
+        description: node.description,
+      }))
+      .filter((person) => {
+        const key = filterValueKey(person.name);
+
+        if (!key || seen.has(key)) {
+          return false;
+        }
+
+        seen.add(key);
+
+        return true;
+      });
+  }, [data]);
+
+  const query = filterValueKey(draft);
+  const exactMatch = useMemo(
+    () => knownPeople.find((person) => filterValueKey(person.name) === query),
+    [knownPeople, query],
+  );
+  const suggestions = useMemo(() => {
+    const matches = knownPeople.filter((person) => {
+      const nameKey = filterValueKey(person.name);
+      const description = person.description?.toLocaleLowerCase() ?? '';
+
+      return !selectedKeys.has(nameKey) && (!query || nameKey.includes(query) || description.includes(query));
+    });
+
+    return matches
+      .sort((a, b) => {
+        const aStarts = filterValueKey(a.name).startsWith(query);
+        const bStarts = filterValueKey(b.name).startsWith(query);
+
+        if (aStarts !== bStarts) {
+          return aStarts ? -1 : 1;
+        }
+
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, MAX_PERSON_SUGGESTIONS);
+  }, [knownPeople, query, selectedKeys]);
+
+  const writePeople = (next: string[]) => {
     setSearchParams((params) => {
-      if (next.length === 0) {
-        params.delete(param);
-      } else {
-        params.set(param, next.join(','));
-      }
+      writeCsvFilterParam(params, 'people', next);
 
       return params;
     });
   };
 
-  const add = () => {
-    const value = draft.trim();
+  const removePerson = (name: string) => {
+    const key = filterValueKey(name);
 
-    if (value && !values.includes(value)) {
-      write([...values, value]);
-    }
-
-    setDraft('');
+    writePeople(people.filter((person) => filterValueKey(person) !== key));
+    setError(null);
   };
 
+  const addPerson = (rawName: string) => {
+    const validation = validatePersonFilterValue(rawName);
+
+    if (validation) {
+      setError(validation);
+
+      return;
+    }
+
+    const normalized = normalizeFilterValue(rawName);
+    const canonical =
+      knownPeople.find((person) => filterValueKey(person.name) === filterValueKey(normalized))?.name ??
+      normalized;
+    const key = filterValueKey(canonical);
+
+    if (selectedKeys.has(key)) {
+      setError(`${canonical} is already selected.`);
+      setDraft('');
+
+      return;
+    }
+
+    writePeople([...people, canonical]);
+    setDraft('');
+    setError(null);
+  };
+
+  const commitDraft = () => {
+    const validation = validatePersonFilterValue(draft);
+
+    if (validation) {
+      setError(validation);
+
+      return;
+    }
+
+    if (exactMatch) {
+      addPerson(exactMatch.name);
+
+      return;
+    }
+
+    if (suggestions.length === 1) {
+      addPerson(suggestions[0].name);
+
+      return;
+    }
+
+    if (suggestions.length > 1) {
+      setError('Choose a matching person, or keep typing to narrow it.');
+
+      return;
+    }
+
+    addPerson(draft);
+  };
+
+  const canCommitDraft =
+    draft.trim().length > 0 &&
+    validatePersonFilterValue(draft) === null &&
+    (exactMatch || suggestions.length <= 1);
+  const showCustomAdd =
+    draft.trim().length > 0 &&
+    validatePersonFilterValue(draft) === null &&
+    !exactMatch &&
+    suggestions.length === 0 &&
+    !selectedKeys.has(filterValueKey(draft));
+
   return (
-    <div className="flex items-center gap-1">
-      <Input
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            add();
-          }
-        }}
-        onBlur={add}
-        placeholder={placeholder}
-        className="h-9 w-[140px]"
-      />
-      {values.map((value) => (
-        <Badge key={value} variant="secondary" className="gap-1">
-          {value}
-          <button
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-muted-foreground">People involved</span>
+          {people.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-muted-foreground"
+              onClick={() => writePeople([])}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitDraft();
+              }
+
+              if (event.key === ',') {
+                event.preventDefault();
+                setError('Names cannot include commas.');
+              }
+
+              if (event.key === 'Escape') {
+                if (draft) {
+                  setDraft('');
+                  setError(null);
+                } else {
+                  event.currentTarget.blur();
+                }
+              }
+
+              if (event.key === 'Backspace' && !event.currentTarget.value && people.length > 0) {
+                removePerson(people[people.length - 1]);
+              }
+            }}
+            placeholder="Search people…"
+            autoComplete="off"
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? 'people-filter-error' : undefined}
+            className="h-9"
+          />
+          <Button
             type="button"
-            onClick={() => write(values.filter((entry) => entry !== value))}
-            aria-label={`Remove ${value}`}
+            variant="secondary"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            disabled={!canCommitDraft}
+            onClick={commitDraft}
+            aria-label="Add person filter"
           >
-            <X className="h-3 w-3" />
-          </button>
-        </Badge>
-      ))}
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        {error && (
+          <p id="people-filter-error" className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+
+      {people.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {people.map((person) => (
+            <Badge key={person} variant="secondary" className="max-w-full gap-1.5 pl-2">
+              <span className="max-w-[180px] truncate">{person}</span>
+              <button
+                type="button"
+                onClick={() => removePerson(person)}
+                aria-label={`Remove ${person}`}
+                className="-mr-1 rounded p-0.5 hover:bg-background/60"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{query ? 'Matching people' : 'Suggested people'}</span>
+          {loading && <span>Loading…</span>}
+        </div>
+        <div className="max-h-56 overflow-y-auto rounded-md border bg-background p-1">
+          {showCustomAdd && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-accent"
+              onClick={() => addPerson(draft)}
+            >
+              <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">Add “{normalizeFilterValue(draft)}”</span>
+            </button>
+          )}
+          {suggestions.length > 0 ? (
+            suggestions.map((person) => (
+              <button
+                key={person.id}
+                type="button"
+                className="flex w-full items-start gap-2 rounded px-2 py-2 text-left hover:bg-accent"
+                onClick={() => addPerson(person.name)}
+              >
+                <Users className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{person.name}</span>
+                  {person.description && (
+                    <span className="block truncate text-xs text-muted-foreground">{person.description}</span>
+                  )}
+                </span>
+                {exactMatch?.id === person.id && <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
+              </button>
+            ))
+          ) : (
+            <div className="px-2 py-3 text-sm text-muted-foreground">
+              {loading
+                ? 'Finding people…'
+                : peopleError
+                  ? 'Suggestions unavailable. Type a full name to add a custom filter.'
+                  : 'No matching people. Type a full name to add a custom filter.'}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getPlaceAddress(properties: Record<string, unknown> | null | undefined): string | null {
+  const address = properties?.address;
+
+  return typeof address === 'string' ? normalizeFilterValue(address) : null;
+}
+
+function PlaceFilterPicker() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const places = useMemo(
+    () => searchParams.get('places')?.split(',').map(normalizeFilterValue).filter(Boolean) ?? [],
+    [searchParams],
+  );
+  const selectedKeys = useMemo(() => new Set(places.map(filterValueKey)), [places]);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const {
+    data,
+    loading,
+    error: placesError,
+  } = useQuery<ExplorerPlacesQuery>(EXPLORER_PLACES, {
+    fetchPolicy: 'cache-and-network',
+  });
+
+  const knownPlaces = useMemo<PlaceOption[]>(() => {
+    const seen = new Set<string>();
+
+    return (data?.places?.edges ?? [])
+      .map(({ node }) => ({
+        id: node.id,
+        name: normalizeFilterValue(node.name ?? ''),
+        description: node.description,
+        type: node.type,
+        address: getPlaceAddress(node.properties),
+      }))
+      .filter((place) => {
+        const key = filterValueKey(place.name);
+
+        if (!key || seen.has(key)) {
+          return false;
+        }
+
+        seen.add(key);
+
+        return true;
+      });
+  }, [data]);
+
+  const query = filterValueKey(draft);
+  const exactMatch = useMemo(
+    () => knownPlaces.find((place) => filterValueKey(place.name) === query),
+    [knownPlaces, query],
+  );
+  const suggestions = useMemo(() => {
+    const matches = knownPlaces.filter((place) => {
+      const nameKey = filterValueKey(place.name);
+      const description = place.description?.toLocaleLowerCase() ?? '';
+      const address = place.address?.toLocaleLowerCase() ?? '';
+      const type = place.type?.toLocaleLowerCase() ?? '';
+
+      return (
+        !selectedKeys.has(nameKey) &&
+        (!query ||
+          nameKey.includes(query) ||
+          description.includes(query) ||
+          address.includes(query) ||
+          type.includes(query))
+      );
+    });
+
+    return matches
+      .sort((a, b) => {
+        const aStarts = filterValueKey(a.name).startsWith(query);
+        const bStarts = filterValueKey(b.name).startsWith(query);
+
+        if (aStarts !== bStarts) {
+          return aStarts ? -1 : 1;
+        }
+
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, MAX_PLACE_SUGGESTIONS);
+  }, [knownPlaces, query, selectedKeys]);
+
+  const writePlaces = (next: string[]) => {
+    setSearchParams((params) => {
+      writeCsvFilterParam(params, 'places', next);
+
+      return params;
+    });
+  };
+
+  const removePlace = (name: string) => {
+    const key = filterValueKey(name);
+
+    writePlaces(places.filter((place) => filterValueKey(place) !== key));
+    setError(null);
+  };
+
+  const addPlace = (rawName: string) => {
+    const validation = validatePlaceFilterValue(rawName);
+
+    if (validation) {
+      setError(validation);
+
+      return;
+    }
+
+    const normalized = normalizeFilterValue(rawName);
+    const canonical =
+      knownPlaces.find((place) => filterValueKey(place.name) === filterValueKey(normalized))?.name ??
+      normalized;
+    const key = filterValueKey(canonical);
+
+    if (selectedKeys.has(key)) {
+      setError(`${canonical} is already selected.`);
+      setDraft('');
+
+      return;
+    }
+
+    if (!knownPlaces.some((place) => filterValueKey(place.name) === key)) {
+      setError('Choose a saved place from the list.');
+
+      return;
+    }
+
+    writePlaces([...places, canonical]);
+    setDraft('');
+    setError(null);
+  };
+
+  const commitDraft = () => {
+    const validation = validatePlaceFilterValue(draft);
+
+    if (validation) {
+      setError(validation);
+
+      return;
+    }
+
+    if (exactMatch) {
+      addPlace(exactMatch.name);
+
+      return;
+    }
+
+    if (suggestions.length === 1) {
+      addPlace(suggestions[0].name);
+
+      return;
+    }
+
+    if (suggestions.length > 1) {
+      setError('Choose a matching place, or keep typing to narrow it.');
+
+      return;
+    }
+
+    setError('Choose a saved place from the list.');
+  };
+
+  const canCommitDraft =
+    draft.trim().length > 0 &&
+    validatePlaceFilterValue(draft) === null &&
+    Boolean(exactMatch || suggestions.length === 1);
+
+  return (
+    <div className="space-y-3">
+      <ToggleChip param="hasLocation" label="Has a location" icon={<MapPin className="h-4 w-4" />} />
+
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-muted-foreground">Places</span>
+          {places.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-muted-foreground"
+              onClick={() => writePlaces([])}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitDraft();
+              }
+
+              if (event.key === ',') {
+                event.preventDefault();
+                setError('Place filters cannot include commas.');
+              }
+
+              if (event.key === 'Escape') {
+                if (draft) {
+                  setDraft('');
+                  setError(null);
+                } else {
+                  event.currentTarget.blur();
+                }
+              }
+
+              if (event.key === 'Backspace' && !event.currentTarget.value && places.length > 0) {
+                removePlace(places[places.length - 1]);
+              }
+            }}
+            placeholder="Search saved places..."
+            autoComplete="off"
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? 'place-filter-error' : undefined}
+            className="h-9"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            disabled={!canCommitDraft}
+            onClick={commitDraft}
+            aria-label="Add place filter"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        {error && (
+          <p id="place-filter-error" className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+
+      {places.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {places.map((place) => (
+            <Badge key={place} variant="secondary" className="max-w-full gap-1.5 pl-2">
+              <span className="max-w-[180px] truncate">{place}</span>
+              <button
+                type="button"
+                onClick={() => removePlace(place)}
+                aria-label={`Remove ${place}`}
+                className="-mr-1 rounded p-0.5 hover:bg-background/60"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{query ? 'Matching places' : 'Saved places'}</span>
+          {loading && <span>Loading...</span>}
+        </div>
+        <div className="max-h-60 overflow-y-auto rounded-md border bg-background p-1">
+          {suggestions.length > 0 ? (
+            suggestions.map((place) => {
+              const secondary = [place.address, place.description, place.type].filter(Boolean).join(' - ');
+
+              return (
+                <button
+                  key={place.id}
+                  type="button"
+                  className="flex w-full items-start gap-2 rounded px-2 py-2 text-left hover:bg-accent"
+                  onClick={() => addPlace(place.name)}
+                >
+                  <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{place.name}</span>
+                    {secondary && (
+                      <span className="block truncate text-xs text-muted-foreground">{secondary}</span>
+                    )}
+                  </span>
+                  {exactMatch?.id === place.id && <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
+                </button>
+              );
+            })
+          ) : (
+            <div className="px-2 py-3 text-sm text-muted-foreground">
+              {loading
+                ? 'Finding places...'
+                : placesError
+                  ? 'Saved places unavailable. Try again after the source data loads.'
+                  : 'No saved places match. Use a place already in your memory.'}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -187,11 +949,78 @@ function ToggleChip({ param, label, icon }: { param: string; label: string; icon
 /** Date-range picker bound to the `from`/`to` URL params. */
 function DateControl() {
   const [{ dateFrom, dateTo }, { setDateRange }] = useDropdown();
+  const [timeExpanded, setTimeExpanded] = useState(() => rangeHasDetailedTime(dateFrom, dateTo));
 
   const selectedRange =
     dateFrom || dateTo
       ? { from: dateFrom ? new Date(dateFrom) : undefined, to: dateTo ? new Date(dateTo) : undefined }
       : undefined;
+  const fromDateValue = dateInputValue(dateFrom);
+  const toDateValue = dateInputValue(dateTo);
+  const fromTimeValue = timeInputValue(dateFrom, START_OF_DAY_TIME);
+  const toTimeValue = timeInputValue(dateTo, END_OF_DAY_TIME);
+  const [draftFromTime, setDraftFromTime] = useState(fromTimeValue);
+  const [draftToTime, setDraftToTime] = useState(toTimeValue);
+
+  useEffect(() => {
+    if (rangeHasDetailedTime(dateFrom, dateTo)) {
+      setTimeExpanded(true);
+    }
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => {
+    setDraftFromTime(fromTimeValue);
+    setDraftToTime(toTimeValue);
+  }, [fromTimeValue, toTimeValue]);
+
+  const applyTime = (part: 'from' | 'to', value: string) => {
+    const normalizedValue = value || (part === 'from' ? START_OF_DAY_TIME : END_OF_DAY_TIME);
+    const nextFromTime = part === 'from' ? normalizedValue : draftFromTime;
+    const nextToTime = part === 'to' ? normalizedValue : draftToTime;
+    const nextFrom = fromDateValue ? dateTimeIso(fromDateValue, nextFromTime, 'start') : undefined;
+    const nextTo = toDateValue ? dateTimeIso(toDateValue, nextToTime, 'end') : undefined;
+
+    if ((fromDateValue && !nextFrom) || (toDateValue && !nextTo)) {
+      return;
+    }
+
+    setDateRange(nextFrom, nextTo);
+  };
+
+  const handleTimeChange = (part: 'from' | 'to', value: string) => {
+    if (part === 'from') {
+      setDraftFromTime(value);
+    } else {
+      setDraftToTime(value);
+    }
+
+    if (isCompleteTimeValue(value)) {
+      applyTime(part, value);
+    }
+  };
+
+  const commitTime = (part: 'from' | 'to', value: string) => {
+    const fallback = part === 'from' ? START_OF_DAY_TIME : END_OF_DAY_TIME;
+    const nextValue = isCompleteTimeValue(value) ? value : fallback;
+
+    if (part === 'from') {
+      setDraftFromTime(nextValue);
+    } else {
+      setDraftToTime(nextValue);
+    }
+
+    applyTime(part, nextValue);
+  };
+
+  const clearDetailedTime = () => {
+    setTimeExpanded(false);
+    setDraftFromTime(START_OF_DAY_TIME);
+    setDraftToTime(END_OF_DAY_TIME);
+    setDateRange(
+      fromDateValue ? dateTimeIso(fromDateValue, START_OF_DAY_TIME, 'start') : undefined,
+      toDateValue ? dateTimeIso(toDateValue, END_OF_DAY_TIME, 'end') : undefined,
+    );
+  };
 
   return (
     <Popover>
@@ -207,31 +1036,101 @@ function DateControl() {
           mode="range"
           selected={selectedRange}
           onSelect={(range) => {
-            const from = range?.from ? range.from.toISOString() : undefined;
+            const fromDate = range?.from ? localDateInputValue(range.from) : '';
+            const toDate = range?.to ? localDateInputValue(range.to) : '';
+            const from = fromDate
+              ? dateTimeIso(fromDate, timeExpanded ? fromTimeValue : START_OF_DAY_TIME, 'start')
+              : undefined;
             let to: string | undefined;
 
-            if (range?.to) {
-              const end = new Date(range.to);
-              end.setHours(23, 59, 59, 999);
-              to = end.toISOString();
+            if (toDate) {
+              to = dateTimeIso(toDate, timeExpanded ? toTimeValue : END_OF_DAY_TIME, 'end');
             }
 
             setDateRange(from, to);
           }}
           numberOfMonths={1}
         />
-        {(dateFrom || dateTo) && (
-          <div className="border-t p-2">
+        <div className="space-y-3 border-t p-3">
+          <div className="flex items-center justify-between gap-3">
             <Button
               variant="ghost"
               size="sm"
-              className="w-full"
-              onClick={() => setDateRange(undefined, undefined)}
+              className="h-8 px-2 text-xs"
+              onClick={() => setTimeExpanded((open) => !open)}
             >
-              Clear dates
+              <Clock className="mr-2 h-3.5 w-3.5" />
+              Specific time
+              <ChevronDown
+                className={`ml-2 h-3.5 w-3.5 opacity-60 transition-transform ${timeExpanded ? 'rotate-180' : ''}`}
+              />
             </Button>
+            {timeExpanded && (dateFrom || dateTo) && (
+              <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={clearDetailedTime}>
+                All day
+              </Button>
+            )}
           </div>
-        )}
+
+          {timeExpanded && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="memory-filter-start-time" className="text-xs text-muted-foreground">
+                  Start time
+                </Label>
+                <Input
+                  id="memory-filter-start-time"
+                  type="time"
+                  value={draftFromTime}
+                  disabled={!fromDateValue}
+                  onChange={(event) => handleTimeChange('from', event.target.value)}
+                  onBlur={(event) => commitTime('from', event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      commitTime('from', event.currentTarget.value);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  className="h-8"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="memory-filter-end-time" className="text-xs text-muted-foreground">
+                  End time
+                </Label>
+                <Input
+                  id="memory-filter-end-time"
+                  type="time"
+                  value={draftToTime}
+                  disabled={!toDateValue}
+                  onChange={(event) => handleTimeChange('to', event.target.value)}
+                  onBlur={(event) => commitTime('to', event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      commitTime('to', event.currentTarget.value);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  className="h-8"
+                />
+              </div>
+            </div>
+          )}
+
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-full text-xs text-muted-foreground"
+              onClick={() => {
+                setTimeExpanded(false);
+                setDateRange(undefined, undefined);
+              }}
+            >
+              Clear range
+            </Button>
+          )}
+        </div>
       </Popover.Content>
     </Popover>
   );
@@ -284,9 +1183,8 @@ function WhoFilter() {
           <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
         </Button>
       </Popover.Trigger>
-      <Popover.Content align="start" className="w-72 space-y-2">
-        <span className="text-xs font-medium text-muted-foreground">People involved</span>
-        <ChipFilter param="people" placeholder="Add a name…" />
+      <Popover.Content align="start" className="w-96 p-3">
+        <PeopleFilterPicker />
       </Popover.Content>
     </Popover>
   );
@@ -315,12 +1213,8 @@ function WhereFilter() {
           <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
         </Button>
       </Popover.Trigger>
-      <Popover.Content align="start" className="w-72 space-y-3">
-        <ToggleChip param="hasLocation" label="Has a location" icon={<MapPin className="h-4 w-4" />} />
-        <div className="space-y-1.5">
-          <span className="text-xs font-medium text-muted-foreground">Places</span>
-          <ChipFilter param="places" placeholder="Add a place…" />
-        </div>
+      <Popover.Content align="start" className="w-96 p-3">
+        <PlaceFilterPicker />
       </Popover.Content>
     </Popover>
   );

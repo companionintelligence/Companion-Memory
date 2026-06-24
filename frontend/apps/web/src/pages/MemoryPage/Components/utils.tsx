@@ -97,26 +97,29 @@ export function getEntityTimestamp(entity: EntityItem): Date | null {
 
 /**
  * Compact event time for timeline cards: just the time range for a same-day
- * event ("8:00 AM – 5:00 PM"), a single time when there's no end, and short
- * dates only when the event spans multiple days. The day/month otherwise comes
- * from the timeline's date-group header, so the card stays uncluttered.
+ * event ("8 AM – 5 PM"), a single time when there's no end, and short dates
+ * only when the event spans multiple days. The surrounding date-group header
+ * already carries the month/year context, so the card stays uncluttered.
  */
-export function formatEventTimeRange(start: string, end?: string | null, now: Date = new Date()): string {
+export function formatEventTimeRange(start: string, end?: string | null): string {
   const startDate = new Date(start);
 
   if (isNaN(startDate.getTime())) {
     return '';
   }
 
-  const time = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  const dateTime = (d: Date) => {
-    const opts: Intl.DateTimeFormatOptions =
-      d.getFullYear() === now.getFullYear()
-        ? { month: 'short', day: 'numeric' }
-        : { month: 'short', day: 'numeric', year: 'numeric' };
+  const time = (d: Date) => {
+    const opts: Intl.DateTimeFormatOptions = { hour: 'numeric' };
 
-    return `${d.toLocaleDateString('en-US', opts)}, ${time(d)}`;
+    if (d.getMinutes() !== 0) {
+      opts.minute = '2-digit';
+    }
+
+    return d.toLocaleTimeString('en-US', opts);
   };
+
+  const dateTime = (d: Date) =>
+    `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time(d)}`;
 
   if (!end) {
     return time(startDate);

@@ -3,10 +3,10 @@
 /* Custom popup styling */
 .custom-popup .leaflet-popup-content-wrapper {
   border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   border: 1px solid var(--border);
   background-color: var(--card);
   color: var(--card-foreground);
+  box-shadow: 0 10px 32px rgb(0 0 0 / 22%);
 }
 
 .custom-popup .leaflet-popup-content {
@@ -20,15 +20,15 @@
 }
 
 .memory-map-cluster-popup .leaflet-popup-content-wrapper {
-  background-color: #ffffff;
-  color: #000000;
+  background-color: var(--card);
+  color: var(--card-foreground);
   overflow: hidden;
   padding-right: 0 !important;
   padding-left: 0 !important;
 }
 
 .memory-map-cluster-popup .leaflet-popup-tip {
-  background-color: #ffffff;
+  background-color: var(--card);
 }
 
 /* Marker animation */
@@ -42,23 +42,53 @@
 }
 
 .custom-map-marker .custom-map-marker-pin {
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  box-shadow: var(--shadow-glow-ci), 0 2px 8px rgb(0 0 0 / 20%);
   transition: box-shadow 0.2s ease-out;
 }
 
 .custom-map-marker:hover .custom-map-marker-pin {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow-glow-ci), 0 4px 16px rgb(0 0 0 / 30%);
+}
+
+.memory-map-cluster > div {
+  transition: transform 200ms ease-out;
+}
+
+.memory-map-cluster:hover > div {
+  transform: scale(1.15);
 }
 
 /* Zoom controls */
 .leaflet-control-zoom {
-  border: none !important;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.1) !important;
+  overflow: hidden !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  background: var(--card) !important;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%) !important;
 }
 
 .leaflet-control-zoom a {
-  border-radius: 4px !important;
-  margin-bottom: 4px !important;
+  display: flex !important;
+  width: 36px !important;
+  height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin-bottom: 0 !important;
+  border-bottom: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  background: var(--card) !important;
+  color: var(--foreground) !important;
+  transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1), color 150ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.leaflet-control-zoom a:last-child {
+  border-bottom: 0 !important;
+}
+
+.leaflet-control-zoom a:hover,
+.leaflet-control-zoom a:focus {
+  background: var(--accent) !important;
+  color: var(--accent-foreground) !important;
 }
 
 /* Map container */

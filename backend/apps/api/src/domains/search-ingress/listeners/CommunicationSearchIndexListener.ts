@@ -147,6 +147,13 @@ export class CommunicationSearchIndexListener {
   private getSearchDocument(communication: Communication): string | null {
     const parts = [communication.subject, communication.preview, communication.content];
 
-    return parts.filter((part): part is string => typeof part === 'string' && part.length > 0).join(' ');
+    const document = parts
+      .filter((part): part is string => typeof part === 'string' && part.length > 0)
+      .join(' ');
+
+    // Return null (not '') when there is nothing to embed, so indexUpsert's
+    // `searchDocument == null` guard skips embedding instead of asking the model
+    // to embed an empty string — which throws "Received empty embedding vector".
+    return document.length > 0 ? document : null;
   }
 }

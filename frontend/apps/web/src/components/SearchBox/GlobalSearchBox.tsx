@@ -307,7 +307,7 @@ export function GlobalSearchBox() {
       onClear={handleClear}
       onResultSelect={handleResultSelect}
       variant="compact"
-      placeholder="Search your memory…"
+      placeholder="Search"
       autoSubmit
       autoSubmitEmpty={onMemory}
       displayResults
