@@ -39,9 +39,11 @@ function styleFor(variant: MarkerVariant): MarkerStyle {
 interface Props extends Omit<MarkerProps, 'icon'> {
   variant?: MarkerVariant;
   onClick?: (e: LeafletMouseEvent) => void;
+  onMouseEnter?: (e: LeafletMouseEvent) => void;
+  onMouseLeave?: (e: LeafletMouseEvent) => void;
 }
 
-export function Marker({ variant = 'default', onClick, ...markerProps }: Props) {
+export function Marker({ variant = 'default', onClick, onMouseEnter, onMouseLeave, ...markerProps }: Props) {
   const icon = useMemo(() => makeMarkerIcon(variant), [variant]);
 
   const eventHandlers = useMemo(
@@ -53,8 +55,14 @@ export function Marker({ variant = 'default', onClick, ...markerProps }: Props) 
       dblclick: (e: LeafletMouseEvent) => {
         L.DomEvent.stopPropagation(e);
       },
+      mouseover: (e: LeafletMouseEvent) => {
+        onMouseEnter?.(e);
+      },
+      mouseout: (e: LeafletMouseEvent) => {
+        onMouseLeave?.(e);
+      },
     }),
-    [onClick],
+    [onClick, onMouseEnter, onMouseLeave],
   );
 
   return <LeafletMarker zIndexOffset={400} {...markerProps} icon={icon} eventHandlers={eventHandlers} />;

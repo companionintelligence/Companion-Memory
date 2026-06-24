@@ -40,6 +40,8 @@ interface EntityDetailScaffoldProps {
   media?: ReactNode;
   /** Extra read-only content rendered under the media (e.g. a content snippet). */
   children?: ReactNode;
+  /** Structured read-only sections rendered after the editable summary fields. */
+  detailSections?: ReactNode;
   metaItems?: MetaItem[];
   editFields?: EditField[];
   /** When provided, an edit affordance appears and these values are persisted on save. */
@@ -193,11 +195,13 @@ function RawDataDetails({ data }: { data: unknown }) {
   }
 
   return (
-    <details className="rounded-md border bg-muted/30">
-      <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+    <details className="rounded-xl border border-border/60 bg-card/45 shadow-sm backdrop-blur">
+      <summary className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         Raw data
       </summary>
-      <pre className="max-h-72 overflow-auto px-3 pb-3 text-xs leading-relaxed">{pretty}</pre>
+      <pre className="max-h-72 overflow-auto px-4 pb-4 text-xs leading-relaxed text-foreground/85">
+        {pretty}
+      </pre>
     </details>
   );
 }
@@ -208,6 +212,7 @@ export function EntityDetailScaffold({
   subtitle,
   media,
   children,
+  detailSections,
   metaItems,
   editFields,
   onSave,
@@ -297,10 +302,10 @@ export function EntityDetailScaffold({
   );
 
   return (
-    <Sheet.Content className="z-index-1000 w-full gap-0 p-0 sm:max-w-xl">
-      <Sheet.Header className="gap-1.5 border-b p-4 pr-12">
+    <Sheet.Content className="z-[1000] w-full gap-0 overflow-hidden border-l border-white/10 bg-background/75 p-0 shadow-2xl backdrop-blur-2xl supports-[backdrop-filter]:bg-background/65 sm:max-w-xl">
+      <Sheet.Header className="gap-2 border-b border-border/60 bg-background/45 p-5 pr-12 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-2">
-          <Sheet.Title className="text-lg leading-tight">{title}</Sheet.Title>
+          <Sheet.Title className="text-xl leading-tight tracking-tight">{title}</Sheet.Title>
           {canEnterEditMode && !editing && (
             <Button
               variant="ghost"
@@ -316,19 +321,21 @@ export function EntityDetailScaffold({
         {/* Always render a description so Radix has an accessible description to
             point `aria-describedby` at (otherwise it logs a console warning). */}
         {subtitle != null && subtitle !== '' ? (
-          <Sheet.Description>{subtitle}</Sheet.Description>
+          <Sheet.Description className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {subtitle}
+          </Sheet.Description>
         ) : (
           <Sheet.Description className="sr-only">{`Details for ${title}`}</Sheet.Description>
         )}
       </Sheet.Header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
         {media}
 
         {children}
 
         {editFields && editFields.length > 0 && (
-          <div className="flex flex-col gap-4">
+          <section className="flex flex-col gap-4 rounded-xl border border-border/60 bg-card/45 p-4 shadow-sm backdrop-blur">
             {editFields.map((field) => (
               <div key={field.key} className="flex flex-col gap-2">
                 <Label htmlFor={`field-${field.key}`}>{field.label}</Label>
@@ -361,14 +368,22 @@ export function EntityDetailScaffold({
                 )}
               </div>
             ))}
-          </div>
+          </section>
         )}
 
+        {detailSections}
+
         {visibleMeta.length > 0 && (
-          <Card className="p-0">
-            <Card.Content className="flex flex-col gap-2 p-4">
+          <Card className="gap-0 border-border/60 bg-card/45 p-0 shadow-sm backdrop-blur">
+            <Card.Header className="p-4 pb-2">
+              <Card.Title className="text-sm">Details</Card.Title>
+            </Card.Header>
+            <Card.Content className="flex flex-col divide-y divide-border/50 p-4 pt-0">
               {visibleMeta.map((item) => (
-                <div key={item.label} className="flex items-baseline gap-2">
+                <div
+                  key={item.label}
+                  className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2 first:pt-0 last:pb-0"
+                >
                   <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
                     {item.label}
                   </span>
@@ -380,7 +395,7 @@ export function EntityDetailScaffold({
         )}
 
         {taggable && ref.globalId && (currentTags.length > 0 || editing) && (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-card/45 p-4 shadow-sm backdrop-blur">
             <Label>Tags</Label>
             <TagInput
               key={ref.globalId}
@@ -428,7 +443,7 @@ export function EntityDetailScaffold({
       </div>
 
       {editing && (
-        <Sheet.Footer className="gap-2 border-t">
+        <Sheet.Footer className="gap-2 border-t border-border/60 bg-background/55 backdrop-blur-xl">
           {saveError && (
             <p role="alert" className="text-sm text-destructive">
               {saveError}

@@ -20,6 +20,9 @@ const MAX_SUGGESTIONS = 50;
 interface Props {
   tags?: string[];
   readOnly?: boolean;
+  className?: string;
+  inputPlaceholder?: string;
+  singleLine?: boolean;
   /**
    * Existing tag labels to autocomplete from. When provided, a dropdown of
    * matching tags surfaces as you type — this is what unifies the explorer's tag
@@ -38,6 +41,9 @@ interface Props {
 export function TagInput({
   tags: initialTags,
   readOnly = false,
+  className,
+  inputPlaceholder,
+  singleLine = false,
   suggestions,
   onTagAdded,
   onTagRemoved,
@@ -174,14 +180,20 @@ export function TagInput({
             'aria-[invalid=true]:ring-destructive/20 dark:aria-[invalid=true]:ring-destructive/40 aria-[invalid=true]:border-destructive',
             'transition-[color,box-shadow]',
             'focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]',
+            className,
           )}
         >
-          <div className="flex items-center gap-1 flex-wrap">
+          <div
+            className={cn(
+              'flex items-center gap-1',
+              singleLine ? 'flex-nowrap overflow-hidden' : 'flex-wrap',
+            )}
+          >
             <TagIcon className="h-4 w-4 mr-0.5 my-0.5" strokeWidth={1.75} />
 
             {tags.map((tag, i) => {
               return (
-                <Tag key={`${tag}-${i}`} text={tag}>
+                <Tag key={`${tag}-${i}`} text={tag} className={singleLine ? 'shrink-0' : undefined}>
                   {!readOnly && (
                     <button
                       type="button"
@@ -207,13 +219,18 @@ export function TagInput({
                     onFocus={() => setFocused(true)}
                     // Delay so a suggestion click registers before the list unmounts.
                     onBlur={() => setTimeout(() => setFocused(false), 120)}
-                    placeholder={suggestions && tags.length === 0 ? 'Add tags…' : undefined}
+                    placeholder={
+                      tags.length === 0
+                        ? (inputPlaceholder ?? (suggestions ? 'Add tags…' : undefined))
+                        : undefined
+                    }
                     className={cn(
                       'min-w-35 !flex-1 !bg-transparent !border-0 !outline-none !ring-0 !shadow-none !rounded-none',
                       '!p-0 h-5',
                       'focus:!border-transparent focus:!ring-0 focus-visible:!ring-0 focus-visible:!border-transparent',
                       'disabled:!bg-transparent',
                       'resize-none text-sm leading-none',
+                      singleLine && '!min-w-0',
                     )}
                   />
                 )}

@@ -14,6 +14,7 @@ import { gql } from '@/graphql';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components/EntityDetails';
+import { countActiveFilters } from './Components/ExplorerToolbar/ActiveFilterChips';
 import { AdvancedSearchToggle, ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
@@ -167,6 +168,9 @@ export default function DesktopMemoryPage() {
     }
   }, []);
 
+  const activeFilterCount = countActiveFilters(searchParams);
+  const showExplorerToolbar = advancedOpen || activeTab !== 'map' || activeFilterCount > 0;
+
   return (
     <>
       <Portal.Slot id="breadcrumbs">
@@ -225,9 +229,11 @@ export default function DesktopMemoryPage() {
 
       <PageContent className="p-0 gap-0">
         {/* Advanced-search drawer (when open) + active-filter chips + result count. */}
-        <div className="px-4 pt-3">
-          <ExplorerToolbar open={advancedOpen} />
-        </div>
+        {showExplorerToolbar && (
+          <div className={advancedOpen ? 'px-4 pt-0' : 'px-4 pt-3'}>
+            <ExplorerToolbar open={advancedOpen} showResultCount={activeTab !== 'map'} attachedToHeader />
+          </div>
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col">
           {activeTab === 'list' && <ListView />}

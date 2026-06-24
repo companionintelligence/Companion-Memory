@@ -53,7 +53,7 @@ export function BrowserActivityCard({ entity }: Props) {
 
   return (
     <Card
-      className="!gap-2 !py-4 px-6 cursor-pointer hover:shadow-lg transition-shadow duration-200"
+      className="!gap-2 !p-3 cursor-pointer hover:shadow-lg transition-shadow duration-200"
       onClick={() => setActiveEntity({ ...data, __typename: 'BrowserActivityType', bucketTime: data.time })}
     >
       <div className="flex items-start gap-3">
@@ -63,7 +63,7 @@ export function BrowserActivityCard({ entity }: Props) {
         <div className="flex-1 min-w-0">
           <Tooltip>
             <Tooltip.Trigger asChild>
-              <h3 className="text-lg font-semibold text-card-foreground truncate cursor-default">
+              <h3 className="text-sm font-semibold text-card-foreground truncate cursor-default">
                 {data.title || 'Untitled page'}
               </h3>
             </Tooltip.Trigger>

@@ -19,6 +19,18 @@
   background-color: var(--card);
 }
 
+.memory-map-cluster-popup .leaflet-popup-content-wrapper {
+  background-color: #ffffff;
+  color: #000000;
+  overflow: hidden;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
+}
+
+.memory-map-cluster-popup .leaflet-popup-tip {
+  background-color: #ffffff;
+}
+
 /* Marker animation */
 .custom-map-marker {
   transition: transform 0.2s ease-out;
@@ -63,9 +75,12 @@
 .leaflet-shadow-pane,
 .leaflet-overlay-pane,
 .leaflet-marker-pane,
-.leaflet-tooltip-pane,
-.leaflet-popup-pane {
+.leaflet-tooltip-pane {
   z-index: 1 !important;
+}
+
+.leaflet-popup-pane {
+  z-index: 450 !important;
 }
 
 /* Leaflet controls should also have lower z-index */

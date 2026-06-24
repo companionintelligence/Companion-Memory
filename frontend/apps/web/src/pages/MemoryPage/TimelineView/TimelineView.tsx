@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
+import { cn } from '@ci/shadcn';
 import { useSearchParams } from 'react-router-dom';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
@@ -23,8 +24,21 @@ const TIMELINE_TYPES: ReadonlySet<string> = new Set([
   'CommunicationType',
 ]);
 
-export function TimelineView() {
+interface TimelineViewProps {
+  activeEntityId?: string | null;
+  onEntityHover?: (entity: EntityItem | null) => void;
+  onEntitySelect?: (entity: EntityItem) => void;
+  registerTimelineRow?: (entityId: string, element: HTMLDivElement | null) => void;
+}
+
+export function TimelineView({
+  activeEntityId,
+  onEntityHover,
+  onEntitySelect,
+  registerTimelineRow,
+}: TimelineViewProps = {}) {
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new globalThis.Map<string, HTMLDivElement>());
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }] = useEntityService();
 
@@ -66,6 +80,35 @@ export function TimelineView() {
 
     return () => observer.disconnect();
   }, [hasNextPage, loadMore]);
+
+  useEffect(() => {
+    if (!activeEntityId) {
+      return;
+    }
+
+    rowRefs.current.get(activeEntityId)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+    });
+  }, [activeEntityId]);
+
+  const resultLabel =
+    loading && data.length === 0
+      ? 'Searching...'
+      : `Showing ${data.length.toLocaleString()}${hasNextPage ? '+' : ''}`;
+
+  const setRowRef = useCallback(
+    (entityId: string) => (element: HTMLDivElement | null) => {
+      if (element) {
+        rowRefs.current.set(entityId, element);
+      } else {
+        rowRefs.current.delete(entityId);
+      }
+
+      registerTimelineRow?.(entityId, element);
+    },
+    [registerTimelineRow],
+  );
 
   if (loading && timelineData.length === 0) {
     return (
@@ -115,36 +158,67 @@ export function TimelineView() {
     );
   }
 
-  // One timeline segment: the vertical rail plus a dotted card per entity.
-  const renderTimeline = (entities: EntityItem[]) => (
-    <div className="relative pl-8 pt-2">
-      <div className="absolute top-0 bottom-0 left-[14px] w-0.5 bg-border" />
+  const renderTimelineRows = (entities: EntityItem[]) => (
+    <div className="space-y-3">
+      {entities.map((entity) => {
+        const active = activeEntityId === entity.id;
 
-      <div className="space-y-4">
-        {entities.map((entity) => (
-          <div key={entity.id} className="relative">
-            <div className="absolute top-6 -left-4.25 h-4 w-4 -translate-x-1/2 rounded-full bg-[#58ebbf] shadow-glow-ci" />
+        return (
+          <div
+            key={entity.id}
+            ref={setRowRef(entity.id)}
+            className={cn(
+              'relative rounded-md transition-shadow duration-150',
+              active && 'ring-2 ring-[#58ebbf]/80 ring-offset-0',
+            )}
+            onClickCapture={() => onEntitySelect?.(entity)}
+            onMouseEnter={() => onEntityHover?.(entity)}
+            onMouseLeave={() => onEntityHover?.(null)}
+          >
+            <div
+              className={cn(
+                'absolute left-[-18px] top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full',
+                active ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci' : 'bg-[#58ebbf] shadow-glow-ci',
+              )}
+            />
             <EntityCard entity={entity} />
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 
   return (
-    <div className="space-y-6 py-2">
-      {groups
-        ? groups.map((group) => (
-            <section key={group.key}>
-              <DateGroupHeader label={group.label} count={group.entities.length} align="right" />
-              {renderTimeline(group.entities)}
-            </section>
-          ))
-        : renderTimeline(timelineData)}
+    <div className="relative py-2">
+      <div className="sticky top-0 z-30 flex items-center justify-start bg-background/90 px-3 py-3 backdrop-blur-sm">
+        <span className="whitespace-nowrap text-xs text-muted-foreground">{resultLabel}</span>
+      </div>
 
-      {loadingMore && <TimelineSkeleton count={2} className="pt-2" />}
+      <div className="relative">
+        <div className="absolute bottom-0 left-[14px] top-0 w-0.5 bg-border" />
 
-      {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+        <div className="space-y-6">
+          {groups ? (
+            groups.map((group) => (
+              <section key={group.key}>
+                <DateGroupHeader
+                  label={group.label}
+                  count={group.entities.length}
+                  align="right"
+                  className="top-10"
+                />
+                <div className="pl-8 pt-2">{renderTimelineRows(group.entities)}</div>
+              </section>
+            ))
+          ) : (
+            <div className="pl-8 pt-2">{renderTimelineRows(timelineData)}</div>
+          )}
+        </div>
+
+        {loadingMore && <TimelineSkeleton count={2} className="pl-8 pt-2" />}
+
+        {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+      </div>
     </div>
   );
 }

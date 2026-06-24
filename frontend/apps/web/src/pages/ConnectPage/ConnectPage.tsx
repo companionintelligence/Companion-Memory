@@ -10,6 +10,8 @@ import { GET_PROVIDERS, GET_OAUTH_CALLBACK_URL } from '@/queries';
 
 import { Card } from './Card';
 
+const DOWNLOAD_URL = 'https://ci.computer/download';
+
 interface ProviderKey {
   readonly id: string;
   readonly clientId: string;
@@ -58,6 +60,7 @@ export function ConnectPage() {
   const { data: getConnections } = useQuery(GET_CONNECTIONS);
 
   const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${window.location.origin}/oauth/callback`;
+  const openDownload = () => window.open(DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
 
   const [setupProvider, setSetupProvider] = useState<ProviderNode | null>(null);
 
@@ -167,49 +170,49 @@ export function ConnectPage() {
               background="bg-blue-500"
               border="border-blue-400"
               text="Connect Home Assistant to track your smart home interactions, automation usage, and device states."
-              disabled
+              onClick={openDownload}
             />
             <Card
               logo="/branding/quest/logo.svg"
               background="bg-gray-800"
               border="border-gray-700"
               text="Link your Quest VR headset to use your camera for XR tracking and more to unlock embodied agentic immersive experiences."
-              disabled
+              onClick={openDownload}
             />
             <Card
               logo="/branding/ios/logo.svg"
               background="bg-blue-500"
               border="border-blue-400"
               text="Download the iOS app to track your mobile usage, screen time, and app interactions on iPhone and iPad."
-              disabled
+              onClick={openDownload}
             />
             <Card
               logo="/branding/android/logo.svg"
               background="bg-green-500"
               border="border-green-400"
               text="Install the Android app to monitor your device usage, notifications, and mobile activity patterns."
-              disabled
+              onClick={openDownload}
             />
             <Card
               logo="/branding/windows/logo.svg"
               background="bg-blue-600"
               border="border-blue-500"
               text="Get the Windows app to track your desktop activity, application usage, and system interactions."
-              disabled
+              onClick={openDownload}
             />
             <Card
               logo="/branding/mac/logo.svg"
               background="bg-gray-600"
               border="border-gray-500"
               text="Download the macOS app to monitor your Mac usage, workspace activity, and application patterns."
-              disabled
+              onClick={openDownload}
             />
             <Card
               logo="/branding/linux/logo.svg"
               background="bg-yellow-600"
               border="border-yellow-500"
               text="Install the Linux app to track your system usage, command line activity, and development workflows."
-              disabled
+              onClick={openDownload}
             />
           </div>
         </div>

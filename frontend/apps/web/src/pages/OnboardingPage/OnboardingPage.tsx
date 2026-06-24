@@ -9,6 +9,7 @@ import { ThemeToggle } from '@/components/ThemePicker';
 import { ActivityPreferences } from './ActivityPreferences';
 import focusAreasImage from './assets/focus-areas.png';
 import peopleImage from './assets/people.png';
+import { DataImportStep } from './DataImportStep';
 import { FocusAreas } from './FocusAreas';
 import { FoodPreferences } from './FoodPreferences';
 import { Intro } from './Intro';
@@ -55,6 +56,7 @@ export function OnboardingPage() {
       <FoodPreferences />,
       <MoviePreferences />,
       <ActivityPreferences />,
+      <DataImportStep />,
       <Submit />,
     ],
     [],
@@ -91,7 +93,9 @@ export function OnboardingPage() {
     null,
     null,
     null,
+    null,
   ];
+  const finalGuidanceStep = steps.length - 2;
 
   return (
     <Form {...form}>
@@ -113,7 +117,7 @@ export function OnboardingPage() {
 
           {step < steps.length - 1 && (
             <Button type="button" className="px-24" onClick={handleNextStep}>
-              Next
+              {step === finalGuidanceStep ? 'Finish setup' : 'Next'}
             </Button>
           )}
 

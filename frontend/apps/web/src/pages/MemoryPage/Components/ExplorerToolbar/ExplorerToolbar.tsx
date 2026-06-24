@@ -328,7 +328,7 @@ function WhereFilter() {
 
 /**
  * The advanced search controls in plain Who / What / When / Where / How order,
- * followed by tags + a semantic toggle, then sort + save. `modal` is forwarded
+ * followed by semantic, sort, save, and right-aligned tags. `modal` is forwarded
  * to the portaled Radix dropdowns so they behave inside a modal Sheet/Dialog.
  */
 function AdvancedFilters({ modal }: { modal: boolean }) {
@@ -339,18 +339,30 @@ function AdvancedFilters({ modal }: { modal: boolean }) {
 
   return (
     <>
-      <WhoFilter />
-      <EntityTypeFilter modal={modal} label="What" />
-      <DateControl />
-      <WhereFilter />
-      <ConnectorFilter modal={modal} label="How" />
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <WhoFilter />
+        <EntityTypeFilter modal={modal} label="What" />
+        <DateControl />
+        <WhereFilter />
+        <ConnectorFilter modal={modal} label="How" />
 
-      <span className="mx-1 h-6 w-px self-center bg-border" />
+        <span className="mx-1 h-6 w-px self-center bg-border" />
 
-      <div className="w-44">
+        <ToggleChip param="semantic" label="Semantic" icon={<Sparkles className="h-4 w-4" />} />
+
+        <span className="mx-1 h-6 w-px self-center bg-border" />
+
+        <SortControl />
+        <SaveSearchButton />
+      </div>
+
+      <div className="ml-auto w-[220px] shrink-0">
         <TagInput
           tags={tags}
           suggestions={tagSuggestions}
+          inputPlaceholder="Search tags"
+          singleLine
+          className="h-9 px-2 py-1"
           onTagAdded={(tag) => {
             setTags([...tags, tag]);
 
@@ -359,12 +371,6 @@ function AdvancedFilters({ modal }: { modal: boolean }) {
           onTagRemoved={(tag) => setTags(tags.filter((value) => value !== tag))}
         />
       </div>
-      <ToggleChip param="semantic" label="Semantic" icon={<Sparkles className="h-4 w-4" />} />
-
-      <span className="mx-1 h-6 w-px self-center bg-border" />
-
-      <SortControl />
-      <SaveSearchButton />
     </>
   );
 }
@@ -516,9 +522,20 @@ export function AdvancedSearchToggle({
             aria-label={label}
             aria-expanded={open}
             title={label}
-            className={cn('relative h-10 w-10 flex-shrink-0', className)}
+            className={cn(
+              'relative h-10 w-10 flex-shrink-0 overflow-visible',
+              open && 'rounded-b-none',
+              className,
+            )}
           >
             <SlidersHorizontal className="h-4 w-4" />
+            <ChevronDown
+              aria-hidden="true"
+              className={cn(
+                'pointer-events-none absolute bottom-0.5 right-0.5 h-3 w-3 opacity-70 transition-transform',
+                open && 'rotate-180',
+              )}
+            />
             {activeCount > 0 && (
               <Badge
                 variant={open ? 'default' : 'secondary'}
@@ -587,25 +604,45 @@ export function MemorySearchField() {
   );
 }
 
-function ExplorerToolbarInner({ open }: { open: boolean }) {
+function ExplorerToolbarInner({
+  open,
+  showResultCount,
+  attachedToHeader,
+}: {
+  open: boolean;
+  showResultCount: boolean;
+  attachedToHeader: boolean;
+}) {
+  const [searchParams] = useSearchParams();
+  const showSummaryRow = showResultCount || countActiveFilters(searchParams) > 0;
+
   return (
     <div className="flex flex-col gap-2">
       {/* The advanced-search drawer: plain Who / What / When / Where / How, then
-          tags + semantic, then sort + save. Opened from the header toggle. */}
+          semantic, sort, save, and right-aligned tags. Opened from the header toggle. */}
       {open && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-2 border border-border/60 bg-muted/20 p-3 shadow-sm',
+            attachedToHeader ? 'rounded-b-lg rounded-t-none border-t-0 bg-secondary/20' : 'rounded-lg',
+          )}
+        >
           <AdvancedFilters modal={false} />
         </div>
       )}
 
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <ActiveFilterChips />
+      {showSummaryRow && (
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <ActiveFilterChips />
+          </div>
+          {showResultCount && (
+            <div className="shrink-0">
+              <ResultCount />
+            </div>
+          )}
         </div>
-        <div className="shrink-0">
-          <ResultCount />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -617,10 +654,22 @@ function ExplorerToolbarInner({ open }: { open: boolean }) {
  * the page — the AdvancedSearchToggle that flips it lives in the header. Wrapped
  * in DropdownProvider so the useDropdown URL-param setters work.
  */
-export function ExplorerToolbar({ open }: { open: boolean }) {
+export function ExplorerToolbar({
+  open,
+  showResultCount = true,
+  attachedToHeader = false,
+}: {
+  open: boolean;
+  showResultCount?: boolean;
+  attachedToHeader?: boolean;
+}) {
   return (
     <DropdownProvider args={[{ changeSearchParams: true }]}>
-      <ExplorerToolbarInner open={open} />
+      <ExplorerToolbarInner
+        open={open}
+        showResultCount={showResultCount}
+        attachedToHeader={attachedToHeader}
+      />
     </DropdownProvider>
   );
 }

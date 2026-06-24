@@ -51,14 +51,29 @@ export function Card({
     <div
       id={id}
       className={cn(
-        'text-gray-700 dark:text-gray-200 rounded-lg bg-white shadow-md dark:bg-gray-80 select-none',
-        !disabled ? 'cursor-pointer' : 'opacity-50',
+        'overflow-hidden rounded-lg bg-white text-slate-800 shadow-md ring-1 ring-black/5 select-none dark:bg-slate-900/95 dark:text-slate-100 dark:ring-white/10',
+        !disabled ? 'cursor-pointer transition hover:-translate-y-0.5 hover:shadow-lg' : 'cursor-not-allowed',
         className,
       )}
       onClick={!disabled ? onClick : undefined}
+      onKeyDown={(event) => {
+        if (disabled || !onClick || (event.key !== 'Enter' && event.key !== ' ')) {
+          return;
+        }
+
+        event.preventDefault();
+        onClick();
+      }}
+      role={!disabled && onClick ? 'button' : undefined}
+      tabIndex={!disabled && onClick ? 0 : undefined}
+      aria-disabled={disabled || undefined}
     >
       <div
-        className={cn('flex items-center justify-center p-10 rounded-t-lg', background)}
+        className={cn(
+          'flex items-center justify-center p-10',
+          disabled && 'opacity-70 saturate-75',
+          background,
+        )}
         style={backgroundStyle}
       >
         <div
@@ -68,14 +83,18 @@ export function Card({
           )}
           style={borderStyle}
         >
-          <img src={logo} className="w-12 h-12" />
+          <img src={logo} className="w-12 h-12" alt="" />
         </div>
       </div>
-      <div className="font-semibold text-sm p-6">{text}</div>
+      <div className="p-5 text-sm font-semibold leading-relaxed text-slate-800 dark:text-slate-100">
+        {text}
+      </div>
       {warningText && (
-        <div className="px-6 pb-2 text-xs text-amber-600 dark:text-amber-400">{warningText}</div>
+        <div className="px-5 pb-2 text-xs font-medium text-amber-700 dark:text-amber-300">{warningText}</div>
       )}
-      {subtext && <div className="font-semibold text-sm p-6">{subtext}</div>}
+      {subtext && (
+        <div className="px-5 pb-5 text-sm font-semibold text-slate-700 dark:text-slate-200">{subtext}</div>
+      )}
     </div>
   );
 }
