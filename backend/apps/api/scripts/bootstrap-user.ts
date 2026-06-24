@@ -70,10 +70,21 @@ async function main(): Promise<void> {
   try {
     const userService = app.get(UserService);
 
-    const existing = await userService.findById({ userId: SYSTEM_USER }, id);
+    const existingById = await userService.findById({ userId: SYSTEM_USER }, id);
 
-    if (existing != null) {
-      logger.log(`Default user already exists (${email}); nothing to do.`);
+    if (existingById != null) {
+      logger.log(`Default user already exists (id ${id}); nothing to do.`);
+
+      return;
+    }
+
+    // Email is unique. A user may already exist under a different id (a prior
+    // manual signup or a restore), in which case create() would hit the unique
+    // email constraint — treat that as a no-op too.
+    const existingByEmail = await userService.findByEmail(email);
+
+    if (existingByEmail != null) {
+      logger.log(`A user with email ${email} already exists; nothing to do.`);
 
       return;
     }
