@@ -71,8 +71,12 @@ async function main(): Promise<void> {
   // blank), skip without error — the user signs up through the web UI. This step
   // must still exit 0: the api service depends on bootstrap-user completing
   // successfully, so failing here would block the whole install.
-  const email = process.env.AUTH_DEFAULT_USER_EMAIL;
-  const password = process.env.AUTH_DEFAULT_USER_PASSWORD;
+  //
+  // Trim first: these often come from secrets/env files that add trailing
+  // newlines/whitespace, which would otherwise pass the blank check or seed an
+  // email/password the operator can't actually log in with.
+  const email = process.env.AUTH_DEFAULT_USER_EMAIL?.trim();
+  const password = process.env.AUTH_DEFAULT_USER_PASSWORD?.trim();
 
   if (!email || !password) {
     logger.log(
