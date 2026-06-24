@@ -95,6 +95,8 @@ type Documents = {
     "\n  mutation UpdatePersonDetail($input: UpdatePersonInput!) {\n    updatePerson(input: $input) {\n      success\n      person {\n        id\n        name\n        description\n      }\n    }\n  }\n": typeof types.UpdatePersonDetailDocument,
     "\n  mutation UpdatePlaceDetail($input: UpdatePlaceInput!) {\n    updatePlace(input: $input) {\n      id\n      name\n      description\n      properties\n    }\n  }\n": typeof types.UpdatePlaceDetailDocument,
     "\n  mutation CreateSavedSearch($input: CreateSavedSearchInput!) {\n    createSavedSearch(input: $input) {\n      success\n      savedSearch {\n        id\n        name\n        description\n        query\n        entityTypes\n        tags\n      }\n    }\n  }\n": typeof types.CreateSavedSearchDocument,
+    "\n  query ExplorerPeople {\n    people(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n        }\n      }\n    }\n  }\n": typeof types.ExplorerPeopleDocument,
+    "\n  query ExplorerPlaces {\n    places(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n          type\n          properties\n        }\n      }\n    }\n  }\n": typeof types.ExplorerPlacesDocument,
     "\n  query ExplorerTags {\n    tags {\n      edges {\n        node {\n          id\n          label\n        }\n      }\n    }\n  }\n": typeof types.ExplorerTagsDocument,
     "\n  query GetSavedSearch($id: ID!) {\n    savedSearch(id: $id) {\n      id\n      name\n      description\n      query\n      entityTypes\n      tags\n    }\n  }\n": typeof types.GetSavedSearchDocument,
     "\n  fragment TableAnswerRowData on AnswerType {\n    id\n    answer\n    question {\n      id\n      text\n    }\n  }\n": typeof types.TableAnswerRowDataFragmentDoc,
@@ -210,6 +212,8 @@ const documents: Documents = {
     "\n  mutation UpdatePersonDetail($input: UpdatePersonInput!) {\n    updatePerson(input: $input) {\n      success\n      person {\n        id\n        name\n        description\n      }\n    }\n  }\n": types.UpdatePersonDetailDocument,
     "\n  mutation UpdatePlaceDetail($input: UpdatePlaceInput!) {\n    updatePlace(input: $input) {\n      id\n      name\n      description\n      properties\n    }\n  }\n": types.UpdatePlaceDetailDocument,
     "\n  mutation CreateSavedSearch($input: CreateSavedSearchInput!) {\n    createSavedSearch(input: $input) {\n      success\n      savedSearch {\n        id\n        name\n        description\n        query\n        entityTypes\n        tags\n      }\n    }\n  }\n": types.CreateSavedSearchDocument,
+    "\n  query ExplorerPeople {\n    people(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n        }\n      }\n    }\n  }\n": types.ExplorerPeopleDocument,
+    "\n  query ExplorerPlaces {\n    places(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n          type\n          properties\n        }\n      }\n    }\n  }\n": types.ExplorerPlacesDocument,
     "\n  query ExplorerTags {\n    tags {\n      edges {\n        node {\n          id\n          label\n        }\n      }\n    }\n  }\n": types.ExplorerTagsDocument,
     "\n  query GetSavedSearch($id: ID!) {\n    savedSearch(id: $id) {\n      id\n      name\n      description\n      query\n      entityTypes\n      tags\n    }\n  }\n": types.GetSavedSearchDocument,
     "\n  fragment TableAnswerRowData on AnswerType {\n    id\n    answer\n    question {\n      id\n      text\n    }\n  }\n": types.TableAnswerRowDataFragmentDoc,
@@ -570,6 +574,14 @@ export function gql(source: "\n  mutation UpdatePlaceDetail($input: UpdatePlaceI
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  mutation CreateSavedSearch($input: CreateSavedSearchInput!) {\n    createSavedSearch(input: $input) {\n      success\n      savedSearch {\n        id\n        name\n        description\n        query\n        entityTypes\n        tags\n      }\n    }\n  }\n"): (typeof documents)["\n  mutation CreateSavedSearch($input: CreateSavedSearchInput!) {\n    createSavedSearch(input: $input) {\n      success\n      savedSearch {\n        id\n        name\n        description\n        query\n        entityTypes\n        tags\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  query ExplorerPeople {\n    people(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n        }\n      }\n    }\n  }\n"): (typeof documents)["\n  query ExplorerPeople {\n    people(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n        }\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  query ExplorerPlaces {\n    places(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n          type\n          properties\n        }\n      }\n    }\n  }\n"): (typeof documents)["\n  query ExplorerPlaces {\n    places(first: 100) {\n      edges {\n        node {\n          id\n          name\n          description\n          type\n          properties\n        }\n      }\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
