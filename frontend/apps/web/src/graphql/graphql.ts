@@ -925,7 +925,6 @@ export type MutationCreateEventsArgs = {
 };
 
 
-
 export type MutationCreateInventoryItemsArgs = {
   input: Array<CreateInventoryInput>;
 };
