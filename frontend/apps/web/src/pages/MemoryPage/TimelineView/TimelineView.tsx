@@ -178,7 +178,9 @@ export function TimelineView({
             <div
               className={cn(
                 'absolute left-[-18px] top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full',
-                active ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci' : 'bg-[#58ebbf] shadow-glow-ci',
+                active
+                  ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci'
+                  : 'bg-[#58ebbf] shadow-glow-ci',
               )}
             />
             <EntityCard entity={entity} />
