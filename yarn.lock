@@ -2916,6 +2916,7 @@ __metadata:
     "@types/passport-jwt": "npm:^4.0.1"
     "@types/passport-local": "npm:^1.0.38"
     "@types/pg": "npm:^8.15.2"
+    "@types/pg-copy-streams": "npm:^1.2.5"
     "@types/supertest": "npm:^6.0.3"
     "@yarnpkg/pnpify": "npm:^4.1.4"
     bcrypt: "npm:^6.0.0"
@@ -2954,6 +2955,7 @@ __metadata:
     passport-local: "npm:^1.0.0"
     pg: "npm:^8.16.0"
     pg-boss: "npm:^10.3.2"
+    pg-copy-streams: "npm:^7.0.0"
     pgvector: "npm:^0.2.1"
     pino: "npm:^9.7.0"
     pino-pretty: "npm:^13.0.0"
@@ -10997,6 +10999,27 @@ __metadata:
   dependencies:
     "@types/express": "npm:*"
   checksum: 10c0/58ca21800b7910385961b7a3dc9071fc9db6223242b96ff88d16c9d004ce7173524e7c17c63363595565af3f85ad932ee301efc8cc3e378bea172eebc9e07703
+  languageName: node
+  linkType: hard
+
+"@types/pg-copy-streams@npm:^1.2.5":
+  version: 1.2.5
+  resolution: "@types/pg-copy-streams@npm:1.2.5"
+  dependencies:
+    "@types/node": "npm:*"
+    "@types/pg": "npm:*"
+  checksum: 10c0/fccb3c4e3df5dd579d1c30538036450be34d586e3f8531be0f8876d72751193ce8fc779a26f4b7a314539e3dbb0d8fb9a0d61c85da96b8fced43e127fa87d1c8
+  languageName: node
+  linkType: hard
+
+"@types/pg@npm:*":
+  version: 8.20.0
+  resolution: "@types/pg@npm:8.20.0"
+  dependencies:
+    "@types/node": "npm:*"
+    pg-protocol: "npm:*"
+    pg-types: "npm:^2.2.0"
+  checksum: 10c0/c8b5aa794ea074aa20d0c1ef6c721ce0fe16f2c084d0ccc32b7f12909a08ec969e6b01a094ce8e7019cc425381c4b59f261bd0133daf0c6d4aca5c6c492e8312
   languageName: node
   linkType: hard
 
@@ -21120,6 +21143,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"pg-copy-streams@npm:^7.0.0":
+  version: 7.0.0
+  resolution: "pg-copy-streams@npm:7.0.0"
+  checksum: 10c0/451d4919774c2a318529ed734e7f1cd33ee08f277379bfdd19cf625dd5cd5031b09bea41a07af8f42091a8642b2a5a541cee2aa234069e7e70e6a8765d1da3e6
+  languageName: node
+  linkType: hard
+
 "pg-int8@npm:1.0.1":
   version: 1.0.1
   resolution: "pg-int8@npm:1.0.1"
@@ -21150,7 +21180,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg-types@npm:2.2.0":
+"pg-types@npm:2.2.0, pg-types@npm:^2.2.0":
   version: 2.2.0
   resolution: "pg-types@npm:2.2.0"
   dependencies:

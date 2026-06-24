@@ -13,6 +13,7 @@ import { EventsModule } from '@ci/domains/events';
 import { EventEntity } from '@ci/domains/memory';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
+import { IndexDeferralService } from './services/IndexDeferralService';
 
 /**
  * @internal
@@ -20,5 +21,7 @@ import { MaintenanceController } from './controllers/MaintenanceController';
 @Module({
   imports: [TypeOrmModule.forFeature([EventEntity]), EventsModule],
   controllers: [MaintenanceController],
+  providers: [IndexDeferralService],
+  exports: [IndexDeferralService],
 })
 export class MaintenanceModule {}

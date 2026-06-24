@@ -54,4 +54,5 @@ export class EventsModule {}
 export { EventService, LocalEventService };
 export { OnEvent } from './decorators/OnEvent';
 export { Events, type EventPayloads } from './event-registry';
+export type { EventRegistry } from './registry';
 export { defineEvent } from './event-registration';

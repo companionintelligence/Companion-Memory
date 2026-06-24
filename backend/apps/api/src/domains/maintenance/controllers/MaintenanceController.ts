@@ -10,6 +10,27 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventEntity } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
 
+import {
+  type DeferralResult,
+  type DroppedIndex,
+  IndexDeferralService,
+  type RecreateResult,
+} from '../services/IndexDeferralService';
+
+// Body for POST /api/maintenance/indexes/recreate: the `dropped` array returned
+// verbatim by the matching /drop call (each carries its exact CREATE statement).
+const recreateIndexesSchema = z.object({
+  dropped: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        definition: z.string(),
+      }),
+    )
+    .min(1),
+});
+
 const geocodeLocationsSchema = z.object({
   /** Max events to geocode in this batch. */
   limit: z.coerce.number().int().min(1).max(5000).optional(),
@@ -44,6 +65,7 @@ export class MaintenanceController {
   constructor(
     private readonly signallingEventService: SignallingEventService,
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly indexDeferralService: IndexDeferralService,
   ) {}
 
   @Post('geocode-locations')
@@ -87,5 +109,30 @@ export class MaintenanceController {
       estimatedEventCount,
       status: jobIds.length > 0 ? 'enqueued' : 'noop',
     };
+  }
+
+  /**
+   * Index-deferral helper (issue #12), DROP phase. Drops the deferrable
+   * secondary indexes (FTS GIN, pgvector HNSW, per-table btree/GIN on the bulk
+   * destinations) before a very large load. Returns each dropped index's exact
+   * recreate statement in `dropped` — POST that array back to /indexes/recreate
+   * after the load. Provenance unique indexes and primary keys are never
+   * dropped (enforced in IndexDeferralService). OPT-IN; operator-triggered.
+   */
+  @Post('indexes/drop')
+  async dropIndexes(): Promise<DeferralResult> {
+    return this.indexDeferralService.dropDeferredIndexes();
+  }
+
+  /**
+   * Index-deferral helper (issue #12), RECREATE phase. Recreates the indexes
+   * dropped by /indexes/drop from the definitions returned there (passed back
+   * verbatim in the body).
+   */
+  @Post('indexes/recreate')
+  async recreateIndexes(
+    @Body(new ValidationPipe(recreateIndexesSchema)) body: { dropped: DroppedIndex[] },
+  ): Promise<RecreateResult> {
+    return this.indexDeferralService.recreateDeferredIndexes(body.dropped);
   }
 }
