@@ -445,12 +445,20 @@ export type CreateInventoryInput = {
 };
 
 export type CreateItemInput = {
+  acquiredAt?: InputMaybe<Scalars['DateTime']['input']>;
   brand?: InputMaybe<Scalars['String']['input']>;
   category?: InputMaybe<Scalars['String']['input']>;
+  currency?: InputMaybe<Scalars['String']['input']>;
   currentValue?: InputMaybe<Scalars['Float']['input']>;
   description?: InputMaybe<Scalars['String']['input']>;
+  metadata?: InputMaybe<Scalars['JSON']['input']>;
   model?: InputMaybe<Scalars['String']['input']>;
   name: Scalars['String']['input'];
+  purchasePrice?: InputMaybe<Scalars['Float']['input']>;
+  sourceId?: InputMaybe<Scalars['ID']['input']>;
+  sourceSystem?: InputMaybe<Scalars['String']['input']>;
+  sourceType?: InputMaybe<Scalars['String']['input']>;
+  subcategory?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type CreateItemPayload = {
