@@ -28,7 +28,12 @@ export function Controls({ className, position = 'top-left' }: Props) {
             <Tooltip delayDuration={600}>
               <Tooltip.Content side={tooltipSide}>Zoom in</Tooltip.Content>
               <Tooltip.Trigger asChild>
-                <Button variant="outline" size="icon" onClick={zoomIn} className={mapControlButtonClassName}>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={zoomIn}
+                  className={mapControlButtonClassName}
+                >
                   <Plus />
                 </Button>
               </Tooltip.Trigger>
@@ -37,7 +42,12 @@ export function Controls({ className, position = 'top-left' }: Props) {
             <Tooltip delayDuration={600}>
               <Tooltip.Content side={tooltipSide}>Zoom out</Tooltip.Content>
               <Tooltip.Trigger asChild>
-                <Button variant="outline" size="icon" onClick={zoomOut} className={mapControlButtonClassName}>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={zoomOut}
+                  className={mapControlButtonClassName}
+                >
                   <Minus />
                 </Button>
               </Tooltip.Trigger>
@@ -66,7 +76,9 @@ export function Controls({ className, position = 'top-left' }: Props) {
                 size="icon"
                 onClick={toggleRoutes}
                 className={cn(
-                  displayRoutes ? 'border-transparent dark:border-transparent' : mapControlButtonClassName,
+                  displayRoutes
+                    ? 'border-transparent dark:border-transparent'
+                    : mapControlButtonClassName,
                 )}
               >
                 <Route />

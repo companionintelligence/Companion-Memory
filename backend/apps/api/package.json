@@ -24,7 +24,6 @@
     "db:chatreset": "yarn dbmate --execute-file ./db/postgres/scripts/reset_demo_chats.sql",
     "db:filereset": "yarn dbmate --execute-file ./db/postgres/scripts/reset_demo_files.sql",
     "migration:run": "DOTENV_CONFIG_PATH=../../../.env ts-node -r tsconfig-paths/register --swc scripts/seed-database/run-migration.ts",
-    "bootstrap-user": "DOTENV_CONFIG_PATH=../../../.env node -r dotenv/config dist/scripts/bootstrap-user.js",
     "test": "DOTENV_CONFIG_PATH=../../../.env jest",
     "docs": "yarn docs:html",
     "docs:html": "typedoc",
