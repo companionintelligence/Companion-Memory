@@ -53,15 +53,28 @@ import { JOHN_SMITH } from './seed-database/data/users';
 class BootstrapUserModule {}
 
 async function main(): Promise<void> {
-  const { id, name, email, password } = JOHN_SMITH;
-
-  // Capture into a local so the non-null narrowing survives the awaits below.
-  if (password == null || password === '') {
-    throw new Error('AUTH_DEFAULT_USER_PASSWORD is not set — cannot bootstrap the default user.');
-  }
-
   const logger = new LoggerService();
   logger.setContext('bootstrap-user');
+
+  // Only seed a default account when the operator explicitly configured one.
+  // When AUTH_DEFAULT_USER_EMAIL / AUTH_DEFAULT_USER_PASSWORD are unset (or
+  // blank), skip without error — the user signs up through the web UI. This step
+  // must still exit 0: the api service depends on bootstrap-user completing
+  // successfully, so failing here would block the whole install.
+  const email = process.env.AUTH_DEFAULT_USER_EMAIL;
+  const password = process.env.AUTH_DEFAULT_USER_PASSWORD;
+
+  if (!email || !password) {
+    logger.log(
+      'AUTH_DEFAULT_USER_EMAIL / AUTH_DEFAULT_USER_PASSWORD not provided — skipping default-user seed (sign up via the web UI).',
+    );
+
+    return;
+  }
+
+  // Reuse the canonical default-user id/name so this stays idempotent with the
+  // demo seeder (scripts/seed-database/main.ts); email/password come from the env.
+  const { id, name } = JOHN_SMITH;
 
   const app = await NestFactory.createApplicationContext(BootstrapUserModule, {
     logger: false,
