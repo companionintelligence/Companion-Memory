@@ -36,9 +36,10 @@ export class CreateItemInput {
   @Field(() => GraphQLJSONObject, { nullable: true })
   metadata?: Record<string, unknown>;
 
-  // Provenance for imported items. No dedicated columns (no migration), so these
-  // are folded into metadata AND used to derive a stable, user-scoped primary key
-  // so a re-sync upserts instead of duplicating — see ItemService.create.
+  // Provenance triple for imported items, persisted to dedicated columns
+  // (inventory_source_triple_uniq). Idempotent re-sync is handled by the batch
+  // createInventory mutation (ItemService.createMany); on the singular path here
+  // they are simply recorded on the row.
   @Field(() => String, { nullable: true })
   sourceType?: string;
 
