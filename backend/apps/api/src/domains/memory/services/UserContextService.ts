@@ -42,6 +42,7 @@ export interface UserContext {
     entityId: string;
     name: string;
     type: string;
+    category: string | null;
     strength: number;
     relationship: 'PREFERS' | 'DISLIKES';
   }>;
@@ -57,6 +58,7 @@ type PreferenceRelationshipResult = {
   entityId: string;
   name: string;
   type: string;
+  category: string | null;
   strength: number;
   relationship: 'PREFERS' | 'DISLIKES';
 };
@@ -213,14 +215,18 @@ export class UserContextService {
       if (preferences.length > 0) {
         lines.push('', '## Top Preferences');
         preferences.forEach((pref) => {
-          lines.push(`- ${pref.name} (${pref.type}) - strength: ${pref.strength.toFixed(2)}`);
+          lines.push(
+            `- ${pref.name} (${pref.category ?? pref.type}) - strength: ${pref.strength.toFixed(2)}`,
+          );
         });
       }
 
       if (dislikes.length > 0) {
         lines.push('', '## Dislikes');
         dislikes.forEach((dislike) => {
-          lines.push(`- ${dislike.name} (${dislike.type}) - strength: ${dislike.strength.toFixed(2)}`);
+          lines.push(
+            `- ${dislike.name} (${dislike.category ?? dislike.type}) - strength: ${dislike.strength.toFixed(2)}`,
+          );
         });
       }
     }
@@ -367,6 +373,7 @@ export class UserContextService {
       entityId: string;
       name: string;
       type: string;
+      category: string | null;
       strength: number;
       relationship: 'PREFERS';
     }>
@@ -388,6 +395,7 @@ export class UserContextService {
       entityId: string;
       name: string;
       type: string;
+      category: string | null;
       strength: number;
       relationship: 'DISLIKES';
     }>
@@ -437,12 +445,14 @@ export class UserContextService {
         }
 
         const type = this.extractConceptType(concept);
+        const category = this.extractConceptCategory(concept);
         const name = concept.name ?? type ?? 'Unknown';
 
         return {
           entityId: concept.entity_id,
           name,
           type,
+          category,
           strength: rel.strength ?? 0,
           relationship: relationshipType,
         };
@@ -477,6 +487,21 @@ export class UserContextService {
     }
 
     return node.entity_type ?? 'Concept';
+  }
+
+  /**
+   * Semantic category of a concept (e.g. "food", "activity", "entertainment"),
+   * stored on the concept node's properties. This is the meaningful label for
+   * the LLM — unlike the node `type`, which is usually just "Concept" — and is
+   * what lets the agent answer category-scoped questions ("favorite food").
+   */
+  private extractConceptCategory(node: GraphNodeEntity): string | null {
+    const category = node.properties?.['category'];
+    if (typeof category === 'string' && category.trim().length > 0) {
+      return category.trim();
+    }
+
+    return null;
   }
 
   /**

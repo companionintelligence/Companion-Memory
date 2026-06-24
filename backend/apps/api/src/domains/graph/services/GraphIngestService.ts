@@ -99,20 +99,21 @@ export class GraphIngestService {
 
     let relationshipsProcessed = 0;
     if (input.relationships.length > 0) {
-      const selfId = await this.resolveSelfEntityId(ownerId);
+      const self = await this.resolveSelfEntity(ownerId);
 
       for (const r of input.relationships) {
         try {
-          const fromId = r.fromKey === SELF_KEY ? selfId : keyToId.get(r.fromKey);
-          const toId = r.toKey === SELF_KEY ? selfId : keyToId.get(r.toKey);
+          const fromId = r.fromKey === SELF_KEY ? self?.id : keyToId.get(r.fromKey);
+          const toId = r.toKey === SELF_KEY ? self?.id : keyToId.get(r.toKey);
 
           if (!fromId || !toId) {
             errors.push(`relationship ${r.fromKey}->${r.toKey}: endpoint not found in batch`);
             continue;
           }
 
-          const fromType = r.fromKey === SELF_KEY ? USER_ENTITY_TYPE : keyToType.get(r.fromKey)!;
-          const toType = r.toKey === SELF_KEY ? USER_ENTITY_TYPE : keyToType.get(r.toKey)!;
+          const fromType =
+            r.fromKey === SELF_KEY ? (self?.type ?? USER_ENTITY_TYPE) : keyToType.get(r.fromKey)!;
+          const toType = r.toKey === SELF_KEY ? (self?.type ?? USER_ENTITY_TYPE) : keyToType.get(r.toKey)!;
 
           await this.upsertRelationship(ownerId, {
             fromId,
@@ -226,12 +227,23 @@ export class GraphIngestService {
     }
   }
 
-  /** The owner's own User entity, used to anchor `self` edges. Null if absent. */
-  private async resolveSelfEntityId(ownerId: string): Promise<string | null> {
-    const user = await this.nodeRepository.findOne({
-      where: { userId: ownerId, entityType: USER_ENTITY_TYPE },
-    });
+  /**
+   * The owner's own entity, used to anchor `self` edges. The canonical source is
+   * `ci.users.entity_id` — a user's self entity is provisioned as a `Person`
+   * (their display name), NOT an `entity_type = 'User'` row, so the previous
+   * lookup by entityType found nothing and every `self->…` edge was dropped.
+   * Returns the resolved id + its actual entity_type, or null if the user has no
+   * self entity. The User entity_type is kept only as a fallback label.
+   */
+  private async resolveSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
+    const rows: Array<{ entity_id: string; entity_type: string }> = await this.nodeRepository.manager.query(
+      `SELECT e.entity_id, e.entity_type
+         FROM ci.users u
+         JOIN ci.entities e ON e.entity_id = u.entity_id
+        WHERE u.id = $1`,
+      [ownerId],
+    );
 
-    return user?.entityId ?? null;
+    return rows[0] ? { id: rows[0].entity_id, type: rows[0].entity_type } : null;
   }
 }
