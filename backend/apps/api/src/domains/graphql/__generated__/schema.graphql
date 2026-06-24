@@ -733,6 +733,7 @@ type Mutation {
   createContent(input: CreateContentInput!): ContentType!
   createContents(input: [CreateContentInput!]!): [ContentType!]!
   createEvent(input: CreateEventInput!): EventType!
+  createEvents(input: [CreateEventInput!]!): [EventType!]!
   createInventoryItems(input: [CreateInventoryInput!]!): [ItemType!]!
   createItem(input: CreateItemInput!): CreateItemPayload!
   createNote(input: CreateNoteInput!): CreateNotePayload!

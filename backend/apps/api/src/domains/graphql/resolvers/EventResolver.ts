@@ -33,14 +33,9 @@ export class EventResolver {
     private readonly tagLoader: TagLoader,
   ) {}
 
-  @Mutation(() => EventType)
-  async createEvent(
-    @Context() context: RequestContext,
-    @Args('input') input: CreateEventInput,
-  ): Promise<EventType> {
-    const serviceContext = toServiceContext(context);
-
-    const entity = await this.eventService.create(serviceContext, {
+  /** Map a CreateEventInput (GraphQL) to the service's CreateEventDto. */
+  private toDto(input: CreateEventInput) {
+    return {
       title: input.title,
       description: input.description,
       event_type: input.eventType,
@@ -62,9 +57,40 @@ export class EventResolver {
       metadata: input.metadata,
       status: input.status,
       sharing_level: input.sharingLevel,
-    });
+    };
+  }
+
+  @Mutation(() => EventType)
+  async createEvent(
+    @Context() context: RequestContext,
+    @Args('input') input: CreateEventInput,
+  ): Promise<EventType> {
+    const serviceContext = toServiceContext(context);
+
+    const entity = await this.eventService.create(serviceContext, this.toDto(input));
 
     return EventType.toType(entity[0]);
+  }
+
+  /**
+   * Batch create events in one round-trip. Returns the created-or-existing rows
+   * in input order (EventService.create dedups on the
+   * (source_type, source_system, source_id) triple), so a re-import is a no-op.
+   * The clean batch equivalent of N aliased createEvent mutations.
+   */
+  @Mutation(() => [EventType])
+  async createEvents(
+    @Context() context: RequestContext,
+    @Args({ name: 'input', type: () => [CreateEventInput] }) input: CreateEventInput[],
+  ): Promise<EventType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const entities = await this.eventService.create(
+      serviceContext,
+      input.map((i) => this.toDto(i)),
+    );
+
+    return entities.map((e) => EventType.toType(e));
   }
 
   @Mutation(() => EventType, { nullable: true })

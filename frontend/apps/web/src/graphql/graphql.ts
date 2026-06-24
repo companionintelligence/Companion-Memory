@@ -813,6 +813,7 @@ export type Mutation = {
   createContent: ContentType;
   createContents: Array<ContentType>;
   createEvent: EventType;
+  createEvents: Array<EventType>;
   createInventoryItems: Array<ItemType>;
   createItem: CreateItemPayload;
   createNote: CreateNotePayload;
@@ -916,6 +917,11 @@ export type MutationCreateContentsArgs = {
 
 export type MutationCreateEventArgs = {
   input: CreateEventInput;
+};
+
+
+export type MutationCreateEventsArgs = {
+  input: Array<CreateEventInput>;
 };
 
 
