@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { type Event, EventService } from '@ci/domains/memory';
@@ -92,11 +92,17 @@ export class EventSearchIndexListener {
     }
 
     const searchDocument = this.getSearchDocument(event);
+    const skipReason = searchDocument == null ? 'empty' : embedSkipReason(searchDocument);
 
-    if (searchDocument == null) {
-      this.logger.log('Event has no search document, skipping embedding');
+    if (!shouldEmbedType('event')) {
+      this.logger.log('Event type not in embed allowlist, skipping embedding');
+    } else if (skipReason != null) {
+      this.logger.log('Skipping low-value event embedding', {
+        eventId: event.id,
+        skipReason,
+      });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
+      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
       await this.embeddingService.upsert(
         {

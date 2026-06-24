@@ -19,7 +19,11 @@ interface EventData {
 
 @Injectable()
 export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
-  private semaphore = plimit(10);
+  // Global in-flight job ceiling across all queues. Configurable (CI_QUEUE_CONCURRENCY)
+  // so the decoupled embedding/index workers can be scaled for bulk imports.
+  private semaphore = plimit(config.queues.concurrency);
+
+  private readonly fetchBatchSize = config.queues.fetchBatchSize;
 
   private running = false;
 
@@ -211,7 +215,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
       const jobs = await this.boss.fetch<EventData>(queueName, {
         includeMetadata: true,
-        batchSize: available,
+        batchSize: Math.min(available, this.fetchBatchSize),
       });
 
       if (jobs.length === 0) {

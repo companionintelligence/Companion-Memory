@@ -98,6 +98,18 @@
       "host": "http://hbpe-service:8002"
     }
   },
+  "embedding": {
+    "model": "nomic-embed-text",
+    "batchSize": 32,
+    "concurrency": 4,
+    "coalesceWindowMs": 15,
+    "minTextLength": 3,
+    "types": []
+  },
+  "queues": {
+    "concurrency": 10,
+    "fetchBatchSize": 10
+  },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { type Message, MessageService, type Thread, ThreadService } from '@ci/domains/conversations';
 import {
@@ -120,11 +120,17 @@ export class ThreadSearchIndexListener {
     const messages = await this.messageService.findByThreadId(context, payload.threadId);
 
     const searchDocument = this.getSearchDocument(thread, messages);
+    const skipReason = searchDocument == null ? 'empty' : embedSkipReason(searchDocument);
 
-    if (searchDocument == null) {
-      this.logger.log('Thread has no search document, skipping embedding');
+    if (!shouldEmbedType('thread')) {
+      this.logger.log('Thread type not in embed allowlist, skipping embedding');
+    } else if (skipReason != null) {
+      this.logger.log('Skipping low-value thread embedding', {
+        threadId: thread.id,
+        skipReason,
+      });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
+      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
       await this.embeddingService.upsert(
         {

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { type BrowserActivity, BrowserActivityService } from '@ci/domains/browser-activity';
 import {
@@ -94,11 +94,17 @@ export class BrowserActivitySearchIndexListener {
     }
 
     const searchDocument = this.getSearchDocument(browserActivity);
+    const skipReason = searchDocument == null ? 'empty' : embedSkipReason(searchDocument);
 
-    if (searchDocument == null) {
-      this.logger.log('Browser activity has no search document, skipping embedding');
+    if (!shouldEmbedType('browser-activity')) {
+      this.logger.log('Browser-activity type not in embed allowlist, skipping embedding');
+    } else if (skipReason != null) {
+      this.logger.log('Skipping low-value browser activity embedding', {
+        browserActivityId: browserActivity.id,
+        skipReason,
+      });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
+      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
       await this.embeddingService.upsert(
         {

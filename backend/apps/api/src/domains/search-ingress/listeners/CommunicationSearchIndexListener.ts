@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { type Communication, CommunicationService } from '@ci/domains/memory';
@@ -90,11 +90,17 @@ export class CommunicationSearchIndexListener {
     }
 
     const searchDocument = this.getSearchDocument(communication);
+    const skipReason = searchDocument == null ? 'empty' : embedSkipReason(searchDocument);
 
-    if (searchDocument == null) {
-      this.logger.log('Communication has no search document, skipping embedding');
+    if (!shouldEmbedType('communication')) {
+      this.logger.log('Communication type not in embed allowlist, skipping embedding');
+    } else if (skipReason != null) {
+      this.logger.log('Skipping low-value communication embedding', {
+        communicationId: communication.id,
+        skipReason,
+      });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
+      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
       await this.embeddingService.upsert(
         {

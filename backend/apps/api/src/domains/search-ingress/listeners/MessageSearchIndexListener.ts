@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { AgentMemoryCreatedEvent, type AgentMemoryCreatedPayload } from '@ci/domains/agent/events';
 import { OnEvent } from '@ci/domains/events';
@@ -40,6 +40,27 @@ export class MessageSearchIndexListener {
 
     if (!content) {
       this.logger.log('Agent-memory fragment has no content, skipping embedding');
+
+      return;
+    }
+
+    if (!shouldEmbedType('message')) {
+      this.logger.log('Message type not in embed allowlist, skipping embedding', {
+        memoryId: payload.memoryId,
+      });
+
+      return;
+    }
+
+    // Selective embedding: drop trivial / reaction fragments ("Loved an image",
+    // bare "ok", emoji) that dominate chat imports and carry no search signal.
+    const skipReason = embedSkipReason(content);
+
+    if (skipReason != null) {
+      this.logger.log('Skipping low-value agent-memory embedding', {
+        memoryId: payload.memoryId,
+        skipReason,
+      });
 
       return;
     }

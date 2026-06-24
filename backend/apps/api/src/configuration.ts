@@ -120,6 +120,51 @@ export const ConfigSchema = z.object({
       host: z.string(),
     }),
   }),
+  // Embedding/indexing pipeline knobs. These let a deployment point the embedder
+  // at a GPU/alternate-host Ollama and tune throughput for bulk imports without
+  // code changes. `host` defaults to services.ollama.host (resolved below) so the
+  // embedder follows the main Ollama host unless OLLAMA_EMBED_HOST overrides it.
+  embedding: z.object({
+    /** Ollama host used for embedding calls. Falls back to services.ollama.host. */
+    host: z.string().optional(),
+    /** Embedding model name (must match the pgvector column dimensionality). */
+    model: z.string().default('nomic-embed-text'),
+    /** Max texts sent to Ollama's /api/embed in a single HTTP request. */
+    batchSize: z.coerce.number().int().positive().default(32),
+    /** Max concurrent in-flight Ollama embedding HTTP requests. */
+    concurrency: z.coerce.number().int().positive().default(4),
+    /**
+     * How long (ms) the coalescing buffer waits for more texts before flushing a
+     * batch. Small values keep latency low; larger values pack fuller batches
+     * during a bulk import. 0 disables coalescing (flush on next tick).
+     */
+    coalesceWindowMs: z.coerce.number().int().nonnegative().default(15),
+    /** Texts shorter than this (after trim) are skipped (selective embedding). */
+    minTextLength: z.coerce.number().int().nonnegative().default(3),
+    /**
+     * Entity types eligible for dense embedding. Empty array = embed all types
+     * (the conservative default — nothing is silently dropped by type). Set
+     * CI_EMBED_TYPES to a comma-separated allowlist to restrict embedding to
+     * specific types (keyword/tsvector indexing is unaffected).
+     */
+    types: z.preprocess((val) => {
+      if (typeof val === 'string') {
+        return val
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0);
+      }
+
+      return val;
+    }, z.array(z.string()).default([])),
+  }),
+  // PGBoss worker tuning. concurrency is the global in-flight job ceiling across
+  // all queues; fetchBatchSize caps how many jobs a single fetch pulls. Raising
+  // these scales the decoupled embedding workers during a bulk import.
+  queues: z.object({
+    concurrency: z.coerce.number().int().positive().default(10),
+    fetchBatchSize: z.coerce.number().int().positive().default(10),
+  }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     'scheduled.connection.sync': booleanStringSchema,
@@ -154,6 +199,13 @@ export const ConfigSchema = z.object({
 });
 
 const parsed = ConfigSchema.parse(config);
+
+// The embedder follows the main Ollama host unless an explicit embedding host is
+// configured (OLLAMA_EMBED_HOST), so a GPU/alternate-host Ollama can be pointed
+// at for embeddings only without touching the prompt/inference host.
+if (!parsed.embedding.host) {
+  parsed.embedding.host = parsed.services.ollama.host;
+}
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
 // existing deployments keep working until the billed key is supplied. (config's

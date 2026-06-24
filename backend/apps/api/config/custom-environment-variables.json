@@ -55,6 +55,37 @@
       "host": "HBPE_HOST"
     }
   },
+  "embedding": {
+    "host": "OLLAMA_EMBED_HOST",
+    "model": "CI_EMBED_MODEL",
+    "batchSize": {
+      "__name": "CI_EMBED_BATCH_SIZE",
+      "__format": "json"
+    },
+    "concurrency": {
+      "__name": "CI_EMBED_CONCURRENCY",
+      "__format": "json"
+    },
+    "coalesceWindowMs": {
+      "__name": "CI_EMBED_COALESCE_WINDOW_MS",
+      "__format": "json"
+    },
+    "minTextLength": {
+      "__name": "CI_EMBED_MIN_TEXT_LENGTH",
+      "__format": "json"
+    },
+    "types": "CI_EMBED_TYPES"
+  },
+  "queues": {
+    "concurrency": {
+      "__name": "CI_QUEUE_CONCURRENCY",
+      "__format": "json"
+    },
+    "fetchBatchSize": {
+      "__name": "CI_QUEUE_FETCH_BATCH_SIZE",
+      "__format": "json"
+    }
+  },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",
