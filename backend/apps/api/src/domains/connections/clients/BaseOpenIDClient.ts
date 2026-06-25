@@ -18,12 +18,15 @@ export abstract class BaseOpenIDClient extends BaseClient {
   async getAuthorizationUrl(connection: Connection): Promise<string> {
     const callbackUrl = config.auth.openid.callbackUrl || `https://${config.hostname}/openid/callback`;
 
+    const returnTo = new URL(callbackUrl);
+    returnTo.searchParams.set('connection_id', connection.id);
+
     const params = new URLSearchParams({
-      'openid.return_to': `${callbackUrl}?connection_id=${connection.id}`,
+      'openid.return_to': returnTo.toString(),
       'openid.ns': 'http://specs.openid.net/auth/2.0',
       'openid.mode': 'checkid_setup',
       'openid.assoc_type': 'HMAC-SHA1',
-      'openid.realm': `https://${config.hostname}`,
+      'openid.realm': returnTo.origin,
       'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
       'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select',
     });
