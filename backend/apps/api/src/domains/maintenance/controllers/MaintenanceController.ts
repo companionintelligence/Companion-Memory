@@ -11,6 +11,10 @@ import { EventEntity } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
 
 import {
+  type CommunicationLinkBackfillResult,
+  CommunicationLinkBackfillService,
+} from '../services/CommunicationLinkBackfillService';
+import {
   type DeferralResult,
   type DroppedIndex,
   IndexDeferralService,
@@ -40,6 +44,23 @@ const geocodeLocationsSchema = z.object({
 
 type GeocodeLocationsRequest = z.infer<typeof geocodeLocationsSchema>;
 
+// Body for POST /api/maintenance/link-communications. All optional: with no
+// time range the job derives the bound from the data's own MIN/MAX(time) and
+// walks the whole history in windows. A range is cheaper/safer on the
+// hypertable. Dates accept ISO strings (coerced to Date).
+const linkCommunicationsSchema = z.object({
+  /** Lower bound (inclusive) on communication `time`. */
+  startTime: z.coerce.date().optional(),
+  /** Upper bound (exclusive) on communication `time`. */
+  endTime: z.coerce.date().optional(),
+  /** Window width in days (default 7). Each window is one bounded read+update. */
+  windowDays: z.coerce.number().int().min(1).max(365).optional(),
+  /** Max candidate rows examined per window (default 5000). */
+  windowLimit: z.coerce.number().int().min(1).max(50000).optional(),
+});
+
+type LinkCommunicationsRequest = z.infer<typeof linkCommunicationsSchema>;
+
 interface GeocodeLocationsResponse {
   jobId: string | null;
   estimatedEventCount: number;
@@ -66,6 +87,7 @@ export class MaintenanceController {
     private readonly signallingEventService: SignallingEventService,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly indexDeferralService: IndexDeferralService,
+    private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
   ) {}
 
   @Post('geocode-locations')
@@ -109,6 +131,35 @@ export class MaintenanceController {
       estimatedEventCount,
       status: jobIds.length > 0 ? 'enqueued' : 'noop',
     };
+  }
+
+  /**
+   * People-linking backfill. Resolves communications' raw participant strings
+   * (participants_metadata.from / .to) to graph entities via the normalized
+   * entity_identifiers index, filling from_entity_id / to_entity_ids where they
+   * are NULL. Re-runnable, idempotent (only touches NULL link columns), creates
+   * no stub Person entities. Bounded per time-window so it never triggers the
+   * all-chunk hypertable scan. Operator-triggered; safe to run repeatedly as new
+   * identifiers arrive.
+   */
+  @Post('link-communications')
+  async linkCommunications(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(linkCommunicationsSchema)) body: LinkCommunicationsRequest,
+  ): Promise<CommunicationLinkBackfillResult> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { examined: 0, fromLinked: 0, toLinked: 0, windows: 0, range: null };
+    }
+
+    return this.communicationLinkBackfillService.backfill(userId, {
+      startTime: body.startTime,
+      endTime: body.endTime,
+      windowDays: body.windowDays,
+      windowLimit: body.windowLimit,
+    });
   }
 
   /**

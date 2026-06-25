@@ -12,8 +12,10 @@ import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { UserModule } from '@ci/domains/user';
 
+import { type EntityIdentifier, EntityIdentifierEntity } from './entities/EntityIdentifierEntity';
 import { type Node, NodeEntity } from './entities/NodeEntity';
 import { type Relationship, RelationshipEntity } from './entities/RelationshipEntity';
+import { EntityIdentifierService, type IdentifierKey } from './services/EntityIdentifierService';
 import { GraphExpansionService } from './services/GraphExpansionService';
 import { GraphIngestService } from './services/GraphIngestService';
 import { GraphService } from './services/GraphService';
@@ -25,7 +27,7 @@ import { RelationshipService } from './services/RelationshipService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([NodeEntity, RelationshipEntity]),
+    TypeOrmModule.forFeature([NodeEntity, RelationshipEntity, EntityIdentifierEntity]),
     ConversationModule,
     EmbeddingModule,
     EventsModule,
@@ -33,12 +35,39 @@ import { RelationshipService } from './services/RelationshipService';
     NotesModule,
     UserModule,
   ],
-  providers: [GraphExpansionService, GraphIngestService, GraphService, NodeService, RelationshipService],
-  exports: [GraphExpansionService, GraphIngestService, GraphService, NodeService, RelationshipService],
+  providers: [
+    EntityIdentifierService,
+    GraphExpansionService,
+    GraphIngestService,
+    GraphService,
+    NodeService,
+    RelationshipService,
+  ],
+  exports: [
+    EntityIdentifierService,
+    GraphExpansionService,
+    GraphIngestService,
+    GraphService,
+    NodeService,
+    RelationshipService,
+  ],
 })
 export class GraphModule {}
 
-export { GraphExpansionService, GraphIngestService, GraphService, NodeService, RelationshipService };
-export { NodeEntity, RelationshipEntity };
-export type { Node, Relationship };
+export {
+  EntityIdentifierService,
+  GraphExpansionService,
+  GraphIngestService,
+  GraphService,
+  NodeService,
+  RelationshipService,
+};
+export { EntityIdentifierEntity, NodeEntity, RelationshipEntity };
+export type { EntityIdentifier, IdentifierKey, Node, Relationship };
 export { RelationshipMap, RelationshipType } from './types';
+export {
+  type IdentifierKind,
+  normalizeEmail,
+  normalizeIdentifier,
+  normalizePhone,
+} from './utils/normalizeIdentifier';

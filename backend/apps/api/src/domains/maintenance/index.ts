@@ -10,18 +10,20 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
+import { GraphModule } from '@ci/domains/graph';
 import { EventEntity } from '@ci/domains/memory';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
+import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { IndexDeferralService } from './services/IndexDeferralService';
 
 /**
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([EventEntity]), EventsModule],
+  imports: [TypeOrmModule.forFeature([EventEntity]), EventsModule, GraphModule],
   controllers: [MaintenanceController],
-  providers: [IndexDeferralService],
-  exports: [IndexDeferralService],
+  providers: [IndexDeferralService, CommunicationLinkBackfillService],
+  exports: [IndexDeferralService, CommunicationLinkBackfillService],
 })
 export class MaintenanceModule {}
