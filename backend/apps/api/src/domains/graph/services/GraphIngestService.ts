@@ -9,6 +9,8 @@ import { LoggerService } from '@ci/common/logging';
 import { NodeEntity } from '../entities/NodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 
+import { EntityIdentifierService } from './EntityIdentifierService';
+
 const PG_UNIQUE_VIOLATION = '23505';
 
 // Stable namespace so the importer and the server derive identical linked_id
@@ -64,6 +66,7 @@ export class GraphIngestService {
     private readonly nodeRepository: Repository<NodeEntity>,
     @InjectRepository(RelationshipEntity)
     private readonly relationshipRepository: Repository<RelationshipEntity>,
+    private readonly entityIdentifierService: EntityIdentifierService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GraphIngestService.name);
@@ -91,6 +94,14 @@ export class GraphIngestService {
         const id = await this.upsertEntity(ownerId, e);
         keyToId.set(e.key, id);
         keyToType.set(e.key, e.entityType);
+
+        // People-linking: index this entity's email/phone identifiers so the
+        // communications backfill can resolve raw participants to it. Idempotent
+        // (ON CONFLICT DO NOTHING); only entities carrying emails/phones touch
+        // the table. Failure to index must not fail the ingest of the entity
+        // itself — log and continue.
+        await this.indexIdentifiers(ownerId, id, e);
+
         entitiesProcessed += 1;
       } catch (err) {
         errors.push(`entity ${e.key}: ${(err as Error).message}`);
@@ -175,6 +186,36 @@ export class GraphIngestService {
       }
 
       throw err;
+    }
+  }
+
+  /**
+   * Register an ingested entity's contact identifiers (properties.emails /
+   * properties.phones) in ci.entity_identifiers for people-linking. No-op when
+   * neither is present. Defensive: even though the importer pre-normalizes, the
+   * service re-applies the canonical rule. Swallows + logs its own errors so a
+   * bad identifier never aborts the entity ingest.
+   */
+  private async indexIdentifiers(ownerId: string, entityId: string, e: GraphEntityInputDto): Promise<void> {
+    const props = e.properties;
+    if (props == null) {
+      return;
+    }
+
+    const emails = props.emails;
+    const phones = props.phones;
+    if (emails == null && phones == null) {
+      return;
+    }
+
+    try {
+      await this.entityIdentifierService.upsertForEntity(ownerId, entityId, { emails, phones });
+    } catch (err) {
+      this.logger.warn('Failed to index entity identifiers', {
+        entityId,
+        key: e.key,
+        error: (err as Error).message,
+      });
     }
   }
 
