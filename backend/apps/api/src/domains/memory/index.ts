@@ -27,7 +27,6 @@ import { FilesModule } from '@ci/domains/files';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule, UserEntity } from '@ci/domains/user';
 
-import { BulkIngestController } from './controllers/BulkIngestController';
 import { EventsIngestController } from './controllers/EventsIngestController';
 import { GraphController } from './controllers/GraphController';
 import { BaseEntity } from './entities/BaseEntity';
@@ -43,7 +42,6 @@ import { type Place, PlaceEntity } from './entities/PlaceEntity';
 import { RelationshipEntity } from './entities/RelationshipEntity';
 import { ThingEntity } from './entities/ThingEntity';
 import { GraphEventListener } from './listeners/GraphEventListener';
-import { BulkIngestService } from './services/BulkIngestService';
 import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
@@ -88,7 +86,6 @@ import { UserContextService } from './services/UserContextService';
     SearchNextModule,
   ],
   providers: [
-    BulkIngestService,
     CommunicationService,
     ContentService,
     EventService,
@@ -105,7 +102,7 @@ import { UserContextService } from './services/UserContextService';
     PlaceService,
     KnownPlacesService,
   ],
-  controllers: [GraphController, EventsIngestController, BulkIngestController],
+  controllers: [GraphController, EventsIngestController],
   exports: [
     CommunicationService,
     ContentService,

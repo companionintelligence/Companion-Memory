@@ -23,9 +23,18 @@ export class ContentService {
     private readonly eventService: EventService,
   ) {}
 
-  async create(context: UserServiceContext, data: CreateContentDto | CreateContentDto[]): Promise<Content[]> {
+  async create(
+    context: UserServiceContext,
+    data: CreateContentDto | CreateContentDto[],
+    options?: { emitCreated?: boolean },
+  ): Promise<Content[]> {
     const isSingle = !Array.isArray(data);
     const dataArray: CreateContentDto[] = isSingle ? [data] : data;
+    // Bulk ingest (createMany) passes emitCreated:false: at import volume the
+    // per-row ContentCreatedEvent pgboss fan-out was the dominant cost, so search
+    // indexing for bulk-loaded rows is deferred to the post-load batch embed
+    // (POST /api/maintenance/search-index/backfill). Interactive create() still emits.
+    const emitCreated = options?.emitCreated ?? true;
 
     // TODO: Some of these can fail, we need to return partial success here?
     return Promise.all(
@@ -48,9 +57,11 @@ export class ContentService {
 
         const contentResult = await this.contentRepository.save(content);
 
-        await this.eventService.send(ContentCreatedEvent, {
-          contentId: contentResult.id,
-        });
+        if (emitCreated) {
+          await this.eventService.send(ContentCreatedEvent, {
+            contentId: contentResult.id,
+          });
+        }
 
         return ContentEntity.toEgressType(contentResult);
       }),
@@ -99,10 +110,14 @@ export class ContentService {
         const event = item.event ?? (await this.resolveEventByTriple(context, item));
 
         try {
-          const [created] = await this.create(context, {
-            ...item,
-            event,
-          });
+          const [created] = await this.create(
+            context,
+            {
+              ...item,
+              event,
+            },
+            { emitCreated: false },
+          );
 
           return created;
         } catch (err) {

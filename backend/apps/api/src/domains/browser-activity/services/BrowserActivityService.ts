@@ -94,8 +94,9 @@ export class BrowserActivityService {
    * findOne + save loop. Re-syncing the same triple returns the existing row
    * instead of inserting a duplicate. Paired with the
    * browser_activity_source_triple_uniq partial unique index, which also absorbs a
-   * lost insert race. A BrowserActivityCreatedEvent is emitted for each
-   * newly-inserted row only (the embedding/search pipeline listens for these).
+   * lost insert race. Bulk ingest does NOT emit a per-row BrowserActivityCreatedEvent
+   * — search indexing is deferred to the post-load batch embed
+   * (POST /api/maintenance/search-index/backfill); single-row create() still emits.
    */
   async createMany(
     context: UserServiceContext,
@@ -142,14 +143,10 @@ export class BrowserActivityService {
       tripleColumns: ['source_type', 'source_system', 'source_id'],
     });
 
-    for (const { entity, inserted } of results) {
-      if (inserted) {
-        await this.eventService.send(BrowserActivityCreatedEvent, {
-          browserActivityId: entity.id,
-        });
-      }
-    }
-
+    // Bulk ingest does NOT emit a per-row BrowserActivityCreatedEvent: the per-row
+    // pgboss fan-out was the dominant cost at import volume. Search indexing for
+    // bulk-loaded rows is deferred to the post-load batch embed
+    // (POST /api/maintenance/search-index/backfill). Single-row create() still emits.
     return results.map(({ entity }) => BrowserActivityEntity.toEgressType(entity));
   }
 

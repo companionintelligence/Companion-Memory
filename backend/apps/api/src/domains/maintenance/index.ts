@@ -19,6 +19,7 @@ import { MaintenanceController } from './controllers/MaintenanceController';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
 import { IndexDeferralService } from './services/IndexDeferralService';
+import { SearchIndexBackfillService } from './services/SearchIndexBackfillService';
 
 /**
  * @internal
@@ -35,7 +36,17 @@ import { IndexDeferralService } from './services/IndexDeferralService';
     MemoryModule,
   ],
   controllers: [MaintenanceController],
-  providers: [IndexDeferralService, CommunicationLinkBackfillService, GraphEnrichmentService],
-  exports: [IndexDeferralService, CommunicationLinkBackfillService, GraphEnrichmentService],
+  providers: [
+    IndexDeferralService,
+    CommunicationLinkBackfillService,
+    GraphEnrichmentService,
+    SearchIndexBackfillService,
+  ],
+  exports: [
+    IndexDeferralService,
+    CommunicationLinkBackfillService,
+    GraphEnrichmentService,
+    SearchIndexBackfillService,
+  ],
 })
 export class MaintenanceModule {}

@@ -28,6 +28,11 @@ import {
   IndexDeferralService,
   type RecreateResult,
 } from '../services/IndexDeferralService';
+import {
+  BACKFILLABLE_ENTITIES,
+  type SearchIndexBackfillResult,
+  SearchIndexBackfillService,
+} from '../services/SearchIndexBackfillService';
 
 // Body for POST /api/maintenance/indexes/recreate: the `dropped` array returned
 // verbatim by the matching /drop call (each carries its exact CREATE statement).
@@ -73,6 +78,20 @@ type CleanupOrphansRequest = z.infer<typeof cleanupOrphansSchema>;
 const truncateSearchIndexSchema = z.object({
   confirm: z.literal(true),
 });
+
+// Body for POST /api/maintenance/search-index/backfill. All optional: defaults
+// sweep every backfillable ingest type with no per-type cap. Re-emits each
+// un-indexed row's create event onto the search-index queue only.
+const searchIndexBackfillSchema = z.object({
+  /** Restrict the sweep to these entity types (default: all backfillable types). */
+  entityTypes: z.array(z.enum(BACKFILLABLE_ENTITIES)).min(1).optional(),
+  /** Source rows scanned + re-emitted per page (default 1000). */
+  batchSize: z.coerce.number().int().min(1).max(50000).optional(),
+  /** Hard cap on rows re-emitted PER entity type (default: unbounded). */
+  limitPerType: z.coerce.number().int().min(1).optional(),
+});
+
+type SearchIndexBackfillRequest = z.infer<typeof searchIndexBackfillSchema>;
 
 type GeocodeLocationsRequest = z.infer<typeof geocodeLocationsSchema>;
 
@@ -132,6 +151,7 @@ export class MaintenanceController {
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
+    private readonly searchIndexBackfillService: SearchIndexBackfillService,
   ) {}
 
   @Post('geocode-locations')
@@ -313,5 +333,26 @@ export class MaintenanceController {
     void body;
 
     return this.orphanCleanupService.truncateSearchIndex();
+  }
+
+  /**
+   * Post-load search-index BACKFILL. Bulk ingest writes directly to `ci.<table>`
+   * and no longer emits a per-row `*CreatedEvent` (the per-row pgboss fan-out was
+   * the dominant cost at import volume), so freshly bulk-loaded rows are not yet
+   * embedded. This finds rows with no `ci_search.embeddings` entry and re-emits
+   * their create event onto the `search-index` queue ONLY — the existing
+   * `*SearchIndexListener` does the (idempotent) embedding + tsvector upsert and
+   * the batched-Ollama buffer amortises the embed calls. Re-runnable + incremental.
+   * Run it after a bulk import (and after link-communications / extract-graph).
+   */
+  @Post('search-index/backfill')
+  async backfillSearchIndex(
+    @Body(new ValidationPipe(searchIndexBackfillSchema)) body: SearchIndexBackfillRequest,
+  ): Promise<SearchIndexBackfillResult> {
+    return this.searchIndexBackfillService.backfill({
+      entityTypes: body.entityTypes,
+      batchSize: body.batchSize,
+      limitPerType: body.limitPerType,
+    });
   }
 }

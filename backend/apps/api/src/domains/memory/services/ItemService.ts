@@ -111,14 +111,10 @@ export class ItemService {
       tripleColumns: ['source_type', 'source_system', 'source_id'],
     });
 
-    for (const { entity, inserted } of results) {
-      if (inserted) {
-        await this.eventService.send(ItemCreatedEvent, {
-          itemId: entity.id,
-        });
-      }
-    }
-
+    // Bulk ingest does NOT emit a per-row ItemCreatedEvent: the per-row pgboss
+    // fan-out was the dominant cost at import volume. Search indexing for
+    // bulk-loaded rows is deferred to the post-load batch embed
+    // (POST /api/maintenance/search-index/backfill).
     return results.map(({ entity }) => ItemEntity.toEgressType(entity));
   }
 

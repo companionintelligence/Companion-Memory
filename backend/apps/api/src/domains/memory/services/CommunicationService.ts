@@ -143,8 +143,7 @@ export class CommunicationService {
       // DO NOTHING re-sync left them wrong forever. Likewise `participants_metadata`
       // (now carrying `.to` recipients) was absent on older rows, blocking the
       // comms->people backfill from populating to_entity_ids. Refreshing these on
-      // conflict corrects both while staying idempotent (no dup rows, and no
-      // CommunicationCreatedEvent for refreshed rows — only genuine inserts). We
+      // conflict corrects both while staying idempotent (no dup rows). We
       // deliberately exclude identity/arbiter columns (id, time, user_id,
       // source_*) and any column a user may edit server-side. NOTE: this means a
       // re-sync overwrites these five fields from the source of record; do not add
@@ -156,16 +155,11 @@ export class CommunicationService {
       timeColumn: 'time',
     });
 
-    // Emit one CommunicationCreatedEvent per newly-inserted row (existing rows were
-    // signalled at first insert), preserving the embedding pipeline's per-row hook.
-    for (const { entity, inserted } of results) {
-      if (inserted) {
-        await this.eventService.send(CommunicationCreatedEvent, {
-          communicationId: entity.id,
-        });
-      }
-    }
-
+    // Bulk ingest does NOT emit a per-row CommunicationCreatedEvent: at import
+    // volume the per-row pgboss fan-out (one job per registered queue per row)
+    // was the dominant cost. Search indexing for bulk-loaded rows is deferred to
+    // the post-load batch embed (POST /api/maintenance/search-index/backfill).
+    // Single-row create() still emits, so interactive creates index live.
     return results.map(({ entity }) => CommunicationEntity.toEgressType(entity));
   }
 

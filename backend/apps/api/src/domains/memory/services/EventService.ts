@@ -179,8 +179,9 @@ export class EventService {
    * loop (the old path was N findOnes + N inserts and throttled the ~1M-row push).
    * Re-syncing the same triple returns the existing row instead of inserting a
    * duplicate. Paired with the events_source_triple_uniq partial unique index,
-   * which also absorbs a lost insert race. An EventCreatedEvent is emitted for each
-   * newly-inserted row only (the embedding/search pipeline listens for these).
+   * which also absorbs a lost insert race. Bulk ingest does NOT emit a per-row
+   * EventCreatedEvent — search indexing is deferred to the post-load batch embed
+   * (POST /api/maintenance/search-index/backfill); single-row create() still emits.
    */
   private async createManyBatched(context: UserServiceContext, data: CreateEventDto[]): Promise<Event[]> {
     if (data.length === 0) {
@@ -211,14 +212,11 @@ export class EventService {
       tripleColumns: ['source_type', 'source_system', 'source_id'],
     });
 
-    for (const { entity, inserted } of results) {
-      if (inserted) {
-        await this.signallingEventService.send(EventCreatedEvent, {
-          eventId: entity.id,
-        });
-      }
-    }
-
+    // Bulk ingest does NOT emit a per-row EventCreatedEvent: the per-row pgboss
+    // fan-out was the dominant cost at import volume. Search indexing for
+    // bulk-loaded rows is deferred to the post-load batch embed
+    // (POST /api/maintenance/search-index/backfill). Single-row create() still
+    // emits, so interactive creates index live.
     return results.map(({ entity }) => EventEntity.toEgressType(entity));
   }
 
