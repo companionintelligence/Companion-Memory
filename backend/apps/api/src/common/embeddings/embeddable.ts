@@ -57,17 +57,47 @@ function normalizeForTriviality(text: string): string {
     .trim();
 }
 
+/**
+ * Matches text that is EXACTLY a single bare URL — an http/https/ftp link, a
+ * `www.`-prefixed host, or a bare domain — with no surrounding words. These
+ * "URL-only" messages (a shared link with no commentary) are part of the tiny /
+ * link-only slice of chat imports (~13% of communications are tiny or URL-only)
+ * and carry no natural-language signal a user would semantically search for: the
+ * embedding of a raw URL is noise. The link itself is still recoverable via the
+ * tsvector / keyword path (which is NOT gated by embeddability) and via the
+ * source row, so dropping only the dense embedding is conservative.
+ *
+ * Anchored (^…$) so it never matches text that merely CONTAINS a URL — "check
+ * out https://… it's great" keeps its embedding.
+ */
+const URL_ONLY_REGEX =
+  /^(?:(?:https?|ftp):\/\/|www\.)\S+$|^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}(?:\/\S*)?$/i;
+
+/**
+ * Whether the whole trimmed text is a single bare URL / link with no other words.
+ * Requires the text to be a single token (no internal whitespace) AND match the
+ * URL shape — so a sentence that happens to start with a domain is not caught.
+ */
+function isUrlOnly(trimmed: string): boolean {
+  if (/\s/.test(trimmed)) {
+    return false;
+  }
+
+  return URL_ONLY_REGEX.test(trimmed);
+}
+
 export interface EmbeddableOptions {
   /** Override the configured minimum length (chars, post-trim). */
   minLength?: number;
 }
 
-export type SkipReason = 'empty' | 'too-short' | 'trivial';
+export type SkipReason = 'empty' | 'too-short' | 'trivial' | 'url-only';
 
 /**
  * Decides whether a text is worth embedding. Conservative by design: it only
- * skips content that is empty, below the configured minimum length, or an exact
- * trivial/reaction phrase. Anything a user might plausibly search for is kept.
+ * skips content that is empty, below the configured minimum length, an exact
+ * trivial/reaction phrase, or a single bare URL with no other words. Anything a
+ * user might plausibly search for is kept.
  *
  * Returns `null` when the text SHOULD be embedded, or a {@link SkipReason} when
  * it should be skipped (so callers can log/count what was dropped).
@@ -94,6 +124,10 @@ export function embedSkipReason(
 
   if (TRIVIAL_PHRASES.has(normalizeForTriviality(trimmed))) {
     return 'trivial';
+  }
+
+  if (isUrlOnly(trimmed)) {
+    return 'url-only';
   }
 
   return null;

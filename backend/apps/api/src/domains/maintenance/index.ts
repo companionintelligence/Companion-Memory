@@ -11,6 +11,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
 import { EventEntity } from '@ci/domains/memory';
+import { SearchIngressModule } from '@ci/domains/search-ingress';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
 import { IndexDeferralService } from './services/IndexDeferralService';
@@ -19,7 +20,7 @@ import { IndexDeferralService } from './services/IndexDeferralService';
  * @internal
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([EventEntity]), EventsModule],
+  imports: [TypeOrmModule.forFeature([EventEntity]), EventsModule, SearchIngressModule],
   controllers: [MaintenanceController],
   providers: [IndexDeferralService],
   exports: [IndexDeferralService],

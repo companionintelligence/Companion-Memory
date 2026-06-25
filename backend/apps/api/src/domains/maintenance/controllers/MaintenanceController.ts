@@ -9,6 +9,15 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventEntity } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
+import {
+  type OrphanCleanupResult,
+  OrphanCleanupService,
+  type TruncateSearchIndexResult,
+} from '@ci/domains/search-ingress';
+import {
+  INDEXABLE_ENTITIES,
+  type IndexableEntity,
+} from '@ci/domains/search-next';
 
 import {
   type DeferralResult,
@@ -36,6 +45,25 @@ const geocodeLocationsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(5000).optional(),
   /** Re-attempt events still missing coordinates (default: same as the auto set). */
   retryNull: z.boolean().optional(),
+});
+
+// Body for POST /api/maintenance/search-index/cleanup-orphans. All optional;
+// defaults sweep every indexable type and actually delete (not a dry run).
+const cleanupOrphansSchema = z.object({
+  /** Rows deleted per statement; bounds lock/WAL footprint. Default 5000. */
+  batchSize: z.coerce.number().int().min(1).max(100000).optional(),
+  /** Restrict the sweep to these entity types (default: all). */
+  entityTypes: z.array(z.enum(INDEXABLE_ENTITIES)).min(1).optional(),
+  /** Count orphans without deleting (sizing pass). */
+  dryRun: z.boolean().optional(),
+});
+
+type CleanupOrphansRequest = z.infer<typeof cleanupOrphansSchema>;
+
+// Body for POST /api/maintenance/search-index/truncate. Destructive — requires
+// an explicit confirm so it cannot be triggered by an empty/accidental POST.
+const truncateSearchIndexSchema = z.object({
+  confirm: z.literal(true),
 });
 
 type GeocodeLocationsRequest = z.infer<typeof geocodeLocationsSchema>;
@@ -66,6 +94,7 @@ export class MaintenanceController {
     private readonly signallingEventService: SignallingEventService,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly indexDeferralService: IndexDeferralService,
+    private readonly orphanCleanupService: OrphanCleanupService,
   ) {}
 
   @Post('geocode-locations')
@@ -134,5 +163,39 @@ export class MaintenanceController {
     @Body(new ValidationPipe(recreateIndexesSchema)) body: { dropped: DroppedIndex[] },
   ): Promise<RecreateResult> {
     return this.indexDeferralService.recreateDeferredIndexes(body.dropped);
+  }
+
+  /**
+   * Search-index hygiene (#2), ORPHAN-CLEANUP phase. Deletes
+   * `ci_search.embeddings` / `ci_search.vectors` rows whose `entity_id` no longer
+   * exists in its source table (per the entity-source map). Re-runnable and
+   * batched so it is safe online; pass `{ "dryRun": true }` to count first.
+   * Complements the per-event cascade-delete the search listeners now do on
+   * `*RemovedEvent` — this reaps the historical orphans those never covered.
+   */
+  @Post('search-index/cleanup-orphans')
+  async cleanupSearchOrphans(
+    @Body(new ValidationPipe(cleanupOrphansSchema)) body: CleanupOrphansRequest,
+  ): Promise<OrphanCleanupResult> {
+    return this.orphanCleanupService.cleanOrphans({
+      batchSize: body.batchSize,
+      entityTypes: body.entityTypes as IndexableEntity[] | undefined,
+      dryRun: body.dryRun,
+    });
+  }
+
+  /**
+   * Search-index hygiene (#2), RESET phase. Truncates BOTH `ci_search` index
+   * tables wholesale. A data reset that clears `ci.*` must also do this (or it
+   * re-orphans the entire index). Destructive — requires `{ "confirm": true }`.
+   */
+  @Post('search-index/truncate')
+  async truncateSearchIndex(
+    @Body(new ValidationPipe(truncateSearchIndexSchema)) body: { confirm: true },
+  ): Promise<TruncateSearchIndexResult> {
+    // The ValidationPipe enforces the `confirm: true` guard; the value isn't otherwise used.
+    void body;
+
+    return this.orphanCleanupService.truncateSearchIndex();
   }
 }

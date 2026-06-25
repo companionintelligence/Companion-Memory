@@ -41,6 +41,33 @@ describe('embedSkipReason', () => {
     expect(embedSkipReason('Your billing account was suspended')).toBeNull();
     expect(embedSkipReason('Kingston NV3 1TB NVMe SSD')).toBeNull();
   });
+
+  it('skips a single bare URL with no other words as "url-only"', () => {
+    expect(embedSkipReason('https://example.com')).toBe('url-only');
+    expect(embedSkipReason('http://example.com/path?x=1#frag')).toBe('url-only');
+    expect(embedSkipReason('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('url-only');
+    expect(embedSkipReason('www.example.com')).toBe('url-only');
+    expect(embedSkipReason('  https://example.com/a/b  ')).toBe('url-only');
+    // bare domain / domain-with-path, no scheme
+    expect(embedSkipReason('example.com')).toBe('url-only');
+    expect(embedSkipReason('maps.google.com/place/123')).toBe('url-only');
+  });
+
+  it('does NOT skip a URL that has surrounding commentary (conservative)', () => {
+    expect(embedSkipReason('check out https://example.com it is great')).toBeNull();
+    expect(embedSkipReason('https://example.com is the link')).toBeNull();
+    expect(embedSkipReason('see example.com for details')).toBeNull();
+  });
+
+  it('does NOT treat ordinary words/sentences as URLs', () => {
+    // single words without a TLD-shaped suffix must not match
+    expect(embedSkipReason('hello')).toBeNull();
+    expect(embedSkipReason('e.g')).toBeNull();
+    // a decimal / version-ish token is not a URL
+    expect(embedSkipReason('3.14')).toBeNull();
+    // a normal sentence with a trailing period is not a URL
+    expect(embedSkipReason('Let us meet at noon.')).toBeNull();
+  });
 });
 
 describe('isEmbeddable', () => {

@@ -1,3 +1,13 @@
+-- ============================================================================
+-- RESET HYGIENE (search/embedding, #2/#3):
+-- A data reset MUST also clear the search index (ci_search.embeddings /
+-- ci_search.vectors). Those rows are keyed by (entity_type, entity_id) and have
+-- NO FK/cascade to the ci.* source rows, so truncating ci.* WITHOUT ci_search
+-- leaves the ENTIRE index pointing at deleted rows (i.e. 100% orphans). The loop
+-- below already includes the 'ci_search' schema — keep it there. Any OTHER reset
+-- path (importer wipe, manual ci.* + pgboss truncate, etc.) must likewise wipe
+-- ci_search, e.g. via:  scripts/search-index-cleanup.ts truncate --confirm
+-- ============================================================================
 DO $$
 DECLARE
     r RECORD;

@@ -32,6 +32,7 @@ import { PersonSearchIndexListener } from './listeners/PersonSearchIndexListener
 import { PlaceSearchIndexListener } from './listeners/PlaceSearchIndexListener';
 import { ThreadSearchIndexListener } from './listeners/ThreadSearchIndexListener';
 import { EmbeddingService } from './services/EmbeddingService';
+import { OrphanCleanupService } from './services/OrphanCleanupService';
 import { VectorService } from './services/VectorService';
 
 /**
@@ -60,12 +61,23 @@ import { VectorService } from './services/VectorService';
     ItemSearchIndexListener,
     MessageSearchIndexListener,
     NoteSearchIndexListener,
+    OrphanCleanupService,
     PersonSearchIndexListener,
     PlaceSearchIndexListener,
     ThreadSearchIndexListener,
     VectorService,
   ],
+  exports: [OrphanCleanupService],
 })
 export class SearchIngressModule {}
 
 export { EmbeddingEntity, VectorEntity };
+export { OrphanCleanupService } from './services/OrphanCleanupService';
+export type {
+  OrphanCleanupOptions,
+  OrphanCleanupResult,
+  OrphanTypeResult,
+  TruncateSearchIndexResult,
+} from './services/OrphanCleanupService';
+export { ENTITY_SOURCE_MAP } from './entitySourceMap';
+export type { EntitySource } from './entitySourceMap';
