@@ -44,6 +44,14 @@ export class AnswerService {
     return AnswerEntity.toEgressType(entity);
   }
 
+  /**
+   * Batch equivalent of N createAnswer calls in a single round-trip. Returns the
+   * created answers in input order.
+   */
+  async createMany(context: UserServiceContext, data: CreateAnswerDto[]): Promise<Answer[]> {
+    return Promise.all(data.map((item) => this.create(context, item)));
+  }
+
   async findAll(context: UserServiceContext): Promise<Answer[]> {
     const result = await this.answerRepository.find({
       where: {

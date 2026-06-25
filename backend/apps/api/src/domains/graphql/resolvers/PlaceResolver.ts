@@ -71,6 +71,62 @@ export class PlaceResolver {
     return PlaceType.toType(entity[0]);
   }
 
+  /**
+   * Batch create places in one round-trip. The clean batch equivalent of N
+   * aliased createPlace mutations; returns the created rows in input order.
+   */
+  @Mutation(() => [PlaceType])
+  async createPlaces(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreatePlaceInput] }) input: CreatePlaceInput[],
+  ): Promise<PlaceType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const places = await this.placeService.createMany(
+      serviceContext,
+      input.map((item) => {
+        const properties = item.properties || {};
+
+        if (item.type) {
+          properties.type = item.type;
+        }
+
+        if (item.geoFormat) {
+          properties.geoFormat = item.geoFormat;
+        }
+
+        if (item.geolocation) {
+          properties.geolocation = item.geolocation;
+        }
+
+        if (item.locationBoundary) {
+          properties.locationBoundary = item.locationBoundary;
+        }
+
+        if (item.estimated) {
+          properties.estimated = item.estimated;
+        }
+
+        if (item.tracked) {
+          properties.tracked = item.tracked;
+        }
+
+        if (item.uploaded) {
+          properties.uploaded = item.uploaded;
+        }
+
+        return {
+          name: item.name,
+          entity_type: 'Location',
+          properties,
+          description: item.description,
+        };
+      }),
+    );
+
+    return places.map((place) => PlaceType.toType(place));
+  }
+
   @Mutation(() => PlaceType, { nullable: true })
   async updatePlace(
     @Context() context: RequestContext,

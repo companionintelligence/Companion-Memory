@@ -41,6 +41,30 @@ export class AnswerResolver {
     return AnswerType.toType(entity);
   }
 
+  /**
+   * Batch equivalent of N createAnswer calls in a single round-trip. Returns the
+   * created answers in input order.
+   */
+  @Mutation(() => [AnswerType])
+  async createAnswers(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreateAnswerInput] }) input: CreateAnswerInput[],
+  ): Promise<AnswerType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const answers = await this.answerService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        text: item.answer,
+        question: {
+          id: item.questionId,
+        },
+      })),
+    );
+
+    return answers.map((answer) => AnswerType.toType(answer));
+  }
+
   @Mutation(() => AnswerType, { nullable: true })
   async updateAnswer(
     @Context() context: RequestContext,

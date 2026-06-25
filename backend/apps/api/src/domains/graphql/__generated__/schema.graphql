@@ -725,9 +725,11 @@ type MessageType implements Node {
 type Mutation {
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
   createAnswer(input: CreateAnswerInput!): AnswerType!
+  createAnswers(input: [CreateAnswerInput!]!): [AnswerType!]!
   createBrowserActivities(input: [CreateBrowserActivityInput!]!): [BrowserActivityType!]!
   createCommunications(input: [CreateCommunicationInput!]!): [CommunicationType!]!
   createConcept(input: CreateConceptInput!): CreateConceptPayload!
+  createConcepts(input: [CreateConceptInput!]!): [ConceptType!]!
   createConnection(input: CreateConnectionInput!): CreateConnectionPayload!
   createConnectionSyncJob(input: CreateConnectionSyncJobInput!): CreateConnectionSyncJobPayload!
   createContent(input: CreateContentInput!): ContentType!
@@ -737,10 +739,14 @@ type Mutation {
   createInventoryItems(input: [CreateInventoryInput!]!): [ItemType!]!
   createItem(input: CreateItemInput!): CreateItemPayload!
   createNote(input: CreateNoteInput!): CreateNotePayload!
+  createNotes(input: [CreateNoteInput!]!): [NoteType!]!
+  createPeople(input: [CreatePersonInput!]!): [PersonType!]!
   createPerson(input: CreatePersonInput!): CreatePersonPayload!
   createPlace(input: CreatePlaceInput!): PlaceType!
+  createPlaces(input: [CreatePlaceInput!]!): [PlaceType!]!
   createProviderKey(input: CreateProviderKeyInput!): ProviderKeyType!
   createQuestion(input: CreateQuestionInput!): QuestionType!
+  createQuestions(input: [CreateQuestionInput!]!): [QuestionType!]!
   createRelationship(input: CreateRelationshipInput!): CreateRelationshipPayload!
   createSavedSearch(input: CreateSavedSearchInput!): CreateSavedSearchPayload!
   deleteConcept(input: DeleteByIdInput!): DeleteByIdPayload!

@@ -39,6 +39,18 @@ export class NoteService {
     return NoteEntity.toEgressType(entity);
   }
 
+  /**
+   * Batch equivalent of N createNote calls in a single client round-trip.
+   * Returns the successfully-created notes in input order; nulls (failed
+   * creates) are omitted. Delegating to `create` preserves the per-row
+   * NoteCreatedEvent.
+   */
+  async createMany(context: UserServiceContext, data: CreateNoteDto[]): Promise<Note[]> {
+    const results = await Promise.all(data.map((item) => this.create(context, item)));
+
+    return results.filter((note): note is Note => note != null);
+  }
+
   async findById(context: ServiceContext, id: string): Promise<Note | null> {
     const entity = await this.noteRepository.findOne({
       where: {

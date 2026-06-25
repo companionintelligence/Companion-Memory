@@ -55,6 +55,16 @@ export class QuestionService {
     return QuestionEntity.toEgressType(entity);
   }
 
+  /**
+   * Batch equivalent of N {@link create} calls in one round-trip. Delegates to
+   * {@link create} per item so per-question logic (id allocation, isPrivateTo
+   * resolution, QuestionCreatedEvent emission) is preserved. Returns the created
+   * questions in input order.
+   */
+  async createMany(context: ServiceContext, data: CreateQuestionDto[]): Promise<Question[]> {
+    return Promise.all(data.map((item) => this.create(context, item)));
+  }
+
   async findAll(context: ServiceContext): Promise<Question[]> {
     const whereClauses: FindOptionsWhere<QuestionEntity>[] = [
       {

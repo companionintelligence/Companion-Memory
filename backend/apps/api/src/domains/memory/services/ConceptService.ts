@@ -79,6 +79,15 @@ export class ConceptService {
     return ConceptEntity.toEgressType(entity);
   }
 
+  /**
+   * Batch equivalent of N createConcept calls in one round-trip, returning the
+   * created-or-existing concepts in input order. Delegates to create() per item so
+   * the (linkedTable, linkedId) dedup and ConceptCreatedEvent emission are preserved.
+   */
+  async createMany(context: UserServiceContext, data: CreateConceptDto[]): Promise<Concept[]> {
+    return Promise.all(data.map((item) => this.create(context, item)));
+  }
+
   async findAll(context: ServiceContext): Promise<Concept[]> {
     const entities = await this.conceptRepository.find({
       where: {

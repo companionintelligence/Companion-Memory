@@ -47,6 +47,16 @@ export class PlaceService {
     );
   }
 
+  /**
+   * Batch equivalent of N `createPlace` calls in a single client round-trip.
+   * Delegates to `create`, whose array branch already maps over the input
+   * with `Promise.all`, preserving input order and emitting one
+   * `PlaceCreatedEvent` per row.
+   */
+  async createMany(context: UserServiceContext, data: CreatePlaceDto[]): Promise<Place[]> {
+    return this.create(context, data);
+  }
+
   async findAll(context: UserServiceContext): Promise<Place[]> {
     return this.placeRepository.find({
       where: {

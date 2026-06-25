@@ -98,6 +98,32 @@ export class ConceptResolver {
     };
   }
 
+  /**
+   * Batch, idempotent concept ingest. Each input dedupes on the external
+   * provenance key (linkedTable, linkedId) so a re-sync returns the existing
+   * concept instead of inserting a duplicate. Returns the created-or-existing
+   * concepts in input order.
+   */
+  @Mutation(() => [ConceptType])
+  async createConcepts(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreateConceptInput] }) input: CreateConceptInput[],
+  ): Promise<ConceptType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const concepts = await this.conceptService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        name: item.name,
+        description: item.description,
+        linkedTable: item.linkedTable,
+        linkedId: item.linkedId,
+      })),
+    );
+
+    return concepts.map((concept) => ConceptType.toType(concept));
+  }
+
   @Mutation(() => UpdateConceptPayload)
   async updateConcept(
     @Context() context: RequestContext,

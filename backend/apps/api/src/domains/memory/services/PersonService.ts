@@ -82,6 +82,16 @@ export class PersonService {
     return PersonEntity.toEgressType(entity);
   }
 
+  /**
+   * Batch equivalent of N createPerson calls in one client round-trip. Delegates
+   * to create() per item, so each one keeps the same resolve-or-create dedup on
+   * (linkedTable, linkedId) and emits PersonCreatedEvent. Returns the
+   * created-or-existing people in input order.
+   */
+  async createMany(context: UserServiceContext, data: CreatePersonDto[]): Promise<Person[]> {
+    return Promise.all(data.map((item) => this.create(context, item)));
+  }
+
   async findAll(context: ServiceContext): Promise<Person[]> {
     const entities = await this.personRepository.find({
       where: {

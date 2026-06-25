@@ -52,6 +52,24 @@ export class NoteResolver {
     };
   }
 
+  @Mutation(() => [NoteType])
+  async createNotes(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreateNoteInput] }) input: CreateNoteInput[],
+  ): Promise<NoteType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const notes = await this.noteService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        title: item.title,
+        content: item.content,
+      })),
+    );
+
+    return notes.map((note) => NoteType.toType(note));
+  }
+
   @Mutation(() => UpdateNotePayload)
   async updateNote(
     @Context() context: RequestContext,

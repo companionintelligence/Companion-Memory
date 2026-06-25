@@ -54,6 +54,32 @@ export class PersonResolver {
     };
   }
 
+  /**
+   * Batch create people in one round-trip. Each input resolves-or-creates on the
+   * (linkedTable, linkedId) provenance key, so a re-sync returns the existing
+   * person instead of duplicating it. Returns the created-or-existing people in
+   * input order — the clean batch equivalent of N createPerson mutations.
+   */
+  @Mutation(() => [PersonType])
+  async createPeople(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreatePersonInput] }) input: CreatePersonInput[],
+  ): Promise<PersonType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const people = await this.personService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        name: item.name,
+        description: item.description,
+        linkedTable: item.linkedTable,
+        linkedId: item.linkedId,
+      })),
+    );
+
+    return people.map((person) => PersonType.toType(person));
+  }
+
   @Mutation(() => UpdatePersonPayload)
   async updatePerson(
     @Context() context: RequestContext,

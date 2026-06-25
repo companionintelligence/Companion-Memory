@@ -34,6 +34,28 @@ export class QuestionResolver {
     return QuestionType.toType(entity);
   }
 
+  /**
+   * Batch equivalent of N {@link createQuestion} calls in one round-trip.
+   * Returns the created questions in input order.
+   */
+  @Mutation(() => [QuestionType])
+  async createQuestions(
+    @Context() context: RequestContext,
+    @Args('input', { type: () => [CreateQuestionInput] }) input: CreateQuestionInput[],
+  ): Promise<QuestionType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const questions = await this.questionService.createMany(
+      serviceContext,
+      input.map((item) => ({
+        text: item.text,
+        category: item.category,
+      })),
+    );
+
+    return questions.map((question) => QuestionType.toType(question));
+  }
+
   @Mutation(() => QuestionType, { nullable: true })
   async updateQuestion(
     @Context() context: RequestContext,
