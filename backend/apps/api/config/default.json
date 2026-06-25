@@ -54,7 +54,7 @@
       "callbackUrl": ""
     },
     "openid": {
-      "callbackUrl": "https://ci-server.localhost/openid/callback"
+      "callbackUrl": ""
     },
     "oidc": {
       "issuerUrl": "",
