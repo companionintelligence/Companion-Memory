@@ -6,17 +6,23 @@
 
 ![Saved-search share & edit flow](images/saved-search-flow.svg)
 
+> User-facing docs (with this same set of screenshots): see the **Companion Memory** page
+> at [docs.ci.computer](https://docs.ci.computer/docs/first-party-apps/digital-memory-server)
+> (`src/content/docs/first-party-apps/digital-memory-server.mdx` in the CI-Docs repo). The
+> screenshots below are captured from the CI-Server Storybook stories via
+> `CI-Docs/scripts/capture-component-screenshots.sh` and committed to both repos so they
+> stay in sync.
+
 ## Screenshots / live UI
 
-The screens below are rendered in isolation as **Storybook** stories (the reproducible
-source of truth — they don't go stale like committed PNGs). To view them:
+All the rendered UI lives as **Storybook** stories under `frontend/apps/web/src/pages/SavedSearchesPage/*.stories.tsx`
+(the reproducible source). To view them live or re-capture screenshots:
 
 ```bash
 yarn workspace @ci/fe-web storybook   # http://localhost:6006
+# Then either browse the "Saved Search" group, or:
+bash ../CI-Docs/scripts/capture-component-screenshots.sh
 ```
-
-Then open the story listed under each step (group **“Saved Search”**), or load it directly:
-`http://localhost:6006/iframe.html?id=<story-id>&viewMode=story`.
 
 ---
 
@@ -35,6 +41,8 @@ Click **Save search** in the explorer toolbar. The dialog has three actions:
 immediately opens the share modal on it — no trip to the Saved Searches page.
 
 ### 3. Share modal  ·  story `saved-search-share-modal--link-shared`
+
+![Share modal](images/saved-search/share-modal.jpg)
 
 - **Visibility** toggle: _Not shared_ / _Link shared_.
 - Turning on **Link shared** mints an unguessable token and shows the **capability link**
@@ -56,11 +64,17 @@ login (incl. CI-Portal **OIDC**) returns them to the shared link afterward.
 
 ### Saved Searches card  ·  story `saved-search-card--shared-and-filtered`
 
+![Saved-search card](images/saved-search/saved-search-card.jpg)
+
 Each card shows a **“Shared”** badge when public and a **filter-count chip**
 (`⚙ N`, hover for the active dimensions) so the captured filters are visible at a glance.
 Buttons: **Edit · Share · Delete**.
 
 ### Edit modal + Filters editor  ·  stories `saved-search-edit-modal--with-filters`, `saved-search-filters-editor--populated`
+
+![Edit modal](images/saved-search/edit-modal-filters.jpg)
+
+![Filters editor](images/saved-search/filters-editor.jpg)
 
 The Edit modal now has a **Filters** section (below Tags) with a full editor:
 

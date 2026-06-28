@@ -20,6 +20,11 @@ Front + Back End API + Web Monorepo
 
 This repository serves as the web interface to the Companion Intelligence server.
 
+## Docs
+
+- **User-facing:** the [Companion Memory page on docs.ci.computer](https://docs.ci.computer/docs/first-party-apps/digital-memory-server) (in [CI-Docs](https://github.com/companionintelligence/CI-Docs)) covers the Explorer, search & filters, saved searches, and sharing — with screenshots.
+- **Internals:** [`docs/architecture/architecture.md`](docs/architecture/architecture.md) (platform & data model), [`docs/architecture/Database.md`](docs/architecture/Database.md), [`docs/saved-search-sharing.md`](docs/saved-search-sharing.md) (sharing + filter capture + read-only viewer).
+
 This is a Yarn workspace monorepo with the following structure:
 
 ```
