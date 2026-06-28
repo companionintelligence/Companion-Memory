@@ -23,20 +23,18 @@ function activeFilterDimensions(
     return [];
   }
 
-  const dims: string[] = [];
-  if (filters.people?.length) {dims.push('Who');}
+  // Array-of-pairs avoids single-statement `if`s, which the oxlint pre-commit
+  // fixer collapses to inline `{ … }` that the Prettier CI check then rejects.
+  const dimensions: Array<[boolean, string]> = [
+    [Boolean(filters.people?.length), 'Who'],
+    [Boolean(filters.places?.length || filters.hasLocation), 'Where'],
+    [Boolean(filters.startTime || filters.endTime), 'When'],
+    [Boolean(filters.eventTypes?.length), 'How'],
+    [Boolean(filters.connectors?.length), 'Source'],
+    [Boolean(filters.semantic), 'Semantic'],
+  ];
 
-  if (filters.places?.length || filters.hasLocation) {dims.push('Where');}
-
-  if (filters.startTime || filters.endTime) {dims.push('When');}
-
-  if (filters.eventTypes?.length) {dims.push('How');}
-
-  if (filters.connectors?.length) {dims.push('Source');}
-
-  if (filters.semantic) {dims.push('Semantic');}
-
-  return dims;
+  return dimensions.filter(([active]) => active).map(([, label]) => label);
 }
 
 interface Props {
