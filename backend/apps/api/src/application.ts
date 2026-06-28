@@ -39,6 +39,7 @@ import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
 import { MemoryModule } from '@ci/domains/memory';
+import { ModelRoutingModule } from '@ci/domains/model-routing';
 import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
 import { PositionModule } from '@ci/domains/position';
@@ -80,6 +81,7 @@ import { UserModule } from '@ci/domains/user';
     IntelligenceModule,
     LLMModule,
     McpModule,
+    ModelRoutingModule,
     OnboardingModule,
     PositionModule,
     PredictionsModule,
