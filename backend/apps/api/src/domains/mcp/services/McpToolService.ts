@@ -86,7 +86,9 @@ export class McpToolService implements OnModuleInit {
   }
 
   private registerNativeTools() {
-    const schemas = this.toolRegistry.getAvailableTools();
+    // Agent-facing list: omits raw tools superseded by a curated intent (unless
+    // CI_PREFER_INTENTS=false), so MCP clients are offered the intent, not both.
+    const schemas = this.toolRegistry.getAgentFacingTools();
 
     for (const schema of schemas) {
       // Skip if a GraphQL tool with the same name already exists

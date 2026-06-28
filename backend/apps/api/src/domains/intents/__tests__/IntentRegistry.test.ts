@@ -63,6 +63,17 @@ describe('IntentRegistry', () => {
     expect(registry.getIntentsByDomain('nope')).toEqual([]);
   });
 
+  it('lists the raw tools intents supersede (their binding targets), de-duplicated', () => {
+    const superseded = registry.getSupersededToolNames();
+
+    expect(superseded).toEqual(
+      expect.arrayContaining(['databaseSearch', 'getFamilyMembers', 'readKnowledge', 'forgetKnowledge']),
+    );
+    expect(new Set(superseded).size).toBe(superseded.length);
+    // databaseSearch backs several intents but appears once.
+    expect(superseded.filter((t) => t === 'databaseSearch')).toHaveLength(1);
+  });
+
   it('resolves intents by dotted name and by tool name', () => {
     const intent = registry.getIntent('people.find');
 

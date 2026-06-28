@@ -3,6 +3,7 @@ import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import { ToolRegistry } from '@ci/domains/tools';
 
+import { IntentRegistry } from './IntentRegistry';
 import { IntentToolProvider } from './IntentToolProvider';
 
 /**
@@ -19,6 +20,7 @@ export class IntentsRegistrationService implements OnModuleInit {
   constructor(
     private readonly toolRegistry: ToolRegistry,
     private readonly intentProvider: IntentToolProvider,
+    private readonly intentRegistry: IntentRegistry,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(IntentsRegistrationService.name);
@@ -27,6 +29,9 @@ export class IntentsRegistrationService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     try {
       await this.toolRegistry.registerProvider(this.intentProvider);
+      // Demote the raw tools these intents wrap from the agent-facing list so the
+      // model prefers the curated intent over the low-level tool.
+      this.toolRegistry.markSuperseded(this.intentRegistry.getSupersededToolNames());
       this.logger.debug('Registered intent tool provider');
     } catch (error) {
       this.logger.error('Failed to register intent tool provider', error as Error);

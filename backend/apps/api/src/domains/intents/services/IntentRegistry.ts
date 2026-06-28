@@ -94,6 +94,15 @@ export class IntentRegistry {
   }
 
   /**
+   * The raw tool names that intents wrap (their `binding.tool`). These are the
+   * tools an agent should reach via the curated intent instead of directly, so the
+   * tool registry can demote them from the agent-facing list.
+   */
+  getSupersededToolNames(): string[] {
+    return [...new Set(this.getIntents().map((intent) => intent.binding.tool))];
+  }
+
+  /**
    * The discoverable capability declaration (the published intent manifest).
    * `generatedAt` is supplied by the caller so this stays pure/deterministic.
    */

@@ -143,7 +143,7 @@ export class OllamaService {
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
-    const availableTools = enableTools ? this.toolRegistry.getAvailableTools(context) : [];
+    const availableTools = enableTools ? this.toolRegistry.getAgentFacingTools(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
 
     const textChunks: string[] = [];
@@ -279,7 +279,7 @@ export class OllamaService {
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
-    const availableTools = enableTools ? this.toolRegistry.getAvailableTools(context) : [];
+    const availableTools = enableTools ? this.toolRegistry.getAgentFacingTools(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
 
     const accumulatedMessages: OllamaMessage[] = [];

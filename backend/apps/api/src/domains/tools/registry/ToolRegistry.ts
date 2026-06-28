@@ -18,6 +18,16 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
   private readonly toolToProvider = new Map<string, string>();
 
+  /**
+   * Raw tool names that are superseded by a curated intent. Populated by the
+   * intents domain (which depends on tools, not the reverse) via
+   * {@link markSuperseded}. Hidden from the agent-facing tool list when the
+   * `CI_PREFER_INTENTS` flag is on (the default), so the model prefers the
+   * curated, privacy-labelled intent over the low-level tool it wraps. The raw
+   * tools stay registered and remain executable by name.
+   */
+  private readonly supersededTools = new Set<string>();
+
   constructor(private readonly logger: LoggerService) {
     this.logger.setContext(ToolRegistry.name);
   }
@@ -136,6 +146,40 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     });
 
     return schemas;
+  }
+
+  /**
+   * Record raw tools that a curated intent supersedes. Idempotent; called once at
+   * boot by the intents domain.
+   */
+  markSuperseded(toolNames: Iterable<string>): void {
+    for (const name of toolNames) {
+      this.supersededTools.add(name);
+    }
+  }
+
+  /**
+   * The tool list to advertise to an LLM / MCP client. Identical to
+   * {@link getAvailableTools} except that, when `CI_PREFER_INTENTS` is on (the
+   * default), tools superseded by a curated intent are omitted so the model isn't
+   * offered both the intent and the raw tool it wraps. Set `CI_PREFER_INTENTS=false`
+   * to advertise the raw tools too.
+   */
+  getAgentFacingTools(context?: RequestContext): ToolSchema[] {
+    const all = this.getAvailableTools(context);
+
+    if (process.env.CI_PREFER_INTENTS === 'false' || this.supersededTools.size === 0) {
+      return all;
+    }
+
+    const filtered = all.filter((schema) => !this.supersededTools.has(schema.name));
+
+    this.logger.debug(`Agent-facing tools: ${filtered.length}/${all.length} (intents preferred)`, {
+      userId: context?.userId,
+      demoted: all.length - filtered.length,
+    });
+
+    return filtered;
   }
 
   /**
