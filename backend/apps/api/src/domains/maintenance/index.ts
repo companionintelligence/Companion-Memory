@@ -17,6 +17,7 @@ import { SearchIngressModule } from '@ci/domains/search-ingress';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
+import { EventParticipantBackfillService } from './services/EventParticipantBackfillService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
 import { IndexDeferralService } from './services/IndexDeferralService';
 import { SearchIndexBackfillService } from './services/SearchIndexBackfillService';
@@ -39,12 +40,14 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
   providers: [
     IndexDeferralService,
     CommunicationLinkBackfillService,
+    EventParticipantBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
   ],
   exports: [
     IndexDeferralService,
     CommunicationLinkBackfillService,
+    EventParticipantBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
   ],

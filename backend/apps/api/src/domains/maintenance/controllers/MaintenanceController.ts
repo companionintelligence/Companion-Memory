@@ -21,6 +21,10 @@ import {
   type CommunicationLinkBackfillResult,
   CommunicationLinkBackfillService,
 } from '../services/CommunicationLinkBackfillService';
+import {
+  type EventParticipantBackfillResult,
+  EventParticipantBackfillService,
+} from '../services/EventParticipantBackfillService';
 import { type GraphEnrichmentResult, GraphEnrichmentService } from '../services/GraphEnrichmentService';
 import {
   type DeferralResult,
@@ -112,6 +116,16 @@ const linkCommunicationsSchema = z.object({
 
 type LinkCommunicationsRequest = z.infer<typeof linkCommunicationsSchema>;
 
+// Body for POST /api/maintenance/link-events. All optional. ci.events isn't a
+// hypertable, so there's no time-window knob to expose — just the per-page
+// candidate cap. Defaults sweep every candidate ci.events row for the user.
+const linkEventsSchema = z.object({
+  /** Max candidate rows examined per page (default 2000). */
+  pageSize: z.coerce.number().int().min(1).max(50000).optional(),
+});
+
+type LinkEventsRequest = z.infer<typeof linkEventsSchema>;
+
 // Body for POST /api/maintenance/extract-graph. All optional: caps how much of
 // the user's own data the LLM extraction samples per run. Re-runnable.
 const extractGraphSchema = z.object({
@@ -150,6 +164,7 @@ export class MaintenanceController {
     private readonly indexDeferralService: IndexDeferralService,
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
+    private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
   ) {}
@@ -232,6 +247,33 @@ export class MaintenanceController {
       endTime: body.endTime,
       windowDays: body.windowDays,
       windowLimit: body.windowLimit,
+    });
+  }
+
+  /**
+   * People-linking backfill for ci.events. Parses organizer + attendee emails
+   * out of `event.metadata` (organizerEmail / participants[].email and friends),
+   * resolves them against the normalized ci.entity_identifiers index, and fills
+   * `organizer_entity_id` / `participant_entity_ids` where they are NULL/empty.
+   * Re-runnable, idempotent (only touches NULL/empty link columns), creates no
+   * stub Person entities. Run AFTER the entity_identifiers/Person index has been
+   * populated so the resolver has something to hit; safe to re-run as more
+   * Person identifiers arrive. Operator-triggered.
+   */
+  @Post('link-events')
+  async linkEvents(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(linkEventsSchema)) body: LinkEventsRequest,
+  ): Promise<EventParticipantBackfillResult> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { examined: 0, organizersLinked: 0, participantsLinked: 0, pages: 0 };
+    }
+
+    return this.eventParticipantBackfillService.backfill(userId, {
+      pageSize: body.pageSize,
     });
   }
 
