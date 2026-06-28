@@ -20,7 +20,9 @@ function makeLogger() {
 
 function intent(name: string) {
   const def = new IntentRegistry().getIntent(name);
-  if (!def) {throw new Error(`fixture intent missing: ${name}`);}
+  if (!def) {
+    throw new Error(`fixture intent missing: ${name}`);
+  }
 
   return def;
 }

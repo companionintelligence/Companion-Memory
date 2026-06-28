@@ -2,7 +2,13 @@
 import { ToolRegistry } from '../ToolRegistry';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 function fakeTool(name: string) {
@@ -51,10 +57,12 @@ describe('ToolRegistry agent-facing demotion', () => {
     const registry = await registryWith(['databaseSearch', 'memory_recall', 'somethingElse']);
     registry.markSuperseded(['databaseSearch']);
 
-    expect(registry.getAgentFacingTools().map((s) => s.name).sort()).toEqual([
-      'memory_recall',
-      'somethingElse',
-    ]);
+    expect(
+      registry
+        .getAgentFacingTools()
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(['memory_recall', 'somethingElse']);
     // The raw tool is demoted from the advertised list, not removed.
     expect(registry.getAvailableTools().map((s) => s.name)).toContain('databaseSearch');
     expect(registry.hasTool('databaseSearch')).toBe(true);
@@ -72,7 +80,12 @@ describe('ToolRegistry agent-facing demotion', () => {
     delete process.env.CI_PREFER_INTENTS;
     const registry = await registryWith(['a', 'b']);
 
-    expect(registry.getAgentFacingTools().map((s) => s.name).sort()).toEqual(['a', 'b']);
+    expect(
+      registry
+        .getAgentFacingTools()
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(['a', 'b']);
   });
 
   it('markSuperseded is additive and idempotent', async () => {
