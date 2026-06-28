@@ -415,6 +415,27 @@ export class FileService implements OnModuleInit {
     return this.findById(context, id);
   }
 
+  /**
+   * Targeted width/height write — deliberately NOT routed through {@link update}
+   * to skip `FileUpdatedEvent` (would re-trigger preview / re-index for every
+   * file we touch) and because width/height aren't part of the user-facing
+   * {@link UpdateFileDto}. Used to backfill the ORIGINAL row's intrinsic dims
+   * once they're known from the preview pass.
+   */
+  async setDimensions(
+    context: ServiceContext,
+    id: string,
+    dimensions: { width: number | null; height: number | null },
+  ): Promise<void> {
+    await this.fileRepository.update(
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+      { width: dimensions.width, height: dimensions.height },
+    );
+  }
+
   async search(context: ServiceContext, query: FindOptionsWhere<FileEntity>): Promise<FileEntity[]> {
     return this.fileRepository.find({
       where: {

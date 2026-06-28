@@ -13,16 +13,25 @@ import { OnEvent, EventService } from '@ci/domains/events';
 import { type File } from '../entities/FileEntity';
 import { FileUploadedEvent, FileUploadedPayload, PreviewGeneratedEvent } from '../events';
 import { FileService } from '../services/FileService';
+import { MediaDimensions, MediaDimensionsService } from '../services/MediaDimensionsService';
 import { FileVariant } from '../types';
 
 const PREVIEW_MAX_DIMENSION = 300;
 const IMAGE_MIME_PREFIX = 'image/';
 const VIDEO_MIME_PREFIX = 'video/';
 
+/** Generated preview bytes plus the rendered preview's own width/height. */
+interface PreviewResult {
+  buffer: Buffer;
+  previewDimensions: MediaDimensions;
+  sourceDimensions: MediaDimensions | null;
+}
+
 @Injectable()
 export class FilePreviewGenerationListener {
   constructor(
     private readonly fileService: FileService,
+    private readonly mediaDimensionsService: MediaDimensionsService,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
@@ -68,12 +77,12 @@ export class FilePreviewGenerationListener {
 
     const fileWithKey = file as RequiredFields<typeof file, 'key', true>;
 
-    let buffer: Buffer | null = null;
+    let result: PreviewResult | null = null;
 
     if (file.contentType.startsWith(IMAGE_MIME_PREFIX)) {
-      buffer = await this.generateImagePreview(context, fileWithKey);
+      result = await this.generateImagePreview(context, fileWithKey);
     } else if (file.contentType.startsWith(VIDEO_MIME_PREFIX)) {
-      buffer = await this.generateVideoPreview(context, fileWithKey);
+      result = await this.generateVideoPreview(context, fileWithKey);
     } else {
       this.logger.log('File type not supported, skipping preview generation', {
         fileId: payload.fileId,
@@ -83,7 +92,7 @@ export class FilePreviewGenerationListener {
       return;
     }
 
-    if (buffer == null) {
+    if (result == null) {
       this.logger.warn('Failed to generate preview, buffer is null', {
         fileId: payload.fileId,
       });
@@ -91,11 +100,20 @@ export class FilePreviewGenerationListener {
       return;
     }
 
+    // Backfill the ORIGINAL row's intrinsic dims when we just decoded them.
+    // Skips FileUpdatedEvent so we don't re-trigger preview / re-index for
+    // every photo we touch.
+    if (result.sourceDimensions != null && (file.width == null || file.height == null)) {
+      await this.fileService.setDimensions(context, file.id, result.sourceDimensions);
+    }
+
     const preview = await this.fileService.create(context, {
       contentType: 'image/jpeg',
-      size: buffer.length,
+      size: result.buffer.length,
+      width: result.previewDimensions.width,
+      height: result.previewDimensions.height,
       variant: FileVariant.PREVIEW,
-      buffer,
+      buffer: result.buffer,
       parentId: file.id,
     });
 
@@ -114,26 +132,39 @@ export class FilePreviewGenerationListener {
   private async generateImagePreview(
     context: UserServiceContext,
     file: RequiredFields<File, 'key', true>,
-  ): Promise<Buffer> {
-    const stream = await this.fileService.getFileStream(context, file.key);
+  ): Promise<PreviewResult> {
+    // Buffer the original once: the dimensions probe and the resize need to
+    // read the same bytes, and sharp's metadata() is unreliable on a
+    // partially-consumed stream.
+    const original = Buffer.from(await this.fileService.getFileContent(context, file.key));
 
-    const transformer = sharp()
+    const sourceDimensions = await this.mediaDimensionsService.fromImageBuffer(original, file.contentType);
+
+    // .rotate() (no args) reads EXIF orientation, rotates the pixels, and
+    // strips the tag — otherwise the JPEG bytes are saved as-is and downstream
+    // <img> renders rotated. Must come before .resize() so the resize box
+    // applies to the display orientation, not the stored one.
+    const { data, info } = await sharp(original)
+      .rotate()
       .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
         fit: 'inside',
       })
       .jpeg({
         quality: 80,
-      });
+      })
+      .toBuffer({ resolveWithObject: true });
 
-    stream.pipe(transformer);
-
-    return transformer.toBuffer();
+    return {
+      buffer: data,
+      previewDimensions: { width: info.width, height: info.height },
+      sourceDimensions,
+    };
   }
 
   private async generateVideoPreview(
     context: UserServiceContext,
     file: RequiredFields<File, 'key', true>,
-  ): Promise<Buffer> {
+  ): Promise<PreviewResult> {
     const stream = await this.fileService.getFileStream(context, file.key);
     const tempInput = join(tmpdir(), `ci-preview-${crypto.randomUUID()}`);
     const tempOutput = `${tempInput}-frame.jpg`;
@@ -160,12 +191,24 @@ export class FilePreviewGenerationListener {
 
       const frame = await fs.readFile(tempOutput);
 
-      return sharp(frame)
+      // ffmpeg auto-rotates the extracted frame, so the frame is already in
+      // display orientation; .rotate() here is a no-op safeguard for any
+      // frames that still carry an orientation tag.
+      const { data, info } = await sharp(frame)
+        .rotate()
         .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
           fit: 'inside',
         })
         .jpeg({ quality: 80 })
-        .toBuffer();
+        .toBuffer({ resolveWithObject: true });
+
+      return {
+        buffer: data,
+        previewDimensions: { width: info.width, height: info.height },
+        // Source-dimension extraction for videos isn't wired up here; the
+        // post-extraction frame can't tell us the original encoded size.
+        sourceDimensions: null,
+      };
     } finally {
       await fs.unlink(tempInput).catch(() => {});
       await fs.unlink(tempOutput).catch(() => {});

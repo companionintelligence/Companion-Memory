@@ -24,6 +24,7 @@ import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
 import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
 import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
 import { FileService } from './services/FileService';
+import { MediaDimensionsService } from './services/MediaDimensionsService';
 import { SavedSearchService } from './services/SavedSearchService';
 
 /**
@@ -31,14 +32,15 @@ import { SavedSearchService } from './services/SavedSearchService';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([FileEntity, SavedSearchEntity]), EventsModule],
-  providers: [FileService, SavedSearchService, FilePreviewGenerationListener],
+  providers: [FileService, SavedSearchService, MediaDimensionsService, FilePreviewGenerationListener],
   controllers: [FilesController],
-  exports: [FileService, SavedSearchService],
+  exports: [FileService, SavedSearchService, MediaDimensionsService],
 })
 export class FilesModule {}
 
-export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { FileEntity, FileService, MediaDimensionsService, SavedSearchEntity, SavedSearchService };
 export type { File, SignedFile, SavedSearch };
+export type { MediaDimensions } from './services/MediaDimensionsService';
 export {
   FileCreatedEvent,
   FileUpdatedEvent,
