@@ -25,6 +25,7 @@ import {
   Plus,
   Save,
   Search,
+  Share2,
   SlidersHorizontal,
   Sparkles,
   Users,
@@ -36,8 +37,10 @@ import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
 import { DropdownProvider, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
-import { gql } from '@/graphql';
+import { gql, type FragmentType } from '@/graphql';
 
+import type { SavedSearchGridItemFragment } from '../../../SavedSearchesPage/SavedSearch';
+import { ShareSavedSearchModal } from '../../../SavedSearchesPage/ShareSavedSearchModal';
 import { buildSavedSearchFilters } from '../../savedSearchFilters';
 import { useEntityService } from '../../useEntityService';
 
@@ -64,23 +67,9 @@ const CREATE_SAVED_SEARCH = gql(`
       success
       savedSearch {
         id
-        name
-        description
-        query
-        entityTypes
-        tags
-        filters {
-          eventTypes
-          startTime
-          endTime
-          sortBy
-          sortOrder
-          connectors
-          people
-          places
-          hasLocation
-          semantic
-        }
+        # Full grid fragment (incl. isPublic/shareToken/filters) so the created
+        # search can be handed straight to the share modal from "Save & share".
+        ...SavedSearchGridItemFragment
       }
     }
   }
@@ -1293,6 +1282,10 @@ function SaveSearchButton() {
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
+  // The just-created saved search, handed to the share modal on "Save & share".
+  const [savedSearchToShare, setSavedSearchToShare] = useState<FragmentType<
+    typeof SavedSearchGridItemFragment
+  > | null>(null);
 
   const [createSavedSearch, { loading }] = useMutation(CREATE_SAVED_SEARCH, {
     // Drop the cached list so the Saved Searches page refetches it with the new entry.
@@ -1304,7 +1297,7 @@ function SaveSearchButton() {
     },
   });
 
-  const handleSave = async () => {
+  const handleSave = async (share: boolean) => {
     const trimmed = name.trim();
 
     if (!trimmed) {
@@ -1331,10 +1324,17 @@ function SaveSearchButton() {
         },
       });
 
-      if (result.data?.createSavedSearch?.success) {
+      const created = result.data?.createSavedSearch?.savedSearch;
+
+      if (created) {
         toast.success(`Saved search “${trimmed}”`);
         setName('');
         setOpen(false);
+        // Hand the new search to the share modal so the user can grab a link
+        // without a trip to the Saved Searches page.
+        if (share) {
+          setSavedSearchToShare(created);
+        }
       } else {
         toast.error('Failed to save search');
       }
@@ -1370,7 +1370,7 @@ function SaveSearchButton() {
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
-                handleSave();
+                handleSave(false);
               }
             }}
             placeholder="e.g. Work emails this month"
@@ -1381,11 +1381,19 @@ function SaveSearchButton() {
           <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={loading || !name.trim()}>
+          <Button variant="secondary" onClick={() => handleSave(true)} disabled={loading || !name.trim()}>
+            <Share2 className="mr-2 h-4 w-4" />
+            Save &amp; share
+          </Button>
+          <Button onClick={() => handleSave(false)} disabled={loading || !name.trim()}>
             {loading ? 'Saving…' : 'Save'}
           </Button>
         </Dialog.Footer>
       </Dialog.Content>
+
+      {savedSearchToShare && (
+        <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
+      )}
     </Dialog>
   );
 }

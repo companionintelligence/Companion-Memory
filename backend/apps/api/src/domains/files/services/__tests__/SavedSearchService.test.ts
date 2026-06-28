@@ -57,6 +57,24 @@ describe('SavedSearchService.create', () => {
   });
 });
 
+describe('SavedSearchService.update', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('passes a new filters object through to the owner-scoped update', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    repo.findOne.mockResolvedValue({ id: 'id1' });
+    const { service } = makeService(repo);
+    const filters = { people: ['alice'], sortBy: 'time', sortOrder: 'desc' };
+
+    await service.update(ownerCtx, 'id1', { name: 'trip', filters });
+
+    const [predicate, payload] = repo.update.mock.calls[0];
+    expect(predicate).toEqual({ id: 'id1', userId: 'owner-1' });
+    expect(payload.filters).toEqual(filters);
+  });
+});
+
 describe('SavedSearchService.setSharing', () => {
   beforeEach(() => jest.clearAllMocks());
 
