@@ -91,7 +91,9 @@ describe('useRecentSearches', () => {
 
     act(() => {
       localStorage.setItem(KEY, JSON.stringify(['from-other-tab']));
-      window.dispatchEvent(new StorageEvent('storage', { key: KEY }));
+      const storageEvent = new Event('storage');
+      Object.defineProperty(storageEvent, 'key', { value: KEY });
+      window.dispatchEvent(storageEvent);
     });
 
     expect(result.current[0]).toEqual(['from-other-tab']);
