@@ -1,0 +1,118 @@
+{
+  "_comment": "Second canonical persona. Designed so the question mix actively distinguishes smart memory from raw retrieval: multi-hop (combine facts from >=2 sessions), temporal-update (which of two conflicting values is current?), and absence (correctly returning empty when the fact was never stored).",
+  "persona_id": "priya_sharma",
+  "name": "Priya Sharma",
+  "description": "Product manager, 31, originally from Pune, moved to Seattle two years ago. Used to stress memory consolidation across multiple sessions plus correctly handling change-over-time and absent facts.",
+  "facts": [
+    "Lives in Seattle, WA. Previously lived in Pune, India until 2023.",
+    "Works as a senior PM at a B2B SaaS company called Lattice (note: fictitious for the benchmark — not the real Lattice).",
+    "Partner: Arjun Sharma, software engineer.",
+    "Dog: a corgi named Biscuit, adopted 2024.",
+    "Originally drank only black tea; switched to oolong in early 2024 after a trip to Taiwan.",
+    "Climbing instructor at Stone Gardens on Saturday mornings since mid-2023."
+  ],
+  "sessions": [
+    {
+      "id": "sess_1",
+      "messages": [
+        {"role": "user", "content": "Hey, just settled into the new place in Seattle. Capitol Hill is fun but the rent is wild."},
+        {"role": "assistant", "content": "Congrats on the move."},
+        {"role": "user", "content": "Yeah, big change from Pune. Two years already since I left."},
+        {"role": "user", "content": "Arjun loves it too — he's an engineer at a security startup, so plenty of meetups around here."}
+      ]
+    },
+    {
+      "id": "sess_2",
+      "messages": [
+        {"role": "user", "content": "Took Biscuit, the corgi, to the dog park this morning. He still hates other dogs but at least tolerates Labradors."},
+        {"role": "user", "content": "Adopted him last spring. Best decision."}
+      ]
+    },
+    {
+      "id": "sess_3",
+      "messages": [
+        {"role": "user", "content": "Coffee meeting at work with the new ICs. I'm a senior PM at Lattice — B2B SaaS. The product is performance management software."},
+        {"role": "user", "content": "Three years into PM now, after switching from data engineering."}
+      ]
+    },
+    {
+      "id": "sess_4",
+      "messages": [
+        {"role": "user", "content": "Used to be a hardcore black tea drinker. Assam every morning."},
+        {"role": "user", "content": "Then I went to Taiwan in early 2024 and oolong absolutely changed my life. That's all I drink now in the morning."}
+      ]
+    },
+    {
+      "id": "sess_5",
+      "messages": [
+        {"role": "user", "content": "Climbing today was rough. I've been teaching Saturday mornings at Stone Gardens since 2023 and the V4 problems still humble me."},
+        {"role": "user", "content": "It's the highlight of my week though — climbing instructor is the only role I'd never want to give up."}
+      ]
+    }
+  ],
+  "eval_questions": [
+    {"id": "q001", "category": "flat-recall",
+     "question": "Where does Priya live?",
+     "keywords": ["Seattle"], "answer": "Seattle"},
+    {"id": "q002", "category": "flat-recall",
+     "question": "What's the dog's name?",
+     "keywords": ["Biscuit"], "answer": "Biscuit"},
+    {"id": "q003", "category": "flat-recall",
+     "question": "Who is Priya's partner?",
+     "keywords": ["Arjun"], "answer": "Arjun"},
+    {"id": "q004", "category": "flat-recall",
+     "question": "What kind of dog does she have?",
+     "keywords": ["corgi"], "answer": "a corgi"},
+
+    {"id": "q005", "category": "relational",
+     "question": "What is Arjun's job?",
+     "keywords": ["engineer", "security"], "answer": "software engineer at a security startup"},
+    {"id": "q006", "category": "relational",
+     "question": "What's Priya's day job?",
+     "keywords": ["PM", "product manager", "Lattice"], "answer": "Senior PM at Lattice"},
+    {"id": "q007", "category": "relational",
+     "question": "Does Priya have a side gig?",
+     "keywords": ["climbing", "Stone Gardens"], "answer": "Yes — she teaches climbing at Stone Gardens on Saturdays"},
+
+    {"id": "q008", "category": "multi-hop",
+     "_comment": "Combines sess_3 (PM job) and sess_5 (climbing instructor). Verbatim recall of either session alone gets you half-credit at best.",
+     "question": "What roles does Priya hold — both her main career and any teaching role?",
+     "keywords": ["PM", "product manager", "climbing"],
+     "answer": "Senior PM at Lattice and a climbing instructor at Stone Gardens"},
+    {"id": "q009", "category": "multi-hop",
+     "_comment": "Combines sess_1 (Pune→Seattle, 2 years ago) and sess_3 (3 years into PM). Asks how the career change relates to the move.",
+     "question": "How long has she been in product management, and was that before or after the move from Pune?",
+     "keywords": ["three years", "3 years", "before"],
+     "answer": "Three years; she was already in PM before the move"},
+    {"id": "q010", "category": "multi-hop",
+     "_comment": "Combines sess_2 (dog name) and sess_5 (Saturday climbing) — who does what on Saturday mornings.",
+     "question": "What does Priya do with her Saturday mornings, and is Biscuit involved?",
+     "keywords": ["climbing", "Stone Gardens"],
+     "answer": "She teaches climbing at Stone Gardens on Saturday mornings; Biscuit is not mentioned as part of that"},
+
+    {"id": "q011", "category": "temporal-update",
+     "_comment": "Persona changed from black tea to oolong in 2024. A system that dumps both without distinguishing current vs past should miss — the LLM judge prompt explicitly penalises that.",
+     "question": "What does Priya drink in the morning these days?",
+     "keywords": ["oolong"], "answer": "oolong (she used to drink black tea but switched)"},
+    {"id": "q012", "category": "temporal-update",
+     "question": "Where did Priya live before she moved?",
+     "keywords": ["Pune"], "answer": "Pune, India"},
+    {"id": "q013", "category": "temporal-update",
+     "question": "What was Priya's previous career before PM?",
+     "keywords": ["data engineering", "data engineer"], "answer": "data engineering"},
+
+    {"id": "q014", "category": "absence",
+     "_comment": "No information about a sibling exists in any session. A correct memory system returns no relevant context; a hallucinating one invents one.",
+     "question": "Does Priya have any siblings, and if so what do they do?",
+     "keywords": ["no info", "not mentioned", "unknown", "no information"],
+     "answer": "Not stated — the persona doesn't mention any siblings"},
+    {"id": "q015", "category": "absence",
+     "question": "What car does Priya drive?",
+     "keywords": ["no info", "not mentioned", "unknown", "no information"],
+     "answer": "Not stated — the persona doesn't mention a car"},
+    {"id": "q016", "category": "absence",
+     "question": "What's Priya's favourite cuisine?",
+     "keywords": ["no info", "not mentioned", "unknown", "no information"],
+     "answer": "Not stated — the persona doesn't mention cuisine preferences"}
+  ]
+}

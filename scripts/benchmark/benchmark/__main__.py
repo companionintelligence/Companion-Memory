@@ -17,6 +17,8 @@ from . import (
     ADAPTERS,
     build_json_report,
     build_markdown_report,
+    compare,
+    format_summary,
     get_adapter,
     make_llm_scorer,
     run_all,
@@ -56,6 +58,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--judge-url", default=os.environ.get("JUDGE_URL", ""))
     p.add_argument("--judge-model", default=os.environ.get("JUDGE_MODEL", ""))
     p.add_argument("--judge-key", default=os.environ.get("JUDGE_API_KEY", ""))
+    p.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="prior JSON report to compare against; non-zero exit on regression",
+    )
+    p.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.05,
+        help="regression tolerance in score-ratio units (default: 0.05 = 5pp)",
+    )
     args = p.parse_args(argv)
 
     persona = _load_persona(args.persona)
@@ -101,8 +115,22 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(md)
 
-    # Non-zero exit code if any system errored — useful as a CI gate.
-    return 0 if all(not r.error for r in results) else 1
+    exit_code = 0 if all(not r.error for r in results) else 1
+
+    # Regression gate: load the baseline, compare, and surface failures.
+    if args.baseline:
+        try:
+            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[error] could not load baseline {args.baseline}: {exc}", file=sys.stderr)
+            return 2
+        report = compare(baseline, js, tolerance=args.tolerance)
+        print()
+        print(format_summary(report))
+        if not report.passed:
+            exit_code = max(exit_code, 1)
+
+    return exit_code
 
 
 if __name__ == "__main__":

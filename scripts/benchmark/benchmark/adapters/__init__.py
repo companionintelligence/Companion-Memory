@@ -16,12 +16,14 @@ from typing import Callable, Dict
 
 from .base import MemoryAdapter
 from .ci_server import CIServerAdapter
+from .mem0 import Mem0Adapter
 from .naive import NaiveAdapter
 
 AdapterFactory = Callable[[], MemoryAdapter]
 
 ADAPTERS: Dict[str, AdapterFactory] = {
     "ci_server": CIServerAdapter,
+    "mem0": Mem0Adapter,
     "naive": NaiveAdapter,
 }
 

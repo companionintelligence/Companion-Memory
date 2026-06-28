@@ -20,15 +20,19 @@ scripts/benchmark/
     scoring.py              keyword + LLM-judge scorers
     runner.py               the run_system / run_all lifecycle
     reporter.py             Markdown + JSON report builders
+    regression.py           --baseline gate: compare two JSON reports
     generate_persona.py     parametric persona inflator (replaces 7 spike scripts)
     adapters/
       base.py               MemoryAdapter contract
       ci_server.py          CI-Server adapter (shipped endpoints only)
+      mem0.py               Mem0 adapter (local Ollama + Chroma; opt-in deps)
       naive.py              top-K BoW retrieval baseline
   personas/
     jordan_rivera.json      canonical persona (5 sessions, 20 questions,
                               3 categories: flat-recall / relational / temporal)
-  tests/                    pytest suite (~50 tests)
+    priya_sharma.json       second persona stressing multi-hop, temporal-update,
+                              and absence (5 sessions, 16 questions, 5 categories)
+  tests/                    pytest suite (~80 tests)
   requirements.txt          (none for runtime; pytest for tests)
   pyproject.toml
 ```
@@ -64,6 +68,54 @@ python -m benchmark \
 The CLI writes a Markdown report (overall table + per-question detail) and a
 sibling `.json` for diffing across CI runs. It exits non-zero if **any** system
 errored — useful as a CI gate.
+
+## Use as a CI gate (regression baseline)
+
+Save the current numbers as a baseline, then re-run to detect regressions:
+
+```bash
+# 1) Record the baseline
+python -m benchmark --systems ci_server,naive \
+  --persona personas/jordan_rivera.json \
+  --out reports/baseline.md
+git add reports/baseline.json && git commit -m "chore: baseline benchmark"
+
+# 2) Re-run later — non-zero exit if any score regresses beyond --tolerance
+python -m benchmark --systems ci_server,naive \
+  --persona personas/jordan_rivera.json \
+  --baseline reports/baseline.json \
+  --tolerance 0.05 \
+  --out reports/run-$(date +%F).md
+```
+
+The regression report distinguishes `regression` (drop beyond tolerance — fails
+the gate) from `improvement`, `stable`, `error_introduced` / `error_resolved`,
+and `missing` (system or category present in only one report — usually means
+the baseline needs refreshing). Tolerance is in score-ratio units;
+`--tolerance 0.05` means "fail if any category drops by more than 5 pp".
+
+## Personas
+
+Two canonical personas, designed so the question mix surfaces *architectural*
+differences rather than just rewarding raw retrieval:
+
+| Persona | Categories |
+|---|---|
+| `jordan_rivera.json` | `flat-recall`, `relational`, `temporal` |
+| `priya_sharma.json` | `flat-recall`, `relational`, `multi-hop`, `temporal-update`, `absence` |
+
+The Priya categories are where a raw-retrieval system loses:
+
+- **`multi-hop`** — answer requires combining facts from ≥2 separate sessions.
+- **`temporal-update`** — fact changed over time; correct answer is the *current*
+  value. A system that dumps both old and new without distinguishing them is
+  graded as a miss by the LLM judge.
+- **`absence`** — persona has no answer. A correct memory system returns
+  nothing relevant; a hallucinating one invents one.
+
+On the canonical personas the naive baseline gets 65 % on Jordan but only 38 %
+on Priya, with 0 % on `absence` — that gap is the suite's signal-to-noise
+floor for cross-architecture comparison.
 
 ## Inflate a persona
 

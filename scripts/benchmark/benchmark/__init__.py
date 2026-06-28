@@ -4,6 +4,7 @@ Public API kept tight — most callers want :func:`run_all` + a reporter.
 """
 
 from .adapters import ADAPTERS, MemoryAdapter, get_adapter, register_adapter
+from .regression import RegressionChange, RegressionReport, compare, format_summary
 from .reporter import build_json_report, build_markdown_report
 from .runner import run_all, run_system
 from .schema import EvalQuestion, QuestionResult, SystemResult, validate_persona
@@ -14,9 +15,13 @@ __all__ = [
     "EvalQuestion",
     "MemoryAdapter",
     "QuestionResult",
+    "RegressionChange",
+    "RegressionReport",
     "SystemResult",
     "build_json_report",
     "build_markdown_report",
+    "compare",
+    "format_summary",
     "get_adapter",
     "make_llm_scorer",
     "register_adapter",
