@@ -51,9 +51,16 @@ export default defineConfig({
     },
     {
       name: 'chromium',
-      testIgnore: /auth\.spec\.ts/,
+      testIgnore: /(auth|mobile)\.spec\.ts/,
       dependencies: ['auth'],
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // Mobile-viewport pass: runs the mobile-specific specs on a Pixel 5.
+      name: 'mobile',
+      testMatch: /mobile\.spec\.ts/,
+      dependencies: ['auth'],
+      use: { ...devices['Pixel 5'] },
     },
   ],
   webServer: [

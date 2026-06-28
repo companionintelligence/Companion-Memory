@@ -24,6 +24,9 @@ for (const { tab, view } of VIEWS) {
 
     await page.getByLabel(tab).click();
     await expect(page).toHaveURL(new RegExp(`view=${view}`));
+
+    // Save a screenshot artifact for each view (uploaded by the e2e workflow).
+    await page.screenshot({ path: `test-results/screenshots/memory-${view}-desktop.png` });
   });
 }
 
