@@ -29,6 +29,10 @@ import {
   type RecreateResult,
 } from '../services/IndexDeferralService';
 import {
+  type PersonStubBackfillResult,
+  PersonStubBackfillService,
+} from '../services/PersonStubBackfillService';
+import {
   BACKFILLABLE_ENTITIES,
   type SearchIndexBackfillResult,
   SearchIndexBackfillService,
@@ -112,6 +116,13 @@ const linkCommunicationsSchema = z.object({
 
 type LinkCommunicationsRequest = z.infer<typeof linkCommunicationsSchema>;
 
+// Body for POST /api/maintenance/extract-people-from-communications. Same shape
+// as the link-communications body: identical windowing semantics, identical
+// MIN/MAX-derived bounds when no range is supplied.
+const extractPeopleFromCommunicationsSchema = linkCommunicationsSchema;
+
+type ExtractPeopleFromCommunicationsRequest = z.infer<typeof extractPeopleFromCommunicationsSchema>;
+
 // Body for POST /api/maintenance/extract-graph. All optional: caps how much of
 // the user's own data the LLM extraction samples per run. Re-runnable.
 const extractGraphSchema = z.object({
@@ -150,6 +161,7 @@ export class MaintenanceController {
     private readonly indexDeferralService: IndexDeferralService,
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
+    private readonly personStubBackfillService: PersonStubBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
   ) {}
@@ -214,6 +226,14 @@ export class MaintenanceController {
    * no stub Person entities. Bounded per time-window so it never triggers the
    * all-chunk hypertable scan. Operator-triggered; safe to run repeatedly as new
    * identifiers arrive.
+   *
+   * PREREQUISITE: the identifier index must be populated. A contact importer
+   * (Google Contacts, Apple Contacts, etc.) ordinarily seeds it, but when a
+   * corpus lands without one — emails/phones live only in communications — the
+   * index is empty and every lookup misses. Run
+   * POST /api/maintenance/extract-people-from-communications first to extract
+   * stub Person entities + identifiers from the communications themselves; then
+   * this endpoint can link the rows to them.
    */
   @Post('link-communications')
   async linkCommunications(
@@ -228,6 +248,52 @@ export class MaintenanceController {
     }
 
     return this.communicationLinkBackfillService.backfill(userId, {
+      startTime: body.startTime,
+      endTime: body.endTime,
+      windowDays: body.windowDays,
+      windowLimit: body.windowLimit,
+    });
+  }
+
+  /**
+   * Person-stub backfill from communications. Scans
+   * `ci.communications.participants_metadata.{from,to,cc,bcc}`, classifies each
+   * distinct raw participant as email/phone via the shared normalization rule,
+   * and creates a stub Person entity + `ci.entity_identifiers` row for every
+   * identifier the index doesn't yet cover. The foundation step that lets
+   * /link-communications resolve raw participants to entity_ids on a corpus
+   * with no contact-importer history. Idempotent (entities dedupe on the
+   * linked-key partial unique index; identifiers dedupe on the unique index).
+   * Bounded per time-window for hypertable safety.
+   *
+   * Run this BEFORE /link-communications. A contact importer that later pushes
+   * the same email lands on its own linked_table, so it does not collide with
+   * the stubs and the identifier index keeps pointing at whichever Person was
+   * created first (a real merge is out of scope; tracked separately).
+   */
+  @Post('extract-people-from-communications')
+  async extractPeopleFromCommunications(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(extractPeopleFromCommunicationsSchema))
+    body: ExtractPeopleFromCommunicationsRequest,
+  ): Promise<PersonStubBackfillResult> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return {
+        examined: 0,
+        identifiersSeen: 0,
+        identifiersExisting: 0,
+        peopleCreated: 0,
+        identifiersIndexed: 0,
+        errors: [],
+        windows: 0,
+        range: null,
+      };
+    }
+
+    return this.personStubBackfillService.backfill(userId, {
       startTime: body.startTime,
       endTime: body.endTime,
       windowDays: body.windowDays,

@@ -67,8 +67,13 @@ export class CommunicationService {
       sourceId: data.source_id ?? null,
     });
 
-    // TODO: Build relationships using from_entity_id and to_entity_ids
-
+    // People-linking — from_entity_id / to_entity_ids are resolved out-of-band
+    // by CommunicationParticipantLinkListener (consuming the
+    // CommunicationCreatedEvent emitted below). The listener classifies the
+    // raw participants in `participants_metadata`, creates stub Person entities
+    // for previously-unseen identifiers, and writes the resolved ids back.
+    // Bulk createMany does not emit per-row events, so its rows are linked by
+    // the matching backfill pair instead (see MaintenanceController).
     const communicationResult = await this.communicationRepository.save(communication);
 
     await this.eventService.send(CommunicationCreatedEvent, {

@@ -16,9 +16,11 @@ import { EventEntity, MemoryModule } from '@ci/domains/memory';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
+import { CommunicationParticipantLinkListener } from './listeners/CommunicationParticipantLinkListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
 import { IndexDeferralService } from './services/IndexDeferralService';
+import { PersonStubBackfillService } from './services/PersonStubBackfillService';
 import { SearchIndexBackfillService } from './services/SearchIndexBackfillService';
 
 /**
@@ -39,12 +41,15 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
   providers: [
     IndexDeferralService,
     CommunicationLinkBackfillService,
+    PersonStubBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
+    CommunicationParticipantLinkListener,
   ],
   exports: [
     IndexDeferralService,
     CommunicationLinkBackfillService,
+    PersonStubBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
   ],
