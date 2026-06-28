@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeFragmentData } from '@/graphql';
+import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { PersonGridItem, PERSON_FRAGMENT } from './PersonGridItem';
 
@@ -20,7 +21,7 @@ function makePerson(overrides: Record<string, unknown> = {}) {
 
 describe('PersonGridItem', () => {
   it('renders the person name, description and type label', () => {
-    render(<PersonGridItem person={makePerson()} />);
+    renderWithProviders(<PersonGridItem person={makePerson()} />);
 
     expect(screen.getByText('John Doe')).toBeInTheDocument();
     expect(screen.getByText('A software engineer in San Francisco.')).toBeInTheDocument();
@@ -29,7 +30,7 @@ describe('PersonGridItem', () => {
 
   it('fires onClick when the card is clicked', () => {
     const onClick = vi.fn();
-    render(<PersonGridItem person={makePerson()} onClick={onClick} />);
+    renderWithProviders(<PersonGridItem person={makePerson()} onClick={onClick} />);
 
     fireEvent.click(screen.getByText('John Doe'));
 
@@ -37,7 +38,7 @@ describe('PersonGridItem', () => {
   });
 
   it('prefixes a relative avatar URL with /static', () => {
-    render(<PersonGridItem person={makePerson({ avatarUrl: '/avatars/jd.png' })} />);
+    renderWithProviders(<PersonGridItem person={makePerson({ avatarUrl: '/avatars/jd.png' })} />);
 
     expect(screen.getByRole('img')).toHaveAttribute('src', '/static/avatars/jd.png');
   });

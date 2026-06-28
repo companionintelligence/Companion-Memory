@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeFragmentData } from '@/graphql';
+import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { FILE_FRAGMENT, FileGridItem } from './FileGridItem';
 
@@ -26,13 +27,13 @@ function makeFile(overrides: Record<string, unknown> = {}) {
 
 describe('FileGridItem', () => {
   it('renders a thumbnail (prefixed with /static) when a preview exists', () => {
-    render(<FileGridItem file={makeFile({ previewUrl: '/p/thumb.jpg' })} />);
+    renderWithProviders(<FileGridItem file={makeFile({ previewUrl: '/p/thumb.jpg' })} />);
 
     expect(screen.getByRole('img')).toHaveAttribute('src', '/static/p/thumb.jpg');
   });
 
   it('falls back to the filename and icon when there is no preview', () => {
-    render(<FileGridItem file={makeFile({ filename: 'report.pdf' })} />);
+    renderWithProviders(<FileGridItem file={makeFile({ filename: 'report.pdf' })} />);
 
     expect(screen.queryByRole('img')).toBeNull();
     expect(screen.getByText('report.pdf')).toBeInTheDocument();
@@ -40,7 +41,7 @@ describe('FileGridItem', () => {
 
   it('fires onClick', () => {
     const onClick = vi.fn();
-    render(<FileGridItem file={makeFile()} onClick={onClick} />);
+    renderWithProviders(<FileGridItem file={makeFile()} onClick={onClick} />);
 
     fireEvent.click(screen.getByText('photo.jpg'));
     expect(onClick).toHaveBeenCalledTimes(1);

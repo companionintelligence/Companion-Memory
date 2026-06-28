@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeFragmentData } from '@/graphql';
+import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { EVENT_FRAGMENT, EventGridItem } from './EventGridItem';
 
@@ -24,7 +25,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
 
 describe('EventGridItem', () => {
   it('renders the title, description and location', () => {
-    render(<EventGridItem event={makeEvent()} />);
+    renderWithProviders(<EventGridItem event={makeEvent()} />);
 
     expect(screen.getByText('Team offsite')).toBeInTheDocument();
     expect(screen.getByText('Quarterly planning')).toBeInTheDocument();
@@ -32,14 +33,14 @@ describe('EventGridItem', () => {
   });
 
   it('falls back to "Untitled event" with no title', () => {
-    render(<EventGridItem event={makeEvent({ title: null })} />);
+    renderWithProviders(<EventGridItem event={makeEvent({ title: null })} />);
 
     expect(screen.getByText('Untitled event')).toBeInTheDocument();
   });
 
   it('fires onClick', () => {
     const onClick = vi.fn();
-    render(<EventGridItem event={makeEvent()} onClick={onClick} />);
+    renderWithProviders(<EventGridItem event={makeEvent()} onClick={onClick} />);
 
     fireEvent.click(screen.getByText('Team offsite'));
     expect(onClick).toHaveBeenCalledTimes(1);

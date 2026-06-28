@@ -17,8 +17,6 @@ export interface RenderWithProvidersOptions extends Omit<RenderOptions, 'wrapper
   routerEntries?: string[];
   /** Apollo mocked GraphQL responses. */
   mocks?: readonly MockedResponse[];
-  /** MockedProvider addTypename (default true — matches generated documents). */
-  addTypename?: boolean;
   /** Wrap with Theme/Background providers (off by default — the Conway texture
    *  runs timers and most components don't need theme context). */
   withTheme?: boolean;
@@ -37,7 +35,7 @@ export interface RenderWithProvidersOptions extends Omit<RenderOptions, 'wrapper
  * supply deterministic values. See existing component tests for the pattern.
  */
 function buildWrapper(options: RenderWithProvidersOptions) {
-  const { route = '/', routerEntries, mocks = [], addTypename = true, withTheme = false, path } = options;
+  const { route = '/', routerEntries, mocks = [], withTheme = false, path } = options;
 
   const cache = new InMemoryCache({ possibleTypes: introspectionResult.possibleTypes });
 
@@ -54,7 +52,9 @@ function buildWrapper(options: RenderWithProvidersOptions) {
       <MemoryRouter initialEntries={routerEntries ?? [route]}>
         <DeviceLayoutProvider args={[]}>
           <CaptureModalProvider args={[]}>
-            <MockedProvider mocks={mocks} addTypename={addTypename} cache={cache}>
+            {/* Apollo 3.14 removed the `addTypename` prop; the cache adds
+                __typename, and our mocks carry it via makeFragmentData. */}
+            <MockedProvider mocks={mocks} cache={cache}>
               {routed}
             </MockedProvider>
           </CaptureModalProvider>
@@ -78,10 +78,10 @@ export function renderWithProviders(
   ui: ReactElement,
   options: RenderWithProvidersOptions = {},
 ): RenderResult {
-  const { route, routerEntries, mocks, addTypename, withTheme, path, ...rtlOptions } = options;
+  const { route, routerEntries, mocks, withTheme, path, ...rtlOptions } = options;
 
   return render(ui, {
-    wrapper: buildWrapper({ route, routerEntries, mocks, addTypename, withTheme, path }),
+    wrapper: buildWrapper({ route, routerEntries, mocks, withTheme, path }),
     ...rtlOptions,
   });
 }
