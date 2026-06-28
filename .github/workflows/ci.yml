@@ -65,6 +65,48 @@ jobs:
       - name: Run backend API tests
         run: yarn workspace @ci/be-api test
 
+  test-frontend:
+    name: Run frontend tests
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    # Non-blocking while the suite stabilizes: the job runs and reports, but a
+    # failure does not fail the workflow. Promote to blocking (drop this line and
+    # add the check to branch protection) once coverage is established.
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run frontend unit/component tests
+        run: yarn workspace @ci/fe-web test --coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fe-coverage
+          path: frontend/apps/web/coverage
+          retention-days: 7
+          if-no-files-found: ignore
+
   typecheck:
     name: Type check ${{ matrix.name }}
     needs: install
