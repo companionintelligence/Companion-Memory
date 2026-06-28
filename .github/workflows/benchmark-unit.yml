@@ -1,0 +1,32 @@
+name: Benchmark unit tests
+
+# Runs only when files in scripts/benchmark/ change. The benchmark is a
+# self-contained Python suite — the CI-Server backend doesn't need to be built.
+on:
+  pull_request:
+    paths:
+      - scripts/benchmark/**
+      - .github/workflows/benchmark-unit.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/benchmark/**
+      - .github/workflows/benchmark-unit.yml
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scripts/benchmark
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/benchmark/requirements.txt
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Run pytest
+        run: pytest

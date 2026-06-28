@@ -1,0 +1,12 @@
+# Runtime deps — none. The benchmark + CI-Server adapter use stdlib urllib only,
+# so a basic run needs nothing more than Python 3.10.
+#
+# Add optional adapter dependencies under their own extras here (uncomment when
+# adapter modules are added back from PR #1453's spike):
+#
+#   mem0ai>=0.1.29
+#   chromadb>=0.4.0
+#   honcho-ai>=0.0.9
+
+# Test deps (pinned soft — any recent pytest works)
+pytest>=8.0
