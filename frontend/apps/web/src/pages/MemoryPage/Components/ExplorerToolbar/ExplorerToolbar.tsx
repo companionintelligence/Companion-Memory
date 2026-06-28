@@ -38,6 +38,7 @@ import { DropdownProvider, useDropdown } from '@/components/SearchBox/useDropdow
 import { TagInput } from '@/components/TagInput';
 import { gql } from '@/graphql';
 
+import { buildSavedSearchFilters } from '../../savedSearchFilters';
 import { useEntityService } from '../../useEntityService';
 
 import { ActiveFilterChips, countActiveFilters } from './ActiveFilterChips';
@@ -68,6 +69,18 @@ const CREATE_SAVED_SEARCH = gql(`
         query
         entityTypes
         tags
+        filters {
+          eventTypes
+          startTime
+          endTime
+          sortBy
+          sortOrder
+          connectors
+          people
+          places
+          hasLocation
+          semantic
+        }
       }
     }
   }
@@ -1303,6 +1316,7 @@ function SaveSearchButton() {
     const entityTypes = selectedEntityTypes.map(
       (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP],
     );
+    const filters = buildSavedSearchFilters(searchParams);
 
     try {
       const result = await createSavedSearch({
@@ -1312,6 +1326,7 @@ function SaveSearchButton() {
             query,
             entityTypes,
             tags: tags.length > 0 ? tags : undefined,
+            filters,
           },
         },
       });
@@ -1340,7 +1355,8 @@ function SaveSearchButton() {
         <Dialog.Header>
           <Dialog.Title>Save this search</Dialog.Title>
           <Dialog.Description>
-            Stores the current query, selected entity types, and tags so you can reuse them later.
+            Stores the current query, entity types, tags, and all active filters (who / where / when / how /
+            sort) so you can reuse them later.
           </Dialog.Description>
         </Dialog.Header>
 

@@ -389,6 +389,7 @@ gantt
 | When does an item become an `entity` vs. stay in `inventory`? | Heuristic ("parasocial relationship") is documented but not enforced — see `Database.md`. |
 | How aggressively to prune to `facts`? | Cold-storage compaction is designed but not yet implemented. |
 | Where does multi-user logic live? | Today: single user per Hub. Multi-tenant would touch `auth`, `connections`, `etl`, and Portal contracts. |
+| In-Hub saved-search sharing vs. single-tenant model | Saved searches are link-shareable: the share token authorizes running the search **as the owner** (`SearchResolver.runSharedSearch`; `SavedSearchService.findByShareToken` is intentionally not user-scoped) — the first cross-user read path inside a Hub. Capability-scoped (the token only surfaces the owner's stored query/types/tags; viewer-supplied filters are ignored) and still behind `JwtOrApiKeyAuthGuard` (signed-in viewers only, **not** anonymous). A node's sub-fields (media/relations/tags) resolve under the node's owner, so a shared result's signed media URLs are the owner's — forwardable until the URL's TTL. Distinct from the Portal-brokered federation in §7.3. |
 | Tool surface: NestJS controllers vs. MCP servers? | `domains/tools` and `mcp-servers/` overlap; a single registry is desirable. |
 | Real-time push to clients | No WebSocket/subscription layer yet — XR and wearable clients currently poll. |
 

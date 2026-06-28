@@ -17,6 +17,7 @@ import { PaginationArgs } from '../types/PaginationArgs';
 import { SavedSearchConnection } from '../types/SavedSearchConnection';
 import { SavedSearchEdge } from '../types/SavedSearchEdge';
 import { SavedSearchType } from '../types/SavedSearchType';
+import { SetSavedSearchSharingInput } from '../types/SetSavedSearchSharingInput';
 import { UpdateSavedSearchInput } from '../types/UpdateSavedSearchInput';
 import { Paginator } from '../utils/Paginator';
 
@@ -46,6 +47,7 @@ export class SavedSearchResolver {
       query: input.query,
       entityTypes: input.entityTypes,
       tags: input.tags,
+      filters: input.filters,
     });
 
     if (entity == null) {
@@ -75,6 +77,7 @@ export class SavedSearchResolver {
       query: input.query,
       entityTypes: input.entityTypes,
       tags: input.tags,
+      filters: input.filters,
     });
 
     if (entity == null) {
@@ -86,6 +89,29 @@ export class SavedSearchResolver {
     return {
       success: true,
       savedSearch: entity ? SavedSearchType.toType(entity) : undefined,
+    };
+  }
+
+  @Mutation(() => UpdateSavedSearchPayload)
+  async setSavedSearchSharing(
+    @Context() context: RequestContext,
+    @Args('input') input: SetSavedSearchSharingInput,
+  ): Promise<UpdateSavedSearchPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('saved-search', input.id);
+
+    const entity = await this.savedSearchService.setSharing(serviceContext, id, input.isPublic);
+
+    if (entity == null) {
+      return {
+        success: false,
+      };
+    }
+
+    return {
+      success: true,
+      savedSearch: SavedSearchType.toType(entity),
     };
   }
 
@@ -154,6 +180,28 @@ export class SavedSearchResolver {
     const entity = await this.savedSearchService.findById(serviceContext, id);
 
     return entity ? SavedSearchType.toType(entity) : null;
+  }
+
+  /**
+   * Resolve a shared saved search by its capability token (the `/shared/<token>`
+   * link). Guarded like everything else — sharing is limited to signed-in users —
+   * but not owner-scoped: any authenticated viewer holding a valid token gets the
+   * search definition (name/description/filters) to drive the read-only viewer.
+   * Returns null for unknown/revoked tokens.
+   */
+  @Query(() => SavedSearchType, { nullable: true })
+  async sharedSavedSearch(@Args('token') token: string): Promise<SavedSearchType | null> {
+    const entity = await this.savedSearchService.findByShareToken(token);
+
+    if (entity == null) {
+      return null;
+    }
+
+    // Never echo the capability token back on the viewer path — the holder
+    // already has it, and reflecting it only widens where the secret lands
+    // (logs, response bodies, client caches). The owner-scoped savedSearch /
+    // setSavedSearchSharing paths remain the only places shareToken is exposed.
+    return { ...SavedSearchType.toType(entity), shareToken: null };
   }
 }
 

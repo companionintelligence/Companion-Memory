@@ -14,9 +14,12 @@ import { ItemDetails } from './ItemDetails';
 import { NoteDetails } from './NoteDetails';
 import { PersonDetails } from './PersonDetails';
 import { PlaceDetails } from './PlaceDetails';
+import { ReadOnlyProvider } from './readOnly';
 
 export interface Props {
   entity: MemoryEntity;
+  /** Suppress edit/tag/open-full-page affordances (shared-search viewer). */
+  readOnly?: boolean;
 }
 
 function getCategoryComponent({ entity }: Props) {
@@ -50,6 +53,6 @@ function getCategoryComponent({ entity }: Props) {
   }
 }
 
-export function EntityDetails({ entity }: Props) {
-  return getCategoryComponent({ entity });
+export function EntityDetails({ entity, readOnly = false }: Props) {
+  return <ReadOnlyProvider value={readOnly}>{getCategoryComponent({ entity })}</ReadOnlyProvider>;
 }

@@ -39,6 +39,7 @@ export class FilesModule {}
 
 export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
 export type { File, SignedFile, SavedSearch };
+export type { SavedSearchFilters } from './types';
 export {
   FileCreatedEvent,
   FileUpdatedEvent,

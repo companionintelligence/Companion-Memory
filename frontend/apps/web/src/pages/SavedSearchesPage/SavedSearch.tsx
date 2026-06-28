@@ -1,14 +1,48 @@
 import { GlobalUID } from '@ci/common';
 import { Button } from '@ci/shadcn';
-import { Pencil, Trash } from '@ci/shadcn/icons';
+import { Pencil, Share2, SlidersHorizontal, Trash } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 
+/** Human-readable labels for the secondary filter dimensions a saved search carries. */
+function activeFilterDimensions(
+  filters?: {
+    people?: string[] | null;
+    connectors?: string[] | null;
+    places?: string[] | null;
+    hasLocation?: boolean | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    eventTypes?: string[] | null;
+    semantic?: boolean | null;
+  } | null,
+): string[] {
+  if (!filters) {
+    return [];
+  }
+
+  const dims: string[] = [];
+  if (filters.people?.length) {dims.push('Who');}
+
+  if (filters.places?.length || filters.hasLocation) {dims.push('Where');}
+
+  if (filters.startTime || filters.endTime) {dims.push('When');}
+
+  if (filters.eventTypes?.length) {dims.push('How');}
+
+  if (filters.connectors?.length) {dims.push('Source');}
+
+  if (filters.semantic) {dims.push('Semantic');}
+
+  return dims;
+}
+
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
   openSavedSearchEditModal: (e: React.MouseEvent) => void;
+  openSavedSearchShareModal: (e: React.MouseEvent) => void;
   openSavedSearchDeleteModal: (e: React.MouseEvent) => void;
 }
 
@@ -20,21 +54,55 @@ export const SavedSearchGridItemFragment = gql(`
     query
     entityTypes
     tags
+    filters {
+      eventTypes
+      startTime
+      endTime
+      sortBy
+      sortOrder
+      connectors
+      people
+      places
+      hasLocation
+      semantic
+    }
+    isPublic
+    shareToken
   }
 `);
 
 export function SavedSearch({
   savedSearch: savedSearchMasked,
   openSavedSearchEditModal,
+  openSavedSearchShareModal,
   openSavedSearchDeleteModal,
 }: Props) {
   const savedSearch = useFragment(SavedSearchGridItemFragment, savedSearchMasked);
+  const filterDims = activeFilterDimensions(savedSearch.filters);
 
   return (
     <Link to={`/memory?saved_search=${GlobalUID.parse('saved-search', savedSearch.id)}`} key={savedSearch.id}>
       <div className="h-full w-full flex flex-col border border-border bg-card text-card-foreground shadow-md rounded-lg cursor-pointer select-none p-3 gap-3 hover:shadow-lg transition-shadow duration-75">
         <div className="flex items-center gap-2">
           <div className="text-md font-semibold truncate">{savedSearch.name || 'Untitled Saved Search'}</div>
+          {savedSearch.isPublic && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary border border-primary/20"
+              title="This saved search is shared via a link"
+            >
+              <Share2 className="w-3 h-3" />
+              Shared
+            </span>
+          )}
+          {filterDims.length > 0 && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground border border-border"
+              title={`Filters: ${filterDims.join(', ')}`}
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              {filterDims.length}
+            </span>
+          )}
         </div>
         <div className="flex-1 flex flex-col gap-1 min-h-0">
           <div className="line-clamp-3 leading-tight">{savedSearch.description || '<no description>'}</div>
@@ -70,6 +138,14 @@ export function SavedSearch({
             aria-label="Edit Saved Search"
           >
             <Pencil className="w-4 h-4" />
+          </Button>
+          <Button
+            onClick={openSavedSearchShareModal}
+            size="icon"
+            variant="ghost"
+            aria-label="Share Saved Search"
+          >
+            <Share2 className="w-4 h-4" />
           </Button>
           <Button
             onClick={openSavedSearchDeleteModal}

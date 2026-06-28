@@ -36,12 +36,16 @@ describe('SearchResolver — event-type ("how") filter', () => {
     const entityResolutionService = {
       resolve: jest.fn().mockResolvedValue(overrides.resolved ?? new Map()),
     };
+    const savedSearchService = {
+      findByShareToken: jest.fn().mockResolvedValue(null),
+    };
 
     const resolver = new SearchResolver(
       browserActivityService as never,
       communicationService as never,
       entityResolutionService as never,
       eventService as never,
+      savedSearchService as never,
       searchService as never,
       tagService as never,
     );

@@ -40,6 +40,7 @@ const ProviderPage = lazy(() => import('@/pages/ProviderPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const FilesPage = lazy(() => import('@/pages/FilesPage'));
 const SavedSearchesPage = lazy(() => import('@/pages/SavedSearchesPage'));
+const SharedSearchPage = lazy(() => import('@/pages/SharedSearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
 const SystemPage = lazy(() => import('@/pages/SystemPage'));
@@ -297,6 +298,15 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <SavedSearchesPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/shared/:token"
+            element={
+              <ProtectedRoute>
+                <SharedSearchPage />
               </ProtectedRoute>
             }
           />

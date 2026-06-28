@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Portal } from '@ci/common';
 import { Button, DropdownMenu, Separator, useToast } from '@ci/shadcn';
 import { NotebookPen, Upload, Camera, Plus, Cable, Search, User, Lightbulb, Package } from '@ci/shadcn/icons';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useUploadFile, useTriggerHbpe } from '@/api';
 import { AddPersonModal } from '@/components/modals/AddItemModal';
@@ -18,6 +18,11 @@ import { NavUser } from './NavUser';
 
 export function PrimaryNavigation() {
   const navigate = useNavigate();
+  // The global search box searches the VIEWER's own memory. On a shared-search
+  // page the body shows someone else's results, so the prominent search would be
+  // misleading (and navigate the viewer away). Hide it there; the page's own view
+  // tabs (nav-views) still render.
+  const isSharedView = useLocation().pathname.startsWith('/shared/');
   const { toast } = useToast();
   const [, { trigger }] = useTriggerHbpe();
 
@@ -74,9 +79,7 @@ export function PrimaryNavigation() {
         {/* Center: the unified search, stretched to fill the bar. Memory's advanced
             filter toggle attaches here, followed by Memory's view switcher. */}
         <div className="flex min-w-0 flex-1 items-stretch">
-          <div className="min-w-0 flex-1">
-            <GlobalSearchBox />
-          </div>
+          <div className="min-w-0 flex-1">{!isSharedView && <GlobalSearchBox />}</div>
           <Portal id="nav-tools" className="flex flex-row items-stretch empty:hidden" />
           <Portal id="nav-views" className="ml-2 flex flex-row items-center empty:hidden" />
         </div>
