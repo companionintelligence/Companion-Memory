@@ -1,0 +1,1267 @@
+{
+  "_comment": "Synthetic persona for memory system benchmarking. All facts are fictional.",
+  "persona_id": "jordan_rivera",
+  "name": "Jordan Rivera",
+  "description": "Senior software engineer, 34, Austin TX. Used to illustrate both flat recall and relational graph queries.",
+  "facts": [
+    {
+      "id": "f001",
+      "text": "Jordan Rivera lives in Austin, Texas",
+      "category": "flat"
+    },
+    {
+      "id": "f002",
+      "text": "Jordan is 34 years old and was born in Miami, Florida",
+      "category": "flat"
+    },
+    {
+      "id": "f003",
+      "text": "Jordan works as a Senior Software Engineer at a company called Meridian AI",
+      "category": "flat"
+    },
+    {
+      "id": "f004",
+      "text": "Jordan has a dog named Mochi, a rescue greyhound adopted one year ago",
+      "category": "flat"
+    },
+    {
+      "id": "f005",
+      "text": "Jordan's best friend is Maya Chen, a data scientist who lives in Denver and works at Palantir",
+      "category": "relational"
+    },
+    {
+      "id": "f006",
+      "text": "Jordan met Maya Chen at PyCon 2021 in Salt Lake City",
+      "category": "relational"
+    },
+    {
+      "id": "f007",
+      "text": "Jordan has a brother named Sam Rivera who is a product manager at Google and lives in Seattle",
+      "category": "relational"
+    },
+    {
+      "id": "f008",
+      "text": "Jordan's parents are named Elena and Carlos, and they live in Miami, Florida",
+      "category": "relational"
+    },
+    {
+      "id": "f009",
+      "text": "Jordan enjoys rock climbing at the Austin Bouldering Project",
+      "category": "flat"
+    },
+    {
+      "id": "f010",
+      "text": "Jordan plays acoustic guitar and has been playing for ten years",
+      "category": "flat"
+    },
+    {
+      "id": "f011",
+      "text": "Jordan's favorite author is Ted Chiang, and a favorite story is Story of Your Life",
+      "category": "flat"
+    },
+    {
+      "id": "f012",
+      "text": "Jordan owns a Specialized Diverge gravel bike",
+      "category": "flat"
+    },
+    {
+      "id": "f013",
+      "text": "Jordan uses Go for backend development and React for frontend",
+      "category": "flat"
+    },
+    {
+      "id": "f014",
+      "text": "Jordan switched from Python to Go for backend work about six months ago",
+      "category": "temporal"
+    },
+    {
+      "id": "f015",
+      "text": "Jordan moved to Austin from San Francisco three years ago",
+      "category": "temporal"
+    },
+    {
+      "id": "f016",
+      "text": "Jordan was recently promoted to Senior Software Engineer two months ago",
+      "category": "temporal"
+    },
+    {
+      "id": "f017",
+      "text": "Jordan is planning a trip to Japan in October",
+      "category": "temporal"
+    },
+    {
+      "id": "f018",
+      "text": "Jordan is currently reading Project Hail Mary by Andy Weir",
+      "category": "flat"
+    },
+    {
+      "id": "f019",
+      "text": "Jordan's favorite food is tacos al pastor",
+      "category": "flat"
+    },
+    {
+      "id": "f020",
+      "text": "Jordan is learning Spanish and is at an intermediate level",
+      "category": "flat"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "noise_45",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        }
+      ]
+    },
+    {
+      "id": "noise_48",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Watched birds at the feeder for half an hour while drinking coffee."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        },
+        {
+          "role": "user",
+          "content": "Watched birds at the feeder for half an hour while drinking coffee."
+        }
+      ]
+    },
+    {
+      "id": "noise_8",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        }
+      ]
+    },
+    {
+      "id": "noise_5",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        }
+      ]
+    },
+    {
+      "id": "noise_50",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        }
+      ]
+    },
+    {
+      "id": "noise_40",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        }
+      ]
+    },
+    {
+      "id": "noise_49",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        }
+      ]
+    },
+    {
+      "id": "noise_4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Watched a documentary about deep-sea hydrothermal vents last night."
+        },
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        },
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        }
+      ]
+    },
+    {
+      "id": "noise_37",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        }
+      ]
+    },
+    {
+      "id": "noise_3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Took the long way home through the park, the trees are turning."
+        }
+      ]
+    },
+    {
+      "id": "noise_46",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        },
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        }
+      ]
+    },
+    {
+      "id": "sess_3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "My brother Sam is visiting from Seattle this weekend. He's a PM at Google."
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds fun! Are you planning anything special?"
+        },
+        {
+          "role": "user",
+          "content": "Just showing him around. My parents are flying in from Miami too, so it'll be a full house\u2014Elena and Carlos both love Austin."
+        },
+        {
+          "role": "assistant",
+          "content": "Big family gathering!"
+        },
+        {
+          "role": "user",
+          "content": "Yeah. I'm also trying to squeeze in a call with my best friend Maya\u2014she's in Denver working at Palantir. We met at PyCon 2021 in Salt Lake City actually."
+        }
+      ]
+    },
+    {
+      "id": "noise_41",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        }
+      ]
+    },
+    {
+      "id": "noise_39",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Got rained on walking back from the grocery store."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        }
+      ]
+    },
+    {
+      "id": "noise_25",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "Got rained on walking back from the grocery store."
+        },
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        }
+      ]
+    },
+    {
+      "id": "noise_36",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        },
+        {
+          "role": "user",
+          "content": "Took the long way home through the park, the trees are turning."
+        },
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        }
+      ]
+    },
+    {
+      "id": "noise_11",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        }
+      ]
+    },
+    {
+      "id": "noise_21",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        }
+      ]
+    },
+    {
+      "id": "sess_5",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tacos al pastor for lunch today\u2014the place near the office is the best I've had outside of Mexico City."
+        },
+        {
+          "role": "assistant",
+          "content": "Sounds like a good lunch spot."
+        },
+        {
+          "role": "user",
+          "content": "Totally. Also finally bit the bullet and got a Specialized Diverge for gravel riding\u2014Austin has some great routes."
+        }
+      ]
+    },
+    {
+      "id": "noise_26",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Took the long way home through the park, the trees are turning."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        }
+      ]
+    },
+    {
+      "id": "noise_42",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        }
+      ]
+    },
+    {
+      "id": "noise_22",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Caught the last twenty minutes of a soccer match on TV."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        }
+      ]
+    },
+    {
+      "id": "noise_38",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        }
+      ]
+    },
+    {
+      "id": "noise_28",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        },
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        },
+        {
+          "role": "user",
+          "content": "Watched a documentary about deep-sea hydrothermal vents last night."
+        }
+      ]
+    },
+    {
+      "id": "noise_20",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        },
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        },
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        }
+      ]
+    },
+    {
+      "id": "noise_13",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        },
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        }
+      ]
+    },
+    {
+      "id": "noise_30",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        },
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        }
+      ]
+    },
+    {
+      "id": "noise_14",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "Watched a documentary about deep-sea hydrothermal vents last night."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        }
+      ]
+    },
+    {
+      "id": "noise_27",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "Watched a documentary about deep-sea hydrothermal vents last night."
+        }
+      ]
+    },
+    {
+      "id": "sess_1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Quick intro since this is a fresh chat \u2014 I'm Jordan Rivera, a senior software engineer living in Austin, Texas."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Jordan. What's on your mind?"
+        },
+        {
+          "role": "user",
+          "content": "I just got back from a great hike at Barton Creek near my house here in Austin."
+        },
+        {
+          "role": "assistant",
+          "content": "Barton Creek is beautiful! How was the trail?"
+        },
+        {
+          "role": "user",
+          "content": "Gorgeous. I grew up in Miami but I've been in Austin for about three years now\u2014so much better for outdoor stuff."
+        },
+        {
+          "role": "assistant",
+          "content": "Have you done much climbing here too?"
+        },
+        {
+          "role": "user",
+          "content": "Yeah, I go to the Austin Bouldering Project pretty regularly. Mochi, my greyhound, waits in the car\u2014I rescued her about a year ago."
+        }
+      ]
+    },
+    {
+      "id": "noise_12",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        },
+        {
+          "role": "user",
+          "content": "Caught the last twenty minutes of a soccer match on TV."
+        }
+      ]
+    },
+    {
+      "id": "noise_2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        },
+        {
+          "role": "user",
+          "content": "Got rained on walking back from the grocery store."
+        }
+      ]
+    },
+    {
+      "id": "noise_1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        }
+      ]
+    },
+    {
+      "id": "noise_24",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        },
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        }
+      ]
+    },
+    {
+      "id": "noise_18",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        },
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        },
+        {
+          "role": "user",
+          "content": "Took the long way home through the park, the trees are turning."
+        }
+      ]
+    },
+    {
+      "id": "noise_44",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Got rained on walking back from the grocery store."
+        },
+        {
+          "role": "user",
+          "content": "Finally cleared the inbox down to triple digits."
+        }
+      ]
+    },
+    {
+      "id": "noise_15",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        }
+      ]
+    },
+    {
+      "id": "noise_9",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        }
+      ]
+    },
+    {
+      "id": "noise_7",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        }
+      ]
+    },
+    {
+      "id": "noise_19",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        }
+      ]
+    },
+    {
+      "id": "noise_16",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        },
+        {
+          "role": "user",
+          "content": "Saw the new ramen place got a long line out the door again today."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        }
+      ]
+    },
+    {
+      "id": "noise_35",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Got rained on walking back from the grocery store."
+        },
+        {
+          "role": "user",
+          "content": "The dog next door barked at the mail carrier for ten straight minutes."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        }
+      ]
+    },
+    {
+      "id": "noise_10",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Took the long way home through the park, the trees are turning."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        }
+      ]
+    },
+    {
+      "id": "noise_31",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Restocked on coffee beans this morning \u2014 switched to a different roast."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        }
+      ]
+    },
+    {
+      "id": "noise_6",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Heard a song on the radio I hadn't thought of in years."
+        },
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        }
+      ]
+    },
+    {
+      "id": "noise_33",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        },
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        }
+      ]
+    },
+    {
+      "id": "noise_17",
+      "messages": [
+        {
+          "role": "user",
+          "content": "The traffic light at 4th and Main has been broken all week."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Watched a documentary about deep-sea hydrothermal vents last night."
+        }
+      ]
+    },
+    {
+      "id": "sess_4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I've been rewinding on Project Hail Mary while practicing guitar in the evenings."
+        },
+        {
+          "role": "assistant",
+          "content": "Both at once? How long have you been playing?"
+        },
+        {
+          "role": "user",
+          "content": "About ten years, acoustic. Andy Weir is great but Ted Chiang is still my favorite\u2014Story of Your Life is incredible."
+        },
+        {
+          "role": "assistant",
+          "content": "What else do you have going on?"
+        },
+        {
+          "role": "user",
+          "content": "Trying to keep up my Spanish\u2014I'm intermediate\u2014and saving up for a Japan trip I'm planning for October."
+        }
+      ]
+    },
+    {
+      "id": "noise_23",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new sourdough recipe over the weekend; the crumb wasn't bad."
+        }
+      ]
+    },
+    {
+      "id": "noise_29",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Watched birds at the feeder for half an hour while drinking coffee."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        },
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        }
+      ]
+    },
+    {
+      "id": "noise_47",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Tried a new tea, oolong, decent but not a daily driver."
+        },
+        {
+          "role": "user",
+          "content": "Cooked the same pasta dish I've made a hundred times."
+        }
+      ]
+    },
+    {
+      "id": "noise_32",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Watched a documentary about deep-sea hydrothermal vents last night."
+        },
+        {
+          "role": "user",
+          "content": "Caught the last twenty minutes of a soccer match on TV."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        }
+      ]
+    },
+    {
+      "id": "noise_43",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Watched a rerun of an old sci-fi movie \u2014 still holds up."
+        },
+        {
+          "role": "user",
+          "content": "Saw an old colleague at the bookstore, caught up briefly."
+        },
+        {
+          "role": "user",
+          "content": "Tested a new keyboard layout, going back to the old one tomorrow."
+        }
+      ]
+    },
+    {
+      "id": "sess_2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Had a long day at Meridian AI\u2014we're in the middle of a big Go migration and it's a lot of work."
+        },
+        {
+          "role": "assistant",
+          "content": "A Go migration sounds intense. Are you moving from another language?"
+        },
+        {
+          "role": "user",
+          "content": "Yeah, we were a Python shop but switched to Go for the backend about six months ago. It's faster but the ecosystem is different."
+        },
+        {
+          "role": "assistant",
+          "content": "How long have you been at Meridian AI?"
+        },
+        {
+          "role": "user",
+          "content": "Two years. And actually I just got promoted to Senior Engineer a couple months ago, so that's exciting at least."
+        }
+      ]
+    },
+    {
+      "id": "noise_34",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Couldn't sleep, ended up reading until 2am."
+        },
+        {
+          "role": "user",
+          "content": "Spent the afternoon decluttering one corner of the apartment."
+        },
+        {
+          "role": "user",
+          "content": "Skipped the gym, went for a walk along the river instead."
+        }
+      ]
+    }
+  ],
+  "eval_questions": [
+    {
+      "id": "q001",
+      "question": "Where does Jordan live?",
+      "keywords": [
+        "Austin",
+        "Texas"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q002",
+      "question": "What company does Jordan work at?",
+      "keywords": [
+        "Meridian"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q003",
+      "question": "What is Jordan's dog's name and breed?",
+      "keywords": [
+        "Mochi",
+        "greyhound"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q004",
+      "question": "What instrument does Jordan play?",
+      "keywords": [
+        "guitar"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q005",
+      "question": "Who is Jordan's favorite author?",
+      "keywords": [
+        "Ted Chiang",
+        "Chiang"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q006",
+      "question": "What programming language does Jordan use for backend work?",
+      "keywords": [
+        "Go"
+      ],
+      "category": "flat-recall",
+      "_note": "Tests update: should NOT say Python"
+    },
+    {
+      "id": "q007",
+      "question": "What food is Jordan's favorite?",
+      "keywords": [
+        "tacos",
+        "al pastor",
+        "taco"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q008",
+      "question": "What book is Jordan currently reading?",
+      "keywords": [
+        "Project Hail Mary",
+        "Andy Weir",
+        "Hail Mary"
+      ],
+      "category": "flat-recall"
+    },
+    {
+      "id": "q009",
+      "question": "What does Jordan's brother Sam do for work?",
+      "keywords": [
+        "product manager",
+        "PM",
+        "Google"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q010",
+      "question": "Where does Sam live?",
+      "keywords": [
+        "Seattle"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q011",
+      "question": "Where did Jordan meet their best friend Maya?",
+      "keywords": [
+        "PyCon",
+        "Salt Lake City",
+        "Salt Lake",
+        "2021"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q012",
+      "question": "What company does Maya work at?",
+      "keywords": [
+        "Palantir"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q013",
+      "question": "What city does Maya live in?",
+      "keywords": [
+        "Denver"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q014",
+      "question": "What are Jordan's parents' names?",
+      "keywords": [
+        "Elena",
+        "Carlos"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q015",
+      "question": "Where do Jordan's parents live?",
+      "keywords": [
+        "Miami",
+        "Florida"
+      ],
+      "category": "relational"
+    },
+    {
+      "id": "q016",
+      "question": "What language did Jordan use for backend work before switching?",
+      "keywords": [
+        "Python"
+      ],
+      "category": "temporal"
+    },
+    {
+      "id": "q017",
+      "question": "Where did Jordan live before moving to Austin?",
+      "keywords": [
+        "San Francisco"
+      ],
+      "category": "temporal"
+    },
+    {
+      "id": "q018",
+      "question": "What recent professional milestone did Jordan reach?",
+      "keywords": [
+        "promoted",
+        "Senior",
+        "promotion"
+      ],
+      "category": "temporal"
+    },
+    {
+      "id": "q019",
+      "question": "What travel is Jordan planning?",
+      "keywords": [
+        "Japan",
+        "October"
+      ],
+      "category": "temporal"
+    },
+    {
+      "id": "q020",
+      "question": "What kind of bike does Jordan own?",
+      "keywords": [
+        "Specialized",
+        "Diverge",
+        "gravel"
+      ],
+      "category": "flat-recall"
+    }
+  ]
+}

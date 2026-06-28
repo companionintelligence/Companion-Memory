@@ -1,4 +1,4 @@
-name: Benchmark unit tests
+name: Benchmark unit tests + regression gate
 
 # Runs only when files in scripts/benchmark/ change. The benchmark is a
 # self-contained Python suite — the CI-Server backend doesn't need to be built.
@@ -30,3 +30,52 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run pytest
         run: pytest
+
+  # Re-runs the naive adapter on every committed persona and compares against
+  # the JSON baselines under scripts/benchmark/baselines/. Naive is fully
+  # deterministic (BoW + keyword scorer), so any drift here is real signal —
+  # either the persona content moved or the adapter logic regressed. Adapters
+  # that need external services (ci_server, mem0, hindsight) are out of scope
+  # for the CI gate; this job is the deterministic floor.
+  regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scripts/benchmark
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/benchmark/requirements.txt
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Regression check — jordan_rivera
+        run: |
+          mkdir -p reports
+          python -m benchmark \
+            --persona personas/jordan_rivera.json \
+            --systems naive \
+            --baseline baselines/naive_jordan.json \
+            --tolerance 0.05 \
+            --out reports/jordan.md
+
+      - name: Regression check — priya_sharma
+        run: |
+          mkdir -p reports
+          python -m benchmark \
+            --persona personas/priya_sharma.json \
+            --systems naive \
+            --baseline baselines/naive_priya.json \
+            --tolerance 0.05 \
+            --out reports/priya.md
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: scripts/benchmark/reports/
+          if-no-files-found: ignore

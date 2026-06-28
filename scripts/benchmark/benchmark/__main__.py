@@ -25,6 +25,7 @@ from . import (
     score_keyword,
     validate_persona,
 )
+from .judge_cache import JudgeCache, cached_scorer
 
 
 def _load_persona(path: Path) -> dict:
@@ -59,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--judge-model", default=os.environ.get("JUDGE_MODEL", ""))
     p.add_argument("--judge-key", default=os.environ.get("JUDGE_API_KEY", ""))
     p.add_argument(
+        "--judge-cache",
+        type=Path,
+        default=None,
+        help="persist LLM-judge verdicts to this JSON file; identical (question, context, model)"
+             " tuples are read from cache instead of re-queried",
+    )
+    p.add_argument(
         "--baseline",
         type=Path,
         default=None,
@@ -81,13 +89,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     adapters = [get_adapter(n) for n in names]
 
+    judge_cache: JudgeCache | None = None
     if args.scorer == "llm":
         if not args.judge_url or not args.judge_model:
             print("[error] --scorer llm requires --judge-url and --judge-model", file=sys.stderr)
             return 2
         scorer = make_llm_scorer(args.judge_url, args.judge_model, args.judge_key)
+        if args.judge_cache:
+            judge_cache = JudgeCache.load(args.judge_cache)
+            scorer = cached_scorer(scorer, judge_cache, model=args.judge_model)
     else:
         scorer = score_keyword
+        if args.judge_cache:
+            print("[warn] --judge-cache is ignored when --scorer is not 'llm'", file=sys.stderr)
 
     def _event(phase: str, system: str, payload: dict) -> None:
         if phase == "start":
@@ -102,6 +116,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   [ERROR @ {payload['phase']}]: {payload['error']}", file=sys.stderr)
 
     results = run_all(adapters, persona, args.user_id, scorer, on_event=_event)
+
+    if judge_cache is not None:
+        judge_cache.save()
+        print(f"\n[judge-cache] hits={judge_cache.hits} misses={judge_cache.misses} "
+              f"entries={len(judge_cache)} ({judge_cache.path})")
 
     md = build_markdown_report(persona, results, scorer_label=args.scorer)
     js = build_json_report(persona, results)

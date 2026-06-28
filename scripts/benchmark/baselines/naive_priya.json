@@ -1,0 +1,166 @@
+{
+  "persona": {
+    "id": "priya_sharma",
+    "name": "Priya Sharma",
+    "questions": 16,
+    "categories": [
+      "flat-recall",
+      "relational",
+      "multi-hop",
+      "temporal-update",
+      "absence"
+    ]
+  },
+  "systems": [
+    {
+      "name": "naive",
+      "error": null,
+      "score": {
+        "hit": 6,
+        "total": 16,
+        "ratio": 0.375
+      },
+      "categories": {
+        "flat-recall": [
+          2,
+          4
+        ],
+        "relational": [
+          0,
+          3
+        ],
+        "multi-hop": [
+          2,
+          3
+        ],
+        "temporal-update": [
+          2,
+          3
+        ],
+        "absence": [
+          0,
+          3
+        ]
+      },
+      "timings_ms": {
+        "ingest_total": 0.006791960913687944,
+        "flush_total": 0.0006249756552278996,
+        "avg_search": 0.06302332258201204
+      },
+      "questions": [
+        {
+          "id": "q001",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.0944170169532299,
+          "reason": ""
+        },
+        {
+          "id": "q002",
+          "category": "flat-recall",
+          "hit": true,
+          "latency_ms": 0.047667010221630335,
+          "reason": ""
+        },
+        {
+          "id": "q003",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.04270800855010748,
+          "reason": ""
+        },
+        {
+          "id": "q004",
+          "category": "flat-recall",
+          "hit": true,
+          "latency_ms": 0.04558300133794546,
+          "reason": ""
+        },
+        {
+          "id": "q005",
+          "category": "relational",
+          "hit": false,
+          "latency_ms": 0.2954169758595526,
+          "reason": ""
+        },
+        {
+          "id": "q006",
+          "category": "relational",
+          "hit": false,
+          "latency_ms": 0.0527920201420784,
+          "reason": ""
+        },
+        {
+          "id": "q007",
+          "category": "relational",
+          "hit": false,
+          "latency_ms": 0.04416599404066801,
+          "reason": ""
+        },
+        {
+          "id": "q008",
+          "category": "multi-hop",
+          "hit": true,
+          "latency_ms": 0.04937499761581421,
+          "reason": ""
+        },
+        {
+          "id": "q009",
+          "category": "multi-hop",
+          "hit": false,
+          "latency_ms": 0.05208305083215237,
+          "reason": ""
+        },
+        {
+          "id": "q010",
+          "category": "multi-hop",
+          "hit": true,
+          "latency_ms": 0.04587502917274833,
+          "reason": ""
+        },
+        {
+          "id": "q011",
+          "category": "temporal-update",
+          "hit": true,
+          "latency_ms": 0.04395801806822419,
+          "reason": ""
+        },
+        {
+          "id": "q012",
+          "category": "temporal-update",
+          "hit": false,
+          "latency_ms": 0.03950000973418355,
+          "reason": ""
+        },
+        {
+          "id": "q013",
+          "category": "temporal-update",
+          "hit": true,
+          "latency_ms": 0.03925000783056021,
+          "reason": ""
+        },
+        {
+          "id": "q014",
+          "category": "absence",
+          "hit": false,
+          "latency_ms": 0.042791012674570084,
+          "reason": ""
+        },
+        {
+          "id": "q015",
+          "category": "absence",
+          "hit": false,
+          "latency_ms": 0.0369579647667706,
+          "reason": ""
+        },
+        {
+          "id": "q016",
+          "category": "absence",
+          "hit": false,
+          "latency_ms": 0.03583304351195693,
+          "reason": ""
+        }
+      ]
+    }
+  ]
+}

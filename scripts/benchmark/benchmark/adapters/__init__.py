@@ -16,6 +16,7 @@ from typing import Callable, Dict
 
 from .base import MemoryAdapter
 from .ci_server import CIServerAdapter
+from .hindsight import HindsightAdapter
 from .mem0 import Mem0Adapter
 from .naive import NaiveAdapter
 
@@ -23,6 +24,7 @@ AdapterFactory = Callable[[], MemoryAdapter]
 
 ADAPTERS: Dict[str, AdapterFactory] = {
     "ci_server": CIServerAdapter,
+    "hindsight": HindsightAdapter,
     "mem0": Mem0Adapter,
     "naive": NaiveAdapter,
 }

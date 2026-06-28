@@ -22,17 +22,23 @@ scripts/benchmark/
     reporter.py             Markdown + JSON report builders
     regression.py           --baseline gate: compare two JSON reports
     generate_persona.py     parametric persona inflator (replaces 7 spike scripts)
+    judge_cache.py          persistent (q, ctx, model) → verdict cache for the LLM judge
     adapters/
       base.py               MemoryAdapter contract
       ci_server.py          CI-Server adapter (shipped endpoints only)
+      hindsight.py          Hindsight adapter (retain/recall; opt-in deps)
       mem0.py               Mem0 adapter (local Ollama + Chroma; opt-in deps)
       naive.py              top-K BoW retrieval baseline
   personas/
     jordan_rivera.json      canonical persona (5 sessions, 20 questions,
                               3 categories: flat-recall / relational / temporal)
+    jordan_rivera_long.json long-context variant (55 sessions / 175 messages,
+                              originals interleaved with 50 noise sessions —
+                              stresses retrieval at scale)
     priya_sharma.json       second persona stressing multi-hop, temporal-update,
                               and absence (5 sessions, 16 questions, 5 categories)
-  tests/                    pytest suite (~80 tests)
+  baselines/                committed JSON baselines used by the CI regression gate
+  tests/                    pytest suite (113 tests)
   requirements.txt          (none for runtime; pytest for tests)
   pyproject.toml
 ```
@@ -128,13 +134,41 @@ python -m benchmark.generate_persona \
   --base personas/jordan_rivera.json \
   --noise-sessions 50 \
   --messages-per-noise-session 3 \
+  --position interleave \
   --seed 42 \
   --out personas/jordan_rivera_50.json
 ```
 
-The `--seed` makes runs reproducible; the noise sessions exist only to stress
-recall against an inflated corpus, so they're deliberately semantically distant
-from any persona fact.
+`--seed` makes runs reproducible; noise sessions are deliberately semantically
+distant from any persona fact. `--position` controls where noise lands:
+
+- `append` (default) — noise after originals → stresses **recency bias**.
+- `prepend` — noise before originals → stresses **primacy bias**.
+- `interleave` — seeded shuffle of the union → uniform dilution, no positional bias.
+
+The shipped `personas/jordan_rivera_long.json` is generated this way
+(`--noise-sessions 50 --position interleave --seed 17`), placing the canonical
+facts at sessions 11/18/29/47/53 of 55.
+
+## Caching the LLM judge
+
+LLM-judge runs are slow and token-priced, but verdicts are deterministic in
+`(question, gold answer, retrieved context, judge model)`. Pass `--judge-cache`
+to persist them and short-circuit the LLM on re-runs:
+
+```bash
+JUDGE_URL=http://localhost:1234 JUDGE_MODEL=qwen2.5-7b \
+python -m benchmark \
+  --persona personas/jordan_rivera.json \
+  --systems ci_server,naive \
+  --scorer llm \
+  --judge-cache .judge_cache.json \
+  --out report.md
+```
+
+A second run with the same inputs touches zero of the LLM endpoint. Changing
+the persona's gold answer, the judge model, or the retrieved context (i.e. the
+memory system's behaviour changed) invalidates the entry and forces a re-judge.
 
 ## Add a memory system
 

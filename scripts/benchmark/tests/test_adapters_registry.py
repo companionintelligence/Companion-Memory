@@ -9,7 +9,7 @@ from benchmark.adapters.naive import NaiveAdapter
 
 
 def test_built_in_adapters_are_registered():
-    assert {"ci_server", "mem0", "naive"}.issubset(ADAPTERS.keys())
+    assert {"ci_server", "hindsight", "mem0", "naive"}.issubset(ADAPTERS.keys())
 
 
 def test_get_adapter_returns_a_fresh_instance_each_call():

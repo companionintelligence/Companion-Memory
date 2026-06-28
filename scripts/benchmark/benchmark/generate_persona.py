@@ -51,18 +51,34 @@ _NOISE_TEMPLATES: List[str] = [
 ]
 
 
+_POSITIONS = ("append", "prepend", "interleave")
+
+
 def generate(
     base: Dict[str, Any],
     *,
     noise_sessions: int = 0,
     messages_per_noise_session: int = 3,
     seed: int = 0,
+    position: str = "append",
 ) -> Dict[str, Any]:
     """Return a new persona dict with ``noise_sessions`` extra sessions injected.
 
     Deterministic for a fixed ``seed`` so a run is reproducible. The original
     base is not mutated.
+
+    ``position`` decides where the noise lands relative to the original sessions:
+
+    - ``append`` — noise after originals. Stresses **recency bias** (relevant
+      facts are the oldest).
+    - ``prepend`` — noise before originals. Stresses **primacy bias** (relevant
+      facts are the newest).
+    - ``interleave`` — noise + originals seeded-shuffled into a single timeline.
+      No positional bias; tests retrieval quality on a uniformly diluted corpus.
     """
+    if position not in _POSITIONS:
+        raise ValueError(f"position must be one of {_POSITIONS}, got {position!r}")
+
     persona = copy.deepcopy(base)
     if noise_sessions <= 0:
         return persona
@@ -70,6 +86,7 @@ def generate(
     rng = random.Random(seed)
     existing_ids = {s["id"] for s in persona["sessions"]}
     next_idx = 1
+    noise: list[Dict[str, Any]] = []
     for _ in range(noise_sessions):
         while f"noise_{next_idx}" in existing_ids:
             next_idx += 1
@@ -80,7 +97,17 @@ def generate(
             {"role": "user", "content": rng.choice(_NOISE_TEMPLATES)}
             for _ in range(messages_per_noise_session)
         ]
-        persona["sessions"].append({"id": sid, "messages": msgs})
+        noise.append({"id": sid, "messages": msgs})
+
+    originals = persona["sessions"]
+    if position == "append":
+        persona["sessions"] = originals + noise
+    elif position == "prepend":
+        persona["sessions"] = noise + originals
+    else:  # interleave — seeded shuffle of the union
+        combined = originals + noise
+        rng.shuffle(combined)
+        persona["sessions"] = combined
 
     return persona
 
@@ -94,6 +121,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--noise-sessions", type=int, default=0)
     p.add_argument("--messages-per-noise-session", type=int, default=3)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--position",
+        choices=_POSITIONS,
+        default="append",
+        help="where noise lands relative to originals (append stresses recency bias, "
+             "prepend stresses primacy bias, interleave gives uniform dilution)",
+    )
     p.add_argument("--out", type=Path, required=True, help="output JSON path")
     args = p.parse_args(argv)
 
@@ -105,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         noise_sessions=args.noise_sessions,
         messages_per_noise_session=args.messages_per_noise_session,
         seed=args.seed,
+        position=args.position,
     )
 
     errors = validate_persona(persona)

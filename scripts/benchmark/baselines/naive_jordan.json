@@ -1,0 +1,184 @@
+{
+  "persona": {
+    "id": "jordan_rivera",
+    "name": "Jordan Rivera",
+    "questions": 20,
+    "categories": [
+      "flat-recall",
+      "relational",
+      "temporal"
+    ]
+  },
+  "systems": [
+    {
+      "name": "naive",
+      "error": null,
+      "score": {
+        "hit": 13,
+        "total": 20,
+        "ratio": 0.65
+      },
+      "categories": {
+        "flat-recall": [
+          4,
+          9
+        ],
+        "relational": [
+          7,
+          7
+        ],
+        "temporal": [
+          2,
+          4
+        ]
+      },
+      "timings_ms": {
+        "ingest_total": 0.007208960596472025,
+        "flush_total": 0.000667001586407423,
+        "avg_search": 0.07682909781578928
+      },
+      "questions": [
+        {
+          "id": "q001",
+          "category": "flat-recall",
+          "hit": true,
+          "latency_ms": 0.11341599747538567,
+          "reason": ""
+        },
+        {
+          "id": "q002",
+          "category": "flat-recall",
+          "hit": true,
+          "latency_ms": 0.09116600267589092,
+          "reason": ""
+        },
+        {
+          "id": "q003",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.07420795736834407,
+          "reason": ""
+        },
+        {
+          "id": "q004",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.06795895751565695,
+          "reason": ""
+        },
+        {
+          "id": "q005",
+          "category": "flat-recall",
+          "hit": true,
+          "latency_ms": 0.06637501064687967,
+          "reason": ""
+        },
+        {
+          "id": "q006",
+          "category": "flat-recall",
+          "hit": true,
+          "latency_ms": 0.06745796417817473,
+          "reason": ""
+        },
+        {
+          "id": "q007",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.06212497828528285,
+          "reason": ""
+        },
+        {
+          "id": "q008",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.062375038396567106,
+          "reason": ""
+        },
+        {
+          "id": "q009",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.0671250163577497,
+          "reason": ""
+        },
+        {
+          "id": "q010",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.059582991525530815,
+          "reason": ""
+        },
+        {
+          "id": "q011",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.09241601219400764,
+          "reason": ""
+        },
+        {
+          "id": "q012",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.10083301458507776,
+          "reason": ""
+        },
+        {
+          "id": "q013",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.07529201684519649,
+          "reason": ""
+        },
+        {
+          "id": "q014",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.06633397424593568,
+          "reason": ""
+        },
+        {
+          "id": "q015",
+          "category": "relational",
+          "hit": true,
+          "latency_ms": 0.06508303340524435,
+          "reason": ""
+        },
+        {
+          "id": "q016",
+          "category": "temporal",
+          "hit": true,
+          "latency_ms": 0.07041700882837176,
+          "reason": ""
+        },
+        {
+          "id": "q017",
+          "category": "temporal",
+          "hit": false,
+          "latency_ms": 0.07108401041477919,
+          "reason": ""
+        },
+        {
+          "id": "q018",
+          "category": "temporal",
+          "hit": true,
+          "latency_ms": 0.11733302380889654,
+          "reason": ""
+        },
+        {
+          "id": "q019",
+          "category": "temporal",
+          "hit": false,
+          "latency_ms": 0.07524999091401696,
+          "reason": ""
+        },
+        {
+          "id": "q020",
+          "category": "flat-recall",
+          "hit": false,
+          "latency_ms": 0.0707499566487968,
+          "reason": ""
+        }
+      ]
+    }
+  ]
+}
