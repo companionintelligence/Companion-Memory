@@ -9,11 +9,10 @@ import type { IntentAccess } from '../types';
 export const INTENT_INVOKED_EVENT = 'intent.invoked';
 
 /**
- * A behavioral signal recorded each time an agent invokes an intent — CI's
- * analogue of Apple "donating" an intent interaction to improve system
- * suggestions. Consumers (e.g. HBPE's behavioral forecaster, proactive
- * suggestions) can subscribe to {@link INTENT_INVOKED_EVENT} to fold intent usage
- * into prediction. This closes the donation loop the harnesses otherwise lack.
+ * A behavioral signal recorded each time an agent invokes an intent. Consumers
+ * (e.g. HBPE's behavioral forecaster, proactive suggestions) can subscribe to
+ * {@link INTENT_INVOKED_EVENT} to fold intent usage into prediction. This closes
+ * the feedback loop the harnesses otherwise lack.
  */
 export interface IntentInvocation {
   /** Dotted intent id, e.g. `memory.recall`. */

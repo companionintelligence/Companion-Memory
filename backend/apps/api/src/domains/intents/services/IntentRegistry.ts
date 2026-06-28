@@ -94,7 +94,7 @@ export class IntentRegistry {
   }
 
   /**
-   * The discoverable capability declaration (Apple intent-manifest analogue).
+   * The discoverable capability declaration (the published intent manifest).
    * `generatedAt` is supplied by the caller so this stays pure/deterministic.
    */
   buildManifest(generatedAt: string): IntentManifest {

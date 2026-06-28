@@ -1,21 +1,20 @@
 /**
  * Model-tier routing — the on-device ↔ private-cloud escalation decision.
  *
- * Apple's Foundation Models framework lets a developer swap `SystemLanguageModel`
- * (on-device, ~4K context, offline, unlimited) for `PrivateCloudComputeLanguageModel`
- * (server, ~32K context, deeper reasoning, quota) with one line, plus a
- * `reasoningLevel` (light/moderate/deep). CI runs local Ollama by default; today a
- * harness's only "escalation" is leaking the raw prompt to a third-party API.
+ * CI runs a local model (Ollama) by default — private, offline, smaller context.
+ * Some tasks (large context, deeper reasoning, long tool chains) need more than the
+ * local tier can give; today a harness's only "escalation" is leaking the raw
+ * prompt to a third-party API.
  *
  * This module makes the escalation a *decision*: given a task's characteristics,
  * choose the cheapest tier that can handle it — and, crucially for a data-ownership
  * product, let privacy *pin* a task on-device even when a bigger model would help.
  */
 
-/** The two compute tiers (Apple `SystemLanguageModel` vs `PrivateCloudComputeLanguageModel`). */
+/** The two compute tiers. */
 export type ModelTier = 'on_device' | 'private_cloud';
 
-/** Reasoning effort (Apple `ContextOptions.reasoningLevel`). */
+/** Reasoning effort for a task. */
 export type ReasoningLevel = 'light' | 'moderate' | 'deep';
 
 /** Static capability profile of a tier. */

@@ -1,12 +1,11 @@
 /**
  * The curated CI Intent catalog.
  *
- * Each entry is a typed semantic action (Apple `AppIntent`) bound to a capability
- * that ALREADY exists as a native tool — proving the core thesis: the catalog is a
- * thin, curated, privacy-labelled facade, not a re-implementation. Several search
- * intents specialise one `databaseSearch` tool via `fixedArgs` (the Apple pattern
- * where `.photos.search` and `.mail.search` share machinery but are distinct,
- * discoverable intents).
+ * Each entry is a typed semantic action bound to a capability that ALREADY exists
+ * as a native tool — proving the core thesis: the catalog is a thin, curated,
+ * privacy-labelled facade, not a re-implementation. Several search intents
+ * specialise one `databaseSearch` tool via `fixedArgs`, so one search capability
+ * backs many distinct, discoverable intents.
  *
  * To add an intent: give it a dotted `name` in an existing {@link IntentDomainKey},
  * a curated parameter subset, a privacy label, the entity types it touches, NL

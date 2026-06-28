@@ -1,18 +1,15 @@
 /**
  * CI Intent + Entity Schema — the semantic capability layer.
  *
- * This is CI's analogue of Apple's App Intents framework. Where Apple has
- * `AppIntent` (a typed action), `AppEntity` (typed content), and **App Schema
- * Domains** (a standardized vocabulary every app conforms to), CI historically
- * exposed only raw GraphQL CRUD + ad-hoc native tools with no shared, curated,
- * discoverable catalog. This module adds that catalog.
+ * CI historically exposed only raw GraphQL CRUD and ad-hoc native tools, with no
+ * shared, curated, discoverable catalog of meaningful actions. This module adds
+ * that catalog: a typed vocabulary of intents and the entity types they operate on.
  *
  * An {@link IntentDefinition} is a *curated semantic facade* over a capability
  * that already exists in CI-Server (a native tool today; GraphQL/search later).
  * Intents are grouped into {@link IntentDomain}s (the standardized vocabulary),
- * carry a {@link IntentPrivacy} label (so a dispatcher can gate destructive or
- * external actions — a gap Apple closes with per-intent privacy), and reference
- * the {@link CiEntityType}s they consume/produce (the AppEntity analogue).
+ * carry an {@link IntentPrivacy} label (so a dispatcher can gate destructive or
+ * external actions), and reference the {@link CiEntityType}s they consume/produce.
  *
  * The whole catalog is published as an {@link IntentManifest} (REST + MCP) so any
  * agent — CI-Hermes, CI-OpenClaw, or an external MCP client — discovers the same
@@ -22,9 +19,9 @@
 import type { JSONSchema } from '@ci/domains/tools';
 
 /**
- * CI Schema Domains — the standardized verb vocabulary (Apple App Schema Domains
- * analogue). Every intent belongs to exactly one domain so agents and apps speak
- * the same language ("memory.*", "people.*", …) instead of inventing their own.
+ * CI Schema Domains — the standardized verb vocabulary. Every intent belongs to
+ * exactly one domain so agents and apps speak the same language ("memory.*",
+ * "people.*", …) instead of inventing their own.
  */
 export type IntentDomainKey = 'memory' | 'knowledge' | 'people' | 'places' | 'calendar' | 'media';
 
@@ -41,9 +38,9 @@ export type IntentAccess = 'read' | 'write' | 'delete';
 export type IntentSensitivity = 'low' | 'personal' | 'sensitive';
 
 /**
- * Per-intent privacy + safety label (Apple per-intent privacy analogue). A future
- * dispatcher uses `destructive` to require confirmation and `external` to warn
- * when an action leaves the appliance (CI's whole pitch is local data ownership).
+ * Per-intent privacy + safety label. A future dispatcher uses `destructive` to
+ * require confirmation and `external` to warn when an action leaves the appliance
+ * (CI's whole pitch is local data ownership).
  */
 export interface IntentPrivacy {
   access: IntentAccess;
@@ -55,7 +52,7 @@ export interface IntentPrivacy {
 }
 
 /**
- * The canonical CI entity types — the "App Entity" registry. These are the typed
+ * The canonical CI entity types — the entity registry. These are the typed
  * content objects intents consume and produce, mirroring the `ci.*` schema and
  * the GraphQL types exposed to clients.
  */
@@ -72,9 +69,8 @@ export type CiEntityType =
   | 'browser-activity';
 
 /**
- * Display + identity descriptor for an entity type (Apple `DisplayRepresentation`
- * analogue). Published in the manifest so agents can render and resolve entities
- * uniformly.
+ * Display + identity descriptor for an entity type. Published in the manifest so
+ * agents can render and resolve entities uniformly.
  */
 export interface CiEntityDescriptor {
   type: CiEntityType;
@@ -101,14 +97,13 @@ export type IntentBinding = {
    * Constant args merged into every call (caller args take precedence). Lets
    * several curated intents specialize one underlying tool — e.g. `people.find`
    * and `places.find` both bind `databaseSearch` with a fixed `entityTypes`
-   * scope, the way Apple's `.photos.search` and `.mail.search` specialize a
-   * common search capability.
+   * scope, so one search capability backs many distinct, discoverable intents.
    */
   fixedArgs?: Record<string, unknown>;
 };
 
 /**
- * A single typed action (Apple `AppIntent` analogue).
+ * A single typed action.
  *
  * `name` is the canonical dotted semantic id and vocabulary entry (e.g.
  * `memory.recall`). Because LLM function-calling / MCP tool names must match
@@ -119,17 +114,17 @@ export interface IntentDefinition {
   /** Canonical dotted id, e.g. `memory.recall`. Unique across the catalog. */
   name: string;
   domain: IntentDomainKey;
-  /** Human-facing action title (Apple `AppIntent.title`). */
+  /** Human-facing action title. */
   title: string;
   description: string;
-  /** Parameter schema (Apple `@Parameter`). */
+  /** Parameter schema. */
   parameters: JSONSchema;
   privacy: IntentPrivacy;
   /** Entity types this intent reads. */
   consumes?: CiEntityType[];
   /** Entity types this intent returns. */
   produces?: CiEntityType[];
-  /** Natural-language triggers (Apple `AppShortcut` phrases). */
+  /** Natural-language triggers (suggested phrasings). */
   phrases?: string[];
   binding: IntentBinding;
 }
@@ -149,9 +144,9 @@ export interface ManifestIntent {
 }
 
 /**
- * The discoverable capability declaration (Apple's intent manifest analogue;
- * closes the "no pre-declared intent file" gap). Served at `GET /api/intents`
- * and as an MCP resource so every harness reads one typed catalog.
+ * The discoverable capability declaration — a pre-declared, typed catalog of the
+ * available intents. Served at `GET /api/intents` and as an MCP resource so every
+ * harness reads one typed catalog.
  */
 export interface IntentManifest {
   version: string;

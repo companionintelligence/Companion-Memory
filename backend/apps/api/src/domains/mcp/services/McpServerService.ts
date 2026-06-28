@@ -47,10 +47,10 @@ export class McpServerService {
       }),
     );
 
-    // The curated CI Intent catalog (Apple App-Intents analogue): a typed,
-    // domain-organized, privacy-labelled declaration of the semantic actions an
-    // agent should prefer over raw CRUD. Discoverable here so any MCP client reads
-    // one catalog instead of re-implementing per-harness integration glue.
+    // The curated CI Intent catalog: a typed, domain-organized, privacy-labelled
+    // declaration of the semantic actions an agent should prefer over raw CRUD.
+    // Discoverable here so any MCP client reads one catalog instead of
+    // re-implementing per-harness integration glue.
     server.registerResource(
       'intent-catalog',
       'intents://catalog',

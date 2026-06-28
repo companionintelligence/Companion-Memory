@@ -3,9 +3,9 @@ import { Injectable } from '@nestjs/common';
 import type { ModelTier, ReasoningLevel, RoutingDecision, RoutingRequest, TierProfile } from '../types';
 
 /**
- * Tier capability profiles. Context sizes mirror Apple's Foundation Models split
- * (on-device ~4K, private-cloud ~32K); the on-device window is set to 8K to match
- * typical local Ollama defaults on the appliance.
+ * Tier capability profiles. The on-device window is set to 8K to match typical
+ * local Ollama defaults on the appliance; the escalated tier carries a much larger
+ * context window.
  */
 export const TIER_PROFILES: Record<ModelTier, TierProfile> = {
   on_device: {
@@ -30,15 +30,13 @@ export const TIER_PROFILES: Record<ModelTier, TierProfile> = {
 const DEEP_TOOL_DEPTH = 8;
 
 /**
- * Decides whether a task runs on-device or escalates to the private-cloud tier —
- * CI's analogue of choosing `SystemLanguageModel` vs `PrivateCloudComputeLanguageModel`.
+ * Decides whether a task runs on-device or escalates to the private-cloud tier.
  *
  * Precedence:
  *  1. `localOnly` (privacy) — always pins on-device; downgrades if escalation was wanted.
  *  2. `forceTier` — explicit caller override (a forced cloud tier still yields to localOnly).
  *  3. Heuristics — large context / deep reasoning / deep tool chains escalate.
- *  4. Cloud availability — an escalation falls back on-device when the cloud tier is down
- *     (mirrors Apple PCC `.unavailable` → on-device fallback).
+ *  4. Cloud availability — an escalation falls back on-device when the cloud tier is down.
  */
 @Injectable()
 export class ModelTierRouter {

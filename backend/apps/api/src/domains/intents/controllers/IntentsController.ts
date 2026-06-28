@@ -8,9 +8,8 @@ import type { CiEntityDescriptor, IntentDomain, IntentManifest, ManifestIntent }
 
 /**
  * Publishes the CI Intent catalog — the discoverable, typed capability
- * declaration (Apple's intent-manifest analogue). Any agent (CI-Hermes,
- * CI-OpenClaw, an external MCP client) can read one catalog here instead of
- * re-implementing bespoke integration glue.
+ * declaration. Any agent (CI-Hermes, CI-OpenClaw, an external MCP client) can read
+ * one catalog here instead of re-implementing bespoke integration glue.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Controller('api/intents')
@@ -32,7 +31,7 @@ export class IntentsController {
     return { domains: this.registry.getDomains() };
   }
 
-  /** The entity (App Entity) registry. */
+  /** The entity registry. */
   @Get('entities')
   getEntities(): { entities: CiEntityDescriptor[] } {
     return { entities: this.registry.getEntities() };

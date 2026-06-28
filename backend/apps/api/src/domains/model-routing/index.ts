@@ -1,10 +1,9 @@
 /**
  * Model-tier routing — the on-device ↔ private-cloud escalation decision.
  *
- * CI's analogue of Apple's Foundation Models tiering (`SystemLanguageModel` vs
- * `PrivateCloudComputeLanguageModel`). Decides the cheapest tier that can handle a
- * task, lets privacy pin a task on-device, and falls back gracefully when the
- * escalated tier is unavailable. Exposed at `POST /api/model-routing/plan`.
+ * Decides the cheapest model tier that can handle a task, lets privacy pin a task
+ * on-device, and falls back gracefully when the escalated tier is unavailable.
+ * Exposed at `POST /api/model-routing/plan`.
  *
  * @module ModelRoutingModule
  */

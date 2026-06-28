@@ -1,11 +1,10 @@
 /**
  * CI Schema Domains — the standardized capability vocabulary.
  *
- * Apple ships ~20 system-defined schema domains (Mail, Photos, Calendar, …) so
- * every app speaks a common language and Apple Intelligence reliably maps natural
- * language to an action. This is CI's equivalent: a small, curated set of domains
- * that intents are grouped under, so CI-Hermes, CI-OpenClaw, and any MCP client
- * use the same verbs instead of inventing their own per-harness tool names.
+ * A small, curated set of domains that intents are grouped under, so an assistant
+ * reliably maps natural language to an action and CI-Hermes, CI-OpenClaw, and any
+ * MCP client use the same verbs instead of inventing their own per-harness tool
+ * names.
  */
 
 import type { IntentDomain, IntentDomainKey } from '../types';

@@ -1,11 +1,10 @@
 /**
- * CI Entity Registry — the "App Entity" catalog.
+ * CI Entity Registry — the catalog of typed content an intent operates on.
  *
- * Apple's `AppEntity` makes an app's content discoverable and resolvable by the
- * system with a uniform identity + `DisplayRepresentation`. CI already has a rich,
- * cross-source entity graph (`ci.events`, `ci.people`, …); this declares those
- * types so the intent manifest can describe what each intent consumes/produces and
- * agents can render/resolve them consistently.
+ * CI has a rich, cross-source entity graph (`ci.events`, `ci.people`, …); this
+ * declares those types — each with a uniform identity + display descriptor — so
+ * the intent manifest can describe what each intent consumes/produces and agents
+ * can render/resolve them consistently.
  */
 
 import type { CiEntityDescriptor } from '../types';

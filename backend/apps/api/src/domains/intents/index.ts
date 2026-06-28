@@ -1,14 +1,14 @@
 /**
- * CI Intent Catalog — the semantic capability layer (CI's "App Intents").
+ * CI Intent Catalog — the semantic capability layer.
  *
  * Provides a curated, typed, domain-organized, privacy-labelled catalog of
  * actions ({@link IntentDefinition}) over capabilities that already exist in
  * CI-Server. The catalog is:
  *  - registered into the shared `ToolRegistry` (via {@link IntentToolProvider}),
  *    so intents flow to the local LLM and the MCP server automatically;
- *  - published as a manifest at `GET /api/intents` (Apple intent-manifest
- *    analogue) so CI-Hermes, CI-OpenClaw, and external MCP clients discover one
- *    typed vocabulary instead of bespoke per-harness glue.
+ *  - published as a manifest at `GET /api/intents` so CI-Hermes, CI-OpenClaw, and
+ *    external MCP clients discover one typed vocabulary instead of bespoke
+ *    per-harness glue.
  *
  * @module IntentsModule
  */
