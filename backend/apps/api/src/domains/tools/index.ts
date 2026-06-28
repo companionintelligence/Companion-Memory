@@ -89,5 +89,6 @@ export class ToolsModule {}
 
 // Exports
 export { ToolRegistry };
+export { BaseTool } from './core/BaseTool';
 export type { JSONSchema, ToolSchema, ToolResult, ToolExecutionContext, ToolError } from './core/types';
-export type { ProviderHealthStatus } from './providers/ToolProvider';
+export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
