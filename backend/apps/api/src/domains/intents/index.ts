@@ -19,13 +19,20 @@ import { ToolsModule } from '@ci/domains/tools';
 
 import { IntentsController } from './controllers/IntentsController';
 import { IntentCatalogService } from './services/IntentCatalogService';
+import { IntentDonationService } from './services/IntentDonationService';
 import { IntentRegistry } from './services/IntentRegistry';
 import { IntentsRegistrationService } from './services/IntentsRegistrationService';
 import { IntentToolProvider } from './services/IntentToolProvider';
 
 @Module({
   imports: [ToolsModule],
-  providers: [IntentRegistry, IntentCatalogService, IntentToolProvider, IntentsRegistrationService],
+  providers: [
+    IntentRegistry,
+    IntentCatalogService,
+    IntentDonationService,
+    IntentToolProvider,
+    IntentsRegistrationService,
+  ],
   controllers: [IntentsController],
   exports: [IntentRegistry, IntentCatalogService],
 })

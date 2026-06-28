@@ -9,6 +9,7 @@ import {
   type ToolSchema,
 } from '@ci/domains/tools';
 
+import { IntentDonationService } from './IntentDonationService';
 import { IntentRegistry } from './IntentRegistry';
 import { IntentTool } from './IntentTool';
 
@@ -31,6 +32,7 @@ export class IntentToolProvider implements ToolProvider {
   constructor(
     private readonly intentRegistry: IntentRegistry,
     private readonly toolRegistry: ToolRegistry,
+    private readonly donation: IntentDonationService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(IntentToolProvider.name);
@@ -42,7 +44,7 @@ export class IntentToolProvider implements ToolProvider {
     }
 
     for (const intent of this.intentRegistry.getIntents()) {
-      const tool = new IntentTool(intent, this.toolRegistry, this.logger);
+      const tool = new IntentTool(intent, this.toolRegistry, this.logger, this.donation);
       this.tools.set(tool.schema.name, tool);
     }
 

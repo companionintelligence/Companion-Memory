@@ -5,12 +5,15 @@ import type { ToolExecutionContext, ToolRegistry, ToolSchema } from '@ci/domains
 
 import { type IntentDefinition, intentToolName } from '../types';
 
+import type { IntentDonationService } from './IntentDonationService';
+
 /**
  * Executable adapter for one {@link IntentDefinition}. Registered into the shared
  * {@link ToolRegistry} so curated intents flow to the LLM tool list AND the MCP
  * server exactly like native tools — but with a stable dotted identity, a privacy
  * label, and entity contracts. Execution delegates to the bound underlying tool,
- * merging the binding's `fixedArgs` with the (optionally renamed) caller args.
+ * merging the binding's `fixedArgs` with the (optionally renamed) caller args, and
+ * donates the invocation as a behavioral signal.
  */
 export class IntentTool extends BaseTool<Record<string, unknown>, unknown> {
   readonly schema: ToolSchema;
@@ -19,6 +22,7 @@ export class IntentTool extends BaseTool<Record<string, unknown>, unknown> {
     private readonly intent: IntentDefinition,
     private readonly toolRegistry: ToolRegistry,
     protected readonly logger: LoggerService,
+    private readonly donation?: IntentDonationService,
   ) {
     super();
 
@@ -39,7 +43,19 @@ export class IntentTool extends BaseTool<Record<string, unknown>, unknown> {
     const callerArgs = this.mapArgs(input ?? {}, argMap);
     const finalArgs = { ...(fixedArgs ?? {}), ...callerArgs };
 
+    const startedAt = Date.now();
     const result = await this.toolRegistry.executeTool(tool, context, finalArgs);
+
+    // Donate the invocation (success or failure) so prediction can learn from it.
+    this.donation?.donate({
+      intent: this.intent.name,
+      domain: this.intent.domain,
+      userId: context.userId,
+      success: result.success,
+      durationMs: Date.now() - startedAt,
+      access: this.intent.privacy.access,
+      external: this.intent.privacy.external,
+    });
 
     if (!result.success) {
       throw new Error(
