@@ -132,6 +132,7 @@ export class ItemResolver {
         acquiredAt: item.acquiredAt,
         condition: item.condition,
         identifierCodes: item.identifierCodes,
+        metadata: item.metadata,
         sourceType: item.sourceType,
         sourceSystem: item.sourceSystem,
         sourceId: item.sourceId,
