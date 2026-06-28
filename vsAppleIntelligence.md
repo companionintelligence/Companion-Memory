@@ -10,38 +10,68 @@
 
 ## TL;DR
 
-**The one-sentence finding:** Apple built a single **declarative, typed, system-owned vocabulary** (App Intents + App Schema Domains) that *every* app conforms to and *every* surface (Siri, Spotlight, Shortcuts, Apple Intelligence) consumes uniformly — whereas CI is a **rich but bottom-up API layer** (GraphQL + REST + a real MCP server + a native tool registry) where each harness (Hermes, OpenClaw) re-implements its own bespoke integration glue and the surfaces don't share one catalog.
+**The one-sentence finding (round 1):** Apple built a single **declarative, typed, system-owned vocabulary** (App Intents + App Schema Domains) that *every* app conforms to and *every* surface (Siri, Spotlight, Shortcuts, Apple Intelligence) consumes uniformly — whereas CI was a **rich but bottom-up API layer** (GraphQL + REST + a real MCP server + a native tool registry) where each harness (Hermes, OpenClaw) re-implemented its own bespoke integration glue and the surfaces didn't share one catalog.
 
-We are **closer than it looks** — CI-Server *already* exposes an MCP server (`companion-memory`) that publishes the GraphQL SDL and tool schemas, and CI-Hub *already* has a declarative app manifest with `agents.{skill, openapi, mcp}`. What we lack is the **semantic layer on top**: a curated catalog of typed *intents* and *entities* (not raw CRUD), a standardized *domain vocabulary*, an *entity-resolution contract*, a *privacy/permission label per action*, and a *privacy-preserving compute-escalation tier*.
+**Where the story stands now (after four rounds of shipping):** the semantic layer is in. CI-Server now publishes a **curated Intent Catalog + Schema Domains** through the MCP server it already runs; both harnesses consume it instead of bespoke REST plugins; CI-Hub apps can register their own intents; intent invocations donate to HBPE; the model-tier router decides on-device vs cloud (with privacy pinning); per-intent privacy labels are wired; and the agent-facing tool list now **prefers the curated intent over the raw tool it wraps** (intent demotion — the *steering* half of a central dispatcher). The harness duplication has been catalogued, 6 of 8 drifts reconciled, and the remaining two kept by design. **And — new since round 1 — we have a public head-to-head benchmark suite (CI-Server #1587) that measures CI-Server vs `mem0`, `hindsight`, and a naive baseline on the same `/api/memory/*` contract, same personas, same scorer, with a regression gate on every PR.** Apple has no public analogue because App Intents has no open backend to point a head-to-head harness at.
 
-**Top 5 things to steal from Apple:**
+**What's still missing:**
 
-1. A canonical **CI Intent + Entity Schema** (our "App Intents") — typed semantic actions + entity contracts, defined once in CI-Server and consumed by *all* harnesses through the MCP server we already ship, replacing the per-harness REST plugins.
-2. **CI Schema Domains** — a standardized verb vocabulary (`memory.recall`, `calendar.logEvent`, `people.find`…) so the LLM maps natural language → intent reliably and apps/harnesses interoperate.
-3. **App-declared intents** — extend the CI-Hub manifest so installing an app *expands the agent's vocabulary* (Apple's killer move), registering the app's intents/entities into the shared catalog.
-4. **On-device ↔ private-cloud model tiering** — Apple's one-line `SystemLanguageModel` → `PrivateCloudComputeLanguageModel` swap with reasoning levels. We have local Ollama; add a difficulty-aware router that escalates to a **PCC-style attested cloud tier** instead of leaking raw prompts to OpenAI/Anthropic.
-5. **Intent donation → HBPE** — Apple donates intent invocations to improve prediction. Every agent action in Hermes/OpenClaw should become a donation that feeds HBPE's behavioral forecast and proactive suggestions.
+1. **The enforcing dispatcher** — the labels exist and the agent is steered toward curated intents, but no gate intercepts a `destructive` or `external` intent at execution to require confirmation or check permission. The single biggest remaining adoption.
+2. **The uniform `EntityQuery` resolver** — the entity registry shipped; the per-type resolve/disambiguate contract did not.
+3. **A verifiable-transparency cloud tier** (PCC analogue) — the model-router has the decision; the trustworthy compute target behind it doesn't exist yet.
+
+**Top 5 things Apple did that CI now does too (no longer "things to steal"):**
+
+1. ✅ Canonical **CI Intent + Entity Schema** (our "App Intents") — typed semantic actions + entity contracts, defined once in CI-Server, consumed by both harnesses through the MCP server.
+2. ✅ **CI Schema Domains** — `memory.*`, `knowledge.*`, `people.*`, `places.*`, `calendar.*`, `media.*`.
+3. ✅ **App-declared intents** — CI-Hub's manifest now has `agents.intents[]`, so installing an app *expands the agent's vocabulary*.
+4. 🔶 **On-device ↔ private-cloud model tiering** — the router shipped; the attested cloud tier behind it didn't.
+5. ✅ **Intent donation → HBPE** — every intent invocation emits `intent.invoked` as a behavioural signal.
 
 ---
 
 ## Status — what's shipped
 
-The roadmap below has been implemented across three repos (foundation-first):
+The roadmap below has been implemented across five repos (foundation-first), then extended with reconciliation, operational levers, and a measurement infrastructure across follow-up rounds:
+
+### Foundations (round 1)
 
 | Item | Status | PR |
 |---|---|---|
-| **P0** CI Intent Catalog + Schema Domains, exposed via the MCP server | ✅ shipped | [CI-Server #1570](https://github.com/companionintelligence/CI-Server/pull/1570) |
-| **P1** On-device ↔ private-cloud model-tier router (privacy-pinning) | ✅ shipped | [CI-Server #1571](https://github.com/companionintelligence/CI-Server/pull/1571) |
+| **P0** CI Intent Catalog + Schema Domains, exposed via the MCP server | ✅ shipped | [CI-Server #1575](https://github.com/companionintelligence/CI-Server/pull/1575) (consolidates #1570, #1571, #1572) |
+| **P1** On-device ↔ private-cloud model-tier router (privacy-pinning) | ✅ shipped | #1575 (model-routing module) |
 | **P1** App-declared intents in the CI-Hub manifest (`agents.intents`) | ✅ shipped | [CI-Hub #813](https://github.com/companionintelligence/CI-Hub/pull/813) |
-| **P2** Intent donation → behavioral signal (HBPE seam) | ✅ shipped | [CI-Server #1572](https://github.com/companionintelligence/CI-Server/pull/1572) |
-| Reference harness migration (OpenClaw consumes the catalog) | ✅ shipped | [CI-OpenClaw #30](https://github.com/companionintelligence/CI-OpenClaw/pull/30) |
-| **P2** Entity registry (App-Entity catalog) | ✅ shipped (in #1570) | — |
-| **P2** Full `EntityQuery` resolve/disambiguate contract | 🔶 partial — registry shipped; resolver deferred | — |
-| **P3** Per-intent privacy labels | ✅ shipped (in #1570) | — |
-| **P3** Central dispatcher + confirmation UX (enforcement) | ⏳ deferred (design-heavy) | — |
-| **P3** Verifiable-transparency / attested cloud tier | ⏳ deferred (infra) — tier profiles + `external` flag in #1571 | — |
+| **P2** Intent donation → behavioral signal (HBPE seam) | ✅ shipped | #1575 (`IntentDonationService` emits `intent.invoked`) |
+| **P2** Entity registry (catalog of the typed content intents operate on) | ✅ shipped | #1575 |
+| **P3** Per-intent privacy labels (`access` / `sensitivity` / `destructive` / `external`) | ✅ shipped | #1575 |
+| Reference harness migration (both harnesses consume the catalog) | ✅ shipped | [CI-OpenClaw #30](https://github.com/companionintelligence/CI-OpenClaw/pull/30), [CI-Hermes #26](https://github.com/companionintelligence/CI-Hermes/pull/26) |
 
-The two deferred P3 items are genuine multi-week efforts (a dispatcher with confirmation/permission enforcement; a PCC-style attested compute tier); their foundations (privacy labels, tier profiles, the `external`/`destructive` flags) are in place.
+### Round 2 — agent-facing surface + privacy levers
+
+| Item | Status | PR |
+|---|---|---|
+| **Intent demotion** — agent-facing tool list prefers curated intents; raw tools they wrap are hidden (`CI_PREFER_INTENTS`, default on) | ✅ shipped | #1575 (`ToolRegistry.markSuperseded` / `getAgentFacingTools`) |
+| **Per-API-system env feature flags** on both harnesses (`CI_MEMORY_CONTEXT_ENABLED`, `_RECALL_`, `_TURN_`, `_WRITE_`, `CI_INTENTS_ENABLED`) — operators can run e.g. recall-only without code changes | ✅ shipped | [CI-Hermes #26](https://github.com/companionintelligence/CI-Hermes/pull/26), [CI-OpenClaw #30](https://github.com/companionintelligence/CI-OpenClaw/pull/30) |
+| **Harness drift reconciliation** — 8 behavioural drifts catalogued between the two plugins against the same `/api/memory/*` contract; 6 fixed in code, 2 kept by design (full-flush idempotence + fast health probe) | ✅ shipped | [CI-Engineering #41](https://github.com/companionintelligence/CI-Engineering/pull/41) + the harness PRs |
+| **Comprehensive memory-path tests** in both harnesses (24 in CI-Hermes, 35 in CI-OpenClaw) covering flag gating, drift fixes, the local-write guard, transport headers, and the `/api/memory/note` 404 fallback | ✅ shipped | the harness PRs |
+
+### Round 3 + 4 — measurement infrastructure
+
+| Item | Status | PR |
+|---|---|---|
+| **Memory benchmark suite** — head-to-head harness comparing CI-Server vs `mem0`, `hindsight`, `naive` against the **same** `/api/memory/*` contract, **same** synthetic personas, **same** scorer; LLM-judge with persistent cache; statistical multi-run (median ± IQR); HTML + JSON + Markdown reports; regression gate on every PR | ✅ shipped | [CI-Server #1587](https://github.com/companionintelligence/CI-Server/pull/1587) |
+| **Persona categories that distinguish smart memory from raw retrieval** — `multi-hop` (combine ≥ 2 sessions), `temporal-update` (which conflicting value is current?), `absence` (correctly returning "no info"). The naive baseline drops from 65% on a flat persona to 38% on Priya, with **0% on `absence`** — the architectural floor the LLM-judge mode is designed to expose | ✅ shipped | #1587 |
+| **CI regression gate** — committed JSON baselines under `scripts/benchmark/baselines/`; the workflow fails any PR whose naive-keyword run drops > 5 pp on any persona × category cell | ✅ shipped | #1587 |
+
+### Still deferred (real multi-week efforts)
+
+| Item | Status |
+|---|---|
+| **P2** Full `EntityQuery` resolve/disambiguate contract | 🔶 partial — registry + display descriptors shipped; the uniform resolver isn't |
+| **P3** Central dispatcher + confirmation UX (full **enforcement** of the privacy labels) | 🔶 partial — the labels exist, the demotion is the first enforcement move (steers the model away from raw paths); a confirmation/permission dispatcher remains |
+| **P3** Verifiable-transparency / attested cloud tier (PCC analogue) | ⏳ deferred (infra) — tier profiles + `external` flag in the model-router; attestation is the next strategic build |
+
+The remaining gaps are infrastructure-level (a dispatcher that actually intercepts destructive/external intents at execution; an attested cloud compute tier). Everything else above either shipped or has its foundations in place.
 
 ---
 
@@ -218,33 +248,63 @@ This is precisely the fragmentation Apple's single schema + system runtime elimi
 
 ## 5. Gap analysis — what Apple has that we don't
 
-| # | Apple capability | CI status | Impact |
+| # | Apple capability | CI status (then → now) | Impact |
 |---|---|---|---|
-| G1 | Curated, typed **intent catalog** (semantic, one-action-per-intent) | Raw CRUD auto-wrapped as tools | Agents see noise, not meaning |
-| G2 | **Schema domains** (standardized verbs) | None | Harnesses/apps can't interoperate semantically |
-| G3 | **AppEntity contract** (uniform resolve + display + transfer) | Per-type ad-hoc | "find John" behaves differently per surface |
-| G4 | App **registers intents** into the system | Manifest exists, no intent registration | Installing an app doesn't grow the agent's skills |
-| G5 | **Central dispatcher** + confirmation/disambiguation UX | Per-surface, ad-hoc | No consistent guardrails for destructive actions |
-| G6 | **Per-intent privacy labels** | Auth guard only (all-or-nothing) | No fine-grained trust model for multi-app |
-| G7 | **Attested cloud escalation** (PCC) + one-line model swap | Raw provider call, no attestation | Escalation leaks data; privacy story breaks at the cloud edge |
-| G8 | **Donation loop** intent → prediction | HBPE exists, not fed by agent actions | Missed proactive-suggestion flywheel |
+| G1 | Curated, typed **intent catalog** (semantic, one-action-per-intent) | 🔴 → 🟢 **closed** — 12 curated intents across 6 domains, registered into the shared `ToolRegistry`, surfaced via MCP | Agents now prefer the curated intent over raw CRUD (see G5) |
+| G2 | **Schema domains** (standardized verbs) | 🔴 → 🟢 **closed** — `memory.*`, `knowledge.*`, `people.*`, `places.*`, `calendar.*`, `media.*` published as the catalog's vocabulary | Both harnesses speak the same verbs against the same contract |
+| G3 | **AppEntity contract** (uniform resolve + display + transfer) | 🟡 → 🟡 **registry shipped; uniform resolver still to come** | "find John" disambiguation isn't yet centralised |
+| G4 | App **registers intents** into the system | 🔴 → 🟢 **closed** — CI-Hub manifest's `agents.intents[]` registers an app's typed intents into the catalog | Installing a marketplace app now grows the agent's vocabulary |
+| G5 | **Central dispatcher** + confirmation/disambiguation UX | 🔴 → 🟡 **partial** — *steering* shipped via `ToolRegistry.markSuperseded`/`getAgentFacingTools` (the agent no longer sees the raw `databaseSearch`/`getFamilyMembers`/etc. when the curated intent supersedes them); *enforcement* (a confirmation/permission gate) still to come | The model is already nudged away from raw paths; an enforcing dispatcher remains |
+| G6 | **Per-intent privacy labels** | 🔴 → 🟢 **closed** — every intent carries `IntentPrivacy { access, sensitivity, destructive, external }`; published in the manifest and used by the harnesses' UI guidance | A trust model now has somewhere to attach |
+| G7 | **Attested cloud escalation** (PCC) + one-line model swap | 🔴 → 🟡 **router shipped; attestation still to come** — `ModelTierRouter` picks tier by context size + reasoning level + tool depth, `localOnly` privacy-pins on-device, cloud-down fallback; the *attested* compute tier behind the cloud branch isn't built | The decision layer is in place; the trustworthy compute target isn't yet |
+| G8 | **Donation loop** intent → prediction | 🔴 → 🟢 **closed** — every intent invocation emits `intent.invoked`; HBPE consumes it as a behavioural signal | The agent-action flywheel is wired |
 
-Where **CI already leads**: a real **MCP server** (open, model-agnostic — Apple is Swift/Apple-OS-only); a **cross-source unified memory graph** vs per-app silos; **whole-corpus local data ownership**; **provider-agnostic harnesses** (any model, including fully-local Ollama); and a **published behavioral forecaster (HBPE)** with no Apple analogue.
+Where **CI already leads** Apple — and this list has *grown* since round 1:
+
+- A real **MCP server** (open, model-agnostic; Apple is Swift/Apple-OS-only).
+- A **cross-source unified memory graph** vs per-app silos.
+- **Whole-corpus local data ownership** (Apple data lives on Apple servers when PCC is engaged).
+- **Provider-agnostic harnesses** (any model, including fully-local Ollama).
+- A **published behavioral forecaster (HBPE)** Apple has no analogue for.
+- **NEW: a public head-to-head benchmark suite** ([CI-Server #1587](https://github.com/companionintelligence/CI-Server/pull/1587)) — runs CI-Server against `mem0`, `hindsight`, and a naive baseline on the same `/api/memory/*` contract, same personas, same scorer. Apple has no public test harness for App Intents because the backend is closed; CI's MCP-native, model-agnostic, regression-gated benchmark is a thing Apple can't trivially replicate without opening their stack.
+- **NEW: persona categories designed to expose the architectural advantage** — `multi-hop` (combine facts from ≥ 2 sessions), `temporal-update` (which conflicting value is current?), `absence` (correctly returning "no info"). The naive baseline scores 0/3 on `absence` precisely because raw retrieval can't know what *isn't* there; smart memory can.
+- **NEW: per-API-system env feature flags** in both harnesses, so an operator can run e.g. context-only or disable turn ingestion without touching code — a privacy/operational lever the original review didn't anticipate.
+
+### What we now *measure* that Apple can't
+
+The benchmark suite is genuinely novel insight that didn't exist at round 1. Three implications:
+
+1. **Apple has nothing equivalent in public.** App Intents has no head-to-head test harness because the system runtime is proprietary; you can't write a `MemoryAdapter` for Apple Intelligence and run questions through it. Ours is open, MCP-native, and runs any backend that implements the five-method `MemoryAdapter` contract.
+2. **The harness duplication tension resolved better than the original doc predicted.** Round 1 worried two bespoke memory plugins would drift apart. What actually happened: 8 drifts catalogued in [CI-Engineering #41](https://github.com/companionintelligence/CI-Engineering/pull/41), 6 reconciled, 2 kept by design — and the **benchmark now proves both harnesses behave identically** against the same `/api/memory/*` contract. The duplication stays (two languages, two surfaces); the equivalence is CI-enforced.
+3. **The "smart memory vs raw retrieval" claim is now falsifiable.** Round 1 had to *argue* the architectural value; round 4 lets you *measure* it. On the Priya persona, raw retrieval (naive top-K BoW) gets 0/3 on `absence` and is rewarded by the keyword scorer for verbatim-dumping the relational category. Under the LLM judge, that dump no longer wins — which is exactly the cross-architecture comparison the original doc said CI needed.
 
 ---
 
 ## 6. What to adopt — prioritized
 
-| Priority | Recommendation | Apple idea it borrows | Lands in | Effort | Powers Hermes/OpenClaw by… |
-|---|---|---|---|---|---|
-| **P0** | **CI Intent + Entity Schema** | App Intents / App Entity | CI-Server (`domains/intents`) + MCP | M | Replacing both bespoke memory plugins with one typed catalog consumed via MCP |
-| **P0** | **CI Schema Domains** (verb vocabulary) | App Schema Domains | CI-Server schema | S–M | Guaranteeing both harnesses speak the same intents |
-| **P1** | **On-device ↔ private-cloud router** | Foundation Models tiering | CI-Hub + CI-Server | M | Auto-escalating hard tasks without leaking raw context |
-| **P1** | **App-declared intents** | App registers intents | CI-Hub manifest → catalog | M | Letting marketplace apps grow the agent's skill set |
-| **P2** | **Intent donation → HBPE** | Intent donation | CI-Server + HBPE | S | Turning every agent action into a prediction signal |
-| **P2** | **EntityQuery + DisplayRepresentation contract** | AppEntity | CI-Server entities | M | Consistent "resolve John / show this Place" everywhere |
-| **P3** | **Per-intent privacy labels + dispatcher** | Intent privacy + Siri dispatch | CI-Server | M–L | Uniform confirmation/guardrails for destructive intents |
-| **P3** | **Verifiable-transparency cloud tier** | PCC transparency | CI-Portal/cloud | L | A defensible privacy claim if we ever offload compute |
+The original priority list mapped Apple-idea → CI-recommendation. Most of those have shipped (✅) — the table below now distinguishes shipped from what remains:
+
+| Priority | Recommendation | Apple idea it borrows | Status | What's left |
+|---|---|---|---|---|
+| **P0** | **CI Intent + Entity Schema** | App Intents / App Entity | ✅ shipped (#1575) | — |
+| **P0** | **CI Schema Domains** (verb vocabulary) | App Schema Domains | ✅ shipped (#1575) | — |
+| **P1** | **On-device ↔ private-cloud router** | Foundation Models tiering | ✅ shipped (#1575) | The router is built; an *attested* cloud target behind its `private_cloud` tier isn't — see P3 |
+| **P1** | **App-declared intents** | App registers intents | ✅ shipped ([CI-Hub #813](https://github.com/companionintelligence/CI-Hub/pull/813)) | — |
+| **P2** | **Intent donation → HBPE** | Intent donation | ✅ shipped (#1575) | — |
+| **P2** | **EntityQuery + DisplayRepresentation contract** | AppEntity | 🔶 partial — registry + descriptors shipped | Uniform `resolve(byId \| byName \| disambiguate)` per entity type, so "find John" works the same on every surface |
+| **P3** | **Per-intent privacy labels + dispatcher** | Intent privacy + Siri dispatch | 🔶 partial — labels ✅; *steering* dispatcher ✅ (demotion); *enforcing* dispatcher ⏳ | A dispatcher that intercepts execution: confirms `destructive` intents, warns on `external`, and gates by `sensitivity` |
+| **P3** | **Verifiable-transparency cloud tier** | PCC transparency | ⏳ deferred (infra) | A stateless, attested compute target the model-router can point its `private_cloud` tier at — published images, dual roots of trust, non-targetability |
+| **NEW** | **Memory benchmark suite** as ongoing CI gate | (no Apple analogue) | ✅ shipped ([CI-Server #1587](https://github.com/companionintelligence/CI-Server/pull/1587)) | Adopt it as the regression bar — every change touching `domains/memory/**` should re-baseline naive on Jordan/Priya and surface deltas on smart adapters (mem0, hindsight, ci_server) when run live |
+
+### What to do next, in priority order
+
+Three things matter, in this order:
+
+1. **Build the enforcing dispatcher** (closes the last 50% of G5). The labels are in place and the agent already prefers the curated path (demotion). What's missing is the gate at *execution* time — a small service that intercepts intent invocations, blocks/confirms by privacy label, and emits an audit event. Mid-effort, high-leverage, doesn't depend on anything else.
+2. **Land the uniform `EntityQuery` resolver** (closes G3). The entity registry shipped; the resolver lets `people.find("John")` use the same disambiguation logic everywhere. Medium-effort, removes per-surface inconsistency.
+3. **Design the attested cloud tier** (closes G7). This is the genuinely large one. Pre-requisite for ever offloading sensitive context to a heavier model without breaking the data-ownership pitch. The model-router's `external` flag is the gate; the tier behind it is the build.
+
+The doc no longer needs a "what to adopt" pitch for items P0–P2 — they shipped. What's left is the longer half.
 
 ### P0 — The CI Intent + Entity Schema (our "App Intents")
 
@@ -311,10 +371,13 @@ Give every CI entity a uniform `resolve(byId | byName | disambiguate)` + `displa
 ## 7. Net assessment
 
 - **Architecturally**, Apple is top-down (system owns the schema, apps conform, one runtime dispatches) and CI is bottom-up (many surfaces expose capabilities, the LLM stitches them). Apple's model yields reliability and interop; CI's yields openness and breadth.
-- **CI's durable advantages** — model-agnostic + MCP-native, a cross-source whole-life memory graph, full local data ownership, and a behavioral forecaster — are real and worth protecting. Don't trade them away chasing parity.
-- **The missing 20%** that would make CI feel like a coherent agent platform is almost entirely the **semantic layer**: a curated intent/entity catalog with a standardized vocabulary, surfaced through the MCP server we already run, fed by app-declared intents, escalated through a PCC-style compute tier, and looped back into HBPE. Most of it is *consolidation and curation* of plumbing we already have — not green-field building.
+- **CI's durable advantages** — model-agnostic + MCP-native, a cross-source whole-life memory graph, full local data ownership, a behavioral forecaster, and now a **public head-to-head benchmark** — are real and worth protecting. Don't trade them away chasing parity.
+- **The "missing 20%" from round 1 has shipped almost entirely.** The semantic layer — curated intent/entity catalog, standardized schema-domain vocabulary, MCP surfacing, app-declared intents from CI-Hub, intent donation → HBPE, per-intent privacy labels, model-tier routing with privacy-pinning, and the *steering* half of the dispatcher (intent demotion in the agent-facing tool list) — is in place across five PRs. The harness duplication has been catalogued, reconciled (6 of 8 drifts fixed), and the remaining duplication is now CI-enforced to behave equivalently.
+- **What remains** is the longer half: the *enforcing* half of the dispatcher (a confirmation/permission gate at execution time), the uniform `EntityQuery` resolver, and a verifiable-transparency cloud tier (PCC analogue). Each is bounded, well-scoped, and now sits on top of a foundation that's been built and measured.
 
-**Recommended first step:** stand up the **CI Intent Catalog + Schema Domains (P0)** in CI-Server, expose it through the existing `companion-memory` MCP server, and migrate **one** harness (OpenClaw — its tools are already JSON-schema'd) off its bespoke REST plugin onto the catalog as a reference implementation. That single move proves the consolidation and de-duplicates the harness integrations.
+**The benchmark suite changes how this comparison ages.** Round 1 had to argue the architectural advantage; rounds 3–4 let us measure it. The naive-baseline floor (65 % on Jordan, 38 % on Priya, **0 % on absence**) is the signal-to-noise threshold smart memory must beat — and it runs in CI on every PR. Apple doesn't have an analogue because App Intents has no open backend to point a head-to-head harness at. That asymmetry is *durable*: even if Apple shipped a public benchmark tomorrow, it'd only cover their own apps. CI's runs against anything that implements a five-method `MemoryAdapter` contract.
+
+**Recommended next step (revised):** build the **enforcing dispatcher** that intercepts intent execution and gates by privacy label. The labels are in place, the catalog is consumed by both harnesses, the agent is already steered toward curated intents — the last move is the gate at invocation time. Mid-effort, high-leverage, and it closes the last 50 % of G5 (the gap the original doc called out as the single biggest one).
 
 ---
 
