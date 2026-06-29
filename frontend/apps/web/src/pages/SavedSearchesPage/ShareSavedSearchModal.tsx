@@ -71,11 +71,21 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
         variables: { input: { id: savedSearch.id, isPublic: next } },
       });
 
-      const updated = result.data?.setSavedSearchSharing?.savedSearch;
+      const payload = result.data?.setSavedSearchSharing;
+      const updated = payload?.savedSearch;
+
+      // The server returns { success: false } (no thrown error) for rejected
+      // changes — e.g. non-owner / not found. Keep prior state in that case so
+      // the toggle doesn't lie about a change the server refused.
+      if (!payload?.success || !updated) {
+        toast.error('Couldn’t update sharing. Please try again.');
+
+        return;
+      }
 
       setSharingState({
-        isPublic: updated?.isPublic ?? next,
-        shareToken: updated?.shareToken ?? null,
+        isPublic: updated.isPublic,
+        shareToken: updated.shareToken ?? null,
       });
     } catch {
       // Leave the toggle reflecting the server's last-known state on failure.
