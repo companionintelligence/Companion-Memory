@@ -27,11 +27,16 @@ const STUB_SOURCE_SYSTEM = 'communications:participant';
  *
  * Fires for every single-row `CommunicationService.create` (interactive creates
  * and the legacy in-server importer transforms). Resolves the raw participant
- * strings in `participants_metadata.{from,to,cc,bcc}` against the
- * `ci.entity_identifiers` index, creates stub Person entities for any
- * previously-unseen identifiers, and writes the resolved ids back onto the
- * row's `from_entity_id` / `to_entity_ids` columns. Closes the long-standing
- * TODO at `CommunicationService.create`.
+ * strings in `participants_metadata` against the `ci.entity_identifiers` index
+ * and creates stub Person entities for any previously-unseen identifiers, then
+ * writes the resolved ids back onto the row:
+ *   - `from`            -> `from_entity_id`
+ *   - `to`              -> `to_entity_ids`
+ *   - `cc` / `bcc`      -> stub Person + identifier ONLY (no per-row column
+ *     to write back to; the index still benefits downstream queries that
+ *     resolve those addresses on future communications).
+ *
+ * Closes the long-standing TODO at `CommunicationService.create`.
  *
  * NOTE — bulk path is deliberately excluded: `CommunicationService.createMany`
  * does NOT emit a per-row `CommunicationCreatedEvent` (the per-row pgboss
@@ -200,12 +205,21 @@ export class CommunicationParticipantLinkListener {
       return;
     }
 
-    // Targeted, partition-key-scoped UPDATE — TimescaleDB chunk-local, NULL
-    // guards keep it idempotent, no Updated event re-fires so the search
-    // listener doesn't redundantly re-embed the same content.
+    // Targeted UPDATE scoped to the full primary key (time, user_id, id) so
+    // TimescaleDB excludes every chunk but the one carrying this row, and so
+    // an id ever reused across `time` partitions can never match two rows.
+    // Both link columns use NULL/empty guards so a value a concurrent path
+    // (e.g. the operator backfill) wrote between this listener's read and
+    // write is preserved — the listener never overwrites an existing link.
+    // No CommunicationUpdatedEvent fires so the search listener doesn't
+    // redundantly re-embed the same content.
     await this.dataSource.query(
       `UPDATE ci.communications
-          SET from_entity_id = COALESCE($3::uuid, from_entity_id),
+          SET from_entity_id = CASE
+                                 WHEN $3::uuid IS NOT NULL AND from_entity_id IS NULL
+                                 THEN $3::uuid
+                                 ELSE from_entity_id
+                               END,
               to_entity_ids  = CASE
                                  WHEN $4::uuid[] IS NOT NULL
                                       AND (to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)
@@ -213,8 +227,9 @@ export class CommunicationParticipantLinkListener {
                                  ELSE to_entity_ids
                                END
         WHERE user_id = $1
-          AND id = $2`,
-      [ownerId, communication.id, fromId, toIds],
+          AND id = $2
+          AND time = $5::timestamptz`,
+      [ownerId, communication.id, fromId, toIds, communication.time],
     );
   }
 }

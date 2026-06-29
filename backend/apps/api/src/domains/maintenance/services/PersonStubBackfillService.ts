@@ -49,11 +49,23 @@ export interface PersonStubBackfillResult {
   examined: number;
   /** Distinct (kind, value) identifiers seen across all windows. */
   identifiersSeen: number;
-  /** Identifiers that already had a Person entity + identifier row. */
+  /** Identifiers the prefilter found already covered by the index. */
   identifiersExisting: number;
-  /** Stub Person entities created this run (one per new identifier). */
+  /**
+   * Upper bound on stub Person entities created. Sourced from
+   * `GraphIngestService.ingest`'s `entitiesProcessed`, which also counts
+   * idempotent resolves of pre-existing linked-key rows — so a concurrent
+   * writer that landed the same key between this run's prefilter and ingest
+   * is counted here even though no row was inserted. Treat as "stubs
+   * attempted"; the actual delta is bounded above by this number.
+   */
   peopleCreated: number;
-  /** Identifier index rows inserted (may exceed peopleCreated if an existing entity gained a new identifier). */
+  /**
+   * Upper bound on identifier-index rows inserted. Equals the count of new
+   * entities sent to ingest (one identifier per entity by construction); the
+   * actual inserts can be fewer because the ON CONFLICT DO NOTHING upsert
+   * drops anything a concurrent writer landed first.
+   */
   identifiersIndexed: number;
   /** Errors surfaced by GraphIngestService.ingest, joined by '\n'. */
   errors: string[];
