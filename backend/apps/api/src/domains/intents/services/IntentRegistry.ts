@@ -35,7 +35,7 @@ export class IntentRegistry {
   }
 
   private validateAndIndex(intents: readonly IntentDefinition[]): void {
-    const safeName = /^[a-zA-Z0-9_]+$/;
+    const safeName = /^[a-zA-Z0-9_-]+$/;
 
     for (const intent of intents) {
       if (this.byName.has(intent.name)) {
