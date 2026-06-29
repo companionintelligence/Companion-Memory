@@ -415,6 +415,29 @@ export class FileService implements OnModuleInit {
     return this.findById(context, id);
   }
 
+  /**
+   * Persist the intrinsic pixel dimensions onto a file row.
+   *
+   * A targeted write — deliberately NOT routed through {@link update}: it skips
+   * the `FileUpdatedEvent` (so the dimensions backfill recording ~18.8k files
+   * doesn't fan out a flood of no-op re-index jobs) and writes width/height,
+   * which the user-facing {@link UpdateFileDto} doesn't expose. User-scoped like
+   * the rest of the service (SYSTEM_USER bypasses the scope).
+   */
+  async setDimensions(
+    context: ServiceContext,
+    id: string,
+    dimensions: { width: number | null; height: number | null },
+  ): Promise<void> {
+    await this.fileRepository.update(
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+      { width: dimensions.width, height: dimensions.height },
+    );
+  }
+
   async search(context: ServiceContext, query: FindOptionsWhere<FileEntity>): Promise<FileEntity[]> {
     return this.fileRepository.find({
       where: {

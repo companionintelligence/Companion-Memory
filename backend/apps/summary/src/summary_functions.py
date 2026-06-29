@@ -107,7 +107,7 @@ def generate_hourly_summary(
         "structured_data": response_dict,
         "embedding": embedding,
         "activity_counts": activity_counts,
-        "tokens_used": result.usage().total_tokens if result.usage() else 0,
+        "tokens_used": result.usage.total_tokens if result.usage else 0,
     }
 
 
@@ -163,7 +163,7 @@ def generate_rollup_summary(
         "embedding": embedding,
         "activity_counts": total_counts,
         "num_child_summaries": len(child_summaries),
-        "tokens_used": result.usage().total_tokens if result.usage() else 0,
+        "tokens_used": result.usage.total_tokens if result.usage else 0,
     }
 
 
@@ -290,7 +290,7 @@ def generate_insights(
         "insights": insights_list,
         "data_sources_used": response.data_sources_used,
         "embedding": embedding,
-        "tokens_used": result.usage().total_tokens if result.usage() else 0,
+        "tokens_used": result.usage.total_tokens if result.usage else 0,
         "num_insights": len(response.insights),
     }
 
@@ -329,7 +329,7 @@ def generate_actions(
 
     return {
         "actions": actions_list,
-        "tokens_used": result.usage().total_tokens if result.usage() else 0,
+        "tokens_used": result.usage.total_tokens if result.usage else 0,
     }
 
 

@@ -75,6 +75,56 @@ async def setup_hbpe_schedules(client: Client) -> None:
              created=created, skipped=skipped, failed=failed)
 
 
+def _checkpoint_exists() -> bool:
+    """True once the base HMT model has been trained/exported at least once."""
+    from pathlib import Path
+
+    ckpt_dir = Path(settings.models_dir) / "hmt"
+    return any(
+        (ckpt_dir / name).exists()
+        for name in ("hmt_int8.onnx", "hmt_fp32.onnx", "hmt_calibrated.pt", "hmt_checkpoint.pt")
+    )
+
+
+async def ensure_bootstrap_if_cold(client: Client) -> None:
+    """
+    Start ``BootstrapHBPEWorkflow`` for each user when no HMT checkpoint exists.
+
+    The nightly schedule only runs *incremental* updates and never trains the
+    base model, so without this a fresh appliance would sit in COLD_START until
+    a human manually hit "Predict". Run on every worker startup; idempotent — a
+    bootstrap already running for the user raises WorkflowAlreadyStartedError and
+    is left alone, and a previous failed/aborted run (e.g. no data yet) is simply
+    retried on the next worker start.
+    """
+    if _checkpoint_exists():
+        log.info("hbpe_bootstrap_skipped", reason="checkpoint_exists")
+        return
+
+    user_ids = _fetch_user_ids()
+    if not user_ids:
+        log.info("hbpe_bootstrap_skipped", reason="no_users_in_db")
+        return
+
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+    from ci.pipeline.bootstrap import BootstrapHBPEWorkflow
+
+    for user_id in user_ids:
+        workflow_id = f"hbpe-bootstrap-{user_id[:8]}"
+        try:
+            await client.start_workflow(
+                BootstrapHBPEWorkflow.run,
+                user_id,
+                id=workflow_id,
+                task_queue=settings.task_queue,
+            )
+            log.info("hbpe_bootstrap_started", workflow_id=workflow_id, user=user_id[:8])
+        except WorkflowAlreadyStartedError:
+            log.info("hbpe_bootstrap_already_running", workflow_id=workflow_id)
+        except Exception as exc:
+            log.error("hbpe_bootstrap_start_failed", workflow_id=workflow_id, error=str(exc))
+
+
 async def delete_hbpe_schedules(client: Client) -> None:
     """Delete all hbpe-nightly-* schedules. Useful for resetting timing."""
     user_ids = _fetch_user_ids()

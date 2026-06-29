@@ -50,9 +50,11 @@ export class ContentService {
           sourceType: item.source_type ?? undefined,
           sourceSystem: item.source_system ?? undefined,
           sourceId: item.source_id ?? undefined,
-          user: {
-            id: context.userId,
-          },
+          // Write the owner via the scalar FK column, not the `user` relation:
+          // ci.content.user_id and the relation map to the same DB column, and a
+          // relation-only write was being shadowed to NULL (see ContentEntity.userId).
+          // Mirrors EventService.createManyBatched.
+          userId: context.userId,
         });
 
         const contentResult = await this.contentRepository.save(content);
@@ -239,6 +241,44 @@ export class ContentService {
     const rows = await query.getRawMany<{ id: string }>();
 
     return rows.map((row) => ({ id: row.id, type: 'content' as IndexableEntity }));
+  }
+
+  /**
+   * Batch-resolve the media file linked to each of `eventIds`. Photo/video
+   * events carry their binary via a `ci.content` row (type='media',
+   * external_id = the ORIGINAL `ci.files` id) written by the importer's media
+   * pass — there is no direct events->files FK. Returns one row per link,
+   * oldest first, so a GraphQL loader can attach a thumbnail to an event
+   * without a per-event query. See {@link EventMediaLoader}.
+   *
+   * Ownership is scoped through the joined event's `user_id` rather than
+   * `content.user_id`. New inserts now populate `content.user_id` (see
+   * ContentEntity.userId — it used to be mapped `insert: false`, which persisted
+   * NULL), but pre-fix rows stay NULL until the backfill migration runs and the
+   * dedupe "loser" rows it leaves behind never get an owner, so the event join is
+   * the reliable scope here. The linked file is independently re-scoped to the
+   * user by `FileService`.
+   */
+  async findMediaFilesByEventIds(
+    context: UserServiceContext,
+    eventIds: string[],
+  ): Promise<{ eventId: string; fileId: string; mimetype: string | null }[]> {
+    if (eventIds.length === 0) {
+      return [];
+    }
+
+    return this.contentRepository
+      .createQueryBuilder('content')
+      .innerJoin('content.event', 'event')
+      .select('content.event_id', 'eventId')
+      .addSelect('content.external_id', 'fileId')
+      .addSelect('content.mimetype', 'mimetype')
+      .where('event.userId = :userId', { userId: context.userId })
+      .andWhere('content.event_id IN (:...eventIds)', { eventIds })
+      .andWhere("content.type = 'media'")
+      .andWhere('content.external_id IS NOT NULL')
+      .orderBy('content.created_at', 'ASC')
+      .getRawMany<{ eventId: string; fileId: string; mimetype: string | null }>();
   }
 
   async update(context: ServiceContext, id: string, data: UpdateContentDto): Promise<Content | null> {

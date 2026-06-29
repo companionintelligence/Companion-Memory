@@ -16,7 +16,9 @@ def _require_env(name: str) -> str:
 
 
 def _llm_model_from_env() -> str:
-    model = os.getenv("SUMMARY_LLM_MODEL") or os.getenv("LLM_DEFAULT_CHAT_MODEL") or os.getenv("LLM_MODEL", "qwen/qwen3-vl-30b")
+    # Fall back to the shared Ollama base model so an unset env (e.g. the
+    # production secrets path) still names a model the endpoint actually serves.
+    model = os.getenv("SUMMARY_LLM_MODEL") or os.getenv("LLM_DEFAULT_CHAT_MODEL") or os.getenv("LLM_MODEL", "gemma4:latest")
     return model
 
 
@@ -32,6 +34,18 @@ class Settings(BaseSettings):
     llm_model: str = Field(default_factory=_llm_model_from_env)
     llm_temperature: float = 0.3
     llm_max_tokens: int = 2000
+
+    # Structured-output strategy for the pydantic-ai agents. The default
+    # tool-calling path emits assistant messages with content=null, which
+    # Ollama's OpenAI-compatible endpoint rejects ("invalid message content
+    # type: <nil>"), and small local models fumble strict schemas. Options:
+    #   native   — Ollama json_schema response_format (server-enforced; default)
+    #   prompted — schema in the prompt, parse the text reply (model-agnostic)
+    #   tool     — original tool-calling behaviour
+    output_mode: str = Field(default_factory=lambda: os.getenv("SUMMARY_OUTPUT_MODE", "native").lower())
+    # How many times pydantic-ai re-asks the model when its output fails schema
+    # validation, before the activity gives up.
+    output_retries: int = Field(default_factory=lambda: int(os.getenv("SUMMARY_OUTPUT_RETRIES", "3")))
 
     @field_validator("llm_api_key", mode="before")
     @classmethod

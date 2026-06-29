@@ -26,6 +26,7 @@ import torch.nn as nn
 
 from ci.config import settings
 from ci.model.calibration import _build_full_batch
+from ci.model.checkpoints import user_ckpt_dir, HMT_FP32_ONNX, HMT_INT8_ONNX
 from ci.model.dataset import TokenStreamDataset
 from ci.model.evaluator import _load_calibrated
 from ci.model.lora import load_adapter, merge_adapter
@@ -210,9 +211,9 @@ def export_and_quantize(
     import onnxruntime as ort
     from onnxruntime.quantization import quantize_static, QuantType
 
-    ckpt_dir = Path(settings.models_dir) / "hmt"
-    fp32_path = ckpt_dir / "hmt_fp32.onnx"
-    int8_path = ckpt_dir / "hmt_int8.onnx"
+    ckpt_dir = user_ckpt_dir(user_id, create=True)
+    fp32_path = ckpt_dir / HMT_FP32_ONNX
+    int8_path = ckpt_dir / HMT_INT8_ONNX
 
     l0_vocab = build_l0_vocab()
     l1_vocab = build_l1_vocab(user_id)

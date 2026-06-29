@@ -13,16 +13,24 @@ import { OnEvent, EventService } from '@ci/domains/events';
 import { type File } from '../entities/FileEntity';
 import { FileUploadedEvent, FileUploadedPayload, PreviewGeneratedEvent } from '../events';
 import { FileService } from '../services/FileService';
+import { MediaDimensions, MediaDimensionsService } from '../services/MediaDimensionsService';
 import { FileVariant } from '../types';
 
 const PREVIEW_MAX_DIMENSION = 300;
 const IMAGE_MIME_PREFIX = 'image/';
 const VIDEO_MIME_PREFIX = 'video/';
 
+/** A generated preview plus the source's intrinsic dimensions (null if unreadable). */
+interface PreviewResult {
+  buffer: Buffer;
+  dimensions: MediaDimensions | null;
+}
+
 @Injectable()
 export class FilePreviewGenerationListener {
   constructor(
     private readonly fileService: FileService,
+    private readonly mediaDimensionsService: MediaDimensionsService,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
@@ -68,12 +76,12 @@ export class FilePreviewGenerationListener {
 
     const fileWithKey = file as RequiredFields<typeof file, 'key', true>;
 
-    let buffer: Buffer | null = null;
+    let result: PreviewResult | null = null;
 
     if (file.contentType.startsWith(IMAGE_MIME_PREFIX)) {
-      buffer = await this.generateImagePreview(context, fileWithKey);
+      result = await this.generateImagePreview(context, fileWithKey);
     } else if (file.contentType.startsWith(VIDEO_MIME_PREFIX)) {
-      buffer = await this.generateVideoPreview(context, fileWithKey);
+      result = await this.generateVideoPreview(context, fileWithKey);
     } else {
       this.logger.log('File type not supported, skipping preview generation', {
         fileId: payload.fileId,
@@ -83,7 +91,7 @@ export class FilePreviewGenerationListener {
       return;
     }
 
-    if (buffer == null) {
+    if (result == null) {
       this.logger.warn('Failed to generate preview, buffer is null', {
         fileId: payload.fileId,
       });
@@ -91,11 +99,18 @@ export class FilePreviewGenerationListener {
       return;
     }
 
+    // Record the source's intrinsic dimensions onto the ORIGINAL row so
+    // EventMediaLoader (and the drawer "Dimensions" row) can surface them. A
+    // targeted write that doesn't re-trigger preview generation or re-indexing.
+    if (result.dimensions != null) {
+      await this.fileService.setDimensions(context, file.id, result.dimensions);
+    }
+
     const preview = await this.fileService.create(context, {
       contentType: 'image/jpeg',
-      size: buffer.length,
+      size: result.buffer.length,
       variant: FileVariant.PREVIEW,
-      buffer,
+      buffer: result.buffer,
       parentId: file.id,
     });
 
@@ -114,26 +129,30 @@ export class FilePreviewGenerationListener {
   private async generateImagePreview(
     context: UserServiceContext,
     file: RequiredFields<File, 'key', true>,
-  ): Promise<Buffer> {
-    const stream = await this.fileService.getFileStream(context, file.key);
+  ): Promise<PreviewResult> {
+    // Buffer the original once so the dimensions probe and the resize read the
+    // same bytes (one object-storage fetch, and metadata is reliable on a
+    // Buffer where it isn't on a partially-consumed stream).
+    const original = Buffer.from(await this.fileService.getFileContent(context, file.key));
 
-    const transformer = sharp()
+    const dimensions = await this.mediaDimensionsService.fromImageBuffer(original);
+
+    const buffer = await sharp(original)
       .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
         fit: 'inside',
       })
       .jpeg({
         quality: 80,
-      });
+      })
+      .toBuffer();
 
-    stream.pipe(transformer);
-
-    return transformer.toBuffer();
+    return { buffer, dimensions };
   }
 
   private async generateVideoPreview(
     context: UserServiceContext,
     file: RequiredFields<File, 'key', true>,
-  ): Promise<Buffer> {
+  ): Promise<PreviewResult> {
     const stream = await this.fileService.getFileStream(context, file.key);
     const tempInput = join(tmpdir(), `ci-preview-${crypto.randomUUID()}`);
     const tempOutput = `${tempInput}-frame.jpg`;
@@ -148,6 +167,10 @@ export class FilePreviewGenerationListener {
         ws.on('error', (err) => reject(err));
       });
 
+      // Probe the source stream's dimensions from the same spooled file, before
+      // collapsing it to a single frame.
+      const dimensions = await this.mediaDimensionsService.fromVideoFile(tempInput);
+
       // Extract a single frame
       await new Promise<void>((resolve, reject) => {
         ffmpeg(tempInput)
@@ -160,12 +183,14 @@ export class FilePreviewGenerationListener {
 
       const frame = await fs.readFile(tempOutput);
 
-      return sharp(frame)
+      const buffer = await sharp(frame)
         .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
           fit: 'inside',
         })
         .jpeg({ quality: 80 })
         .toBuffer();
+
+      return { buffer, dimensions };
     } finally {
       await fs.unlink(tempInput).catch(() => {});
       await fs.unlink(tempOutput).catch(() => {});

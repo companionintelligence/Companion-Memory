@@ -530,11 +530,17 @@ type EventType implements Node & Taggable {
   locationCoordinates: JSON
   locationEntityId: ID
   locationName: String
+  mediaContentType: String
+  mediaHeight: Int
+  mediaSize: Float
+  mediaUrl: String
+  mediaWidth: Int
   metadata: JSON
   organizer: PersonType
   organizerEntityId: ID
   participantEntityIds: [ID!]
   participants(after: String, before: String, first: Int, last: Int): PersonConnection!
+  previewUrl: String
   sourceId: ID
   sourceSystem: String
   sourceType: String

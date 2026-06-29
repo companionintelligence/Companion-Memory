@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ── CI-Server → CI-Portal Publish Script ───────────────────────────────
 #
-# Publishes CI-Server as a single app ("companion") to a CI-Portal
+# Publishes CI-Server as a single app ("ci-memory") to a CI-Portal
 # store instance using the three-phase publish workflow:
 #
 #   Phase 1: POST /api/store/ingest        (upload .tar.gz bundle → pending)
@@ -42,7 +42,16 @@ fi
 REGISTRY="${REGISTRY:-portal.ci.localhost}"
 PORTAL_API="${PORTAL_API:-https://portal.ci.localhost/api}"
 ADMIN_KEY="${STORE_ADMIN_API_KEY:-}"
-SLUG="ci-memory"
+
+# Slug is derived from the manifest's config.json `id` so it always matches the
+# value the Portal ingest handler reads from the bundle. Keeping it in sync this
+# way prevents Step 2 (ingest, keyed on config.json id) and Step 4 (publish,
+# keyed on this slug) from ever disagreeing on which app is being published.
+SLUG=$(jq -r '.id' "${SCRIPT_DIR}/manifest/config.json")
+if [[ -z "$SLUG" || "$SLUG" == "null" ]]; then
+  echo "  ✗ Could not read 'id' from ${SCRIPT_DIR}/manifest/config.json" >&2
+  exit 1
+fi
 
 # Portal catalog registration (ingest → publish) is best-effort. Pushing the
 # images to the registry is the part that actually matters for installs, so a

@@ -38,6 +38,10 @@ import numpy as np
 
 from ci.config import settings
 from ci.model.calibration import _build_full_batch
+from ci.model.checkpoints import (
+    user_ckpt_dir, HMT_CALIBRATED, HMT_CKPT, HMT_FP32_ONNX, HMT_INT8_ONNX,
+    MODEL_ARTIFACTS,
+)
 from ci.model.vocab import (
     L0_CLASSES, PAD_IDX, SOD_IDX, EOD_IDX,
     build_l0_vocab, build_l1_vocab,
@@ -96,6 +100,7 @@ class InferenceEngine:
         self._l1_vocab = build_l1_vocab(user_id)
         self._l1_display_names: dict[str, str] = self._load_l1_display_names()
         self._onnx_seq_len: Optional[int] = None
+        self._l1_dim: Optional[int] = None      # model's L1 output width
         self._session_path: Optional[Path] = None
         self._session_mtime: Optional[float] = None
         self._session  = self._load_session()
@@ -118,13 +123,28 @@ class InferenceEngine:
             log.warning("Could not load L1 display names: %s", exc)
             return {}
 
+    def _refresh_vocab(self) -> None:
+        """Rebuild the L1 vocab + display names to match a freshly (re)loaded
+        model.
+
+        The model's L1 output width is fixed at export/train time. A cached
+        engine builds its vocab once in __init__; if it was created when fewer
+        clusters existed, that vocab stays stale even after the nightly pipeline
+        rewrites the model with a larger vocab — so predict() would aggregate a
+        stale-width array against the new model output and raise a numpy
+        broadcast error (HTTP 400). Refreshing on every session (re)load keeps
+        the vocab and cluster-name decoding in lockstep with the model.
+        """
+        self._l1_vocab = build_l1_vocab(self.user_id)
+        self._l1_display_names = self._load_l1_display_names()
+
     # ── Session loading ────────────────────────────────────────────────────────
 
     def _load_session(self):
         """Load INT8 ONNX → FP32 ONNX → PyTorch model (in preference order)."""
-        ckpt_dir  = Path(settings.models_dir) / "hmt"
-        int8_path = ckpt_dir / "hmt_int8.onnx"
-        fp32_path = ckpt_dir / "hmt_fp32.onnx"
+        ckpt_dir  = user_ckpt_dir(self.user_id)
+        int8_path = ckpt_dir / HMT_INT8_ONNX
+        fp32_path = ckpt_dir / HMT_FP32_ONNX
         for path in (int8_path, fp32_path):
             if path.exists():
                 try:
@@ -139,6 +159,13 @@ class InferenceEngine:
                         self._onnx_seq_len = input_shape[1]
                     else:
                         self._onnx_seq_len = ONNX_SEQ_LEN
+                    # Capture the model's L1 output width so predict() sizes its
+                    # aggregation to the model, never a possibly-stale vocab.
+                    self._l1_dim = next(
+                        (o.shape[-1] for o in sess.get_outputs()
+                         if o.name == "l1_logits" and o.shape and isinstance(o.shape[-1], int)),
+                        None,
+                    )
                     self._session_path  = path
                     self._session_mtime = path.stat().st_mtime
                     log.info("Inference engine using ONNX: %s  (seq_len=%d)",
@@ -157,8 +184,11 @@ class InferenceEngine:
                 load_adapter(model, adapter_path)
                 merge_adapter(model)
             model.eval()
+            # The PyTorch model is built from the current vocab, so its L1 width
+            # matches len(self._l1_vocab).
+            self._l1_dim = len(self._l1_vocab)
             # Track calibrated checkpoint for mtime-based hot reload.
-            calibrated_path = ckpt_dir / "hmt_calibrated.pt"
+            calibrated_path = ckpt_dir / HMT_CALIBRATED
             if calibrated_path.exists():
                 self._session_path  = calibrated_path
                 self._session_mtime = calibrated_path.stat().st_mtime
@@ -173,8 +203,8 @@ class InferenceEngine:
 
     def _load_temperature(self) -> float:
         import torch
-        ckpt_dir = Path(settings.models_dir) / "hmt"
-        for name in ("hmt_calibrated.pt", "hmt_checkpoint.pt"):
+        ckpt_dir = user_ckpt_dir(self.user_id)
+        for name in (HMT_CALIBRATED, HMT_CKPT):
             p = ckpt_dir / name
             if p.exists():
                 ckpt = torch.load(p, map_location="cpu", weights_only=True)
@@ -293,16 +323,16 @@ class InferenceEngine:
 
     def _try_reload_session(self) -> None:
         """Reload model session if we're in dry-run mode and a checkpoint now exists."""
-        ckpt_dir = Path(settings.models_dir) / "hmt"
+        ckpt_dir = user_ckpt_dir(self.user_id)
         checkpoint_exists = any(
-            (ckpt_dir / name).exists()
-            for name in ("hmt_int8.onnx", "hmt_fp32.onnx", "hmt_calibrated.pt", "hmt_checkpoint.pt")
+            (ckpt_dir / name).exists() for name in MODEL_ARTIFACTS
         )
         if not checkpoint_exists:
             return
         session = self._load_session()
         if session is not None:
             self._session = session
+            self._refresh_vocab()
             self._temp = self._load_temperature()
             self.invalidate_all()
             log.info("Inference engine reloaded from checkpoint (was in dry-run mode)")
@@ -332,6 +362,7 @@ class InferenceEngine:
             new_session = self._load_session()
             if new_session is not None:
                 self._session = new_session
+                self._refresh_vocab()
                 self._temp = self._load_temperature()
                 self.invalidate_all()
 
@@ -356,8 +387,12 @@ class InferenceEngine:
         today         = datetime.date.today()
 
         # ── Aggregate per-bucket logits from recent days ──────────────────────
+        # Size the L1 aggregation to the model's actual output width (falling
+        # back to the vocab length), so a vocab that has drifted from the loaded
+        # model can never cause a numpy broadcast error. Out-of-range indices
+        # decode to the PAD token, so a slightly stale vocab degrades gracefully.
         V_l0 = len(self._l0_vocab)
-        V_l1 = len(self._l1_vocab)
+        V_l1 = self._l1_dim or len(self._l1_vocab)
 
         bucket_l0_sum  = np.zeros((N_BUCKETS, V_l0), dtype=np.float64)
         bucket_l1_sum  = np.zeros((N_BUCKETS, V_l1), dtype=np.float64)

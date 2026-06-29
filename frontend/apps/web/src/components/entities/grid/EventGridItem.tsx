@@ -4,7 +4,7 @@ import { MapPin } from '@ci/shadcn/icons';
 
 import { EventIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
-import { formatDateTime } from '@/pages/MemoryPage/Components/utils';
+import { eventDisplayTitle, formatDateTime } from '@/pages/MemoryPage/Components/utils';
 
 import { EntityGridItem } from './EntityGridItem';
 import { SourceBadge } from './SourceBadge';
@@ -28,13 +28,18 @@ interface Props {
 
 export function EventGridItem({ event, onClick }: Props) {
   const data = useFragment(EVENT_FRAGMENT, event);
+  const title = eventDisplayTitle({
+    title: data.title,
+    startTime: data.startTime,
+    locationName: data.locationName,
+  });
 
   return (
     <EntityGridItem onClick={onClick}>
       <EntityGridItem.Header>
         <EventIcon className="shrink-0" />
 
-        <div className="text-md font-semibold truncate">{data.title || 'Untitled event'}</div>
+        <div className="text-md font-semibold truncate">{title || 'Untitled event'}</div>
       </EntityGridItem.Header>
 
       <EntityGridItem.Content>

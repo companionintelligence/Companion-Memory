@@ -6,18 +6,21 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 function getAllowedHosts(): string[] {
+  // `.ts.net` permits Tailscale MagicDNS hostnames (e.g. <machine>.<tailnet>.ts.net)
+  // so the dev server is reachable over the tailnet, alongside the local proxy host.
+  const base = ['ci-server.localhost', '.ts.net'];
   const hostname = process.env.APP_PUBLIC_HOSTNAME;
 
   if (!hostname) {
-    return ['ci-server.localhost'];
+    return base;
   }
 
   try {
     const url = new URL(hostname);
 
-    return [url.hostname];
+    return [...base, url.hostname];
   } catch {
-    return [hostname];
+    return [...base, hostname];
   }
 }
 
@@ -137,6 +140,10 @@ export default defineConfig({
       '/api': {
         target: process.env.API_PROXY_TARGET || 'http://localhost:64669',
         changeOrigin: true,
+        // Forward X-Forwarded-Host/Proto so the API derives OIDC callback URLs
+        // from the real browser-facing host (e.g. the tailnet hostname) rather
+        // than the proxy target — otherwise the OIDC redirect_uri is localhost.
+        xfwd: true,
         rewrite: (requestPath) => requestPath.replace(/^\/api/, ''),
       },
     },
