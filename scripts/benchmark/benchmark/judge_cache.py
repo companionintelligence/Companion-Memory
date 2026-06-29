@@ -98,7 +98,7 @@ class JudgeCache:
             try:
                 os.unlink(tmp)
             except OSError:
-                pass
+                pass  # Cleanup is best-effort; re-raise the original write error below.
             raise
         self.path = target
 

@@ -149,13 +149,13 @@ class HindsightAdapter(MemoryAdapter):
                     fn(bank_id=self._bank)
                     break
                 except Exception:
-                    pass
+                    pass  # Best-effort teardown: the randomised bank id already isolates the next run.
         close = getattr(client, "close", None)
         if callable(close):
             try:
                 close()
             except Exception:
-                pass
+                pass  # Best-effort teardown: ignore failures closing the client.
         self._client = None
 
     # ── default factory ─────────────────────────────────────────────────────
