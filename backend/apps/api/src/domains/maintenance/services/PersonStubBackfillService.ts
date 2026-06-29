@@ -277,20 +277,30 @@ export class PersonStubBackfillService {
         const meta = row.participants_metadata ?? {};
         const collect = (raw: string | null) => {
           const key = classify(raw);
-          if (key == null) {return;}
+          if (key == null) {
+            return;
+          }
 
           const composite = `${key.kind}:${key.valueNormalized}`;
-          if (seenByComposite.has(composite)) {return;}
+          if (seenByComposite.has(composite)) {
+            return;
+          }
 
           seenByComposite.set(composite, { key, rawName: (raw ?? '').trim() });
         };
 
         collect(readString(meta.from));
-        for (const raw of readStringArray(meta.to)) {collect(raw);}
+        for (const raw of readStringArray(meta.to)) {
+          collect(raw);
+        }
 
-        for (const raw of readStringArray(meta.cc)) {collect(raw);}
+        for (const raw of readStringArray(meta.cc)) {
+          collect(raw);
+        }
 
-        for (const raw of readStringArray(meta.bcc)) {collect(raw);}
+        for (const raw of readStringArray(meta.bcc)) {
+          collect(raw);
+        }
       }
 
       identifiersSeen += seenByComposite.size;
@@ -375,14 +385,20 @@ export class PersonStubBackfillService {
  * agree byte-for-byte on what counts as a match.
  */
 function classify(raw: string | null): IdentifierKey | null {
-  if (raw == null) {return null;}
+  if (raw == null) {
+    return null;
+  }
 
   const trimmed = raw.trim();
-  if (trimmed.length === 0) {return null;}
+  if (trimmed.length === 0) {
+    return null;
+  }
 
   const kind: IdentifierKind = trimmed.includes('@') ? 'email' : 'phone';
   const valueNormalized = normalizeIdentifier(kind, trimmed);
-  if (valueNormalized == null) {return null;}
+  if (valueNormalized == null) {
+    return null;
+  }
 
   return { kind, valueNormalized };
 }

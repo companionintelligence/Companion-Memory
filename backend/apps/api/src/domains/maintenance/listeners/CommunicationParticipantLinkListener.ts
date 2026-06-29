@@ -97,10 +97,14 @@ export class CommunicationParticipantLinkListener {
     const seenByComposite = new Map<string, { key: IdentifierKey; rawName: string }>();
     const collect = (raw: string | null) => {
       const key = classify(raw);
-      if (key == null) {return;}
+      if (key == null) {
+        return;
+      }
 
       const composite = `${key.kind}:${key.valueNormalized}`;
-      if (seenByComposite.has(composite)) {return;}
+      if (seenByComposite.has(composite)) {
+        return;
+      }
 
       seenByComposite.set(composite, { key, rawName: (raw ?? '').trim() });
     };
@@ -110,11 +114,17 @@ export class CommunicationParticipantLinkListener {
     }
 
     if (!toAlreadySet) {
-      for (const raw of readStringArray(meta.to)) {collect(raw);}
+      for (const raw of readStringArray(meta.to)) {
+        collect(raw);
+      }
 
-      for (const raw of readStringArray(meta.cc)) {collect(raw);}
+      for (const raw of readStringArray(meta.cc)) {
+        collect(raw);
+      }
 
-      for (const raw of readStringArray(meta.bcc)) {collect(raw);}
+      for (const raw of readStringArray(meta.bcc)) {
+        collect(raw);
+      }
     }
 
     if (seenByComposite.size === 0) {
@@ -127,7 +137,9 @@ export class CommunicationParticipantLinkListener {
 
     const newEntities: GraphEntityInputDto[] = [];
     for (const [composite, seen] of seenByComposite) {
-      if (existing.has(composite)) {continue;}
+      if (existing.has(composite)) {
+        continue;
+      }
 
       const propertyKey = seen.key.kind === 'email' ? 'emails' : 'phones';
       newEntities.push({
@@ -161,7 +173,9 @@ export class CommunicationParticipantLinkListener {
 
     const lookup = (raw: string | null): string | null => {
       const key = classify(raw);
-      if (key == null) {return null;}
+      if (key == null) {
+        return null;
+      }
 
       return resolved.get(`${key.kind}:${key.valueNormalized}`) ?? null;
     };
@@ -173,7 +187,9 @@ export class CommunicationParticipantLinkListener {
       const ids: string[] = [];
       for (const raw of readStringArray(meta.to)) {
         const id = lookup(raw);
-        if (id != null) {ids.push(id);}
+        if (id != null) {
+          ids.push(id);
+        }
       }
 
       toIds = ids.length > 0 ? [...new Set(ids)] : null;
@@ -210,14 +226,20 @@ export class CommunicationParticipantLinkListener {
  * because the three paths must agree byte-for-byte on what counts as a match.
  */
 function classify(raw: string | null): IdentifierKey | null {
-  if (raw == null) {return null;}
+  if (raw == null) {
+    return null;
+  }
 
   const trimmed = raw.trim();
-  if (trimmed.length === 0) {return null;}
+  if (trimmed.length === 0) {
+    return null;
+  }
 
   const kind: IdentifierKind = trimmed.includes('@') ? 'email' : 'phone';
   const valueNormalized = normalizeIdentifier(kind, trimmed);
-  if (valueNormalized == null) {return null;}
+  if (valueNormalized == null) {
+    return null;
+  }
 
   return { kind, valueNormalized };
 }

@@ -126,9 +126,13 @@ describe('PersonStubBackfillService.backfill', () => {
     const phones: string[] = [];
     for (const entity of payload.entities) {
       const props = entity.properties ?? {};
-      if (Array.isArray(props.emails)) {emails.push(...(props.emails as string[]));}
+      if (Array.isArray(props.emails)) {
+        emails.push(...(props.emails as string[]));
+      }
 
-      if (Array.isArray(props.phones)) {phones.push(...(props.phones as string[]));}
+      if (Array.isArray(props.phones)) {
+        phones.push(...(props.phones as string[]));
+      }
     }
 
     expect(emails.sort()).toEqual(['alice <alice@example.com>', 'bcc@example.com', 'cc@example.com'].sort());
