@@ -381,12 +381,6 @@ input CreateInventoryInput {
   currentValue: Float
   description: String
   identifierCodes: JSON
-
-  """
-  Full source metadata bag (importer-parsed fields without a first-class
-  column home — e.g. Amazon `Source`, raw `Total`, future fields). Persists
-  to inventory.metadata so importers stop dropping correctly-parsed data.
-  """
   metadata: JSON
   name: String!
   purchasePrice: Float

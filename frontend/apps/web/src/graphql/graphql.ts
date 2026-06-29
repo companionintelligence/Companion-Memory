@@ -436,6 +436,7 @@ export type CreateInventoryInput = {
   currentValue?: InputMaybe<Scalars['Float']['input']>;
   description?: InputMaybe<Scalars['String']['input']>;
   identifierCodes?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSON']['input']>;
   name: Scalars['String']['input'];
   purchasePrice?: InputMaybe<Scalars['Float']['input']>;
   sourceId?: InputMaybe<Scalars['String']['input']>;
