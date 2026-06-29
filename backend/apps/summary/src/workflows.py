@@ -58,10 +58,17 @@ def get_data_activity_options():
     }
 
 def get_llm_activity_options():
-    """Activity options for LLM operations (slow, high timeout)"""
+    """Activity options for LLM operations (slow, single blocking call).
+
+    No heartbeat_timeout: each LLM activity makes one synchronous run_sync()
+    call that cannot heartbeat mid-flight, and on CPU that call routinely
+    exceeds a short heartbeat window — so a heartbeat_timeout just cancels
+    healthy work ("Final heartbeat task didn't trap error"). start_to_close
+    bounds the call instead; it's generous because a local model on CPU can
+    take minutes per generation (×output retries).
+    """
     return {
-        "start_to_close_timeout": timedelta(minutes=5),
-        "heartbeat_timeout": timedelta(seconds=30),
+        "start_to_close_timeout": timedelta(minutes=10),
         "retry_policy": ACTIVITY_RETRY_POLICY,
     }
 

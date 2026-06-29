@@ -80,6 +80,22 @@ const DEFAULT_MAX_EVENTS = 100;
 /** How many records' content go in one LLM prompt. Bounds the prompt size. */
 const SAMPLE_CHUNK_SIZE = 25;
 
+/**
+ * Cumulative running totals reported per chunk to
+ * {@link GraphEnrichmentOptions.onProgress}. These are the pre-dedupe counts
+ * accumulated across the chunks processed so far (the final result's
+ * preferencesExtracted/familyRelationsExtracted are de-duplicated across the
+ * whole run, so they may be <= these running totals).
+ */
+export interface GraphEnrichmentProgressCounts {
+  /** Records (communications + events) sent to the LLM so far (cumulative). */
+  recordsProcessed: number;
+  /** Cleaned preference items extracted so far, before run-wide dedupe (cumulative). */
+  preferencesExtracted: number;
+  /** Cleaned family relations extracted so far, before run-wide dedupe (cumulative). */
+  familyRelationsExtracted: number;
+}
+
 export interface GraphEnrichmentOptions {
   /** Max communications to sample (default 200). */
   maxCommunications?: number;
@@ -87,6 +103,14 @@ export interface GraphEnrichmentOptions {
   maxEvents?: number;
   /** Override the Ollama model (default PROMPT_MODEL). */
   model?: string;
+  /**
+   * Invoked once per LLM chunk with `(chunksDone, chunksTotal, partial)`, where
+   * `chunksTotal = ceil(records.length / SAMPLE_CHUNK_SIZE)` and `partial` holds
+   * cumulative running totals. Called on EVERY chunk including ones whose LLM
+   * call failed (the bar advances so it never stalls on a transient Ollama
+   * error). Optional; the synchronous result is unchanged with or without it.
+   */
+  onProgress?: (chunksDone: number, chunksTotal: number, partial: GraphEnrichmentProgressCounts) => void;
 }
 
 export interface GraphEnrichmentResult {
@@ -229,6 +253,21 @@ export class GraphEnrichmentService {
     const allPreferences: PreferenceItem[] = [];
     const allFamily: FamilyRelationItem[] = [];
 
+    // Denominator known up front (records.length is fixed). Emitting per chunk,
+    // including the failed-chunk path below, so a transient Ollama error never
+    // stalls the importer's stage-5 progress bar.
+    const chunksTotal = Math.ceil(records.length / SAMPLE_CHUNK_SIZE);
+    let recordsProcessed = 0;
+
+    const emitChunkProgress = (chunkIndex: number) => {
+      recordsProcessed += records.slice(chunkIndex, chunkIndex + SAMPLE_CHUNK_SIZE).length;
+      options.onProgress?.(chunkIndex / SAMPLE_CHUNK_SIZE + 1, chunksTotal, {
+        recordsProcessed,
+        preferencesExtracted: allPreferences.length,
+        familyRelationsExtracted: allFamily.length,
+      });
+    };
+
     for (let i = 0; i < records.length; i += SAMPLE_CHUNK_SIZE) {
       const chunk = records.slice(i, i + SAMPLE_CHUNK_SIZE);
 
@@ -240,12 +279,17 @@ export class GraphEnrichmentService {
           chunkStart: i,
           error: (err as Error).message,
         });
+        // Still tick the bar so it never stalls on an Ollama error: the chunk's
+        // records are "processed" (consumed) even though nothing was extracted.
+        emitChunkProgress(i);
         continue;
       }
 
       const { preferences, family } = GraphEnrichmentService.cleanExtraction(extraction);
       allPreferences.push(...preferences);
       allFamily.push(...family);
+
+      emitChunkProgress(i);
     }
 
     const preferences = GraphEnrichmentService.dedupePreferences(allPreferences);

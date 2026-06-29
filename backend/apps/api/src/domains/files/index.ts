@@ -23,6 +23,7 @@ import { FilesController } from './controllers/FilesController';
 import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
 import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
 import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
+import { MediaDimensionsBackfillListener } from './listeners/MediaDimensionsBackfillListener';
 import { FileService } from './services/FileService';
 import { MediaDimensionsService } from './services/MediaDimensionsService';
 import { SavedSearchService } from './services/SavedSearchService';
@@ -32,21 +33,30 @@ import { SavedSearchService } from './services/SavedSearchService';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([FileEntity, SavedSearchEntity]), EventsModule],
-  providers: [FileService, SavedSearchService, MediaDimensionsService, FilePreviewGenerationListener],
+  providers: [
+    FileService,
+    SavedSearchService,
+    MediaDimensionsService,
+    FilePreviewGenerationListener,
+    MediaDimensionsBackfillListener,
+  ],
   controllers: [FilesController],
   exports: [FileService, SavedSearchService, MediaDimensionsService],
 })
 export class FilesModule {}
 
-export { FileEntity, FileService, MediaDimensionsService, SavedSearchEntity, SavedSearchService };
-export type { File, SignedFile, SavedSearch };
+export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { MediaDimensionsService } from './services/MediaDimensionsService';
 export type { MediaDimensions } from './services/MediaDimensionsService';
+export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';
+export type { File, SignedFile, SavedSearch };
 export {
   FileCreatedEvent,
   FileUpdatedEvent,
   FileUploadedEvent,
   FileRemovedEvent,
   PreviewGeneratedEvent,
+  MediaDimensionsBackfillRequestEvent,
   SavedSearchCreatedEvent,
   SavedSearchUpdatedEvent,
   SavedSearchDeletedEvent,
@@ -55,6 +65,7 @@ export {
   type FileUploadedPayload,
   type FileDeletedPayload,
   type PreviewGeneratedPayload,
+  type MediaDimensionsBackfillRequestPayload,
   type SavedSearchCreatedPayload,
   type SavedSearchUpdatedPayload,
   type SavedSearchDeletedPayload,

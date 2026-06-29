@@ -130,6 +130,42 @@ describe('GoogleGeocodeProvider status -> outcome mapping', () => {
   });
 });
 
+describe('GoogleGeocodeProvider reverseGeocode', () => {
+  afterEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (global as any).fetch;
+    jest.clearAllMocks();
+  });
+
+  it('maps OK to a place name and queries the same endpoint with latlng=', async () => {
+    const fetchFn = mockFetch(OK_BODY);
+    const result = await makeProvider().reverseGeocode(37.422, -122.084);
+
+    expect(result.status).toBe('OK');
+    expect(result.normalizedAddress).toContain('Amphitheatre');
+    const url = fetchFn.mock.calls[0][0] as string;
+    expect(url).toContain('latlng=37.422,-122.084');
+    expect(url).not.toContain('address=');
+    expect(url).toContain('key=test-key');
+  });
+
+  it('falls back to ZERO_RESULTS when the result carries no formatted_address', async () => {
+    mockFetch({ status: 'OK', results: [{ geometry: { location: { lat: 1, lng: 2 } } }] });
+    const result = await makeProvider().reverseGeocode(1, 2);
+
+    expect(result.status).toBe('ZERO_RESULTS');
+    expect(result.errorMessage).toContain('formatted_address');
+  });
+
+  it('maps ZERO_RESULTS (HTTP 200) verbatim without throwing', async () => {
+    mockFetch({ status: 'ZERO_RESULTS', results: [] });
+    const result = await makeProvider().reverseGeocode(0.1, 0.1);
+
+    expect(result.status).toBe('ZERO_RESULTS');
+    expect(result.normalizedAddress).toBeUndefined();
+  });
+});
+
 describe('GoogleGeocodeProvider without an API key', () => {
   it('returns REQUEST_DENIED without making a network call', async () => {
     // The provider reads config.geocoding.apiKey at construction; clear it just

@@ -9,13 +9,31 @@ import httpx
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, NativeOutput, PromptedOutput, ToolOutput
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from .config import settings
 
 logger = structlog.get_logger()
+
+
+def wrap_output(response_type):
+    """Wrap a structured output type in the configured pydantic-ai output mode.
+
+    Local models behind Ollama choke on the default tool-calling path (the
+    tool-call assistant message has content=null, which Ollama's OpenAI endpoint
+    rejects), and small models fumble strict schemas. 'native' uses Ollama's
+    json_schema response_format (server-enforced); 'prompted' puts the schema in
+    the prompt and parses the text reply. Both avoid tool calls. See
+    settings.output_mode (SUMMARY_OUTPUT_MODE).
+    """
+    mode = (settings.output_mode or "native").lower()
+    if mode == "tool":
+        return ToolOutput(response_type)
+    if mode == "prompted":
+        return PromptedOutput(response_type)
+    return NativeOutput(response_type)
 
 
 # ============================================================================
@@ -163,7 +181,7 @@ class Summarizer:
         # Create agents for each summary type
         self.hourly_agent = Agent(
             self.model,
-            output_type=HourlySummaryResponse,
+            output_type=wrap_output(HourlySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You are an AI that creates concise hourly summaries of user activity. "
                 "Analyze the data and provide insights, patterns, and notable events."
@@ -173,7 +191,7 @@ class Summarizer:
         # Time-scale specific agents
         self.daily_agent = Agent(
             self.model,
-            output_type=DailySummaryResponse,
+            output_type=wrap_output(DailySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize hourly summaries into a daily overview. "
                 "Focus on: daily rhythms and routines, workflow patterns, "
@@ -185,7 +203,7 @@ class Summarizer:
 
         self.weekly_agent = Agent(
             self.model,
-            output_type=WeeklySummaryResponse,
+            output_type=wrap_output(WeeklySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize daily summaries into a weekly overview. "
                 "Focus on: work-life balance, recurring weekly patterns, "
@@ -197,7 +215,7 @@ class Summarizer:
 
         self.monthly_agent = Agent(
             self.model,
-            output_type=MonthlySummaryResponse,
+            output_type=wrap_output(MonthlySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize weekly summaries into a monthly overview. "
                 "Focus on: major milestones and achievements, evolving priorities, "
@@ -209,7 +227,7 @@ class Summarizer:
 
         self.seasonal_agent = Agent(
             self.model,
-            output_type=SeasonalSummaryResponse,
+            output_type=wrap_output(SeasonalSummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize monthly summaries into a seasonal (3-month) overview. "
                 "Focus on: life phase transitions, major project outcomes, "
@@ -221,7 +239,7 @@ class Summarizer:
 
         self.yearly_agent = Agent(
             self.model,
-            output_type=YearlySummaryResponse,
+            output_type=wrap_output(YearlySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize seasonal summaries into a yearly overview. "
                 "Focus on: annual achievements and setbacks, identity shifts, "
@@ -233,7 +251,7 @@ class Summarizer:
 
         self.dossier_agent = Agent(
             self.model,
-            output_type=UserDossierResponse,
+            output_type=wrap_output(UserDossierResponse), retries=settings.output_retries,
             system_prompt=(
                 "Create a concise user dossier summarizing personality, preferences, "
                 "challenges, and interests based on their activity. Keep summary under 500 characters."
@@ -242,7 +260,7 @@ class Summarizer:
 
         self.insights_agent = Agent(
             self.model,
-            output_type=InsightsResponse,
+            output_type=wrap_output(InsightsResponse), retries=settings.output_retries,
             system_prompt=(
                 "You are a proactive personal assistant that generates actionable insights. "
                 "Analyze the user's recent activity, relationships, upcoming events, and changes "
@@ -264,7 +282,7 @@ class Summarizer:
 
         self.action_agent = Agent(
             self.model,
-            output_type=ActionsResponse,
+            output_type=wrap_output(ActionsResponse), retries=settings.output_retries,
             system_prompt=(
                 "You are an AI assistant that facilitates proactive engagement. "
                 "Based on the user's recent context, suggest 3 Conversation Starters or Planning Cycles. "
@@ -309,7 +327,7 @@ class Summarizer:
                 },
             )
             logger.info("llm_response_received",
-                       tokens=result.usage().total_tokens if result.usage() else 0)
+                       tokens=result.usage.total_tokens if result.usage else 0)
         except Exception as exc:
             logger.error("llm_call_failed", error=str(exc), error_type=type(exc).__name__)
             raise
@@ -330,7 +348,7 @@ class Summarizer:
             "structured_data": response_dict,  # Store all structured fields
             "embedding": embedding,
             "activity_counts": activity_counts,
-            "tokens_used": result.usage().total_tokens if result.usage() else 0,
+            "tokens_used": result.usage.total_tokens if result.usage else 0,
         }
 
     def generate_daily_summary(self, hourly_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -437,7 +455,7 @@ class Summarizer:
             )
             logger.info(
                 "insights_response_received",
-                tokens=result.usage().total_tokens if result.usage() else 0,
+                tokens=result.usage.total_tokens if result.usage else 0,
                 num_insights=len(result.output.insights),
             )
         except Exception as exc:
@@ -457,7 +475,7 @@ class Summarizer:
             "insights": insights_list,
             "data_sources_used": response.data_sources_used,
             "embedding": embedding,
-            "tokens_used": result.usage().total_tokens if result.usage() else 0,
+            "tokens_used": result.usage.total_tokens if result.usage else 0,
             "num_insights": len(response.insights),
         }
 
@@ -483,7 +501,7 @@ class Summarizer:
             )
             logger.info(
                 "actions_response_received",
-                tokens=result.usage().total_tokens if result.usage() else 0,
+                tokens=result.usage.total_tokens if result.usage else 0,
                 num_actions=len(result.output.actions),
             )
         except Exception as exc:
@@ -495,7 +513,7 @@ class Summarizer:
 
         return {
             "actions": actions_list,
-            "tokens_used": result.usage().total_tokens if result.usage() else 0,
+            "tokens_used": result.usage.total_tokens if result.usage else 0,
         }
 
     def _build_insights_prompt(self, context: Dict[str, Any]) -> str:
@@ -664,7 +682,7 @@ class Summarizer:
             "embedding": embedding,
             "activity_counts": total_counts,
             "num_child_summaries": len(child_summaries),
-            "tokens_used": result.usage().total_tokens if result.usage() else 0,
+            "tokens_used": result.usage.total_tokens if result.usage else 0,
         }
 
     def _build_data_prompt(self, data: Dict[str, Any], counts: Dict[str, int]) -> str:

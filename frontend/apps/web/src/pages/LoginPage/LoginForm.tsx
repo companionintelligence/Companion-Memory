@@ -31,6 +31,9 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
 
   const form = useForm<LoginFormData>({
     resolver: formDataResolver(LoginFormSchema),
+    // Controlled from first render — without explicit defaults the inputs start
+    // `undefined` and React warns about switching uncontrolled → controlled.
+    defaultValues: { email: '', password: '' },
   });
 
   const handleSubmit = (data: LoginFormData, e?: BaseSyntheticEvent) => onSubmit?.(data, e);

@@ -10,6 +10,8 @@
     "lint": "oxlint && eslint --cache",
     "lint:fix": "oxlint --fix && eslint --fix --cache",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
     "graphql:generate": "graphql-codegen",
@@ -92,6 +94,7 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.32.1",
     "vite": "^6.4.3",
-    "vite-plugin-pwa": "^1.0.3"
+    "vite-plugin-pwa": "^1.0.3",
+    "vitest": "^3.2.5"
   }
 }

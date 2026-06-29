@@ -1,5 +1,5 @@
 import { VIRTUAL_STATUS } from '../../services/GeocodeService';
-import type { GeocodeOutcome } from '../../services/GeocodeService';
+import type { GeocodeOutcome, ReverseGeocodeOutcome } from '../../services/GeocodeService';
 import { GeocodeBatchListener, RateLimiter } from '../GeocodeBatchListener';
 
 function makeLogger() {
@@ -10,7 +10,7 @@ function makeLogger() {
  * A QueryBuilder spy that records every where/andWhere clause so a test can
  * assert on the candidate filter, and returns the seeded rows from getRawMany.
  */
-function makeQueryBuilder(rows: Array<{ event_id: string; location_name: string }>) {
+function makeQueryBuilder(rows: Array<Record<string, unknown>>) {
   const clauses: string[] = [];
   const qb: Record<string, jest.Mock> = {};
   const chain = () => qb;
@@ -44,18 +44,32 @@ function makeDataSource(builder: ReturnType<typeof makeQueryBuilder>) {
  * outcome (provider never touched), and capture EventService.update calls.
  */
 function makeListener(
-  rows: Array<{ event_id: string; location_name: string }>,
+  rows: Array<Record<string, unknown>>,
   outcomeFor: (location: string) => GeocodeOutcome,
+  reverseOutcomeFor?: (lat: number, lng: number) => ReverseGeocodeOutcome,
 ) {
   const builder = makeQueryBuilder(rows);
   const dataSource = makeDataSource(builder);
 
   const geocodeCalls: Array<{ location: string; bustCache: boolean }> = [];
+  const reverseCalls: Array<{ lat: number; lng: number; bustCache: boolean }> = [];
   const geocodeService = {
     geocode: jest.fn(async (location: string, options?: { bustCache?: boolean }) => {
       geocodeCalls.push({ location, bustCache: options?.bustCache ?? false });
 
       return outcomeFor(location);
+    }),
+    reverseGeocode: jest.fn(async (lat: number, lng: number, options?: { bustCache?: boolean }) => {
+      reverseCalls.push({ lat, lng, bustCache: options?.bustCache ?? false });
+
+      return (
+        reverseOutcomeFor?.(lat, lng) ?? {
+          status: 'ZERO_RESULTS',
+          placeName: null,
+          cached: false,
+          retryable: false,
+        }
+      );
     }),
   };
 
@@ -80,7 +94,7 @@ function makeListener(
     makeLogger() as any,
   );
 
-  return { listener, builder, geocodeService, eventService, geocodeCalls, updates };
+  return { listener, builder, geocodeService, eventService, geocodeCalls, reverseCalls, updates };
 }
 
 function okOutcome(lowConfidence = false): GeocodeOutcome {
@@ -211,5 +225,79 @@ describe('GeocodeBatchListener candidate selection', () => {
     const retry = makeListener(rows, () => okOutcome());
     await retry.listener.handleBatch({ userId: USER, retryNull: true });
     expect(retry.geocodeCalls[0].bustCache).toBe(true);
+  });
+});
+
+describe('GeocodeBatchListener reverse direction', () => {
+  const okReverse = (placeName: string): ReverseGeocodeOutcome => ({
+    status: 'OK',
+    placeName,
+    cached: false,
+    retryable: false,
+  });
+
+  it('writes location_name + a reverse_geocoded tag for a coordinate-only event', async () => {
+    const rows = [{ event_id: 'e1', lat: 37.4, lng: -122.1 }];
+    const { listener, eventService, updates, reverseCalls } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => okReverse('Mountain View, CA'),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    expect(reverseCalls[0]).toMatchObject({ lat: 37.4, lng: -122.1 });
+    // One write for the name, one for the provenance tag.
+    expect(eventService.update).toHaveBeenCalledTimes(2);
+    expect(updates[0].data.location_name).toBe('Mountain View, CA');
+    expect(updates[1].data.metadata).toMatchObject({ location_source: 'reverse_geocoded' });
+    // Reverse must never touch coordinates.
+    expect(updates[0].data.location_coordinates).toBeUndefined();
+  });
+
+  it('selects coordinate-bearing events that lack a name (the inverse of the forward filter)', async () => {
+    const { listener, builder } = makeListener(
+      [],
+      () => okOutcome(),
+      () => okReverse('x'),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    const joined = builder.clauses.join(' | ');
+    expect(joined).toContain('location_coordinates IS NOT NULL');
+    expect(joined).toContain('location_name IS NULL');
+  });
+
+  it('coerces numeric-string coordinates from the driver before calling the provider', async () => {
+    const rows = [{ event_id: 'e1', lat: '40.7128', lng: '-74.0060' }];
+    const { listener, reverseCalls } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => okReverse('New York, NY'),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    expect(reverseCalls[0].lat).toBe(40.7128);
+    expect(reverseCalls[0].lng).toBe(-74.006);
+  });
+
+  it('writes nothing when reverse geocoding finds no place name', async () => {
+    const rows = [{ event_id: 'e1', lat: 0.1, lng: 0.1 }];
+    const { listener, eventService } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => ({
+        status: 'ZERO_RESULTS',
+        placeName: null,
+        cached: false,
+        retryable: false,
+      }),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    expect(eventService.update).not.toHaveBeenCalled();
   });
 });

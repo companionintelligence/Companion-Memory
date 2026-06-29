@@ -25,6 +25,7 @@ import torch
 
 from ci.config import settings
 from ci.model.calibration import _build_full_batch
+from ci.model.checkpoints import user_ckpt_dir, HMT_CKPT, HMT_CALIBRATED
 from ci.model.dataset import TokenStreamDataset
 from ci.model.transformer import HMTModel
 from ci.model.vocab import (
@@ -135,7 +136,7 @@ def evaluate(
              l1_acc3 * 100, l1_top3_correct, l1_total, L1_TOP3_TARGET * 100,
              "✓" if report["l1_top3_passed"] else "✗")
 
-    out = Path(settings.models_dir) / "hmt" / "eval_report.json"
+    out = user_ckpt_dir(user_id, create=True) / "eval_report.json"
     out.write_text(json.dumps(report, indent=2, default=str))
     log.info("Eval report → %s", out)
 
@@ -148,9 +149,9 @@ def _load_calibrated(
     l1_vocab: Vocab,
     device:   str,
 ) -> tuple[HMTModel, float]:
-    ckpt_dir = Path(settings.models_dir) / "hmt"
-    cal_path = ckpt_dir / "hmt_calibrated.pt"
-    src_path = ckpt_dir / "hmt_checkpoint.pt"
+    ckpt_dir = user_ckpt_dir(user_id)
+    cal_path = ckpt_dir / HMT_CALIBRATED
+    src_path = ckpt_dir / HMT_CKPT
     path = cal_path if cal_path.exists() else src_path
 
     ckpt  = torch.load(path, map_location=device, weights_only=True)

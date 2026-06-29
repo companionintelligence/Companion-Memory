@@ -25,6 +25,7 @@ from torch.optim import AdamW
 
 from ci.config import settings
 from ci.model.calibration import _build_full_batch
+from ci.model.checkpoints import user_ckpt_dir
 from ci.model.dataset import TokenStreamDataset
 from ci.model.evaluator import _load_calibrated
 from ci.model.lora import apply_lora, load_adapter, save_adapter
@@ -64,7 +65,7 @@ def fine_tune_nightly(
     apply_lora(model)
 
     # ── Load existing adapter if present ──────────────────────────────────────
-    adapter_path = Path(settings.models_dir) / "hmt" / f"lora_{user_id}.pt"
+    adapter_path = user_ckpt_dir(user_id, create=True) / f"lora_{user_id}.pt"
     if adapter_path.exists():
         load_adapter(model, adapter_path)
         log.info("Resumed adapter from %s", adapter_path)

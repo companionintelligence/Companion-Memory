@@ -58,11 +58,26 @@ export type PreviewGeneratedPayload = {
   model?: string;
 };
 
+/**
+ * Request to backfill `ci.files.width`/`height` for ORIGINAL image/video files
+ * that lack them (dimensions weren't captured at ingest before the preview pass
+ * recorded them). Consumed out-of-band by {@link MediaDimensionsBackfillListener}.
+ */
+export const MediaDimensionsBackfillRequestEvent = 'file.media-dimensions-backfill-request';
+
+export type MediaDimensionsBackfillRequestPayload = {
+  /** Owner whose files are probed. */
+  userId: string;
+  /** Max files to record dimensions for in this batch (default: listener's DEFAULT_LIMIT). */
+  limit?: number;
+};
+
 defineEvent<FileCreatedPayload>(FileCreatedEvent);
 defineEvent<FileUpdatedPayload>(FileUpdatedEvent);
 defineEvent<FileUploadedPayload>(FileUploadedEvent);
 defineEvent<FileDeletedPayload>(FileRemovedEvent);
 defineEvent<PreviewGeneratedPayload>(PreviewGeneratedEvent);
+defineEvent<MediaDimensionsBackfillRequestPayload>(MediaDimensionsBackfillRequestEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
@@ -71,6 +86,7 @@ declare module '@ci/domains/events/registry' {
     [FileUploadedEvent]: FileUploadedPayload;
     [FileRemovedEvent]: FileDeletedPayload;
     [PreviewGeneratedEvent]: PreviewGeneratedPayload;
+    [MediaDimensionsBackfillRequestEvent]: MediaDimensionsBackfillRequestPayload;
   }
 }
 

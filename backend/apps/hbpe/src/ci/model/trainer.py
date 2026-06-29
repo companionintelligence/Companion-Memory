@@ -27,6 +27,9 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ci.config import settings
+from ci.model.checkpoints import (
+    user_ckpt_dir, l1_vocab_fingerprint, L0_MAE_CKPT, HMT_CKPT,
+)
 from ci.model.dataset import TokenStreamDataset
 from ci.model.transformer import L0MAEModel, HMTModel
 from ci.model.vocab import (
@@ -68,9 +71,8 @@ def train_l0_mae(
     optimiser = AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimiser, T_max=N_EPOCHS, eta_min=LR / 10)
 
-    ckpt_dir = Path(settings.models_dir) / "hmt"
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = ckpt_dir / "l0_mae_checkpoint.pt"
+    ckpt_dir = user_ckpt_dir(user_id, create=True)
+    ckpt_path = ckpt_dir / L0_MAE_CKPT
 
     best_val_loss = math.inf
     patience_counter = 0
@@ -230,8 +232,8 @@ def train_hmt_joint(
     model = HMTModel(l0_vocab_size=len(l0_vocab), l1_vocab_size=len(l1_vocab)).to(device)
 
     # Load L0 backbone weights from MAE checkpoint
-    ckpt_dir  = Path(settings.models_dir) / "hmt"
-    mae_ckpt  = ckpt_dir / "l0_mae_checkpoint.pt"
+    ckpt_dir  = user_ckpt_dir(user_id, create=True)
+    mae_ckpt  = ckpt_dir / L0_MAE_CKPT
     if mae_ckpt.exists():
         mae_state = torch.load(mae_ckpt, map_location=device, weights_only=True)["model_state"]
         # Copy weights that match (token_emb, pos_emb, encoder)
@@ -246,7 +248,8 @@ def train_hmt_joint(
     optimiser = AdamW(model.parameters(), lr=LR_FINETUNE, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimiser, T_max=N_EPOCHS, eta_min=LR_FINETUNE / 10)
 
-    ckpt_path    = ckpt_dir / "hmt_checkpoint.pt"
+    ckpt_path    = ckpt_dir / HMT_CKPT
+    l1_fp        = l1_vocab_fingerprint(l1_vocab)
     best_val     = math.inf
     patience_ctr = 0
 
@@ -265,6 +268,7 @@ def train_hmt_joint(
                 "model_state":    model.state_dict(),
                 "l0_vocab_size":  len(l0_vocab),
                 "l1_vocab_size":  len(l1_vocab),
+                "l1_vocab_fingerprint": l1_fp,
                 "val_loss":       best_val,
             }, ckpt_path)
             log.info("Epoch %d/%d  train=%.4f  val=%.4f  ✓ saved",

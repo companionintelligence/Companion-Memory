@@ -21,6 +21,7 @@ dependencies = [
 
     # ── Data I/O ──────────────────────────────────────────────────────────────
     "psycopg2-binary>=2.9",         # PostgreSQL / TimescaleDB access
+    "asyncpg>=0.29",                # async LISTEN/NOTIFY ingester (event-driven cache invalidation)
 
     # ── Workflow orchestration ────────────────────────────────────────────────
     "temporalio",                    # nightly job Temporal workflows

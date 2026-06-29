@@ -25,6 +25,7 @@ import torch
 import torch.nn.functional as F
 
 from ci.config import settings
+from ci.model.checkpoints import user_ckpt_dir, HMT_CKPT, HMT_CALIBRATED
 from ci.model.dataset import TokenStreamDataset
 from ci.model.transformer import HMTModel
 from ci.model.vocab import PAD_IDX, SOD_IDX, EOD_IDX, Vocab, build_l0_vocab, build_l1_vocab
@@ -74,12 +75,12 @@ def calibrate(
     log.info("ECE after  scaling — L0: %.4f  L1: %.4f",
              ece_after["l0"], ece_after["l1"])
 
-    # Save calibrated checkpoint (same weights, add temperature)
-    ckpt_dir = Path(settings.models_dir) / "hmt"
-    src_ckpt = torch.load(ckpt_dir / "hmt_checkpoint.pt", map_location=device,
+    # Save calibrated checkpoint (same weights + fingerprint, add temperature)
+    ckpt_dir = user_ckpt_dir(user_id, create=True)
+    src_ckpt = torch.load(ckpt_dir / HMT_CKPT, map_location=device,
                           weights_only=True)
     src_ckpt["temperature"] = best_T
-    cal_path = ckpt_dir / "hmt_calibrated.pt"
+    cal_path = ckpt_dir / HMT_CALIBRATED
     torch.save(src_ckpt, cal_path)
     log.info("Saved calibrated checkpoint → %s", cal_path)
 
@@ -103,7 +104,7 @@ def calibrate(
 
 
 def _load_hmt(user_id: str, l0_vocab: Vocab, l1_vocab: Vocab, device: str) -> HMTModel:
-    ckpt_path = Path(settings.models_dir) / "hmt" / "hmt_checkpoint.pt"
+    ckpt_path = user_ckpt_dir(user_id) / HMT_CKPT
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     model = HMTModel(l0_vocab_size=len(l0_vocab), l1_vocab_size=len(l1_vocab)).to(device)
     model.load_state_dict(ckpt["model_state"])

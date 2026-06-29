@@ -98,6 +98,7 @@ def get_unlabeled_events(user_id: str, limit: int = 1000) -> list[dict]:
         WHERE e.user_id    = %s::uuid
           AND e.is_deleted = FALSE
           AND ec.event_id  IS NULL
+          AND e.start_time >= '2010-01-01'::timestamptz
         ORDER BY e.start_time
         LIMIT %s
     """
@@ -179,6 +180,7 @@ def get_unlabeled_content(user_id: str, limit: int = 1000) -> list[dict]:
         LEFT JOIN hbpe.l2_content_cluster lc ON lc.content_id = c.id
         WHERE c.user_id     = %s::uuid
           AND lc.content_id IS NULL
+          AND c.created_at >= '2010-01-01'::timestamptz
         ORDER BY c.created_at
         LIMIT %s
     """

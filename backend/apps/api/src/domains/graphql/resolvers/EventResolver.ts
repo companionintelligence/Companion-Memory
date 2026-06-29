@@ -1,11 +1,12 @@
 import { UseGuards } from '@nestjs/common';
-import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { EventService } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
+import { type EventMedia, EventMediaLoader } from '../loaders/EventMediaLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -31,6 +32,7 @@ export class EventResolver {
     private readonly personLoader: PersonLoader,
     private readonly placeLoader: PlaceLoader,
     private readonly tagLoader: TagLoader,
+    private readonly eventMediaLoader: EventMediaLoader,
   ) {}
 
   /** Map a CreateEventInput (GraphQL) to the service's CreateEventDto. */
@@ -278,5 +280,49 @@ export class EventResolver {
     });
 
     return tags.map((tag) => EntityTagType.toType(tag));
+  }
+
+  /**
+   * Resolve the photo/video linked to this event (null for non-media events).
+   * The six media fields below all read from this one DataLoader call, so a
+   * page of events resolves its media in a single batch.
+   */
+  private resolveMedia(context: RequestContext, parent: EventType): Promise<EventMedia | null> {
+    return this.eventMediaLoader.load(toServiceContext(context), parent.__source.id);
+  }
+
+  /** Thumbnail (PREVIEW variant) URL for a photo/video event. */
+  @ResolveField(() => String, { nullable: true })
+  async previewUrl(@Context() context: RequestContext, @Parent() parent: EventType): Promise<string | null> {
+    return (await this.resolveMedia(context, parent))?.previewUrl ?? null;
+  }
+
+  /** Full-resolution (ORIGINAL variant) URL — drives the lightbox / video player. */
+  @ResolveField(() => String, { nullable: true })
+  async mediaUrl(@Context() context: RequestContext, @Parent() parent: EventType): Promise<string | null> {
+    return (await this.resolveMedia(context, parent))?.mediaUrl ?? null;
+  }
+
+  @ResolveField(() => String, { nullable: true })
+  async mediaContentType(
+    @Context() context: RequestContext,
+    @Parent() parent: EventType,
+  ): Promise<string | null> {
+    return (await this.resolveMedia(context, parent))?.contentType ?? null;
+  }
+
+  @ResolveField(() => Int, { nullable: true })
+  async mediaWidth(@Context() context: RequestContext, @Parent() parent: EventType): Promise<number | null> {
+    return (await this.resolveMedia(context, parent))?.width ?? null;
+  }
+
+  @ResolveField(() => Int, { nullable: true })
+  async mediaHeight(@Context() context: RequestContext, @Parent() parent: EventType): Promise<number | null> {
+    return (await this.resolveMedia(context, parent))?.height ?? null;
+  }
+
+  @ResolveField(() => Float, { nullable: true })
+  async mediaSize(@Context() context: RequestContext, @Parent() parent: EventType): Promise<number | null> {
+    return (await this.resolveMedia(context, parent))?.size ?? null;
   }
 }

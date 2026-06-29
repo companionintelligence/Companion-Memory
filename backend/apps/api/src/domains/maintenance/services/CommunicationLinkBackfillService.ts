@@ -11,6 +11,26 @@ const DEFAULT_WINDOW_DAYS = 7;
 /** Default cap on candidate rows examined per window (bounds memory + a query). */
 const DEFAULT_WINDOW_LIMIT = 5000;
 
+/**
+ * Per-window progress snapshot for {@link CommunicationLinkBackfillOptions.onProgress}.
+ * All counts are CUMULATIVE running totals at the point the most recent window's
+ * writes committed; `windowsDone` is the numerator and `windowsTotal` the
+ * denominator of a determinate progress bar (so `windowsDone / windowsTotal` is a
+ * valid 0..1 ratio that reaches 1 on completion).
+ */
+export interface CommunicationLinkBackfillProgress {
+  /** Candidate communications examined so far (cumulative). */
+  examined: number;
+  /** Rows whose from_entity_id was filled so far (cumulative). */
+  fromLinked: number;
+  /** Rows whose to_entity_ids was filled so far (cumulative). */
+  toLinked: number;
+  /** Windows whose writes have committed so far (numerator). */
+  windowsDone: number;
+  /** Total windows this run will process (denominator), known up front. */
+  windowsTotal: number;
+}
+
 export interface CommunicationLinkBackfillOptions {
   /**
    * Only consider communications with `time` in [startTime, endTime]. STRONGLY
@@ -25,6 +45,13 @@ export interface CommunicationLinkBackfillOptions {
   windowDays?: number;
   /** Max candidate rows pulled per window (default 5000). */
   windowLimit?: number;
+  /**
+   * Invoked once per window, AFTER that window's writes commit, with cumulative
+   * counts plus `windowsDone`/`windowsTotal`. Drives a determinate per-window
+   * progress bar for the importer's maintenance stage. Optional; the synchronous
+   * result return value is unchanged whether or not this is supplied.
+   */
+  onProgress?: (partial: CommunicationLinkBackfillProgress) => void;
 }
 
 export interface CommunicationLinkBackfillResult {
@@ -103,6 +130,12 @@ export class CommunicationLinkBackfillService {
 
     const windowMs = windowDays * 24 * 60 * 60 * 1000;
 
+    // Denominator known up front: the while-loop below steps windowEnd down from
+    // `end` to `start` in windowMs slices, so it runs ceil((end - start) / windowMs)
+    // times. Matches the loop's stepping exactly so windowsDone reaches this on
+    // completion. (>=1 whenever there is any range; ceil of 0 stays 0.)
+    const windowsTotal = Math.ceil((end.getTime() - start.getTime()) / windowMs);
+
     // Walk newest-first: more recent communications are likelier to have a
     // matching, recently-ingested Person. Each window is its own bounded scan.
     let windowEnd = end;
@@ -114,6 +147,17 @@ export class CommunicationLinkBackfillService {
       fromLinked += windowResult.fromLinked;
       toLinked += windowResult.toLinked;
       windows += 1;
+
+      // This window's writes have committed (backfillWindow awaited above), so
+      // emit cumulative progress with windows as the numerator. Done AFTER the
+      // writes commit so a consumer never sees progress ahead of durable state.
+      options.onProgress?.({
+        examined,
+        fromLinked,
+        toLinked,
+        windowsDone: windows,
+        windowsTotal,
+      });
 
       // Step to the next, older window. windowStart is inclusive here and used as
       // the exclusive upper bound of the next window, so no row is double-counted.

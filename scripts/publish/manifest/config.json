@@ -1,6 +1,6 @@
 {
   "$schema": "https://schemas.runtipi.io/v2/app-info.json",
-  "id": "companion",
+  "id": "ci-memory",
   "name": "Companion Memory",
   "version": "0.0.0",
   "short_desc": "Personal database, RAG, and behavioral prediction — on your own hardware.",

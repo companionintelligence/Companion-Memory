@@ -20,7 +20,12 @@ const PREVIEW_MAX_DIMENSION = 300;
 const IMAGE_MIME_PREFIX = 'image/';
 const VIDEO_MIME_PREFIX = 'video/';
 
-/** Generated preview bytes plus the rendered preview's own width/height. */
+/**
+ * A generated preview plus the dimensions of both the rendered preview JPEG
+ * (always known; stored on the PREVIEW row so the FE has intrinsic sizes for
+ * `<img>` aspect-ratio) and the source media (`null` if unreadable; backfilled
+ * onto the ORIGINAL row).
+ */
 interface PreviewResult {
   buffer: Buffer;
   previewDimensions: MediaDimensions;
@@ -100,16 +105,18 @@ export class FilePreviewGenerationListener {
       return;
     }
 
-    // Backfill the ORIGINAL row's intrinsic dims when we just decoded them.
-    // Skips FileUpdatedEvent so we don't re-trigger preview / re-index for
-    // every photo we touch.
-    if (result.sourceDimensions != null && (file.width == null || file.height == null)) {
+    // Record the source's intrinsic dimensions onto the ORIGINAL row so
+    // EventMediaLoader (and the drawer "Dimensions" row) can surface them. A
+    // targeted write that doesn't re-trigger preview generation or re-indexing.
+    if (result.sourceDimensions != null) {
       await this.fileService.setDimensions(context, file.id, result.sourceDimensions);
     }
 
     const preview = await this.fileService.create(context, {
       contentType: 'image/jpeg',
       size: result.buffer.length,
+      // Always known — captured from sharp's resolveWithObject. Lets the FE
+      // thumbnail loader size the slot before the image decodes.
       width: result.previewDimensions.width,
       height: result.previewDimensions.height,
       variant: FileVariant.PREVIEW,
@@ -133,17 +140,18 @@ export class FilePreviewGenerationListener {
     context: UserServiceContext,
     file: RequiredFields<File, 'key', true>,
   ): Promise<PreviewResult> {
-    // Buffer the original once: the dimensions probe and the resize need to
-    // read the same bytes, and sharp's metadata() is unreliable on a
-    // partially-consumed stream.
+    // Buffer the original once so the dimensions probe and the resize read the
+    // same bytes (one object-storage fetch, and metadata is reliable on a
+    // Buffer where it isn't on a partially-consumed stream).
     const original = Buffer.from(await this.fileService.getFileContent(context, file.key));
 
-    const sourceDimensions = await this.mediaDimensionsService.fromImageBuffer(original, file.contentType);
+    const sourceDimensions = await this.mediaDimensionsService.fromImageBuffer(original);
 
     // .rotate() (no args) reads EXIF orientation, rotates the pixels, and
-    // strips the tag — otherwise the JPEG bytes are saved as-is and downstream
-    // <img> renders rotated. Must come before .resize() so the resize box
-    // applies to the display orientation, not the stored one.
+    // strips the tag. Must come before .resize() so the resize box applies to
+    // the *display* orientation, not the stored one. Without this the JPEG
+    // bytes are saved as-is and browsers don't reliably honour the tag on
+    // derivative JPEGs — photos come back upside-down or sideways.
     const { data, info } = await sharp(original)
       .rotate()
       .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
@@ -179,6 +187,10 @@ export class FilePreviewGenerationListener {
         ws.on('error', (err) => reject(err));
       });
 
+      // Probe the source stream's dimensions from the same spooled file, before
+      // collapsing it to a single frame.
+      const sourceDimensions = await this.mediaDimensionsService.fromVideoFile(tempInput);
+
       // Extract a single frame
       await new Promise<void>((resolve, reject) => {
         ffmpeg(tempInput)
@@ -191,9 +203,8 @@ export class FilePreviewGenerationListener {
 
       const frame = await fs.readFile(tempOutput);
 
-      // ffmpeg auto-rotates the extracted frame, so the frame is already in
-      // display orientation; .rotate() here is a no-op safeguard for any
-      // frames that still carry an orientation tag.
+      // ffmpeg already auto-rotates the extracted frame, so .rotate() is a
+      // safety net for any orientation tag still on the JPEG bytes.
       const { data, info } = await sharp(frame)
         .rotate()
         .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
@@ -205,9 +216,7 @@ export class FilePreviewGenerationListener {
       return {
         buffer: data,
         previewDimensions: { width: info.width, height: info.height },
-        // Source-dimension extraction for videos isn't wired up here; the
-        // post-extraction frame can't tell us the original encoded size.
-        sourceDimensions: null,
+        sourceDimensions,
       };
     } finally {
       await fs.unlink(tempInput).catch(() => {});

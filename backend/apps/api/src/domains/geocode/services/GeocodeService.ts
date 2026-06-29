@@ -77,6 +77,18 @@ export interface GeocodeOutcome {
   locationType?: string | null;
 }
 
+/** Outcome of a reverse-geocode attempt (coords -> place name). */
+export interface ReverseGeocodeOutcome {
+  /** Provider status, or 'OK'. */
+  status: string;
+  /** Resolved human-readable place name, present only when status === 'OK'. */
+  placeName: string | null;
+  /** True when served from the cache (no provider call billed). */
+  cached: boolean;
+  /** Whether a retry is worthwhile (transient provider failure). */
+  retryable: boolean;
+}
+
 /** Options controlling a single {@link GeocodeService.geocode} call. */
 export interface GeocodeOptions {
   /**
@@ -227,6 +239,76 @@ export class GeocodeService {
       cached: false,
       retryable: false,
     };
+  }
+
+  /**
+   * Reverse-geocode a (lat, lng) pair into a human-readable place name, going
+   * through the same cache table as forward geocoding. The cache key is the
+   * rounded coordinate pair under a `reverse:` namespace (so it never collides
+   * with a forward address hash); rounding to 4 decimals (~11 m) lets nearby
+   * pins share a cached label. Never throws on provider-level failures.
+   */
+  async reverseGeocode(
+    lat: number,
+    lng: number,
+    options: GeocodeOptions = {},
+  ): Promise<ReverseGeocodeOutcome> {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return { status: 'INVALID_REQUEST', placeName: null, cached: false, retryable: false };
+    }
+
+    const cacheKey = `reverse:${lat.toFixed(4)},${lng.toFixed(4)}`;
+    // Hash the structured key DIRECTLY — do NOT route it through hashQuery, whose
+    // canonicalize() strips '-', '.' and ',' (it's built for free-text addresses).
+    // That would collapse all four coordinate quadrants into one cache row
+    // (37.42,-122.08 vs -37.42,122.08 vs ...), so the first quadrant to resolve
+    // poisons the others with a wrong-hemisphere place name.
+    const queryHash = createHash('sha256').update(cacheKey).digest('hex');
+
+    // --- Cache check -------------------------------------------------------
+    if (!options.bustCache) {
+      const cached = await this.cacheRepository.findOne({ where: { queryHash } });
+      if (cached) {
+        await this.cacheRepository.increment({ queryHash }, 'hitCount', 1).catch(() => undefined);
+
+        return {
+          status: cached.status,
+          placeName: cached.status === 'OK' ? (cached.normalizedAddress ?? null) : null,
+          cached: true,
+          retryable: false,
+        };
+      }
+    }
+
+    // --- Provider call -----------------------------------------------------
+    let result: GeocodeProviderResult;
+    try {
+      result = await this.provider.reverseGeocode(lat, lng);
+    } catch (error) {
+      // Transport failure (network/timeout) — transient, retryable, NOT cached.
+      this.logger.warn('Reverse-geocode provider transport error', {
+        lat,
+        lng,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      return { status: 'UNKNOWN_ERROR', placeName: null, cached: false, retryable: true };
+    }
+
+    // Transient provider statuses are not cached (the next attempt may succeed).
+    if (RETRYABLE_STATUSES.has(result.status)) {
+      return { status: result.status, placeName: null, cached: false, retryable: true };
+    }
+
+    await this.writeCache(cacheKey, queryHash, result);
+
+    if (result.status === 'OK' && result.normalizedAddress) {
+      return { status: 'OK', placeName: result.normalizedAddress, cached: false, retryable: false };
+    }
+
+    // Negative result (ZERO_RESULTS / REQUEST_DENIED / INVALID_REQUEST) — cached
+    // above so we never re-bill it.
+    return { status: result.status, placeName: null, cached: false, retryable: false };
   }
 
   private outcomeFromCache(row: GeocodeCacheEntity): GeocodeOutcome {

@@ -14,6 +14,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from .config import settings
 from .summarizer import (
+    wrap_output,
     HourlySummaryResponse,
     DailySummaryResponse,
     WeeklySummaryResponse,
@@ -62,7 +63,7 @@ def create_llm_config() -> LLMConfig:
     agents = {
         'hourly': Agent(
             model,
-            output_type=HourlySummaryResponse,
+            output_type=wrap_output(HourlySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You are an AI that creates concise hourly summaries of user activity. "
                 "Analyze the data and provide insights, patterns, and notable events."
@@ -70,7 +71,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'daily': Agent(
             model,
-            output_type=DailySummaryResponse,
+            output_type=wrap_output(DailySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize hourly summaries into a daily overview. "
                 "Focus on: daily rhythms and routines, workflow patterns, "
@@ -81,7 +82,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'weekly': Agent(
             model,
-            output_type=WeeklySummaryResponse,
+            output_type=wrap_output(WeeklySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize daily summaries into a weekly overview. "
                 "Focus on: work-life balance, recurring weekly patterns, "
@@ -92,7 +93,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'monthly': Agent(
             model,
-            output_type=MonthlySummaryResponse,
+            output_type=wrap_output(MonthlySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize weekly summaries into a monthly overview. "
                 "Focus on: major milestones and achievements, evolving priorities, "
@@ -103,7 +104,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'seasonal': Agent(
             model,
-            output_type=SeasonalSummaryResponse,
+            output_type=wrap_output(SeasonalSummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize monthly summaries into a seasonal (3-month) overview. "
                 "Focus on: life phase transitions, major project outcomes, "
@@ -114,7 +115,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'yearly': Agent(
             model,
-            output_type=YearlySummaryResponse,
+            output_type=wrap_output(YearlySummaryResponse), retries=settings.output_retries,
             system_prompt=(
                 "You synthesize seasonal summaries into a yearly overview. "
                 "Focus on: annual achievements and setbacks, identity shifts, "
@@ -125,7 +126,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'dossier': Agent(
             model,
-            output_type=UserDossierResponse,
+            output_type=wrap_output(UserDossierResponse), retries=settings.output_retries,
             system_prompt=(
                 "Create a concise user dossier summarizing personality, preferences, "
                 "challenges, and interests based on their activity. Keep summary under 500 characters."
@@ -133,7 +134,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'insights': Agent(
             model,
-            output_type=InsightsResponse,
+            output_type=wrap_output(InsightsResponse), retries=settings.output_retries,
             system_prompt=(
                 "You are a proactive personal assistant that generates actionable insights. "
                 "Analyze the user's recent activity, relationships, upcoming events, and changes "
@@ -154,7 +155,7 @@ def create_llm_config() -> LLMConfig:
         ),
         'actions': Agent(
             model,
-            output_type=ActionsResponse,
+            output_type=wrap_output(ActionsResponse), retries=settings.output_retries,
             system_prompt=(
                 "You are a proactive personal assistant that suggests action cards to help the user "
                 "make the most of their time and have meaningful conversations.\n\n"

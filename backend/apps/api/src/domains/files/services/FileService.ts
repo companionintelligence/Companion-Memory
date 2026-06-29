@@ -416,11 +416,13 @@ export class FileService implements OnModuleInit {
   }
 
   /**
-   * Targeted width/height write — deliberately NOT routed through {@link update}
-   * to skip `FileUpdatedEvent` (would re-trigger preview / re-index for every
-   * file we touch) and because width/height aren't part of the user-facing
-   * {@link UpdateFileDto}. Used to backfill the ORIGINAL row's intrinsic dims
-   * once they're known from the preview pass.
+   * Persist the intrinsic pixel dimensions onto a file row.
+   *
+   * A targeted write — deliberately NOT routed through {@link update}: it skips
+   * the `FileUpdatedEvent` (so the dimensions backfill recording ~18.8k files
+   * doesn't fan out a flood of no-op re-index jobs) and writes width/height,
+   * which the user-facing {@link UpdateFileDto} doesn't expose. User-scoped like
+   * the rest of the service (SYSTEM_USER bypasses the scope).
    */
   async setDimensions(
     context: ServiceContext,

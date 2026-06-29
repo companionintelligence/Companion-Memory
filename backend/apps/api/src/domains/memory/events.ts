@@ -396,6 +396,15 @@ export type GeocodeBatchRequestPayload = {
    * negative results served from cache.
    */
   retryNull?: boolean;
+  /**
+   * Which direction to run. 'forward' (default) geocodes location_name -> coords
+   * for events missing coordinates; 'reverse' geocodes coords -> location_name
+   * for events that have coordinates (e.g. from photo EXIF / GPS) but no name,
+   * so a bare pin gets a readable label. Both directions share this queue + the
+   * listener's single rate limiter so they never collectively exceed the
+   * provider's QPS.
+   */
+  direction?: 'forward' | 'reverse';
 };
 
 defineEvent<GeocodeBatchRequestPayload>(GeocodeBatchRequestEvent);
@@ -403,5 +412,50 @@ defineEvent<GeocodeBatchRequestPayload>(GeocodeBatchRequestEvent);
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
     [GeocodeBatchRequestEvent]: GeocodeBatchRequestPayload;
+  }
+}
+
+/**
+ * Event emitted to enqueue a temporal location-ESTIMATION backfill batch
+ * (geodata-plan Phase 3). Handled by {@link EstimateLocationBatchListener},
+ * which fills location_coordinates for physical-presence events that have no
+ * coordinates of their own by borrowing the nearest-in-time REAL location (a
+ * ci.position GPS fix, else a located event) within a bounded time gap —
+ * mirroring LifeScope's "coordinates set to the non-estimated location closest
+ * in time". Estimated rows are flagged is_inferred + metadata.location_source
+ * = 'estimated' so they're distinguishable from measured/geocoded coordinates.
+ *
+ * @see {@link EstimateLocationBatchListener.handleBatch} - The listener that consumes this event
+ */
+export const EstimateLocationBatchRequestEvent = 'event.estimate-location-batch-request';
+
+/**
+ * Event payload of {@link EstimateLocationBatchRequestEvent}.
+ */
+export type EstimateLocationBatchRequestPayload = {
+  /** Owner whose events are estimated. */
+  userId: string;
+  /** Max number of coordinate-less events to fill in this batch. */
+  limit?: number;
+  /**
+   * Maximum time gap (hours) between a candidate event and its donor location.
+   * A candidate with no real location within this window is left unestimated, so
+   * a location-less event is never pinned to somewhere days away. Default 24.
+   */
+  maxGapHours?: number;
+  /**
+   * Restrict candidates to these `source_system`s (physical-presence events that
+   * represent BEING somewhere — calendar, photos, purchases, transport, fitness).
+   * Messages/social posts are excluded by default so a 3am email isn't snapped to
+   * yesterday's restaurant. Defaults to {@link DEFAULT_ESTIMATE_SOURCE_SYSTEMS}.
+   */
+  sourceSystems?: string[];
+};
+
+defineEvent<EstimateLocationBatchRequestPayload>(EstimateLocationBatchRequestEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [EstimateLocationBatchRequestEvent]: EstimateLocationBatchRequestPayload;
   }
 }

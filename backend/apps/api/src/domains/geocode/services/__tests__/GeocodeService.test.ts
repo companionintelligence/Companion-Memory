@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { GeocodeCacheEntity } from '../../entities/GeocodeCacheEntity';
 import type { GeocodeProvider, GeocodeProviderResult } from '../GeocodeProvider';
 import {
@@ -24,14 +26,17 @@ function makeCacheRepo(seed?: Partial<GeocodeCacheEntity>) {
 }
 
 function makeProvider(result: GeocodeProviderResult | Error): jest.Mocked<GeocodeProvider> {
-  return {
-    geocode: jest.fn<Promise<GeocodeProviderResult>, [string]>(async () => {
-      if (result instanceof Error) {
-        throw result;
-      }
+  const respond = async () => {
+    if (result instanceof Error) {
+      throw result;
+    }
 
-      return result;
-    }),
+    return result;
+  };
+
+  return {
+    geocode: jest.fn<Promise<GeocodeProviderResult>, [string]>(respond),
+    reverseGeocode: jest.fn<Promise<GeocodeProviderResult>, [number, number]>(respond),
   };
 }
 
@@ -243,5 +248,87 @@ describe('GeocodeService.geocode', () => {
 
     expect(out.status).toBe(VIRTUAL_STATUS);
     expect(provider.geocode).not.toHaveBeenCalled();
+  });
+});
+
+describe('GeocodeService.reverseGeocode', () => {
+  it('calls the provider on a cache miss and returns the resolved place name', async () => {
+    const repo = makeCacheRepo();
+    const provider = makeProvider(ROOFTOP_OK);
+
+    const outcome = await makeService(repo, provider).reverseGeocode(37.422, -122.084);
+
+    expect(provider.reverseGeocode).toHaveBeenCalledWith(37.422, -122.084);
+    expect(outcome.status).toBe('OK');
+    expect(outcome.placeName).toBe(ROOFTOP_OK.normalizedAddress);
+    expect(outcome.cached).toBe(false);
+    expect(repo.query).toHaveBeenCalled(); // result written to the shared cache
+  });
+
+  it('serves a cached reverse result without calling the provider', async () => {
+    const repo = makeCacheRepo({
+      status: 'OK',
+      normalizedAddress: 'Cached Place, City',
+    } as Partial<GeocodeCacheEntity>);
+    const provider = makeProvider(ROOFTOP_OK);
+
+    const outcome = await makeService(repo, provider).reverseGeocode(40, -73);
+
+    expect(provider.reverseGeocode).not.toHaveBeenCalled();
+    expect(outcome.cached).toBe(true);
+    expect(outcome.placeName).toBe('Cached Place, City');
+  });
+
+  it('rejects non-finite coordinates without a provider call', async () => {
+    const repo = makeCacheRepo();
+    const provider = makeProvider(ROOFTOP_OK);
+
+    const outcome = await makeService(repo, provider).reverseGeocode(Number.NaN, 10);
+
+    expect(provider.reverseGeocode).not.toHaveBeenCalled();
+    expect(outcome.status).toBe('INVALID_REQUEST');
+    expect(outcome.placeName).toBeNull();
+  });
+
+  it('marks a transient provider status retryable and does not cache it', async () => {
+    const repo = makeCacheRepo();
+    const provider = makeProvider({ status: 'OVER_QUERY_LIMIT' });
+
+    const outcome = await makeService(repo, provider).reverseGeocode(1, 2);
+
+    expect(outcome.retryable).toBe(true);
+    expect(outcome.placeName).toBeNull();
+    expect(repo.query).not.toHaveBeenCalled();
+  });
+
+  it('hashes the structured key directly (NOT via hashQuery) so the coordinate signs survive', async () => {
+    const repo = makeCacheRepo();
+    const provider = makeProvider(ROOFTOP_OK);
+
+    await makeService(repo, provider).reverseGeocode(37.422, -122.084);
+
+    // The key is sha256 of the raw `reverse:lat,lng` string, not the canonicalized
+    // form (which would strip the '-', '.' and ',').
+    const expectedHash = createHash('sha256').update('reverse:37.4220,-122.0840').digest('hex');
+    expect(repo.findOne).toHaveBeenCalledWith({ where: { queryHash: expectedHash } });
+  });
+
+  it('gives all four coordinate quadrants distinct cache keys (no sign collapse)', async () => {
+    const hashFor = async (lat: number, lng: number): Promise<string> => {
+      const repo = makeCacheRepo();
+      await makeService(repo, makeProvider(ROOFTOP_OK)).reverseGeocode(lat, lng);
+      const arg = (repo.findOne.mock.calls[0] as unknown[])[0] as { where: { queryHash: string } };
+
+      return arg.where.queryHash;
+    };
+
+    const hashes = new Set([
+      await hashFor(37.42, -122.08), // California (NW)
+      await hashFor(-37.42, 122.08), // near Australia (SE) — would collide under canonicalize
+      await hashFor(37.42, 122.08), // NE
+      await hashFor(-37.42, -122.08), // SW
+    ]);
+
+    expect(hashes.size).toBe(4);
   });
 });

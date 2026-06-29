@@ -1,5 +1,7 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
+import config from '@ci/configuration';
+
 export interface ProviderEndpoint {
   name: string;
   description: string;
@@ -64,7 +66,10 @@ export class ProviderEntity {
       authType: entity.authType ?? null,
       openidKeyLink: entity.openidKeyLink ?? null,
       appSetupUrl: entity.appSetupUrl ?? null,
-      localOnly: entity.localOnly ?? false,
+      localOnly:
+        entity.authType === 'oauth2' && (!config.ciPortal.deviceId || !config.ciPortal.apiKey)
+          ? true
+          : (entity.localOnly ?? false),
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };
