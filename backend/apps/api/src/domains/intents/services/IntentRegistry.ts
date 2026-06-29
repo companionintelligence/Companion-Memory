@@ -46,8 +46,8 @@ export class IntentRegistry {
         throw new Error(`Intent ${intent.name} references unknown domain "${intent.domain}"`);
       }
 
-      const [prefix] = intent.name.split('.');
-      if (prefix !== intent.domain) {
+      const parts = intent.name.split('.');
+      if (parts.length !== 2 || parts[0] !== intent.domain || !parts[1]) {
         throw new Error(
           `Intent ${intent.name} must be named "${intent.domain}.<action>" to match its domain`,
         );
