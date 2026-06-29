@@ -8,9 +8,35 @@ import { EntityIdentifierService, type IdentifierKey, normalizeIdentifier } from
 /** Default cap on candidate rows examined per page (bounds memory + a query). */
 const DEFAULT_PAGE_SIZE = 2000;
 
+/**
+ * Per-page progress snapshot for {@link EventParticipantBackfillOptions.onProgress}.
+ * All counts are CUMULATIVE running totals at the point the most recent page's
+ * UPDATE committed. `pagesDone` is the numerator; there is no `pagesTotal` —
+ * candidate-count probing isn't worth a second filtered scan over `ci.events`,
+ * so the streaming consumer shows an indeterminate "pages so far" indicator
+ * until the final result line.
+ */
+export interface EventParticipantBackfillProgress {
+  /** Candidate events examined so far (cumulative). */
+  examined: number;
+  /** Rows whose organizer_entity_id was filled so far (cumulative). */
+  organizersLinked: number;
+  /** Rows whose participant_entity_ids was filled so far (cumulative). */
+  participantsLinked: number;
+  /** Pages whose writes have committed so far. */
+  pagesDone: number;
+}
+
 export interface EventParticipantBackfillOptions {
   /** Max candidate rows pulled per page (default 2000). */
   pageSize?: number;
+  /**
+   * Invoked once per page, AFTER that page's writes commit, with cumulative
+   * counts. Optional; the synchronous return value is unchanged whether or not
+   * this is supplied. Mirrors {@link CommunicationLinkBackfillOptions.onProgress}
+   * so the controller's NDJSON streaming wrapper is uniform across backfills.
+   */
+  onProgress?: (partial: EventParticipantBackfillProgress) => void;
 }
 
 export interface EventParticipantBackfillResult {
@@ -234,6 +260,16 @@ export class EventParticipantBackfillService {
       }
 
       pages += 1;
+
+      // This page's writes have committed (the UPDATE above awaited), so emit
+      // cumulative progress. Done AFTER the commit so a streaming consumer
+      // never sees progress ahead of durable state.
+      options.onProgress?.({
+        examined,
+        organizersLinked,
+        participantsLinked,
+        pagesDone: pages,
+      });
 
       // Advance the keyset cursor to the oldest row in this page. Strictly
       // monotonic (start_time DESC, event_id DESC), so progress is guaranteed

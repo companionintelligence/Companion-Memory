@@ -16,10 +16,12 @@ import { EventEntity, MemoryModule } from '@ci/domains/memory';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
+import { EstimateLocationBatchListener } from './listeners/EstimateLocationBatchListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { EventParticipantBackfillService } from './services/EventParticipantBackfillService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
 import { IndexDeferralService } from './services/IndexDeferralService';
+import { LocationEstimateService } from './services/LocationEstimateService';
 import { SearchIndexBackfillService } from './services/SearchIndexBackfillService';
 
 /**
@@ -43,6 +45,8 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
     EventParticipantBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
+    LocationEstimateService,
+    EstimateLocationBatchListener,
   ],
   exports: [
     IndexDeferralService,
@@ -50,6 +54,7 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
     EventParticipantBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
+    LocationEstimateService,
   ],
 })
 export class MaintenanceModule {}

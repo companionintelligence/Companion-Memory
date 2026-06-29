@@ -26,6 +26,20 @@ log = logging.getLogger(__name__)
 _RETRY_ONCE = RetryPolicy(maximum_attempts=1, backoff_coefficient=1.0)
 _RETRY_2X   = RetryPolicy(maximum_attempts=2, backoff_coefficient=2.0)
 
+# Cold-start labeling of a full history is CPU-bound and long-running. Bound it
+# with a generous start_to_close and rely on heartbeats (emitted every ~30s by
+# nightly_runner._run_inference) for liveness, matching NightlyHBPEWorkflow.
+_LABEL_TIMEOUT     = timedelta(hours=24)
+_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
+
+# The remaining cold-start steps are also CPU-bound and have no heartbeat, so
+# they get generous start_to_close bounds (early-stopping/finite work ends them
+# sooner). These are ceilings, not targets.
+_SERIALIZE_TIMEOUT = timedelta(hours=1)
+_TRAIN_TIMEOUT     = timedelta(hours=6)
+_EXPORT_TIMEOUT    = timedelta(hours=1)
+_LORA_TIMEOUT      = timedelta(hours=1)
+
 
 # ── Activities ─────────────────────────────────────────────────────────────────
 
@@ -140,7 +154,8 @@ class BootstrapHBPEWorkflow:
         results["steps"]["label"] = await _safe(
             workflow.execute_activity(
                 label_unlabeled, user_id,
-                start_to_close_timeout=timedelta(minutes=30),
+                start_to_close_timeout=_LABEL_TIMEOUT,
+                heartbeat_timeout=_HEARTBEAT_TIMEOUT,
                 retry_policy=_RETRY_2X,
             ),
             "label",
@@ -151,7 +166,8 @@ class BootstrapHBPEWorkflow:
         results["steps"]["label_summaries"] = await _safe(
             workflow.execute_activity(
                 label_summary_tokens, user_id,
-                start_to_close_timeout=timedelta(minutes=10),
+                start_to_close_timeout=_LABEL_TIMEOUT,
+                heartbeat_timeout=_HEARTBEAT_TIMEOUT,
                 retry_policy=_RETRY_2X,
             ),
             "label_summaries",
@@ -162,7 +178,7 @@ class BootstrapHBPEWorkflow:
         results["steps"]["serialize"] = await _safe(
             workflow.execute_activity(
                 serialize_token_stream, user_id,
-                start_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=_SERIALIZE_TIMEOUT,
                 retry_policy=_RETRY_ONCE,
             ),
             "serialize",
@@ -181,7 +197,7 @@ class BootstrapHBPEWorkflow:
         results["steps"]["train"] = await _safe(
             workflow.execute_activity(
                 train_hmt_model, user_id,
-                start_to_close_timeout=timedelta(minutes=90),
+                start_to_close_timeout=_TRAIN_TIMEOUT,
                 retry_policy=_RETRY_ONCE,
             ),
             "train",
@@ -202,7 +218,7 @@ class BootstrapHBPEWorkflow:
         results["steps"]["export"] = await _safe(
             workflow.execute_activity(
                 calibrate_and_export_onnx, user_id,
-                start_to_close_timeout=timedelta(minutes=20),
+                start_to_close_timeout=_EXPORT_TIMEOUT,
                 retry_policy=_RETRY_ONCE,
             ),
             "export",
@@ -213,7 +229,7 @@ class BootstrapHBPEWorkflow:
         results["steps"]["lora"] = await _safe(
             workflow.execute_activity(
                 lora_fine_tune, user_id,
-                start_to_close_timeout=timedelta(minutes=10),
+                start_to_close_timeout=_LORA_TIMEOUT,
                 retry_policy=_RETRY_ONCE,
             ),
             "lora",

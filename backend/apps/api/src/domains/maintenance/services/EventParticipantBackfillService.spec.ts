@@ -331,7 +331,7 @@ describe('EventParticipantBackfillService.backfill', () => {
     expect(ds.updates).toHaveLength(0);
   });
 
-  it('reports per-page counts in the synchronous result', async () => {
+  it('invokes onProgress once per page with cumulative counts', async () => {
     const rows: FakeRow[] = [
       {
         event_id: 'event-1',
@@ -343,9 +343,13 @@ describe('EventParticipantBackfillService.backfill', () => {
     ];
 
     const { service } = makeService(rows, { 'email:alice@example.com': ORGANIZER });
+    const ticks: Array<Record<string, number>> = [];
 
-    const result = await service.backfill(USER);
+    const result = await service.backfill(USER, {
+      onProgress: (p) => ticks.push({ ...p }),
+    });
 
+    expect(ticks).toEqual([{ examined: 1, organizersLinked: 1, participantsLinked: 0, pagesDone: 1 }]);
     expect(result).toEqual({ examined: 1, organizersLinked: 1, participantsLinked: 0, pages: 1 });
   });
 });

@@ -597,8 +597,23 @@ async def generate_insights_activity(
     # Create LLM config
     llm_config = get_llm_config()
 
-    # Call pure function
-    insights_data = generate_insights(llm_config, insights_context)
+    # Call pure function. Insights are a proactive, best-effort feature: a flaky
+    # local model that can't produce schema-valid output should not fail the
+    # workflow (and trigger Temporal's retry storm). Return an empty result so
+    # the workflow's num_insights==0 branch skips gracefully.
+    try:
+        insights_data = generate_insights(llm_config, insights_context)
+    except Exception as exc:
+        activity.logger.warning("insights_generation_failed_nonfatal", error=str(exc))
+        return {
+            "insights": [],
+            "data_sources_used": [],
+            "embedding": None,
+            "tokens_used": 0,
+            "num_insights": 0,
+            "skipped": True,
+            "reason": "generation_failed",
+        }
 
     activity.heartbeat("Insights generated")
     activity.logger.info(
@@ -657,8 +672,19 @@ async def generate_actions_activity(
     # Create LLM config
     llm_config = get_llm_config()
 
-    # Call pure function
-    actions_data = generate_actions(llm_config, action_context)
+    # Call pure function. Action cards are proactive/best-effort — don't fail the
+    # workflow when a local model can't produce schema-valid output; return empty
+    # so the workflow's num_actions==0 branch skips gracefully.
+    try:
+        actions_data = generate_actions(llm_config, action_context)
+    except Exception as exc:
+        activity.logger.warning("actions_generation_failed_nonfatal", error=str(exc))
+        return {
+            "actions": [],
+            "tokens_used": 0,
+            "skipped": True,
+            "reason": "generation_failed",
+        }
 
     activity.heartbeat("Actions generated")
     activity.logger.info(

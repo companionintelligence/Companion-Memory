@@ -185,6 +185,8 @@ interface ForecastStripProps {
   buckets: ForecastBucket[];
   generatedAt: string;
   systemStatus?: string;
+  /** True when polling gave up because the engine stayed non-READY too long. */
+  stalled?: boolean;
   className?: string;
 }
 
@@ -211,13 +213,16 @@ export function ForecastStrip({
   buckets,
   generatedAt,
   systemStatus = 'READY',
+  stalled = false,
   className,
 }: ForecastStripProps) {
   const pinned = normalizeBuckets(buckets);
 
-  const statusLabel =
-    systemStatus === 'READY'
-      ? `Generated ${new Date(generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+  const isReady = systemStatus === 'READY';
+  const statusLabel = isReady
+    ? `Generated ${new Date(generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    : stalled
+      ? 'Prediction model not built yet — open Add ▸ Predict to start'
       : (STATUS_LABELS[systemStatus] ?? 'Processing...');
 
   return (
@@ -238,11 +243,17 @@ export function ForecastStrip({
       {/* Time labels — always midnight to 23:30 */}
       <div className="flex justify-between text-[10px] text-muted-foreground px-0.5">
         <span>{formatBucketTime(0)}</span>
-        <span className={systemStatus !== 'READY' ? 'animate-pulse text-primary' : ''}>{statusLabel}</span>
+        <span
+          className={
+            !isReady && !stalled ? 'animate-pulse text-primary' : !isReady ? 'text-muted-foreground' : ''
+          }
+        >
+          {statusLabel}
+        </span>
         <span>{formatBucketTime(N_BUCKETS - 1)}</span>
       </div>
 
-      {systemStatus === 'READY' && <Legend />}
+      {isReady && <Legend />}
     </div>
   );
 }

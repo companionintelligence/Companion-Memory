@@ -1,10 +1,11 @@
 import { Card, Tooltip } from '@ci/shadcn';
-import { Calendar, Clock, MapPin } from '@ci/shadcn/icons';
+import { Calendar, Clock, MapPin, Play } from '@ci/shadcn/icons';
 
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { useEntityService } from '../../useEntityService';
-import { formatEventTimeRange } from '../utils';
+import { resolveStaticUrl } from '../EntityDetails/EntityDetailScaffold';
+import { eventDisplayTitle, formatEventTimeRange } from '../utils';
 
 interface Props {
   entity: FragmentType<typeof EVENT_FRAGMENT>;
@@ -18,6 +19,7 @@ export const EVENT_FRAGMENT = gql(`
     sourceSystem
     startTime
     endTime
+    locationName
     location {
       ... on PlaceType {
         id
@@ -25,6 +27,12 @@ export const EVENT_FRAGMENT = gql(`
         properties
       }
     }
+    previewUrl
+    mediaUrl
+    mediaContentType
+    mediaWidth
+    mediaHeight
+    mediaSize
     tags {
       label
     }
@@ -35,6 +43,14 @@ export function EventCard({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
   const [, { setActiveEntity }] = useEntityService();
   const hasStartDate = data.startTime;
+  const title = eventDisplayTitle({
+    title: data.title,
+    startTime: data.startTime,
+    locationName: data.locationName ?? data.location?.name,
+    mediaContentType: data.mediaContentType,
+  });
+  const thumbUrl = resolveStaticUrl(data.previewUrl);
+  const isVideo = data.mediaContentType?.startsWith('video/') ?? false;
   // const hasOrganizer = data.organizer;
   // const hasRepeating = data.repeatingFrequency;
   // const hasDuration = data.duration;
@@ -48,17 +64,30 @@ export function EventCard({ entity }: Props) {
       className="!gap-2 !px-6 !py-4 cursor-pointer transition-shadow duration-200 hover:shadow-lg"
       onClick={() => setActiveEntity({ ...data, __typename: 'EventType', bucketStartTime: data.startTime })}
     >
+      {thumbUrl && (
+        <div className="relative -mx-2 mb-1 overflow-hidden rounded-md bg-muted">
+          <img src={thumbUrl} alt={title} loading="lazy" className="h-44 w-full object-cover" />
+          {isVideo && (
+            <span className="absolute inset-0 flex items-center justify-center">
+              <span className="flex size-11 items-center justify-center rounded-full bg-black/55 text-white">
+                <Play className="size-5 translate-x-0.5 fill-current" />
+              </span>
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="flex items-start gap-3">
-        <Calendar className="h-6 w-6 flex-shrink-0 mt-1 text-[var(--primary)]" />
+        {!thumbUrl && <Calendar className="h-6 w-6 flex-shrink-0 mt-1 text-[var(--primary)]" />}
         <div className="flex-1 min-w-0">
           <Tooltip>
             <Tooltip.Trigger asChild>
               <h3 className="truncate text-lg font-semibold leading-4 text-card-foreground cursor-default">
-                {data.title || 'Untitled event'}
+                {title || 'Untitled event'}
               </h3>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>{data.title || 'Untitled event'}</p>
+              <p>{title || 'Untitled event'}</p>
             </Tooltip.Content>
           </Tooltip>
           {/*<p className="text-sm text-muted-foreground">{data.category}</p>*/}

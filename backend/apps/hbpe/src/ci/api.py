@@ -123,6 +123,21 @@ async def _active_workflow_status(uid: str) -> Optional[str]:
     return None
 
 
+async def _resolve_system_status(user_id: str) -> str:
+    """
+    Status string for the forecast response.
+
+    READY once a checkpoint exists; otherwise the live workflow step
+    (e.g. ``BOOTSTRAP:train``) so the UI shows real progress instead of a
+    permanent "Waiting to initialize…", falling back to COLD_START when no
+    workflow is currently running.
+    """
+    if _model_exists():
+        return "READY"
+    status = await _active_workflow_status(user_id)
+    return status or "COLD_START"
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
@@ -148,7 +163,10 @@ async def histogram(
 
     try:
         engine = _get_or_create_engine(user_id)
-        result = build_histogram(engine, horizon=horizon, user_id=user_id)
+        system_status = await _resolve_system_status(user_id)
+        result = build_histogram(
+            engine, horizon=horizon, user_id=user_id, system_status=system_status
+        )
         return JSONResponse(content=result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -180,15 +198,10 @@ async def invalidate_cache(
     return {"invalidated": str(d), "user_id": user_id, "note": "no engine loaded"}
 
 
-def _model_exists() -> bool:
-    """Return True if an HMT checkpoint is present and predictions can be served."""
-    from pathlib import Path
-    from ci.config import settings
-    ckpt_dir = Path(settings.models_dir) / "hmt"
-    return any(
-        (ckpt_dir / name).exists()
-        for name in ("hmt_int8.onnx", "hmt_fp32.onnx", "hmt_calibrated.pt", "hmt_checkpoint.pt")
-    )
+def _model_exists(user_id: str) -> bool:
+    """Return True if this user has an HMT checkpoint and predictions can be served."""
+    from ci.model.checkpoints import model_exists
+    return model_exists(user_id)
 
 
 @app.post("/trigger")
@@ -218,7 +231,7 @@ async def trigger_pipeline(
         from temporalio.exceptions import WorkflowAlreadyStartedError
         from ci.config import settings
 
-        if _model_exists():
+        if _model_exists(user_id):
             from ci.pipeline.nightly_runner import NightlyHBPEWorkflow
             workflow_id = f"{_NIGHTLY_WF_PREFIX}-{user_id[:8]}"
             try:

@@ -1,3 +1,4 @@
+import { eventDisplayTitle } from '../Components/utils';
 import type { EntityItem } from '../useEntityService';
 
 export type EntityMediaKind = 'image' | 'video';
@@ -70,6 +71,37 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
         thumbUrl: resolveMediaUrl(entity.galleryPreviewUrl) ?? full,
         fullUrl: full,
         title: entity.galleryFilename ?? 'Untitled',
+      };
+    }
+
+    case 'EventType': {
+      // Photo/video events link to a file whose PREVIEW variant is the
+      // thumbnail and ORIGINAL is the full-res source (resolved server-side via
+      // the gallery* aliases). Non-media events resolve no content type here and
+      // keep their plain text tile.
+      const contentType = entity.galleryMediaContentType;
+      const kind = mediaKind(contentType);
+      if (!kind || !contentType) {
+        return null;
+      }
+
+      const full = resolveMediaUrl(entity.gallerySourceUrl) ?? resolveMediaUrl(entity.galleryPreviewUrl);
+      if (!full) {
+        return null;
+      }
+
+      return {
+        entityId: entity.id,
+        kind,
+        contentType,
+        thumbUrl: resolveMediaUrl(entity.galleryPreviewUrl) ?? full,
+        fullUrl: full,
+        title: eventDisplayTitle({
+          title: entity.galleryTitle,
+          startTime: (entity.bucketStartTime as string | Date | null) ?? undefined,
+          locationName: entity.galleryLocationName,
+          mediaContentType: contentType,
+        }),
       };
     }
 

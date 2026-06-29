@@ -19,6 +19,92 @@ export class PlaceService {
     private readonly eventService: EventService,
   ) {}
 
+  /**
+   * Idempotent find-or-create for reverse-geocoded Places. Used by
+   * GeocodeBatchListener after a coordinate→name resolution to ensure each
+   * named location resolves to exactly one Place row, so events can be linked
+   * via `events.location_entity_id` and "events at <place>" queries work.
+   *
+   * Uniqueness key: `(owner_user_id, lower(btrim(name)), round(lat, 3),
+   * round(lng, 3))`. 3 decimal places ≈ 110 m, which absorbs GPS jitter at the
+   * same address without merging geographically distinct places that share a
+   * generic name like "Starbucks".
+   *
+   * Backed by the partial unique index `entities_reverse_geocode_dedup_idx`
+   * scoped to `properties.source = 'reverse_geocode'`. The two-step flow —
+   * INSERT ... ON CONFLICT DO NOTHING followed by SELECT — is atomic against
+   * concurrent callers: at most one INSERT wins per (user, key) tuple, and any
+   * loser falls through to SELECT and returns the same id.
+   *
+   * Emits `PlaceCreatedEvent` only on actual insertion (so search-indexing and
+   * graph-sync don't fire for every event in a busy place).
+   */
+  async findOrCreateForGeocode(
+    context: UserServiceContext,
+    input: { name: string; lat: number; lng: number },
+  ): Promise<{ id: string; created: boolean }> {
+    const trimmedName = input.name.trim();
+    if (!trimmedName) {
+      throw new Error('findOrCreateForGeocode: name must be non-empty');
+    }
+
+    // Round to 3dp via Number.toFixed so the value matches the SQL-side
+    // round(numeric, 3) used in the partial unique index.
+    const latR = Number(input.lat.toFixed(3));
+    const lngR = Number(input.lng.toFixed(3));
+
+    const newId = uuidv7();
+    const properties = {
+      source: 'reverse_geocode',
+      type: 'address',
+      lat: latR,
+      lng: lngR,
+    };
+
+    // INSERT ... ON CONFLICT DO NOTHING: races safely with concurrent callers
+    // for the same key. Loser sees zero rows affected; both fall through to
+    // the SELECT below and return the same id.
+    await this.placeRepository.manager.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name, properties)
+       VALUES ($1, 'Location', $2, $3, $4::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [newId, context.userId, trimmedName, JSON.stringify(properties)],
+    );
+
+    // Read back the canonical row (whether we inserted or hit a conflict).
+    // The predicate matches the partial unique index exactly so the lookup
+    // can use it.
+    const rows: Array<{ entity_id: string; was_new: boolean }> = await this.placeRepository.manager.query(
+      `SELECT entity_id, entity_id = $1 AS was_new
+         FROM ci.entities
+        WHERE entity_type = 'Location'
+          AND owner_user_id = $2
+          AND properties->>'source' = 'reverse_geocode'
+          AND lower(btrim(name)) = lower(btrim($3))
+          AND round((properties->>'lat')::numeric, 3) = $4::numeric
+          AND round((properties->>'lng')::numeric, 3) = $5::numeric
+        LIMIT 1`,
+      [newId, context.userId, trimmedName, latR, lngR],
+    );
+
+    if (rows.length === 0) {
+      // Unreachable in steady state: either the INSERT succeeded, or a
+      // conflicting row already existed and the SELECT finds it. If we hit
+      // this, the unique index and SELECT predicate have drifted apart.
+      throw new Error(
+        `findOrCreateForGeocode: failed to find or create place for "${trimmedName}" at (${latR}, ${lngR})`,
+      );
+    }
+
+    const { entity_id, was_new } = rows[0];
+
+    if (was_new) {
+      await this.eventService.send(PlaceCreatedEvent, { placeId: entity_id });
+    }
+
+    return { id: entity_id, created: was_new };
+  }
+
   async create(context: UserServiceContext, data: CreatePlaceDto | CreatePlaceDto[]): Promise<Place[]> {
     const isSingle = !Array.isArray(data);
     const dataArray: CreatePlaceDto[] = isSingle ? [data] : data;

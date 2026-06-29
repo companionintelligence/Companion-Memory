@@ -46,6 +46,12 @@ export class ContentResolver {
     private readonly eventLoader: EventLoader,
   ) {}
 
+  /**
+   * Single-record content ingest. Routed through ContentService.createMany so it
+   * shares the same provenance-triple dedup + event auto-link as the batch path —
+   * a re-send with the same (userId, sourceType, sourceSystem, sourceId) returns
+   * the existing row instead of inserting a duplicate-without-triple.
+   */
   @Mutation(() => ContentType)
   async createContent(
     @Context() context: RequestContext,
@@ -53,19 +59,24 @@ export class ContentResolver {
   ): Promise<ContentType> {
     const serviceContext = toServiceContext(context);
 
-    const entity = await this.contentService.create(serviceContext, {
-      type: input.type,
-      title: input.title,
-      text: input.text,
-      url: input.url,
-      mimetype: input.mimetype,
-      external_id: input.externalId,
-      source_url: input.sourceUrl,
-      source_data: input.sourceData,
-      event: input.eventId ? { id: resolveEventId(input.eventId) } : undefined,
-    });
+    const [entity] = await this.contentService.createMany(serviceContext, [
+      {
+        type: input.type,
+        title: input.title,
+        text: input.text,
+        url: input.url,
+        mimetype: input.mimetype,
+        external_id: input.externalId,
+        source_url: input.sourceUrl,
+        source_data: input.sourceData,
+        source_type: input.sourceType,
+        source_system: input.sourceSystem,
+        source_id: input.sourceId,
+        event: input.eventId ? { id: resolveEventId(input.eventId) } : undefined,
+      },
+    ]);
 
-    return ContentType.toType(entity[0]);
+    return ContentType.toType(entity);
   }
 
   /**

@@ -28,6 +28,11 @@ from datetime import date, datetime, timedelta
 log = logging.getLogger(__name__)
 
 DEBOUNCE_SEC   = 5.0
+# Safety poll runs alongside the LISTEN path. Push-based NOTIFY (if producers
+# are installed) gives instant invalidation; this slower poll guarantees the
+# cache still refreshes even where no NOTIFY trigger exists yet.
+SAFETY_POLL_SEC = 30.0
+RECONNECT_SEC   = 5.0
 CHANNELS       = ("ci_events", "ci_browser_activity", "ci_communications")
 
 
@@ -65,15 +70,35 @@ class EventIngester:
 
     async def _listen_loop(self) -> None:
         """
-        Main loop: open a dedicated asyncpg connection (or psycopg2 thread),
-        LISTEN on all channels, dispatch notifications.
+        Main loop: subscribe to PostgreSQL LISTEN/NOTIFY via asyncpg and, in
+        parallel, run a slow safety poll of hbpe.token_stream.
+
+        Both paths reconnect on failure instead of dying, so a Postgres restart
+        or a dropped LISTEN connection self-heals. If asyncpg is unavailable the
+        loop degrades to polling only.
         """
         try:
             import asyncpg
-            await self._asyncpg_loop(asyncpg)
         except ImportError:
-            log.warning("asyncpg not installed — falling back to polling ingester")
-            await self._polling_loop()
+            log.warning("asyncpg not installed — using polling ingester only")
+            await self._polling_loop(DEBOUNCE_SEC)
+            return
+
+        await asyncio.gather(
+            self._asyncpg_listen_forever(asyncpg),
+            self._polling_loop(SAFETY_POLL_SEC),
+        )
+
+    async def _asyncpg_listen_forever(self, asyncpg) -> None:
+        """Run the LISTEN loop, reconnecting after any connection failure."""
+        while True:
+            try:
+                await self._asyncpg_loop(asyncpg)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("asyncpg LISTEN connection dropped — reconnecting in %ss", RECONNECT_SEC)
+                await asyncio.sleep(RECONNECT_SEC)
 
     async def _asyncpg_loop(self, asyncpg) -> None:
         from ci.config import settings
@@ -82,20 +107,28 @@ class EventIngester:
             for ch in CHANNELS:
                 await conn.add_listener(ch, self._on_notify)
             log.info("LISTEN active on: %s", ", ".join(CHANNELS))
+            # Periodically check liveness so a server-side drop triggers a
+            # reconnect instead of silently sleeping on a dead connection.
             while True:
-                await asyncio.sleep(60)   # keep connection alive
+                await asyncio.sleep(15)
+                if conn.is_closed():
+                    raise ConnectionError("asyncpg LISTEN connection closed")
         finally:
-            await conn.close()
+            if not conn.is_closed():
+                await conn.close()
 
-    async def _polling_loop(self) -> None:
+    async def _polling_loop(self, interval: float = DEBOUNCE_SEC) -> None:
         """
-        Fallback: poll ci.token_stream for rows newer than last check.
-        Used when asyncpg is unavailable (e.g. some CI environments).
+        Poll hbpe.token_stream for rows newer than the last check and invalidate.
+
+        Runs as a safety net alongside the LISTEN path (or as the sole path when
+        asyncpg is unavailable). Errors are logged and the loop continues; the
+        connection pool recycles dead connections so a DB blip self-heals.
         """
         from ci.database import get_conn
         last_check: datetime = datetime.utcnow() - timedelta(hours=1)
         while True:
-            await asyncio.sleep(DEBOUNCE_SEC)
+            await asyncio.sleep(interval)
             try:
                 def _query():
                     import psycopg2.extras

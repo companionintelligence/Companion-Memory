@@ -33,10 +33,11 @@ export class CreateContentInput {
   @Field(() => GraphQLJSONObject, { nullable: true })
   sourceData?: Record<string, unknown>;
 
-  // Provenance triple. When present, the batch createContents mutation dedupes on
-  // (userId, sourceType, sourceSystem, sourceId) and, if no explicit eventId is
-  // given, auto-links the content to the event sharing the same triple. See
-  // content_source_triple_uniq and ContentService.createMany.
+  // Provenance triple. When present, both the single createContent and the
+  // batch createContents mutations dedupe on (userId, sourceType, sourceSystem,
+  // sourceId) and, if no explicit eventId is given, auto-link the content to
+  // the event sharing the same triple. See content_source_triple_uniq and
+  // ContentService.createMany.
   @Field(() => String, { nullable: true })
   sourceType?: string;
 

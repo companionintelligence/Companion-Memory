@@ -98,6 +98,20 @@ const SEARCH_QUERY = gql(`
             # location PlaceType; aliased + unmasked so the map can read it
             # without unmasking the card fragment.
             mapCoordinates: locationCoordinates
+
+            # Photo/video events carry their binary via a linked file; these
+            # aliased media fields let the gallery build real thumbnails + a
+            # lightbox (mirrors FileType/ContentType above). Null for non-media
+            # events. galleryLocationName feeds the derived "Photo · place ·
+            # date" tile caption (eventDisplayTitle).
+            # Distinct content-type alias: FileType.contentType is String! but
+            # EventType.mediaContentType is nullable String, so they can't share
+            # the galleryContentType response key (overlapping-fields rule).
+            galleryMediaContentType: mediaContentType
+            galleryPreviewUrl: previewUrl
+            gallerySourceUrl: mediaUrl
+            galleryTitle: title
+            galleryLocationName: locationName
           }
 
           ... on PlaceType {

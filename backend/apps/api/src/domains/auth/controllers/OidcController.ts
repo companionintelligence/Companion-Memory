@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 
-import { Controller, Get, HttpCode, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, HttpCode, Query, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import parseDuration from 'parse-duration';
 import { Agent, fetch as undiciFetch } from 'undici';
@@ -78,7 +78,12 @@ export class OidcController {
     const { issuerUrl } = config.auth.oidc;
 
     if (!issuerUrl) {
-      throw new UnauthorizedException('OIDC is not configured — OIDC_ISSUER_URL is required');
+      // Redirect to the login page with an error rather than dead-ending the
+      // browser on a raw JSON 401 — the "Sign in with CI-Portal" button lands
+      // here, so the user must end up somewhere they can recover from.
+      this.logger.error('OIDC initiate blocked: OIDC_ISSUER_URL is not configured');
+
+      return res.redirect('/login?error=oidc_not_configured');
     }
 
     const callbackUrl = this.getCallbackUrl(req);

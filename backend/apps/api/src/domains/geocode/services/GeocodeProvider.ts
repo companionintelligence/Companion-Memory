@@ -44,4 +44,13 @@ export interface GeocodeProvider {
    * the caller treats as a transient (retryable) error.
    */
   geocode(address: string): Promise<GeocodeProviderResult>;
+
+  /**
+   * Reverse-geocode a (lat, lng) pair into a human-readable place name. The
+   * resolved name is returned in {@link GeocodeProviderResult.normalizedAddress}.
+   * Same error contract as {@link geocode}: return a result carrying the
+   * provider `status` on a provider-level failure; throw only on transport
+   * failures (treated as transient/retryable by the caller).
+   */
+  reverseGeocode(lat: number, lng: number): Promise<GeocodeProviderResult>;
 }

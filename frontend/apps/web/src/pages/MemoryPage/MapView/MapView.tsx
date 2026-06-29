@@ -13,6 +13,8 @@ import { useEntityService, type EntityItem } from '../../MemoryPage/useEntitySer
 import { boundsToBbox, bboxCenter, formatBbox, parseBbox } from '../bbox';
 import { formatEventTimeRange } from '../Components';
 import { TimelineView } from '../TimelineView';
+
+import { readCoordinates, readGeoJsonPoint } from './mapCoordinates';
 import './memory-map.css';
 
 // Colour/icon-code each marker by what it represents, like the old LifeScope map.
@@ -33,55 +35,6 @@ const MARKER_VARIANT_BY_TYPENAME: Record<string, MarkerVariant> = {
 
 function markerVariant(entity: EntityItem): MarkerVariant {
   return MARKER_VARIANT_BY_TYPENAME[entity.__typename] ?? 'default';
-}
-
-type Coordinates = { latitude?: number | null; longitude?: number | null };
-
-function readCoordinates(props: unknown): { lat: number; lng: number } | null {
-  if (props == null || typeof props !== 'object') {
-    return null;
-  }
-
-  const { latitude, longitude } = props as Coordinates;
-
-  if (
-    typeof latitude !== 'number' ||
-    typeof longitude !== 'number' ||
-    isNaN(latitude) ||
-    isNaN(longitude) ||
-    (latitude === 0 && longitude === 0)
-  ) {
-    return null;
-  }
-
-  return { lat: latitude, lng: longitude };
-}
-
-/** GeoJSON Point: `{ type: 'Point', coordinates: [lng, lat] }`. */
-function readGeoJsonPoint(value: unknown): { lat: number; lng: number } | null {
-  if (value == null || typeof value !== 'object') {
-    return null;
-  }
-
-  const coords = (value as { coordinates?: unknown }).coordinates;
-
-  if (!Array.isArray(coords) || coords.length < 2) {
-    return null;
-  }
-
-  const [lng, lat] = coords;
-
-  if (
-    typeof lat !== 'number' ||
-    typeof lng !== 'number' ||
-    isNaN(lat) ||
-    isNaN(lng) ||
-    (lat === 0 && lng === 0)
-  ) {
-    return null;
-  }
-
-  return { lat, lng };
 }
 
 /**

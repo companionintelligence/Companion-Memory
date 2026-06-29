@@ -47,13 +47,28 @@ describe('ContentService.create — event link', () => {
       type: 'attachment',
       mimetype: 'image/jpeg',
       event: { id: 'event-9' },
-      user: { id: 'user-1' },
+      userId: 'user-1',
     });
   });
 
   it('omits the event relation when no event is given', async () => {
     await service.create(ctx, { type: 'note', text: 'hi' } as CreateContentDto);
     expect(repo.create.mock.calls[0][0].event).toBeUndefined();
+  });
+
+  // Regression: ci.content.user_id and the `user` relation map to the same DB
+  // column. When the scalar was insert:false the owner was written via the
+  // relation only and silently shadowed to NULL, which broke every user_id-scoped
+  // read. The owner must be persisted on the scalar column and surface on egress.
+  it('persists the owner on the scalar user_id column, not the relation', async () => {
+    const [created] = await service.create(ctx, { type: 'note', text: 'hi' } as CreateContentDto);
+
+    const persisted = repo.create.mock.calls[0][0];
+    expect(persisted.userId).toBe('user-1');
+    // The relation must NOT be the write path (it shadowed the column to NULL).
+    expect(persisted.user).toBeUndefined();
+    // ...and the owner round-trips through toEgressType.
+    expect(created.userId).toBe('user-1');
   });
 });
 
@@ -111,6 +126,20 @@ describe('ContentService.createMany — batch + event auto-link', () => {
     expect(repo.create.mock.calls[0][0]).toMatchObject({
       event: { id: 'event-from-triple' },
     });
+  });
+
+  it('stamps the owner on each bulk-ingested row', async () => {
+    const [created] = await service.createMany(ctx, [
+      {
+        type: 'Photo',
+        source_type: 'import',
+        source_system: 'facebook',
+        source_id: 'photo-99',
+      } as CreateContentDto,
+    ]);
+
+    expect(repo.create.mock.calls[0][0].userId).toBe('user-1');
+    expect(created.userId).toBe('user-1');
   });
 
   it('prefers an explicit event over the triple lookup', async () => {

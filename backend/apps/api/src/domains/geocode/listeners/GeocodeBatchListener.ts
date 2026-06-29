@@ -7,10 +7,15 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { OnEvent } from '@ci/domains/events';
-import { EventEntity, EventService } from '@ci/domains/memory';
+import { EventEntity, EventService, PlaceService } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent, type GeocodeBatchRequestPayload } from '@ci/domains/memory/events';
 
-import { GeocodeService, RETRYABLE_STATUSES, VIRTUAL_STATUS } from '../services/GeocodeService';
+import {
+  GeocodeService,
+  RETRYABLE_STATUSES,
+  VIRTUAL_STATUS,
+  type ReverseGeocodeOutcome,
+} from '../services/GeocodeService';
 
 /** Dedicated PGBoss queue so geocode backfills don't block the default queue. */
 const GEOCODE_QUEUE = 'geocode';
@@ -66,6 +71,13 @@ interface CandidateRow {
   location_name: string;
 }
 
+interface ReverseCandidateRow {
+  event_id: string;
+  /** Latitude/longitude read out of the geography Point via ST_Y/ST_X. */
+  lat: number;
+  lng: number;
+}
+
 /**
  * Consumes {@link GeocodeBatchRequestEvent}: selects events carrying a
  * location_name but no location_coordinates (the backfill set), forward-geocodes
@@ -91,6 +103,7 @@ export class GeocodeBatchListener {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly geocodeService: GeocodeService,
     private readonly eventService: EventService,
+    private readonly placeService: PlaceService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GeocodeBatchListener.name);
@@ -98,13 +111,23 @@ export class GeocodeBatchListener {
 
   @OnEvent(GeocodeBatchRequestEvent, { queue: GEOCODE_QUEUE })
   async handleBatch(payload: GeocodeBatchRequestPayload): Promise<void> {
-    const { userId, eventIds, limit, retryNull } = payload;
-    const context: UserServiceContext = { userId };
+    const { userId, eventIds, limit, retryNull, direction } = payload;
     const retry = retryNull ?? false;
+    const batchLimit = limit ?? this.defaultLimit;
+
+    // Reverse direction (coords -> name) shares this queue + rate limiter so the
+    // two never collectively exceed the provider's QPS.
+    if (direction === 'reverse') {
+      await this.handleReverseBatch(userId, { eventIds, limit: batchLimit, retryNull: retry });
+
+      return;
+    }
+
+    const context: UserServiceContext = { userId };
 
     const candidates = await this.selectCandidates(userId, {
       eventIds,
-      limit: limit ?? this.defaultLimit,
+      limit: batchLimit,
       retryNull: retry,
     });
 
@@ -124,11 +147,16 @@ export class GeocodeBatchListener {
           const outcome = await this.geocodeWithRetry(candidate.location_name, retry);
 
           if (outcome.status === 'OK' && outcome.point && outcome.confidence !== null) {
+            // PostGIS Point.coordinates is [lng, lat] (GeoJSON order).
+            const [lng, lat] = outcome.point.coordinates;
+            const place = await this.linkPlace(context, candidate.location_name, lat, lng);
+
             await this.eventService.update(context, candidate.event_id, {
               location_coordinates: outcome.point,
               // Inferred / coarse coords carry < 1.0 so HBPE/RAG don't treat
               // them as ground truth.
               confidence_score: outcome.confidence,
+              ...(place && { location_entity_id: place.id }),
             });
             // A coarse APPROXIMATE centroid (<= 0.4) — likely a non-address
             // label that slipped past the denylist resolving to a city center.
@@ -206,6 +234,129 @@ export class GeocodeBatchListener {
   }
 
   /**
+   * Reverse-geocode backfill: events that have coordinates (photo EXIF / GPS /
+   * estimation) but no readable location_name get one, so a bare map pin gains a
+   * label. Idempotent — a resolved row now HAS a name and drops out of the
+   * candidate set; re-runs serve negative results from the geocode cache.
+   */
+  private async handleReverseBatch(
+    userId: string,
+    opts: { eventIds?: string[]; limit: number; retryNull: boolean },
+  ): Promise<void> {
+    const context: UserServiceContext = { userId };
+    const candidates = await this.selectReverseCandidates(userId, opts);
+
+    this.logger.log('Starting reverse-geocode backfill batch', {
+      userId,
+      candidateCount: candidates.length,
+    });
+
+    let resolved = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    await Promise.all(
+      candidates.map((candidate) =>
+        this.limiter(async () => {
+          // ST_Y/ST_X come back as doubles; coerce defensively in case the
+          // driver hands them over as numeric strings.
+          const outcome = await this.reverseGeocodeWithRetry(
+            Number(candidate.lat),
+            Number(candidate.lng),
+            opts.retryNull,
+          );
+
+          if (outcome.status === 'OK' && outcome.placeName) {
+            const lat = Number(candidate.lat);
+            const lng = Number(candidate.lng);
+            const place = await this.linkPlace(context, outcome.placeName, lat, lng);
+
+            await this.eventService.update(context, candidate.event_id, {
+              location_name: outcome.placeName,
+              ...(place && { location_entity_id: place.id }),
+            });
+            await this.tagLocationSource(context, candidate.event_id, 'reverse_geocoded');
+            resolved++;
+
+            return;
+          }
+
+          if (outcome.retryable) {
+            // Exhausted retries on a transient failure — leave for the next run.
+            failed++;
+
+            return;
+          }
+
+          // Non-retryable negative result (ZERO_RESULTS / REQUEST_DENIED /
+          // INVALID_REQUEST). Cached in geocode_cache so the next run skips the
+          // provider call entirely.
+          skipped++;
+        }),
+      ),
+    );
+
+    this.logger.log('Completed reverse-geocode backfill batch', {
+      userId,
+      resolved,
+      failed,
+      skipped,
+      candidateCount: candidates.length,
+    });
+  }
+
+  /** Reverse-geocode with the same backoff/throttle contract as the forward path. */
+  private async reverseGeocodeWithRetry(
+    lat: number,
+    lng: number,
+    bustCache: boolean,
+  ): Promise<ReverseGeocodeOutcome> {
+    await this.rateLimiter.acquire();
+    let outcome = await this.geocodeService.reverseGeocode(lat, lng, { bustCache });
+
+    for (let attempt = 0; outcome.retryable && attempt < BACKOFF_MS.length; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
+      await this.rateLimiter.acquire();
+      outcome = await this.geocodeService.reverseGeocode(lat, lng, { bustCache: true });
+    }
+
+    if (outcome.retryable && RETRYABLE_STATUSES.has(outcome.status)) {
+      this.logger.warn('Reverse-geocode exhausted retries', { lat, lng, status: outcome.status });
+    }
+
+    return outcome;
+  }
+
+  /**
+   * Select the reverse-backfill candidate set: events for this user that HAVE
+   * coordinates but no usable location_name. lat/lng are projected out of the
+   * geography Point with ST_Y/ST_X (PostGIS stores [lng, lat]).
+   */
+  private async selectReverseCandidates(
+    userId: string,
+    opts: { eventIds?: string[]; limit: number },
+  ): Promise<ReverseCandidateRow[]> {
+    const query = this.dataSource
+      .getRepository(EventEntity)
+      .createQueryBuilder('event')
+      .select('event.event_id', 'event_id')
+      .addSelect('ST_Y(event.location_coordinates::geometry)', 'lat')
+      .addSelect('ST_X(event.location_coordinates::geometry)', 'lng')
+      .where('event.user_id = :userId', { userId })
+      .andWhere('event.location_coordinates IS NOT NULL');
+
+    if (opts.eventIds && opts.eventIds.length > 0) {
+      query.andWhere('event.event_id IN (:...eventIds)', { eventIds: opts.eventIds });
+    } else {
+      query.andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')");
+    }
+
+    query.orderBy('event.start_time', 'DESC').limit(opts.limit);
+
+    return query.getRawMany<ReverseCandidateRow>();
+  }
+
+  /**
    * Select the backfill candidate set: events for this user that have a
    * non-empty location_name.
    *
@@ -257,13 +408,42 @@ export class GeocodeBatchListener {
   }
 
   /**
+   * Idempotent upsert of the {@link PlaceEntity} for a (name, lat, lng) tuple
+   * so the event can carry `location_entity_id` and "events at <place>" queries
+   * can traverse the graph. Returns null on any failure — the caller proceeds
+   * with the coordinate/name update so a transient Place-write error never
+   * blocks geocoding progress.
+   */
+  private async linkPlace(
+    context: UserServiceContext,
+    name: string,
+    lat: number,
+    lng: number,
+  ): Promise<{ id: string } | null> {
+    try {
+      return await this.placeService.findOrCreateForGeocode(context, { name, lat, lng });
+    } catch (error) {
+      this.logger.warn('Failed to find-or-create place for geocoded event', {
+        userId: context.userId,
+        name,
+        lat,
+        lng,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return null;
+    }
+  }
+
+  /**
    * Record metadata.location_source (e.g. 'virtual' for a denylisted venue,
-   * 'approximate' for a coarse city-centroid hit) without touching coordinates.
+   * 'approximate' for a coarse city-centroid hit, 'reverse_geocoded' for a name
+   * resolved from coordinates) without touching coordinates.
    */
   private async tagLocationSource(
     context: UserServiceContext,
     eventId: string,
-    source: 'virtual' | 'approximate',
+    source: 'virtual' | 'approximate' | 'reverse_geocoded',
   ): Promise<void> {
     const event = await this.eventService.findById(context, eventId);
     if (!event) {

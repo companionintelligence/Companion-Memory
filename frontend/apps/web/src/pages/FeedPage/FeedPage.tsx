@@ -48,7 +48,7 @@ export function FeedPage() {
   ] = useFeedQuestionService();
   const { isFeatureEnabled } = useFeatures();
   const hbpeEnabled = isFeatureEnabled('hbpe');
-  const [{ data: forecast }] = useForecastService();
+  const [{ data: forecast, stalled: forecastStalled }] = useForecastService();
   const [dismissedActionIds, setDismissedActionIds] = useState<Set<string>>(new Set());
   const [dismissedSummaryIds, setDismissedSummaryIds] = useState<Set<string>>(new Set());
   const [dismissedInsightIds, setDismissedInsightIds] = useState<Set<string>>(new Set());
@@ -336,6 +336,7 @@ export function FeedPage() {
               buckets={forecast.buckets}
               generatedAt={forecast.generatedAt}
               systemStatus={forecast.systemStatus}
+              stalled={forecastStalled}
             />
           </div>
         )}
@@ -377,6 +378,7 @@ export function FeedPage() {
               buckets={forecast.buckets}
               generatedAt={forecast.generatedAt}
               systemStatus={forecast.systemStatus}
+              stalled={forecastStalled}
             />
           </>
         )}

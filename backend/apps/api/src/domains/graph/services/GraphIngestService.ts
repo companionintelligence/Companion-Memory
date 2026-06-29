@@ -21,6 +21,12 @@ const IMPORT_NAMESPACE = '6f4b3f9e-1c2a-5d8e-9a7b-0c1d2e3f4a5b';
 // entity (resolved server-side; the importer never knows the owner's entity_id).
 const SELF_KEY = 'self';
 const USER_ENTITY_TYPE = 'User';
+// A provisioned self entity is a `Person` (the owner's display name), NOT an
+// entity_type='User' row — see resolveSelfEntity. linked_table `import:self` +
+// linked_id uuidv5(`self:user:<id>`) make it stable and idempotent so re-runs
+// and concurrent ingests resolve to the same row.
+const SELF_ENTITY_TYPE = 'Person';
+const SELF_SOURCE_SYSTEM = 'self';
 
 export interface GraphEntityInputDto {
   /** Importer-stable natural key, e.g. `apple_contacts:contact:John Doe`. */
@@ -122,7 +128,14 @@ export class GraphIngestService {
 
     let relationshipsProcessed = 0;
     if (input.relationships.length > 0) {
-      const self = await this.resolveSelfEntity(ownerId);
+      // Self-anchored edges (the `self` sentinel) need the owner's self entity.
+      // On a from-scratch ingest — or after any wipe that NULLs
+      // ci.users.entity_id — the owner has none, so provision one before wiring
+      // the edges; otherwise every `self->…` edge fails "endpoint not found in
+      // batch". Batches without a self edge (e.g. the family path's pre-resolved
+      // Person-to-Person edges) skip this entirely.
+      const needsSelf = input.relationships.some((r) => r.fromKey === SELF_KEY || r.toKey === SELF_KEY);
+      const self = needsSelf ? await this.ensureSelfEntity(ownerId) : null;
 
       for (const r of input.relationships) {
         try {
@@ -283,6 +296,58 @@ export class GraphIngestService {
 
       throw err;
     }
+  }
+
+  /**
+   * Resolve the owner's self entity, provisioning it when absent. The self
+   * entity anchors every `self->…` edge (preferences from extract-graph, the
+   * importer's own self-links). Its canonical pointer is ci.users.entity_id,
+   * which a from-scratch ingest — or any data wipe — leaves NULL, so the owner
+   * has no self and every self-anchored edge was silently dropped
+   * ("endpoint not found in batch", preferenceEdgesWritten=0). Here we create a
+   * stable `Person` for the owner (named from ci.users.name) and link
+   * ci.users.entity_id to it, so a fresh import yields a complete graph with
+   * preferences actually attached to the user.
+   *
+   * Idempotent and concurrency-safe: the Person upserts on its linked key, the
+   * pointer is only set while still NULL, and we re-resolve afterwards so a
+   * pointer a concurrent writer won is honoured over the row we created. Returns
+   * null only when there is no ci.users row to anchor (a non-user context).
+   */
+  private async ensureSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
+    const existing = await this.resolveSelfEntity(ownerId);
+    if (existing) {
+      return existing;
+    }
+
+    const users: Array<{ name: string | null; email: string | null }> =
+      await this.nodeRepository.manager.query(`SELECT name, email FROM ci.users WHERE id = $1`, [ownerId]);
+    if (users.length === 0) {
+      this.logger.warn('Cannot provision self entity: no ci.users row for owner', { ownerId });
+
+      return null;
+    }
+
+    const displayName = users[0].name?.trim() || users[0].email?.trim() || 'Me';
+
+    const selfEntityId = await this.upsertEntity(ownerId, {
+      key: `self:user:${ownerId}`,
+      entityType: SELF_ENTITY_TYPE,
+      name: displayName,
+      sourceSystem: SELF_SOURCE_SYSTEM,
+      properties: { is_self: true },
+    });
+
+    // Link the owner to it, but never clobber a pointer set concurrently.
+    await this.nodeRepository.manager.query(
+      `UPDATE ci.users SET entity_id = $2 WHERE id = $1 AND entity_id IS NULL`,
+      [ownerId, selfEntityId],
+    );
+
+    this.logger.log('Provisioned self entity for owner', { ownerId, selfEntityId, displayName });
+
+    // Honour whatever pointer actually won; fall back to the row we created.
+    return (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
   }
 
   /**

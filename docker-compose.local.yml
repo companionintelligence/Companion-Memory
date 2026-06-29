@@ -36,8 +36,18 @@ services:
   summary-service:
     ports:
       - ${SUMMARY_HOST_PORT:-8001}:8001
+    # Pass the shared LLM config from .env (compose interpolates ${VAR} from the
+    # root .env). Done explicitly rather than via env_file so host-oriented vars
+    # like DATABASE_HOST=localhost don't leak in and break in-container DB/DNS.
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-ollama}
+      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-gemma4:latest}
+      # Structured-output strategy: native (Ollama json_schema) | prompted | tool.
+      # Flip without a rebuild if a model behaves better in a different mode.
+      SUMMARY_OUTPUT_MODE: ${SUMMARY_OUTPUT_MODE:-native}
+      SUMMARY_OUTPUT_RETRIES: ${SUMMARY_OUTPUT_RETRIES:-3}
 
   #############
   # EPHEMERAL #

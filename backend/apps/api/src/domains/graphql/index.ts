@@ -22,6 +22,7 @@ import { UserModule } from '@ci/domains/user';
 import { GraphQLController } from './controllers/GraphQLController';
 import { ConnectionLoader } from './loaders/ConnectionLoader';
 import { EventLoader } from './loaders/EventLoader';
+import { EventMediaLoader } from './loaders/EventMediaLoader';
 import { FileItemsLoader } from './loaders/FileItemsLoader';
 import { ItemFileLoader } from './loaders/ItemFileLoader';
 import { PersonLoader } from './loaders/PersonLoader';
@@ -103,6 +104,7 @@ import { UserResolver } from './resolvers/UserResolver';
     NoteResolver,
     AnswerResolver,
     EventLoader,
+    EventMediaLoader,
     EventResolver,
     FileItemsLoader,
     FileResolver,
