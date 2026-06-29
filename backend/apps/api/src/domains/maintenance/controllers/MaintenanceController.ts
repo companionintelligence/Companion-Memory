@@ -27,6 +27,11 @@ import {
   CommunicationLinkBackfillService,
 } from '../services/CommunicationLinkBackfillService';
 import {
+  type EventParticipantBackfillProgress,
+  type EventParticipantBackfillResult,
+  EventParticipantBackfillService,
+} from '../services/EventParticipantBackfillService';
+import {
   type GraphEnrichmentProgressCounts,
   type GraphEnrichmentResult,
   GraphEnrichmentService,
@@ -196,6 +201,16 @@ const extractPeopleFromCommunicationsSchema = linkCommunicationsSchema;
 
 type ExtractPeopleFromCommunicationsRequest = z.infer<typeof extractPeopleFromCommunicationsSchema>;
 
+// Body for POST /api/maintenance/link-events. All optional. ci.events isn't a
+// hypertable, so there's no time-window knob to expose — just the per-page
+// candidate cap. Defaults sweep every candidate ci.events row for the user.
+const linkEventsSchema = z.object({
+  /** Max candidate rows examined per page (default 2000). */
+  pageSize: z.coerce.number().int().min(1).max(50000).optional(),
+});
+
+type LinkEventsRequest = z.infer<typeof linkEventsSchema>;
+
 // Body for POST /api/maintenance/extract-graph. All optional: caps how much of
 // the user's own data the LLM extraction samples per run. Re-runnable.
 const extractGraphSchema = z.object({
@@ -247,6 +262,7 @@ export class MaintenanceController {
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly personStubBackfillService: PersonStubBackfillService,
+    private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
     private readonly locationEstimateService: LocationEstimateService,
@@ -572,6 +588,60 @@ export class MaintenanceController {
       endTime: body.endTime,
       windowDays: body.windowDays,
       windowLimit: body.windowLimit,
+    });
+  }
+
+  /**
+   * People-linking backfill for ci.events. Parses organizer + attendee emails
+   * out of `event.metadata` (organizerEmail / participants[].email and friends),
+   * resolves them against the normalized ci.entity_identifiers index, and fills
+   * `organizer_entity_id` / `participant_entity_ids` where they are NULL/empty.
+   * Re-runnable, idempotent (only touches NULL/empty link columns), creates no
+   * stub Person entities. Run AFTER the entity_identifiers/Person index has been
+   * populated so the resolver has something to hit; safe to re-run as more
+   * Person identifiers arrive. Operator-triggered.
+   */
+  @Post('link-events')
+  async linkEvents(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(linkEventsSchema)) body: LinkEventsRequest,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Query('stream') stream?: string,
+    @Headers('accept') accept?: string,
+  ): Promise<EventParticipantBackfillResult | void> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    const empty: EventParticipantBackfillResult = {
+      examined: 0,
+      organizersLinked: 0,
+      participantsLinked: 0,
+      pages: 0,
+    };
+
+    // Opt-in streaming (NDJSON): one {type:'progress'} line per page then a
+    // final {type:'result'} line. When NOT requested, behave exactly as before:
+    // a single synchronous JSON result. Same JwtOrApiKeyAuthGuard either way.
+    if (wantsStream(stream, accept)) {
+      return this.streamNdjson<EventParticipantBackfillResult>(req, res, async (emit) => {
+        if (typeof userId !== 'string') {
+          return empty;
+        }
+
+        return this.eventParticipantBackfillService.backfill(userId, {
+          pageSize: body.pageSize,
+          onProgress: (partial: EventParticipantBackfillProgress) => emit({ type: 'progress', ...partial }),
+        });
+      });
+    }
+
+    if (typeof userId !== 'string') {
+      return empty;
+    }
+
+    return this.eventParticipantBackfillService.backfill(userId, {
+      pageSize: body.pageSize,
     });
   }
 
