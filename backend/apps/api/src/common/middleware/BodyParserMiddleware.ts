@@ -20,6 +20,16 @@ const GRAPHQL_BODY_LIMIT = '10mb';
 const GRAPHQL_PATH = '/graphql';
 
 /**
+ * Capture ingest (`POST /v1/events`) carries perception snapshots from
+ * CI-Applet — a single vizier baseline snapshot serializes to ~1MB+, far over
+ * the 100kb default. Like GraphQL, this is matched by path here rather than via
+ * @BodyLimit: BodyParserMiddleware is applied with `forRoutes('*')`, so it runs
+ * before routing and `req.route` (and thus per-route metadata) is undefined.
+ */
+const CAPTURE_INGEST_BODY_LIMIT = '10mb';
+const CAPTURE_INGEST_PATH = '/v1/events';
+
+/**
  * Middleware that dynamically applies JSON body size limits based on route metadata.
  * Uses the @BodyLimit decorator to determine the appropriate limit for each route.
  * Falls back to a default of 100kb if no limit is specified.
@@ -45,9 +55,13 @@ export class BodyParserMiddleware implements NestMiddleware {
     const routePath = (req.originalUrl || req.url || req.path).split('?')[0];
     const isGraphql =
       req.baseUrl === GRAPHQL_PATH || routePath === GRAPHQL_PATH || routePath.startsWith(`${GRAPHQL_PATH}/`);
+    const isCaptureIngest = routePath.includes(CAPTURE_INGEST_PATH);
 
-    // Use the specified limit, the GraphQL bulk-ingest limit, or default to 100kb.
-    const bodyLimit = limit || (isGraphql ? GRAPHQL_BODY_LIMIT : '100kb');
+    // Use the route's own limit, then the GraphQL / capture-ingest bulk limits,
+    // else default to 100kb.
+    const bodyLimit =
+      limit ||
+      (isGraphql ? GRAPHQL_BODY_LIMIT : isCaptureIngest ? CAPTURE_INGEST_BODY_LIMIT : '100kb');
 
     // Chain both parsers so each checks the Content-Type header and only the
     // matching one actually parses the body. `next` is called exactly once at the end.

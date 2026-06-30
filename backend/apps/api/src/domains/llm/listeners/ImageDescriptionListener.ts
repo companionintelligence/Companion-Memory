@@ -42,6 +42,17 @@ export class ImageDescriptionListener {
 
   @OnEvent(PreviewGeneratedEvent, { queue: 'image-description' })
   async handle(payload: PreviewGeneratedPayload) {
+    // When the upload opted out of server-side analysis, the capture source
+    // (e.g. CI-Applet using its own vision endpoint) already wrote a title and
+    // description, so skip the Ollama pass entirely.
+    if (payload.inventoryCapture === false) {
+      this.logger.log('Upload handled analysis itself, skipping image description', {
+        previewId: payload.previewId,
+      });
+
+      return;
+    }
+
     const serviceContext = toServiceContext({
       userId: payload.userId,
     });

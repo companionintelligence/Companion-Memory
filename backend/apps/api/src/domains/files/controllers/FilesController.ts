@@ -6,6 +6,9 @@ import {
   BadRequestException,
   Controller,
   Logger,
+  NotFoundException,
+  Param,
+  Patch,
   Post,
   UploadedFiles,
   UseGuards,
@@ -94,5 +97,41 @@ export class FilesController {
         }
       }
     }
+  }
+
+  /**
+   * Update a file's user-facing metadata. Capture sources that run their own
+   * analysis (e.g. CI-Applet with a configured vision endpoint) call this to
+   * write the title/description they generated, in place of the server's Ollama
+   * image description.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Patch(':id')
+  async update(
+    @Context() context: RequestContext,
+    @Param('id') id: string,
+    @Body('title') title?: string,
+    @Body('description') description?: string,
+  ) {
+    const data: { title?: string; description?: string } = {};
+    if (typeof title === 'string') {
+      data.title = title;
+    }
+
+    if (typeof description === 'string') {
+      data.description = description;
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('At least one of title or description is required');
+    }
+
+    const updated = await this.fileService.update(toServiceContext(context), id, data);
+
+    if (updated == null) {
+      throw new NotFoundException('File not found');
+    }
+
+    return { id: updated.id };
   }
 }

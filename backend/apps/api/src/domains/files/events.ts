@@ -56,6 +56,12 @@ export type PreviewGeneratedPayload = {
   userId: string;
   previewId: string;
   model?: string;
+  /**
+   * Whether the upload requested server-side analysis. When false the capture
+   * source (e.g. CI-Applet with its own vision endpoint) already produced a
+   * description, so {@link ImageDescriptionListener} skips its Ollama pass.
+   */
+  inventoryCapture?: boolean;
 };
 
 /**
