@@ -450,6 +450,14 @@ export type EstimateLocationBatchRequestPayload = {
    * yesterday's restaurant. Defaults to {@link DEFAULT_ESTIMATE_SOURCE_SYSTEMS}.
    */
   sourceSystems?: string[];
+  /**
+   * Forced re-sweep: also reconsider rows already tagged
+   * `metadata.location_source = 'estimated'`. Without this, prior estimates are
+   * frozen — even when a new donor source (a wave of GPS positions, a freshly
+   * geocoded calendar) would now beat them. Use after backfilling new donors.
+   * Defaults to false (standard incremental, NULL-only behaviour).
+   */
+  forced?: boolean;
 };
 
 defineEvent<EstimateLocationBatchRequestPayload>(EstimateLocationBatchRequestEvent);

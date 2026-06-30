@@ -35,6 +35,7 @@ describe('EstimateLocationBatchListener', () => {
       limit: DEFAULT_ESTIMATE_BATCH_LIMIT,
       maxGapHours: DEFAULT_MAX_GAP_HOURS,
       sourceSystems: [...DEFAULT_ESTIMATE_SOURCE_SYSTEMS],
+      forced: false,
     });
   });
 
@@ -47,7 +48,19 @@ describe('EstimateLocationBatchListener', () => {
       limit: 10,
       maxGapHours: 6,
       sourceSystems: ['uber'],
+      forced: false,
     });
+  });
+
+  it('forwards forced=true so the service runs a re-sweep including prior estimates', async () => {
+    const { listener, estimateService } = makeListener();
+
+    await listener.handleBatch({ userId: USER, forced: true });
+
+    expect(estimateService.estimateBatch).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ forced: true }),
+    );
   });
 
   it('excludes messages/social posts by default (physical-presence allowlist only)', () => {

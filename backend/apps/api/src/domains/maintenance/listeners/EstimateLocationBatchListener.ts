@@ -42,6 +42,7 @@ export class EstimateLocationBatchListener {
       limit: payload.limit ?? DEFAULT_ESTIMATE_BATCH_LIMIT,
       maxGapHours: payload.maxGapHours ?? DEFAULT_MAX_GAP_HOURS,
       sourceSystems: payload.sourceSystems ?? [...DEFAULT_ESTIMATE_SOURCE_SYSTEMS],
+      forced: payload.forced === true,
     });
   }
 }

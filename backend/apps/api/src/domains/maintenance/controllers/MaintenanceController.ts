@@ -98,6 +98,15 @@ const estimateLocationsSchema = z.object({
    * fitness) so messages/social posts are never estimated.
    */
   sourceSystems: z.array(z.string().min(1)).min(1).optional(),
+  /**
+   * Forced re-sweep: also reconsider events that already carry a prior estimate
+   * (`metadata.location_source = 'estimated'`). Use after new donor sources land
+   * (e.g. a wave of GPS positions) so frozen estimates get re-coordinated against
+   * the richer pool. Predicate-relax — rows whose new donor lookup returns
+   * nothing keep their old estimate, so the map never regresses mid-sweep.
+   * Default false (standard incremental, NULL-only behaviour).
+   */
+  forced: z.coerce.boolean().optional(),
 });
 
 // Body for POST /api/maintenance/search-index/cleanup-orphans. All optional;
@@ -396,11 +405,13 @@ export class MaintenanceController {
     const limit = body.limit ?? ESTIMATE_DEFAULT_LIMIT;
     const maxGapHours = body.maxGapHours ?? DEFAULT_MAX_GAP_HOURS;
     const sourceSystems = body.sourceSystems ?? [...DEFAULT_ESTIMATE_SOURCE_SYSTEMS];
+    const forced = body.forced === true;
 
     const candidateCount = await this.locationEstimateService.countCandidates(
       userId,
       sourceSystems,
       Math.round(maxGapHours * 3600),
+      forced,
     );
     const estimatedEventCount = Math.min(candidateCount, limit);
 
@@ -410,7 +421,7 @@ export class MaintenanceController {
 
     const jobIds = await this.signallingEventService.send(
       EstimateLocationBatchRequestEvent,
-      { userId, limit, maxGapHours, sourceSystems },
+      { userId, limit, maxGapHours, sourceSystems, forced },
       { queue: ESTIMATE_LOCATION_QUEUE },
     );
 
