@@ -20,7 +20,7 @@ SET
   source_system = e.source_system,
   source_id = e.source_id
 FROM ci.events e
-WHERE c.event_id = e.id
+WHERE c.event_id = e.event_id
   AND c.source_system IS NULL
   AND c.source_type IS NULL
   AND c.source_id IS NULL
