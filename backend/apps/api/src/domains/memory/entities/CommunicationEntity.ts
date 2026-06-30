@@ -28,7 +28,11 @@ export class CommunicationEntity {
   // text"). Declaring it `enum` makes TypeORM bind it as the enum type; the
   // connection search_path includes `ci` (see application.ts) so the unqualified
   // type name resolves.
-  @Column({ type: 'enum', enum: ['inbound', 'outbound', 'internal', 'async', 'ongoing'], enumName: 'communication_direction' })
+  @Column({
+    type: 'enum',
+    enum: ['inbound', 'outbound', 'internal', 'async', 'ongoing'],
+    enumName: 'communication_direction',
+  })
   direction!: string;
 
   @Column({ type: 'text', nullable: true, name: 'thread_id' })
