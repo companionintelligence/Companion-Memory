@@ -24,6 +24,10 @@ const EMPTY_CONNECTION: SearchResultConnection = {
 function makeResolver() {
   const savedSearchService = { findByShareToken: jest.fn().mockResolvedValue(null) };
 
+  // Shared search enabled: these tests exercise the runSharedSearch boundary, so
+  // the 'shared.search' gate must be open for the token path to run at all.
+  const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(true) };
+
   const resolver = new SearchResolver(
     {} as never, // browserActivityService
     {} as never, // communicationService
@@ -32,6 +36,7 @@ function makeResolver() {
     savedSearchService as never,
     {} as never, // searchService
     {} as never, // tagService
+    featureService as never,
   );
 
   const execSpy = jest
@@ -43,7 +48,7 @@ function makeResolver() {
     )
     .mockResolvedValue(EMPTY_CONNECTION);
 
-  return { resolver, savedSearchService, execSpy };
+  return { resolver, savedSearchService, execSpy, featureService };
 }
 
 describe('SearchResolver — shared search (runSharedSearch)', () => {
@@ -209,6 +214,19 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     const result = await resolver.search(viewerCtx, { shareToken: 'tok' } as SearchInput);
 
     expect(result.edges).toEqual([]);
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns empty without touching the saved search when the shared.search flag is off', async () => {
+    const { resolver, savedSearchService, execSpy, featureService } = makeResolver();
+    featureService.isFeatureEnabled.mockResolvedValue(false);
+
+    const result = await resolver.search(viewerCtx, { shareToken: 'tok' } as SearchInput);
+
+    expect(result.edges).toEqual([]);
+    expect(result.totalCount).toBe(0);
+    // The gate short-circuits before the token is ever resolved or the search run.
+    expect(savedSearchService.findByShareToken).not.toHaveBeenCalled();
     expect(execSpy).not.toHaveBeenCalled();
   });
 

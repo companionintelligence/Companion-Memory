@@ -3,6 +3,7 @@ import { Args, Query, Resolver } from '@nestjs/graphql';
 import { type FindOptionsOrder } from 'typeorm';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
@@ -128,6 +129,7 @@ export class SearchResolver {
     private readonly savedSearchService: SavedSearchService,
     private readonly searchService: SearchService,
     private readonly tagService: TagService,
+    private readonly featureService: FeatureService,
   ) {}
 
   @Query(() => SearchResultConnection)
@@ -139,7 +141,16 @@ export class SearchResolver {
     // search is resolved from the owner's public saved search and run as the
     // owner, ignoring all viewer-supplied filters (only pagination/sort carry
     // over). The guard above still requires the viewer to be authenticated.
+    //
+    // Gated behind the 'shared.search' feature flag: while the access model is
+    // being hardened the shared-URL surface stays dark. When disabled a token
+    // resolves to an empty result — identical to an unknown/revoked token — so
+    // the viewer falls into the tidy "link unavailable" state rather than an error.
     if (input.shareToken != null && input.shareToken.length > 0) {
+      if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
+        return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0 };
+      }
+
       return this.runSharedSearch(input);
     }
 

@@ -36,7 +36,15 @@ function makeResolver() {
     setSharing: jest.fn(),
   };
 
-  return { resolver: new SavedSearchResolver(savedSearchService as never), savedSearchService };
+  // Shared search enabled: these tests exercise sharedSavedSearch, so the gate
+  // must be open for the token to resolve to a definition.
+  const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(true) };
+
+  return {
+    resolver: new SavedSearchResolver(savedSearchService as never, featureService as never),
+    savedSearchService,
+    featureService,
+  };
 }
 
 describe('SavedSearchResolver.sharedSavedSearch', () => {
@@ -58,6 +66,15 @@ describe('SavedSearchResolver.sharedSavedSearch', () => {
     savedSearchService.findByShareToken.mockResolvedValue(null);
 
     expect(await resolver.sharedSavedSearch('bad')).toBeNull();
+  });
+
+  it('returns null without resolving the token when the shared.search flag is off', async () => {
+    const { resolver, savedSearchService, featureService } = makeResolver();
+    featureService.isFeatureEnabled.mockResolvedValue(false);
+    savedSearchService.findByShareToken.mockResolvedValue(sampleEntity);
+
+    expect(await resolver.sharedSavedSearch('tok')).toBeNull();
+    expect(savedSearchService.findByShareToken).not.toHaveBeenCalled();
   });
 });
 

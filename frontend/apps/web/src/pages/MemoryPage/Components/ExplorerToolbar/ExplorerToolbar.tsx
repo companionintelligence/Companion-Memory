@@ -33,6 +33,7 @@ import {
 } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
 import { DropdownProvider, useDropdown } from '@/components/SearchBox/useDropdown';
@@ -1279,6 +1280,9 @@ function SaveSearchButton() {
   const [searchParams] = useSearchParams();
   const [{ selectedEntityTypes }] = useDropdown();
   const { toast } = useToast();
+  // Sharing (the "make public" control) is gated while the access model is hardened.
+  const { isFeatureEnabled } = useFeatures();
+  const sharingEnabled = isFeatureEnabled('shared.search');
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -1381,10 +1385,12 @@ function SaveSearchButton() {
           <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
             Cancel
           </Button>
-          <Button variant="secondary" onClick={() => handleSave(true)} disabled={loading || !name.trim()}>
-            <Share2 className="mr-2 h-4 w-4" />
-            Save &amp; share
-          </Button>
+          {sharingEnabled && (
+            <Button variant="secondary" onClick={() => handleSave(true)} disabled={loading || !name.trim()}>
+              <Share2 className="mr-2 h-4 w-4" />
+              Save &amp; share
+            </Button>
+          )}
           <Button onClick={() => handleSave(false)} disabled={loading || !name.trim()}>
             {loading ? 'Saving…' : 'Save'}
           </Button>

@@ -3,6 +3,7 @@ import { Button } from '@ci/shadcn';
 import { Pencil, Share2, SlidersHorizontal, Trash } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 
@@ -77,13 +78,16 @@ export function SavedSearch({
 }: Props) {
   const savedSearch = useFragment(SavedSearchGridItemFragment, savedSearchMasked);
   const filterDims = activeFilterDimensions(savedSearch.filters);
+  // Sharing (the "make public" control) is gated while the access model is hardened.
+  const { isFeatureEnabled } = useFeatures();
+  const sharingEnabled = isFeatureEnabled('shared.search');
 
   return (
     <Link to={`/memory?saved_search=${GlobalUID.parse('saved-search', savedSearch.id)}`} key={savedSearch.id}>
       <div className="h-full w-full flex flex-col border border-border bg-card text-card-foreground shadow-md rounded-lg cursor-pointer select-none p-3 gap-3 hover:shadow-lg transition-shadow duration-75">
         <div className="flex items-center gap-2">
           <div className="text-md font-semibold truncate">{savedSearch.name || 'Untitled Saved Search'}</div>
-          {savedSearch.isPublic && (
+          {sharingEnabled && savedSearch.isPublic && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary border border-primary/20"
               title="This saved search is shared via a link"
@@ -137,14 +141,16 @@ export function SavedSearch({
           >
             <Pencil className="w-4 h-4" />
           </Button>
-          <Button
-            onClick={openSavedSearchShareModal}
-            size="icon"
-            variant="ghost"
-            aria-label="Share Saved Search"
-          >
-            <Share2 className="w-4 h-4" />
-          </Button>
+          {sharingEnabled && (
+            <Button
+              onClick={openSavedSearchShareModal}
+              size="icon"
+              variant="ghost"
+              aria-label="Share Saved Search"
+            >
+              <Share2 className="w-4 h-4" />
+            </Button>
+          )}
           <Button
             onClick={openSavedSearchDeleteModal}
             size="icon"

@@ -122,7 +122,8 @@
     "require.signup.codes": true,
     "files.page": false,
     "hbpe": true,
-    "agent.memory.compaction": false
+    "agent.memory.compaction": false,
+    "shared.search": false
   },
   "environment": {
     "database.query.logging": false

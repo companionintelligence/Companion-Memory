@@ -48,6 +48,7 @@ describe('SearchResolver — event-type ("how") filter', () => {
       savedSearchService as never,
       searchService as never,
       tagService as never,
+      { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
     );
 
     return { resolver, eventService, searchService, tagService };

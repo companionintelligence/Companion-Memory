@@ -2,6 +2,7 @@ import { BadRequestException, UseGuards } from '@nestjs/common';
 import { Mutation, Query, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { SavedSearchService } from '@ci/domains/files';
 import { UpdateSavedSearchPayload } from '@ci/domains/graphql/types/UpdateSavedSearchPayload';
@@ -24,7 +25,10 @@ import { Paginator } from '../utils/Paginator';
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => SavedSearchType)
 export class SavedSearchResolver {
-  constructor(private readonly savedSearchService: SavedSearchService) {}
+  constructor(
+    private readonly savedSearchService: SavedSearchService,
+    private readonly featureService: FeatureService,
+  ) {}
 
   @Mutation(() => CreateSavedSearchPayload)
   async createSavedSearch(
@@ -191,6 +195,13 @@ export class SavedSearchResolver {
    */
   @Query(() => SavedSearchType, { nullable: true })
   async sharedSavedSearch(@Args('token') token: string): Promise<SavedSearchType | null> {
+    // Gated behind 'shared.search': while the access model is being hardened the
+    // shared-URL surface stays dark. Disabled resolves to null — indistinguishable
+    // from an unknown/revoked token — so the viewer shows "link unavailable".
+    if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
+      return null;
+    }
+
     const entity = await this.savedSearchService.findByShareToken(token);
 
     if (entity == null) {

@@ -29,6 +29,7 @@ function makeResolver() {
     savedSearchService as never,
     searchService as never,
     tagService as never,
+    { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
   );
 
   // Bypass the real GraphQL type mappers; the unit under test is the filter/sort composition.
