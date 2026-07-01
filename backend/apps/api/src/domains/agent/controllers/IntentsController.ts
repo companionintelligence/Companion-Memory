@@ -1,9 +1,13 @@
 import { Controller, Get, Param, NotFoundException, UseGuards } from '@nestjs/common';
 
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-
-import type { CiEntityDescriptor, IntentDomain, IntentManifest, ManifestIntent } from '../catalog/types';
-import { IntentCatalogService } from '../services/IntentCatalogService';
+import {
+  IntentCatalogService,
+  type CiEntityDescriptor,
+  type IntentDomain,
+  type IntentManifest,
+  type ManifestIntent,
+} from '@ci/domains/tools';
 
 /**
  * Publishes the CI Intent catalog — the discoverable, typed capability declaration. Any agent

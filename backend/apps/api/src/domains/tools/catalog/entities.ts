@@ -1,9 +1,9 @@
 /**
- * CI Entity Registry — the catalog of typed content an intent operates on.
+ * CI Entity Registry — the catalog of typed content a tool operates on.
  *
  * CI has a rich, cross-source entity graph (`ci.events`, `ci.people`, …); this declares those
- * types — each with a uniform identity + display descriptor — so the intent manifest can
- * describe what each intent consumes/produces and agents can render/resolve them consistently.
+ * types — each with a uniform identity + display descriptor — so the manifest can describe what
+ * each tool consumes/produces and agents can render/resolve them consistently.
  */
 
 import type { CiEntityDescriptor } from './types';

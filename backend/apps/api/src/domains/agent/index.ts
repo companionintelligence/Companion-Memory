@@ -36,7 +36,6 @@ import { MemoryCompactionCron } from './cron/MemoryCompactionCron';
 import { AgentMemoryEntity } from './entities/AgentMemoryEntity';
 import { AgentMemoryService } from './services/AgentMemoryService';
 import { ForecastContextService } from './services/ForecastContextService';
-import { IntentCatalogService } from './services/IntentCatalogService';
 import { MemoryCompactionService } from './services/MemoryCompactionService';
 import { RecallService } from './services/RecallService';
 import { SerializerService } from './services/SerializerService';
@@ -51,13 +50,13 @@ import { SerializerService } from './services/SerializerService';
     MemoryModule,
     PredictionsModule,
     SearchNextModule,
+    // Provides IntentCatalogService, which the IntentsController publishes.
     ToolsModule,
   ],
-  exports: [SerializerService, IntentCatalogService],
+  exports: [SerializerService],
   providers: [
     AgentMemoryService,
     ForecastContextService,
-    IntentCatalogService,
     MemoryCompactionCron,
     MemoryCompactionService,
     RecallService,
@@ -66,11 +65,3 @@ import { SerializerService } from './services/SerializerService';
   controllers: [IntentsController, MemoryController],
 })
 export class AgentModule {}
-
-export { IntentCatalogService } from './services/IntentCatalogService';
-export {
-  type IntentManifest,
-  type ManifestIntent,
-  type IntentDomain,
-  type CiEntityDescriptor,
-} from './catalog/types';

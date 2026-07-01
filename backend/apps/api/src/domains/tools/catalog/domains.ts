@@ -1,12 +1,12 @@
 /**
  * CI Schema Domains — the standardized capability vocabulary.
  *
- * A small, curated set of domains that intents are grouped under, so an assistant reliably maps
- * natural language to an action and CI-Hermes, CI-OpenClaw, and any MCP client use the same
- * verbs instead of inventing their own per-harness tool names.
+ * A small, curated set of domains that tools are grouped under, so an assistant reliably maps
+ * natural language to an action and CI-Hermes, CI-OpenClaw, and any MCP client use the same verbs
+ * instead of inventing their own per-harness tool names.
  */
 
-import type { IntentDomainKey } from '@ci/domains/tools';
+import type { IntentDomainKey } from '../core/types';
 
 import type { IntentDomain } from './types';
 

@@ -1,16 +1,15 @@
 /**
  * The published CI Intent catalog shape — the discoverable, typed capability declaration.
  *
- * The per-tool metadata types (domain key, privacy, entity type, the intent definition itself)
- * live in the tools domain because each intent IS a tool. These types describe how that catalog
- * is *published* (REST + the MCP `intents://catalog` resource), so they live with the catalog
- * here in the agent domain.
+ * Every tool is an intent, so the catalog is entirely tool metadata: it describes how the tools
+ * registered in this domain are published (over REST via the agent-domain controller and over MCP
+ * as the `intents://catalog` resource).
  */
 
-import type { CiEntityType, IntentDomainKey, IntentPrivacy, JSONSchema } from '@ci/domains/tools';
+import type { CiEntityType, IntentDomainKey, IntentPrivacy, JSONSchema } from '../core/types';
 
 /**
- * Display descriptor for a schema domain. The standardized verb vocabulary intents are grouped
+ * Display descriptor for a schema domain — the standardized verb vocabulary tools are grouped
  * under, so agents and apps speak the same language.
  */
 export interface IntentDomain {
@@ -30,7 +29,7 @@ export interface CiEntityDescriptor {
   idKind: 'uuid' | 'global-uid';
 }
 
-/** A catalog intent flattened for publication (binding replaced by its executable tool name). */
+/** A tool flattened for publication: its dotted intent name plus its executable tool name. */
 export interface ManifestIntent {
   name: string;
   tool: string;

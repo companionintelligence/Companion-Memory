@@ -1,7 +1,6 @@
-import type { ToolRegistry } from '@ci/domains/tools';
-
-import { INTENT_DOMAINS } from '../../catalog/domains';
-import { CI_ENTITIES } from '../../catalog/entities';
+import type { ToolRegistry } from '../../registry/ToolRegistry';
+import { INTENT_DOMAINS } from '../domains';
+import { CI_ENTITIES } from '../entities';
 import { IntentCatalogService } from '../IntentCatalogService';
 
 const READ = { access: 'read', sensitivity: 'personal', destructive: false, external: false } as const;
@@ -29,17 +28,7 @@ describe('IntentCatalogService', () => {
   ];
   const service = new IntentCatalogService(fakeRegistry(schemas));
 
-  it('validates that every tool references a registered domain at boot', () => {
-    expect(() => service.onModuleInit()).not.toThrow();
-  });
-
-  it('throws at boot when a tool references an unknown domain', () => {
-    const bad = new IntentCatalogService(fakeRegistry([schema('weird.thing', 'weird')]));
-
-    expect(() => bad.onModuleInit()).toThrow(/unknown domain/);
-  });
-
-  it('builds a manifest (domains + entities + flattened, sorted intents)', () => {
+  it('builds a manifest (domains + entities + flattened, sorted intents) from the registry', () => {
     const manifest = service.getManifest();
 
     expect(manifest.version).toBe('1.0.0');

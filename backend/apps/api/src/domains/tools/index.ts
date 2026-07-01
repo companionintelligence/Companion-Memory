@@ -29,6 +29,7 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 
+import { IntentCatalogService } from './catalog/IntentCatalogService';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
 import { IntentDonationService } from './services/IntentDonationService';
@@ -92,13 +93,17 @@ const nativeToolInstances = [
     },
     // Registration service to wire everything together
     ToolsRegistrationService,
+    // Read API over the tool catalog (manifest), consumed by the agent REST controller + MCP.
+    IntentCatalogService,
   ],
-  exports: [ToolRegistry],
+  exports: [ToolRegistry, IntentCatalogService],
 })
 export class ToolsModule {}
 
 // Exports
 export { ToolRegistry };
+export { IntentCatalogService } from './catalog/IntentCatalogService';
+export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
 export { BaseTool } from './core/BaseTool';
 export { IntentDonationService, INTENT_INVOKED_EVENT } from './services/IntentDonationService';
 export type { IntentInvocation } from './services/IntentDonationService';
