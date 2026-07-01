@@ -50,10 +50,10 @@ const context: RequestContext = { userId: 'user-1' };
 
 describe('ToolRegistry', () => {
   function makeRegistry() {
-    const donate = jest.fn();
-    const registry = new ToolRegistry(makeLogger(), { donate } as any);
+    const send = jest.fn().mockResolvedValue([]);
+    const registry = new ToolRegistry(makeLogger(), { send } as any);
 
-    return { registry, donate };
+    return { registry, send };
   }
 
   it('keys tools by the executable (underscored) name while exposing the dotted intent name', async () => {
@@ -79,8 +79,8 @@ describe('ToolRegistry', () => {
     ).toEqual(['memory.recall', 'people.find']);
   });
 
-  it('executes a tool by its executable name and donates the invocation', async () => {
-    const { registry, donate } = makeRegistry();
+  it('executes a tool by its executable name and emits tool.invoked via EventService', async () => {
+    const { registry, send } = makeRegistry();
     const tool = fakeTool('memory.recall', { hits: [] });
     await registry.registerProvider(fakeProvider({ 'memory.recall': tool }));
 
@@ -89,25 +89,40 @@ describe('ToolRegistry', () => {
     expect(result.success).toBe(true);
     expect(result.data).toEqual({ hits: [] });
     expect(tool.execute).toHaveBeenCalledWith(context, { q: 1 });
-    expect(donate).toHaveBeenCalledTimes(1);
-    expect(donate.mock.calls[0][0]).toMatchObject({
+    expect(send).toHaveBeenCalledTimes(1);
+    const [eventName, payload, options] = send.mock.calls[0];
+    expect(eventName).toBe('tool.invoked');
+    expect(payload).toMatchObject({
       intent: 'memory.recall',
+      tool: 'memory_recall',
       domain: 'memory',
       userId: 'user-1',
       success: true,
       access: 'read',
       external: false,
     });
+    expect(options).toEqual({ queue: 'telemetry' });
   });
 
-  it('returns TOOL_NOT_FOUND (and does not donate) for an unknown tool', async () => {
-    const { registry, donate } = makeRegistry();
+  it('never fails the tool call when telemetry emission throws', async () => {
+    const send = jest.fn().mockRejectedValue(new Error('bus down'));
+    const registry = new ToolRegistry(makeLogger(), { send } as any);
+    await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall', { ok: 1 }) }));
+
+    const result = await registry.executeTool('memory_recall', context, {});
+
+    expect(result.success).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns TOOL_NOT_FOUND (and does not emit) for an unknown tool', async () => {
+    const { registry, send } = makeRegistry();
     await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall') }));
 
     const result = await registry.executeTool('does_not_exist', context, {});
 
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('TOOL_NOT_FOUND');
-    expect(donate).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 });

@@ -30,9 +30,9 @@ import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 
 import { IntentCatalogService } from './catalog/IntentCatalogService';
+import { ToolInvokedListener } from './listeners/ToolInvokedListener';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
-import { IntentDonationService } from './services/IntentDonationService';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 import { CalendarFindEventsTool } from './tools/CalendarFindEventsTool';
 import { DatabaseSearchTool } from './tools/DatabaseSearchTool';
@@ -78,7 +78,8 @@ const nativeToolInstances = [
   ],
   providers: [
     ToolRegistry,
-    IntentDonationService,
+    // Consumes the durable tool.invoked signal (and registers its telemetry queue).
+    ToolInvokedListener,
     // Native tools (each a curated intent)
     ...nativeToolInstances,
     // Native tool provider with injected tools
@@ -105,8 +106,8 @@ export { ToolRegistry };
 export { IntentCatalogService } from './catalog/IntentCatalogService';
 export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
 export { BaseTool } from './core/BaseTool';
-export { IntentDonationService, INTENT_INVOKED_EVENT } from './services/IntentDonationService';
-export type { IntentInvocation } from './services/IntentDonationService';
+export { ToolInvokedEvent } from './events';
+export type { ToolInvokedPayload } from './events';
 export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
 export {
   intentToolName,

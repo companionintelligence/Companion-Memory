@@ -2,11 +2,12 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { EventService } from '@ci/domains/events';
 
 import type { BaseTool } from '../core/BaseTool';
 import { intentToolName, type ToolSchema, type ToolResult } from '../core/types';
+import { ToolInvokedEvent } from '../events';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
-import { IntentDonationService } from '../services/IntentDonationService';
 
 /**
  * Centralized registry for managing all tools from various providers.
@@ -26,7 +27,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly logger: LoggerService,
-    private readonly donation: IntentDonationService,
+    private readonly events: EventService,
   ) {
     this.logger.setContext(ToolRegistry.name);
   }
@@ -195,18 +196,41 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
     const result = await tool.execute(context, input);
 
-    const { schema } = tool;
-    this.donation.donate({
-      intent: schema.name,
-      domain: schema.domain,
-      userId: context.userId,
-      success: result.success,
-      durationMs: result.executionTimeMs,
-      access: schema.privacy.access,
-      external: schema.privacy.external,
-    });
+    await this.emitInvoked(name, tool, context, result);
 
     return result;
+  }
+
+  /**
+   * Emit the durable `tool.invoked` behavioral signal (routed to the `telemetry` queue). Never
+   * throws: a telemetry failure must not fail an already-completed tool call.
+   */
+  private async emitInvoked(
+    toolName: string,
+    tool: BaseTool,
+    context: RequestContext,
+    result: ToolResult,
+  ): Promise<void> {
+    const { schema } = tool;
+
+    try {
+      await this.events.send(
+        ToolInvokedEvent,
+        {
+          intent: schema.name,
+          tool: toolName,
+          domain: schema.domain,
+          userId: context.userId,
+          success: result.success,
+          durationMs: result.executionTimeMs,
+          access: schema.privacy.access,
+          external: schema.privacy.external,
+        },
+        { queue: 'telemetry' },
+      );
+    } catch (error) {
+      this.logger.warn('tool.invoked emit failed (non-fatal)', { error });
+    }
   }
 
   /**

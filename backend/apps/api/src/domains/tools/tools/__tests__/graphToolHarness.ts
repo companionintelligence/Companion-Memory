@@ -430,7 +430,7 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
   ];
 
   const provider = new NativeToolProvider(tools, makeFakeLogger());
-  const registry = new ToolRegistry(makeFakeLogger(), { donate: () => {} } as any);
+  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any);
   await registry.registerProvider(provider);
 
   return {
