@@ -1,0 +1,54 @@
+# Dependabot configuration for CI-Server
+# Provides recurring dependency-vulnerability-scan evidence for CASA Tier 2 / SOC 2.
+#
+# Layout notes (verified against repo):
+#   - JS/TS is a single Yarn Berry (yarn@4.9.1) workspaces monorepo with ONE
+#     root lockfile (/yarn.lock). All workspaces (backend/apps/*, frontend/apps/*,
+#     frontend/packages/*) resolve through it, so the npm ecosystem targets "/" only.
+#     Dependabot's "npm" ecosystem understands Yarn (including Berry) lockfiles.
+#   - Python services each have their own pyproject.toml + uv.lock:
+#       backend/apps/hbpe, backend/apps/summary  -> "pip" ecosystem.
+#   - GitHub Actions workflows -> "github-actions" ecosystem.
+#
+# This PR is config-only: version updates are opened as PRs and remediated
+# separately with care (do not auto-merge dependency bumps here).
+version: 2
+updates:
+  # ── JavaScript / TypeScript (Yarn Berry workspaces, single root lockfile) ──
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+
+  # ── Python service: HBPE (Hierarchical Behavioral Prediction Engine) ──
+  - package-ecosystem: "pip"
+    directory: "/backend/apps/hbpe"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+
+  # ── Python service: Summary (Temporal summarization) ──
+  - package-ecosystem: "pip"
+    directory: "/backend/apps/summary"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+
+  # ── GitHub Actions ──
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
