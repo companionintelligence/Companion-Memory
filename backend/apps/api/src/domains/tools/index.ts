@@ -14,10 +14,8 @@
  *   systems.
  * - **Individual Tools (`GetUserPreferencesTool`, etc.)**: These are the concrete implementations
  *   of actions the LLM can invoke, each with a defined schema for its inputs and outputs.
- *
- * Each provider self-registers with the `ToolRegistry` in its own `onModuleInit`,
- * so adding a capability source is just adding a provider — no central
- * registration service to keep in sync.
+ * - **`ToolsRegistrationService`**: An initialization service that runs when the module loads,
+ *   registering all available tool providers with the central `ToolRegistry`.
  *
  * @module ToolsModule
  */
@@ -42,6 +40,7 @@ import { NativeToolProvider } from './providers/native/NativeToolProvider';
 import { ReadKnowledgeTool } from './providers/native/ReadKnowledgeTool';
 import { WriteKnowledgeTool } from './providers/native/WriteKnowledgeTool';
 import { ToolRegistry } from './registry/ToolRegistry';
+import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 
 // Instantiate native tools
 const nativeToolInstances = [
@@ -71,17 +70,18 @@ const nativeToolInstances = [
     ToolRegistry,
     // Native tools
     ...nativeToolInstances,
-    // Native tool provider with injected tools. Self-registers with the
-    // ToolRegistry in its onModuleInit — no separate registration service.
+    // Native tool provider with injected tools
     {
       provide: NativeToolProvider,
-      inject: [LoggerService, ToolRegistry, ...nativeToolInstances],
+      inject: [LoggerService, ...nativeToolInstances],
       useFactory: (...args) => {
-        const [logger, toolRegistry, ...tools] = args;
+        const [logger, ...tools] = args;
 
-        return new NativeToolProvider(tools, logger, toolRegistry);
+        return new NativeToolProvider(tools, logger);
       },
     },
+    // Registration service to wire everything together
+    ToolsRegistrationService,
   ],
   exports: [ToolRegistry],
 })
@@ -89,6 +89,5 @@ export class ToolsModule {}
 
 // Exports
 export { ToolRegistry };
-export { BaseTool } from './core/BaseTool';
 export type { JSONSchema, ToolSchema, ToolResult, ToolExecutionContext, ToolError } from './core/types';
-export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
+export type { ProviderHealthStatus } from './providers/ToolProvider';

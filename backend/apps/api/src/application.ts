@@ -22,7 +22,6 @@ import { LoggingModule, LoggerService, RequestLoggerMiddleware } from '@ci/commo
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import config from '@ci/configuration';
 import { AgentModule } from '@ci/domains/agent';
-import { IntentsModule } from '@ci/domains/agent-capabilities';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
 import { PortalAuthModule } from '@ci/domains/auth/PortalAuthModule';
@@ -40,7 +39,6 @@ import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
 import { MemoryModule } from '@ci/domains/memory';
-import { ModelRoutingModule } from '@ci/domains/model-routing';
 import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
 import { PositionModule } from '@ci/domains/position';
@@ -85,10 +83,8 @@ import { UserModule } from '@ci/domains/user';
     GraphModule,
     GraphQLModule,
     IntelligenceModule,
-    IntentsModule,
     LLMModule,
     McpModule,
-    ModelRoutingModule,
     OnboardingModule,
     PositionModule,
     PredictionsModule,

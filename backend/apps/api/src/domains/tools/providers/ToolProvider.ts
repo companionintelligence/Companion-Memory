@@ -1,13 +1,9 @@
 import type { BaseTool } from '../core/BaseTool';
+import type { ToolSchema } from '../core/types';
 
 /**
  * Base interface for tool providers
- * Providers are responsible for discovering, managing, and providing tools.
- *
- * A provider hands back tool *instances* — each {@link BaseTool} already carries
- * its own `schema`, so there is no separate schema projection for the registry
- * to reconcile by name. Do any async discovery in `initialize()`; `getTools()`
- * is a cheap accessor over what discovery produced.
+ * Providers are responsible for discovering, managing, and providing tools
  */
 export interface ToolProvider {
   /**
@@ -26,18 +22,19 @@ export interface ToolProvider {
   shutdown(): Promise<void>;
 
   /**
-   * The tools this provider contributes. Each tool carries its own schema, so
-   * the registry never re-fetches an instance by name.
+   * Get all available tool schemas from this provider
    */
-  getTools(): BaseTool[];
+  getAvailableTools(): Promise<ToolSchema[]>;
 
   /**
-   * Optional: raw tool names whose capability this provider's tools supersede.
-   * The registry demotes these from the agent-facing list, so the model is
-   * offered the curated tool, not the low-level one it wraps. Providers that
-   * wrap nothing omit this.
+   * Get a specific tool instance by name
    */
-  getSupersededToolNames?(): string[];
+  getTool(name: string): BaseTool | undefined;
+
+  /**
+   * Check if this provider can handle a specific tool
+   */
+  canHandle(toolName: string): boolean;
 
   /**
    * Get provider health status

@@ -18,16 +18,6 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
   private readonly toolToProvider = new Map<string, string>();
 
-  /**
-   * Raw tool names that are superseded by a curated intent. Populated by the
-   * intents domain (which depends on tools, not the reverse) via
-   * {@link markSuperseded}. Hidden from the agent-facing tool list when the
-   * `CI_PREFER_INTENTS` flag is on (the default), so the model prefers the
-   * curated, privacy-labelled intent over the low-level tool it wraps. The raw
-   * tools stay registered and remain executable by name.
-   */
-  private readonly supersededTools = new Set<string>();
-
   constructor(private readonly logger: LoggerService) {
     this.logger.setContext(ToolRegistry.name);
   }
@@ -63,7 +53,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   private async initializeProvider(provider: ToolProvider): Promise<void> {
     try {
       await provider.initialize();
-      this.loadToolsFromProvider(provider);
+      await this.loadToolsFromProvider(provider);
 
       this.logger.debug(`Initialized provider: ${provider.name}`);
     } catch (error) {
@@ -72,24 +62,23 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Load a provider's tools into the registry. The provider hands back
-   * instances (each carrying its own schema), so there is no schema list to
-   * reconcile and no tool can be silently dropped. A provider may also declare
-   * the raw tools its curated tools supersede; those are demoted from the
-   * agent-facing list here.
+   * Load tools from a provider into the registry
    */
-  private loadToolsFromProvider(provider: ToolProvider): void {
-    const tools = provider.getTools();
+  private async loadToolsFromProvider(provider: ToolProvider): Promise<void> {
+    try {
+      const schemas = await provider.getAvailableTools();
 
-    for (const tool of tools) {
-      this.registerTool(tool, provider.name);
+      for (const schema of schemas) {
+        const tool = provider.getTool(schema.name);
+        if (tool) {
+          this.registerTool(tool, provider.name);
+        }
+      }
+
+      this.logger.debug(`Loaded ${schemas.length} tools from provider: ${provider.name}`);
+    } catch (error) {
+      this.logger.error(`Failed to load tools from provider: ${provider.name}`, error as Error);
     }
-
-    if (provider.getSupersededToolNames) {
-      this.markSuperseded(provider.getSupersededToolNames());
-    }
-
-    this.logger.debug(`Loaded ${tools.length} tools from provider: ${provider.name}`);
   }
 
   /**
@@ -147,40 +136,6 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     });
 
     return schemas;
-  }
-
-  /**
-   * Record raw tools that a curated intent supersedes. Idempotent; called once at
-   * boot by the intents domain.
-   */
-  markSuperseded(toolNames: Iterable<string>): void {
-    for (const name of toolNames) {
-      this.supersededTools.add(name);
-    }
-  }
-
-  /**
-   * The tool list to advertise to an LLM / MCP client. Identical to
-   * {@link getAvailableTools} except that, when `CI_PREFER_INTENTS` is on (the
-   * default), tools superseded by a curated intent are omitted so the model isn't
-   * offered both the intent and the raw tool it wraps. Set `CI_PREFER_INTENTS=false`
-   * to advertise the raw tools too.
-   */
-  getAgentFacingTools(context?: RequestContext): ToolSchema[] {
-    const all = this.getAvailableTools(context);
-
-    if (process.env.CI_PREFER_INTENTS === 'false' || this.supersededTools.size === 0) {
-      return all;
-    }
-
-    const filtered = all.filter((schema) => !this.supersededTools.has(schema.name));
-
-    this.logger.debug(`Agent-facing tools: ${filtered.length}/${all.length} (intents preferred)`, {
-      userId: context?.userId,
-      demoted: all.length - filtered.length,
-    });
-
-    return filtered;
   }
 
   /**

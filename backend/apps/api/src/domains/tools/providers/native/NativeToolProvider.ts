@@ -1,17 +1,16 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 
 import type { BaseTool } from '../../core/BaseTool';
-import { ToolRegistry } from '../../registry/ToolRegistry';
+import type { ToolSchema } from '../../core/types';
 import type { ToolProvider, ProviderHealthStatus } from '../ToolProvider';
 
 /**
- * Provider for native (built-in) tools. Self-registers with the shared
- * {@link ToolRegistry} at boot — no separate registration service needed.
+ * Provider for native (built-in) tools
  */
 @Injectable()
-export class NativeToolProvider implements ToolProvider, OnModuleInit {
+export class NativeToolProvider implements ToolProvider {
   readonly name = 'native';
 
   private readonly tools = new Map<string, BaseTool>();
@@ -21,13 +20,8 @@ export class NativeToolProvider implements ToolProvider, OnModuleInit {
   constructor(
     private readonly nativeTools: BaseTool[],
     private readonly logger: LoggerService,
-    private readonly toolRegistry: ToolRegistry,
   ) {
     this.logger.setContext(NativeToolProvider.name);
-  }
-
-  async onModuleInit(): Promise<void> {
-    await this.toolRegistry.registerProvider(this);
   }
 
   async initialize(): Promise<void> {
@@ -52,8 +46,16 @@ export class NativeToolProvider implements ToolProvider, OnModuleInit {
     this.logger.debug('Native tool provider shut down');
   }
 
-  getTools(): BaseTool[] {
-    return Array.from(this.tools.values());
+  async getAvailableTools(): Promise<ToolSchema[]> {
+    return Array.from(this.tools.values()).map((tool) => tool.schema);
+  }
+
+  getTool(name: string): BaseTool | undefined {
+    return this.tools.get(name);
+  }
+
+  canHandle(toolName: string): boolean {
+    return this.tools.has(toolName);
   }
 
   async getHealthStatus(): Promise<ProviderHealthStatus> {
