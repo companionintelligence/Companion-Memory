@@ -90,6 +90,10 @@ export { FacebookClient, GitHubClient, GoogleClient, MicrosoftClient, SpotifyCli
 
 // Types
 export type { BaseClient } from './clients/BaseClient';
+// BaseOAuth2Client is exported as a VALUE (not just a type) so consumers can do
+// `instanceof BaseOAuth2Client` to detect OAuth2 (vs OpenID) providers — used by
+// the privacy domain's token-revocation path.
+export { BaseOAuth2Client } from './clients/BaseOAuth2Client';
 export type { Connection } from './entities/ConnectionEntity';
 export type { Provider } from './entities/ProviderEntity';
 export type { ProviderKey } from './entities/ProviderKeyEntity';

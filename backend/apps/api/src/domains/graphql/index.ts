@@ -15,6 +15,7 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { PredictionsModule } from '@ci/domains/predictions';
+import { PrivacyModule } from '@ci/domains/privacy';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
 import { UserModule } from '@ci/domains/user';
@@ -76,6 +77,7 @@ import { UserResolver } from './resolvers/UserResolver';
     }),
     BrowserActivityModule,
     ConnectionsModule,
+    PrivacyModule,
     PredictionsModule,
     ConversationModule,
     EntityResolutionModule,

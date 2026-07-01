@@ -22,6 +22,16 @@ export abstract class BaseOAuth2Client extends BaseClient {
 
   protected abstract tokenEndpoint: string;
 
+  /**
+   * The provider's OAuth 2.0 token-revocation endpoint (RFC 7009), when it
+   * exposes one. Revoking here tells the provider to invalidate the token so
+   * access actually stops on their side — required for Google's restricted-scope
+   * policy and CASA/ASVS V8 ("delete user data on request" implies the grant is
+   * also withdrawn). `null` for providers with no revocation endpoint (revocation
+   * is then a best-effort no-op and we rely on local deletion of the token).
+   */
+  protected readonly revocationEndpoint: string | null = null;
+
   protected abstract scopes: string[];
 
   protected abstract extraAuthParams: Record<string, string>;
@@ -266,5 +276,71 @@ export abstract class BaseOAuth2Client extends BaseClient {
         tokenExpiry,
       } satisfies TokenExchange;
     }
+  }
+
+  /**
+   * Revoke this connection's OAuth grant with the provider (RFC 7009), so access
+   * stops on the provider's side — not just in our database. Called when a
+   * connection is disconnected or the owning account is deleted.
+   *
+   * Best-effort by contract: revocation is a courtesy to the provider and must
+   * never block the local purge. If the provider has no revocation endpoint, the
+   * connection carries no token, or the provider rejects/errors on the call
+   * (including because the token was already revoked — providers commonly answer
+   * 200 or a benign 400 there), we return `{ revoked: false }` and let the caller
+   * proceed to delete the stored token locally. A revocation attempt is made for
+   * BOTH the refresh token and the access token when present, because revoking a
+   * Google refresh token invalidates the whole grant while an access-token-only
+   * connection still needs its access token withdrawn.
+   *
+   * @returns whether at least one token was accepted for revocation by the provider.
+   */
+  async revoke(connection: Connection): Promise<{ revoked: boolean }> {
+    if (this.revocationEndpoint == null) {
+      return { revoked: false };
+    }
+
+    // Prefer the refresh token (revoking it invalidates the entire grant on most
+    // providers, incl. Google), then the access token. Deduped + falsy-filtered.
+    const tokens = Array.from(
+      new Set([connection.refreshToken, connection.accessToken].filter((t): t is string => !!t)),
+    );
+
+    if (tokens.length === 0) {
+      return { revoked: false };
+    }
+
+    let revoked = false;
+
+    for (const token of tokens) {
+      try {
+        const response = await fetch(this.revocationEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: new URLSearchParams({ token }).toString(),
+        });
+
+        if (response.ok) {
+          revoked = true;
+        } else {
+          // A token that is already invalid/revoked is a success from our POV —
+          // the goal (no live grant) is met. Log and continue; never throw.
+          this.logger.log('Token revocation returned non-OK; treating as best-effort', {
+            connectionId: connection.id,
+            status: response.status,
+          });
+        }
+      } catch (error) {
+        this.logger.error('Token revocation request failed', {
+          connectionId: connection.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    return { revoked };
   }
 }
