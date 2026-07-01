@@ -86,7 +86,6 @@ describe('IntentToolProvider self-registration + demotion', () => {
     for (const raw of superseded) {
       expect(agentFacing).not.toContain(raw);
     }
-
     // The raw tools stay registered + executable, just not advertised.
     for (const raw of superseded) {
       expect(registry.hasTool(raw)).toBe(true);
