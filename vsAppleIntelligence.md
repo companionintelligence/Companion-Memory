@@ -39,7 +39,7 @@ The roadmap below has been implemented across five repos (foundation-first), the
 | Item | Status | PR |
 |---|---|---|
 | **P0** CI Intent Catalog + Schema Domains, exposed via the MCP server | ✅ shipped | [CI-Server #1575](https://github.com/companionintelligence/CI-Server/pull/1575) (consolidates #1570, #1571, #1572) |
-| **P1** On-device ↔ private-cloud model-tier router (privacy-pinning) | ✅ shipped | #1575 (model-routing module) |
+| **P1** On-device ↔ private-cloud model-tier router (privacy-pinning) | 🔴 not started | model-routing module removed; to be redesigned |
 | **P1** App-declared intents in the CI-Hub manifest (`agents.intents`) | ✅ shipped | [CI-Hub #813](https://github.com/companionintelligence/CI-Hub/pull/813) |
 | **P2** Intent donation → behavioral signal (HBPE seam) | ✅ shipped | #1575 (`IntentDonationService` emits `intent.invoked`) |
 | **P2** Entity registry (catalog of the typed content intents operate on) | ✅ shipped | #1575 |
@@ -256,7 +256,7 @@ This is precisely the fragmentation Apple's single schema + system runtime elimi
 | G4 | App **registers intents** into the system | 🔴 → 🟢 **closed** — CI-Hub manifest's `agents.intents[]` registers an app's typed intents into the catalog | Installing a marketplace app now grows the agent's vocabulary |
 | G5 | **Central dispatcher** + confirmation/disambiguation UX | 🔴 → 🟡 **partial** — *steering* shipped via `ToolRegistry.markSuperseded`/`getAgentFacingTools` (the agent no longer sees the raw `databaseSearch`/`getFamilyMembers`/etc. when the curated intent supersedes them); *enforcement* (a confirmation/permission gate) still to come | The model is already nudged away from raw paths; an enforcing dispatcher remains |
 | G6 | **Per-intent privacy labels** | 🔴 → 🟢 **closed** — every intent carries `IntentPrivacy { access, sensitivity, destructive, external }`; published in the manifest and used by the harnesses' UI guidance | A trust model now has somewhere to attach |
-| G7 | **Attested cloud escalation** (PCC) + one-line model swap | 🔴 → 🟡 **router shipped; attestation still to come** — `ModelTierRouter` picks tier by context size + reasoning level + tool depth, `localOnly` privacy-pins on-device, cloud-down fallback; the *attested* compute tier behind the cloud branch isn't built | The decision layer is in place; the trustworthy compute target isn't yet |
+| G7 | **Attested cloud escalation** (PCC) + one-line model swap | 🔴 not started — an earlier `ModelTierRouter` prototype (tier by context size + reasoning level + tool depth, `localOnly` privacy-pinning, cloud-down fallback) was removed; both the decision layer and the attested compute target remain to be built | Neither the decision layer nor the trustworthy compute target exists yet |
 | G8 | **Donation loop** intent → prediction | 🔴 → 🟢 **closed** — every intent invocation emits `intent.invoked`; HBPE consumes it as a behavioural signal | The agent-action flywheel is wired |
 
 Where **CI already leads** Apple — and this list has *grown* since round 1:
