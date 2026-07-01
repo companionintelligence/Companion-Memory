@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { AgentModule } from '@ci/domains/agent';
 import { GraphQLModule } from '@ci/domains/graphql';
-import { IntentsModule } from '@ci/domains/intents';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { McpController } from './controllers/McpController';
@@ -10,11 +10,12 @@ import { McpExecutorService } from './services/McpExecutorService';
 import { McpServerService } from './services/McpServerService';
 import { McpToolService } from './services/McpToolService';
 
-// IntentsModule is imported so the curated intent catalog registers into the
-// shared ToolRegistry BEFORE McpToolService consolidates it (Nest initialises
-// imported modules first), making intents discoverable as MCP tools.
+// ToolsModule registers the curated intent shells into the shared ToolRegistry BEFORE
+// McpToolService consolidates it (Nest initialises imported modules first), making intents
+// discoverable as MCP tools. AgentModule provides the IntentCatalogService that backs the
+// `intents://catalog` MCP resource.
 @Module({
-  imports: [GraphQLModule, IntentsModule, ToolsModule],
+  imports: [GraphQLModule, AgentModule, ToolsModule],
   controllers: [McpController],
   providers: [GraphQLToolAdapter, McpExecutorService, McpToolService, McpServerService],
   exports: [McpServerService],

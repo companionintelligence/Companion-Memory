@@ -12,7 +12,7 @@ import type { RequestContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { ToolRegistry, type ToolSchema } from '@ci/domains/tools';
+import { ToolRegistry, intentToolName, type ToolSchema } from '@ci/domains/tools';
 
 import type { OllamaModel } from '../types';
 
@@ -431,7 +431,9 @@ export class OllamaService {
     return {
       type: 'function',
       function: {
-        name: toolSchema.name,
+        // schema.name is the dotted intent id; the LLM must call back with the executable
+        // (underscored) name the ToolRegistry is keyed by.
+        name: intentToolName(toolSchema.name),
         description: toolSchema.description,
         parameters: toolSchema.parameters,
       },

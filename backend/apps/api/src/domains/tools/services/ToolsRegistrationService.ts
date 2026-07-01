@@ -2,7 +2,7 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { NativeToolProvider } from '../providers/native/NativeToolProvider';
+import { NativeToolProvider } from '../providers/NativeToolProvider';
 import { ToolRegistry } from '../registry/ToolRegistry';
 
 /**
