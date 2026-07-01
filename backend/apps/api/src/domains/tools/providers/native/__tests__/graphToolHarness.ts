@@ -429,8 +429,8 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
     new GetFamilyMembersTool(graphQuery, graphRead, makeFakeLogger()),
   ];
 
-  const provider = new NativeToolProvider(tools, makeFakeLogger());
   const registry = new ToolRegistry(makeFakeLogger());
+  const provider = new NativeToolProvider(tools, makeFakeLogger(), registry);
   await registry.registerProvider(provider);
 
   return {

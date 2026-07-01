@@ -22,9 +22,7 @@ function fakeProvider(names: string[]) {
     name: 'fake',
     initialize: jest.fn(async () => {}),
     shutdown: jest.fn(async () => {}),
-    getAvailableTools: jest.fn(async () => [...tools.values()].map((t) => t.schema)),
-    getTool: (n: string) => tools.get(n),
-    canHandle: (n: string) => tools.has(n),
+    getTools: () => [...tools.values()],
     getHealthStatus: jest.fn(async () => ({
       name: 'fake',
       status: 'healthy',
@@ -50,6 +48,23 @@ describe('ToolRegistry agent-facing demotion', () => {
     } else {
       process.env.CI_PREFER_INTENTS = ORIGINAL;
     }
+  });
+
+  it('demotes tools a provider declares via getSupersededToolNames() at load time', async () => {
+    delete process.env.CI_PREFER_INTENTS;
+    const registry = new ToolRegistry(makeLogger());
+    const provider = fakeProvider(['databaseSearch', 'memory_recall', 'somethingElse']);
+    // A provider may declare the raw tools its curated tools supersede.
+    provider.getSupersededToolNames = () => ['databaseSearch'];
+    await registry.registerProvider(provider);
+
+    expect(
+      registry
+        .getAgentFacingTools()
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(['memory_recall', 'somethingElse']);
+    expect(registry.hasTool('databaseSearch')).toBe(true);
   });
 
   it('hides superseded tools from the agent-facing list but keeps them registered + executable', async () => {

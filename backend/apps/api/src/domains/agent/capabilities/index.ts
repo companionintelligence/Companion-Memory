@@ -6,9 +6,9 @@
  * CI-Server. The catalog is:
  *  - registered into the shared `ToolRegistry` (via {@link IntentToolProvider}),
  *    so intents flow to the local LLM and the MCP server automatically;
- *  - published as a manifest at `GET /api/intents` so CI-Hermes, CI-OpenClaw, and
- *    external MCP clients discover one typed vocabulary instead of bespoke
- *    per-harness glue.
+ *  - published as a manifest at `GET /api/agent/intents` (with `/api/intents`
+ *    kept as a deprecated alias) so CI-Hermes, CI-OpenClaw, and external MCP
+ *    clients discover one typed vocabulary instead of bespoke per-harness glue.
  *
  * @module IntentsModule
  */
@@ -21,7 +21,6 @@ import { IntentsController } from './controllers/IntentsController';
 import { IntentCatalogService } from './services/IntentCatalogService';
 import { IntentDonationService } from './services/IntentDonationService';
 import { IntentRegistry } from './services/IntentRegistry';
-import { IntentsRegistrationService } from './services/IntentsRegistrationService';
 import { IntentToolProvider } from './services/IntentToolProvider';
 
 @Module({
@@ -30,8 +29,8 @@ import { IntentToolProvider } from './services/IntentToolProvider';
     IntentRegistry,
     IntentCatalogService,
     IntentDonationService,
+    // Self-registers with the ToolRegistry in its onModuleInit.
     IntentToolProvider,
-    IntentsRegistrationService,
   ],
   controllers: [IntentsController],
   exports: [IntentRegistry, IntentCatalogService],

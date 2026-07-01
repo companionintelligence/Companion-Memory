@@ -63,7 +63,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   private async initializeProvider(provider: ToolProvider): Promise<void> {
     try {
       await provider.initialize();
-      await this.loadToolsFromProvider(provider);
+      this.loadToolsFromProvider(provider);
 
       this.logger.debug(`Initialized provider: ${provider.name}`);
     } catch (error) {
@@ -72,23 +72,24 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Load tools from a provider into the registry
+   * Load a provider's tools into the registry. The provider hands back
+   * instances (each carrying its own schema), so there is no schema list to
+   * reconcile and no tool can be silently dropped. A provider may also declare
+   * the raw tools its curated tools supersede; those are demoted from the
+   * agent-facing list here.
    */
-  private async loadToolsFromProvider(provider: ToolProvider): Promise<void> {
-    try {
-      const schemas = await provider.getAvailableTools();
+  private loadToolsFromProvider(provider: ToolProvider): void {
+    const tools = provider.getTools();
 
-      for (const schema of schemas) {
-        const tool = provider.getTool(schema.name);
-        if (tool) {
-          this.registerTool(tool, provider.name);
-        }
-      }
-
-      this.logger.debug(`Loaded ${schemas.length} tools from provider: ${provider.name}`);
-    } catch (error) {
-      this.logger.error(`Failed to load tools from provider: ${provider.name}`, error as Error);
+    for (const tool of tools) {
+      this.registerTool(tool, provider.name);
     }
+
+    if (provider.getSupersededToolNames) {
+      this.markSuperseded(provider.getSupersededToolNames());
+    }
+
+    this.logger.debug(`Loaded ${tools.length} tools from provider: ${provider.name}`);
   }
 
   /**

@@ -10,9 +10,13 @@ import type { CiEntityDescriptor, IntentDomain, IntentManifest, ManifestIntent }
  * Publishes the CI Intent catalog — the discoverable, typed capability
  * declaration. Any agent (CI-Hermes, CI-OpenClaw, an external MCP client) can read
  * one catalog here instead of re-implementing bespoke integration glue.
+ *
+ * Canonical path is `/api/agent/intents` (the catalog lives in the agent
+ * capability domain). `/api/intents` stays mounted as a deprecated alias so
+ * existing harness clients keep working during migration.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
-@Controller('api/intents')
+@Controller(['api/agent/intents', 'api/intents'])
 export class IntentsController {
   constructor(
     private readonly catalog: IntentCatalogService,
