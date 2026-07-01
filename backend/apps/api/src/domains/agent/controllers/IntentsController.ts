@@ -15,7 +15,7 @@ import {
  * re-implementing bespoke integration glue.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
-@Controller('intents')
+@Controller('api/intents')
 export class IntentsController {
   constructor(private readonly catalog: IntentCatalogService) {}
 
