@@ -330,7 +330,7 @@ export class FileService implements OnModuleInit {
   }
 
   async upload(context: UserServiceContext, file: UploadFileDto): Promise<SignedFile> {
-    const { inventoryCapture = false, model, ...uploadData } = file;
+    const { inventoryCapture = false, skipDescription = false, model, ...uploadData } = file;
     const hash = await this.getFileHash(uploadData);
 
     if (hash) {
@@ -346,6 +346,7 @@ export class FileService implements OnModuleInit {
             fileId: existing.id,
             userId: context.userId,
             inventoryCapture: true,
+            skipDescription,
             model,
           });
         }
@@ -363,6 +364,7 @@ export class FileService implements OnModuleInit {
       fileId: created.id,
       userId: context.userId,
       inventoryCapture,
+      skipDescription,
       model,
     });
 
@@ -402,13 +404,19 @@ export class FileService implements OnModuleInit {
   }
 
   async update(context: ServiceContext, id: string, data: UpdateFileDto): Promise<SignedFile | null> {
-    await this.fileRepository.update(
+    const result = await this.fileRepository.update(
       {
         id,
         ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
       },
       data,
     );
+
+    // No row matched (unknown id, or one owned by another user) — don't emit a
+    // spurious FileUpdatedEvent to downstream re-index listeners.
+    if (!result.affected) {
+      return null;
+    }
 
     await this.eventService.send(FileUpdatedEvent, { fileId: id });
 

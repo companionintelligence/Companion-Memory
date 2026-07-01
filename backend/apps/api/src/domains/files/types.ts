@@ -26,6 +26,11 @@ export type UploadFileDto = Omit<
   'variant' | 'title' | 'description' | 'externalId' | 'parentId' | 'externalCreatedAt' | 'externalUpdatedAt'
 > & {
   inventoryCapture?: boolean;
+  /**
+   * When true, the capture source produced its own title/description (and writes
+   * them via PATCH /files/:id), so the server skips the Ollama description pass.
+   */
+  skipDescription?: boolean;
   model?: string;
 };
 
