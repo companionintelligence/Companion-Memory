@@ -124,7 +124,9 @@ function makeService(opts: {
       return c ? { ...c, provider: { id: c.providerId } } : null;
     }),
     find: jest.fn(async ({ where }: { where: { userId: string } }) =>
-      opts.connections.filter((x) => x.userId === where.userId).map((c) => ({ ...c, provider: { id: c.providerId } })),
+      opts.connections
+        .filter((x) => x.userId === where.userId)
+        .map((c) => ({ ...c, provider: { id: c.providerId } })),
     ),
   };
 

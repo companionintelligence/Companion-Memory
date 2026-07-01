@@ -14,11 +14,7 @@ import {
 } from '@ci/domains/connections';
 import { OrphanCleanupService } from '@ci/domains/search-ingress';
 
-import {
-  CONNECTION_SCOPED_TABLES,
-  USER_OWNED_TABLES,
-  type UserOwnedTable,
-} from '../dataDeletionPlan';
+import { CONNECTION_SCOPED_TABLES, USER_OWNED_TABLES, type UserOwnedTable } from '../dataDeletionPlan';
 import { DataDeletionAuditEntity } from '../entities/DataDeletionAuditEntity';
 
 /** Result of a single per-connection disconnect + purge. */
@@ -89,10 +85,7 @@ export class DataDeletionService {
    * not owned by the caller (so a caller can never disconnect another user's
    * connection, and enumeration is not possible).
    */
-  async disconnectConnection(
-    context: UserServiceContext,
-    connectionId: string,
-  ): Promise<DisconnectResult> {
+  async disconnectConnection(context: UserServiceContext, connectionId: string): Promise<DisconnectResult> {
     // Owner scoping: load the connection ONLY if it belongs to the caller.
     const connection = await this.connectionRepository.findOne({
       where: { id: connectionId, userId: context.userId },
@@ -125,11 +118,7 @@ export class DataDeletionService {
 
     // Graph entities/relationships derived from this connection carry the
     // connection id inside their JSONB `properties`, scoped to the owner.
-    const graphEntities = await this.deleteGraphByConnection(
-      'entities',
-      context.userId,
-      connectionId,
-    );
+    const graphEntities = await this.deleteGraphByConnection('entities', context.userId, connectionId);
     if (graphEntities > 0) {
       deletedCounts['ci.entities'] = graphEntities;
     }
@@ -194,7 +183,11 @@ export class DataDeletionService {
     const revocations: AccountDeletionResult['revocations'] = [];
     for (const connection of connections) {
       const tokenRevoked = await this.revokeConnectionGrant(connection);
-      revocations.push({ connectionId: connection.id, providerId: connection.providerId ?? null, tokenRevoked });
+      revocations.push({
+        connectionId: connection.id,
+        providerId: connection.providerId ?? null,
+        tokenRevoked,
+      });
     }
 
     // 2) Purge every user-owned table, children before parents.
@@ -301,18 +294,12 @@ export class DataDeletionService {
   }
 
   /** DELETE ... WHERE <column> = <value>, returning the affected row count. */
-  private async deleteWhere(
-    schema: string,
-    table: string,
-    column: string,
-    value: string,
-  ): Promise<number> {
+  private async deleteWhere(schema: string, table: string, column: string, value: string): Promise<number> {
     // schema/table/column come exclusively from the trusted internal deletion
     // plan (never request input); the value is always a bound parameter.
-    const result = await this.dataSource.query(
-      `DELETE FROM "${schema}"."${table}" WHERE "${column}" = $1`,
-      [value],
-    );
+    const result = await this.dataSource.query(`DELETE FROM "${schema}"."${table}" WHERE "${column}" = $1`, [
+      value,
+    ]);
 
     return affectedRows(result);
   }

@@ -46,7 +46,9 @@ describe('BaseOAuth2Client.revoke (via GoogleClient)', () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     const client = new GoogleClient(makeLogger() as never);
-    const result = await client.revoke(makeConnection({ refreshToken: 'refresh-tok', accessToken: 'access-tok' }));
+    const result = await client.revoke(
+      makeConnection({ refreshToken: 'refresh-tok', accessToken: 'access-tok' }),
+    );
 
     expect(result.revoked).toBe(true);
     expect(fetchMock).toHaveBeenCalled();
