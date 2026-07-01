@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 
 import { LoggerService } from '@ci/common/logging';
-import { IntentCatalogService } from '@ci/domains/agent/capabilities';
+import { IntentCatalogService } from '@ci/domains/agent-capabilities';
 
 import { McpToolService } from './McpToolService';
 

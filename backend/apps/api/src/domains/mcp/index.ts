@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { IntentsModule } from '@ci/domains/agent-capabilities';
 import { GraphQLModule } from '@ci/domains/graphql';
-import { IntentsModule } from '@ci/domains/agent/capabilities';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { McpController } from './controllers/McpController';
