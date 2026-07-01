@@ -332,7 +332,10 @@ export class CommunicationService {
             );
 
             return (
-              `($${offset + 1}::uuid, $${offset + 2}::timestamptz, $${offset + 3}::text,` +
+              // direction is the enum ci.communication_direction — cast the
+              // param to it explicitly (schema-qualified so it resolves
+              // regardless of search_path), not ::text.
+              `($${offset + 1}::uuid, $${offset + 2}::timestamptz, $${offset + 3}::ci.communication_direction,` +
               ` $${offset + 4}::jsonb, $${offset + 5}::text, $${offset + 6}::text, $${offset + 7}::text)`
             );
           })

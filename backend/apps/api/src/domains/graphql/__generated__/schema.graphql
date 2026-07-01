@@ -471,6 +471,7 @@ type CreateRelationshipPayload {
 input CreateSavedSearchInput {
   description: String
   entityTypes: [String!]
+  filters: SavedSearchFiltersInput
   name: String
   query: String
   tags: [String!]
@@ -782,6 +783,7 @@ type Mutation {
   removeEvent(id: String!): Boolean!
   removePlace(id: String!): Boolean!
   removeQuestion(id: String!): Boolean!
+  setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
   tagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
 
   """Manually trigger the HBPE pipeline for the current user"""
@@ -1005,6 +1007,7 @@ type Query {
   savedSearch(id: ID!): SavedSearchType
   savedSearches(after: String, before: String, first: Int, last: Int): SavedSearchConnection!
   search(input: SearchInput!): SearchResultConnection!
+  sharedSavedSearch(token: String!): SavedSearchType
   summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
   summary(id: ID!): SummaryType
   tag(id: ID!): TagType
@@ -1069,13 +1072,42 @@ type SavedSearchEdge implements Edge {
   node: SavedSearchType!
 }
 
+input SavedSearchFiltersInput {
+  connectors: [String!]
+  endTime: String
+  eventTypes: [String!]
+  hasLocation: Boolean
+  people: [String!]
+  places: [String!]
+  semantic: Boolean
+  sortBy: String
+  sortOrder: String
+  startTime: String
+}
+
+type SavedSearchFiltersType {
+  connectors: [String!]
+  endTime: String
+  eventTypes: [String!]
+  hasLocation: Boolean
+  people: [String!]
+  places: [String!]
+  semantic: Boolean
+  sortBy: String
+  sortOrder: String
+  startTime: String
+}
+
 type SavedSearchType implements Node {
   createdAt: DateTime!
   description: String
   entityTypes: [String!]
+  filters: SavedSearchFiltersType
   id: ID!
+  isPublic: Boolean!
   name: String
   query: String
+  shareToken: String
   tags: [String!]
   updatedAt: DateTime!
 }
@@ -1094,6 +1126,7 @@ input SearchInput {
   places: [String!]
   query: String
   semantic: Boolean
+  shareToken: String
   sortBy: String
   sortOrder: String
   startTime: String
@@ -1112,6 +1145,11 @@ type SearchResultEdge {
 }
 
 union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+input SetSavedSearchSharingInput {
+  id: ID!
+  isPublic: Boolean!
+}
 
 type SummaryConnection implements Connection {
   edges: [SummaryEdge!]!
@@ -1409,6 +1447,7 @@ type UpdateRelationshipPayload {
 input UpdateSavedSearchInput {
   description: String
   entityTypes: [String!]
+  filters: SavedSearchFiltersInput
   id: ID!
   name: String
   query: String

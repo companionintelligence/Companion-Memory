@@ -1,4 +1,5 @@
 import { BrowserActivityCreatedEvent } from '@ci/domains/browser-activity/events';
+import { FileCreatedEvent } from '@ci/domains/files/events';
 import {
   CommunicationCreatedEvent,
   ContentCreatedEvent,
@@ -56,13 +57,21 @@ describe('SearchIndexBackfillService', () => {
       content: [[], []],
       item: [['i1', 'i2', 'i3'], []],
       'browser-activity': [['b1'], []],
+      file: [['f1', 'f2'], []],
     });
 
     const result = await service.backfill({ batchSize: 100 });
 
     expect(result).toEqual({
-      enqueued: 7,
-      perType: { communication: 2, event: 1, content: 0, item: 3, 'browser-activity': 1 },
+      enqueued: 9,
+      perType: {
+        communication: 2,
+        event: 1,
+        content: 0,
+        item: 3,
+        'browser-activity': 1,
+        file: 2,
+      },
     });
 
     // Correct event name + payload field per type, all scoped to search-index.
@@ -70,6 +79,8 @@ describe('SearchIndexBackfillService', () => {
     expect(send).toHaveBeenCalledWith(EventCreatedEvent, { eventId: 'e1' }, SEARCH_INDEX);
     expect(send).toHaveBeenCalledWith(ItemCreatedEvent, { itemId: 'i3' }, SEARCH_INDEX);
     expect(send).toHaveBeenCalledWith(BrowserActivityCreatedEvent, { browserActivityId: 'b1' }, SEARCH_INDEX);
+    expect(send).toHaveBeenCalledWith(FileCreatedEvent, { fileId: 'f1' }, SEARCH_INDEX);
+    expect(send).toHaveBeenCalledWith(FileCreatedEvent, { fileId: 'f2' }, SEARCH_INDEX);
     expect(send).not.toHaveBeenCalledWith(ContentCreatedEvent, expect.anything(), expect.anything());
 
     // Every emission targeted the search-index queue (3rd arg of every send call).

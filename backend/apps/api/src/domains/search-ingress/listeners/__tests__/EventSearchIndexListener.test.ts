@@ -1,6 +1,6 @@
 import { type Event } from '@ci/domains/memory';
 
-import { EventSearchIndexListener } from '../EventSearchIndexListener';
+import { EventSearchIndexListener, eventDisplayTitle } from '../EventSearchIndexListener';
 
 // getSearchDocument is private and depends on nothing but its argument, so we
 // instantiate the listener with no-op deps and reach it directly. This locks in
@@ -60,5 +60,175 @@ describe('EventSearchIndexListener.getSearchDocument', () => {
   it('ignores non-string metadata values without throwing', () => {
     const result = doc({ title: 'ok', metadata: { Subject: 42, Text: { nested: true } } });
     expect(result).toBe('ok');
+  });
+
+  it('rewrites bare photo filenames into a human-readable display title', () => {
+    const result = doc({
+      title: 'DSC00838.jpg',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      locationName: '1642 Rambla Pacifico St, Topanga, CA 90290, USA',
+      eventType: 'capture.photo',
+      sourceSystem: 'apple_photos',
+      metadata: { 'Media Type': 'image/jpeg' },
+    });
+
+    expect(result).not.toBeNull();
+    // The raw filename should NOT survive on its own — the display title replaces it.
+    expect(result).toContain('Photo');
+    expect(result).toContain('Topanga, CA');
+    expect(result).toContain('Jun 17, 2026');
+  });
+
+  it("includes locationName for photo events even when shortPlace can't parse it", () => {
+    const result = doc({
+      title: 'IMG_0042.heic',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      locationName: 'A Very Long Address That Definitely Will Not Fit In The Compact Title String',
+      eventType: 'capture.photo',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('A Very Long Address That Definitely');
+  });
+
+  it('rewrites bare video filenames into a Video display title', () => {
+    const result = doc({
+      title: 'IMG_0301.MP4',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      locationName: 'Malibu, CA, USA',
+      sourceSystem: 'google_photos',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('Video');
+    expect(result).toContain('Malibu, CA');
+    expect(result).toContain('Jun 17, 2026');
+  });
+
+  it('keeps an authored title (with whitespace) untouched', () => {
+    const result = doc({
+      title: 'Sunset over the Pacific',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      locationName: 'Topanga, CA',
+      metadata: { 'Media Type': 'image/jpeg' },
+    });
+
+    expect(result).toContain('Sunset over the Pacific');
+    // No "Photo · " prefix should be synthesized when the user (or LLM caption)
+    // already wrote a real title.
+    expect(result).not.toMatch(/Photo · /);
+  });
+
+  it('includes calendar tokens for date-fuzzy queries (month name + season)', () => {
+    const result = doc({
+      title: 'DSC00838.jpg',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      metadata: { 'Media Type': 'image/jpeg' },
+    });
+
+    expect(result).toContain('June 2026');
+    expect(result).toContain('summer 2026');
+  });
+
+  it('expands sourceSystem into searchable words', () => {
+    const result = doc({
+      title: 'DSC00838.jpg',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      sourceSystem: 'apple_photos',
+      metadata: { 'Media Type': 'image/jpeg' },
+    });
+
+    expect(result).toContain('apple photos library');
+  });
+
+  it('falls back to a humanized sourceSystem when no expansion is registered', () => {
+    const result = doc({
+      title: 'note from somewhere',
+      sourceSystem: 'some_new_importer',
+    });
+
+    expect(result).toContain('some new importer');
+  });
+
+  it('indexes EXIF camera metadata (Make/Model/LensModel)', () => {
+    const result = doc({
+      title: 'DSC00838.jpg',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      metadata: {
+        'Media Type': 'image/jpeg',
+        Make: 'FUJIFILM',
+        Model: 'X100V',
+        LensModel: '23mm f/2',
+      },
+    });
+
+    expect(result).toContain('FUJIFILM');
+    expect(result).toContain('X100V');
+    expect(result).toContain('23mm f/2');
+  });
+
+  it('handles a media event with no place gracefully', () => {
+    const result = doc({
+      title: 'DSC00838.jpg',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      metadata: { 'Media Type': 'image/jpeg' },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('Photo');
+    expect(result).toContain('Jun 17, 2026');
+  });
+});
+
+describe('eventDisplayTitle', () => {
+  it('rewrites filename-only photo titles into "Photo · place · date"', () => {
+    expect(
+      eventDisplayTitle({
+        title: 'DSC00838.jpg',
+        startTime: new Date('2026-06-17T15:30:00.000Z'),
+        locationName: '1642 Rambla Pacifico St, Topanga, CA 90290, USA',
+      }),
+    ).toBe('Photo · Topanga, CA · Jun 17, 2026');
+  });
+
+  it('rewrites filename-only video titles into "Video · place · date"', () => {
+    expect(
+      eventDisplayTitle({
+        title: 'IMG_0301.MP4',
+        startTime: new Date('2026-06-17T15:30:00.000Z'),
+        locationName: 'Malibu, CA, USA',
+      }),
+    ).toBe('Video · Malibu, CA · Jun 17, 2026');
+  });
+
+  it('passes authored titles through untouched', () => {
+    expect(
+      eventDisplayTitle({
+        title: 'Lunch with Dana',
+        startTime: new Date('2026-06-17T15:30:00.000Z'),
+        locationName: 'Topanga, CA',
+      }),
+    ).toBe('Lunch with Dana');
+  });
+
+  it("uses Media Type when title alone isn't a recognizable filename", () => {
+    expect(
+      eventDisplayTitle({
+        title: '50231557_2415233981880',
+        startTime: new Date('2026-06-17T15:30:00.000Z'),
+        locationName: 'Topanga, CA, USA',
+        metadata: { 'Media Type': 'image/jpeg' },
+      }),
+    ).toBe('Photo · Topanga, CA · Jun 17, 2026');
+  });
+
+  it("drops the place segment when shortPlace can't parse it", () => {
+    const result = eventDisplayTitle({
+      title: 'IMG.JPG',
+      startTime: new Date('2026-06-17T15:30:00.000Z'),
+      locationName: 'A Very Long Address That Exceeds The Compact Title Length Cap',
+    });
+
+    expect(result).toBe('Photo · Jun 17, 2026');
   });
 });

@@ -31,6 +31,26 @@ export type UploadFileDto = Omit<
 
 export type UpdateFileDto = Pick<CreateFileDto, 'title' | 'description' | 'externalUpdatedAt'>;
 
+/**
+ * Secondary explorer dimensions a saved search persists alongside the primary
+ * query / entityTypes / tags, so it round-trips the full search the user built
+ * (and a shared search runs with all of them). Mirrors the LifeScope-parity
+ * SearchInput filter fields; pagination/viewport (first/after/bbox) are
+ * intentionally excluded as transient.
+ */
+export interface SavedSearchFilters {
+  eventTypes?: string[];
+  startTime?: string;
+  endTime?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  connectors?: string[];
+  people?: string[];
+  places?: string[];
+  hasLocation?: boolean;
+  semantic?: boolean;
+}
+
 export interface CreateSavedSearchDto {
   id?: string;
   name?: string;
@@ -38,6 +58,7 @@ export interface CreateSavedSearchDto {
   query?: string;
   entityTypes?: IndexableEntity[];
   tags?: string[];
+  filters?: SavedSearchFilters | null;
 }
 
 export interface UpdateSavedSearchDto {
@@ -46,4 +67,5 @@ export interface UpdateSavedSearchDto {
   query?: string;
   entityTypes?: IndexableEntity[];
   tags?: string[];
+  filters?: SavedSearchFilters | null;
 }

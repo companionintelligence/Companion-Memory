@@ -1,0 +1,94 @@
+name: E2E
+
+# Full-stack Playwright E2E against a real backend + seeded Postgres. Heavy
+# (builds the DB image, runs 147 migrations, seeds, boots api+web), so it runs
+# nightly and on-demand rather than per-PR. It lives in its own workflow and is
+# non-blocking (continue-on-error) — promote to `pull_request` (path-filtered)
+# and required once it is reliably green.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *' # 07:00 UTC nightly
+
+jobs:
+  e2e:
+    name: Full-stack E2E
+    runs-on: ubuntu-latest
+    # Runs on the host runner (not a node:22 container) so Docker + Playwright's
+    # `--with-deps` browser install work.
+    continue-on-error: true
+    env:
+      # Throwaway dev credentials from .env.default; fine for an ephemeral CI DB.
+      DATABASE_HOST: localhost
+      DATABASE_PORT: '5432'
+      DATABASE_USERNAME: companion
+      DATABASE_PASSWORD: comp4nion_1ntel_ftw!
+      DATABASE_ADMIN_PASSWORD: pgadmin_s3cure!
+      ORCHESTRATOR_DATABASE_PASSWORD: t3mporal_ftw!
+      DB_HOST_PORT: '5432'
+      PORT: '3030'
+      E2E_API_PORT: '3030'
+      E2E_WEB_PORT: '5173'
+      E2E_BASE_URL: http://localhost:5173
+      AUTH_DEFAULT_USER_EMAIL: jsmith@example.com
+      AUTH_DEFAULT_USER_PASSWORD: ']60.a6{CJ}lB*rHAp;w;'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Provide .env (dev defaults)
+        run: cp .env.default .env
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # The Postgres image bundles TimescaleDB + PostGIS + pgvector and the role
+      # bootstrap, which a stock pgvector image lacks — build the project's own.
+      - name: Build database images
+        run: |
+          make distribute-license
+          docker build -f infrastructure/database/Dockerfile -t ci/database:latest infrastructure/database
+          docker build -f infrastructure/setup-database/Dockerfile -t ci/setup-database:latest infrastructure/setup-database
+
+      - name: Start Postgres (+ role/extension bootstrap)
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d database setup-database
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            docker compose exec -T database pg_isready -U postgres && break
+            echo "waiting for postgres ($i)…"; sleep 2
+          done
+
+      - name: Run migrations
+        run: yarn workspace @ci/be-api migrate
+
+      - name: Seed database
+        run: cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
+
+      - name: Install Playwright browser
+        run: yarn playwright install --with-deps chromium
+
+      # Excludes @llm specs (those need a model / Ollama). Playwright's webServer
+      # boots the API and Vite dev server; global-setup logs in once.
+      - name: Run E2E
+        run: yarn e2e --grep-invert @llm
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore

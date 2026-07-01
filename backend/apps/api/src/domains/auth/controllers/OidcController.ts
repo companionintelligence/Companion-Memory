@@ -18,6 +18,38 @@ import { resolveOidcCallbackUrl } from '../utils/oidcCallbackUrl';
 const COOKIE_MAX_AGE = parseDuration(config.auth.jwt.refreshTokenExpiration) ?? 0;
 const STATE_COOKIE = 'oidc_state';
 const PKCE_COOKIE = 'oidc_pkce';
+// Carries the post-login destination (e.g. a /shared/<token> deep link) across
+// the full-page OIDC round-trip, which discards the SPA's in-memory router state.
+const REDIRECT_COOKIE = 'oidc_redirect';
+
+/**
+ * Validate a post-login redirect target — an open-redirect guard. Returns the
+ * value only when it is a safe SAME-ORIGIN relative path: a single leading '/',
+ * never '//' (protocol-relative), no backslashes or control characters that a
+ * browser might normalise into an origin change, and no scheme. Anything else
+ * yields null, so the caller falls back to the home page.
+ */
+export function safeRelativePath(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) {
+    return null;
+  }
+
+  if (!value.startsWith('/') || value.startsWith('//')) {
+    return null;
+  }
+
+  // Reject backslash (0x5c) and control characters (incl. tab/newline) that a
+  // browser might normalise into an origin change, e.g. "/" + backslash + host.
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+
+    if (code < 0x20 || code === 0x5c || code === 0x7f) {
+      return null;
+    }
+  }
+
+  return value;
+}
 
 // Allow self-signed certificates when the OIDC issuer is on localhost (dev only).
 // Short keepAlive prevents stale connections to Wrangler's dev server from hanging.
@@ -85,7 +117,7 @@ export class OidcController {
    */
   @Get()
   @HttpCode(302)
-  initiate(@Req() req: Request, @Res() res: Response) {
+  initiate(@Query('redirect') redirectParam: string | undefined, @Req() req: Request, @Res() res: Response) {
     const { issuerUrl } = config.auth.oidc;
 
     if (!issuerUrl) {
@@ -116,6 +148,23 @@ export class OidcController {
       path: '/',
       maxAge: 10 * 60 * 1000,
     });
+
+    // Remember a safe same-origin destination (e.g. a /shared/<token> deep link)
+    // so the callback can return there; clear any stale value otherwise so a
+    // plain sign-in never inherits a previous attempt's redirect.
+    const redirect = safeRelativePath(redirectParam);
+
+    if (redirect) {
+      res.cookie(REDIRECT_COOKIE, redirect, {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 10 * 60 * 1000,
+      });
+    } else {
+      res.clearCookie(REDIRECT_COOKIE, { path: '/' });
+    }
 
     const authorizeUrl = new URL('/api/auth/oauth2/authorize', issuerUrl);
 
@@ -296,7 +345,12 @@ export class OidcController {
         path: '/',
       });
 
-      return res.redirect('/');
+      // Return to the deep link the user was headed for before being bounced to
+      // login (re-validated on read), then clear the one-shot cookie.
+      const storedRedirect = safeRelativePath(req.cookies?.[REDIRECT_COOKIE]);
+      res.clearCookie(REDIRECT_COOKIE, { path: '/' });
+
+      return res.redirect(storedRedirect ?? '/');
     } catch (err) {
       this.logger.error('OIDC callback error', err instanceof Error ? err.stack : String(err));
 

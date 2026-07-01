@@ -11,6 +11,9 @@ import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { SavedSearchGridItemFragment } from '../SavedSearchesPage/SavedSearch';
 
+import { toFiltersInput, type EditableFilters } from './savedSearchFiltersEdit';
+import { SavedSearchFiltersEditor } from './SavedSearchFiltersEditor';
+
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
   onClose: () => void;
@@ -27,6 +30,18 @@ const UPDATE_SAVED_SEARCH = gql(`
         query
         entityTypes
         tags
+        filters {
+          eventTypes
+          startTime
+          endTime
+          sortBy
+          sortOrder
+          connectors
+          people
+          places
+          hasLocation
+          semantic
+        }
       }
     }
   }
@@ -38,6 +53,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
   const [name, setName] = useState(savedSearch.name);
   const [description, setDescription] = useState(savedSearch.description);
   const [query, setQuery] = useState(savedSearch.query);
+  const [filters, setFilters] = useState<EditableFilters>(savedSearch.filters ?? {});
   const [{ selectedEntityTypes }, { setSelectedEntityTypes }] = useDropdown();
 
   useEffect(() => {
@@ -101,6 +117,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
           entityTypes: selectedEntityTypes.map(
             (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP],
           ),
+          filters: toFiltersInput(filters),
         },
       },
     });
@@ -115,7 +132,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
           <Dialog.Title>Update Saved Search</Dialog.Title>
         </Dialog.Header>
 
-        <div className="space-y-4 py-4">
+        <div className="max-h-[65vh] space-y-4 overflow-y-auto py-4 pr-1">
           <div className="space-y-2">
             <Label htmlFor="name">Name</Label>
             <Input
@@ -155,6 +172,15 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
           <div className="space-y-2">
             <Label htmlFor="tags">Tags</Label>
             <TagInput tags={savedSearch.tags || undefined} onTagAdded={() => true} />
+          </div>
+
+          <div className="space-y-2 border-t border-border pt-4">
+            <Label>Filters</Label>
+            <p className="text-xs text-muted-foreground">
+              The who / where / when / how / sort captured with this search. Editing here keeps it in sync
+              everywhere it runs — including a shared link.
+            </p>
+            <SavedSearchFiltersEditor value={filters} onChange={setFilters} />
           </div>
         </div>
 

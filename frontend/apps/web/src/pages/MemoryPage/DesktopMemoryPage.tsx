@@ -30,6 +30,18 @@ const GET_SAVED_SEARCH = gql(`
       query
       entityTypes
       tags
+      filters {
+        eventTypes
+        startTime
+        endTime
+        sortBy
+        sortOrder
+        connectors
+        people
+        places
+        hasLocation
+        semantic
+      }
     }
   }
 `);
@@ -89,13 +101,29 @@ export default function DesktopMemoryPage() {
   useEffect(() => {
     if (savedSearchData?.savedSearch) {
       const currentParams = new URLSearchParams(searchParams);
-      const { entityTypes, query, tags } = savedSearchData.savedSearch;
+      const { entityTypes, query, tags, filters } = savedSearchData.savedSearch;
 
-      currentParams.delete('search');
-      currentParams.delete('excludedEntityTypes');
-      currentParams.delete('includedEntityTypes');
-      currentParams.delete('saved_search');
-      currentParams.delete('tags');
+      // Clear every param a saved search owns so a stale filter from the prior
+      // view can't survive the restore.
+      for (const key of [
+        'search',
+        'excludedEntityTypes',
+        'includedEntityTypes',
+        'saved_search',
+        'tags',
+        'eventTypes',
+        'from',
+        'to',
+        'sortBy',
+        'sortOrder',
+        'connectors',
+        'people',
+        'places',
+        'hasLocation',
+        'semantic',
+      ]) {
+        currentParams.delete(key);
+      }
 
       if (query?.trim()) {
         currentParams.set('search', query.trim());
@@ -116,6 +144,46 @@ export default function DesktopMemoryPage() {
 
       if (tags?.length && tags.length > 0) {
         currentParams.set('tags', tags.join(','));
+      }
+
+      // Secondary dimensions (who / where / when / how / sort / semantic). The
+      // `filters` keys mirror the explorer URL params 1:1 except for the date
+      // range (startTime -> ?from, endTime -> ?to).
+      if (filters) {
+        const setCsv = (param: string, value?: readonly string[] | null) => {
+          if (value && value.length > 0) {
+            currentParams.set(param, value.join(','));
+          }
+        };
+
+        setCsv('eventTypes', filters.eventTypes);
+        setCsv('connectors', filters.connectors);
+        setCsv('people', filters.people);
+        setCsv('places', filters.places);
+
+        if (filters.startTime) {
+          currentParams.set('from', filters.startTime);
+        }
+
+        if (filters.endTime) {
+          currentParams.set('to', filters.endTime);
+        }
+
+        if (filters.sortBy) {
+          currentParams.set('sortBy', filters.sortBy);
+        }
+
+        if (filters.sortOrder) {
+          currentParams.set('sortOrder', filters.sortOrder);
+        }
+
+        if (filters.hasLocation) {
+          currentParams.set('hasLocation', '1');
+        }
+
+        if (filters.semantic) {
+          currentParams.set('semantic', '1');
+        }
       }
 
       setSearchParams(currentParams);

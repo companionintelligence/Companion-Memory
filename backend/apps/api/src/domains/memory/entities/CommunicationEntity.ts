@@ -21,7 +21,18 @@ export class CommunicationEntity {
   @Column({ type: 'uuid', nullable: true, name: 'device_id' })
   deviceId!: string | null;
 
-  @Column({ type: 'text' })
+  // The DB column is the Postgres enum `ci.communication_direction` (NOT NULL,
+  // no default). Declaring it as `text` made TypeORM emit a text-typed param in
+  // the bulk INSERT, which Postgres refuses to assign to the enum column
+  // ("column is of type ci.communication_direction but expression is of type
+  // text"). Declaring it `enum` makes TypeORM bind it as the enum type; the
+  // connection search_path includes `ci` (see application.ts) so the unqualified
+  // type name resolves.
+  @Column({
+    type: 'enum',
+    enum: ['inbound', 'outbound', 'internal', 'async', 'ongoing'],
+    enumName: 'communication_direction',
+  })
   direction!: string;
 
   @Column({ type: 'text', nullable: true, name: 'thread_id' })

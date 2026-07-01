@@ -183,6 +183,14 @@ export const ConfigSchema = z.object({
     hbpe: booleanStringSchema,
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,
+    /**
+     * Enables saved-search sharing: the `/shared/<token>` capability-link path
+     * (resolving a shared saved search and running it as its owner) and the
+     * frontend "make public" control. Off by default — the access model is still
+     * being hardened, so the shared-URL surface stays dark unless explicitly
+     * enabled.
+     */
+    'shared.search': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

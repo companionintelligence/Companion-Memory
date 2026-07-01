@@ -19,14 +19,17 @@ function makeResolver() {
     getEntitiesForCommunications: jest.fn().mockResolvedValue([] as Identifier[]),
   };
   const entityResolutionService = { resolve: jest.fn().mockResolvedValue(new Map<string, Entry>()) };
+  const savedSearchService = { findByShareToken: jest.fn().mockResolvedValue(null) };
 
   const resolver = new SearchResolver(
     browserActivityService as never,
     communicationService as never,
     entityResolutionService as never,
     eventService as never,
+    savedSearchService as never,
     searchService as never,
     tagService as never,
+    { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
   );
 
   // Bypass the real GraphQL type mappers; the unit under test is the filter/sort composition.

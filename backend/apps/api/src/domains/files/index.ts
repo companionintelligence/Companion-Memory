@@ -50,6 +50,7 @@ export { MediaDimensionsService } from './services/MediaDimensionsService';
 export type { MediaDimensions } from './services/MediaDimensionsService';
 export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';
 export type { File, SignedFile, SavedSearch };
+export type { SavedSearchFilters } from './types';
 export {
   FileCreatedEvent,
   FileUpdatedEvent,

@@ -99,7 +99,8 @@
     "require.signup.codes": "ENABLE_REQUIRE_SIGNUP_CODES",
     "files.page": "ENABLE_FILES_PAGE",
     "hbpe": "ENABLE_HBPE",
-    "agent.memory.compaction": "ENABLE_AGENT_MEMORY_COMPACTION"
+    "agent.memory.compaction": "ENABLE_AGENT_MEMORY_COMPACTION",
+    "shared.search": "ENABLE_SHARED_SEARCH"
   },
   "environment": {
     "database.query.logging": "DATABASE_QUERY_LOGGING"

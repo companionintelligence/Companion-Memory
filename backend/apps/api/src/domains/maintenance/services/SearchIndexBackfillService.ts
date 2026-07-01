@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 import { BrowserActivityCreatedEvent } from '@ci/domains/browser-activity/events';
 import { EventService as SignallingEventService } from '@ci/domains/events';
+import { FileCreatedEvent } from '@ci/domains/files/events';
 import {
   CommunicationCreatedEvent,
   ContentCreatedEvent,
@@ -33,6 +34,7 @@ export const BACKFILLABLE_ENTITIES = [
   'content',
   'item',
   'browser-activity',
+  'file',
 ] as const;
 
 export type BackfillableEntity = (typeof BACKFILLABLE_ENTITIES)[number];
@@ -173,6 +175,8 @@ export class SearchIndexBackfillService {
         return this.events.send(ItemCreatedEvent, { itemId: id }, opts);
       case 'browser-activity':
         return this.events.send(BrowserActivityCreatedEvent, { browserActivityId: id }, opts);
+      case 'file':
+        return this.events.send(FileCreatedEvent, { fileId: id }, opts);
     }
   }
 }

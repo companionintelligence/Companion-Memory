@@ -14,6 +14,7 @@ import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 import { DeleteSavedSearchModal } from './DeleteSavedSearchModal';
 import { EditSavedSearchModal } from './EditSavedSearchModal';
 import { SavedSearchGridItemFragment, SavedSearch } from './SavedSearch';
+import { ShareSavedSearchModal } from './ShareSavedSearchModal';
 
 const GET_SAVED_SEARCHES = gql(`
   query GetSavedSearches($first: Int, $after: String) {
@@ -41,6 +42,9 @@ export function SavedSearchesPage() {
   const [savedSearchToEdit, setSavedSearchToEdit] = useState<FragmentType<
     typeof SavedSearchGridItemFragment
   > | null>(null);
+  const [savedSearchToShare, setSavedSearchToShare] = useState<FragmentType<
+    typeof SavedSearchGridItemFragment
+  > | null>(null);
 
   const openSavedSearchEditModal = (
     e: React.MouseEvent,
@@ -49,6 +53,15 @@ export function SavedSearchesPage() {
     e.preventDefault();
     e.stopPropagation();
     setSavedSearchToEdit(savedSearch);
+  };
+
+  const openSavedSearchShareModal = (
+    e: React.MouseEvent,
+    savedSearch: FragmentType<typeof SavedSearchGridItemFragment>,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSavedSearchToShare(savedSearch);
   };
 
   const openSavedSearchDeleteModal = (
@@ -88,6 +101,7 @@ export function SavedSearchesPage() {
               savedSearch={savedSearch}
               openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
               openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
+              openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
             />
           ))}
         </div>
@@ -128,6 +142,10 @@ export function SavedSearchesPage() {
         <DropdownProvider args={[{ changeSearchParams: false }]}>
           <EditSavedSearchModal savedSearch={savedSearchToEdit} onClose={() => setSavedSearchToEdit(null)} />
         </DropdownProvider>
+      )}
+
+      {savedSearchToShare && (
+        <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
       )}
     </>
   );
