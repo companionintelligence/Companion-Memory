@@ -1,7 +1,13 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import { type BaseTool, type ProviderHealthStatus, ToolRegistry, type ToolProvider } from '@ci/domains/tools';
+import {
+  type BaseTool,
+  type ProviderHealthStatus,
+  ToolRegistry,
+  type ToolProvider,
+  type ToolSchema,
+} from '@ci/domains/tools';
 
 import { IntentDonationService } from './IntentDonationService';
 import { IntentRegistry } from './IntentRegistry';
@@ -16,7 +22,7 @@ import { IntentTool } from './IntentTool';
  * CI-OpenClaw consume one typed catalog instead of bespoke per-harness glue.
  */
 @Injectable()
-export class IntentToolProvider implements ToolProvider, OnModuleInit {
+export class IntentToolProvider implements ToolProvider {
   readonly name = 'intents';
 
   private readonly tools = new Map<string, BaseTool>();
@@ -30,18 +36,6 @@ export class IntentToolProvider implements ToolProvider, OnModuleInit {
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(IntentToolProvider.name);
-  }
-
-  /**
-   * Self-register with the shared registry at boot. `registerProvider` loads
-   * this provider's tools and (via {@link getSupersededToolNames}) demotes the
-   * raw tools they wrap — the wiring the old IntentsRegistrationService did.
-   *
-   * Ordering: `McpToolService` consolidates the registry in its own
-   * `onModuleInit`; McpModule imports IntentsModule so intents register first.
-   */
-  async onModuleInit(): Promise<void> {
-    await this.toolRegistry.registerProvider(this);
   }
 
   async initialize(): Promise<void> {
@@ -66,17 +60,16 @@ export class IntentToolProvider implements ToolProvider, OnModuleInit {
     this.isInitialized = false;
   }
 
-  getTools(): BaseTool[] {
-    return Array.from(this.tools.values());
+  async getAvailableTools(): Promise<ToolSchema[]> {
+    return Array.from(this.tools.values()).map((tool) => tool.schema);
   }
 
-  /**
-   * The raw tools these intents wrap. The registry demotes them from the
-   * agent-facing list so the model reaches for the curated intent, not the
-   * low-level tool. (Previously wired by a separate registration service.)
-   */
-  getSupersededToolNames(): string[] {
-    return this.intentRegistry.getSupersededToolNames();
+  getTool(name: string): BaseTool | undefined {
+    return this.tools.get(name);
+  }
+
+  canHandle(toolName: string): boolean {
+    return this.tools.has(toolName);
   }
 
   async getHealthStatus(): Promise<ProviderHealthStatus> {

@@ -35,7 +35,7 @@ import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
 import { GraphQLModule } from '@ci/domains/graphql';
 import { IntelligenceModule } from '@ci/domains/intelligence';
-import { IntentsModule } from '@ci/domains/agent/capabilities';
+import { IntentsModule } from '@ci/domains/intents';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
