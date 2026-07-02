@@ -195,6 +195,38 @@ describe('PersonStubBackfillService.backfill', () => {
     expect(payload.entities[0].properties?.emails).toEqual(['repeat@example.com']);
   });
 
+  it('creates name-kind stubs for display-name-only participants (Messenger)', async () => {
+    const rows: FakeRow[] = [
+      {
+        id: 'row-1',
+        time: new Date('2026-01-07T00:00:00.000Z'),
+        participants_metadata: {
+          from: 'Brian Paul',
+          to: ['Gabrielle DePesa', 'brian  PAUL'], // dupe of `from` after normalization
+        },
+      },
+    ];
+
+    const { service, ingest } = makeService(rows, {});
+
+    const result = await service.backfill(USER, { startTime: START, endTime: END });
+
+    expect(result.identifiersSeen).toBe(2);
+    expect(result.peopleCreated).toBe(2);
+
+    const [, payload] = ingest.ingest.mock.calls[0];
+    expect(payload.entities).toHaveLength(2);
+    const brian = payload.entities.find((e) => e.name === 'Brian Paul');
+    expect(brian?.properties?.names).toEqual(['brian paul']);
+    expect(brian?.key).toBe('communications:participant:name:brian paul');
+    // Structured name parts, middle omitted for a two-token name.
+    expect(brian?.properties?.first_name).toBe('Brian');
+    expect(brian?.properties?.last_name).toBe('Paul');
+    expect(brian?.properties).not.toHaveProperty('middle_name');
+    const gabrielle = payload.entities.find((e) => e.name === 'Gabrielle DePesa');
+    expect(gabrielle?.properties?.names).toEqual(['gabrielle depesa']);
+  });
+
   it('drops empty / whitespace participants without crashing', async () => {
     const rows: FakeRow[] = [
       {

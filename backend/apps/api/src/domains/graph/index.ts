@@ -72,7 +72,11 @@ export type {
 export { RelationshipMap, RelationshipType } from './types';
 export {
   type IdentifierKind,
+  type PersonNameParts,
+  classifyParticipant,
   normalizeEmail,
   normalizeIdentifier,
+  normalizeName,
   normalizePhone,
+  splitPersonName,
 } from './utils/normalizeIdentifier';

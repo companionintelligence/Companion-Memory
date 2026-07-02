@@ -19,7 +19,7 @@ export class EntityIdentifierEntity {
   ownerUserId!: string;
 
   @PrimaryColumn({ type: 'text' })
-  kind!: 'email' | 'phone';
+  kind!: 'email' | 'phone' | 'name';
 
   @PrimaryColumn({ name: 'value_normalized', type: 'text' })
   valueNormalized!: string;

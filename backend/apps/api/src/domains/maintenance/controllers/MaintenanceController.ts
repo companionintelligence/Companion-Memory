@@ -262,7 +262,7 @@ const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
  * to process out-of-band.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
-@Controller('api/maintenance')
+@Controller('maintenance')
 export class MaintenanceController {
   constructor(
     private readonly signallingEventService: SignallingEventService,

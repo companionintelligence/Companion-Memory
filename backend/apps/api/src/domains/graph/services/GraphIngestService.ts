@@ -221,8 +221,9 @@ export class GraphIngestService {
 
   /**
    * Register an ingested entity's contact identifiers (properties.emails /
-   * properties.phones) in ci.entity_identifiers for people-linking. No-op when
-   * neither is present. Defensive: even though the importer pre-normalizes, the
+   * properties.phones / properties.names — display-name identifiers for chat
+   * networks that export no email/phone) in ci.entity_identifiers for
+   * people-linking. No-op when none is present. Defensive: even though the importer pre-normalizes, the
    * service re-applies the canonical rule. Swallows + logs its own errors so a
    * bad identifier never aborts the entity ingest.
    */
@@ -234,12 +235,13 @@ export class GraphIngestService {
 
     const emails = props.emails;
     const phones = props.phones;
-    if (emails == null && phones == null) {
+    const names = props.names;
+    if (emails == null && phones == null && names == null) {
       return;
     }
 
     try {
-      await this.entityIdentifierService.upsertForEntity(ownerId, entityId, { emails, phones });
+      await this.entityIdentifierService.upsertForEntity(ownerId, entityId, { emails, phones, names });
     } catch (err) {
       this.logger.warn('Failed to index entity identifiers', {
         entityId,
