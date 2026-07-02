@@ -33,6 +33,14 @@
       "issuer": "PORTAL_OIDC_ISSUER",
       "jwksUri": "PORTAL_OIDC_JWKS_URI",
       "audience": "PORTAL_OIDC_AUDIENCE"
+    },
+    "hubForwardAuth": {
+      "enabled": {
+        "__name": "CI_HUB_FORWARD_AUTH_ENABLED",
+        "__format": "boolean"
+      },
+      "secret": "CI_HUB_FORWARD_AUTH_SECRET",
+      "maxSkewMs": "CI_HUB_FORWARD_AUTH_MAX_SKEW_MS"
     }
   },
   "db": {
