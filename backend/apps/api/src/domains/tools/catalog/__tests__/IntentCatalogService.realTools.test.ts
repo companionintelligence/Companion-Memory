@@ -55,7 +55,9 @@ const EXPECTED_INTENTS = [
 
 async function buildCatalog(): Promise<IntentCatalogService> {
   const tools = TOOL_CLASSES.map((Cls) => new Cls(...Array(Cls.length).fill(stub)));
-  const registry = new ToolRegistry(stub, stub);
+  // Third arg is the enforcing dispatcher; the catalog builder never executes a tool, so the
+  // universal stub stands in for it too.
+  const registry = new ToolRegistry(stub, stub, stub);
   await registry.registerProvider(new NativeToolProvider(tools, stub));
 
   return new IntentCatalogService(registry);

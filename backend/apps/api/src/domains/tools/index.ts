@@ -33,6 +33,7 @@ import { IntentCatalogService } from './catalog/IntentCatalogService';
 import { ToolInvokedListener } from './listeners/ToolInvokedListener';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
+import { IntentDispatcherService } from './services/IntentDispatcherService';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 import { CalendarFindEventsTool } from './tools/CalendarFindEventsTool';
 import { DatabaseSearchTool } from './tools/DatabaseSearchTool';
@@ -77,6 +78,9 @@ const nativeToolInstances = [
     SearchNextModule,
   ],
   providers: [
+    // The enforcing dispatcher: the single policy gate ToolRegistry (and, via it, MCP) call
+    // before executing any intent. Must be constructed before ToolRegistry, which depends on it.
+    IntentDispatcherService,
     ToolRegistry,
     // Consumes the durable tool.invoked signal (and registers its telemetry queue).
     ToolInvokedListener,
@@ -106,8 +110,19 @@ export { ToolRegistry };
 export { IntentCatalogService } from './catalog/IntentCatalogService';
 export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
 export { BaseTool } from './core/BaseTool';
-export { ToolInvokedEvent } from './events';
-export type { ToolInvokedPayload } from './events';
+export {
+  IntentDispatcherService,
+  DEFAULT_INTENT_POLICY,
+  type IntentPolicy,
+  type IntentDecision,
+} from './services/IntentDispatcherService';
+export { ToolInvokedEvent, IntentAuthorizedEvent, IntentDeniedEvent } from './events';
+export type {
+  ToolInvokedPayload,
+  IntentAuthorizedPayload,
+  IntentDeniedPayload,
+  IntentSurface,
+} from './events';
 export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
 export {
   intentToolName,

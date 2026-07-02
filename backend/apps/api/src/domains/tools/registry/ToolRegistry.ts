@@ -6,8 +6,9 @@ import { EventService } from '@ci/domains/events';
 
 import type { BaseTool } from '../core/BaseTool';
 import { intentToolName, type ToolSchema, type ToolResult } from '../core/types';
-import { ToolInvokedEvent } from '../events';
+import { ToolInvokedEvent, type IntentSurface } from '../events';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
+import { IntentDispatcherService } from '../services/IntentDispatcherService';
 
 /**
  * Centralized registry for managing all tools from various providers.
@@ -28,6 +29,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly logger: LoggerService,
     private readonly events: EventService,
+    private readonly dispatcher: IntentDispatcherService,
   ) {
     this.logger.setContext(ToolRegistry.name);
   }
@@ -168,7 +170,12 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
    * Execute a tool by its executable name. Donates the invocation (success or failure) as a
    * behavioral signal for prediction.
    */
-  async executeTool(name: string, context: RequestContext, input: unknown): Promise<ToolResult> {
+  async executeTool(
+    name: string,
+    context: RequestContext,
+    input: unknown,
+    surface: IntentSurface = 'native',
+  ): Promise<ToolResult> {
     const tool = this.tools.get(name);
 
     if (!tool) {
@@ -184,6 +191,22 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
           code: 'TOOL_NOT_FOUND',
           message: `Tool '${name}' not found`,
           retryable: false,
+        },
+      };
+    }
+
+    // Enforcement gate: the privacy label decides whether this intent may run at all. A denial
+    // short-circuits before execution and is recorded via the dispatcher's audit event.
+    const decision = await this.dispatcher.authorize(tool.schema, context, surface, name);
+
+    if (!decision.allowed) {
+      return {
+        success: false,
+        error: {
+          code: 'INTENT_DENIED',
+          message: decision.message,
+          retryable: false,
+          details: { reason: decision.reason, intent: tool.schema.name },
         },
       };
     }

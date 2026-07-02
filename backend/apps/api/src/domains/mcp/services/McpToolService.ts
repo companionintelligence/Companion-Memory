@@ -62,10 +62,13 @@ export class McpToolService implements OnModuleInit {
       return this.executorService.executeTool(graphqlTool, args, context);
     }
 
-    // Native tool execution
+    // Native tool execution. Route through the shared enforcing dispatcher (via the registry,
+    // tagged with the `mcp` surface) so MCP callers hit the same privacy-label policy gate as the
+    // local LLM. NOTE: GraphQL-wrapped CRUD (above) is still unlabelled and ungated — that is P0
+    // item 2 (label-or-demote GraphQL CRUD on MCP), tracked separately in the same wave.
     const userId = (context.req.user as { id?: string })?.id;
     const requestContext: RequestContext = { userId };
-    const result = await this.toolRegistry.executeTool(name, requestContext, args);
+    const result = await this.toolRegistry.executeTool(name, requestContext, args, 'mcp');
 
     if (!result.success) {
       throw new Error(result.error?.message ?? `Tool "${name}" execution failed`);

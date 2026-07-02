@@ -3,7 +3,14 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 
-import { ToolInvokedEvent, type ToolInvokedPayload } from '../events';
+import {
+  IntentAuthorizedEvent,
+  IntentDeniedEvent,
+  ToolInvokedEvent,
+  type IntentAuthorizedPayload,
+  type IntentDeniedPayload,
+  type ToolInvokedPayload,
+} from '../events';
 
 /**
  * Consumes the durable {@link ToolInvokedEvent} on the `telemetry` queue.
@@ -24,6 +31,37 @@ export class ToolInvokedListener {
       intent: payload.intent,
       domain: payload.domain,
       success: payload.success,
+      userId: payload.userId,
+    });
+  }
+
+  /**
+   * Records the enforcing dispatcher's authorization decisions. These are the durable security
+   * audit trail (distinct from the behavioral `tool.invoked` signal): every gated `destructive` /
+   * `external` invocation lands here as authorized (optionally warned) or denied.
+   */
+  @OnEvent(IntentAuthorizedEvent, { queue: 'telemetry' })
+  handleIntentAuthorized(payload: IntentAuthorizedPayload): void {
+    this.logger.log('intent.authorized', {
+      intent: payload.intent,
+      tool: payload.tool,
+      surface: payload.surface,
+      warned: payload.warned,
+      destructive: payload.destructive,
+      external: payload.external,
+      userId: payload.userId,
+    });
+  }
+
+  @OnEvent(IntentDeniedEvent, { queue: 'telemetry' })
+  handleIntentDenied(payload: IntentDeniedPayload): void {
+    this.logger.warn('intent.denied', {
+      intent: payload.intent,
+      tool: payload.tool,
+      surface: payload.surface,
+      reason: payload.reason,
+      destructive: payload.destructive,
+      external: payload.external,
       userId: payload.userId,
     });
   }

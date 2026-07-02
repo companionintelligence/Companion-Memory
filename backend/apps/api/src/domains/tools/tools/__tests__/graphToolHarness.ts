@@ -23,6 +23,7 @@ import { GraphNodeEntity, GraphQueryService, GraphReadService, RelationshipEntit
 import type { BaseTool } from '../../core/BaseTool';
 import { NativeToolProvider } from '../../providers/NativeToolProvider';
 import { ToolRegistry } from '../../registry/ToolRegistry';
+import { IntentDispatcherService } from '../../services/IntentDispatcherService';
 import { GetEntertainmentPreferencesTool } from '../GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from '../GetFamilyMembersTool';
 import { GetUserPreferencesTool } from '../GetUserPreferencesTool';
@@ -430,7 +431,9 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
   ];
 
   const provider = new NativeToolProvider(tools, makeFakeLogger());
-  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any);
+  // These are all read intents; the default deny-by-default policy lets them through unchanged.
+  const dispatcher = new IntentDispatcherService(makeFakeLogger(), { send: async () => [] } as any);
+  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any, dispatcher);
   await registry.registerProvider(provider);
 
   return {
