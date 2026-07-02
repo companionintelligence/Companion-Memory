@@ -27,6 +27,10 @@ import {
   CommunicationLinkBackfillService,
 } from '../services/CommunicationLinkBackfillService';
 import {
+  type EmbedCoverageReport,
+  EmbedCoverageTelemetryService,
+} from '../services/EmbedCoverageTelemetryService';
+import {
   type EventParticipantBackfillProgress,
   type EventParticipantBackfillResult,
   EventParticipantBackfillService,
@@ -175,6 +179,29 @@ const embeddedCountQuerySchema = z.object({
 
 type EmbeddedCountQuery = z.infer<typeof embeddedCountQuerySchema>;
 
+/** Indexable types, as a Set, for lenient `?types=` filtering on /search/coverage. */
+const INDEXABLE_ENTITY_SET: ReadonlySet<string> = new Set(INDEXABLE_ENTITIES);
+
+// Query for GET /api/maintenance/search/coverage. `types` is an optional CSV of
+// INDEXABLE_ENTITIES (e.g. "content,event"). Unknown tokens are dropped silently
+// (same lenience as embedded-count). Absent (or all-unknown) => measure every
+// indexable type.
+const coverageQuerySchema = z.object({
+  types: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value === undefined
+        ? undefined
+        : value
+            .split(',')
+            .map((type) => type.trim())
+            .filter((type): type is IndexableEntity => INDEXABLE_ENTITY_SET.has(type)),
+    ),
+});
+
+type CoverageQuery = z.infer<typeof coverageQuerySchema>;
+
 interface EmbeddedCountResponse {
   /** Total `ci_search.embeddings` rows matching the (optional) type filter. */
   count: number;
@@ -274,6 +301,7 @@ export class MaintenanceController {
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
+    private readonly embedCoverageTelemetryService: EmbedCoverageTelemetryService,
     private readonly locationEstimateService: LocationEstimateService,
   ) {}
 
@@ -848,6 +876,27 @@ export class MaintenanceController {
     }
 
     return { count, perType };
+  }
+
+  /**
+   * Embed-coverage telemetry (memory-and-search plan gap G2 / issue #1239). For
+   * each search `entity_type`, reports how many source rows exist (`total`), how
+   * many carry a `ci_search.embeddings` row (`embedded`), and the ratio in
+   * [0, 1]. `alarms` lists the types with source rows but zero embeddings — the
+   * coverage holes PR #1605 found by hand (e.g. content 0/366,862, event 6.5%).
+   *
+   * Pure observability: no writes, no retrieval-path change. Counts are GLOBAL
+   * (not user-scoped), matching /search-index/embedded-count. Optional CSV
+   * `?types=content,event` narrows the measurement; unknown tokens are ignored.
+   * A metrics scraper can poll this and page on a non-empty `alarms`.
+   */
+  @Get('search/coverage')
+  async searchCoverage(
+    @Query(new ValidationPipe(coverageQuerySchema)) query: CoverageQuery,
+  ): Promise<EmbedCoverageReport> {
+    const types = query.types && query.types.length > 0 ? query.types : undefined;
+
+    return this.embedCoverageTelemetryService.computeCoverage(types);
   }
 
   /**
