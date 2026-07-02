@@ -48,11 +48,14 @@ jobs:
           # Fetch the base branch to ensure we can compare against it
           git fetch origin ${{ github.base_ref }}
 
-          # Check for changes in the migrations directory. --no-renames keeps a
-          # reissued migration (delete + add under a fresh version) reading as
-          # D + A instead of R: normal mode still forbids the D, and squash
-          # mode — whose contract is exactly "only delete and add" — permits it.
-          ALL_CHANGES=$(git diff --no-renames --name-status origin/${{ github.base_ref }} HEAD -- backend/apps/api/db/postgres/migrations)
+          # Check for changes in the migrations directory. --find-renames=100%
+          # pairs a file into an R entry only when it moved with content
+          # byte-identical, so a verbatim rename stays forbidden in BOTH modes.
+          # A reissued migration (fresh version stamp after a collision) reads
+          # as D + A instead: a legitimate reissue always edits the content,
+          # because it re-runs on databases that applied the original version
+          # and therefore must add idempotency guards and a provenance note.
+          ALL_CHANGES=$(git diff --find-renames=100% --name-status origin/${{ github.base_ref }} HEAD -- backend/apps/api/db/postgres/migrations)
 
           # Check if PR is marked for migration squashing
           SQUASH_MODE=false

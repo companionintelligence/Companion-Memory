@@ -28,9 +28,7 @@ const GRANDFATHERED = new Set([
   '202601112192456_add_saved_searches.sql', // 15-digit hand-written timestamp
 ]);
 
-const files = readdirSync(MIGRATIONS_DIR).filter(
-  (name) => name.endsWith('.sql') && !GRANDFATHERED.has(name),
-);
+const files = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql') && !GRANDFATHERED.has(name));
 
 const byVersion = new Map<string, string[]>();
 const malformed: string[] = [];
