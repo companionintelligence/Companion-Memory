@@ -12,6 +12,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from .database import db
     from .priority import Priority, get_task_queue
+    from .activities import resolve_summary_window_activity
     from .workflows import (
         HourlySummaryWorkflow,
         DailySummaryWorkflow,
@@ -126,10 +127,9 @@ class SystemDailySummariesWorkflow:
         """Execute daily summaries for all users."""
         workflow.logger.info("system_daily_summaries_started")
 
-        # Calculate time window (previous day)
+        # Reference instant; per-user local day boundaries are resolved below so
+        # each user's "yesterday" is their local calendar day, not the UTC one.
         now = workflow.now()
-        end_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_time = end_time - timedelta(days=1)
 
         users = await self._get_active_users()
         workflow.logger.info(f"active_users_fetched count={len(users)}")
@@ -140,10 +140,16 @@ class SystemDailySummariesWorkflow:
         results = []
         for user_id in users:
             try:
+                window = await workflow.execute_activity(
+                    resolve_summary_window_activity,
+                    args=[user_id, "daily", now.isoformat()],
+                    **get_activity_options(),
+                )
+                start_iso, end_iso, tz = window["start_time"], window["end_time"], window["timezone"]
                 result = await workflow.execute_child_workflow(
                     DailySummaryWorkflow.run,
-                    args=[user_id, start_time.isoformat(), end_time.isoformat(), "UTC", None],
-                    id=f"daily-{user_id}-{end_time.isoformat()}",
+                    args=[user_id, start_iso, end_iso, tz, None],
+                    id=f"daily-{user_id}-{end_iso}",
                     task_queue=get_task_queue(Priority.MEDIUM),
                 )
                 results.append({"user_id": user_id, "status": "success", "result": result})
@@ -155,8 +161,6 @@ class SystemDailySummariesWorkflow:
 
         return {
             "users_processed": len(users),
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
             "results": results,
         }
 
@@ -192,11 +196,8 @@ class SystemWeeklySummariesWorkflow:
         """Execute weekly summaries for all users."""
         workflow.logger.info("system_weekly_summaries_started")
 
+        # Per-user local Mon–Sun week resolved below (see resolve_summary_window).
         now = workflow.now()
-        # Get start of current week (Monday)
-        days_since_monday = (now.weekday() + 6) % 7
-        end_time = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-        start_time = end_time - timedelta(days=7)
 
         users = await self._get_active_users()
         if not users:
@@ -205,10 +206,16 @@ class SystemWeeklySummariesWorkflow:
         results = []
         for user_id in users:
             try:
+                window = await workflow.execute_activity(
+                    resolve_summary_window_activity,
+                    args=[user_id, "weekly", now.isoformat()],
+                    **get_activity_options(),
+                )
+                start_iso, end_iso, tz = window["start_time"], window["end_time"], window["timezone"]
                 result = await workflow.execute_child_workflow(
                     WeeklySummaryWorkflow.run,
-                    args=[user_id, start_time.isoformat(), end_time.isoformat(), "UTC", None],
-                    id=f"weekly-{user_id}-{end_time.isoformat()}",
+                    args=[user_id, start_iso, end_iso, tz, None],
+                    id=f"weekly-{user_id}-{end_iso}",
                     task_queue=get_task_queue(Priority.MEDIUM),
                 )
                 results.append({"user_id": user_id, "status": "success"})
@@ -243,10 +250,8 @@ class SystemMonthlySummariesWorkflow:
         """Execute monthly summaries for all users."""
         workflow.logger.info("system_monthly_summaries_started")
 
+        # Per-user local calendar month resolved below (see resolve_summary_window).
         now = workflow.now()
-        end_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        # Previous month
-        start_time = (end_time - timedelta(days=1)).replace(day=1)
 
         users = await self._get_active_users()
         if not users:
@@ -255,10 +260,16 @@ class SystemMonthlySummariesWorkflow:
         results = []
         for user_id in users:
             try:
+                window = await workflow.execute_activity(
+                    resolve_summary_window_activity,
+                    args=[user_id, "monthly", now.isoformat()],
+                    **get_activity_options(),
+                )
+                start_iso, end_iso, tz = window["start_time"], window["end_time"], window["timezone"]
                 result = await workflow.execute_child_workflow(
                     MonthlySummaryWorkflow.run,
-                    args=[user_id, start_time.isoformat(), end_time.isoformat(), "UTC", None],
-                    id=f"monthly-{user_id}-{end_time.isoformat()}",
+                    args=[user_id, start_iso, end_iso, tz, None],
+                    id=f"monthly-{user_id}-{end_iso}",
                     task_queue=get_task_queue(Priority.MEDIUM),
                 )
                 results.append({"user_id": user_id, "status": "success"})

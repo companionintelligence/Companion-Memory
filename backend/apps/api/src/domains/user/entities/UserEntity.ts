@@ -20,6 +20,11 @@ export class UserEntity {
   @Column()
   onboarded!: boolean;
 
+  // IANA timezone name (e.g. 'America/New_York'). Drives local-time bucketing in
+  // HBPE + the summary service; defaults to 'UTC' at the DB layer.
+  @Column({ type: 'text', default: 'UTC' })
+  timezone!: string;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -33,6 +38,7 @@ export class UserEntity {
       email: entity.email,
       entityId: entity.entityId,
       onboarded: entity.onboarded,
+      timezone: entity.timezone,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };

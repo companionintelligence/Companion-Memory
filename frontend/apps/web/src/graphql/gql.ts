@@ -58,7 +58,7 @@ type Documents = {
     "\n  mutation CreateItem($input: CreateItemInput!) {\n    createItem(input: $input) {\n      item {\n        id\n        name\n        category\n        description\n        brand\n        model\n        currentValue\n        tags {\n          id\n          label\n        }\n      }\n      success\n    }\n  }\n": typeof types.CreateItemDocument,
     "\n  mutation UpdateItem($input: UpdateItemInput!) {\n    updateItem(input: $input) {\n      item {\n        id\n        name\n        category\n        description\n        brand\n        model\n        currentValue\n        tags {\n          id\n          label\n        }\n      }\n      success\n    }\n  }\n": typeof types.UpdateItemDocument,
     "\n                  fragment NewItem on ItemType {\n                    id\n                    name\n                    category\n                    description\n                    brand\n                    model\n                    currentValue\n                  }\n                ": typeof types.NewItemFragmentDoc,
-    "\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n\n      entity {\n        id\n      }\n    }\n  }\n": typeof types.GetUserDataDocument,
+    "\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n      timezone\n\n      entity {\n        id\n      }\n    }\n  }\n": typeof types.GetUserDataDocument,
     "\n  fragment FeedBadgeAction on ActionType {\n    id\n    seen\n    dismissed\n  }\n": typeof types.FeedBadgeActionFragmentDoc,
     "\n  fragment FeedBadgeSummary on SummaryType {\n    id\n    seen\n    dismissed\n  }\n": typeof types.FeedBadgeSummaryFragmentDoc,
     "\n  query GetFeedBadgeCount($actionLimit: Int, $summaryFirst: Int) {\n    feedActions(limit: $actionLimit) {\n      ...FeedBadgeAction\n    }\n    summaries(first: $summaryFirst) {\n      edges {\n        node {\n          ...FeedBadgeSummary\n        }\n      }\n    }\n  }\n  \n  \n": typeof types.GetFeedBadgeCountDocument,
@@ -131,6 +131,7 @@ type Documents = {
     "\n  mutation CreateProviderKey($input: CreateProviderKeyInput!) {\n    createProviderKey(input: $input) {\n      id\n      providerId\n      clientId\n      clientSecret\n      userId\n    }\n  }\n": typeof types.CreateProviderKeyDocument,
     "\n  mutation UpdateProviderKey($id: ID!, $input: UpdateProviderKeyInput!) {\n    updateProviderKey(id: $id, input: $input) {\n      id\n      clientId\n      clientSecret\n    }\n  }\n": typeof types.UpdateProviderKeyDocument,
     "\n  mutation DeleteProviderKey($id: ID!) {\n    deleteProviderKey(id: $id)\n  }\n": typeof types.DeleteProviderKeyDocument,
+    "\n  mutation UpdateCurrentUserTimezone($input: UpdateCurrentUserInput!) {\n    updateCurrentUser(input: $input) {\n      id\n      timezone\n    }\n  }\n": typeof types.UpdateCurrentUserTimezoneDocument,
     "\n  query GetSharedSavedSearch($token: String!) {\n    sharedSavedSearch(token: $token) {\n      id\n      name\n      description\n    }\n  }\n": typeof types.GetSharedSavedSearchDocument,
     "\n  query GetSummary($id: ID!) {\n    summary(id: $id) {\n      id\n      title\n      periodType\n      periodStart\n      periodEnd\n      summaryText\n      keyInsights\n      notableEvents\n      anomalies\n      tags\n      activityCounts {\n        total\n        browserActivity\n        communications\n        files\n        events\n        messages\n        screenCaptures\n        apiLogs\n        positions\n        activities\n        measurements\n      }\n      dailyRhythm\n      productivityPatterns\n      socialInteractions\n      keyAccomplishments\n      moodIndicators\n      confidenceScore\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.GetSummaryDocument,
     "\n  query GetOAuthCallbackUrl {\n    oAuthCallbackUrl\n  }\n": typeof types.GetOAuthCallbackUrlDocument,
@@ -177,7 +178,7 @@ const documents: Documents = {
     "\n  mutation CreateItem($input: CreateItemInput!) {\n    createItem(input: $input) {\n      item {\n        id\n        name\n        category\n        description\n        brand\n        model\n        currentValue\n        tags {\n          id\n          label\n        }\n      }\n      success\n    }\n  }\n": types.CreateItemDocument,
     "\n  mutation UpdateItem($input: UpdateItemInput!) {\n    updateItem(input: $input) {\n      item {\n        id\n        name\n        category\n        description\n        brand\n        model\n        currentValue\n        tags {\n          id\n          label\n        }\n      }\n      success\n    }\n  }\n": types.UpdateItemDocument,
     "\n                  fragment NewItem on ItemType {\n                    id\n                    name\n                    category\n                    description\n                    brand\n                    model\n                    currentValue\n                  }\n                ": types.NewItemFragmentDoc,
-    "\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n\n      entity {\n        id\n      }\n    }\n  }\n": types.GetUserDataDocument,
+    "\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n      timezone\n\n      entity {\n        id\n      }\n    }\n  }\n": types.GetUserDataDocument,
     "\n  fragment FeedBadgeAction on ActionType {\n    id\n    seen\n    dismissed\n  }\n": types.FeedBadgeActionFragmentDoc,
     "\n  fragment FeedBadgeSummary on SummaryType {\n    id\n    seen\n    dismissed\n  }\n": types.FeedBadgeSummaryFragmentDoc,
     "\n  query GetFeedBadgeCount($actionLimit: Int, $summaryFirst: Int) {\n    feedActions(limit: $actionLimit) {\n      ...FeedBadgeAction\n    }\n    summaries(first: $summaryFirst) {\n      edges {\n        node {\n          ...FeedBadgeSummary\n        }\n      }\n    }\n  }\n  \n  \n": types.GetFeedBadgeCountDocument,
@@ -250,6 +251,7 @@ const documents: Documents = {
     "\n  mutation CreateProviderKey($input: CreateProviderKeyInput!) {\n    createProviderKey(input: $input) {\n      id\n      providerId\n      clientId\n      clientSecret\n      userId\n    }\n  }\n": types.CreateProviderKeyDocument,
     "\n  mutation UpdateProviderKey($id: ID!, $input: UpdateProviderKeyInput!) {\n    updateProviderKey(id: $id, input: $input) {\n      id\n      clientId\n      clientSecret\n    }\n  }\n": types.UpdateProviderKeyDocument,
     "\n  mutation DeleteProviderKey($id: ID!) {\n    deleteProviderKey(id: $id)\n  }\n": types.DeleteProviderKeyDocument,
+    "\n  mutation UpdateCurrentUserTimezone($input: UpdateCurrentUserInput!) {\n    updateCurrentUser(input: $input) {\n      id\n      timezone\n    }\n  }\n": types.UpdateCurrentUserTimezoneDocument,
     "\n  query GetSharedSavedSearch($token: String!) {\n    sharedSavedSearch(token: $token) {\n      id\n      name\n      description\n    }\n  }\n": types.GetSharedSavedSearchDocument,
     "\n  query GetSummary($id: ID!) {\n    summary(id: $id) {\n      id\n      title\n      periodType\n      periodStart\n      periodEnd\n      summaryText\n      keyInsights\n      notableEvents\n      anomalies\n      tags\n      activityCounts {\n        total\n        browserActivity\n        communications\n        files\n        events\n        messages\n        screenCaptures\n        apiLogs\n        positions\n        activities\n        measurements\n      }\n      dailyRhythm\n      productivityPatterns\n      socialInteractions\n      keyAccomplishments\n      moodIndicators\n      confidenceScore\n      createdAt\n      updatedAt\n    }\n  }\n": types.GetSummaryDocument,
     "\n  query GetOAuthCallbackUrl {\n    oAuthCallbackUrl\n  }\n": types.GetOAuthCallbackUrlDocument,
@@ -433,7 +435,7 @@ export function gql(source: "\n                  fragment NewItem on ItemType {\
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n\n      entity {\n        id\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n\n      entity {\n        id\n      }\n    }\n  }\n"];
+export function gql(source: "\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n      timezone\n\n      entity {\n        id\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetUserData {\n    me {\n      id\n      name\n      email\n      onboarded\n      timezone\n\n      entity {\n        id\n      }\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -722,6 +724,10 @@ export function gql(source: "\n  mutation UpdateProviderKey($id: ID!, $input: Up
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  mutation DeleteProviderKey($id: ID!) {\n    deleteProviderKey(id: $id)\n  }\n"): (typeof documents)["\n  mutation DeleteProviderKey($id: ID!) {\n    deleteProviderKey(id: $id)\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  mutation UpdateCurrentUserTimezone($input: UpdateCurrentUserInput!) {\n    updateCurrentUser(input: $input) {\n      id\n      timezone\n    }\n  }\n"): (typeof documents)["\n  mutation UpdateCurrentUserTimezone($input: UpdateCurrentUserInput!) {\n    updateCurrentUser(input: $input) {\n      id\n      timezone\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
