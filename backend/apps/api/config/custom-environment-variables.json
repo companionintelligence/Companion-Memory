@@ -98,6 +98,9 @@
     "new.insights.page": "ENABLE_NEW_INSIGHTS_PAGE",
     "require.signup.codes": "ENABLE_REQUIRE_SIGNUP_CODES",
     "files.page": "ENABLE_FILES_PAGE",
+    "insights.page": "ENABLE_INSIGHTS_PAGE",
+    "chat.page": "ENABLE_CHAT_PAGE",
+    "jobs.page": "ENABLE_JOBS_PAGE",
     "hbpe": "ENABLE_HBPE",
     "agent.memory.compaction": "ENABLE_AGENT_MEMORY_COMPACTION",
     "shared.search": "ENABLE_SHARED_SEARCH"

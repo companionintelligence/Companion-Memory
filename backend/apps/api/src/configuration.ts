@@ -184,6 +184,12 @@ export const ConfigSchema = z.object({
     'new.insights.page': booleanStringSchema,
     'require.signup.codes': booleanStringSchema,
     'files.page': booleanStringSchema,
+    /** Wholesale gate for the Insights surface (/insights, /insights/:id, /prompts + nav entry points). */
+    'insights.page': booleanStringSchema,
+    /** Wholesale gate for the Chat page (/chat + nav entry points). */
+    'chat.page': booleanStringSchema,
+    /** Wholesale gate for the Jobs page (/jobs + nav entry points). */
+    'jobs.page': booleanStringSchema,
     hbpe: booleanStringSchema,
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,

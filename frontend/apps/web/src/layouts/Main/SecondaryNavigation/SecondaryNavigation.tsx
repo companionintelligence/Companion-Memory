@@ -60,13 +60,17 @@ export function SecondaryNavigation() {
             <Brain className="h-6 w-6" strokeWidth={1.25} />
           </NavLink>
 
-          <NavLink to="/insights" label="Insights">
-            <Lightbulb className="h-6 w-6" strokeWidth={1.25} />
-          </NavLink>
+          {isFeatureEnabled('insights.page') && (
+            <NavLink to="/insights" label="Insights">
+              <Lightbulb className="h-6 w-6" strokeWidth={1.25} />
+            </NavLink>
+          )}
 
-          <NavLink to="/chat" label="Chat">
-            <MessagesSquare className="h-6 w-6" strokeWidth={1.25} />
-          </NavLink>
+          {isFeatureEnabled('chat.page') && (
+            <NavLink to="/chat" label="Chat">
+              <MessagesSquare className="h-6 w-6" strokeWidth={1.25} />
+            </NavLink>
+          )}
 
           <NavLink to="/saved-searches" label="Saved Searches">
             <FolderSearch2 className="h-6 w-6" strokeWidth={1.25} />
