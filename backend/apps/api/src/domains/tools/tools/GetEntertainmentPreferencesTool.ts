@@ -3,55 +3,44 @@ import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
-import { GraphQueryService, GraphReadService, GraphNodeEntity } from '@ci/domains/memory';
+import { GraphNodeEntity, GraphQueryService, GraphReadService } from '@ci/domains/memory';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 // Input schema for the tool
-const getUserPreferencesInputSchema = z.object({
-  category: z
-    .enum(['food', 'entertainment', 'activity', 'beverage', 'music', 'all'])
-    .optional()
-    .default('all'),
+const getEntertainmentPreferencesInputSchema = z.object({
+  mediaType: z.enum(['movies', 'tv', 'music', 'books', 'all']).optional().default('all'),
   personName: z.string().optional(),
   includeContext: z.boolean().default(true),
 });
 
-type GetUserPreferencesInput = z.infer<typeof getUserPreferencesInputSchema>;
+type GetEntertainmentPreferencesInput = z.infer<typeof getEntertainmentPreferencesInputSchema>;
 
-// Output interfaces
-interface PreferenceNode {
+// Output interface
+interface EntertainmentPreference {
   id: string;
-  type: string;
+  type: string; // movie_genre, music_genre, book_genre, etc.
   name: string;
   strength: number;
   relationship: 'PREFERS' | 'DISLIKES';
   properties?: Record<string, any>;
 }
 
-interface GetUserPreferencesOutput {
-  preferences: PreferenceNode[];
-  dislikes: PreferenceNode[];
+interface GetEntertainmentPreferencesOutput {
+  preferences: EntertainmentPreference[];
+  dislikes: EntertainmentPreference[];
   totalPreferences: number;
   totalDislikes: number;
   personId: string;
   personName: string;
-  debugInfo?: DebugInfo;
 }
 
-interface DebugInfo {
-  userId: string;
-  entityLookupMethod: string;
-  queryInfo: string;
-}
-
-const CATEGORY_TYPE_MAP: Record<string, string[]> = {
-  food: ['food', 'cuisine', 'dietary_preference', 'food_category'],
-  entertainment: ['movie_genre', 'tv_genre', 'book_genre'],
-  activity: ['activity', 'sport', 'hobby'],
-  beverage: ['beverage', 'drink'],
+const MEDIA_TYPE_MAP: Record<string, string[]> = {
+  movies: ['movie_genre', 'film_style'],
+  tv: ['tv_genre', 'tv_style'],
   music: ['music_genre', 'music_style'],
+  books: ['book_genre', 'literary_genre'],
 };
 
 const RELATIONSHIP_DESCRIPTOR_PATTERNS: Array<{
@@ -71,39 +60,51 @@ const RELATIONSHIP_DESCRIPTOR_PATTERNS: Array<{
     relationshipTypes: ['PARENT_OF', 'CHILD_OF'],
   },
   { keywords: ['brother', 'sister', 'sibling'], relationshipTypes: ['SIBLING_OF'] },
+  { keywords: ['friend', 'best friend', 'buddy'], relationshipTypes: ['FRIEND', 'KNOWS'] },
+  {
+    keywords: ['colleague', 'coworker', 'boss', 'manager'],
+    relationshipTypes: ['WORKS_WITH', 'COLLEAGUE'],
+  },
 ];
 
 /**
- * Tool to retrieve user preferences from the graph database
- * Uses the event-driven graph domain for reads via GraphQueryService
+ * Tool to retrieve entertainment preferences from the graph
+ * Focuses on movies, TV, music, and books for recommendation systems
  */
 @Injectable()
-export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, GetUserPreferencesOutput> {
-  readonly schema = {
-    name: 'getUserPreferences',
+export class GetEntertainmentPreferencesTool extends BaseTool<
+  GetEntertainmentPreferencesInput,
+  GetEntertainmentPreferencesOutput
+> {
+  readonly schema: IntentDefinition = {
+    name: 'media.entertainmentPreferences',
+    domain: 'media',
+    title: 'Get entertainment taste',
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    produces: ['concept'],
+    phrases: ['What movies do I like', 'My taste in $media'],
     description:
-      'Get user preferences including likes and dislikes for food, entertainment, activities, music, and beverages. ' +
-      'Can query preferences for the current user or family members (e.g., "my wife", "John"). ' +
-      'Returns detailed information about each preference including strength and rich context.',
+      'Get entertainment preferences including movie genres, TV preferences, music tastes, and book interests. ' +
+      'Returns both likes and dislikes with detailed context. ' +
+      'Can query for current user or family members (e.g., "my wife").',
     category: 'database',
     parameters: {
       type: 'object',
       properties: {
-        category: {
+        mediaType: {
           type: 'string',
-          enum: ['food', 'entertainment', 'activity', 'beverage', 'music', 'all'],
-          description: 'Filter preferences by category (default: all)',
+          enum: ['movies', 'tv', 'music', 'books', 'all'],
+          description: 'Filter by media type (default: all)',
           default: 'all',
         },
         personName: {
           type: 'string',
           description:
-            'Name of the person to get preferences for (e.g., "my wife", "Sarah", "John Smith"). If not provided, returns current user preferences.',
+            'Name of person to get preferences for (e.g., "my wife", "John"). Defaults to current user.',
         },
         includeContext: {
           type: 'boolean',
-          description:
-            'Include detailed properties about each preference (cuisine style, movie themes, etc.)',
+          description: 'Include detailed properties (themes, sub-genres, example works)',
           default: true,
         },
       },
@@ -111,32 +112,32 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     },
     examples: [
       {
-        input: { category: 'food' },
+        input: { mediaType: 'movies' },
         output: {
           preferences: [
             {
               id: 'uuid-123',
-              type: 'cuisine',
-              name: 'Italian',
+              type: 'movie_genre',
+              name: 'Science Fiction',
               strength: 0.9,
               relationship: 'PREFERS',
               properties: {
-                description: 'Mediterranean cuisine from Italy',
-                signature_dishes: ['pasta', 'pizza', 'risotto'],
-                regional_styles: ['Northern Italian', 'Southern Italian'],
+                description: 'Speculative fiction based on scientific concepts',
+                themes: ['space exploration', 'time travel', 'artificial intelligence'],
+                example_films: ['Blade Runner', 'The Matrix', 'Interstellar'],
               },
             },
           ],
           dislikes: [
             {
               id: 'uuid-456',
-              type: 'food',
-              name: 'Seafood',
-              strength: 0.7,
+              type: 'movie_genre',
+              name: 'Horror',
+              strength: 0.8,
               relationship: 'DISLIKES',
               properties: {
-                category: 'protein',
-                description: 'Fish and shellfish',
+                description: 'Movies designed to elicit fear and suspense',
+                sub_genres: ['psychological', 'supernatural', 'slasher'],
               },
             },
           ],
@@ -145,7 +146,7 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
           personId: 'user-uuid',
           personName: 'Current User',
         },
-        description: 'Get food preferences including likes and dislikes with rich context',
+        description: 'Get movie preferences with detailed context for recommendations',
       },
     ],
   };
@@ -156,32 +157,25 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     protected readonly logger: LoggerService,
   ) {
     super();
-    this.logger.setContext(GetUserPreferencesTool.name);
+    this.logger.setContext(GetEntertainmentPreferencesTool.name);
   }
 
-  protected validateInput(input: unknown): GetUserPreferencesInput {
-    return getUserPreferencesInputSchema.parse(input);
+  protected validateInput(input: unknown): GetEntertainmentPreferencesInput {
+    return getEntertainmentPreferencesInputSchema.parse(input);
   }
 
   protected async executeInternal(
     context: ToolExecutionContext,
-    input: GetUserPreferencesInput,
-  ): Promise<GetUserPreferencesOutput> {
+    input: GetEntertainmentPreferencesInput,
+  ): Promise<GetEntertainmentPreferencesOutput> {
     if (!context.userId) {
-      throw new Error('User context is required to load preferences');
+      throw new Error('User context is required to load entertainment preferences');
     }
 
     const ownerUserId = context.userId;
-    const debugInfo: DebugInfo = {
-      userId: ownerUserId,
-      entityLookupMethod: '',
-      queryInfo: '',
-    };
+    const userProfile = await this.resolveUserProfile(ownerUserId);
 
-    const userNode = await this.resolveUserEntity(ownerUserId);
-    if (!userNode) {
-      debugInfo.queryInfo = 'User entity not found in graph';
-
+    if (!userProfile?.entityId) {
       return {
         preferences: [],
         dislikes: [],
@@ -189,21 +183,16 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
         totalDislikes: 0,
         personId: '',
         personName: 'User not found',
-        debugInfo,
       };
     }
 
-    let targetPersonId = userNode.entityId;
-    let targetPersonName = userNode.name ?? 'Current User';
-    debugInfo.entityLookupMethod = 'current user entity';
+    let targetPersonId = userProfile.entityId;
+    let targetPersonName = userProfile.username ?? 'Current User';
 
     if (input.personName) {
-      debugInfo.entityLookupMethod = 'personName resolution';
       const resolved = await this.resolvePersonEntity(ownerUserId, targetPersonId, input.personName);
 
       if (!resolved) {
-        debugInfo.queryInfo = `Person '${input.personName}' not found in graph relationships`;
-
         return {
           preferences: [],
           dislikes: [],
@@ -211,7 +200,6 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
           totalDislikes: 0,
           personId: '',
           personName: `${input.personName} (not found)`,
-          debugInfo,
         };
       }
 
@@ -224,8 +212,6 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     });
 
     if (relationshipSummaries.length === 0) {
-      debugInfo.queryInfo = 'No PREFERS or DISLIKES relationships found for this entity';
-
       return {
         preferences: [],
         dislikes: [],
@@ -233,42 +219,39 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
         totalDislikes: 0,
         personId: targetPersonId,
         personName: targetPersonName,
-        debugInfo,
       };
     }
 
-    const allowedTypes = this.buildCategoryTypeSet(input.category);
-    const includeContext = input.includeContext;
+    const mediaFilter = this.buildMediaTypeSet(input.mediaType);
 
-    const preferences: PreferenceNode[] = [];
-    const dislikes: PreferenceNode[] = [];
+    const includeContext = input.includeContext;
+    const preferences: EntertainmentPreference[] = [];
+    const dislikes: EntertainmentPreference[] = [];
 
     for (const summary of relationshipSummaries) {
-      const normalizedType = summary.type.toLowerCase();
-      if (allowedTypes && !allowedTypes.has(normalizedType)) {
+      const conceptType = summary.type.toLowerCase();
+      if (mediaFilter && !mediaFilter.has(conceptType)) {
         continue;
       }
 
-      const payload: PreferenceNode = {
+      const item: EntertainmentPreference = {
         id: summary.entityId,
-        type: normalizedType,
-        name: summary.name ?? normalizedType,
+        type: conceptType,
+        name: summary.name ?? conceptType,
         strength: summary.strength,
         relationship: summary.relationship,
         properties: includeContext ? (summary.properties ?? undefined) : undefined,
       };
 
-      if (payload.relationship === 'PREFERS') {
-        preferences.push(payload);
+      if (item.relationship === 'PREFERS') {
+        preferences.push(item);
       } else {
-        dislikes.push(payload);
+        dislikes.push(item);
       }
     }
 
     preferences.sort((a, b) => b.strength - a.strength);
     dislikes.sort((a, b) => b.strength - a.strength);
-
-    debugInfo.queryInfo = `Found ${preferences.length} preferences and ${dislikes.length} dislikes`;
 
     return {
       preferences,
@@ -277,32 +260,23 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
       totalDislikes: dislikes.length,
       personId: targetPersonId,
       personName: targetPersonName,
-      debugInfo,
     };
   }
 
-  private buildCategoryTypeSet(category: string): Set<string> | null {
-    if (!category || category === 'all') {
-      return null;
-    }
-
-    const types = CATEGORY_TYPE_MAP[category];
-    if (!types || types.length === 0) {
-      return null;
-    }
-
-    return new Set(types.map((type) => type.toLowerCase()));
-  }
-
-  private async resolveUserEntity(ownerUserId: string): Promise<{ entityId: string; name?: string } | null> {
+  private async resolveUserProfile(
+    ownerUserId: string,
+  ): Promise<{ entityId: string | null; username: string | null }> {
     const node = await this.graphQuery.getUserEntity(ownerUserId);
     if (!node) {
-      return null;
+      return {
+        entityId: null,
+        username: null,
+      };
     }
 
     return {
       entityId: node.entity_id,
-      name: node.name ?? undefined,
+      username: node.name ?? null,
     };
   }
 
@@ -358,10 +332,6 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
       ),
     );
 
-    if (otherIds.length === 0) {
-      return null;
-    }
-
     const nodes = await this.graphQuery.getNodesByIds(ownerUserId, otherIds);
     const person = nodes.find((node) => node.entity_type === 'Person');
 
@@ -395,11 +365,13 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
         'FAMILY_MEMBER',
         'FRIEND',
         'KNOWS',
+        'WORKS_WITH',
+        'COLLEAGUE',
       ],
       direction: 'both',
       maxDepth: 1,
-      maxNodes: 50,
-      maxEdges: 100,
+      maxNodes: 75,
+      maxEdges: 150,
     });
 
     const candidates = Array.from(traversal.nodes.values()).filter(
@@ -417,7 +389,7 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     const partialMatch = candidates.find(
       (node) =>
         (node.name ?? '').toLowerCase().includes(lowerName) ||
-        this.extractNameFromProperties(node).some((value) => value.includes(lowerName)),
+        this.extractNameFragments(node).some((value) => value.includes(lowerName)),
     );
 
     if (partialMatch) {
@@ -446,9 +418,25 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     };
   }
 
-  private extractNameFromProperties(node: GraphNodeEntity): string[] {
-    const output: string[] = [];
+  private buildMediaTypeSet(mediaType: string): Set<string> | null {
+    if (!mediaType || mediaType === 'all') {
+      return new Set(
+        Object.values(MEDIA_TYPE_MAP)
+          .flat()
+          .map((type) => type.toLowerCase()),
+      );
+    }
 
+    const types = MEDIA_TYPE_MAP[mediaType];
+    if (!types || types.length === 0) {
+      return null;
+    }
+
+    return new Set(types.map((type) => type.toLowerCase()));
+  }
+
+  private extractNameFragments(node: GraphNodeEntity): string[] {
+    const output: string[] = [];
     const first = node.properties?.first_name;
     const last = node.properties?.last_name;
 

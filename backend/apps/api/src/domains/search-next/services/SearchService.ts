@@ -29,6 +29,28 @@ const TS_RANK_WEIGHTS = '{0.1, 0.2, 0.4, 1.0}';
  */
 const EMBEDDING_BOOST_FACTOR = 0.5;
 
+/**
+ * Default cosine-distance floor for `searchMessages` (naive-RAG message channel).
+ *
+ * Expressed as cosine DISTANCE (embedding <=> query), so smaller = more similar.
+ * 0.5 matches `semanticSearch`'s `distanceThreshold` — anything the semantic mode
+ * would already reject as too far is now also rejected here. This closes gap G5
+ * (memory-and-search plan §3): before the floor, `searchMessages` always unioned
+ * the top-K raw fragments regardless of similarity, injecting recall noise on
+ * sparse corpora where even the closest fragment is unrelated. See plan §5
+ * ("`searchMessages` floor → Yes, start at cosine-distance 0.5").
+ */
+const MESSAGE_DISTANCE_FLOOR = 0.5;
+
+/**
+ * Default top-K for `searchMessages`. K is corpus-dependent: dense corpora
+ * benefit from a larger union, sparse ones from a smaller one. The floor above
+ * does most of the noise-suppression work, so K stays at the historical 10 as
+ * the safe default; deployments tune it via the `maxResults` argument once the
+ * benchmark (PR #1587) is the gate. See plan §4 "Recall tuning: ... per-corpus K".
+ */
+const MESSAGE_DEFAULT_K = 10;
+
 type ScoredRowResult = {
   entity_id: string;
   entity_type: string;
@@ -113,25 +135,36 @@ export class SearchService {
    * closest raw fragments alongside the graph lifts recall (see RecallService).
    *
    * Cosine distance (<=>), matching semanticSearch — nomic embeddings are
-   * unnormalised, so L2 is meaningless here. Top-K by similarity, no distance
-   * threshold: callers union the result and let the answerer filter.
+   * unnormalised, so L2 is meaningless here. Top-K by similarity, gated by a
+   * cosine-distance floor so fragments the semantic mode would reject as too far
+   * are dropped instead of padding the union with noise (gap G5). Callers union
+   * whatever survives the floor and let the answerer filter the rest.
+   *
+   * @param maxResults top-K cap (corpus-tunable; default {@link MESSAGE_DEFAULT_K})
+   * @param distanceFloor max cosine distance to admit (default
+   *   {@link MESSAGE_DISTANCE_FLOOR}); rows with `embedding <=> query >= floor`
+   *   are excluded. Pass a larger value to loosen recall on paraphrase-heavy
+   *   corpora, a smaller one to tighten precision on sparse corpora.
    */
   async searchMessages(
     context: UserServiceContext,
     query: string,
-    maxResults = 10,
+    maxResults = MESSAGE_DEFAULT_K,
+    distanceFloor = MESSAGE_DISTANCE_FLOOR,
   ): Promise<{ id: string; score: number }[]> {
     const vector = await this.embeddingGenerationService.generateEmbeddingString(query);
 
     const sql = `
       SELECT entity_id, 1 - (embedding <=> $2) AS score
       FROM ci_search.embeddings
-      WHERE user_id = $1 AND entity_type = 'message'
+      WHERE user_id = $1
+        AND entity_type = 'message'
+        AND (embedding <=> $2) < $3::double precision
       ORDER BY score DESC
       LIMIT ${maxResults}
     `;
 
-    const rows = await this.embeddingRepo.query(sql, [context.userId, vector]);
+    const rows = await this.embeddingRepo.query(sql, [context.userId, vector, distanceFloor]);
 
     return rows.map((row: { entity_id: string; score: string }) => ({
       id: row.entity_id,

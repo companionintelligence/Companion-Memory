@@ -20,12 +20,12 @@
 import type { RequestContext } from '@ci/common/context';
 import { GraphNodeEntity, GraphQueryService, GraphReadService, RelationshipEntity } from '@ci/domains/memory';
 
-import type { BaseTool } from '../../../core/BaseTool';
-import { ToolRegistry } from '../../../registry/ToolRegistry';
+import type { BaseTool } from '../../core/BaseTool';
+import { NativeToolProvider } from '../../providers/NativeToolProvider';
+import { ToolRegistry } from '../../registry/ToolRegistry';
 import { GetEntertainmentPreferencesTool } from '../GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from '../GetFamilyMembersTool';
 import { GetUserPreferencesTool } from '../GetUserPreferencesTool';
-import { NativeToolProvider } from '../NativeToolProvider';
 import { ReadKnowledgeTool } from '../ReadKnowledgeTool';
 
 /** A no-op logger that satisfies the LoggerService surface the tools use. */
@@ -430,7 +430,7 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
   ];
 
   const provider = new NativeToolProvider(tools, makeFakeLogger());
-  const registry = new ToolRegistry(makeFakeLogger());
+  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any);
   await registry.registerProvider(provider);
 
   return {

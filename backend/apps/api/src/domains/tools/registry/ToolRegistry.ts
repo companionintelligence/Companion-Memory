@@ -2,13 +2,20 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { EventService } from '@ci/domains/events';
 
 import type { BaseTool } from '../core/BaseTool';
-import type { ToolSchema, ToolResult } from '../core/types';
+import { intentToolName, type ToolSchema, type ToolResult } from '../core/types';
+import { ToolInvokedEvent } from '../events';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
 
 /**
- * Centralized registry for managing all tools from various providers
+ * Centralized registry for managing all tools from various providers.
+ *
+ * Every tool is an intent: its `schema.name` is the dotted semantic id (e.g. `memory.recall`),
+ * while the registry keys tools by the executable name ({@link intentToolName}, e.g.
+ * `memory_recall`) — the same name advertised to the LLM and MCP, so a tool call round-trips by
+ * that name.
  */
 @Injectable()
 export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
@@ -18,7 +25,10 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
   private readonly toolToProvider = new Map<string, string>();
 
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    private readonly logger: LoggerService,
+    private readonly events: EventService,
+  ) {
     this.logger.setContext(ToolRegistry.name);
   }
 
@@ -82,10 +92,11 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Register a tool from a provider
+   * Register a tool from a provider. Keyed by the executable name (dots→underscores) so it
+   * matches what the LLM/MCP call back with.
    */
   private registerTool(tool: BaseTool, providerName: string): void {
-    const { name } = tool.schema;
+    const name = intentToolName(tool.schema.name);
 
     if (this.tools.has(name)) {
       this.logger.warn(`Tool '${name}' is already registered, skipping`);
@@ -98,14 +109,12 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
     this.logger.debug(`Registered tool: ${name}`, {
       toolName: name,
+      intent: tool.schema.name,
       provider: providerName,
       category: tool.schema.category,
     });
   }
 
-  /**
-   * Initialize all registered providers
-   */
   /**
    * Shutdown all providers
    */
@@ -125,7 +134,9 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Get all available tool schemas (for LLM function calling)
+   * Get all available tool schemas (for LLM function calling). Schemas carry the dotted intent
+   * `name`; callers that advertise to the LLM/MCP derive the executable name via
+   * {@link intentToolName}.
    */
   getAvailableTools(context?: RequestContext): ToolSchema[] {
     const schemas = Array.from(this.tools.values()).map((tool) => tool.schema);
@@ -139,14 +150,23 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Check if a tool exists
+   * The tool list to advertise to an LLM / MCP client. Every tool is a curated intent, so this is
+   * simply the full list — there is no raw/intent two-tier distinction to filter.
+   */
+  getAgentFacingTools(context?: RequestContext): ToolSchema[] {
+    return this.getAvailableTools(context);
+  }
+
+  /**
+   * Check if a tool exists (by executable name).
    */
   hasTool(name: string): boolean {
     return this.tools.has(name);
   }
 
   /**
-   * Execute a tool by name
+   * Execute a tool by its executable name. Donates the invocation (success or failure) as a
+   * behavioral signal for prediction.
    */
   async executeTool(name: string, context: RequestContext, input: unknown): Promise<ToolResult> {
     const tool = this.tools.get(name);
@@ -174,18 +194,54 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
       provider: this.toolToProvider.get(name),
     });
 
-    return await tool.execute(context, input);
+    const result = await tool.execute(context, input);
+
+    await this.emitInvoked(name, tool, context, result);
+
+    return result;
   }
 
   /**
-   * Get tool by name (for testing/debugging)
+   * Emit the durable `tool.invoked` behavioral signal (routed to the `telemetry` queue). Never
+   * throws: a telemetry failure must not fail an already-completed tool call.
+   */
+  private async emitInvoked(
+    toolName: string,
+    tool: BaseTool,
+    context: RequestContext,
+    result: ToolResult,
+  ): Promise<void> {
+    const { schema } = tool;
+
+    try {
+      await this.events.send(
+        ToolInvokedEvent,
+        {
+          intent: schema.name,
+          tool: toolName,
+          domain: schema.domain,
+          userId: context.userId,
+          success: result.success,
+          durationMs: result.executionTimeMs,
+          access: schema.privacy.access,
+          external: schema.privacy.external,
+        },
+        { queue: 'telemetry' },
+      );
+    } catch (error) {
+      this.logger.warn('tool.invoked emit failed (non-fatal)', { error });
+    }
+  }
+
+  /**
+   * Get tool by executable name (for testing/debugging)
    */
   getTool(name: string): BaseTool | undefined {
     return this.tools.get(name);
   }
 
   /**
-   * List all registered tool names
+   * List all registered (executable) tool names
    */
   getRegisteredToolNames(): string[] {
     return Array.from(this.tools.keys());

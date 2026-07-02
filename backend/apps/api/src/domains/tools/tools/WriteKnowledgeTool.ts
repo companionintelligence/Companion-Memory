@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { LoggerService } from '@ci/common/logging';
 import { GraphEventService, GraphQueryService } from '@ci/domains/memory';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 const EntityCreateSchema = z.object({
   kind: z.literal('entity.create'),
@@ -100,8 +100,13 @@ export interface WriteKnowledgeOutput {
 
 @Injectable()
 export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowledgeOutput> {
-  readonly schema = {
-    name: 'writeKnowledge',
+  readonly schema: IntentDefinition = {
+    name: 'memory.remember',
+    domain: 'memory',
+    title: 'Remember a fact',
+    privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+    produces: ['concept', 'person'],
+    phrases: ['Remember that $fact', 'Note that $fact'],
     description: 'Create or update entities and relationships in the personal knowledge graph.',
     category: 'database',
     parameters: {

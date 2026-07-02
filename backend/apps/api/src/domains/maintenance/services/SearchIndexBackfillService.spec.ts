@@ -9,7 +9,7 @@ import {
 
 import { SearchIndexBackfillService } from './SearchIndexBackfillService';
 
-const SEARCH_INDEX = { queue: 'search-index' };
+const SEARCH_INDEX_QUEUE = 'search-index';
 
 /**
  * Build a DataSource whose `query` serves a queue of id pages PER entity type
@@ -39,19 +39,19 @@ function makeDataSource(pagesByType: Record<string, string[][]>) {
 
 function makeService(pagesByType: Record<string, string[][]>) {
   const ds = makeDataSource(pagesByType);
-  const send = jest.fn(async () => ['job-id']);
-  const events = { send } as const;
+  const sendMany = jest.fn(async () => undefined);
+  const events = { sendMany } as const;
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const service = new SearchIndexBackfillService(ds as any, events as any, logger as any);
 
-  return { service, send, ds };
+  return { service, sendMany, ds };
 }
 
 describe('SearchIndexBackfillService', () => {
-  it('re-emits each type’s create event onto the search-index queue ONLY, with correct counts', async () => {
-    const { service, send } = makeService({
+  it('bulk re-emits each type’s create events onto the search-index queue ONLY, with correct counts', async () => {
+    const { service, sendMany } = makeService({
       communication: [['c1', 'c2'], []],
       event: [['e1'], []],
       content: [[], []],
@@ -74,23 +74,40 @@ describe('SearchIndexBackfillService', () => {
       },
     });
 
-    // Correct event name + payload field per type, all scoped to search-index.
-    expect(send).toHaveBeenCalledWith(CommunicationCreatedEvent, { communicationId: 'c1' }, SEARCH_INDEX);
-    expect(send).toHaveBeenCalledWith(EventCreatedEvent, { eventId: 'e1' }, SEARCH_INDEX);
-    expect(send).toHaveBeenCalledWith(ItemCreatedEvent, { itemId: 'i3' }, SEARCH_INDEX);
-    expect(send).toHaveBeenCalledWith(BrowserActivityCreatedEvent, { browserActivityId: 'b1' }, SEARCH_INDEX);
-    expect(send).toHaveBeenCalledWith(FileCreatedEvent, { fileId: 'f1' }, SEARCH_INDEX);
-    expect(send).toHaveBeenCalledWith(FileCreatedEvent, { fileId: 'f2' }, SEARCH_INDEX);
-    expect(send).not.toHaveBeenCalledWith(ContentCreatedEvent, expect.anything(), expect.anything());
+    // Each non-empty page is one bulk enqueue: (queue, [{name, data}, ...]).
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: CommunicationCreatedEvent, data: { communicationId: 'c1' } },
+      { name: CommunicationCreatedEvent, data: { communicationId: 'c2' } },
+    ]);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: EventCreatedEvent, data: { eventId: 'e1' } },
+    ]);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: ItemCreatedEvent, data: { itemId: 'i1' } },
+      { name: ItemCreatedEvent, data: { itemId: 'i2' } },
+      { name: ItemCreatedEvent, data: { itemId: 'i3' } },
+    ]);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: BrowserActivityCreatedEvent, data: { browserActivityId: 'b1' } },
+    ]);
+    // file rows (the file-embedding backfill, #1605) ride the same bulk path.
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: FileCreatedEvent, data: { fileId: 'f1' } },
+      { name: FileCreatedEvent, data: { fileId: 'f2' } },
+    ]);
 
-    // Every emission targeted the search-index queue (3rd arg of every send call).
-    for (const call of send.mock.calls) {
-      expect((call as unknown[])[2]).toEqual(SEARCH_INDEX);
+    // content had an empty page — never enqueued — and nothing left the search-index queue.
+    const contentEmitted = sendMany.mock.calls.some((call) =>
+      ((call as unknown[])[1] as Array<{ name: string }>).some((e) => e.name === ContentCreatedEvent),
+    );
+    expect(contentEmitted).toBe(false);
+    for (const call of sendMany.mock.calls) {
+      expect((call as unknown[])[0]).toBe(SEARCH_INDEX_QUEUE);
     }
   });
 
   it('keyset-pages until a short page, advancing the cursor by the last id', async () => {
-    const { service, send, ds } = makeService({
+    const { service, sendMany, ds } = makeService({
       communication: [['c1', 'c2'], ['c3'], []],
     });
 
@@ -100,11 +117,12 @@ describe('SearchIndexBackfillService', () => {
     // page 1 after=null, page 2 after='c2' (last of page 1), page 3 after='c3'.
     const comCalls = ds.calls.filter((c) => c.entityType === 'communication');
     expect(comCalls.map((c) => c.after)).toEqual([null, 'c2', 'c3']);
-    expect(send).toHaveBeenCalledTimes(3);
+    // one bulk enqueue per non-empty page (the empty page 3 enqueues nothing).
+    expect(sendMany).toHaveBeenCalledTimes(2);
   });
 
   it('caps emission at limitPerType and stops paging that type', async () => {
-    const { service, send } = makeService({
+    const { service, sendMany } = makeService({
       communication: [['c1', 'c2', 'c3', 'c4', 'c5'], ['c6']],
     });
 
@@ -115,7 +133,12 @@ describe('SearchIndexBackfillService', () => {
     });
 
     expect(result.enqueued).toBe(2);
-    expect(send).toHaveBeenCalledTimes(2);
+    // the first page is trimmed to the cap and enqueued once; paging then stops.
+    expect(sendMany).toHaveBeenCalledTimes(1);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: CommunicationCreatedEvent, data: { communicationId: 'c1' } },
+      { name: CommunicationCreatedEvent, data: { communicationId: 'c2' } },
+    ]);
   });
 
   it('only sweeps the requested entity types', async () => {

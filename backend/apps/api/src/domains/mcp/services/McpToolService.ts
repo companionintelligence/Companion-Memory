@@ -3,7 +3,7 @@ import { z, type ZodTypeAny } from 'zod';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type JSONSchema, ToolRegistry } from '@ci/domains/tools';
+import { type JSONSchema, ToolRegistry, intentToolName } from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
 
@@ -86,18 +86,23 @@ export class McpToolService implements OnModuleInit {
   }
 
   private registerNativeTools() {
-    const schemas = this.toolRegistry.getAvailableTools();
+    // Every registered tool is a curated intent; advertise them all to MCP clients under their
+    // executable (underscored) names.
+    const schemas = this.toolRegistry.getAgentFacingTools();
 
     for (const schema of schemas) {
+      // schema.name is the dotted intent id; expose/execute by the MCP-safe executable name.
+      const toolName = intentToolName(schema.name);
+
       // Skip if a GraphQL tool with the same name already exists
-      if (this.tools.has(schema.name)) {
-        this.logger.debug(`Skipping native tool "${schema.name}" — name conflict with GraphQL tool`);
+      if (this.tools.has(toolName)) {
+        this.logger.debug(`Skipping native tool "${toolName}" — name conflict with GraphQL tool`);
 
         continue;
       }
 
-      this.tools.set(schema.name, {
-        name: schema.name,
+      this.tools.set(toolName, {
+        name: toolName,
         description: schema.description,
         inputSchema: this.jsonSchemaToZodShape(schema.parameters),
         source: 'native',

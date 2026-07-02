@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphReadService } from '@ci/domains/memory';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 const FAMILY_RELATIONSHIP_TYPES = [
   'SPOUSE',
@@ -48,8 +48,13 @@ interface GetFamilyMembersOutput {
 
 @Injectable()
 export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFamilyMembersOutput> {
-  readonly schema = {
-    name: 'getFamilyMembers',
+  readonly schema: IntentDefinition = {
+    name: 'people.relationships',
+    domain: 'people',
+    title: 'List relationships',
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    produces: ['person'],
+    phrases: ['Who is my family', 'List my relationships'],
     description:
       'Get information about family members, friends, and social connections. ' +
       'Returns relationship details including closeness scores and interaction frequency. ' +

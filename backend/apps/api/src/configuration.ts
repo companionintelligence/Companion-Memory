@@ -136,7 +136,7 @@ export const ConfigSchema = z.object({
     /** Max texts sent to Ollama's /api/embed in a single HTTP request. */
     batchSize: z.coerce.number().int().positive().default(32),
     /** Max concurrent in-flight Ollama embedding HTTP requests. */
-    concurrency: z.coerce.number().int().positive().default(4),
+    concurrency: z.coerce.number().int().positive().default(12),
     /**
      * How long (ms) the coalescing buffer waits for more texts before flushing a
      * batch. Small values keep latency low; larger values pack fuller batches
@@ -163,11 +163,15 @@ export const ConfigSchema = z.object({
     }, z.array(z.string()).default([])),
   }),
   // PGBoss worker tuning. concurrency is the global in-flight job ceiling across
-  // all queues; fetchBatchSize caps how many jobs a single fetch pulls. Raising
-  // these scales the decoupled embedding workers during a bulk import.
+  // all queues; fetchBatchSize caps how many jobs a single fetch pulls. This
+  // global pool is shared by every queue, so the search-index (embedding) workers
+  // only fill the Ollama coalescing buffer as fast as they get slots — the
+  // default is sized so a post-import backfill drains in hours, not days. Raise
+  // CI_QUEUE_CONCURRENCY / CI_EMBED_CONCURRENCY further (and CI_QUEUE_SUPPRESS the
+  // enrichment queues) to push a large import harder.
   queues: z.object({
-    concurrency: z.coerce.number().int().positive().default(10),
-    fetchBatchSize: z.coerce.number().int().positive().default(10),
+    concurrency: z.coerce.number().int().positive().default(32),
+    fetchBatchSize: z.coerce.number().int().positive().default(20),
   }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,

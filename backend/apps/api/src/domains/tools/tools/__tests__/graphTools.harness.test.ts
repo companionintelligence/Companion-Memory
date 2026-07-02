@@ -24,7 +24,12 @@ describe('graph LLM tools — registry harness (B4)', () => {
     const names = harness.registry.getRegisteredToolNames().sort();
 
     expect(names).toEqual(
-      ['getEntertainmentPreferences', 'getFamilyMembers', 'getUserPreferences', 'readKnowledge'].sort(),
+      [
+        'media_entertainmentPreferences',
+        'people_relationships',
+        'knowledge_preferences',
+        'memory_recall',
+      ].sort(),
     );
   });
 
@@ -46,7 +51,7 @@ describe('graph LLM tools — registry harness (B4)', () => {
     });
 
     it('getUserPreferences returns the typed PREFERS concepts, sorted by strength', async () => {
-      const result = await harness.run('getUserPreferences', ctx, { category: 'all' });
+      const result = await harness.run('knowledge_preferences', ctx, { category: 'all' });
 
       expect(result.success).toBe(true);
       expect(result.data.totalPreferences).toBe(2);
@@ -65,13 +70,13 @@ describe('graph LLM tools — registry harness (B4)', () => {
     });
 
     it('getUserPreferences honours the food category filter', async () => {
-      const result = await harness.run('getUserPreferences', ctx, { category: 'food' });
+      const result = await harness.run('knowledge_preferences', ctx, { category: 'food' });
 
       expect(result.data.preferences.map((p: { type: string }) => p.type)).toEqual(['cuisine']);
     });
 
     it('getEntertainmentPreferences returns only media-typed concepts', async () => {
-      const result = await harness.run('getEntertainmentPreferences', ctx, { mediaType: 'movies' });
+      const result = await harness.run('media_entertainmentPreferences', ctx, { mediaType: 'movies' });
 
       expect(result.success).toBe(true);
       expect(result.data.preferences.map((p: { name: string }) => p.name)).toEqual(['Science Fiction']);
@@ -79,7 +84,7 @@ describe('graph LLM tools — registry harness (B4)', () => {
     });
 
     it('getFamilyMembers returns the SPOUSE contact', async () => {
-      const result = await harness.run('getFamilyMembers', ctx, { includePreferences: false });
+      const result = await harness.run('people_relationships', ctx, { includePreferences: false });
 
       expect(result.success).toBe(true);
       expect(result.data.totalCount).toBe(1);
@@ -92,7 +97,7 @@ describe('graph LLM tools — registry harness (B4)', () => {
     });
 
     it('readKnowledge resolves "my wife" via the SPOUSE edge', async () => {
-      const result = await harness.run('readKnowledge', ctx, {
+      const result = await harness.run('memory_recall', ctx, {
         personName: 'my wife',
         useCurrentUser: false,
         relationshipTypes: ['SPOUSE', 'PREFERS'],
@@ -106,7 +111,7 @@ describe('graph LLM tools — registry harness (B4)', () => {
     });
 
     it('readKnowledge can find typed concepts via filters + inbound PREFERS', async () => {
-      const result = await harness.run('readKnowledge', ctx, {
+      const result = await harness.run('memory_recall', ctx, {
         useCurrentUser: false,
         filters: { entityType: 'Concept', propertyEquals: { type: 'cuisine' } },
         relationshipTypes: ['PREFERS'],
@@ -128,11 +133,12 @@ describe('graph LLM tools — registry harness (B4)', () => {
       const harness = await createGraphToolHarness();
       seedImporterGraph(harness);
 
-      const result = await harness.run('readKnowledge', ctx, { useCurrentUser: true });
+      const result = await harness.run('memory_recall', ctx, { useCurrentUser: true });
 
       expect(result).toMatchObject({
         success: true,
-        metadata: { toolName: 'readKnowledge' },
+        // metadata.toolName carries the tool's schema name — the dotted intent id.
+        metadata: { toolName: 'memory.recall' },
       });
       expect(typeof result.executionTimeMs).toBe('number');
       expect(result.metadata?.executionId).toBeTruthy();

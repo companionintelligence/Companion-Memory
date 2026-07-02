@@ -2,9 +2,10 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 
-import type { BaseTool } from '../../core/BaseTool';
-import type { ToolSchema } from '../../core/types';
-import type { ToolProvider, ProviderHealthStatus } from '../ToolProvider';
+import type { BaseTool } from '../core/BaseTool';
+import type { ToolSchema } from '../core/types';
+
+import type { ToolProvider, ProviderHealthStatus } from './ToolProvider';
 
 /**
  * Provider for native (built-in) tools

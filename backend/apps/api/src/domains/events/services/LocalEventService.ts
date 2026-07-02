@@ -109,6 +109,35 @@ export class LocalEventService extends EventService implements BeforeApplication
     return executionPromise;
   }
 
+  async sendMany(
+    queue: string,
+    events: Array<{ name: string; data: Record<string, unknown> }>,
+  ): Promise<void> {
+    if (events.length === 0) {
+      return;
+    }
+
+    if (!this.getRegisteredQueues().has(queue)) {
+      this.logger.warn(`Requested queue ${queue} does not exist. ${events.length} events will not be sent.`);
+
+      return;
+    }
+
+    // LocalEventService executes inline (no pg-boss), so there is no bulk-insert
+    // fast path — just run each event through the same single-queue execution
+    // send() uses. Fine for dev/test volumes; the pg-boss impl carries the
+    // import-scale bulk path.
+    for (const event of events) {
+      const job: JobWithMetadata<EventData> = {
+        id: uuidv4(),
+        data: { name: event.name, ...event.data },
+        userId: (event.data as { userId?: string }).userId,
+      };
+
+      await this.executeJob(queue, job);
+    }
+  }
+
   private trackJob(promise: Promise<string[]>) {
     this.pendingJobs.push(promise);
 

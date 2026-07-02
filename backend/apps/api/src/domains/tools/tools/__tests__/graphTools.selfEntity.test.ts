@@ -34,7 +34,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
     });
 
     it('getUserPreferences returns clean empty with a "user not found" signal', async () => {
-      const result = await harness.run('getUserPreferences', ctx, {});
+      const result = await harness.run('knowledge_preferences', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -44,7 +44,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
     });
 
     it('getEntertainmentPreferences returns clean empty', async () => {
-      const result = await harness.run('getEntertainmentPreferences', ctx, {});
+      const result = await harness.run('media_entertainmentPreferences', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -53,7 +53,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
     });
 
     it('getFamilyMembers returns clean empty', async () => {
-      const result = await harness.run('getFamilyMembers', ctx, {});
+      const result = await harness.run('people_relationships', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -61,7 +61,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
     });
 
     it('readKnowledge returns a warning payload (not a throw)', async () => {
-      const result = await harness.run('readKnowledge', ctx, { useCurrentUser: true });
+      const result = await harness.run('memory_recall', ctx, { useCurrentUser: true });
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -86,7 +86,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
     it('getUserPreferences degrades gracefully (getUserEntity has no linked_table fallback)', async () => {
       // GraphQueryService.getUserEntity reads users.entity_id only, so a missing
       // user row yields a clean empty result for the preference tools.
-      const result = await harness.run('getUserPreferences', ctx, {});
+      const result = await harness.run('knowledge_preferences', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.data.personName).toBe('User not found');
@@ -97,7 +97,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
       // ci.entities (linked_table=users) that recovers the self node even when
       // the users row / entity_id is gone — so it returns a full payload, not a
       // crash and not a malformed object.
-      const result = await harness.run('readKnowledge', ctx, { useCurrentUser: true });
+      const result = await harness.run('memory_recall', ctx, { useCurrentUser: true });
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -118,7 +118,7 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
     });
 
     it('getUserPreferences returns clean empty when the linked node is gone', async () => {
-      const result = await harness.run('getUserPreferences', ctx, {});
+      const result = await harness.run('knowledge_preferences', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -132,10 +132,10 @@ describe('graph LLM tools — self-entity resolution (B2)', () => {
       seedImporterGraph(harness);
 
       for (const name of [
-        'getUserPreferences',
-        'getEntertainmentPreferences',
-        'getFamilyMembers',
-        'readKnowledge',
+        'knowledge_preferences',
+        'media_entertainmentPreferences',
+        'people_relationships',
+        'memory_recall',
       ]) {
         const result = await harness.run(name, {}, {});
         expect(result.success).toBe(false);

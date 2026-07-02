@@ -55,13 +55,13 @@ export class BodyParserMiddleware implements NestMiddleware {
     const routePath = (req.originalUrl || req.url || req.path).split('?')[0];
     const isGraphql =
       req.baseUrl === GRAPHQL_PATH || routePath === GRAPHQL_PATH || routePath.startsWith(`${GRAPHQL_PATH}/`);
-    const isCaptureIngest = routePath.includes(CAPTURE_INGEST_PATH);
+    const isCaptureIngest =
+      routePath === CAPTURE_INGEST_PATH || routePath.startsWith(`${CAPTURE_INGEST_PATH}/`);
 
     // Use the route's own limit, then the GraphQL / capture-ingest bulk limits,
     // else default to 100kb.
     const bodyLimit =
-      limit ||
-      (isGraphql ? GRAPHQL_BODY_LIMIT : isCaptureIngest ? CAPTURE_INGEST_BODY_LIMIT : '100kb');
+      limit || (isGraphql ? GRAPHQL_BODY_LIMIT : isCaptureIngest ? CAPTURE_INGEST_BODY_LIMIT : '100kb');
 
     // Chain both parsers so each checks the Content-Type header and only the
     // matching one actually parses the body. `next` is called exactly once at the end.

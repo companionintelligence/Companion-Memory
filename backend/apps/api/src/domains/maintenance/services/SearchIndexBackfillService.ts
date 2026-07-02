@@ -39,6 +39,20 @@ export const BACKFILLABLE_ENTITIES = [
 
 export type BackfillableEntity = (typeof BACKFILLABLE_ENTITIES)[number];
 
+/**
+ * Per-entity-type re-emit descriptor: the `*CreatedEvent` name to fire and the
+ * payload field its listener reads the id from. Drives the bulk enqueue so a
+ * page of ids becomes one `sendMany` call instead of N awaited `send`s.
+ */
+const EVENT_BY_TYPE: Record<BackfillableEntity, { event: string; idField: string }> = {
+  communication: { event: CommunicationCreatedEvent, idField: 'communicationId' },
+  event: { event: EventCreatedEvent, idField: 'eventId' },
+  content: { event: ContentCreatedEvent, idField: 'contentId' },
+  item: { event: ItemCreatedEvent, idField: 'itemId' },
+  'browser-activity': { event: BrowserActivityCreatedEvent, idField: 'browserActivityId' },
+  file: { event: FileCreatedEvent, idField: 'fileId' },
+};
+
 export interface SearchIndexBackfillOptions {
   /** Restrict the sweep to these entity types (default: all backfillable types). */
   entityTypes?: BackfillableEntity[];
@@ -97,15 +111,19 @@ export class SearchIndexBackfillService {
   }
 
   /**
-   * Keyset-page over the source table's rows that have no embedding yet, re-emitting
-   * each id's create event onto the search-index queue. Paging on the id column keeps
-   * the working set bounded over a multi-million-row table.
+   * Keyset-page over the source table's rows that have no embedding yet,
+   * bulk-re-emitting each PAGE's create events onto the search-index queue in a
+   * single `sendMany` call. Paging on the id column keeps the working set bounded
+   * over a multi-million-row table, and the per-page bulk enqueue keeps the whole
+   * sweep to O(pages) round trips instead of O(rows) — the difference between the
+   * endpoint returning in seconds vs. blocking the request for minutes.
    */
   private async backfillType(
     entityType: BackfillableEntity,
     batchSize: number,
     limitPerType: number | undefined,
   ): Promise<number> {
+    const { event, idField } = EVENT_BY_TYPE[entityType];
     let after: string | null = null;
     let enqueued = 0;
 
@@ -115,12 +133,20 @@ export class SearchIndexBackfillService {
         break;
       }
 
-      for (const id of ids) {
-        await this.emit(entityType, id);
-        enqueued += 1;
-        if (limitPerType != null && enqueued >= limitPerType) {
-          return enqueued;
-        }
+      // Trim the final page so we never exceed limitPerType.
+      const room = limitPerType != null ? Math.max(limitPerType - enqueued, 0) : ids.length;
+      const page = ids.slice(0, room);
+
+      if (page.length > 0) {
+        await this.events.sendMany(
+          SEARCH_INDEX_QUEUE,
+          page.map((id) => ({ name: event, data: { [idField]: id } })),
+        );
+        enqueued += page.length;
+      }
+
+      if (limitPerType != null && enqueued >= limitPerType) {
+        break;
       }
 
       after = ids[ids.length - 1];
@@ -133,6 +159,14 @@ export class SearchIndexBackfillService {
    * Ids of source rows with no matching `ci_search.embeddings` row, after the
    * keyset cursor. Table / id column come from the authoritative ENTITY_SOURCE_MAP
    * (trusted constants, not request input), so interpolating them is safe.
+   *
+   * The cursor compares and orders on the NATIVE `uuid` id column (casting only
+   * the bound cursor param to `::uuid`), NOT `id::text`. Every BACKFILLABLE_ENTITIES
+   * id column is a `uuid`, and a `uuid`-typed keyset lets Postgres serve the page
+   * straight from the primary-key index — whereas the old `id::text` cast forced a
+   * full sort of the source table on every page, which dominated the sweep time at
+   * import scale. `id::text` remains only in the SELECT list (a cheap per-row
+   * projection that returns the id as a string for the caller).
    */
   private async missingIds(
     entityType: BackfillableEntity,
@@ -151,32 +185,12 @@ export class SearchIndexBackfillService {
            ON e.entity_type = $1 AND e.entity_id = s."${source.idColumn}"
         WHERE e.entity_id IS NULL
           ${discriminator}
-          AND ($2::text IS NULL OR s."${source.idColumn}"::text > $2)
-        ORDER BY s."${source.idColumn}"::text
+          AND ($2::uuid IS NULL OR s."${source.idColumn}" > $2::uuid)
+        ORDER BY s."${source.idColumn}"
         LIMIT $3`,
       [entityType, after, batchSize],
     );
 
     return rows.map((row) => row.id);
-  }
-
-  /** Re-emit the entity's create event onto the search-index queue only. */
-  private emit(entityType: BackfillableEntity, id: string): Promise<string[]> {
-    const opts = { queue: SEARCH_INDEX_QUEUE } as const;
-
-    switch (entityType) {
-      case 'communication':
-        return this.events.send(CommunicationCreatedEvent, { communicationId: id }, opts);
-      case 'event':
-        return this.events.send(EventCreatedEvent, { eventId: id }, opts);
-      case 'content':
-        return this.events.send(ContentCreatedEvent, { contentId: id }, opts);
-      case 'item':
-        return this.events.send(ItemCreatedEvent, { itemId: id }, opts);
-      case 'browser-activity':
-        return this.events.send(BrowserActivityCreatedEvent, { browserActivityId: id }, opts);
-      case 'file':
-        return this.events.send(FileCreatedEvent, { fileId: id }, opts);
-    }
   }
 }

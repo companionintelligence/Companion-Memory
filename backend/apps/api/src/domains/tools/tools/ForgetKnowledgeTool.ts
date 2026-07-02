@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { LoggerService } from '@ci/common/logging';
 import { GraphUtilityService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 const ForgetKnowledgeInputBaseSchema = z.object({
   entityIds: z.array(z.string().uuid()).optional(),
@@ -32,8 +32,13 @@ export interface ForgetKnowledgeOutput {
 
 @Injectable()
 export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKnowledgeOutput> {
-  readonly schema = {
-    name: 'forgetKnowledge',
+  readonly schema: IntentDefinition = {
+    name: 'memory.forget',
+    domain: 'memory',
+    title: 'Forget knowledge',
+    privacy: { access: 'delete', sensitivity: 'personal', destructive: true, external: false },
+    consumes: ['concept', 'person'],
+    phrases: ['Forget $fact', 'Delete what you know about $topic'],
     description: 'Archive or remove entities and relationships from the knowledge graph.',
     category: 'database',
     parameters: {

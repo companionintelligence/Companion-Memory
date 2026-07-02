@@ -21,9 +21,9 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     seedImporterGraph(harness);
   });
 
-  describe('getUserPreferences', () => {
+  describe('knowledge_preferences', () => {
     it('returns a clean empty result (no error) when no PREFERS/DISLIKES edges exist', async () => {
-      const result = await harness.run('getUserPreferences', ctx, {});
+      const result = await harness.run('knowledge_preferences', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -38,7 +38,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
 
     it('returns clean empty for a category filter too', async () => {
-      const result = await harness.run('getUserPreferences', ctx, { category: 'food' });
+      const result = await harness.run('knowledge_preferences', ctx, { category: 'food' });
 
       expect(result.success).toBe(true);
       expect(result.data.totalPreferences).toBe(0);
@@ -46,9 +46,9 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
   });
 
-  describe('getEntertainmentPreferences', () => {
+  describe('media_entertainmentPreferences', () => {
     it('returns a clean empty result (no error) when no PREFERS/DISLIKES edges exist', async () => {
-      const result = await harness.run('getEntertainmentPreferences', ctx, {});
+      const result = await harness.run('media_entertainmentPreferences', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -63,9 +63,9 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
   });
 
-  describe('getFamilyMembers', () => {
+  describe('people_relationships', () => {
     it('returns a clean empty result (no error) when only KNOWS edges exist (no family edges)', async () => {
-      const result = await harness.run('getFamilyMembers', ctx, {});
+      const result = await harness.run('people_relationships', ctx, {});
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -77,7 +77,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
 
     it('returns clean empty with includePreferences set (no nested throw)', async () => {
-      const result = await harness.run('getFamilyMembers', ctx, { includePreferences: true });
+      const result = await harness.run('people_relationships', ctx, { includePreferences: true });
 
       expect(result.success).toBe(true);
       expect(result.data.totalCount).toBe(0);
@@ -86,7 +86,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
 
   describe('personName resolution on importer vocabulary', () => {
     it('getUserPreferences("my wife") returns "not found" (no SPOUSE edge exists)', async () => {
-      const result = await harness.run('getUserPreferences', ctx, { personName: 'my wife' });
+      const result = await harness.run('knowledge_preferences', ctx, { personName: 'my wife' });
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -97,7 +97,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     it('getEntertainmentPreferences resolves a KNOWS contact by name, then returns clean empty prefs', async () => {
       // "Alice" matches a KNOWS contact via the name-based fallback; she has no
       // PREFERS edges, so the tool returns her id with empty preferences.
-      const result = await harness.run('getEntertainmentPreferences', ctx, { personName: 'Alice' });
+      const result = await harness.run('media_entertainmentPreferences', ctx, { personName: 'Alice' });
 
       expect(result.success).toBe(true);
       expect(result.error).toBeUndefined();
@@ -107,7 +107,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
 
     it('readKnowledge("Alice") resolves the KNOWS contact by name', async () => {
-      const result = await harness.run('readKnowledge', ctx, {
+      const result = await harness.run('memory_recall', ctx, {
         personName: 'Alice',
         useCurrentUser: false,
         include: { properties: false, relationships: true, metadata: false },
@@ -119,7 +119,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
 
     it('readKnowledge("Nonexistent Person") returns a warning, not a throw', async () => {
-      const result = await harness.run('readKnowledge', ctx, {
+      const result = await harness.run('memory_recall', ctx, {
         personName: 'Nonexistent Person',
         useCurrentUser: false,
       });
@@ -141,7 +141,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
         strength: 1.0,
       });
 
-      const result = await harness.run('getFamilyMembers', ctx, { includePreferences: true });
+      const result = await harness.run('people_relationships', ctx, { includePreferences: true });
 
       expect(result.success).toBe(true);
       expect(result.data.totalCount).toBe(1);
@@ -151,7 +151,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
 
   describe('readKnowledge — importer vocabulary (KNOWS / MENTIONS)', () => {
     it('returns connected people via KNOWS/MENTIONS when relationshipTypes is omitted', async () => {
-      const result = await harness.run('readKnowledge', ctx, {
+      const result = await harness.run('memory_recall', ctx, {
         useCurrentUser: true,
         include: { properties: false, relationships: true, metadata: false },
       });
@@ -177,7 +177,7 @@ describe('graph LLM tools — graceful empty on imported vocabulary (B1)', () =>
     });
 
     it('returns the self node alone (no warning) when filtered to PREFERS, which the importer never writes', async () => {
-      const result = await harness.run('readKnowledge', ctx, {
+      const result = await harness.run('memory_recall', ctx, {
         useCurrentUser: true,
         relationshipTypes: ['PREFERS'],
         include: { properties: false, relationships: true, metadata: false },

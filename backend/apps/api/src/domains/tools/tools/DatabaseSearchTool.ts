@@ -29,8 +29,8 @@ import {
   type IndexableEntity,
 } from '@ci/domains/search-next';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 const DatabaseSearchInputSchema = z.object({
   query: z.string().min(1).max(500),
@@ -57,14 +57,19 @@ export type SearchResult =
 
 @Injectable()
 export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResult[]> {
-  readonly schema = {
-    name: 'databaseSearch',
+  readonly schema: IntentDefinition = {
+    name: 'knowledge.search',
+    domain: 'knowledge',
+    title: 'Search everything',
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    produces: ['event', 'content', 'person', 'place', 'note', 'file'],
+    phrases: ['Search for $query', 'Find anything about $query'],
     description:
       'Search across all your personal data using natural language or keywords. ' +
       'Searches entities (people, places, concepts), documents, and conversation messages. ' +
       'Use this for broad searches like "find everything about coffee" or "when did I last visit Paris". ' +
-      'For specific graph queries like "my family members", use readKnowledge instead. ' +
-      'For precise entity lookups, use readKnowledge with filters.',
+      'For specific graph queries like "my family members", use memory.recall instead. ' +
+      'For precise entity lookups, use memory.recall with filters.',
     category: 'database',
     parameters: {
       type: 'object',
@@ -132,6 +137,15 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     context: ToolExecutionContext,
     input: DatabaseSearchInput,
   ): Promise<SearchResult[]> {
+    return this.run(context, input);
+  }
+
+  /**
+   * The core search, exposed so domain-specialized search intents (people.find, places.find,
+   * calendar.findEvents, media.findPhotos) can reuse it with a fixed entity-type scope instead of
+   * re-implementing search. Input is assumed already validated by the caller.
+   */
+  async run(context: ToolExecutionContext, input: DatabaseSearchInput): Promise<SearchResult[]> {
     const serviceContext = toServiceContext(context);
 
     const searchResults = await this.searchService.search(serviceContext, {

@@ -4,8 +4,8 @@ import { z } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 // Input schema for the tool
 const getStreamingAvailabilityInputSchema = z.object({
@@ -73,8 +73,12 @@ export class GetStreamingAvailabilityTool extends BaseTool<
   GetStreamingAvailabilityInput,
   GetStreamingAvailabilityOutput
 > {
-  readonly schema = {
-    name: 'getStreamingAvailability',
+  readonly schema: IntentDefinition = {
+    name: 'media.streamingAvailability',
+    domain: 'media',
+    title: 'Find where to stream',
+    privacy: { access: 'read', sensitivity: 'low', destructive: false, external: true },
+    phrases: ['Where can I stream $title', 'What service has $title'],
     description:
       'Get currently trending movies and TV shows with real streaming availability data. Can filter by genre and content type. Shows which platforms (Netflix, Hulu, Disney+, etc.) currently have each title available. Use this when users ask about what to watch, want specific genres, or need streaming recommendations.',
     category: 'external_api',

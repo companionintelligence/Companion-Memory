@@ -1,4 +1,8 @@
 -- migrate:up
+-- Reissued from 20260628120000, which collided with add_saved_search_sharing
+-- (both hand-stamped the same version; dbmate keys schema_migrations on it).
+-- DBs that migrated while this file held the old version will run it again —
+-- every statement below is idempotent, so the re-run is a no-op.
 -- communications_source_triple_uniq HAD to include `time` because
 -- ci.communications is a TimescaleDB hypertable partitioned on (time, user_id),
 -- and TimescaleDB hard-rejects UNIQUE indexes that don't cover every partition

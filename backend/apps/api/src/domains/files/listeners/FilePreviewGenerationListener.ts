@@ -128,7 +128,7 @@ export class FilePreviewGenerationListener {
       userId: payload.userId,
       previewId: preview.id,
       model: payload.model,
-      inventoryCapture: payload.inventoryCapture,
+      skipDescription: payload.skipDescription,
     });
 
     this.logger.log('Generated preview', {

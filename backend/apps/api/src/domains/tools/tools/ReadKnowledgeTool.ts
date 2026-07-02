@@ -6,8 +6,8 @@ import { z } from 'zod';
 import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
 
-import { BaseTool } from '../../core/BaseTool';
-import type { ToolExecutionContext } from '../../core/types';
+import { BaseTool } from '../core/BaseTool';
+import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 const ReadKnowledgeInputBaseSchema = z.object({
   // Semantic entity references (preferred for LLM usage)
@@ -97,8 +97,13 @@ export interface ReadKnowledgeOutput {
 
 @Injectable()
 export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledgeOutput> {
-  readonly schema = {
-    name: 'readKnowledge',
+  readonly schema: IntentDefinition = {
+    name: 'memory.recall',
+    domain: 'memory',
+    title: 'Recall knowledge',
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    produces: ['concept', 'person'],
+    phrases: ['What do you know about $person', 'Recall my $topic'],
     description:
       'General-purpose tool to query the personal knowledge graph. Use this to explore entities (people, places, concepts) and their relationships. ' +
       'Supports filtering by entity type, names, properties, and relationship types (PREFERS, DISLIKES, KNOWS, WORKS_WITH, etc.). ' +
