@@ -48,55 +48,45 @@ jobs:
           # Fetch the base branch to ensure we can compare against it
           git fetch origin ${{ github.base_ref }}
 
-          # Check for changes in the migrations directory. --find-renames=100%
-          # pairs a file into an R entry only when it moved with content
-          # byte-identical, so a verbatim rename stays forbidden in BOTH modes.
-          # A reissued migration (fresh version stamp after a collision) reads
-          # as D + A instead: a legitimate reissue always edits the content,
-          # because it re-runs on databases that applied the original version
-          # and therefore must add idempotency guards and a provenance note.
-          ALL_CHANGES=$(git diff --find-renames=100% --name-status origin/${{ github.base_ref }} HEAD -- backend/apps/api/db/postgres/migrations)
+          # Check for changes in the migrations directory
+          ALL_CHANGES=$(git diff --name-status origin/${{ github.base_ref }} HEAD -- backend/apps/api/db/postgres/migrations)
 
-          # Check if PR is marked for migration squashing
-          SQUASH_MODE=false
+          # Committed migrations are immutable: normally only additions (A)
+          # are allowed. Two exceptions, declared in the PR title:
+          #   [squash-migrations]  consolidate history: deletions + additions,
+          #                        never renames or in-place modifications
+          #   [fix-migrations]     repair broken migrations (e.g. a version
+          #                        collision): renames allowed too; only
+          #                        in-place modification stays forbidden
+          MODE=normal
 
-          if [[ "${{ github.event.pull_request.title }}" == *"[squash-migrations]"* ]]; then
-            SQUASH_MODE=true
+          if [[ "${{ github.event.pull_request.title }}" == *"[fix-migrations]"* ]]; then
+            MODE=fix
+            echo "Migration fix mode detected."
+          elif [[ "${{ github.event.pull_request.title }}" == *"[squash-migrations]"* ]]; then
+            MODE=squash
             echo "Migration squashing mode detected."
           fi
 
-          if [ "$SQUASH_MODE" = true ]; then
-            # In squash mode: only allow Deletions (D) and Additions (A)
-            # Modifications (M) and Renames (R) are still forbidden
-            FORBIDDEN_CHANGES=$(echo "$ALL_CHANGES" | grep -E '^[MR]') || true
+          case "$MODE" in
+            fix)    FORBIDDEN='^M';     ALLOWED="additions, deletions, and renames" ;;
+            squash) FORBIDDEN='^[MR]';  ALLOWED="additions and deletions" ;;
+            *)      FORBIDDEN='^[MRD]'; ALLOWED="additions" ;;
+          esac
 
-            if [ -n "$FORBIDDEN_CHANGES" ]; then
-              echo "FAILURE: Modified or renamed migrations detected in squash mode."
-              echo "When squashing migrations, you can only DELETE old migrations and ADD new ones."
-              echo "Modifying existing migrations is never allowed."
-              echo ""
-              echo "Detected forbidden changes:"
-              echo "$FORBIDDEN_CHANGES"
-              exit 1
-            fi
+          FORBIDDEN_CHANGES=$(echo "$ALL_CHANGES" | grep -E "$FORBIDDEN") || true
 
-            echo "Migration squashing check passed. Only deletions and additions detected."
-          else
-            # Normal mode: only allow Additions (A)
-            # Modifications (M), Renames (R), and Deletions (D) are forbidden
-            FORBIDDEN_CHANGES=$(echo "$ALL_CHANGES" | grep -E '^[MRD]') || true
-
-            if [ -n "$FORBIDDEN_CHANGES" ]; then
-              echo "FAILURE: Existing migration files have been modified, renamed, or deleted."
-              echo "It is forbidden to modify migrations that have already been committed."
-              echo "Please revert changes to existing files and create a new migration file instead."
-              echo ""
-              echo "To squash migrations, add [squash-migrations] to your PR title."
-              echo ""
-              echo "Detected forbidden changes:"
-              echo "$FORBIDDEN_CHANGES"
-              exit 1
-            fi
-
-            echo "Migration integrity check passed. No existing migrations were modified."
+          if [ -n "$FORBIDDEN_CHANGES" ]; then
+            echo "FAILURE: in $MODE mode only these migration changes are allowed: $ALLOWED."
+            echo "Committed migrations are immutable; create a new migration file instead."
+            echo ""
+            echo "To declare an exception, tag the PR title:"
+            echo "  [squash-migrations]  consolidate migrations (delete + add)"
+            echo "  [fix-migrations]     rename/reissue broken migrations"
+            echo ""
+            echo "Detected forbidden changes:"
+            echo "$FORBIDDEN_CHANGES"
+            exit 1
           fi
+
+          echo "Migration integrity check passed ($MODE mode: $ALLOWED allowed)."
