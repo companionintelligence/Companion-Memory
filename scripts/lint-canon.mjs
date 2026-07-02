@@ -1,279 +1,147 @@
 #!/usr/bin/env node
-/*
- * lint-canon.mjs — Companion Intelligence design-canon guard
- * ============================================================================
- * ZERO-DEPENDENCY Node ESM CLI (Node built-ins only). Copy this file into any
- * CI repo and run it to guard the shared design system against drift.
- *
- * USAGE:
- *   node scripts/lint-canon.mjs [targetDir]
- *
- *   targetDir  Directory to scan (default: process.cwd()).
- *
- * WHAT IT CHECKS:
- *   (a) FAIL (exit 1) — every `--primary:` declared in any *.css file must
- *       resolve to the canonical CI teal:
- *         - light  #0f717a  or  oklch(50.2043% 0.0822 204.9225)  (L~0.50 h~205)
- *         - dark   #abd4d8  or  oklch(84.195% 0.043 203.701)     (L~0.84 h~204)
- *       Hex is matched case-insensitively. A `--primary` that is present but
- *       does NOT resolve to teal (e.g. a navy `#0f172b`) fails the build.
- *   (b) WARN (no fail) — hardcoded hex colors in *.tsx / *.jsx component source:
- *         - Tailwind arbitrary values:  bg-[#..], text-[#..], border-[#..], etc.
- *         - inline styles:              color/background(-color): #..
- *       Reference a semantic token instead (bg-primary, text-muted-foreground …).
- *
- * Skips node_modules / dist / .git / out. Prints a file:line report.
- *
- * Exit codes: 0 = canon OK (warnings allowed), 1 = a non-canon --primary found.
- * ============================================================================
- */
+// CI design-canon lint gate — fails if any `--primary` CSS custom property is not the Companion
+// Intelligence teal (light #0f717a / dark #abd4d8), in ANY notation (hex, rgb, hsl, bare hsl-triplet,
+// oklch with % or 0–1 lightness, oklab). Warns (non-fatal) on hardcoded hex in component source.
+// Zero dependencies (Node built-ins only). Usage: node scripts/lint-canon.mjs [targetDir]
+//
+// Canon source of truth: @companionintelligence/tokens (CI-Common) / CI-Hub globals.css.
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, extname, relative } from 'node:path';
 
-import { readFileSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { join, relative, extname } from 'node:path';
-
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'out']);
-
-// ---- Canon reference -------------------------------------------------------
-const CANON_HEX = new Set(['#0f717a', '#abd4d8']);
-// Known canonical oklch strings (whitespace-normalized, lowercased).
-const CANON_OKLCH = new Set([
-  'oklch(50.2043% 0.0822 204.9225)',
-  'oklch(84.195% 0.043 203.701)',
-]);
-// Numeric oklch acceptance window (belt-and-suspenders around the known strings):
-//   light  L ~ 0.50 (50%),  h ~ 205
-//   dark   L ~ 0.84 (84%),  h ~ 204
-const OKLCH_CANON_RANGES = [
-  { lMin: 48, lMax: 52, hMin: 203, hMax: 207 }, // light teal
-  { lMin: 82, lMax: 86, hMin: 202, hMax: 206 }, // dark teal
+const TARGET = process.argv[2] || '.';
+const CANON = [
+  { name: 'teal-light', rgb: [15, 113, 122] }, // #0f717a
+  { name: 'teal-dark', rgb: [171, 212, 216] }, // #abd4d8
 ];
+const TOLERANCE = 14; // euclidean sRGB distance; exact canon = 0, off-brand navy/mint >> 14
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', '.turbo', 'coverage', 'vendor', '.cache', 'target', '.output', '.vercel']);
 
-// ---- ANSI (skipped when not a TTY) -----------------------------------------
-const useColor = process.stdout.isTTY;
-const c = (code, s) => (useColor ? `[${code}m${s}[0m` : s);
-const red = (s) => c('31', s);
-const green = (s) => c('32', s);
-const yellow = (s) => c('33', s);
-const dim = (s) => c('2', s);
-const bold = (s) => c('1', s);
+// ---------- color parsing -> sRGB [0..255] or null ----------
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const srgbGamma = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
-// ---- Helpers ---------------------------------------------------------------
+function oklchToRgb(L, C, H) {
+  const h = (H * Math.PI) / 180;
+  const a = C * Math.cos(h), b = C * Math.sin(h);
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+  const l = l_ ** 3, m = m_ ** 3, s = s_ ** 3;
+  const rl = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+  const gl = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+  const bl = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
+  return [rl, gl, bl].map((v) => Math.round(clamp(srgbGamma(v), 0, 1) * 255));
+}
+function oklabToRgb(L, a, b) { return oklchToRgb(L, Math.hypot(a, b), (Math.atan2(b, a) * 180) / Math.PI); }
+function hslToRgb(H, S, L) {
+  H = ((H % 360) + 360) % 360; S /= 100; L /= 100;
+  const c = (1 - Math.abs(2 * L - 1)) * S, x = c * (1 - Math.abs(((H / 60) % 2) - 1)), m = L - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (H < 60) [r, g, b] = [c, x, 0]; else if (H < 120) [r, g, b] = [x, c, 0];
+  else if (H < 180) [r, g, b] = [0, c, x]; else if (H < 240) [r, g, b] = [0, x, c];
+  else if (H < 300) [r, g, b] = [x, 0, c]; else [r, g, b] = [c, 0, x];
+  return [r, g, b].map((v) => Math.round((v + m) * 255));
+}
+const num = (s) => parseFloat(s);
+// lightness token: "50.2%" -> 50.2 ; "0.502" -> 50.2 ; "50" -> 50
+const lPct = (s) => { s = s.trim(); if (s.endsWith('%')) return num(s); const n = num(s); return n <= 1 ? n * 100 : n; };
+const lFrac = (s) => lPct(s) / 100;
 
-/** Recursively collect files under `dir`, skipping SKIP_DIRS. */
-async function collectFiles(dir) {
-  const out = [];
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return out;
+function parseColor(raw) {
+  let v = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/!important/i, '').trim();
+  if (/var\(/i.test(v)) return null; // unresolvable reference — skip
+  let m = v.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (m) {
+    let h = m[1];
+    if (h.length === 3 || h.length === 4) h = h.split('').map((c) => c + c).join('');
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
   }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      out.push(...(await collectFiles(join(dir, entry.name))));
-    } else if (entry.isFile()) {
-      out.push(join(dir, entry.name));
-    }
+  m = v.match(/^rgba?\(([^)]+)\)$/i);
+  if (m) { const p = m[1].split(/[,\s/]+/).filter(Boolean); return [num(p[0]), num(p[1]), num(p[2])].map((x) => Math.round(x)); }
+  m = v.match(/^hsla?\(([^)]+)\)$/i);
+  if (m) { const p = m[1].split(/[,\s/]+/).filter(Boolean); return hslToRgb(num(p[0]), num(p[1]), num(p[2])); }
+  m = v.match(/^oklch\(([^)]+)\)$/i);
+  if (m) { const p = m[1].split(/[\s/]+/).filter(Boolean); return oklchToRgb(lFrac(p[0]), num(p[1]), num(p[2])); }
+  m = v.match(/^oklab\(([^)]+)\)$/i);
+  if (m) { const p = m[1].split(/[\s/]+/).filter(Boolean); return oklabToRgb(lFrac(p[0]), num(p[1]), num(p[2])); }
+  // bare shadcn hsl triplet: "185 78.1% 26.9%" (H S% L%)
+  m = v.match(/^(-?\d*\.?\d+)\s+(-?\d*\.?\d+)%\s+(-?\d*\.?\d+)%$/);
+  if (m) return hslToRgb(num(m[1]), num(m[2]), num(m[3]));
+  return null;
+}
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const isCanonTeal = (rgb) => CANON.some((c) => dist(rgb, c.rgb) <= TOLERANCE);
+
+// ---------- file walking ----------
+function walk(dir, out = []) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return out; }
+  for (const e of entries) {
+    const p = join(dir, e);
+    let st; try { st = statSync(p); } catch { continue; }
+    if (st.isDirectory()) { if (!IGNORE_DIRS.has(e)) walk(p, out); }
+    else out.push(p);
   }
   return out;
 }
-
-/** Turn a byte index into a 1-based line number for reporting. */
-function lineAt(text, index) {
-  let line = 1;
-  for (let i = 0; i < index && i < text.length; i++) {
-    if (text[i] === '\n') line++;
+const cssText = (file, ext) => {
+  const raw = readFileSync(file, 'utf8');
+  if (['.html', '.htm', '.vue', '.svelte', '.astro'].includes(ext)) {
+    return [...raw.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
   }
-  return line;
-}
+  return raw;
+};
+const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
 
-/** Normalize an oklch() string: lowercase, collapse internal whitespace. */
-function normalizeOklch(raw) {
-  return raw
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .replace(/\(\s+/g, '(')
-    .replace(/\s+\)/g, ')')
-    .trim();
-}
+// ---------- scan ----------
+const CSS_EXT = new Set(['.css', '.scss', '.sass', '.less', '.html', '.htm', '.vue', '.svelte', '.astro']);
+const COMP_EXT = new Set(['.tsx', '.jsx', '.ts', '.js', '.vue', '.svelte', '.astro', '.html', '.htm']);
+const PRIMARY_RE = /(?:^|[^\w-])--primary\s*:\s*([^;}\n]+)/g;
+const HARDHEX_RE = /(?:bg-\[|text-\[|border-\[|from-\[|to-\[|fill=["']?|stroke=["']?|(?:background|color|fill|stroke)\s*[:=]\s*["']?)#([0-9a-fA-F]{3,8})\b/g;
 
-/**
- * Decide whether a `--primary` value string is canonical teal.
- * Accepts a hex (#0f717a / #abd4d8, case-insensitive) or a canon oklch (by
- * known string OR by numeric L/h window). Returns { ok, kind }.
- */
-function isCanonPrimary(value) {
-  const v = value.trim();
+const files = statSync(TARGET).isDirectory() ? walk(TARGET) : [TARGET];
+const fails = [];
+const warns = [];
+let cssScanned = 0, compScanned = 0;
 
-  // Hex form (#rgb or #rrggbb, case-insensitive)
-  const hexMatch = v.match(/#[0-9a-fA-F]{3,8}\b/);
-  if (hexMatch) {
-    if (CANON_HEX.has(hexMatch[0].toLowerCase())) return { ok: true, kind: 'hex' };
-    return { ok: false, kind: 'hex' };
-  }
-
-  // oklch form
-  const oklchMatch = v.match(/oklch\([^)]*\)/i);
-  if (oklchMatch) {
-    const norm = normalizeOklch(oklchMatch[0]);
-    if (CANON_OKLCH.has(norm)) return { ok: true, kind: 'oklch' };
-    // Numeric window fallback: oklch(L[%] C H ...)
-    const nums = norm
-      .replace(/^oklch\(/, '')
-      .replace(/\)$/, '')
-      .replace(/\/.*/, '') // drop any alpha component
-      .trim()
-      .split(/[\s,]+/);
-    if (nums.length >= 3) {
-      // Lightness may be written as a percentage ("50.2043%" -> 50.2043) or as a
-      // bare 0–1 fraction ("0.502" -> 50.2). The acceptance window below is in
-      // percentage units, so normalize a fraction-form L (no '%', value ≤ 1) ×100.
-      let L = parseFloat(nums[0]);
-      if (!nums[0].includes('%') && Number.isFinite(L) && L <= 1) L *= 100;
-      const H = parseFloat(nums[2]);
-      if (Number.isFinite(L) && Number.isFinite(H)) {
-        for (const r of OKLCH_CANON_RANGES) {
-          if (L >= r.lMin && L <= r.lMax && H >= r.hMin && H <= r.hMax) {
-            return { ok: true, kind: 'oklch' };
-          }
-        }
-      }
-    }
-    return { ok: false, kind: 'oklch' };
-  }
-
-  // References like var(...) or a named color — cannot resolve statically.
-  // Treat as unknown (do NOT fail): only concrete hex/oklch values are gated.
-  return { ok: true, kind: 'unresolved' };
-}
-
-// ---- Checks ----------------------------------------------------------------
-
-const PRIMARY_RE = /(^|[^-\w])--primary\s*:\s*([^;}\n]+)/g;
-
-/** Check a CSS file's `--primary` declarations. Returns array of failures. */
-function checkCssPrimary(text, relPath) {
-  const failures = [];
-  let m;
-  PRIMARY_RE.lastIndex = 0;
-  while ((m = PRIMARY_RE.exec(text)) !== null) {
-    const rawValue = m[2].trim();
-    const valueIndex = m.index + m[0].indexOf(rawValue);
-    const verdict = isCanonPrimary(rawValue);
-    if (!verdict.ok) {
-      failures.push({
-        file: relPath,
-        line: lineAt(text, valueIndex),
-        value: rawValue,
-        kind: verdict.kind,
-      });
+for (const f of files) {
+  const ext = extname(f).toLowerCase();
+  const rel = relative(process.cwd(), f) || f;
+  if (CSS_EXT.has(ext)) {
+    cssScanned++;
+    const text = cssText(f, ext);
+    for (const m of text.matchAll(PRIMARY_RE)) {
+      const val = m[1].trim();
+      const rgb = parseColor(val);
+      if (rgb === null) continue;
+      if (!isCanonTeal(rgb)) fails.push({ rel, line: lineOf(text, m.index), val, rgb });
     }
   }
-  return failures;
+  if (COMP_EXT.has(ext)) {
+    compScanned++;
+    const raw = readFileSync(f, 'utf8');
+    for (const m of raw.matchAll(HARDHEX_RE)) warns.push({ rel, line: lineOf(raw, m.index), hex: '#' + m[1] });
+  }
 }
 
-// Arbitrary Tailwind hex utilities: bg-[#fff], text-[#0a222e], border-[#abc123], etc.
-const TW_ARBITRARY_HEX_RE = /\b(?:bg|text|border|fill|stroke|ring|from|via|to|shadow|outline|decoration|caret|accent|divide|placeholder)-\[#[0-9a-fA-F]{3,8}\]/g;
-// Inline-style hex: color: #.., background: #.., backgroundColor: '#..'
-const INLINE_STYLE_HEX_RE = /(?:background(?:-?color)?|color)\s*:\s*['"]?#[0-9a-fA-F]{3,8}\b/gi;
-
-/** Scan a component file for hardcoded hex. Returns array of warnings. */
-function checkComponentHex(text, relPath) {
-  const warnings = [];
-  for (const re of [TW_ARBITRARY_HEX_RE, INLINE_STYLE_HEX_RE]) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      warnings.push({
-        file: relPath,
-        line: lineAt(text, m.index),
-        snippet: m[0],
-      });
-    }
-  }
-  return warnings;
+// ---------- report ----------
+console.log('CI design-canon lint');
+console.log(`  target: ${TARGET}`);
+console.log(`  scanned: ${cssScanned} css/markup file(s), ${compScanned} component file(s)`);
+console.log('');
+if (warns.length) {
+  console.log(`⚠ ${warns.length} hardcoded-hex warning(s) (non-blocking):`);
+  for (const w of warns.slice(0, 40)) console.log(`  warn ${w.rel}:${w.line}  ${w.hex}`);
+  if (warns.length > 40) console.log(`  … and ${warns.length - 40} more`);
+  console.log('');
 }
-
-// ---- Main ------------------------------------------------------------------
-
-async function main() {
-  const targetDir = process.argv[2] ? process.argv[2] : process.cwd();
-
-  const files = await collectFiles(targetDir);
-  if (files.length === 0) {
-    console.error(red(`lint-canon: no files found under ${targetDir}`));
-    process.exit(1);
-  }
-
-  const failures = [];
-  const warnings = [];
-  let cssScanned = 0;
-  let componentScanned = 0;
-
-  for (const file of files) {
-    const ext = extname(file).toLowerCase();
-    const rel = relative(targetDir, file) || file;
-
-    if (ext === '.css') {
-      let text;
-      try {
-        text = readFileSync(file, 'utf8');
-      } catch {
-        continue;
-      }
-      cssScanned++;
-      failures.push(...checkCssPrimary(text, rel));
-    } else if (ext === '.tsx' || ext === '.jsx') {
-      let text;
-      try {
-        text = readFileSync(file, 'utf8');
-      } catch {
-        continue;
-      }
-      componentScanned++;
-      warnings.push(...checkComponentHex(text, rel));
-    }
-  }
-
-  // ---- Report --------------------------------------------------------------
-  console.log(bold('\nCI design-canon lint'));
-  console.log(dim(`  target: ${targetDir}`));
-  console.log(
-    dim(`  scanned: ${cssScanned} css file(s), ${componentScanned} component file(s)\n`),
-  );
-
-  if (warnings.length > 0) {
-    console.log(yellow(bold(`⚠ ${warnings.length} hardcoded-hex warning(s):`)));
-    for (const w of warnings) {
-      console.log(`  ${yellow('warn')} ${w.file}:${w.line}  ${dim(w.snippet)}`);
-    }
-    console.log(dim('  → prefer a semantic token (bg-primary, text-muted-foreground, …)\n'));
-  }
-
-  if (failures.length > 0) {
-    console.log(red(bold(`✖ ${failures.length} non-canon --primary value(s):`)));
-    for (const f of failures) {
-      console.log(
-        `  ${red('FAIL')} ${f.file}:${f.line}  --primary: ${bold(f.value)}  ${dim('(' + f.kind + ')')}`,
-      );
-    }
-    console.log(
-      red(
-        '\n  --primary must be CI teal: #0f717a / #abd4d8 ' +
-          '(or oklch light L~0.50 h~205 / dark L~0.84 h~204).',
-      ),
-    );
-    console.log(red(bold('\nlint-canon: FAILED\n')));
-    process.exit(1);
-  }
-
-  console.log(green(bold('✔ lint-canon: canon OK')) + dim(' (all --primary values are CI teal)\n'));
-  process.exit(0);
-}
-
-main().catch((err) => {
-  console.error(red('lint-canon: unexpected error'), err);
+if (fails.length) {
+  console.log(`✖ ${fails.length} non-canon --primary value(s):`);
+  for (const x of fails) console.log(`  FAIL ${x.rel}:${x.line}  --primary: ${x.val}  -> rgb(${x.rgb.join(',')})`);
+  console.log('');
+  console.log('  --primary must be CI teal: #0f717a (light) / #abd4d8 (dark), in any notation.');
+  console.log('lint-canon: FAILED');
   process.exit(1);
-});
+}
+console.log('✔ lint-canon: canon OK (all resolvable --primary values are CI teal)');
+process.exit(0);
