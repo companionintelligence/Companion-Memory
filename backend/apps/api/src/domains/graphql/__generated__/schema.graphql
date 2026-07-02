@@ -427,13 +427,18 @@ type CreatePersonPayload {
 }
 
 input CreatePlaceInput {
+  capturedAt: String
   description: String
   estimated: Boolean
   geoFormat: String
   geolocation: JSON
+  latitude: Float
   locationBoundary: JSON
+  longitude: Float
+  memoryRef: JSON
   name: String!
   properties: JSON
+  source: String
   tracked: Boolean
   type: String
   uploaded: Boolean

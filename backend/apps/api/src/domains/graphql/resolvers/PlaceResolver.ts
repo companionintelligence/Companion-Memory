@@ -16,6 +16,78 @@ import { PlaceType } from '../types/PlaceType';
 import { UpdatePlaceInput } from '../types/UpdatePlaceInput';
 import { Paginator } from '../utils/Paginator';
 
+/**
+ * Normalize a {@link CreatePlaceInput} into the JSONB `properties` bag stored on
+ * the Place entity.
+ *
+ * Shared by `createPlace` and `createPlaces` so the single- and batch-create
+ * paths can never drift. Kept as a free function (not a method) so it is unit
+ * testable without instantiating the resolver's DI graph.
+ *
+ * Pin-sync contract (CI-Earth-2 globe pins → PlaceEntity): when a caller passes
+ * first-class `latitude`/`longitude`, they are written as top-level numeric
+ * `properties.latitude` / `properties.longitude`. That is exactly the shape the
+ * memory-explorer Map view's `readCoordinates` reads, so a pin created here
+ * renders on the map and survives reload. `capturedAt`, `memoryRef` and
+ * `source` bind the rest of the Pin contract (time + MemoryRef + provenance).
+ */
+export function buildPlaceProperties(input: CreatePlaceInput): Record<string, unknown> {
+  const properties = input.properties || {};
+
+  if (input.type) {
+    properties.type = input.type;
+  }
+
+  if (input.geoFormat) {
+    properties.geoFormat = input.geoFormat;
+  }
+
+  if (input.geolocation) {
+    properties.geolocation = input.geolocation;
+  }
+
+  if (input.locationBoundary) {
+    properties.locationBoundary = input.locationBoundary;
+  }
+
+  if (input.estimated) {
+    properties.estimated = input.estimated;
+  }
+
+  if (input.tracked) {
+    properties.tracked = input.tracked;
+  }
+
+  if (input.uploaded) {
+    properties.uploaded = input.uploaded;
+  }
+
+  // Pin coordinates → map-readable top-level lat/lng. Guard against NaN so a
+  // malformed pin never persists a coordinate the map would render at a bogus
+  // position; a Float arg can still arrive as NaN via a stringified payload.
+  if (typeof input.latitude === 'number' && !Number.isNaN(input.latitude)) {
+    properties.latitude = input.latitude;
+  }
+
+  if (typeof input.longitude === 'number' && !Number.isNaN(input.longitude)) {
+    properties.longitude = input.longitude;
+  }
+
+  if (input.capturedAt) {
+    properties.capturedAt = input.capturedAt;
+  }
+
+  if (input.memoryRef) {
+    properties.memoryRef = input.memoryRef;
+  }
+
+  if (input.source) {
+    properties.source = input.source;
+  }
+
+  return properties;
+}
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => PlaceType)
 export class PlaceResolver {
@@ -31,35 +103,7 @@ export class PlaceResolver {
   ): Promise<PlaceType> {
     const serviceContext = toServiceContext(context);
 
-    const properties = input.properties || {};
-
-    if (input.type) {
-      properties.type = input.type;
-    }
-
-    if (input.geoFormat) {
-      properties.geoFormat = input.geoFormat;
-    }
-
-    if (input.geolocation) {
-      properties.geolocation = input.geolocation;
-    }
-
-    if (input.locationBoundary) {
-      properties.locationBoundary = input.locationBoundary;
-    }
-
-    if (input.estimated) {
-      properties.estimated = input.estimated;
-    }
-
-    if (input.tracked) {
-      properties.tracked = input.tracked;
-    }
-
-    if (input.uploaded) {
-      properties.uploaded = input.uploaded;
-    }
+    const properties = buildPlaceProperties(input);
 
     const entity = await this.placeService.create(serviceContext, {
       name: input.name,
@@ -84,44 +128,12 @@ export class PlaceResolver {
 
     const places = await this.placeService.createMany(
       serviceContext,
-      input.map((item) => {
-        const properties = item.properties || {};
-
-        if (item.type) {
-          properties.type = item.type;
-        }
-
-        if (item.geoFormat) {
-          properties.geoFormat = item.geoFormat;
-        }
-
-        if (item.geolocation) {
-          properties.geolocation = item.geolocation;
-        }
-
-        if (item.locationBoundary) {
-          properties.locationBoundary = item.locationBoundary;
-        }
-
-        if (item.estimated) {
-          properties.estimated = item.estimated;
-        }
-
-        if (item.tracked) {
-          properties.tracked = item.tracked;
-        }
-
-        if (item.uploaded) {
-          properties.uploaded = item.uploaded;
-        }
-
-        return {
-          name: item.name,
-          entity_type: 'Location',
-          properties,
-          description: item.description,
-        };
-      }),
+      input.map((item) => ({
+        name: item.name,
+        entity_type: 'Location',
+        properties: buildPlaceProperties(item),
+        description: item.description,
+      })),
     );
 
     return places.map((place) => PlaceType.toType(place));
