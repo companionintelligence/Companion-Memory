@@ -110,6 +110,13 @@ export class McpServerService {
         {
           description: tool.description,
           inputSchema: tool.inputSchema,
+          // Advertise the privacy/safety label as standard MCP annotation hints so no tool —
+          // including auto-wrapped GraphQL CRUD — reaches a client unlabelled.
+          annotations: {
+            readOnlyHint: tool.privacy.access === 'read',
+            destructiveHint: tool.privacy.destructive,
+            openWorldHint: tool.privacy.external,
+          },
         },
         handler,
       );

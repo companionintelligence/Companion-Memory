@@ -22,8 +22,16 @@ import {
 import { z, type ZodTypeAny } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
+import type { IntentPrivacy } from '@ci/domains/tools';
 
 import type { McpToolDefinition } from '../types';
+
+/**
+ * Mutation name prefixes that remove or overwrite data. Auto-wrapped tools matching these are
+ * labelled `destructive` so the enforcing dispatcher confirms/audits before running them, matching
+ * the treatment of the native `memory.forget` intent.
+ */
+const DESTRUCTIVE_MUTATION_PREFIXES = ['delete', 'remove', 'destroy', 'purge', 'drop'] as const;
 
 @Injectable()
 export class GraphQLToolAdapter implements OnModuleInit {
@@ -89,10 +97,48 @@ export class GraphQLToolAdapter implements OnModuleInit {
       name: `${operation}_${name}`,
       description,
       inputSchema,
+      privacy: this.synthesizePrivacy(name, operation),
       operationName: name,
       operationType: operation,
       graphqlArgs: field.args,
       returnType: field.type,
+    };
+  }
+
+  /**
+   * Synthesize a privacy/safety label for an auto-wrapped GraphQL root field. These tools are
+   * generated from the schema and carry no hand-authored {@link IntentPrivacy}; without a label
+   * they slip past the intent layer's dispatcher entirely. We derive a conservative label from the
+   * operation kind and field name:
+   *
+   * - queries → read access, non-destructive;
+   * - mutations → write access, unless the name matches a {@link DESTRUCTIVE_MUTATION_PREFIXES}
+   *   pattern (e.g. `deleteMemory`), in which case it is `delete`/`destructive`;
+   * - all wrapped operations are internal CRUD against local Companion Memory, so `external: false`.
+   *
+   * Sensitivity defaults to `personal` — memory data is personal by default; a dispatcher can
+   * downgrade specific safe fields later.
+   */
+  private synthesizePrivacy(name: string, operation: 'query' | 'mutation'): IntentPrivacy {
+    if (operation === 'query') {
+      return {
+        access: 'read',
+        sensitivity: 'personal',
+        destructive: false,
+        external: false,
+      };
+    }
+
+    const lowerName = name.toLowerCase();
+    const destructive = DESTRUCTIVE_MUTATION_PREFIXES.some((prefix) =>
+      lowerName.startsWith(prefix),
+    );
+
+    return {
+      access: destructive ? 'delete' : 'write',
+      sensitivity: 'personal',
+      destructive,
+      external: false,
     };
   }
 
