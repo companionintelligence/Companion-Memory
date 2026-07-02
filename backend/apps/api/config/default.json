@@ -121,6 +121,9 @@
     "new.insights.page": false,
     "require.signup.codes": true,
     "files.page": false,
+    "insights.page": false,
+    "chat.page": false,
+    "jobs.page": false,
     "hbpe": true,
     "agent.memory.compaction": false,
     "shared.search": false

@@ -2,6 +2,7 @@ import { cn, Tooltip } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
 import type { ForecastBucket, ProbabilityEntry } from '@/api/useForecastService';
+import { useFeatures } from '@/common/feature';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,7 @@ function topL1(probs: ProbabilityEntry[]): { name: string; prob: number } | null
 // ── Tooltip content ───────────────────────────────────────────────────────────
 
 function SlotTooltip({ bucket }: { bucket: ForecastBucket }) {
+  const { isFeatureEnabled } = useFeatures();
   const sorted = [...bucket.l0Probs].sort((a, b) => b.probability - a.probability);
   const top1 = topL1(bucket.l1Probs);
 
@@ -103,12 +105,16 @@ function SlotTooltip({ bucket }: { bucket: ForecastBucket }) {
       {top1 && top1.prob > 0.1 && (
         <p className="pt-1 border-t border-current/20 text-[10px] opacity-60">
           Top context:{' '}
-          <Link
-            to={`/insights?context=${encodeURIComponent(top1.name)}`}
-            className="underline underline-offset-2 hover:opacity-100 transition-opacity"
-          >
-            {top1.name.slice(0, 24)}
-          </Link>{' '}
+          {isFeatureEnabled('insights.page') ? (
+            <Link
+              to={`/insights?context=${encodeURIComponent(top1.name)}`}
+              className="underline underline-offset-2 hover:opacity-100 transition-opacity"
+            >
+              {top1.name.slice(0, 24)}
+            </Link>
+          ) : (
+            <span>{top1.name.slice(0, 24)}</span>
+          )}{' '}
           ({Math.round(top1.prob * 100)}%)
         </p>
       )}
