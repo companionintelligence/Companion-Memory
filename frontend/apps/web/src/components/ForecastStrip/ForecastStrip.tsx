@@ -302,7 +302,9 @@ export function ForecastStrip({
         >
           {statusLabel}
         </span>
-        <span>{formatClock(ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - MINUTES_PER_BUCKET)}</span>
+        <span>
+          {formatClock(ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - MINUTES_PER_BUCKET)}
+        </span>
       </div>
 
       {isReady && <Legend />}
