@@ -1,4 +1,11 @@
-import { classifyParticipant, normalizeEmail, normalizeIdentifier, normalizeName, normalizePhone, splitPersonName } from './normalizeIdentifier';
+import {
+  classifyParticipant,
+  normalizeEmail,
+  normalizeIdentifier,
+  normalizeName,
+  normalizePhone,
+  splitPersonName,
+} from './normalizeIdentifier';
 
 describe('normalizeEmail', () => {
   it('trims and lowercases', () => {
