@@ -49,7 +49,7 @@ const PromptsPage = lazy(() => import('@/pages/PromptsPage'));
 function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
-      <ThemeProvider defaultTheme="system" storageKey="ci-ui-theme">
+      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
         <BackgroundProvider>
           <DeviceLayoutProvider args={[]}>
             <AuthProvider args={[]}>
