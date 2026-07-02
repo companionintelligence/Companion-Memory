@@ -64,7 +64,8 @@
       "enabled": false,
       "issuer": "https://hub.ci.computer",
       "jwksUri": "https://hub.ci.computer/api/auth/jwks",
-      "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension"
+      "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension",
+      "serviceClients": "hbpe-sidecar,summary-sidecar"
     }
   },
   "db": {

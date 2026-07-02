@@ -41,6 +41,13 @@ export const ConfigSchema = z.object({
       issuer: z.string(),
       jwksUri: z.string(),
       audience: z.string(),
+      // Comma-separated OAuth client ids allow-listed as service accounts (e.g.
+      // "hbpe-sidecar,summary-sidecar"). A Portal-signed token presenting one of
+      // these client ids is treated as a Portal-brokered service credential: it
+      // acts on behalf of the user named in its `sub` claim instead of being
+      // JIT-provisioned as a human login. Replaces the shared HS256 secret the
+      // sidecars used to self-sign with. See unified-identity-plan.md · B5.
+      serviceClients: z.string().default(''),
     }),
     session: z.object({
       fieldPepper: z.string(),

@@ -32,7 +32,8 @@
       },
       "issuer": "PORTAL_OIDC_ISSUER",
       "jwksUri": "PORTAL_OIDC_JWKS_URI",
-      "audience": "PORTAL_OIDC_AUDIENCE"
+      "audience": "PORTAL_OIDC_AUDIENCE",
+      "serviceClients": "PORTAL_OIDC_SERVICE_CLIENTS"
     }
   },
   "db": {
