@@ -81,9 +81,7 @@ describe('IndexDeferralService.dropDeferredIndexes', () => {
     const droppedHnsw = result.dropped.find((d) => d.name === 'embeddings_embedding_hnsw_idx');
     expect(droppedHnsw?.definition).toBe(def);
     expect(
-      ds.executed.some((sql) =>
-        /DROP INDEX IF EXISTS "ci_search"."embeddings_embedding_hnsw_idx"/.test(sql),
-      ),
+      ds.executed.some((sql) => /DROP INDEX IF EXISTS "ci_search"."embeddings_embedding_hnsw_idx"/.test(sql)),
     ).toBe(true);
   });
 
@@ -100,9 +98,9 @@ describe('IndexDeferralService.dropDeferredIndexes', () => {
     const result = await service(ds).dropDeferredIndexes();
 
     expect(result.dropped.find((d) => d.name === 'embeddings_embedding_hnsw_idx')).toBeUndefined();
-    expect(
-      result.skipped.find((s) => s.name === 'embeddings_embedding_hnsw_idx')?.reason,
-    ).toMatch(/refusing to drop/i);
+    expect(result.skipped.find((s) => s.name === 'embeddings_embedding_hnsw_idx')?.reason).toMatch(
+      /refusing to drop/i,
+    );
     expect(ds.executed.some((sql) => /DROP INDEX/.test(sql))).toBe(false);
   });
 
@@ -129,10 +127,7 @@ describe('IndexDeferralService.recreateDeferredIndexes', () => {
 
     const result = await service(ds).recreateDeferredIndexes(dropped);
 
-    expect(result.recreated).toEqual([
-      'embeddings_embedding_hnsw_idx',
-      'messages_embedding_idx',
-    ]);
+    expect(result.recreated).toEqual(['embeddings_embedding_hnsw_idx', 'messages_embedding_idx']);
     expect(result.failed).toHaveLength(0);
     expect(ds.executed).toEqual(['CREATE INDEX a ...', 'CREATE INDEX b ...']);
   });

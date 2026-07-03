@@ -130,9 +130,7 @@ export class GraphQLToolAdapter implements OnModuleInit {
     }
 
     const lowerName = name.toLowerCase();
-    const destructive = DESTRUCTIVE_MUTATION_PREFIXES.some((prefix) =>
-      lowerName.startsWith(prefix),
-    );
+    const destructive = DESTRUCTIVE_MUTATION_PREFIXES.some((prefix) => lowerName.startsWith(prefix));
 
     return {
       access: destructive ? 'delete' : 'write',

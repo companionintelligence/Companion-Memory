@@ -89,10 +89,7 @@ export class EmbedCoverageTelemetryService {
         throw new Error(`No source mapping for entity type "${entityType}"`);
       }
 
-      const [total, embedded] = await Promise.all([
-        this.countSource(source),
-        this.countEmbedded(entityType),
-      ]);
+      const [total, embedded] = await Promise.all([this.countSource(source), this.countEmbedded(entityType)]);
 
       const coverage = buildCoverage(total, embedded);
       perType[entityType] = coverage;
@@ -117,9 +114,7 @@ export class EmbedCoverageTelemetryService {
   private async countSource(source: EntitySource): Promise<number> {
     const sourceRef = `"${source.schema}"."${source.table}"`;
 
-    const discriminatorClause = source.discriminator
-      ? `WHERE "${source.discriminator.column}" = $1`
-      : '';
+    const discriminatorClause = source.discriminator ? `WHERE "${source.discriminator.column}" = $1` : '';
     const params = source.discriminator ? [source.discriminator.value] : [];
 
     const rows = await this.dataSource.query<Array<{ count: string }>>(

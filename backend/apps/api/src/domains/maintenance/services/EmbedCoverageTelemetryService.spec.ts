@@ -10,10 +10,7 @@ import { buildCoverage, EmbedCoverageTelemetryService } from './EmbedCoverageTel
  * We disambiguate on whether the SQL targets `ci_search.embeddings`, and read
  * the type from either the (source) table name or the (embedded) bound param.
  */
-function makeDataSource(
-  sourceCounts: Record<string, number>,
-  embeddedCounts: Record<string, number>,
-) {
+function makeDataSource(sourceCounts: Record<string, number>, embeddedCounts: Record<string, number>) {
   // Map each source table (+discriminator value) back to the entity_type so the
   // source-count query can be resolved. Mirrors ENTITY_SOURCE_MAP.
   const query = jest.fn(async (sql: string, params: unknown[]) => {
@@ -51,31 +48,46 @@ function resolveSourceType(sql: string, params: unknown[]): string {
     }
   }
 
-  if (sql.includes('"communications"')) {return 'communication';}
+  if (sql.includes('"communications"')) {
+    return 'communication';
+  }
 
-  if (sql.includes('"content"')) {return 'content';}
+  if (sql.includes('"content"')) {
+    return 'content';
+  }
 
-  if (sql.includes('"events"')) {return 'event';}
+  if (sql.includes('"events"')) {
+    return 'event';
+  }
 
-  if (sql.includes('"inventory"')) {return 'item';}
+  if (sql.includes('"inventory"')) {
+    return 'item';
+  }
 
-  if (sql.includes('"agent_memories"')) {return 'message';}
+  if (sql.includes('"agent_memories"')) {
+    return 'message';
+  }
 
-  if (sql.includes('"notes"')) {return 'note';}
+  if (sql.includes('"notes"')) {
+    return 'note';
+  }
 
-  if (sql.includes('"threads"')) {return 'thread';}
+  if (sql.includes('"threads"')) {
+    return 'thread';
+  }
 
-  if (sql.includes('"answers"')) {return 'answer';}
+  if (sql.includes('"answers"')) {
+    return 'answer';
+  }
 
-  if (sql.includes('"browser_activity"')) {return 'browser-activity';}
+  if (sql.includes('"browser_activity"')) {
+    return 'browser-activity';
+  }
 
   return 'unknown';
 }
 
-function makeService(
-  sourceCounts: Record<string, number>,
-  embeddedCounts: Record<string, number>,
-) {
+function makeService(sourceCounts: Record<string, number>, embeddedCounts: Record<string, number>) {
   const ds = makeDataSource(sourceCounts, embeddedCounts);
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -159,9 +171,8 @@ describe('EmbedCoverageTelemetryService', () => {
 
     await service.computeCoverage(['content']);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('Embed-coverage alarm'),
-      { alarms: ['content'] },
-    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Embed-coverage alarm'), {
+      alarms: ['content'],
+    });
   });
 });
