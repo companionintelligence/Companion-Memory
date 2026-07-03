@@ -34,7 +34,11 @@ describe('hub-forward-auth verifier', () => {
   });
 
   it('rejects an unsigned header (username only, as the old Hub sent)', () => {
-    const result = verifyForwardAuthHeaders(SECRET, { user: 'alice', timestamp: null, signature: null }, { now: NOW });
+    const result = verifyForwardAuthHeaders(
+      SECRET,
+      { user: 'alice', timestamp: null, signature: null },
+      { now: NOW },
+    );
     expect(result).toEqual({ ok: false, reason: 'missing_headers' });
   });
 

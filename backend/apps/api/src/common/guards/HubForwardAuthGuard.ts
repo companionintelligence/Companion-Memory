@@ -9,7 +9,6 @@ import {
 } from '@ci/common/crypto';
 import config from '@ci/configuration';
 
-
 /**
  * Guard that trusts the `X-CI-Hub-User` identity header only when its HMAC
  * signature (issued by CI-Hub's forward-auth endpoint) verifies against the
