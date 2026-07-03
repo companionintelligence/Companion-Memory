@@ -31,7 +31,6 @@ Spec: CI-HBPE-SPEC-001 §T5.1; subsystem plan §6 success metric
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from ci.database import get_conn
 
