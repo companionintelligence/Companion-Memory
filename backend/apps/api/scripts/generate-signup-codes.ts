@@ -1,4 +1,5 @@
 import { input } from '@inquirer/prompts';
+import { Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
 import { LoggerService } from '@ci/common/logging';
@@ -7,11 +8,19 @@ import { SignupCodeService } from '@ci/domains/auth';
 import { EtlModule } from '@ci/domains/etl';
 import { EventService, LocalEventService } from '@ci/domains/events';
 import { GraphQLModule } from '@ci/domains/graphql';
-import { LLMModule } from '@ci/domains/llm';
+import { LLMModule, OllamaService } from '@ci/domains/llm';
 import { McpModule } from '@ci/domains/mcp';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { App } from '../src/application';
+
+// Modules that stay active (e.g. MaintenanceModule) inject OllamaService from
+// LLMModule, so the replacement module must still export that token.
+@Module({
+  providers: [{ provide: OllamaService, useValue: {} }],
+  exports: [OllamaService],
+})
+class StubLLMModule {}
 
 (async function () {
   const createFilteredLogger = () => {
@@ -44,7 +53,7 @@ import { App } from '../src/application';
     .overrideModule(GraphQLModule)
     .useModule(class {})
     .overrideModule(LLMModule)
-    .useModule(class {})
+    .useModule(StubLLMModule)
     .overrideModule(McpModule)
     .useModule(class {})
     .overrideModule(ToolsModule)

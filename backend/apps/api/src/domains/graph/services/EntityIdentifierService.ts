@@ -45,7 +45,7 @@ export class EntityIdentifierService {
   async upsertForEntity(
     ownerUserId: string,
     entityId: string,
-    raw: { emails?: unknown; phones?: unknown },
+    raw: { emails?: unknown; phones?: unknown; names?: unknown },
   ): Promise<number> {
     const rows: EntityIdentifierEntity[] = [];
     const seen = new Set<string>();
@@ -79,6 +79,7 @@ export class EntityIdentifierService {
 
     collect('email', raw.emails);
     collect('phone', raw.phones);
+    collect('name', raw.names);
 
     if (rows.length === 0) {
       return 0;

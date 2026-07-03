@@ -106,8 +106,9 @@ def _log_prediction(
     Write all 48 forecast buckets to ci.prediction_log in a single batch.
 
     Non-fatal: any DB error is logged and swallowed so it never affects the
-    API response.  actual_l0/l1/l2 are left NULL; label_unlabeled fills them
-    in the nightly run.
+    API response.  actual_l0/l1/l2 are left NULL here; the nightly
+    ``backfill_actuals`` step (ci.pipeline.actuals_backfill) fills them once the
+    forecast window has elapsed and the day's token_stream labels exist.
     """
     version = _model_version(user_id)
     rows = [

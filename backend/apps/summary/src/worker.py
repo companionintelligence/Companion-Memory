@@ -45,6 +45,7 @@ from .system_workflows import (
 
 # Import activities
 from .activities import (
+    resolve_summary_window_activity,
     aggregate_data_activity,
     generate_hourly_summary_activity,
     generate_rollup_summary_activity,
@@ -151,6 +152,7 @@ async def run_worker():
         ]
 
         all_activities = [
+            resolve_summary_window_activity,
             aggregate_data_activity,
             generate_hourly_summary_activity,
             generate_rollup_summary_activity,

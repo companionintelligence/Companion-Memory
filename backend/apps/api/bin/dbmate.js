@@ -16,6 +16,10 @@ const { z } = require('zod');
 
 const UNSAFE_OPERATIONS = new Set(['drop_all_pg_data.sql']);
 
+// dbmate subcommands that only touch the filesystem; creating a migration
+// must not require a running database.
+const OFFLINE_COMMANDS = new Set(['new']);
+
 const schema = z.object({
   type: z.literal('postgres'),
   host: z.string(),
@@ -82,7 +86,7 @@ const opts = program.opts();
 const forwardArgs = program.args;
 
 (async () => {
-  if (opts.wait !== false) {
+  if (opts.wait !== false && !OFFLINE_COMMANDS.has(forwardArgs[0])) {
     await waitForDatabase();
   }
 

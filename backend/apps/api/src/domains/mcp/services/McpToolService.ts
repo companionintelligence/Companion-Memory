@@ -80,6 +80,9 @@ export class McpToolService implements OnModuleInit {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        // Carry the synthesized label so auto-wrapped CRUD is advertised (and gated) with the same
+        // privacy metadata as native intents rather than slipping through unlabelled.
+        privacy: tool.privacy,
         source: 'graphql',
       });
     }
@@ -105,6 +108,7 @@ export class McpToolService implements OnModuleInit {
         name: toolName,
         description: schema.description,
         inputSchema: this.jsonSchemaToZodShape(schema.parameters),
+        privacy: schema.privacy,
         source: 'native',
       });
     }

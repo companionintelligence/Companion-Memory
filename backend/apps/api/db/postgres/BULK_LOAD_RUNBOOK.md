@@ -159,7 +159,8 @@ Dropped (see `DEFERRABLE_INDEXES` in
 
 - FTS GIN tsvector indexes: `entities_fts_idx`, `facts_fts_idx`,
   `document_chunks_fts_idx`, `messages_fts_idx`
-- pgvector HNSW: `messages_embedding_idx`
+- pgvector HNSW: `messages_embedding_idx`,
+  `ci_search.embeddings_embedding_hnsw_idx`
 - secondary btree/GIN on the bulk destinations:
   `communications_{thread,from,to,category,direction_type,device}_idx`,
   `events_{type_category,status,source}_idx`
@@ -171,12 +172,20 @@ list drifts):
 - primary keys / hypertable partition constraints
 - `ci_search.embeddings` & `ci_search.vectors` `UNIQUE (entity_type, entity_id)`
 
-> **pgvector finding**: there is currently **no** ANN (HNSW/IVFFlat) index on
-> `ci_search.embeddings.embedding` in the migrations — only the UNIQUE
-> constraint. So none is dropped today. When such an index is added it will be
-> the single most expensive index to maintain during load; add it to
-> `DEFERRABLE_INDEXES` at that point. `events_user_time_idx` (the main read
-> path) is intentionally kept — it is cheap and helps post-load queries.
+> **pgvector index**: the ANN index on `ci_search.embeddings.embedding` is
+> `embeddings_embedding_hnsw_idx` (HNSW, `vector_cosine_ops`; migration
+> `20260701120100_add_embeddings_hnsw_index.sql`). It is the single most
+> expensive index to maintain during a load, so it IS dropped/rebuilt by the
+> deferral helper. The companion `embeddings_user_id_idx` btree(user_id)
+> (`20260701120000`) is a cheap scalar btree and is intentionally NOT deferred.
+> `events_user_time_idx` (the main read path) is likewise kept — it is cheap and
+> helps post-load queries.
+>
+> **Appliance memory caveat**: HNSW build memory on ~400k × 768-dim rows is not
+> yet quantified on appliance hardware (plan §5 flags a measure-first spike).
+> On a live appliance with a large existing corpus, build the index out-of-band
+> with `CREATE INDEX CONCURRENTLY` and tune `maintenance_work_mem` rather than
+> letting the blocking migration run it inline.
 
 ---
 

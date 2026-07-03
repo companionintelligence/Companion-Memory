@@ -163,24 +163,28 @@ function AppRoutes() {
             />
           )}
 
-          <Route
-            path="/insights"
-            element={
-              <ProtectedRoute>
-                {isFeatureEnabled('new.insights.page') && <InsightsPage />}
-                {!isFeatureEnabled('new.insights.page') && <PromptsPage />}
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('insights.page') && (
+            <>
+              <Route
+                path="/insights"
+                element={
+                  <ProtectedRoute>
+                    {isFeatureEnabled('new.insights.page') && <InsightsPage />}
+                    {!isFeatureEnabled('new.insights.page') && <PromptsPage />}
+                  </ProtectedRoute>
+                }
+              />
 
-          <Route
-            path="/insights/:id"
-            element={
-              <ProtectedRoute>
-                <SummaryDetailPage />
-              </ProtectedRoute>
-            }
-          />
+              <Route
+                path="/insights/:id"
+                element={
+                  <ProtectedRoute>
+                    <SummaryDetailPage />
+                  </ProtectedRoute>
+                }
+              />
+            </>
+          )}
 
           {isFeatureEnabled('files.page') && (
             <Route
@@ -193,24 +197,28 @@ function AppRoutes() {
             />
           )}
 
-          <Route
-            path="/chat/:id?"
-            element={
-              <ProtectedRoute>
-                <ChatPage />
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('chat.page') && (
+            <Route
+              path="/chat/:id?"
+              element={
+                <ProtectedRoute>
+                  <ChatPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
 
           {/* Admin / System */}
-          <Route
-            path="/jobs"
-            element={
-              <ProtectedRoute>
-                <JobsPage />
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('jobs.page') && (
+            <Route
+              path="/jobs"
+              element={
+                <ProtectedRoute>
+                  <JobsPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
 
           <Route
             path="/connect"
@@ -374,7 +382,7 @@ function AppRoutes() {
             }
           />
 
-          {isFeatureEnabled('new.insights.page') && (
+          {isFeatureEnabled('insights.page') && isFeatureEnabled('new.insights.page') && (
             <Route
               path="/prompts"
               element={
