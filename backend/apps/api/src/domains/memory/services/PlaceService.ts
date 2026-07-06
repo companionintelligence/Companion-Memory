@@ -105,7 +105,19 @@ export class PlaceService {
     return { id: entity_id, created: was_new };
   }
 
-  async create(context: UserServiceContext, data: CreatePlaceDto | CreatePlaceDto[]): Promise<Place[]> {
+  /**
+   * @param options.emitCreated When true (default) a PlaceCreatedEvent is sent per
+   *   row so it indexes/enriches live. The bulk path (`createMany`) passes false:
+   *   emitting a per-row pgboss event for every ingested row is the dominant cost at
+   *   import volume, so bulk-loaded rows are instead swept by the post-load
+   *   search-index backfill.
+   */
+  async create(
+    context: UserServiceContext,
+    data: CreatePlaceDto | CreatePlaceDto[],
+    options: { emitCreated?: boolean } = {},
+  ): Promise<Place[]> {
+    const { emitCreated = true } = options;
     const isSingle = !Array.isArray(data);
     const dataArray: CreatePlaceDto[] = isSingle ? [data] : data;
 
@@ -124,9 +136,11 @@ export class PlaceService {
 
         const placeResult = await this.placeRepository.save(place);
 
-        await this.eventService.send(PlaceCreatedEvent, {
-          placeId: place.id,
-        });
+        if (emitCreated) {
+          await this.eventService.send(PlaceCreatedEvent, {
+            placeId: place.id,
+          });
+        }
 
         return PlaceEntity.toEgressType(placeResult);
       }),
@@ -134,13 +148,55 @@ export class PlaceService {
   }
 
   /**
-   * Batch equivalent of N `createPlace` calls in a single client round-trip.
-   * Delegates to `create`, whose array branch already maps over the input
-   * with `Promise.all`, preserving input order and emitting one
-   * `PlaceCreatedEvent` per row.
+   * Batch places ingest for the importer. Replaces the per-row save +
+   * PlaceCreatedEvent loop with one set-based INSERT plus one hydration SELECT.
+   * createPlace has no dedup key (Places are deduped separately by
+   * findOrCreateForGeocode), so this is a plain multi-row INSERT — every input
+   * row is inserted, matching create()'s behaviour. Returns the created places in
+   * input order.
+   *
+   * Bulk ingest does NOT emit a per-row PlaceCreatedEvent: the per-row pgboss
+   * fan-out was the dominant cost at import volume. Search indexing for
+   * bulk-loaded rows is deferred to the post-load batch embed
+   * (POST /api/maintenance/search-index/backfill). Single-row create() still
+   * emits, so interactive creates index live.
    */
   async createMany(context: UserServiceContext, data: CreatePlaceDto[]): Promise<Place[]> {
-    return this.create(context, data);
+    if (data.length === 0) {
+      return [];
+    }
+
+    const entities = data.map((item) =>
+      this.placeRepository.create({
+        ...item,
+        entityType: 'Location',
+        id: item.id ?? uuidv7(),
+        user: {
+          id: context.userId,
+        },
+      }),
+    );
+
+    await this.placeRepository
+      .createQueryBuilder()
+      .insert()
+      // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
+      // of `.values()`; passing the entity class narrows to
+      // `_QueryDeepPartialEntity`, which rejects the jsonb `properties` column.
+      .into(this.placeRepository.metadata.target)
+      .values(entities)
+      .execute();
+
+    // Hydrate with the user relation so the returned rows match findById/findAll
+    // fidelity (toEgressType reads entity.user).
+    const ids = entities.map((entity) => entity.id);
+    const rows = await this.placeRepository.find({
+      where: { id: In(ids) },
+      relations: ['user'],
+    });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+
+    return entities.map((entity) => PlaceEntity.toEgressType(byId.get(entity.id) ?? entity));
   }
 
   async findAll(context: UserServiceContext): Promise<Place[]> {

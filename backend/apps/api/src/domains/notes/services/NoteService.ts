@@ -23,7 +23,19 @@ export class NoteService {
     this.logger.setContext(NoteService.name);
   }
 
-  async create(context: UserServiceContext, data: CreateNoteDto): Promise<Note | null> {
+  /**
+   * @param options.emitCreated When true (default) a NoteCreatedEvent is sent so the
+   *   row indexes/enriches live. The bulk path passes false: emitting a per-row
+   *   pgboss event for every ingested row is the dominant cost at import volume, so
+   *   bulk-loaded rows are instead swept by the post-load search-index backfill.
+   */
+  async create(
+    context: UserServiceContext,
+    data: CreateNoteDto,
+    options: { emitCreated?: boolean } = {},
+  ): Promise<Note | null> {
+    const { emitCreated = true } = options;
+
     const record = this.noteRepository.create({
       id: data.id || uuidv7(),
       ...data,
@@ -32,23 +44,54 @@ export class NoteService {
 
     const entity = await this.noteRepository.save(record);
 
-    await this.eventService.send(NoteCreatedEvent, {
-      noteId: entity.id,
-    });
+    if (emitCreated) {
+      await this.eventService.send(NoteCreatedEvent, {
+        noteId: entity.id,
+      });
+    }
 
     return NoteEntity.toEgressType(entity);
   }
 
   /**
-   * Batch equivalent of N createNote calls in a single client round-trip.
-   * Returns the successfully-created notes in input order; nulls (failed
-   * creates) are omitted. Delegating to `create` preserves the per-row
-   * NoteCreatedEvent.
+   * Batch notes ingest for the importer. Replaces the per-row save +
+   * NoteCreatedEvent loop with one set-based INSERT plus one hydration SELECT.
+   * Notes have no dedup key, so this is a plain multi-row INSERT — every input
+   * row is inserted. Returns the created notes in input order.
+   *
+   * Bulk ingest does NOT emit a per-row NoteCreatedEvent: the per-row pgboss
+   * fan-out was the dominant cost at import volume. Search indexing for
+   * bulk-loaded rows is deferred to the post-load batch embed
+   * (POST /api/maintenance/search-index/backfill). Single-row create() still
+   * emits, so interactive creates index live.
    */
   async createMany(context: UserServiceContext, data: CreateNoteDto[]): Promise<Note[]> {
-    const results = await Promise.all(data.map((item) => this.create(context, item)));
+    if (data.length === 0) {
+      return [];
+    }
 
-    return results.filter((note): note is Note => note != null);
+    const entities = data.map((item) =>
+      this.noteRepository.create({
+        id: item.id || uuidv7(),
+        ...item,
+        userId: context.userId,
+      }),
+    );
+
+    await this.noteRepository
+      .createQueryBuilder()
+      .insert()
+      // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
+      // of `.values()` (matches the other bulk-ingest services).
+      .into(this.noteRepository.metadata.target)
+      .values(entities)
+      .execute();
+
+    const ids = entities.map((entity) => entity.id);
+    const rows = await this.noteRepository.find({ where: { id: In(ids) } });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+
+    return entities.map((entity) => NoteEntity.toEgressType(byId.get(entity.id) ?? entity));
   }
 
   async findById(context: ServiceContext, id: string): Promise<Note | null> {
