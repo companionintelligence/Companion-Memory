@@ -1,3 +1,7 @@
+import {
+  makeFakeNodeRepository,
+  makeFakeRelationshipRepository,
+} from './__testHelpers__/fakeGraphRepositories';
 import { GraphIngestService } from './GraphIngestService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
@@ -11,7 +15,7 @@ const CONCEPT_KEY = 'graph_llm:concept:cuisine:italian';
  * ci.users.entity_id is still NULL. The previous behaviour dropped every such
  * edge with "endpoint not found in batch" (preferenceEdgesWritten=0). Now the
  * ingest provisions a `Person` for the owner and links ci.users.entity_id to it
- * before wiring the edge.
+ * before wiring the edge. Exercises the set-based upsert path.
  */
 function makeService(opts: { selfExists: boolean }) {
   // The owner's self entity, as resolveSelfEntity's JOIN would return it. Starts
@@ -20,64 +24,49 @@ function makeService(opts: { selfExists: boolean }) {
     ? [{ entity_id: EXISTING_SELF, entity_type: 'Person' }]
     : [];
 
-  const relSave = jest.fn().mockResolvedValue(undefined);
-  const nodeSave = jest.fn((row) => {
-    // The self Person upsert carries is_self; the JOIN now resolves to it.
-    if ((row?.properties as Record<string, unknown> | undefined)?.is_self) {
-      selfRows = [{ entity_id: row.entityId, entity_type: row.entityType }];
-    }
-
-    return Promise.resolve(row);
-  });
+  const node = makeFakeNodeRepository();
+  const rel = makeFakeRelationshipRepository();
 
   const usersUpdate = jest.fn();
 
-  const nodeRepository = {
-    // No existing linked row for either the Concept upsert or the self upsert.
-    findOne: jest.fn().mockResolvedValue(null),
-    create: jest.fn((row) => row),
-    save: nodeSave,
-    manager: {
-      query: jest.fn((sql: string, params: unknown[]) => {
-        if (sql.includes('JOIN ci.entities')) {
-          return Promise.resolve(selfRows);
-        }
+  // The self Person is provisioned via the set-based upsert (insert()), so the
+  // provisioned row shows up in node.inserted; mirror it into the resolveSelfEntity
+  // JOIN result so the subsequent lookup finds it (as the ci.users FK link would).
+  node.repo.manager.query = jest.fn((sql: string, params: unknown[]) => {
+    if (sql.includes('JOIN ci.entities')) {
+      return Promise.resolve(selfRows);
+    }
 
-        if (sql.includes('name, email')) {
-          return Promise.resolve([{ name: 'Liam', email: 'liam@ci.computer' }]);
-        }
+    if (sql.includes('name, email')) {
+      return Promise.resolve([{ name: 'Liam', email: 'liam@ci.computer' }]);
+    }
 
-        if (sql.includes('UPDATE ci.users')) {
-          usersUpdate(params);
+    if (sql.includes('UPDATE ci.users')) {
+      usersUpdate(params);
+      // params = [ownerId, selfEntityId]; reflect the link into the JOIN result.
+      selfRows = [{ entity_id: params[1] as string, entity_type: 'Person' }];
 
-          return Promise.resolve([]);
-        }
+      return Promise.resolve([]);
+    }
 
-        return Promise.resolve([]);
-      }),
-    },
-  };
+    return Promise.resolve([]);
+  }) as unknown as typeof node.repo.manager.query;
 
-  const relationshipRepository = {
-    findOne: jest.fn().mockResolvedValue(null),
-    create: jest.fn((row) => row),
-    save: relSave,
-  };
   const entityIdentifierService = { upsertForEntity: jest.fn() };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const service = new GraphIngestService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    nodeRepository as any,
+    node.repo as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    relationshipRepository as any,
+    rel.repo as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     entityIdentifierService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );
 
-  return { service, relSave, nodeSave, usersUpdate };
+  return { service, node, rel, usersUpdate };
 }
 
 // One preference: a Concept node + a self -> PREFERS -> Concept edge, exactly
@@ -99,7 +88,7 @@ const PREFERENCE_BATCH = {
 
 describe('GraphIngestService self-entity provisioning', () => {
   it('provisions a Person + links ci.users.entity_id when the owner has no self entity, then writes the self edge', async () => {
-    const { service, relSave, nodeSave, usersUpdate } = makeService({ selfExists: false });
+    const { service, node, rel, usersUpdate } = makeService({ selfExists: false });
 
     const result = await service.ingest({ userId: USER }, PREFERENCE_BATCH);
 
@@ -108,26 +97,23 @@ describe('GraphIngestService self-entity provisioning', () => {
     expect(result.errors).toEqual([]);
 
     // A self Person was provisioned (named from ci.users.name, flagged is_self).
-    const selfSave = nodeSave.mock.calls.find(
-      ([row]) => (row?.properties as Record<string, unknown> | undefined)?.is_self,
-    );
-    expect(selfSave).toBeDefined();
-    const selfRow = selfSave![0];
-    expect(selfRow.entityType).toBe('Person');
-    expect(selfRow.name).toBe('Liam');
+    const selfRow = node.inserted.find((row) => (row.properties as Record<string, unknown>)?.is_self);
+    expect(selfRow).toBeDefined();
+    expect(selfRow!.entityType).toBe('Person');
+    expect(selfRow!.name).toBe('Liam');
 
     // ci.users.entity_id was linked to the provisioned Person.
     expect(usersUpdate).toHaveBeenCalledTimes(1);
-    expect(usersUpdate.mock.calls[0][0]).toEqual([USER, selfRow.entityId]);
+    expect(usersUpdate.mock.calls[0][0]).toEqual([USER, selfRow!.entityId]);
 
     // The edge anchors on the provisioned self.
-    const edge = relSave.mock.calls[0][0];
-    expect(edge.fromNodeId).toBe(selfRow.entityId);
+    const edge = rel.inserted[0];
+    expect(edge.fromNodeId).toBe(selfRow!.entityId);
     expect(edge.type).toBe('PREFERS');
   });
 
   it('reuses an existing self entity without provisioning or relinking', async () => {
-    const { service, relSave, nodeSave, usersUpdate } = makeService({ selfExists: true });
+    const { service, node, rel, usersUpdate } = makeService({ selfExists: true });
 
     const result = await service.ingest({ userId: USER }, PREFERENCE_BATCH);
 
@@ -135,12 +121,10 @@ describe('GraphIngestService self-entity provisioning', () => {
     expect(result.errors).toEqual([]);
 
     // No self Person provisioned, no relink.
-    expect(nodeSave.mock.calls.some(([row]) => (row?.properties as Record<string, unknown>)?.is_self)).toBe(
-      false,
-    );
+    expect(node.inserted.some((row) => (row.properties as Record<string, unknown>)?.is_self)).toBe(false);
     expect(usersUpdate).not.toHaveBeenCalled();
 
     // The edge anchors on the existing self.
-    expect(relSave.mock.calls[0][0].fromNodeId).toBe(EXISTING_SELF);
+    expect(rel.inserted[0].fromNodeId).toBe(EXISTING_SELF);
   });
 });

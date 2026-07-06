@@ -1,3 +1,7 @@
+import {
+  makeFakeNodeRepository,
+  makeFakeRelationshipRepository,
+} from './__testHelpers__/fakeGraphRepositories';
 import { GraphIngestService, type GraphEntityInputDto } from './GraphIngestService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
@@ -8,41 +12,39 @@ const EXISTING_ID = '00000000-0000-0000-0000-0000000000d1';
  * entity that upserts — freshly created OR resolved to an existing row — must
  * appear in `result.entities` with the ci.entities UUID it landed on, so the
  * importer can cache the mapping. Failed entities are reported in `errors` and
- * excluded from the mapping.
+ * excluded from the mapping. Exercises the set-based upsert path.
  */
-function makeService(opts: { existingKeys?: string[]; failingKeys?: string[] } = {}) {
-  const existingLinkedIds = new Set((opts.existingKeys ?? []).map((k) => GraphIngestService.linkedIdFor(k)));
-  const failingLinkedIds = new Set((opts.failingKeys ?? []).map((k) => GraphIngestService.linkedIdFor(k)));
+function makeService(opts: { existingKeys?: string[]; failEntities?: boolean } = {}) {
+  // Seed the node store with an already-present row per existing key so the
+  // existence pre-check resolves it to EXISTING_ID (no insert).
+  const seed = (opts.existingKeys ?? []).map((k) => ({
+    entityId: EXISTING_ID,
+    entityType: 'Person',
+    name: k,
+    description: null,
+    properties: {},
+    linkedTable: 'import:apple_contacts',
+    linkedId: GraphIngestService.linkedIdFor(k),
+    userId: USER,
+  }));
 
-  const nodeSave = jest.fn((row) => Promise.resolve(row));
-  const nodeRepository = {
-    findOne: jest.fn(({ where }: { where: { linkedId: string } }) => {
-      if (failingLinkedIds.has(where.linkedId)) {
-        return Promise.reject(new Error('db unavailable'));
-      }
-
-      return Promise.resolve(existingLinkedIds.has(where.linkedId) ? { entityId: EXISTING_ID } : null);
-    }),
-    create: jest.fn((row) => row),
-    save: nodeSave,
-    manager: { query: jest.fn().mockResolvedValue([]) },
-  };
-  const relationshipRepository = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+  const node = makeFakeNodeRepository({ seed, failSelect: opts.failEntities, failInsert: opts.failEntities });
+  const rel = makeFakeRelationshipRepository();
   const entityIdentifierService = { upsertForEntity: jest.fn() };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const service = new GraphIngestService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    nodeRepository as any,
+    node.repo as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    relationshipRepository as any,
+    rel.repo as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     entityIdentifierService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );
 
-  return { service, nodeSave };
+  return { service, node };
 }
 
 function entity(key: string): GraphEntityInputDto {
@@ -57,7 +59,7 @@ function entity(key: string): GraphEntityInputDto {
 
 describe('GraphIngestService entity key mapping', () => {
   it('maps every input key to its UUID, covering created and resolved-existing rows', async () => {
-    const { service, nodeSave } = makeService({ existingKeys: ['ent:1'] });
+    const { service, node } = makeService({ existingKeys: ['ent:1'] });
 
     const result = await service.ingest(
       { userId: USER },
@@ -67,9 +69,9 @@ describe('GraphIngestService entity key mapping', () => {
     expect(result.entitiesProcessed).toBe(2);
     expect(result.errors).toEqual([]);
 
-    // 'ent:2' was freshly created — its UUID is whatever the save persisted.
-    expect(nodeSave).toHaveBeenCalledTimes(1);
-    const createdId = nodeSave.mock.calls[0][0].entityId;
+    // 'ent:2' was freshly inserted — exactly one node row landed.
+    expect(node.inserted).toHaveLength(1);
+    const createdId = node.inserted[0].entityId;
     expect(createdId).toBeTruthy();
 
     expect(result.entities).toEqual([
@@ -78,25 +80,28 @@ describe('GraphIngestService entity key mapping', () => {
     ]);
   });
 
-  it('resolves an existing row to its stable UUID on re-ingest without a save', async () => {
-    const { service, nodeSave } = makeService({ existingKeys: ['ent:1'] });
+  it('resolves an existing row to its stable UUID on re-ingest without an insert', async () => {
+    const { service, node } = makeService({ existingKeys: ['ent:1'] });
 
     const result = await service.ingest({ userId: USER }, { entities: [entity('ent:1')], relationships: [] });
 
-    expect(nodeSave).not.toHaveBeenCalled();
+    expect(node.inserted).toHaveLength(0);
     expect(result.entities).toEqual([{ key: 'ent:1', entityId: EXISTING_ID }]);
   });
 
-  it('excludes failed entities from the mapping and reports them in errors', async () => {
-    const { service } = makeService({ existingKeys: ['ent:1'], failingKeys: ['ent:bad'] });
+  it('excludes all entities from the mapping and reports them on a batch-level DB failure', async () => {
+    // A batch-level failure can't be pinned to one row, so every input key is
+    // reported and none resolve — matching the prior per-entity catch's outcome
+    // for a genuine (non-race) DB error.
+    const { service } = makeService({ failEntities: true });
 
     const result = await service.ingest(
       { userId: USER },
       { entities: [entity('ent:1'), entity('ent:bad')], relationships: [] },
     );
 
-    expect(result.entitiesProcessed).toBe(1);
-    expect(result.errors).toEqual(['entity ent:bad: db unavailable']);
-    expect(result.entities).toEqual([{ key: 'ent:1', entityId: EXISTING_ID }]);
+    expect(result.entitiesProcessed).toBe(0);
+    expect(result.errors).toEqual(['entity ent:1: db unavailable', 'entity ent:bad: db unavailable']);
+    expect(result.entities).toEqual([]);
   });
 });
