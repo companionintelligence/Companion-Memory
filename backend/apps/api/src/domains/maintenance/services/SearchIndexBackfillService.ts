@@ -95,6 +95,19 @@ export interface SearchIndexBackfillResult {
   /** Rows re-emitted per entity type. */
   perType: Record<string, number>;
   /**
+   * Total rows ALREADY indexed (an `ci_search.embeddings` row exists) across the
+   * swept types, sampled after the enqueue. This is the drain progress signal:
+   * `enqueued` says how much work was queued, `embedded` says how much has
+   * actually been embedded. A caller that polls the backfill and sees `enqueued`
+   * fall to 0 while `embedded` stops climbing (with a non-empty queue) can tell a
+   * stalled Ollama drain apart from a completed one — the gap the old
+   * enqueued-only response hid. Always present, including on a skip, so a skipped
+   * trigger still reports drain state.
+   */
+  embedded: number;
+  /** Rows already indexed per entity type (same sampling as `embedded`). */
+  embeddedPerType: Record<string, number>;
+  /**
    * Present only when one or more types failed partway: entity type → error
    * message. Counts in `perType` reflect what WAS enqueued before the failure,
    * and the sweep continues with the remaining types — so a transient failure on
@@ -106,6 +119,8 @@ export interface SearchIndexBackfillResult {
    * Present when the sweep enqueued NOTHING by design: another sweep is already
    * running in-process, or the queue backlog exceeds pendingThreshold. Callers
    * treat this as success — the pending work already covers the missing rows.
+   * The `embedded` count is still populated on a skip so a stalled drain stays
+   * visible even when no new work is enqueued.
    */
   skipped?: 'already_running' | 'queue_backlog';
   /** Queue depth observed when skipped === 'queue_backlog'. */
@@ -147,23 +162,30 @@ export class SearchIndexBackfillService {
   }
 
   async backfill(options: SearchIndexBackfillOptions = {}): Promise<SearchIndexBackfillResult> {
+    const types = options.entityTypes ?? [...BACKFILLABLE_ENTITIES];
+
     if (this.running) {
       this.logger.warn('Search-index backfill: sweep already running, skipping this trigger');
 
-      return { enqueued: 0, perType: {}, skipped: 'already_running' };
+      // Still report drain state so an overlapping trigger isn't blind to progress.
+      const { embedded, embeddedPerType } = await this.embeddedCounts(types);
+
+      return { enqueued: 0, perType: {}, embedded, embeddedPerType, skipped: 'already_running' };
     }
 
     this.running = true;
     try {
-      return await this.sweep(options);
+      return await this.sweep(options, types);
     } finally {
       this.running = false;
     }
   }
 
-  private async sweep(options: SearchIndexBackfillOptions): Promise<SearchIndexBackfillResult> {
+  private async sweep(
+    options: SearchIndexBackfillOptions,
+    types: BackfillableEntity[],
+  ): Promise<SearchIndexBackfillResult> {
     const batchSize = options.batchSize ?? 1000;
-    const types = options.entityTypes ?? [...BACKFILLABLE_ENTITIES];
 
     const pendingThreshold = options.pendingThreshold ?? 5000;
     if (pendingThreshold > 0) {
@@ -174,7 +196,9 @@ export class SearchIndexBackfillService {
           pendingThreshold,
         });
 
-        return { enqueued: 0, perType: {}, skipped: 'queue_backlog', pending };
+        const { embedded, embeddedPerType } = await this.embeddedCounts(types);
+
+        return { enqueued: 0, perType: {}, embedded, embeddedPerType, skipped: 'queue_backlog', pending };
       }
     }
 
@@ -198,7 +222,42 @@ export class SearchIndexBackfillService {
       }
     }
 
-    return Object.keys(errors).length > 0 ? { enqueued, perType, errors } : { enqueued, perType };
+    // Sample drain progress AFTER the enqueue so `embedded` reflects what has
+    // actually been indexed by the time the response is built.
+    const { embedded, embeddedPerType } = await this.embeddedCounts(types);
+    this.logger.log('Search-index backfill: sweep complete', { enqueued, embedded });
+
+    const base: SearchIndexBackfillResult = { enqueued, perType, embedded, embeddedPerType };
+
+    return Object.keys(errors).length > 0 ? { ...base, errors } : base;
+  }
+
+  /**
+   * Count already-indexed rows (an `ci_search.embeddings` row exists) per swept
+   * type, plus the total. This is the drain-progress counterpart to `enqueued`:
+   * it lets a poller distinguish a stalled Ollama drain (embedded flat while the
+   * queue is non-empty) from a completed one. Discriminated types (Person/Place/
+   * File-in-`entities`) count only their own `entity_type` in `ci_search.embeddings`.
+   */
+  private async embeddedCounts(
+    types: BackfillableEntity[],
+  ): Promise<{ embedded: number; embeddedPerType: Record<string, number> }> {
+    const embeddedPerType: Record<string, number> = {};
+    let embedded = 0;
+
+    for (const entityType of types) {
+      const rows: Array<{ count: string }> = await this.dataSource.query(
+        `SELECT count(*)::bigint AS count
+           FROM ci_search.embeddings
+          WHERE entity_type = $1`,
+        [entityType],
+      );
+      const count = Number(rows[0]?.count ?? 0);
+      embeddedPerType[entityType] = count;
+      embedded += count;
+    }
+
+    return { embedded, embeddedPerType };
   }
 
   /** Undrained (created/retry) jobs currently sitting on the search-index queue. */

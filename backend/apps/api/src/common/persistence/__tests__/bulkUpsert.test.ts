@@ -1,6 +1,6 @@
 import type { Repository } from 'typeorm';
 
-import { bulkInsertIdempotent } from '../bulkUpsert';
+import { bulkInsertIdempotent, computeChunkSize } from '../bulkUpsert';
 
 /**
  * Minimal row used by the fake repository. Mirrors the shape the ingest services
@@ -206,6 +206,10 @@ function makeFakeRepository(initial: Row[] = []) {
       tableName: 'fake',
       target: 'fake',
       primaryColumns: [{ databaseName: 'id' }],
+      // Persisted-column count computeChunkSize reads to derive the param-budget
+      // cap. The Row shape has ~6 columns; the exact value doesn't matter for the
+      // chunk tests, which pass an explicit maxRowsPerChunk.
+      columns: Array.from({ length: 6 }, (_, i) => ({ databaseName: `c${i}` })),
     },
     create: (x: Partial<Row>) => x as Row,
     createQueryBuilder: (alias?: string) => (alias ? makeSelectQB(viaTxRepo) : makeInsertQB(viaTxRepo)),
@@ -235,7 +239,12 @@ function makeFakeRepository(initial: Row[] = []) {
   return { repo: repo as unknown as Repository<Row>, table, statements, tx };
 }
 
-const opts = (repo: Repository<Row>, entities: Row[], conflictUpdateColumns?: string[]) => ({
+const opts = (
+  repo: Repository<Row>,
+  entities: Row[],
+  conflictUpdateColumns?: string[],
+  maxRowsPerChunk?: number,
+) => ({
   repository: repo,
   entities,
   primaryKey: 'id' as const,
@@ -248,6 +257,7 @@ const opts = (repo: Repository<Row>, entities: Row[], conflictUpdateColumns?: st
   conflictTarget: '(source_type, source_system, source_id) WHERE source_id IS NOT NULL',
   tripleColumns: ['source_type', 'source_system', 'source_id'] as [string, string, string],
   ...(conflictUpdateColumns ? { conflictUpdateColumns } : {}),
+  ...(maxRowsPerChunk != null ? { maxRowsPerChunk } : {}),
 });
 
 const row = (over: Partial<Row>): Row => ({
@@ -475,5 +485,82 @@ describe('bulkInsertIdempotent — DO UPDATE (conflictUpdateColumns) self-heal p
     expect(tx.count).toBe(1);
     expect(statements.map((s) => s.kind)).toEqual(['insert', 'select']);
     expect(statements.every((s) => s.insideTx && s.viaTxRepo)).toBe(true);
+  });
+});
+
+describe('computeChunkSize', () => {
+  it('honours the caller ceiling when the param budget is not the binding constraint', () => {
+    // 6 cols → budget cap floor(60000/6)=10000, so a 500 ceiling wins.
+    expect(computeChunkSize(6, 500)).toBe(500);
+  });
+
+  it('caps at the param budget when the requested ceiling is larger', () => {
+    // 6000 cols → budget cap floor(60000/6000)=10; a 1000 ceiling is clamped to 10.
+    expect(computeChunkSize(6000, 1000)).toBe(10);
+  });
+
+  it('defaults to 1000 rows when no ceiling is given and the budget allows it', () => {
+    expect(computeChunkSize(10)).toBe(1000);
+  });
+
+  it('never returns less than 1 even for an absurdly wide row', () => {
+    expect(computeChunkSize(1_000_000)).toBe(1);
+  });
+
+  it('ignores a non-positive requested ceiling and falls back to the default', () => {
+    expect(computeChunkSize(6, 0)).toBe(1000);
+  });
+});
+
+describe('bulkInsertIdempotent — chunking (>maxRowsPerChunk splits into multiple INSERTs)', () => {
+  it('splits an over-chunk-size batch into multiple INSERT statements, still atomic in ONE transaction', async () => {
+    const { repo, table, statements, tx } = makeFakeRepository();
+    // 5 rows, chunk size 2 → chunks of [2, 2, 1] = 3 INSERT statements.
+    const entities = Array.from({ length: 5 }, (_, i) => row({ id: `r${i}`, sourceId: `s${i}` }));
+
+    const results = await bulkInsertIdempotent(opts(repo, entities, undefined, 2));
+
+    // Every row round-trips, in input order, each flagged inserted.
+    expect(results.map((r) => r.entity.id)).toEqual(['r0', 'r1', 'r2', 'r3', 'r4']);
+    expect(results.map((r) => r.inserted)).toEqual([true, true, true, true, true]);
+    expect(table.size).toBe(5);
+
+    // Three chunks → three INSERTs (plus each chunk's pre-check + hydration SELECT).
+    expect(statements.filter((s) => s.kind === 'insert')).toHaveLength(3);
+    // All chunks ran inside the SAME single transaction, on the tx-bound repository.
+    expect(tx.count).toBe(1);
+    expect(statements.every((s) => s.insideTx && s.viaTxRepo)).toBe(true);
+  });
+
+  it('still dedups correctly across chunk boundaries (existing + intra-batch dup)', async () => {
+    const existing = row({ id: 'existing', sourceId: 's-dup' });
+    const { repo, table } = makeFakeRepository([existing]);
+
+    // 4 inputs, chunk size 2. First chunk holds a re-push of the existing triple +
+    // a genuinely new row; second chunk holds two more new rows.
+    const entities = [
+      row({ id: 'a', sourceId: 's-dup' }), // dedupes to `existing`
+      row({ id: 'b', sourceId: 's1' }),
+      row({ id: 'c', sourceId: 's2' }),
+      row({ id: 'd', sourceId: 's3' }),
+    ];
+
+    const results = await bulkInsertIdempotent(opts(repo, entities, undefined, 2));
+
+    expect(results[0].entity.id).toBe('existing');
+    expect(results[0].inserted).toBe(false);
+    expect(results.slice(1).map((r) => r.entity.id)).toEqual(['b', 'c', 'd']);
+    expect(results.slice(1).map((r) => r.inserted)).toEqual([true, true, true]);
+    // existing + b + c + d, no duplicate of the re-pushed triple.
+    expect(table.size).toBe(4);
+  });
+
+  it('does not chunk when the batch fits (single INSERT, no slicing)', async () => {
+    const { repo, statements } = makeFakeRepository();
+    const entities = Array.from({ length: 3 }, (_, i) => row({ id: `r${i}`, sourceId: `s${i}` }));
+
+    await bulkInsertIdempotent(opts(repo, entities, undefined, 10));
+
+    expect(statements.filter((s) => s.kind === 'insert')).toHaveLength(1);
   });
 });

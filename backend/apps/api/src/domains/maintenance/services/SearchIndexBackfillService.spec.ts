@@ -16,16 +16,27 @@ const SEARCH_INDEX_QUEUE = 'search-index';
  * (keyed on params[0] = the entity_type), exhausting to [] so the keyset loop
  * terminates. Records every SELECT so paging can be asserted.
  */
-function makeDataSource(pagesByType: Record<string, string[][]>) {
+function makeDataSource(
+  pagesByType: Record<string, string[][]>,
+  embeddedByType: Record<string, number> = {},
+) {
   const calls: Array<{ entityType: string; after: string | null; afterTs?: string | null; limit: number }> =
     [];
   const cursors: Record<string, number> = {};
 
-  const query = jest.fn(async (_sql: string, params?: unknown[]) => {
+  const query = jest.fn(async (sql: string, params?: unknown[]) => {
     // The pending-depth probe binds no params (reads pgboss.job); answer 0 so
     // sweeps proceed by default — guard tests override with mockImplementationOnce.
     if (!params) {
       return [{ count: '0' }];
+    }
+
+    // The embedded-count probe binds one param (entity_type) and reads
+    // ci_search.embeddings; answer the configured drain count for that type.
+    if (/FROM ci_search\.embeddings/i.test(sql)) {
+      const entityType = params[0] as string;
+
+      return [{ count: String(embeddedByType[entityType] ?? 0) }];
     }
 
     // Time-paged (hypertable) types bind 4 params (type, afterTs, afterId, limit);
@@ -49,8 +60,8 @@ function makeDataSource(pagesByType: Record<string, string[][]>) {
   return { query, calls } as const;
 }
 
-function makeService(pagesByType: Record<string, string[][]>) {
-  const ds = makeDataSource(pagesByType);
+function makeService(pagesByType: Record<string, string[][]>, embeddedByType: Record<string, number> = {}) {
+  const ds = makeDataSource(pagesByType, embeddedByType);
   const sendMany = jest.fn(async () => undefined);
   const events = { sendMany } as const;
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -84,6 +95,16 @@ describe('SearchIndexBackfillService', () => {
         'browser-activity': 1,
         file: 2,
       },
+      // No embeddings configured for this DS → drain count is 0 for every type.
+      embedded: 0,
+      embeddedPerType: {
+        communication: 0,
+        event: 0,
+        content: 0,
+        item: 0,
+        'browser-activity': 0,
+        file: 0,
+      },
     });
 
     // Each non-empty page is one bulk enqueue: (queue, [{name, data}, ...]).
@@ -116,6 +137,36 @@ describe('SearchIndexBackfillService', () => {
     for (const call of sendMany.mock.calls) {
       expect((call as unknown[])[0]).toBe(SEARCH_INDEX_QUEUE);
     }
+  });
+
+  it('surfaces the embedded (drain) count per type and in total, alongside enqueued', async () => {
+    // 3 comms still missing an embedding get enqueued; the drain has already
+    // indexed 100 comms + 5 events by the time the response is built.
+    const { service } = makeService(
+      { communication: [['c1', 'c2', 'c3'], []], event: [[], []] },
+      { communication: 100, event: 5 },
+    );
+
+    const result = await service.backfill({ entityTypes: ['communication', 'event'], batchSize: 100 });
+
+    expect(result.enqueued).toBe(3);
+    expect(result.embedded).toBe(105);
+    expect(result.embeddedPerType).toEqual({ communication: 100, event: 5 });
+  });
+
+  it('reports the embedded count even on a queue_backlog skip so a stalled drain stays visible', async () => {
+    const { service, sendMany, ds } = makeService({ communication: [['c1'], []] }, { communication: 42 });
+    // First query is the pending-depth probe → over threshold, so the sweep skips
+    // enqueue but still samples the drain count.
+    ds.query.mockImplementationOnce(async () => [{ count: '999999' }]);
+
+    const result = await service.backfill({ entityTypes: ['communication'], batchSize: 10 });
+
+    expect(result.skipped).toBe('queue_backlog');
+    expect(result.enqueued).toBe(0);
+    expect(result.embedded).toBe(42);
+    expect(result.embeddedPerType).toEqual({ communication: 42 });
+    expect(sendMany).not.toHaveBeenCalled();
   });
 
   it('keyset-pages plain uuid tables until a short page, advancing the cursor by the last id', async () => {
@@ -179,15 +230,23 @@ describe('SearchIndexBackfillService', () => {
     await service.backfill({ entityTypes: ['communication', 'content'], batchSize: 10 });
 
     expect(ds.query.mock.calls.length).toBeGreaterThan(0);
+    let pageQueriesSeen = 0;
     for (const [sql, params] of ds.query.mock.calls) {
       if (!params) {
         continue;
       } // the pending-depth probe reads pgboss.job, not a source table
 
       const flat = (sql as string).replace(/\s+/g, ' ');
+      if (/FROM ci_search\.embeddings/i.test(flat)) {
+        continue;
+      } // the embedded-count probe reads ci_search.embeddings, not a source table
+
+      pageQueriesSeen += 1;
       expect(flat).toContain('LEFT JOIN ci_search.index_skips k');
       expect(flat).toContain('k.entity_id IS NULL');
     }
+
+    expect(pageQueriesSeen).toBeGreaterThan(0);
   });
 
   it('only sweeps the requested entity types', async () => {
@@ -256,7 +315,13 @@ describe('SearchIndexBackfillService', () => {
       pendingThreshold: 0,
     });
 
-    expect(second).toEqual({ enqueued: 0, perType: {}, skipped: 'already_running' });
+    expect(second).toEqual({
+      enqueued: 0,
+      perType: {},
+      embedded: 0,
+      embeddedPerType: { communication: 0 },
+      skipped: 'already_running',
+    });
 
     release();
     const firstResult = await first;
@@ -279,7 +344,14 @@ describe('SearchIndexBackfillService', () => {
 
     const result = await service.backfill({ entityTypes: ['communication'], batchSize: 10 });
 
-    expect(result).toEqual({ enqueued: 0, perType: {}, skipped: 'queue_backlog', pending: 123456 });
+    expect(result).toEqual({
+      enqueued: 0,
+      perType: {},
+      embedded: 0,
+      embeddedPerType: { communication: 0 },
+      skipped: 'queue_backlog',
+      pending: 123456,
+    });
     expect(sendMany).not.toHaveBeenCalled();
   });
 
