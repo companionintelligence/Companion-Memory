@@ -150,4 +150,39 @@ describe('IntentsController — POST :name/execute (generic REST executor)', () 
     );
     expect(executeTool).not.toHaveBeenCalled();
   });
+
+  it('round-trips suggestions.feedback — a write but non-destructive intent passes the gate', async () => {
+    const feedbackSchema: Partial<ToolSchema> = {
+      name: 'suggestions.feedback',
+      domain: 'suggestions',
+      privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+    };
+    const { registry, executeTool } = makeRegistry([feedbackSchema]);
+    (executeTool as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        applied: true,
+        id: 'a1',
+        action: 'dismissed',
+        suggestion: { id: 'a1', seen: false, dismissed: true },
+      },
+      executionTimeMs: 2,
+    });
+    const controller = controllerWith(MANIFEST, registry);
+
+    const result = await controller.executeIntent('suggestions.feedback', ctx, {
+      id: 'a1',
+      action: 'dismissed',
+    });
+
+    expect(executeTool).toHaveBeenCalledWith('suggestions_feedback', ctx, {
+      id: 'a1',
+      action: 'dismissed',
+    });
+    expect(result.success).toBe(true);
+    expect((result.data as { applied: boolean; suggestion: { dismissed: boolean } }).applied).toBe(true);
+    expect(
+      (result.data as { applied: boolean; suggestion: { dismissed: boolean } }).suggestion.dismissed,
+    ).toBe(true);
+  });
 });

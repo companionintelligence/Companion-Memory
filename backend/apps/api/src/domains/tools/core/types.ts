@@ -49,7 +49,10 @@ export type IntentDomainKey =
   | 'places'
   | 'calendar'
   | 'media'
-  | 'predictions';
+  | 'predictions'
+  | 'insights'
+  | 'anomalies'
+  | 'suggestions';
 
 /** What an intent does to the user's data. Drives confirmation/guardrails. */
 export type IntentAccess = 'read' | 'write' | 'delete';

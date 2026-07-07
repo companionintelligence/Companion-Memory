@@ -47,6 +47,23 @@ export const INTENT_DOMAINS: readonly IntentDomain[] = [
     description:
       "Forecasts of the user's likely activities, calibrated confidence, and prediction-derived signals — read-only.",
   },
+  {
+    key: 'insights',
+    title: 'Insights',
+    description:
+      "Narrative insights derived from the user's activity summaries — read-only, LLM-narrative today.",
+  },
+  {
+    key: 'anomalies',
+    title: 'Anomalies',
+    description:
+      "Deviations from the user's routine surfaced from activity summaries — read-only, LLM-narrative today.",
+  },
+  {
+    key: 'suggestions',
+    title: 'Suggestions',
+    description: 'Suggested actions for the user, plus seen/dismissed feedback on them.',
+  },
 ] as const;
 
 const DOMAIN_KEYS = new Set<string>(INTENT_DOMAINS.map((d) => d.key));

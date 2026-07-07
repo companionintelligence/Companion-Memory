@@ -29,12 +29,14 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
+import { SummariesModule } from '@ci/domains/summaries';
 
 import { IntentCatalogService } from './catalog/IntentCatalogService';
 import { ToolInvokedListener } from './listeners/ToolInvokedListener';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
+import { AnomaliesRecentTool } from './tools/AnomaliesRecentTool';
 import { CalendarFindEventsTool } from './tools/CalendarFindEventsTool';
 import { DatabaseSearchTool } from './tools/DatabaseSearchTool';
 import { ForgetKnowledgeTool } from './tools/ForgetKnowledgeTool';
@@ -42,11 +44,14 @@ import { GetEntertainmentPreferencesTool } from './tools/GetEntertainmentPrefere
 import { GetFamilyMembersTool } from './tools/GetFamilyMembersTool';
 import { GetStreamingAvailabilityTool } from './tools/GetStreamingAvailabilityTool';
 import { GetUserPreferencesTool } from './tools/GetUserPreferencesTool';
+import { InsightsListTool } from './tools/InsightsListTool';
 import { MediaFindPhotosTool } from './tools/MediaFindPhotosTool';
 import { PeopleFindTool } from './tools/PeopleFindTool';
 import { PlacesFindTool } from './tools/PlacesFindTool';
 import { PredictionsForecastTool } from './tools/PredictionsForecastTool';
 import { ReadKnowledgeTool } from './tools/ReadKnowledgeTool';
+import { SuggestionsFeedbackTool } from './tools/SuggestionsFeedbackTool';
+import { SuggestionsListTool } from './tools/SuggestionsListTool';
 import { WriteKnowledgeTool } from './tools/WriteKnowledgeTool';
 
 // Instantiate native tools. Each is a curated intent (its schema is an IntentDefinition);
@@ -65,6 +70,10 @@ const nativeToolInstances = [
   CalendarFindEventsTool,
   MediaFindPhotosTool,
   PredictionsForecastTool,
+  InsightsListTool,
+  AnomaliesRecentTool,
+  SuggestionsListTool,
+  SuggestionsFeedbackTool,
 ];
 
 /**
@@ -80,6 +89,8 @@ const nativeToolInstances = [
     // Backs the predictions.forecast intent (HBPE sidecar client).
     PredictionsModule,
     SearchNextModule,
+    // Backs the insights.list / anomalies.recent narrative intents.
+    SummariesModule,
   ],
   providers: [
     ToolRegistry,
