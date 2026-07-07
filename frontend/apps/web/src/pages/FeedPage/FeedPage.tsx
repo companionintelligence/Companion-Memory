@@ -9,6 +9,7 @@ import { useFeatures } from '@/common/feature';
 import { ForecastStrip } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
 import { Markdown } from '@/components/Markdown';
+import { NextUpPanel } from '@/components/NextUpPanel';
 import { type FragmentType } from '@/graphql';
 import { useModalControls } from '@/hooks';
 
@@ -330,14 +331,17 @@ export function FeedPage() {
         )}
 
         {hbpeEnabled && forecast && (
-          <div className="px-2 pb-4">
-            <h3 className="text-sm font-semibold text-foreground mb-2">Tomorrow's Forecast</h3>
-            <ForecastStrip
-              buckets={forecast.buckets}
-              generatedAt={forecast.generatedAt}
-              systemStatus={forecast.systemStatus}
-              stalled={forecastStalled}
-            />
+          <div className="px-2 pb-4 space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground mb-2">Tomorrow's Forecast</h3>
+              <ForecastStrip
+                buckets={forecast.buckets}
+                generatedAt={forecast.generatedAt}
+                systemStatus={forecast.systemStatus}
+                stalled={forecastStalled}
+              />
+            </div>
+            <NextUpPanel buckets={forecast.buckets} systemStatus={forecast.systemStatus} />
           </div>
         )}
 
@@ -380,6 +384,7 @@ export function FeedPage() {
               systemStatus={forecast.systemStatus}
               stalled={forecastStalled}
             />
+            <NextUpPanel buckets={forecast.buckets} systemStatus={forecast.systemStatus} />
           </>
         )}
 
