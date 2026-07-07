@@ -14,4 +14,10 @@ export interface ForecastResponse {
   generated_at: string;
   system_status: string;
   buckets: ForecastBucket[];
+  /**
+   * UTC day (YYYY-MM-DD) the 24h window starts. Only present when the sidecar
+   * was called with an explicit horizon_start (multi-day range egress); the
+   * legacy default response omits it (byte-identical back-compat).
+   */
+  horizon_start?: string;
 }

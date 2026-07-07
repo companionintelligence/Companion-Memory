@@ -14,9 +14,17 @@ export class ForecastType {
 
   @Field(() => String, {
     defaultValue: 'READY',
-    description: 'System status of the HBPE engine (COLD_START, TRAINING, READY)',
+    description:
+      'System status of the HBPE engine (COLD_START, TRAINING, READY; UNAVAILABLE for a range day whose fetch failed)',
   })
   systemStatus!: string;
+
+  @Field(() => String, {
+    nullable: true,
+    description:
+      'UTC day (YYYY-MM-DD) the 24h window starts. Set on forecastRange days; null on the legacy single forecast (its window is always tomorrow).',
+  })
+  horizonStart?: string | null;
 
   @Field(() => [ForecastBucketType!]!)
   buckets!: ForecastBucketType[];
@@ -26,6 +34,7 @@ export class ForecastType {
       horizon: source.horizon,
       generatedAt: source.generated_at,
       systemStatus: source.system_status,
+      horizonStart: source.horizon_start ?? null,
       buckets: source.buckets.map(ForecastBucketType.toType),
     };
   }

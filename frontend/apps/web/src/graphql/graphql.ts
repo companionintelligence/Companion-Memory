@@ -693,7 +693,9 @@ export type ForecastType = {
   generatedAt: Scalars['String']['output'];
   /** Forecast horizon, e.g. "48h" */
   horizon: Scalars['String']['output'];
-  /** System status of the HBPE engine (COLD_START, TRAINING, READY) */
+  /** UTC day (YYYY-MM-DD) the 24h window starts. Set on forecastRange days; null on the legacy single forecast (its window is always tomorrow). */
+  horizonStart?: Maybe<Scalars['String']['output']>;
+  /** System status of the HBPE engine (COLD_START, TRAINING, READY; UNAVAILABLE for a range day whose fetch failed) */
   systemStatus: Scalars['String']['output'];
 };
 
@@ -1434,6 +1436,8 @@ export type Query = {
   files: FileConnection;
   /** Fetch the HBPE day-ahead forecast histogram */
   forecast?: Maybe<ForecastType>;
+  /** Fetch HBPE forecasts for a multi-day window (weekly scheduling / week-heatmap rows). One ForecastType per day, each with its own generatedAt/systemStatus; a day the engine cannot serve comes back with a non-READY systemStatus instead of failing the range. Note: every day is produced by the same recency×day-of-week kernel over the trailing 30 days — day+7 approximates the typical pattern for that weekday, not a learned multi-step rollout. */
+  forecastRange?: Maybe<Array<ForecastType>>;
   item?: Maybe<ItemType>;
   items: ItemConnection;
   knownPlaceCandidates: Array<KnownPlaceCandidateType>;
@@ -1606,6 +1610,12 @@ export type QueryFilesArgs = {
 
 export type QueryForecastArgs = {
   horizon?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryForecastRangeArgs = {
+  days?: InputMaybe<Scalars['Int']['input']>;
+  startDate?: InputMaybe<Scalars['String']['input']>;
 };
 
 

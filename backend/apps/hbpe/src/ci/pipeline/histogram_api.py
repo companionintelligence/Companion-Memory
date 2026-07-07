@@ -33,6 +33,11 @@ log = logging.getLogger(__name__)
 # Only 24h horizon supported currently (48 × 30-min buckets)
 SUPPORTED_HORIZONS = {"24h"}
 
+# Furthest-out day selectable via horizon_start (today + N). Seven days covers
+# weekly scheduling and the week-heatmap dashboard (CI-Engineering#61) while
+# staying inside the range where the kernel's day-of-week boost is meaningful.
+MAX_HORIZON_DAYS_AHEAD = 7
+
 _INSERT_LOG_SQL = """
     INSERT INTO hbpe.prediction_log
         (user_id, predicted_at, horizon_start, bucket_index,
@@ -46,52 +51,91 @@ def build_histogram(
     horizon:       str = "24h",
     user_id:       Optional[str] = None,
     system_status: Optional[str] = None,
+    horizon_start: Optional[datetime.date] = None,
 ) -> dict:
     """
     Generate the histogram response dict for GET /histogram.
 
     Also writes all 48 forecast buckets to ci.prediction_log.  The write is
-    non-fatal: errors are logged but do not affect the API response.
+    non-fatal: errors are logged but do not affect the API response.  Every
+    served day — including multi-day range calls — goes through the same
+    logging path, so each day's forecast remains scoreable by the nightly
+    actuals backfill (ADR HBPE-0009 discipline).
 
     Args:
         engine:  An InferenceEngine instance (or compatible object with predict()).
         horizon: Forecast window string ("24h" is the only supported value).
         user_id: User UUID string; required for prediction logging.
+        system_status: Pre-resolved engine status; resolved from checkpoints if None.
+        horizon_start: UTC day the 24h window starts. None keeps the legacy
+            default (tomorrow) and a byte-identical response shape.  When set it
+            must satisfy today <= horizon_start <= today + MAX_HORIZON_DAYS_AHEAD.
+
+    Honesty note (CI-Engineering#61): every selectable day is produced by the
+    SAME kernel — a recency x day-of-week weighted blend over the trailing
+    30 days of per-day model outputs.  Forecast quality therefore does not
+    degrade with distance the way a learned autoregressive model's would; a
+    day+7 forecast is essentially "what does this weekday usually look like",
+    i.e. approximately day+0's same-weekday pattern.  Likewise q10/q50/q90
+    remain a cross-day confidence spread, not calibrated predictive intervals.
 
     Returns:
         {
           "horizon": "24h",
           "generated_at": "<ISO timestamp>",
-          "buckets": [<48 bucket dicts>]
+          "system_status": "<READY | COLD_START | workflow step>",
+          "buckets": [<48 bucket dicts>],
+          "horizon_start": "YYYY-MM-DD"   # only when horizon_start was provided
         }
 
     Raises:
-        ValueError if horizon is not supported.
+        ValueError if horizon is not supported or horizon_start is out of range.
     """
     if horizon not in SUPPORTED_HORIZONS:
         raise ValueError(f"Unsupported horizon '{horizon}'. Supported: {SUPPORTED_HORIZONS}")
 
-    now            = datetime.datetime.utcnow()
-    tomorrow       = datetime.datetime(now.year, now.month, now.day) + datetime.timedelta(days=1)
-    horizon_start  = tomorrow   # forecast begins at midnight tonight
+    now   = datetime.datetime.utcnow()
+    today = now.date()
+
+    if horizon_start is None:
+        # Legacy default: forecast begins at midnight tonight (tomorrow, UTC).
+        # Existing single-day clients hit this branch and see zero change.
+        explicit_start = False
+        start_dt = datetime.datetime(now.year, now.month, now.day) + datetime.timedelta(days=1)
+    else:
+        explicit_start = True
+        if not (today <= horizon_start <= today + datetime.timedelta(days=MAX_HORIZON_DAYS_AHEAD)):
+            raise ValueError(
+                f"horizon_start {horizon_start.isoformat()} out of range: must be between "
+                f"{today.isoformat()} (today) and today+{MAX_HORIZON_DAYS_AHEAD} inclusive"
+            )
+        start_dt = datetime.datetime.combine(horizon_start, datetime.time.min)
 
     log.info("Building histogram: user=%s  horizon=%s  start=%s",
-             (user_id or "?")[:8], horizon, horizon_start.date())
+             (user_id or "?")[:8], horizon, start_dt.date())
 
-    buckets = engine.predict(horizon_start=horizon_start)
+    # Per-day ONNX outputs are memoized in the engine's _output_cache, so an
+    # N-day range shares the trailing 30-day history across calls; each extra
+    # day costs only the aggregation pass, not N re-inferences.
+    buckets = engine.predict(horizon_start=start_dt)
 
     if system_status is None:
         system_status = "READY" if (user_id and model_exists(user_id)) else "COLD_START"
 
     if user_id:
-        _log_prediction(user_id, now, horizon_start, buckets)
+        _log_prediction(user_id, now, start_dt, buckets)
 
-    return {
+    result = {
         "horizon":       horizon,
         "generated_at":  now.isoformat() + "Z",
         "system_status": system_status,
         "buckets":       buckets,
     }
+    if explicit_start:
+        # Only added when explicitly requested so the default response stays
+        # byte-identical for pre-multi-day clients.
+        result["horizon_start"] = start_dt.date().isoformat()
+    return result
 
 
 # ── Prediction logging ─────────────────────────────────────────────────────────
