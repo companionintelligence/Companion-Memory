@@ -42,7 +42,14 @@ export interface ToolExample {
  * CI Schema Domains — the standardized verb vocabulary. Every tool belongs to exactly one
  * domain so agents and apps speak the same language ("memory.*", "people.*", …).
  */
-export type IntentDomainKey = 'memory' | 'knowledge' | 'people' | 'places' | 'calendar' | 'media';
+export type IntentDomainKey =
+  | 'memory'
+  | 'knowledge'
+  | 'people'
+  | 'places'
+  | 'calendar'
+  | 'media'
+  | 'predictions';
 
 /** What an intent does to the user's data. Drives confirmation/guardrails. */
 export type IntentAccess = 'read' | 'write' | 'delete';

@@ -27,6 +27,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
+import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
 
 import { IntentCatalogService } from './catalog/IntentCatalogService';
@@ -44,6 +45,7 @@ import { GetUserPreferencesTool } from './tools/GetUserPreferencesTool';
 import { MediaFindPhotosTool } from './tools/MediaFindPhotosTool';
 import { PeopleFindTool } from './tools/PeopleFindTool';
 import { PlacesFindTool } from './tools/PlacesFindTool';
+import { PredictionsForecastTool } from './tools/PredictionsForecastTool';
 import { ReadKnowledgeTool } from './tools/ReadKnowledgeTool';
 import { WriteKnowledgeTool } from './tools/WriteKnowledgeTool';
 
@@ -62,6 +64,7 @@ const nativeToolInstances = [
   PlacesFindTool,
   CalendarFindEventsTool,
   MediaFindPhotosTool,
+  PredictionsForecastTool,
 ];
 
 /**
@@ -74,6 +77,8 @@ const nativeToolInstances = [
     FilesModule,
     MemoryModule,
     IntelligenceModule,
+    // Backs the predictions.forecast intent (HBPE sidecar client).
+    PredictionsModule,
     SearchNextModule,
   ],
   providers: [
