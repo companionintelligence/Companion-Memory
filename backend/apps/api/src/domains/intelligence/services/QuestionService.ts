@@ -4,6 +4,7 @@ import { DataSource, type FindOptionsWhere, In, IsNull, Repository } from 'typeo
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER } from '@ci/common/context';
+import { computeChunkSize } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import {
   QuestionCreatedEvent,
@@ -25,15 +26,34 @@ export class QuestionService {
     private readonly eventService: EventService,
   ) {}
 
-  async create(context: ServiceContext, data: CreateQuestionDto): Promise<Question> {
+  /**
+   * Resolve the effective is_private_to for a question: an explicit value on the
+   * DTO wins; otherwise a real (non-system) caller privatizes to themselves, and
+   * a system caller leaves it public (null).
+   */
+  private resolveIsPrivateTo(context: ServiceContext, data: CreateQuestionDto): string | null {
+    return data.isPrivateTo !== undefined
+      ? data.isPrivateTo
+      : context.userId && context.userId !== SYSTEM_USER
+        ? context.userId
+        : null;
+  }
+
+  /**
+   * @param options.emitCreated When true (default) a QuestionCreatedEvent is sent so
+   *   the row indexes/enriches live. The bulk path passes false: emitting a per-row
+   *   pgboss event for every ingested row is the dominant cost at import volume, so
+   *   bulk-loaded rows are instead swept by the post-load search-index backfill.
+   */
+  async create(
+    context: ServiceContext,
+    data: CreateQuestionDto,
+    options: { emitCreated?: boolean } = {},
+  ): Promise<Question> {
+    const { emitCreated = true } = options;
     const id = data.id ?? uuidv7();
 
-    const isPrivateTo =
-      data.isPrivateTo !== undefined
-        ? data.isPrivateTo
-        : context.userId && context.userId !== SYSTEM_USER
-          ? context.userId
-          : null;
+    const isPrivateTo = this.resolveIsPrivateTo(context, data);
 
     const instance = await this.questionRepository.create({
       id,
@@ -48,21 +68,67 @@ export class QuestionService {
 
     const entity = await this.questionRepository.save(instance);
 
-    await this.eventService.send(QuestionCreatedEvent, {
-      questionId: id,
-    });
+    if (emitCreated) {
+      await this.eventService.send(QuestionCreatedEvent, {
+        questionId: id,
+      });
+    }
 
     return QuestionEntity.toEgressType(entity);
   }
 
   /**
-   * Batch equivalent of N {@link create} calls in one round-trip. Delegates to
-   * {@link create} per item so per-question logic (id allocation, isPrivateTo
-   * resolution, QuestionCreatedEvent emission) is preserved. Returns the created
-   * questions in input order.
+   * Batch questions ingest. Replaces the per-row save + QuestionCreatedEvent loop
+   * with one set-based INSERT plus one hydration SELECT. Questions have no dedup
+   * key, so every input row is inserted; per-question logic (id allocation,
+   * isPrivateTo resolution) is preserved. Returns the created questions in input
+   * order.
+   *
+   * Bulk ingest does NOT emit a per-row QuestionCreatedEvent: the per-row pgboss
+   * fan-out was the dominant cost at import volume. Search indexing for
+   * bulk-loaded rows is deferred to the post-load batch embed
+   * (POST /api/maintenance/search-index/backfill). Single-row create() still
+   * emits, so interactive creates index live.
    */
   async createMany(context: ServiceContext, data: CreateQuestionDto[]): Promise<Question[]> {
-    return Promise.all(data.map((item) => this.create(context, item)));
+    if (data.length === 0) {
+      return [];
+    }
+
+    const entities = data.map((item) =>
+      this.questionRepository.create({
+        id: item.id ?? uuidv7(),
+        text: item.text,
+        category: item.category,
+        isSeedQuestion: item.isSeedQuestion ?? false,
+        createdByLlm: item.createdByLlm ?? false,
+        frequencyRecommendation: item.frequencyRecommendation,
+        isActive: item.isActive ?? true,
+        isPrivateTo: this.resolveIsPrivateTo(context, item),
+      }),
+    );
+
+    // Split into param-budget-bounded chunks so a large batch never exceeds
+    // Postgres' 65535 bind-param limit (computeChunkSize is the same helper
+    // bulkInsertIdempotent uses). Questions have no dedup key, so every chunk is
+    // a plain multi-row INSERT.
+    const chunkSize = computeChunkSize(this.questionRepository.metadata.columns.length);
+    for (let offset = 0; offset < entities.length; offset += chunkSize) {
+      await this.questionRepository
+        .createQueryBuilder()
+        .insert()
+        // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
+        // of `.values()` (matches the other bulk-ingest services).
+        .into(this.questionRepository.metadata.target)
+        .values(entities.slice(offset, offset + chunkSize))
+        .execute();
+    }
+
+    const ids = entities.map((entity) => entity.id);
+    const rows = await this.questionRepository.find({ where: { id: In(ids) } });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+
+    return entities.map((entity) => QuestionEntity.toEgressType(byId.get(entity.id) ?? entity));
   }
 
   async findAll(context: ServiceContext): Promise<Question[]> {
@@ -423,6 +489,26 @@ export class QuestionService {
         AND question_id = $2;
       `,
       [userId, questionId],
+    );
+  }
+
+  /**
+   * Batched {@link removeFromFeedQueue}: drop every listed question from the
+   * user's feed in a single DELETE. Used by the bulk answer-ingest path so
+   * answering N questions costs one query instead of N.
+   */
+  async removeManyFromFeedQueue(userId: string, questionIds: string[]): Promise<void> {
+    if (questionIds.length === 0) {
+      return;
+    }
+
+    await this.dataSource.query(
+      `
+      DELETE FROM ci.feed_queue
+      WHERE user_id = $1
+        AND question_id = ANY($2::uuid[]);
+      `,
+      [userId, questionIds],
     );
   }
 

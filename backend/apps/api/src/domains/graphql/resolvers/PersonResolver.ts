@@ -3,6 +3,7 @@ import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
@@ -63,7 +64,8 @@ export class PersonResolver {
   @Mutation(() => [PersonType])
   async createPeople(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreatePersonInput] }) input: CreatePersonInput[],
+    @Args('input', { type: () => [CreatePersonInput] }, new MaxArraySizePipe())
+    input: CreatePersonInput[],
   ): Promise<PersonType[]> {
     const serviceContext = toServiceContext(context);
 

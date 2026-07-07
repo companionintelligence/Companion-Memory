@@ -15,7 +15,7 @@ Personal database, REST/LLM API, RAG, and HBPE behavioral-prediction engine. The
 
 - NestJS 10 (backend)
 - React/Vite (frontend)
-- PostgreSQL 15 + pgvector + TimescaleDB
+- PostgreSQL 18 + pgvector + TimescaleDB + PostGIS
 - Ollama (local LLM / embeddings)
 - Python/FastAPI sidecar (HBPE — ONNX INT8)
 - PGBoss (background jobs)

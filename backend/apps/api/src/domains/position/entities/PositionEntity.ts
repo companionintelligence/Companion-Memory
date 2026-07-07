@@ -103,6 +103,18 @@ export class PositionEntity {
   @Column({ type: 'boolean', default: false, name: 'is_private' })
   isPrivate!: boolean;
 
+  // Provenance triple for bulk-ingested fixes (#1672) — traceability + triple
+  // idempotency, mirroring communications/content/browser_activity. Nullable:
+  // live device fixes have no import provenance.
+  @Column({ type: 'text', nullable: true, name: 'source_type' })
+  sourceType?: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'source_system' })
+  sourceSystem?: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'source_id' })
+  sourceId?: string | null;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity | null;

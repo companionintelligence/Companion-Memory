@@ -11,6 +11,7 @@ import {
   Cable,
   Palette,
   ChartPie,
+  Tags,
 } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -79,7 +80,16 @@ export function NavUser() {
             </Link>
           </DropdownMenu.Item>
 
-          {isFeatureEnabled('new.insights.page') && (
+          {isFeatureEnabled('tags.page') && (
+            <DropdownMenu.Item asChild>
+              <Link to="/tags">
+                <Tags />
+                Tags
+              </Link>
+            </DropdownMenu.Item>
+          )}
+
+          {isFeatureEnabled('insights.page') && isFeatureEnabled('new.insights.page') && (
             <DropdownMenu.Item asChild>
               <Link to="/prompts">
                 <BadgeQuestionMark />
@@ -106,12 +116,14 @@ export function NavUser() {
             </Link>
           </DropdownMenu.Item>
 
-          <DropdownMenu.Item asChild>
-            <Link to="/jobs">
-              <ListTodo />
-              Jobs
-            </Link>
-          </DropdownMenu.Item>
+          {isFeatureEnabled('jobs.page') && (
+            <DropdownMenu.Item asChild>
+              <Link to="/jobs">
+                <ListTodo />
+                Jobs
+              </Link>
+            </DropdownMenu.Item>
+          )}
         </DropdownMenu.Group>
 
         <DropdownMenu.Separator />

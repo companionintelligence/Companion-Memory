@@ -6,7 +6,11 @@ import type { BrowserActivity } from './entities/BrowserActivityEntity';
 export const createBrowserActivitySchemaRoot = z.object({
   time: z.string().datetime(),
   device_id: z.string().uuid().optional(),
-  url: z.string().url(),
+  // Any non-empty identity, not just http(s) URLs (#1673): search rows arrive
+  // as bare queries or `search:<query>` synthetics from importers, and the
+  // column is a plain-text identity nothing downstream dereferences — strict
+  // .url() mass-rejected those rows at the /v1 bulk plane.
+  url: z.string().min(1),
   title: z.string().optional(),
   action_type: z.enum(['visit', 'reload', 'bookmark', 'search', 'download', 'form_submit']).optional(),
   properties: z.record(z.unknown()).optional(),

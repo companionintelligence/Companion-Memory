@@ -3,6 +3,7 @@ import { ID, Args, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { NoteService } from '@ci/domains/notes';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -55,7 +56,8 @@ export class NoteResolver {
   @Mutation(() => [NoteType])
   async createNotes(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateNoteInput] }) input: CreateNoteInput[],
+    @Args('input', { type: () => [CreateNoteInput] }, new MaxArraySizePipe())
+    input: CreateNoteInput[],
   ): Promise<NoteType[]> {
     const serviceContext = toServiceContext(context);
 

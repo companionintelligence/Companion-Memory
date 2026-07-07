@@ -5,12 +5,12 @@ import { DataSource } from 'typeorm';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
+  classifyParticipant,
   EntityIdentifierService,
   type GraphEntityInputDto,
   GraphIngestService,
   type IdentifierKey,
-  type IdentifierKind,
-  normalizeIdentifier,
+  splitPersonName,
 } from '@ci/domains/graph';
 
 /** Default window width — one TimescaleDB-chunk-friendly slice per pass. */
@@ -288,7 +288,7 @@ export class PersonStubBackfillService {
         examined += 1;
         const meta = row.participants_metadata ?? {};
         const collect = (raw: string | null) => {
-          const key = classify(raw);
+          const key = classifyParticipant(raw);
           if (key == null) {
             return;
           }
@@ -334,11 +334,18 @@ export class PersonStubBackfillService {
             continue;
           }
 
-          // properties.{emails|phones} is what GraphIngestService.indexIdentifiers
-          // reads to populate ci.entity_identifiers; the value rides as a single-
-          // element string[] (the canonical contract shape) so the same path the
-          // contact importer uses lights up.
-          const propertyKey = seen.key.kind === 'email' ? 'emails' : 'phones';
+          // properties.{emails|phones|names} is what GraphIngestService
+          // .indexIdentifiers reads to populate ci.entity_identifiers; the value
+          // rides as a single-element string[] (the canonical contract shape) so
+          // the same path the contact importer uses lights up. 'name' covers
+          // display-name-only participants (Messenger etc.).
+          const propertyKey =
+            seen.key.kind === 'email' ? 'emails' : seen.key.kind === 'phone' ? 'phones' : 'names';
+          // Display-name participants also get structured first/middle/last
+          // parts (middle omitted when the name has only two tokens) so the
+          // Person surfaces firstName/lastName like contact-importer rows do.
+          // Email/phone raws are addresses, not names — no parts for those.
+          const nameParts = seen.key.kind === 'name' ? splitPersonName(seen.rawName) : null;
           newEntities.push({
             key: `${STUB_SOURCE_SYSTEM}:${seen.key.kind}:${seen.key.valueNormalized}`,
             entityType: 'Person',
@@ -347,7 +354,7 @@ export class PersonStubBackfillService {
             // raw was empty/whitespace-only.
             name: seen.rawName.length > 0 ? seen.rawName : seen.key.valueNormalized,
             sourceSystem: STUB_SOURCE_SYSTEM,
-            properties: { [propertyKey]: [seen.key.valueNormalized] },
+            properties: { [propertyKey]: [seen.key.valueNormalized], ...(nameParts ?? {}) },
           });
         }
 
@@ -388,31 +395,6 @@ export class PersonStubBackfillService {
       errors,
     };
   }
-}
-
-/**
- * Classify a raw participant string as an email or phone and normalize it with
- * the SAME shared rule the identifier index uses. Mirrors the helper in
- * CommunicationLinkBackfillService — kept inline because the two services must
- * agree byte-for-byte on what counts as a match.
- */
-function classify(raw: string | null): IdentifierKey | null {
-  if (raw == null) {
-    return null;
-  }
-
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const kind: IdentifierKind = trimmed.includes('@') ? 'email' : 'phone';
-  const valueNormalized = normalizeIdentifier(kind, trimmed);
-  if (valueNormalized == null) {
-    return null;
-  }
-
-  return { kind, valueNormalized };
 }
 
 function readString(value: unknown): string | null {

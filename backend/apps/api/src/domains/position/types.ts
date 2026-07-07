@@ -52,6 +52,11 @@ export const createPositionSchemaRoot = z.object({
   reference_entity_id: z.string().uuid().optional(),
   relative_coordinates: z.record(z.unknown()).optional(),
   relative_orientation: z.record(z.unknown()).optional(),
+  // Provenance triple for bulk-ingested fixes (#1672). Previously stripped
+  // silently, so importer positions lost their origin on the wire.
+  source_type: z.string().optional(),
+  source_system: z.string().optional(),
+  source_id: z.string().optional(),
 });
 
 export const createPositionSchema = z.array(createPositionSchemaRoot);
@@ -114,6 +119,10 @@ export interface CreatePositionDto {
   reference_entity_id?: string;
   relative_coordinates?: RelativeCoordinates | Record<string, unknown>;
   relative_orientation?: RelativeOrientation | Record<string, unknown>;
+  // Provenance triple for bulk-ingested fixes (#1672).
+  source_type?: string;
+  source_system?: string;
+  source_id?: string;
 }
 
 export interface UpdatePositionDto {

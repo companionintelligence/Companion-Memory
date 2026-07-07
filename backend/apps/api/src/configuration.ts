@@ -42,6 +42,17 @@ export const ConfigSchema = z.object({
       jwksUri: z.string(),
       audience: z.string(),
     }),
+    // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
+    // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting
+    // it (shared secret provisioned as CI_HUB_FORWARD_AUTH_SECRET on both sides).
+    // Off by default so local/tailscale-exposed apps (which get no forward-auth
+    // from Traefik) keep working. See CI-Engineering/architecture/subsystems/
+    // security-trust-and-ops.md.
+    hubForwardAuth: z.object({
+      enabled: z.boolean(),
+      secret: z.string(),
+      maxSkewMs: z.coerce.number().int().positive(),
+    }),
     session: z.object({
       fieldPepper: z.string(),
       duration: z.string(),
@@ -184,6 +195,19 @@ export const ConfigSchema = z.object({
     'new.insights.page': booleanStringSchema,
     'require.signup.codes': booleanStringSchema,
     'files.page': booleanStringSchema,
+    /** Wholesale gate for the Insights surface (/insights, /insights/:id, /prompts + nav entry points). */
+    'insights.page': booleanStringSchema,
+    /** Wholesale gate for the Chat page (/chat + nav entry points). */
+    'chat.page': booleanStringSchema,
+    /** Wholesale gate for the Jobs page (/jobs + nav entry points). */
+    'jobs.page': booleanStringSchema,
+    /** Enables the memory stats page (`/stats`): timeline totals plus entity
+     * breakdowns by data source and by tag. */
+    'stats.page': booleanStringSchema,
+    /** The standalone all-tags browse page (`/tags`). Restored — on by default —
+     * after #1512 removed it and left no way to see every tag in the system.
+     * Chips open the explorer filtered by the tag (`/memory?tags=<label>`). */
+    'tags.page': booleanStringSchema,
     hbpe: booleanStringSchema,
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,

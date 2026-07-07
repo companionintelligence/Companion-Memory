@@ -7,7 +7,8 @@ import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 // Every URL param the explorer toolbar can set. `Clear all` removes all of them;
 // `countActiveFilters` powers the "Filters (N)" badge. `search` is excluded —
 // it lives in the always-visible search box and reads as its own affordance.
-const FILTER_PARAMS = [
+// Exported for the header search box, whose X clears the same set.
+export const FILTER_PARAMS = [
   'includedEntityTypes',
   'excludedEntityTypes',
   'eventTypes',

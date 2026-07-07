@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { PlaceService } from '@ci/domains/memory';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -78,7 +79,8 @@ export class PlaceResolver {
   @Mutation(() => [PlaceType])
   async createPlaces(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreatePlaceInput] }) input: CreatePlaceInput[],
+    @Args('input', { type: () => [CreatePlaceInput] }, new MaxArraySizePipe())
+    input: CreatePlaceInput[],
   ): Promise<PlaceType[]> {
     const serviceContext = toServiceContext(context);
 

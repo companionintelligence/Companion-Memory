@@ -1,16 +1,17 @@
-import path from 'node:path';
+import { Controller, Get, Header } from '@nestjs/common';
 
-import { Controller, Get, Res } from '@nestjs/common';
-import type { Response } from 'express';
-
-import { Context, type RequestContext } from '@ci/common/context';
+import { GRAPHIQL_HTML } from './graphiql.html';
 
 @Controller()
 export class GraphQLController {
-  constructor() {}
-
-  @Get('graphql')
-  async playground(@Context() context: RequestContext, @Res() res: Response) {
-    res.sendFile(path.resolve(__dirname, 'playground.html'));
+  /**
+   * Serves the GraphiQL IDE. Reachable from the browser at `/api/graphiql`
+   * (the reverse proxy strips the `/api` prefix). Kept off `/graphql` so it
+   * never collides with the Apollo driver mounted there for GraphQL requests.
+   */
+  @Get('graphiql')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  graphiql(): string {
+    return GRAPHIQL_HTML;
   }
 }

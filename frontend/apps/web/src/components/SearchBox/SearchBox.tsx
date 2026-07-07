@@ -80,6 +80,37 @@ interface Props {
    */
   openOnFocus?: boolean;
   saveSupported?: boolean;
+  /**
+   * Passive status content rendered inset just before the clear button (e.g.
+   * the header slots Memory's active-filter count here).
+   */
+  statusSlot?: ReactNode;
+  /**
+   * Show the clear button even when the input is empty — for callers whose
+   * onClear resets more than the query (e.g. active explorer filters).
+   */
+  showClear?: boolean;
+  /**
+   * Extra controls rendered inset at the right edge of the input, after the
+   * clear button (e.g. the header slots Memory's advanced-filter toggle here).
+   */
+  toolsSlot?: ReactNode;
+  /**
+   * Caller-supplied section rendered at the top of the dropdown panel, above the
+   * results (e.g. Memory's advanced filters). Shown whenever the panel is open.
+   */
+  panelHeader?: ReactNode;
+  /**
+   * Hold the dropdown panel open regardless of focus/query — used with
+   * `panelHeader` so its content stays interactive (it survives input blur).
+   */
+  panelPinned?: boolean;
+  /**
+   * Escape pressed while the panel is pinned (after the dismiss stage). The
+   * pin's owner decides what closing it means; without this, Escape on a
+   * pinned panel falls through to clearing the query.
+   */
+  onPanelUnpin?: () => void;
   onSearch?: (data: FormData & { entityDropdowns?: string[] }) => boolean | void | Promise<boolean | void>;
   /**
    * Explicit submit (Enter with no result highlighted). Falls back to `onSearch`
@@ -107,6 +138,12 @@ function SearchBox(
     displayDropdown = false,
     openOnFocus = false,
     saveSupported = true,
+    statusSlot,
+    showClear = false,
+    toolsSlot,
+    panelHeader,
+    panelPinned = false,
+    onPanelUnpin,
     defaultQuery,
     onSearch,
     onSubmit,
@@ -124,6 +161,9 @@ function SearchBox(
 
   const isFocusedRef = useRef(false);
   const [isFocused, setIsFocused] = useState(false);
+  // Escape closes the results panel before it clears the query (two-stage);
+  // typing or refocusing reopens it.
+  const [panelDismissed, setPanelDismissed] = useState(false);
 
   // Reflect external query changes (e.g. URL `?search=` or saved-search restore)
   // into the input, but only while it isn't focused so it never clobbers typing.
@@ -145,6 +185,9 @@ function SearchBox(
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const resultItemsRef = useRef<(HTMLDivElement | null)[]>([]);
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Last value the auto-submit actually fired for; guards the effect against
+  // re-running on dependency identity churn rather than real query changes.
+  const lastAutoSubmittedRef = useRef<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   const selectedResult = selectedIndex >= 0 && selectedIndex < results.length ? results[selectedIndex] : null;
@@ -186,6 +229,8 @@ function SearchBox(
         if (success === true) {
           form.reset();
           setSelectedIndex(-1);
+          // Allow the same value to auto-submit again after the reset.
+          lastAutoSubmittedRef.current = null;
         }
       }
     },
@@ -214,8 +259,12 @@ function SearchBox(
 
   const handleClear = useCallback(() => {
     if (!disabled) {
-      form.reset();
+      // Reset to empty explicitly: bare reset() restores the mount-time
+      // defaultValues, which may be a non-empty seeded `defaultQuery`.
+      form.reset(EMPTY);
       setSelectedIndex(-1);
+      // Allow the same value to auto-submit again after the clear.
+      lastAutoSubmittedRef.current = null;
 
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
@@ -235,17 +284,28 @@ function SearchBox(
       }
 
       switch (e.key) {
-        case Keys.ESCAPE:
+        case Keys.ESCAPE: {
           e.preventDefault();
           e.stopPropagation();
 
+          const panelShowing =
+            displayResults &&
+            !panelDismissed &&
+            (openOnFocus ? isFocusedRef.current : queryValue.length > 0) &&
+            results.length > 0;
+
           if (selectedIndex !== -1) {
             setSelectedIndex(-1);
+          } else if (panelShowing) {
+            setPanelDismissed(true);
+          } else if (panelPinned) {
+            onPanelUnpin?.();
           } else {
             handleClear();
           }
 
           break;
+        }
 
         case Keys.ARROW_UP:
           if (results.length > 0) {
@@ -282,6 +342,7 @@ function SearchBox(
         default:
           if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete') {
             setSelectedIndex(-1);
+            setPanelDismissed(false);
           }
 
           break;
@@ -292,7 +353,21 @@ function SearchBox(
         onKeyDown?.((e.target as HTMLInputElement).value, e);
       }, 0);
     },
-    [disabled, form, results, selectedIndex, onResultSelect, handleClear, onKeyDown],
+    [
+      disabled,
+      form,
+      results,
+      selectedIndex,
+      displayResults,
+      panelDismissed,
+      openOnFocus,
+      queryValue,
+      panelPinned,
+      onPanelUnpin,
+      onResultSelect,
+      handleClear,
+      onKeyDown,
+    ],
   );
 
   const handleSaveSearch = useCallback(
@@ -314,6 +389,14 @@ function SearchBox(
       return;
     }
 
+    // The effect also re-runs when callback identities churn (e.g. the caller's
+    // onSearch closes over router state and any URL write remints it). Only an
+    // actual query change warrants a new debounce cycle — otherwise the spinner
+    // flashes and the same value is resubmitted.
+    if (queryValue === lastAutoSubmittedRef.current) {
+      return;
+    }
+
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
     }
@@ -321,6 +404,7 @@ function SearchBox(
     setIsAutoSubmitPending(true);
 
     debounceTimeoutRef.current = setTimeout(async () => {
+      lastAutoSubmittedRef.current = queryValue;
       await handleSubmit({ query: queryValue });
       setIsAutoSubmitPending(false);
     }, autoSubmitDelay);
@@ -407,7 +491,14 @@ function SearchBox(
   // Default: show the dropdown whenever there's a query. With `openOnFocus`, gate
   // it on focus instead — so it can surface recent searches before the user types
   // and won't auto-open just because the input reflects an external `?search` value.
-  const resultsPanelOpen = displayResults && !disabled && (openOnFocus ? isFocused : hasQuery);
+  // While the panel is pinned, a live query keeps its results visible even
+  // unfocused — interacting with panelHeader content (filter dropdowns steal
+  // focus) must not blank the suggestions below it.
+  const resultsPanelOpen =
+    displayResults &&
+    !disabled &&
+    !panelDismissed &&
+    (openOnFocus ? isFocused || (panelPinned && hasQuery) : hasQuery);
 
   let resultsNode: ReactNode | null = null;
 
@@ -436,7 +527,7 @@ function SearchBox(
             <div className="flex-1 p-4 overflow-hidden">{selectedResult.preview}</div>
           )}
           <ScrollArea className="flex-1/2" ref={scrollAreaRef}>
-            <div className="py-2">
+            <div className="py-1">
               {results.map((result, index) => (
                 <div
                   key={result.id}
@@ -444,7 +535,7 @@ function SearchBox(
                     resultItemsRef.current[index] = el;
                   }}
                   className={`
-                        p-2 cursor-pointer border-l-4
+                        px-2 py-1.5 cursor-pointer border-l-4
                         ${index === selectedIndex ? 'bg-accent text-accent-foreground border-blue-500' : 'hover:bg-muted/50 border-transparent'}
                       `}
                   // Keep the input focused so the focus-driven panel doesn't close before the click lands.
@@ -471,6 +562,8 @@ function SearchBox(
     resultsNode = body;
   }
 
+  const panelVisible = resultsNode != null || panelPinned;
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(handleFormSubmit)}>
@@ -483,14 +576,15 @@ function SearchBox(
               'aria-[invalid=true]:ring-destructive/20 dark:aria-[invalid=true]:ring-destructive/40 aria-[invalid=true]:border-destructive',
               'transition-[color,box-shadow]',
               disabled ? 'cursor-not-allowed opacity-50 pointer-events-none' : '',
-              resultsNode ? 'rounded-b-none' : '',
-              variant === 'compact' ? 'py-0.5 pr-0.5' : '',
+              panelVisible ? 'rounded-b-none' : '',
+              // Right inset matches the 3px of vertical slack around the h-7 controls.
+              variant === 'compact' ? 'pr-[3px]' : '',
             )}
           >
             <div className={cn('flex items-center justify-center', variant === 'compact' ? '' : 'pl-3')}>
               {variant === 'compact' && (
-                <div className={`p-2 ${disabled ? 'text-muted-foreground' : ''}`}>
-                  <Search className="h-5 w-5" strokeWidth={1.75} />
+                <div className={cn('pl-3 pr-2', disabled && 'text-muted-foreground')}>
+                  <Search className="h-4 w-4" strokeWidth={1.75} />
                 </div>
               )}
 
@@ -515,13 +609,22 @@ function SearchBox(
                     onFocus={() => {
                       isFocusedRef.current = true;
                       setIsFocused(true);
+                      setPanelDismissed(false);
                     }}
                     onBlur={() => {
+                      // Window deactivation isn't a real focus change — keep the
+                      // panel so it's still open when the window comes back (the
+                      // browser restores focus to the input).
+                      if (!document.hasFocus()) {
+                        return;
+                      }
+
                       isFocusedRef.current = false;
                       setIsFocused(false);
                       field.onBlur();
                     }}
-                    className="
+                    className={cn(
+                      `
                       !w-full
                       !flex-1
                       !bg-transparent
@@ -541,30 +644,43 @@ function SearchBox(
                       disabled:!bg-transparent
 
                       resize-none
-                      text-base
-                      md:text-base
                       leading-none
-                    "
+                    `,
+                      // Compact matches the collapsed header button (h-9, text-sm).
+                      variant === 'compact' ? 'text-sm md:text-sm' : 'text-base md:text-base',
+                    )}
                   />
                 )}
               />
 
               <div
-                className={cn('flex items-center gap-1 mr-1.5', variant === 'compact' ? 'h-full' : 'my-1.5')}
+                className={cn('flex items-center gap-1', variant === 'compact' ? 'h-full' : 'my-1.5 mr-1.5')}
               >
-                {queryValue.length > 0 && (
+                {statusSlot}
+
+                {(queryValue.length > 0 || showClear) && (
                   <Button
                     type="button"
                     disabled={disabled}
                     variant="ghost"
                     size="sm"
-                    className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform -mr-1"
+                    className={cn(
+                      'cursor-pointer p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform',
+                      // Tuck against a following control (chevron/submit), but only
+                      // when one renders — the toolsSlot target sits empty otherwise
+                      // and the X must keep the box's right inset.
+                      '[&:has(+*:not(:empty))]:-mr-1',
+                      // Leave visible slack inside compact's 34px content row.
+                      variant === 'compact' ? 'h-7 w-7' : 'h-8 w-8',
+                    )}
                     onClick={handleClear}
                     onMouseDown={(e) => e.preventDefault()}
                   >
                     <X className="h-4 w-4" />
                   </Button>
                 )}
+
+                {toolsSlot}
 
                 {displayDropdown && (
                   <Button
@@ -598,8 +714,9 @@ function SearchBox(
             </div>
           </div>
 
-          {resultsNode && (
+          {panelVisible && (
             <div className="absolute top-full left-0 right-0 z-50 bg-background border border-t-0 rounded-b-md shadow-xs">
+              {panelHeader}
               {resultsNode}
             </div>
           )}

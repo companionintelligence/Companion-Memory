@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { computeChunkSize } from '@ci/common/persistence';
 
 import { EntityIdentifierEntity } from '../entities/EntityIdentifierEntity';
 import { type IdentifierKind, normalizeIdentifier } from '../utils/normalizeIdentifier';
@@ -13,12 +14,20 @@ export interface IdentifierKey {
   valueNormalized: string;
 }
 
+/** One entity's raw identifier payload within a {@link EntityIdentifierService.upsertForEntities} batch. */
+export interface EntityIdentifierBatchEntry {
+  entityId: string;
+  raw: { emails?: unknown; phones?: unknown; names?: unknown };
+}
+
 /**
  * Read/write surface for `ci.entity_identifiers`: the normalized
- * email/phone -> graph entity_id index that powers people-linking.
+ * email/phone/name -> graph entity_id index that powers people-linking.
  *
- * - {@link upsertForEntity} is called from the graph-ingest entity path to
- *   register a Person's identifiers (idempotent on the unique index).
+ * - {@link upsertForEntities} is called from the graph-ingest entity path to
+ *   register the whole batch's identifiers set-based (idempotent on the
+ *   unique index); {@link upsertForEntity} is the single-entity convenience
+ *   over it.
  * - {@link findEntityIdByIdentifier} / {@link findEntityIdsByIdentifiers} are
  *   the lookups the communications backfill resolves participants against.
  */
@@ -33,67 +42,115 @@ export class EntityIdentifierService {
   }
 
   /**
-   * Register the given raw email/phone identifiers for an entity. Values are
-   * normalized defensively (the importer pre-normalizes, but we re-apply the
-   * same rule so a non-conforming or directly-written entity still indexes
-   * correctly). Idempotent: inserts ON CONFLICT DO NOTHING against the
-   * (owner_user_id, kind, value_normalized) unique index, so re-ingest never
-   * duplicates and never throws on collision.
+   * Register the given raw email/phone/name identifiers for one entity — the
+   * single-entity convenience over {@link upsertForEntities}, kept for callers
+   * that genuinely have one entity in hand.
    *
    * Returns the number of rows actually inserted (new identifiers).
    */
   async upsertForEntity(
     ownerUserId: string,
     entityId: string,
-    raw: { emails?: unknown; phones?: unknown },
+    raw: { emails?: unknown; phones?: unknown; names?: unknown },
   ): Promise<number> {
+    return this.upsertForEntities(ownerUserId, [{ entityId, raw }]);
+  }
+
+  /**
+   * Register raw email/phone/name identifiers for a whole ingest batch of
+   * entities in ONE set-based INSERT (chunked to the shared bind-param
+   * budget), replacing the former per-entity statement — the last per-row
+   * write on the bulk graph-ingest path. Values are normalized defensively
+   * (the importer pre-normalizes, but we re-apply the same rule so a
+   * non-conforming or directly-written entity still indexes correctly);
+   * unusable values (empty emails, digit-less phones) are skipped without
+   * failing the batch.
+   *
+   * Idempotent: inserts ON CONFLICT DO NOTHING against the
+   * (owner_user_id, kind, value_normalized) unique index
+   * (entity_identifiers_owner_kind_value_uniq), so re-ingest never duplicates
+   * and never throws on collision. Duplicate (kind, value) tuples across the
+   * batch collapse to the FIRST entity carrying them — exactly what the
+   * sequential per-entity statements produced (the first INSERT claimed the
+   * tuple; later ones were ignored) — and the client-side de-dup also keeps a
+   * multi-row INSERT from tripping the unique index against itself.
+   *
+   * A failed chunk is recorded and the remaining chunks still run (bounding a
+   * transient failure's blast radius to its chunk); the first failure is then
+   * rethrown so the caller's non-fatal handling (log + continue) still sees it.
+   *
+   * Returns the number of rows actually inserted (new identifiers).
+   */
+  async upsertForEntities(ownerUserId: string, entries: EntityIdentifierBatchEntry[]): Promise<number> {
     const rows: EntityIdentifierEntity[] = [];
     const seen = new Set<string>();
 
-    const collect = (kind: IdentifierKind, values: unknown) => {
-      for (const candidate of toStringArray(values)) {
-        const valueNormalized = normalizeIdentifier(kind, candidate);
-        if (valueNormalized == null) {
-          continue;
+    for (const entry of entries) {
+      const collect = (kind: IdentifierKind, values: unknown) => {
+        for (const candidate of toStringArray(values)) {
+          const valueNormalized = normalizeIdentifier(kind, candidate);
+          if (valueNormalized == null) {
+            continue;
+          }
+
+          const dedupeKey = `${kind}:${valueNormalized}`;
+          if (seen.has(dedupeKey)) {
+            continue;
+          }
+
+          seen.add(dedupeKey);
+
+          rows.push(
+            this.repository.create({
+              ownerUserId,
+              entityId: entry.entityId,
+              kind,
+              valueNormalized,
+            }),
+          );
         }
+      };
 
-        // De-dup within this batch so the multi-row insert never trips the
-        // unique index against itself (which would abort the whole statement).
-        const dedupeKey = `${kind}:${valueNormalized}`;
-        if (seen.has(dedupeKey)) {
-          continue;
-        }
-
-        seen.add(dedupeKey);
-
-        rows.push(
-          this.repository.create({
-            ownerUserId,
-            entityId,
-            kind,
-            valueNormalized,
-          }),
-        );
-      }
-    };
-
-    collect('email', raw.emails);
-    collect('phone', raw.phones);
+      collect('email', entry.raw.emails);
+      collect('phone', entry.raw.phones);
+      collect('name', entry.raw.names);
+    }
 
     if (rows.length === 0) {
       return 0;
     }
 
-    const result = await this.repository
-      .createQueryBuilder()
-      .insert()
-      .into(EntityIdentifierEntity)
-      .values(rows)
-      .orIgnore() // ON CONFLICT DO NOTHING on the unique index.
-      .execute();
+    // Split into param-budget-bounded chunks so a large batch (a full
+    // contacts+graph sync is 100k+ entities) never exceeds Postgres' 65535
+    // bind-param limit — computeChunkSize is the same helper the entity /
+    // relationship bulk upserts use.
+    const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
+    let inserted = 0;
+    const failures: string[] = [];
+    for (let offset = 0; offset < rows.length; offset += chunkSize) {
+      try {
+        const result = await this.repository
+          .createQueryBuilder()
+          .insert()
+          .into(EntityIdentifierEntity)
+          .values(rows.slice(offset, offset + chunkSize))
+          .orIgnore() // ON CONFLICT DO NOTHING on the unique index.
+          .execute();
 
-    // `identifiers` lists only the rows that were actually inserted.
-    return result.identifiers.length;
+        // `identifiers` lists only the rows that were actually inserted.
+        inserted += result.identifiers.length;
+      } catch (err) {
+        failures.push((err as Error).message);
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new Error(
+        `${failures.length} identifier insert chunk(s) failed (${inserted} rows inserted): ${failures[0]}`,
+      );
+    }
+
+    return inserted;
   }
 
   /**

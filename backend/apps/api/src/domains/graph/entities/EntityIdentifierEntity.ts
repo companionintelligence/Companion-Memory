@@ -1,8 +1,9 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
 
 /**
- * Normalized identifier (email / phone) -> graph entity_id lookup. Mirrors
- * migration 20260624140000_create_entity_identifiers.
+ * Normalized identifier (email / phone / name) -> graph entity_id lookup.
+ * Mirrors migration 20260624140000_create_entity_identifiers (kind CHECK
+ * widened to include 'name' in 20260707120000_entity_identifiers_allow_name_kind).
  *
  * Populated on graph ingest from a Person entity's `properties.emails` /
  * `properties.phones` and queried by the people-linking backfill to resolve a
@@ -19,7 +20,7 @@ export class EntityIdentifierEntity {
   ownerUserId!: string;
 
   @PrimaryColumn({ type: 'text' })
-  kind!: 'email' | 'phone';
+  kind!: 'email' | 'phone' | 'name';
 
   @PrimaryColumn({ name: 'value_normalized', type: 'text' })
   valueNormalized!: string;

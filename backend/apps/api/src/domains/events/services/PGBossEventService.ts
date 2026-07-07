@@ -238,6 +238,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     }
 
     if (this.suppressedQueues.has(queue)) {
+      // Unlike send()'s per-row fan-out (where skipping suppressed queues is the
+      // whole point and logging would spam), sendMany is a deliberate bulk
+      // enqueue of ONE named queue — dropping it silently makes a backfill
+      // report success while enqueuing nothing. Warn loudly instead.
+      this.logger.warn(
+        `Queue ${queue} is suppressed via CI_QUEUE_SUPPRESS — dropping ${events.length} bulk-enqueued events. ` +
+          `If this is a post-import backfill, unset the suppression and re-run.`,
+      );
+
       return;
     }
 

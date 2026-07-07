@@ -3,6 +3,7 @@ import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { ConceptService } from '@ci/domains/memory';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -107,7 +108,8 @@ export class ConceptResolver {
   @Mutation(() => [ConceptType])
   async createConcepts(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateConceptInput] }) input: CreateConceptInput[],
+    @Args('input', { type: () => [CreateConceptInput] }, new MaxArraySizePipe())
+    input: CreateConceptInput[],
   ): Promise<ConceptType[]> {
     const serviceContext = toServiceContext(context);
 

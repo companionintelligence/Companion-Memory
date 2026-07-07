@@ -26,7 +26,6 @@ import {
   Save,
   Search,
   Share2,
-  SlidersHorizontal,
   Sparkles,
   Users,
   X,
@@ -1228,7 +1227,7 @@ function WhereFilter() {
  * followed by semantic, sort, save, and right-aligned tags. `modal` is forwarded
  * to the portaled Radix dropdowns so they behave inside a modal Sheet/Dialog.
  */
-function AdvancedFilters({ modal }: { modal: boolean }) {
+export function AdvancedFilters({ modal }: { modal: boolean }) {
   const [{ tags }, { setTags }] = useDropdown();
 
   const { data: tagData } = useQuery(EXPLORER_TAGS);
@@ -1404,7 +1403,7 @@ function SaveSearchButton() {
   );
 }
 
-function ResultCount() {
+export function ResultCount() {
   const [{ data, hasNextPage, loading }] = useEntityService();
 
   return (
@@ -1419,7 +1418,7 @@ function ResultCount() {
 /**
  * The "Advanced" toggle. Lives in the global header (desktop) or above the mobile
  * tabs; it controls the toolbar drawer via the page's lifted `open` state and
- * surfaces the active-filter count with an up/down chevron.
+ * flips an up/down chevron; the caller surfaces the active-filter count.
  */
 export function AdvancedSearchToggle({
   open,
@@ -1430,8 +1429,6 @@ export function AdvancedSearchToggle({
   onToggle: () => void;
   className?: string;
 }) {
-  const [searchParams] = useSearchParams();
-  const activeCount = countActiveFilters(searchParams);
   const label = open ? 'Close advanced search' : 'Open advanced search';
 
   return (
@@ -1441,33 +1438,20 @@ export function AdvancedSearchToggle({
           <Button
             type="button"
             size="icon"
-            variant={open || activeCount > 0 ? 'secondary' : 'outline'}
+            // Open state is signalled by the rotated chevron alone, and the
+            // active-filter count by the caller's adjacent text — a filled
+            // button here visually fuses with the clear-X beside it.
+            variant="outline"
             onClick={onToggle}
+            // Keep focus in the search input (the toggle sits inset in it) so the
+            // suggestions panel doesn't blink out between mousedown and the toggle.
+            onMouseDown={(e) => e.preventDefault()}
             aria-label={label}
             aria-expanded={open}
             title={label}
-            className={cn(
-              'relative h-10 w-10 flex-shrink-0 overflow-visible',
-              open && 'rounded-b-none',
-              className,
-            )}
+            className={cn('h-10 w-10 flex-shrink-0', open && 'rounded-b-none', className)}
           >
-            <SlidersHorizontal className="h-4 w-4" />
-            <ChevronDown
-              aria-hidden="true"
-              className={cn(
-                'pointer-events-none absolute bottom-0.5 right-0.5 h-3 w-3 opacity-70 transition-transform',
-                open && 'rotate-180',
-              )}
-            />
-            {activeCount > 0 && (
-              <Badge
-                variant={open ? 'default' : 'secondary'}
-                className="absolute -right-1 -top-1 h-5 min-w-5 justify-center px-1 text-[10px]"
-              >
-                {activeCount}
-              </Badge>
-            )}
+            <ChevronDown className={cn('h-4 w-4 transition-transform duration-100', open && 'rotate-180')} />
           </Button>
         </Tooltip.Trigger>
         <Tooltip.Content side="bottom">{label}</Tooltip.Content>
@@ -1528,15 +1512,7 @@ export function MemorySearchField() {
   );
 }
 
-function ExplorerToolbarInner({
-  open,
-  showResultCount,
-  attachedToHeader,
-}: {
-  open: boolean;
-  showResultCount: boolean;
-  attachedToHeader: boolean;
-}) {
+function ExplorerToolbarInner({ open, showResultCount }: { open: boolean; showResultCount: boolean }) {
   const [searchParams] = useSearchParams();
   const showSummaryRow = showResultCount || countActiveFilters(searchParams) > 0;
 
@@ -1545,12 +1521,7 @@ function ExplorerToolbarInner({
       {/* The advanced-search drawer: plain Who / What / When / Where / How, then
           semantic, sort, save, and right-aligned tags. Opened from the header toggle. */}
       {open && (
-        <div
-          className={cn(
-            'flex flex-wrap items-center gap-2 border border-border/60 bg-muted/20 p-3 shadow-sm',
-            attachedToHeader ? 'rounded-b-lg rounded-t-none border-t-0 bg-secondary/20' : 'rounded-lg',
-          )}
-        >
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-3 shadow-sm">
           <AdvancedFilters modal={false} />
         </div>
       )}
@@ -1581,19 +1552,13 @@ function ExplorerToolbarInner({
 export function ExplorerToolbar({
   open,
   showResultCount = true,
-  attachedToHeader = false,
 }: {
   open: boolean;
   showResultCount?: boolean;
-  attachedToHeader?: boolean;
 }) {
   return (
     <DropdownProvider args={[{ changeSearchParams: true }]}>
-      <ExplorerToolbarInner
-        open={open}
-        showResultCount={showResultCount}
-        attachedToHeader={attachedToHeader}
-      />
+      <ExplorerToolbarInner open={open} showResultCount={showResultCount} />
     </DropdownProvider>
   );
 }

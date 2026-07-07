@@ -17,6 +17,7 @@ import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
+import { IndexSkipEntity } from './entities/IndexSkipEntity';
 import { VectorEntity } from './entities/VectorEntity';
 import { AnswerSearchIndexListener } from './listeners/AnswerSearchIndexListener';
 import { BrowserActivitySearchIndexListener } from './listeners/BrowserActivitySearchIndexListener';
@@ -33,6 +34,7 @@ import { PersonSearchIndexListener } from './listeners/PersonSearchIndexListener
 import { PlaceSearchIndexListener } from './listeners/PlaceSearchIndexListener';
 import { ThreadSearchIndexListener } from './listeners/ThreadSearchIndexListener';
 import { EmbeddingService } from './services/EmbeddingService';
+import { IndexSkipService } from './services/IndexSkipService';
 import { OrphanCleanupService } from './services/OrphanCleanupService';
 import { VectorService } from './services/VectorService';
 
@@ -41,7 +43,7 @@ import { VectorService } from './services/VectorService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmbeddingEntity, VectorEntity]),
+    TypeOrmModule.forFeature([EmbeddingEntity, IndexSkipEntity, VectorEntity]),
     BrowserActivityModule,
     ConversationModule,
     EmbeddingModule,
@@ -60,6 +62,7 @@ import { VectorService } from './services/VectorService';
     EntityEmbeddingListener,
     EventSearchIndexListener,
     FileSearchIndexListener,
+    IndexSkipService,
     ItemSearchIndexListener,
     MessageSearchIndexListener,
     NoteSearchIndexListener,
@@ -73,8 +76,8 @@ import { VectorService } from './services/VectorService';
 })
 export class SearchIngressModule {}
 
-export { EmbeddingEntity, VectorEntity };
-export { OrphanCleanupService } from './services/OrphanCleanupService';
+export { EmbeddingEntity, IndexSkipEntity, VectorEntity };
+export { OrphanCleanupService, SEARCH_TABLES } from './services/OrphanCleanupService';
 export type {
   OrphanCleanupOptions,
   OrphanCleanupResult,

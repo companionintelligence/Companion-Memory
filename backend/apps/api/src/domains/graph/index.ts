@@ -13,12 +13,18 @@ import { NotesModule } from '@ci/domains/notes';
 import { UserModule } from '@ci/domains/user';
 
 import { type EntityIdentifier, EntityIdentifierEntity } from './entities/EntityIdentifierEntity';
+import { type ItemRelationship, ItemRelationshipEntity } from './entities/ItemRelationshipEntity';
 import { type Node, NodeEntity } from './entities/NodeEntity';
 import { type Relationship, RelationshipEntity } from './entities/RelationshipEntity';
-import { EntityIdentifierService, type IdentifierKey } from './services/EntityIdentifierService';
+import {
+  type EntityIdentifierBatchEntry,
+  EntityIdentifierService,
+  type IdentifierKey,
+} from './services/EntityIdentifierService';
 import { GraphExpansionService } from './services/GraphExpansionService';
 import { GraphIngestService } from './services/GraphIngestService';
 import { GraphService } from './services/GraphService';
+import { ItemRelationshipService } from './services/ItemRelationshipService';
 import { NodeService } from './services/NodeService';
 import { RelationshipService } from './services/RelationshipService';
 
@@ -27,7 +33,12 @@ import { RelationshipService } from './services/RelationshipService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([NodeEntity, RelationshipEntity, EntityIdentifierEntity]),
+    TypeOrmModule.forFeature([
+      NodeEntity,
+      RelationshipEntity,
+      EntityIdentifierEntity,
+      ItemRelationshipEntity,
+    ]),
     ConversationModule,
     EmbeddingModule,
     EventsModule,
@@ -40,6 +51,7 @@ import { RelationshipService } from './services/RelationshipService';
     GraphExpansionService,
     GraphIngestService,
     GraphService,
+    ItemRelationshipService,
     NodeService,
     RelationshipService,
   ],
@@ -48,6 +60,7 @@ import { RelationshipService } from './services/RelationshipService';
     GraphExpansionService,
     GraphIngestService,
     GraphService,
+    ItemRelationshipService,
     NodeService,
     RelationshipService,
   ],
@@ -59,20 +72,37 @@ export {
   GraphExpansionService,
   GraphIngestService,
   GraphService,
+  ItemRelationshipService,
   NodeService,
   RelationshipService,
 };
-export { EntityIdentifierEntity, NodeEntity, RelationshipEntity };
-export type { EntityIdentifier, IdentifierKey, Node, Relationship };
+export { EntityIdentifierEntity, ItemRelationshipEntity, NodeEntity, RelationshipEntity };
+export type {
+  EntityIdentifier,
+  EntityIdentifierBatchEntry,
+  IdentifierKey,
+  ItemRelationship,
+  Node,
+  Relationship,
+};
 export type {
   GraphEntityInputDto,
+  GraphEntityMappingDto,
   GraphRelationshipInputDto,
   GraphIngestResult,
 } from './services/GraphIngestService';
+export type {
+  ItemRelationshipInputDto,
+  BulkItemRelationshipResult,
+} from './services/ItemRelationshipService';
 export { RelationshipMap, RelationshipType } from './types';
 export {
   type IdentifierKind,
+  type PersonNameParts,
+  classifyParticipant,
   normalizeEmail,
   normalizeIdentifier,
+  normalizeName,
   normalizePhone,
+  splitPersonName,
 } from './utils/normalizeIdentifier';

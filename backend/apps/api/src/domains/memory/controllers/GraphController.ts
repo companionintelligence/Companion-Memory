@@ -115,6 +115,9 @@ interface FilterMatch {
   entityIds: string[];
 }
 
+/** How many top tags the stats endpoint reports in its "by tag" breakdown. */
+const STATS_TAG_LIMIT = 15;
+
 /** Upper bound on events scanned when resolving the event-scoped filters, so a
  * broad filter can't produce an unbounded match set / response. Matches the
  * id-resolution cap in {@link GraphUtilityService.getEntityIdsByLinkedOrEntityIds}. */
@@ -320,6 +323,43 @@ export class GraphController {
     return {
       success: true,
       context,
+    };
+  }
+
+  /**
+   * Memory-wide totals for the stats page: timeline event count + date span,
+   * entity/relationship totals, entities per data source (the importer's
+   * `properties.data_source`), and the user's {@link STATS_TAG_LIMIT}
+   * most-used tags.
+   */
+  @Get('stats')
+  async getMemoryStats(@Context() ctx: RequestContext) {
+    const ownerId = this.ensureUserId(ctx);
+
+    const [relationshipStats, bySource, byTag, timeline] = await Promise.all([
+      this.graphUtility.getRelationshipStats(ownerId),
+      this.graphUtility.getEntityCountsBySource(ownerId),
+      this.tagService.getTagUsageCounts(toServiceContext(ctx), STATS_TAG_LIMIT),
+      this.eventService.getTimelineStats(toServiceContext(ctx)),
+    ]);
+
+    const totalEntities = relationshipStats.entitiesByType.reduce((sum, entry) => sum + entry.count, 0);
+
+    return {
+      success: true,
+      data: {
+        totals: {
+          events: timeline.totalEvents,
+          entities: totalEntities,
+          relationships: relationshipStats.totalRelationships,
+        },
+        dateRange: {
+          earliest: timeline.earliest,
+          latest: timeline.latest,
+        },
+        bySource,
+        byTag,
+      },
     };
   }
 

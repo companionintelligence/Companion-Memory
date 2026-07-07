@@ -640,6 +640,29 @@ export class GraphUtilityService {
   }
 
   /**
+   * Count active entities per data source. Provenance is the importer-supplied
+   * `properties.data_source` key (CI-Import-Tools sets it on ingested entities;
+   * this repo passes the payload's properties through untouched). Entities
+   * without the key group under `Unknown`.
+   */
+  async getEntityCountsBySource(ownerUserId: string): Promise<Array<{ source: string; count: number }>> {
+    const rows: Array<{ source: string; count: string }> = await this.entityRepo
+      .createQueryBuilder('entity')
+      .select(`COALESCE(entity.properties ->> 'data_source', 'Unknown')`, 'source')
+      .addSelect('COUNT(*)', 'count')
+      .where('entity.is_active = true')
+      .andWhere('entity.owner_user_id = :ownerUserId', { ownerUserId })
+      .groupBy('source')
+      .orderBy('count', 'DESC')
+      .getRawMany();
+
+    return rows.map((row) => ({
+      source: row.source,
+      count: parseInt(row.count, 10),
+    }));
+  }
+
+  /**
    * ========================================================================
    * SNAPSHOT & ARCHIVAL
    * ========================================================================

@@ -1,8 +1,9 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { HubForwardAuthGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { NodeService } from '@ci/domains/graph';
 
@@ -26,6 +27,28 @@ export class AuditController {
     private readonly deltaService: DeltaService,
     private readonly nodeService: NodeService,
   ) {}
+
+  /**
+   * First consumer of the signed CI-Hub forward-auth identity header. Returns the
+   * username only when the HMAC signature verifies (HubForwardAuthGuard rejects an
+   * unsigned or forged header with 401 before this handler runs). Serves as the
+   * reference integration for other endpoints that want to trust Hub-brokered
+   * identity. See CI-Engineering/architecture/subsystems/security-trust-and-ops.md.
+   *
+   * The method-level guard overrides the class-level JwtOrApiKeyAuthGuard: identity
+   * here is attested by the Hub signature, not a server-issued token.
+   */
+  @Get('forward-auth/whoami')
+  @UseGuards(HubForwardAuthGuard)
+  forwardAuthWhoami(@Req() req: Request & { hubForwardAuthUser?: string }) {
+    return {
+      success: true,
+      data: {
+        username: req.hubForwardAuthUser ?? null,
+        source: 'ci-hub-forward-auth',
+      },
+    };
+  }
 
   @Get('deltas')
   async getDeltas(

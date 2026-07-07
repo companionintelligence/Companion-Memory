@@ -3,6 +3,7 @@ import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { AnswerService } from '@ci/domains/intelligence';
 
 import { QuestionLoader } from '../loaders/QuestionLoader';
@@ -48,7 +49,8 @@ export class AnswerResolver {
   @Mutation(() => [AnswerType])
   async createAnswers(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateAnswerInput] }) input: CreateAnswerInput[],
+    @Args('input', { type: () => [CreateAnswerInput] }, new MaxArraySizePipe())
+    input: CreateAnswerInput[],
   ): Promise<AnswerType[]> {
     const serviceContext = toServiceContext(context);
 

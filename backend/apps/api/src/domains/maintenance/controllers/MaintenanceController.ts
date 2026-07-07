@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Headers, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  Get,
+  Headers,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { Request, Response } from 'express';
 import { DataSource } from 'typeorm';
@@ -27,6 +38,10 @@ import {
   CommunicationLinkBackfillService,
 } from '../services/CommunicationLinkBackfillService';
 import {
+  type EmbedCoverageReport,
+  EmbedCoverageTelemetryService,
+} from '../services/EmbedCoverageTelemetryService';
+import {
   type EventParticipantBackfillProgress,
   type EventParticipantBackfillResult,
   EventParticipantBackfillService,
@@ -42,11 +57,17 @@ import {
   IndexDeferralService,
   type RecreateResult,
 } from '../services/IndexDeferralService';
+import { type IngestResetResult, IngestResetService } from '../services/IngestResetService';
 import {
   DEFAULT_ESTIMATE_SOURCE_SYSTEMS,
   DEFAULT_MAX_GAP_HOURS,
   LocationEstimateService,
 } from '../services/LocationEstimateService';
+import {
+  MaintenanceOrchestratorService,
+  ORCHESTRATE_STAGES,
+  type OrchestrateSummary,
+} from '../services/MaintenanceOrchestratorService';
 import {
   type PersonStubBackfillResult,
   PersonStubBackfillService,
@@ -175,11 +196,62 @@ const embeddedCountQuerySchema = z.object({
 
 type EmbeddedCountQuery = z.infer<typeof embeddedCountQuerySchema>;
 
+/** Indexable types, as a Set, for lenient `?types=` filtering on /search/coverage. */
+const INDEXABLE_ENTITY_SET: ReadonlySet<string> = new Set(INDEXABLE_ENTITIES);
+
+// Query for GET /api/maintenance/search/coverage. `types` is an optional CSV of
+// INDEXABLE_ENTITIES (e.g. "content,event"). Unknown tokens are dropped silently
+// (same lenience as embedded-count). Absent (or all-unknown) => measure every
+// indexable type.
+const coverageQuerySchema = z.object({
+  types: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value === undefined
+        ? undefined
+        : value
+            .split(',')
+            .map((type) => type.trim())
+            .filter((type): type is IndexableEntity => INDEXABLE_ENTITY_SET.has(type)),
+    ),
+});
+
+type CoverageQuery = z.infer<typeof coverageQuerySchema>;
+
 interface EmbeddedCountResponse {
   /** Total `ci_search.embeddings` rows matching the (optional) type filter. */
   count: number;
   /** Per-`entity_type` row counts (only the matched types appear). */
   perType: Record<string, number>;
+}
+
+// Body for POST /api/maintenance/ingest/reset. Destructive across ALL users'
+// ingested data, so the confirm is an exact literal (not a boolean) — anything
+// else 400s in the ValidationPipe before the handler runs.
+const ingestResetSchema = z.object({
+  confirm: z.literal('RESET_ALL_INGESTED_DATA'),
+});
+
+interface IngestStatusResponse {
+  /** Row counts of the bulk-ingest destination tables. */
+  tables: {
+    communications: number;
+    events: number;
+    content: number;
+    inventory: number;
+    browser_activity: number;
+  };
+  searchIndex: {
+    /** `ci_search.embeddings` rows per entity_type. */
+    embeddingsByType: Record<string, number>;
+    /** `ci_search.index_skips` rows per entity_type (examined, not embedded). */
+    skipsByType: Record<string, number>;
+    /** Pending/in-flight/failed jobs on the search-index pgboss queue. */
+    queue: { created: number; active: number; failed: number };
+  };
+  /** ISO timestamp the snapshot was taken. */
+  at: string;
 }
 
 type GeocodeLocationsRequest = z.infer<typeof geocodeLocationsSchema>;
@@ -233,6 +305,43 @@ const extractGraphSchema = z.object({
 
 type ExtractGraphRequest = z.infer<typeof extractGraphSchema>;
 
+// Body for POST /api/maintenance/orchestrate. `stages` is a subset of the
+// canonical ORCHESTRATE_STAGES vocabulary (unknown names 400 here); execution
+// order is ALWAYS canonical regardless of body order. Each `options.<leg>`
+// object is validated with the SAME schema as the leg's standalone endpoint,
+// then forwarded verbatim to the leg service.
+const orchestrateSchema = z.object({
+  stages: z.array(z.enum(ORCHESTRATE_STAGES)).min(1).optional(),
+  options: z
+    .object({
+      extractPeople: extractPeopleFromCommunicationsSchema.optional(),
+      linkCommunications: linkCommunicationsSchema.optional(),
+      linkEvents: linkEventsSchema.optional(),
+      extractGraph: extractGraphSchema.optional(),
+      geocode: geocodeLocationsSchema.optional(),
+      reverseGeocode: geocodeLocationsSchema.optional(),
+      estimateLocations: estimateLocationsSchema.optional(),
+      mediaDimensions: backfillMediaDimensionsSchema.optional(),
+      searchIndex: searchIndexBackfillSchema.optional(),
+    })
+    .optional(),
+  /** Stop the chain on the first leg error (default false: fail-soft, continue). */
+  abortOnError: z.boolean().optional(),
+  /** When present, the search_index leg polls the embedded count until drained or timeout. */
+  searchIndexDrain: z
+    .object({
+      timeoutMs: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(3 * 60 * 60 * 1000)
+        .optional(),
+    })
+    .optional(),
+});
+
+type OrchestrateRequest = z.infer<typeof orchestrateSchema>;
+
 interface GeocodeLocationsResponse {
   jobId: string | null;
   estimatedEventCount: number;
@@ -274,7 +383,10 @@ export class MaintenanceController {
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
+    private readonly embedCoverageTelemetryService: EmbedCoverageTelemetryService,
     private readonly locationEstimateService: LocationEstimateService,
+    private readonly ingestResetService: IngestResetService,
+    private readonly maintenanceOrchestratorService: MaintenanceOrchestratorService,
   ) {}
 
   @Post('geocode-locations')
@@ -724,6 +836,57 @@ export class MaintenanceController {
   }
 
   /**
+   * One-shot enrichment orchestrator. Runs the requested maintenance legs (all
+   * nine by default) back-to-back in canonical order — extract_people →
+   * link_communications → link_events → extract_graph → geocode →
+   * reverse_geocode → estimate_locations → media_dimensions → search_index —
+   * calling the same leg services as the standalone endpoints, with per-leg
+   * option passthrough. Fail-soft by default (a leg error is reported and the
+   * chain continues); `abortOnError: true` stops the chain and reports the rest
+   * 'skipped'. With `?stream=1` (or Accept: application/x-ndjson) the response
+   * is an NDJSON stream of leg-start / leg-progress / leg-result / leg-error /
+   * tick / done lines; otherwise a single synchronous JSON summary. One
+   * orchestration per user at a time — a second call while one runs is a 409.
+   */
+  @Post('orchestrate')
+  async orchestrate(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(orchestrateSchema)) body: OrchestrateRequest,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Query('stream') stream?: string,
+    @Headers('accept') accept?: string,
+  ): Promise<OrchestrateSummary | void> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    const empty: OrchestrateSummary = { ok: false, legs: [], totalDurationMs: 0 };
+
+    // Overlap guard, checked BEFORE the stream headers are committed so the
+    // second caller gets a real 409 (inside streamNdjson the 200 has already
+    // been written). The service re-checks atomically when it acquires.
+    if (typeof userId === 'string' && this.maintenanceOrchestratorService.isRunning(userId)) {
+      throw new ConflictException({ error: 'orchestration already running' });
+    }
+
+    if (wantsStream(stream, accept)) {
+      return this.streamNdjson<OrchestrateSummary>(req, res, async (emit) => {
+        if (typeof userId !== 'string') {
+          return empty;
+        }
+
+        return this.maintenanceOrchestratorService.orchestrate(userId, body, emit);
+      });
+    }
+
+    if (typeof userId !== 'string') {
+      return empty;
+    }
+
+    return this.maintenanceOrchestratorService.orchestrate(userId, body);
+  }
+
+  /**
    * Index-deferral helper (issue #12), DROP phase. Drops the deferrable
    * secondary indexes (FTS GIN, pgvector HNSW, per-table btree/GIN on the bulk
    * destinations) before a very large load. Returns each dropped index's exact
@@ -848,6 +1011,116 @@ export class MaintenanceController {
     }
 
     return { count, perType };
+  }
+
+  /**
+   * Embed-coverage telemetry (memory-and-search plan gap G2 / issue #1239). For
+   * each search `entity_type`, reports how many source rows exist (`total`), how
+   * many carry a `ci_search.embeddings` row (`embedded`), and the ratio in
+   * [0, 1]. `alarms` lists the types with source rows but zero embeddings — the
+   * coverage holes PR #1605 found by hand (e.g. content 0/366,862, event 6.5%).
+   *
+   * Pure observability: no writes, no retrieval-path change. Counts are GLOBAL
+   * (not user-scoped), matching /search-index/embedded-count. Optional CSV
+   * `?types=content,event` narrows the measurement; unknown tokens are ignored.
+   * A metrics scraper can poll this and page on a non-empty `alarms`.
+   */
+  @Get('search/coverage')
+  async searchCoverage(
+    @Query(new ValidationPipe(coverageQuerySchema)) query: CoverageQuery,
+  ): Promise<EmbedCoverageReport> {
+    const types = query.types && query.types.length > 0 ? query.types : undefined;
+
+    return this.embedCoverageTelemetryService.computeCoverage(types);
+  }
+
+  /**
+   * Ingest observability snapshot: row counts of the bulk-ingest destination
+   * tables plus the search-index side (embeddings + skip markers per type, and
+   * the search-index queue depth from pgboss). One call answers "did the import
+   * land, and how far along is the index?" — the plain count(*) on the
+   * communications hypertable is ~1-2s at 1M rows, acceptable for an ops
+   * endpoint hit by hand or a poller.
+   */
+  @Get('ingest-status')
+  async ingestStatus(): Promise<IngestStatusResponse> {
+    const [tableRows, embeddingRows, skipRows, queueRows] = await Promise.all([
+      this.dataSource.query<
+        Array<{
+          communications: string;
+          events: string;
+          content: string;
+          inventory: string;
+          browser_activity: string;
+        }>
+      >(
+        `SELECT
+           (SELECT count(*) FROM ci.communications)   AS communications,
+           (SELECT count(*) FROM ci.events)           AS events,
+           (SELECT count(*) FROM ci.content)          AS content,
+           (SELECT count(*) FROM ci.inventory)        AS inventory,
+           (SELECT count(*) FROM ci.browser_activity) AS browser_activity`,
+      ),
+      this.dataSource.query<Array<{ entity_type: string; count: string }>>(
+        `SELECT entity_type, count(*) AS count FROM ci_search.embeddings GROUP BY entity_type`,
+      ),
+      this.dataSource.query<Array<{ entity_type: string; count: string }>>(
+        `SELECT entity_type, count(*) AS count FROM ci_search.index_skips GROUP BY entity_type`,
+      ),
+      this.dataSource.query<Array<{ state: string; count: string }>>(
+        `SELECT state, count(*) AS count
+           FROM pgboss.job
+          WHERE name = 'search-index' AND state IN ('created', 'active', 'failed')
+          GROUP BY state`,
+      ),
+    ]);
+
+    const toByType = (rows: Array<{ entity_type: string; count: string }>) =>
+      Object.fromEntries(rows.map((row) => [row.entity_type, Number(row.count)]));
+
+    const queue = { created: 0, active: 0, failed: 0 };
+    for (const row of queueRows) {
+      queue[row.state as keyof typeof queue] = Number(row.count);
+    }
+
+    const tables = tableRows[0];
+
+    return {
+      tables: {
+        communications: Number(tables?.communications ?? 0),
+        events: Number(tables?.events ?? 0),
+        content: Number(tables?.content ?? 0),
+        inventory: Number(tables?.inventory ?? 0),
+        browser_activity: Number(tables?.browser_activity ?? 0),
+      },
+      searchIndex: {
+        embeddingsByType: toByType(embeddingRows),
+        skipsByType: toByType(skipRows),
+        queue,
+      },
+      at: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Guarded full ingest reset. Truncates (one transaction) every bulk-ingest
+   * destination table, the communications dedup table in lockstep with the
+   * hypertable (TRUNCATE skips the AFTER DELETE trigger — leaving it populated
+   * is the "0 comms on re-import" incident), the whole ci_search index
+   * (embeddings/vectors/index_skips), and deletes the not-yet-run search-index
+   * queue jobs. Destructive across ALL users — requires the exact confirm
+   * literal. Returns counts-before per table. The importer's own watermark
+   * (`ci_server.last_push`) must be reset separately; see
+   * db/postgres/INGEST_RESET_RUNBOOK.md.
+   */
+  @Post('ingest/reset')
+  async resetIngest(
+    @Body(new ValidationPipe(ingestResetSchema)) body: { confirm: 'RESET_ALL_INGESTED_DATA' },
+  ): Promise<IngestResetResult> {
+    // The ValidationPipe enforces the confirm literal; the value isn't otherwise used.
+    void body;
+
+    return this.ingestResetService.reset();
   }
 
   /**

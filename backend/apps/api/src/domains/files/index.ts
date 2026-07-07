@@ -19,6 +19,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EventsModule } from '@ci/domains/events';
 
+import { BulkFilesController } from './controllers/BulkFilesController';
 import { FilesController } from './controllers/FilesController';
 import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
 import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
@@ -40,12 +41,14 @@ import { SavedSearchService } from './services/SavedSearchService';
     FilePreviewGenerationListener,
     MediaDimensionsBackfillListener,
   ],
-  controllers: [FilesController],
+  controllers: [FilesController, BulkFilesController],
   exports: [FileService, SavedSearchService, MediaDimensionsService],
 })
 export class FilesModule {}
 
 export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { BulkFilesController, MAX_FILES_PER_BATCH } from './controllers/BulkFilesController';
+export type { BulkFileUploadResult } from './controllers/BulkFilesController';
 export { MediaDimensionsService } from './services/MediaDimensionsService';
 export type { MediaDimensions } from './services/MediaDimensionsService';
 export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';

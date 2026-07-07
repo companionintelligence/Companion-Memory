@@ -9,11 +9,18 @@ import { ENTITY_SOURCE_MAP, type EntitySource } from '../entitySourceMap';
 
 /**
  * `ci_search` tables that hold `(entity_type, entity_id)`-keyed index rows and so
- * can accumulate orphans / must be truncated on a data reset.
+ * can accumulate orphans / must be truncated on a data reset. `keyColumns` is the
+ * table's primary key — embeddings/vectors have a surrogate uuid `id`, while
+ * index_skips is keyed directly on the `(entity_type, entity_id)` pair — used by
+ * the batched orphan delete to address exactly the victim rows.
+ *
+ * Exported so a data reset (maintenance ingest/reset) truncates the SAME set of
+ * tables — drift here is how a reset leaves a fully-orphaned index behind.
  */
-const SEARCH_TABLES = [
-  { schema: 'ci_search', table: 'embeddings' },
-  { schema: 'ci_search', table: 'vectors' },
+export const SEARCH_TABLES = [
+  { schema: 'ci_search', table: 'embeddings', keyColumns: ['id'] },
+  { schema: 'ci_search', table: 'vectors', keyColumns: ['id'] },
+  { schema: 'ci_search', table: 'index_skips', keyColumns: ['entity_type', 'entity_id'] },
 ] as const;
 
 type SearchTable = (typeof SEARCH_TABLES)[number];
@@ -57,8 +64,8 @@ export interface TruncateSearchIndexResult {
 const DEFAULT_BATCH_SIZE = 5000;
 
 /**
- * Maintenance routine that keeps `ci_search.embeddings` / `ci_search.vectors`
- * consistent with the source rows they index.
+ * Maintenance routine that keeps `ci_search.embeddings` / `ci_search.vectors` /
+ * `ci_search.index_skips` consistent with the source rows they index.
  *
  * Two concerns, both re-runnable and safe against the live index:
  *
@@ -67,7 +74,7 @@ const DEFAULT_BATCH_SIZE = 5000;
  *     historical-orphan backfill complementing the per-event cascade-delete the
  *     `*SearchIndexListener`s now do on `*RemovedEvent`.
  *
- *  2. {@link truncateSearchIndex} — wipes both index tables wholesale. A data
+ *  2. {@link truncateSearchIndex} — wipes the index tables wholesale. A data
  *     reset MUST call this (or otherwise truncate `ci_search`) or it re-orphans
  *     the whole index: the reset clears `ci.*` but the index keeps pointing at
  *     the now-deleted rows.
@@ -86,8 +93,11 @@ export class OrphanCleanupService {
   }
 
   /**
-   * Sweep `ci_search.embeddings` and `ci_search.vectors` for rows whose source
-   * row no longer exists, deleting them in bounded batches per entity type.
+   * Sweep every {@link SEARCH_TABLES} table (embeddings, vectors, index_skips)
+   * for rows whose source row no longer exists, deleting them in bounded batches
+   * per entity type. Skip markers are reaped like index rows: a deleted entity's
+   * marker is dead weight, and reaping it means a re-created entity with the same
+   * id is re-examined rather than silently treated as skipped.
    * Idempotent and re-runnable: a clean index deletes nothing.
    */
   async cleanOrphans(options: OrphanCleanupOptions = {}): Promise<OrphanCleanupResult> {
@@ -142,8 +152,9 @@ export class OrphanCleanupService {
   }
 
   /**
-   * Truncate both `ci_search` index tables. Use as part of a full data reset so
-   * the cleared `ci.*` data does not leave a fully-orphaned index behind.
+   * Truncate every `ci_search` index table (embeddings, vectors, index_skips).
+   * Use as part of a full data reset so the cleared `ci.*` data does not leave a
+   * fully-orphaned index behind.
    */
   async truncateSearchIndex(): Promise<TruncateSearchIndexResult> {
     const truncated: string[] = [];
@@ -193,13 +204,14 @@ export class OrphanCleanupService {
   ): Promise<number> {
     const searchRef = `"${searchTable.schema}"."${searchTable.table}"`;
     const { clause, discriminatorParam } = this.buildSourceExistsClause('s', source);
+    const keyColumns = searchTable.keyColumns.map((column) => `"${column}"`);
 
-    // Delete in bounded batches: select up to `batchSize` orphan ids (PK `id`)
+    // Delete in bounded batches: select up to `batchSize` orphan primary keys
     // and delete exactly those, looping until a batch comes back short. This caps
     // the lock + WAL footprint of each statement so the sweep is safe online.
     const sql = `
       WITH victims AS (
-        SELECT s.id
+        SELECT ${keyColumns.map((column) => `s.${column}`).join(', ')}
         FROM ${searchRef} s
         WHERE s.entity_type = $1
           AND NOT ${clause}
@@ -207,7 +219,7 @@ export class OrphanCleanupService {
       )
       DELETE FROM ${searchRef} t
       USING victims
-      WHERE t.id = victims.id
+      WHERE ${keyColumns.map((column) => `t.${column} = victims.${column}`).join(' AND ')}
     `;
 
     const params: string[] = [entityType];

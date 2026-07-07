@@ -15,6 +15,7 @@ import {
 } from '@ci/domains/memory/events';
 
 import { EmbeddingService } from '../services/EmbeddingService';
+import { IndexSkipService } from '../services/IndexSkipService';
 import { VectorService } from '../services/VectorService';
 import { type WeightedText } from '../types';
 
@@ -24,6 +25,7 @@ export class CommunicationSearchIndexListener {
     private readonly communicationService: CommunicationService,
     private readonly embeddingGenerationService: EmbeddingGenerationService,
     private readonly embeddingService: EmbeddingService,
+    private readonly indexSkipService: IndexSkipService,
     private readonly vectorService: VectorService,
     private readonly logger: LoggerService,
   ) {
@@ -67,6 +69,10 @@ export class CommunicationSearchIndexListener {
         entityType: 'communication',
         entityId: payload.communicationId,
       }),
+      this.indexSkipService.clearSkip({
+        entityType: 'communication',
+        entityId: payload.communicationId,
+      }),
     ]);
   }
 
@@ -99,6 +105,15 @@ export class CommunicationSearchIndexListener {
         communicationId: communication.id,
         skipReason,
       });
+
+      // Persist the skip so the backfill sweep (LEFT JOIN on ci_search.embeddings)
+      // stops re-finding this row on every run — without a marker the sweep never
+      // converges and its no-op jobs starve the other entity types.
+      await this.indexSkipService.recordSkip({
+        entityType: 'communication',
+        entityId: communication.id,
+        reason: skipReason,
+      });
     } else {
       const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
@@ -112,6 +127,12 @@ export class CommunicationSearchIndexListener {
           embedding,
         },
       );
+
+      // An updated communication that became embeddable is no longer skipped.
+      await this.indexSkipService.clearSkip({
+        entityType: 'communication',
+        entityId: communication.id,
+      });
 
       this.logger.log('Generated embedding for communication');
     }

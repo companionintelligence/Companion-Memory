@@ -1,4 +1,11 @@
-import { normalizeEmail, normalizeIdentifier, normalizePhone } from './normalizeIdentifier';
+import {
+  classifyParticipant,
+  normalizeEmail,
+  normalizeIdentifier,
+  normalizeName,
+  normalizePhone,
+  splitPersonName,
+} from './normalizeIdentifier';
 
 describe('normalizeEmail', () => {
   it('trims and lowercases', () => {
@@ -40,5 +47,83 @@ describe('normalizeIdentifier', () => {
   it('dispatches on kind', () => {
     expect(normalizeIdentifier('email', '  A@B.com')).toBe('a@b.com');
     expect(normalizeIdentifier('phone', '+1 415 555 0100')).toBe('4155550100');
+  });
+});
+
+describe('normalizeName', () => {
+  it('lowercases, collapses whitespace, and strips diacritics', () => {
+    expect(normalizeName('  Jos\u00e9   GARC\u00cdA ')).toBe('jose garcia');
+    expect(normalizeName('Brian Paul')).toBe('brian paul');
+    expect(normalizeName('Andrea Schr\u00f6er F')).toBe('andrea schroer f');
+  });
+
+  it('returns null for empty / whitespace / null', () => {
+    expect(normalizeName('')).toBeNull();
+    expect(normalizeName('   ')).toBeNull();
+    expect(normalizeName(null)).toBeNull();
+    expect(normalizeName(undefined)).toBeNull();
+  });
+});
+
+describe('classifyParticipant', () => {
+  it('classifies an @-bearing string as email', () => {
+    expect(classifyParticipant(' John.Doe@Example.COM ')).toEqual({
+      kind: 'email',
+      valueNormalized: 'john.doe@example.com',
+    });
+  });
+
+  it('classifies a digit-bearing string as phone', () => {
+    expect(classifyParticipant('+1 (415) 555-0100')).toEqual({
+      kind: 'phone',
+      valueNormalized: '4155550100',
+    });
+  });
+
+  it('classifies a display-name-only string as name (Messenger participants)', () => {
+    expect(classifyParticipant('Brian Paul')).toEqual({
+      kind: 'name',
+      valueNormalized: 'brian paul',
+    });
+    expect(classifyParticipant('Jos\u00e9 Garc\u00eda')).toEqual({
+      kind: 'name',
+      valueNormalized: 'jose garcia',
+    });
+  });
+
+  it('returns null for empty / whitespace / null', () => {
+    expect(classifyParticipant('')).toBeNull();
+    expect(classifyParticipant('   ')).toBeNull();
+    expect(classifyParticipant(null)).toBeNull();
+  });
+});
+
+describe('splitPersonName', () => {
+  it('splits two tokens into first + last (no middle key at all)', () => {
+    expect(splitPersonName('Brian Paul')).toEqual({ first_name: 'Brian', last_name: 'Paul' });
+    expect(splitPersonName('Brian Paul')).not.toHaveProperty('middle_name');
+  });
+
+  it('keeps a single token as first name only', () => {
+    expect(splitPersonName('Cher')).toEqual({ first_name: 'Cher' });
+  });
+
+  it('routes everything between first and last into middle', () => {
+    expect(splitPersonName('Nancy Jiang Sprute')).toEqual({
+      first_name: 'Nancy',
+      middle_name: 'Jiang',
+      last_name: 'Sprute',
+    });
+    expect(splitPersonName('John Jacob Jingleheimer Schmidt')).toEqual({
+      first_name: 'John',
+      middle_name: 'Jacob Jingleheimer',
+      last_name: 'Schmidt',
+    });
+  });
+
+  it('collapses whitespace and returns null for empty input', () => {
+    expect(splitPersonName('  Brian   Paul  ')).toEqual({ first_name: 'Brian', last_name: 'Paul' });
+    expect(splitPersonName('   ')).toBeNull();
+    expect(splitPersonName(null)).toBeNull();
   });
 });

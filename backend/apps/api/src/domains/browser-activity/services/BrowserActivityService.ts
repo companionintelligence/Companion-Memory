@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { bulkInsertIdempotent } from '@ci/common/persistence';
+import { bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -141,6 +141,9 @@ export class BrowserActivityService {
       scope: { user_id: context.userId },
       conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
       tripleColumns: ['source_type', 'source_system', 'source_id'],
+      // Centralized refresh contract — currently empty, so conflicts stay
+      // DO NOTHING find-or-return.
+      conflictUpdateColumns: INGEST_REFRESH_COLUMNS.browser_activity,
     });
 
     // Bulk ingest does NOT emit a per-row BrowserActivityCreatedEvent: the per-row

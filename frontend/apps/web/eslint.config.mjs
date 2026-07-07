@@ -32,7 +32,20 @@ const importOrderRules = {
 
 export default [
   {
-    ignores: ['.yarn', '**/dist/**', '**/dev-dist/**', '**/node_modules/**', '.pnp.*'],
+    ignores: [
+      '.yarn',
+      '**/dist/**',
+      '**/dev-dist/**',
+      '**/node_modules/**',
+      '.pnp.*',
+      // GraphQL codegen output (mirrors .prettierignore / root .oxlintrc.json):
+      // eslint --fix strips their /* eslint-disable */ banners as "unused".
+      'src/graphql/index.ts',
+      'src/graphql/gql.ts',
+      'src/graphql/graphql.ts',
+      'src/graphql/fragment-masking.ts',
+      'src/graphql/possibleTypes.ts',
+    ],
   },
 
   ...base,

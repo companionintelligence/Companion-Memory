@@ -65,6 +65,11 @@
       "issuer": "https://hub.ci.computer",
       "jwksUri": "https://hub.ci.computer/api/auth/jwks",
       "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension"
+    },
+    "hubForwardAuth": {
+      "enabled": false,
+      "secret": "",
+      "maxSkewMs": 300000
     }
   },
   "db": {
@@ -121,6 +126,11 @@
     "new.insights.page": false,
     "require.signup.codes": true,
     "files.page": false,
+    "insights.page": false,
+    "chat.page": false,
+    "jobs.page": false,
+    "stats.page": false,
+    "tags.page": true,
     "hbpe": true,
     "agent.memory.compaction": false,
     "shared.search": false

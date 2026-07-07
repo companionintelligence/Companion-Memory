@@ -18,7 +18,7 @@ Personal database, REST/LLM API, RAG, and HBPE behavioral-prediction engine. The
 
 - NestJS 10 (backend)
 - React/Vite (frontend)
-- PostgreSQL 15 + pgvector + TimescaleDB
+- PostgreSQL 18 + pgvector + TimescaleDB + PostGIS
 - Ollama (local LLM / embeddings)
 - Python/FastAPI sidecar (HBPE — ONNX INT8)
 - PGBoss (background jobs)
@@ -55,7 +55,9 @@ yarn build
 
 ## Database migrations
 
-SQL migration files in `backend/apps/api/db/migrations/` are hand-written and are the source of truth. Update the TypeORM entities to match.
+SQL migration files in `backend/apps/api/db/postgres/migrations/` are hand-written and are the source of truth. Update the TypeORM entities to match.
+
+**Never hand-write the timestamp prefix.** Create migration files with `yarn workspace @ci/be-api migrate:make <name>`, which stamps the real UTC time to the second. Hand-picked round timestamps (…120000) have collided across parallel branches; dbmate keys `schema_migrations` on the prefix, so a duplicate breaks `migrate` for everyone. Uniqueness is enforced by `scripts/check-migration-versions.ts` (runs in lint-staged and before `yarn migrate`).
 
 ## HBPE sidecar
 

@@ -330,6 +330,25 @@ export class FileService implements OnModuleInit {
   }
 
   async upload(context: UserServiceContext, file: UploadFileDto): Promise<SignedFile> {
+    const { file: uploaded } = await this.uploadWithDedupInfo(context, file);
+
+    return uploaded;
+  }
+
+  /**
+   * Same upload pipeline as {@link upload} (hash-dedup against the store,
+   * create + FileUploadedEvent fan-out for new content), but ALSO reports
+   * whether the content was deduplicated against an already-stored file —
+   * `deduped: true` means no new file row/object was created and `file` is the
+   * pre-existing one. Extracted so the batch `POST /v1/files` endpoint can
+   * honor its per-input `{ filename, sha256, id, deduped }` contract without
+   * forking the pipeline; `upload` (and thus `POST /files/upload`) delegates
+   * here and behaves exactly as before.
+   */
+  async uploadWithDedupInfo(
+    context: UserServiceContext,
+    file: UploadFileDto,
+  ): Promise<{ file: SignedFile; deduped: boolean }> {
     const { inventoryCapture = false, skipDescription = false, model, ...uploadData } = file;
     const hash = await this.getFileHash(uploadData);
 
@@ -351,7 +370,7 @@ export class FileService implements OnModuleInit {
           });
         }
 
-        return existing;
+        return { file: existing, deduped: true };
       }
     }
 
@@ -368,7 +387,7 @@ export class FileService implements OnModuleInit {
       model,
     });
 
-    return created;
+    return { file: created, deduped: false };
   }
 
   async getFileContent(context: ServiceContext, key: string): Promise<Uint8Array> {

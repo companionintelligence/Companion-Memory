@@ -28,6 +28,7 @@ import { ToolsModule } from '@ci/domains/tools';
 
 import { OllamaController } from './controllers/OllamaController';
 import { AnswerInferenceCron } from './cron/AnswerInferenceCron';
+import { CvDetectionsListener } from './listeners/CvDetectionsListener';
 import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { InventoryListener } from './listeners/InventoryListener';
 import { OllamaService } from './services/OllamaService';
@@ -37,7 +38,13 @@ import { OllamaService } from './services/OllamaService';
  */
 @Module({
   imports: [ConversationModule, EventsModule, FilesModule, IntelligenceModule, MemoryModule, ToolsModule],
-  providers: [AnswerInferenceCron, ImageDescriptionListener, InventoryListener, OllamaService],
+  providers: [
+    AnswerInferenceCron,
+    CvDetectionsListener,
+    ImageDescriptionListener,
+    InventoryListener,
+    OllamaService,
+  ],
   controllers: [OllamaController],
   exports: [OllamaService],
 })
@@ -45,3 +52,11 @@ export class LLMModule {}
 
 export { OllamaService };
 export { PROMPT_MODEL } from './services/OllamaService';
+export { CV_DETECTION_LINKED_TABLE } from './listeners/CvDetectionsListener';
+export {
+  CvDetectionsCapturedEvent,
+  type CvDetection,
+  type CvDetectionKind,
+  type CvBBoxNormalized,
+  type CvDetectionsCapturedPayload,
+} from './events';
