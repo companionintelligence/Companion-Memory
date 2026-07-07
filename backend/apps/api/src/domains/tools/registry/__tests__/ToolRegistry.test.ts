@@ -126,7 +126,11 @@ describe('ToolRegistry', () => {
 
   it('never fails the tool call when telemetry emission throws', async () => {
     const send = jest.fn().mockRejectedValue(new Error('bus down'));
-    const dispatcher = new IntentDispatcherService(makeLogger(), { send: jest.fn() } as any, DEFAULT_INTENT_POLICY);
+    const dispatcher = new IntentDispatcherService(
+      makeLogger(),
+      { send: jest.fn() } as any,
+      DEFAULT_INTENT_POLICY,
+    );
     const registry = new ToolRegistry(makeLogger(), { send } as any, dispatcher);
     await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall', { ok: 1 }) }));
 

@@ -2,7 +2,11 @@
 import type { RequestContext } from '@ci/common/context';
 
 import type { IntentPrivacy, ToolSchema } from '../../core/types';
-import { DEFAULT_INTENT_POLICY, IntentDispatcherService, type IntentPolicy } from '../IntentDispatcherService';
+import {
+  DEFAULT_INTENT_POLICY,
+  IntentDispatcherService,
+  type IntentPolicy,
+} from '../IntentDispatcherService';
 
 function makeLogger() {
   return {
@@ -14,7 +18,10 @@ function makeLogger() {
   } as any;
 }
 
-function schema(privacy: IntentPrivacy, name = 'memory.act'): Pick<ToolSchema, 'name' | 'domain' | 'privacy'> {
+function schema(
+  privacy: IntentPrivacy,
+  name = 'memory.act',
+): Pick<ToolSchema, 'name' | 'domain' | 'privacy'> {
   return { name, domain: 'memory', privacy };
 }
 
@@ -28,9 +35,19 @@ function make(policy: IntentPolicy = DEFAULT_INTENT_POLICY) {
 }
 
 const READ: IntentPrivacy = { access: 'read', sensitivity: 'personal', destructive: false, external: false };
-const DESTRUCTIVE: IntentPrivacy = { access: 'delete', sensitivity: 'personal', destructive: true, external: false };
+const DESTRUCTIVE: IntentPrivacy = {
+  access: 'delete',
+  sensitivity: 'personal',
+  destructive: true,
+  external: false,
+};
 const EXTERNAL: IntentPrivacy = { access: 'read', sensitivity: 'low', destructive: false, external: true };
-const SENSITIVE: IntentPrivacy = { access: 'read', sensitivity: 'sensitive', destructive: false, external: false };
+const SENSITIVE: IntentPrivacy = {
+  access: 'read',
+  sensitivity: 'sensitive',
+  destructive: false,
+  external: false,
+};
 
 describe('IntentDispatcherService', () => {
   it('allows a plain read intent and emits intent.authorized (not warned)', async () => {
@@ -42,7 +59,12 @@ describe('IntentDispatcherService', () => {
     expect(send).toHaveBeenCalledTimes(1);
     const [name, payload, options] = send.mock.calls[0];
     expect(name).toBe('intent.authorized');
-    expect(payload).toMatchObject({ intent: 'memory.act', tool: 'memory_act', surface: 'native', warned: false });
+    expect(payload).toMatchObject({
+      intent: 'memory.act',
+      tool: 'memory_act',
+      surface: 'native',
+      warned: false,
+    });
     expect(options).toEqual({ queue: 'telemetry' });
   });
 
