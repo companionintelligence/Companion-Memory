@@ -40,6 +40,11 @@ type ActionType implements Node & Taggable {
   """Priority/relevance level 1-10"""
   priority: Int
   seen: Boolean!
+
+  """
+  Provenance: which producer family wrote this action (llm-narrative, divergence-anomaly, suggestion-engine, onboarding, unspecified)
+  """
+  source: String!
   tags: [EntityTagType!]!
   text: String!
   thread: ThreadType

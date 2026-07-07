@@ -335,6 +335,7 @@ export class OnboardingService {
           imageUrl: '/actions/dinner.jpg',
           priority: 0,
           threadId: thread.id,
+          source: 'onboarding',
         }),
       ]);
     };
@@ -351,6 +352,7 @@ export class OnboardingService {
           imageUrl: '/actions/movie_night.jpg',
           priority: 1,
           threadId: thread.id,
+          source: 'onboarding',
         }),
 
         this.messageService.create(context, {
@@ -374,6 +376,7 @@ export class OnboardingService {
           imageUrl: '/actions/woods.jpg',
           priority: 2,
           threadId: thread.id,
+          source: 'onboarding',
         }),
 
         this.messageService.create(context, {

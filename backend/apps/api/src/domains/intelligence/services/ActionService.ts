@@ -8,7 +8,7 @@ import { EventService } from '@ci/domains/events';
 
 import { type Action, ActionEntity } from '../entities/ActionEntity';
 import { ActionCreatedEvent } from '../events';
-import type { CreateActionDto } from '../types';
+import type { ActionSource, CreateActionDto } from '../types';
 
 @Injectable()
 export class ActionService {
@@ -29,6 +29,7 @@ export class ActionService {
       priority: data.priority,
       seen: data.seen ?? false,
       dismissed: data.dismissed ?? false,
+      source: data.source ?? 'unspecified',
       thread: {
         id: data.threadId,
       },
@@ -47,7 +48,7 @@ export class ActionService {
     return ActionEntity.toEgressType(entity);
   }
 
-  async findAll(context: ServiceContext): Promise<Action[]> {
+  async findAll(context: ServiceContext, options?: { sources?: ActionSource[] }): Promise<Action[]> {
     const entities = await this.actionRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
@@ -55,6 +56,7 @@ export class ActionService {
             id: context.userId,
           },
         }),
+        ...(options?.sources?.length && { source: In(options.sources) }),
       },
       order: {
         priority: 'asc',
@@ -124,16 +126,25 @@ export class ActionService {
    * Returns up to `limit` actions, prioritizing unseen ones.
    * If there are fewer unseen actions than the limit, fills with seen actions.
    */
-  async findForFeed(context: ServiceContext, limit: number = 5): Promise<Action[]> {
+  async findForFeed(
+    context: ServiceContext,
+    limit: number = 5,
+    options?: { sources?: ActionSource[] },
+  ): Promise<Action[]> {
+    const sources = options?.sources;
+
     // First, get unseen actions that are not dismissed.
-    const unseenEntities = await this.actionRepository
+    const unseenQuery = this.actionRepository
       .createQueryBuilder('action')
       .where(context.userId !== SYSTEM_USER ? 'action.user_id = :userId' : '1=1', { userId: context.userId })
       .andWhere('action.dismissed = false')
-      .andWhere('action.seen = false')
-      .orderBy('action.created_at', 'DESC')
-      .take(limit)
-      .getMany();
+      .andWhere('action.seen = false');
+
+    if (sources?.length) {
+      unseenQuery.andWhere('action.source IN (:...sources)', { sources });
+    }
+
+    const unseenEntities = await unseenQuery.orderBy('action.created_at', 'DESC').take(limit).getMany();
 
     const results = unseenEntities.map((entity) => ActionEntity.toEgressType(entity));
 
@@ -151,6 +162,10 @@ export class ActionService {
       .where(context.userId !== SYSTEM_USER ? 'action.user_id = :userId' : '1=1', { userId: context.userId })
       .andWhere('action.dismissed = false')
       .andWhere('action.seen = true');
+
+    if (sources?.length) {
+      seenQuery.andWhere('action.source IN (:...sources)', { sources });
+    }
 
     if (unseenIds.length > 0) {
       seenQuery.andWhere('action.id NOT IN (:...unseenIds)', { unseenIds });

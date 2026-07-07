@@ -61,6 +61,8 @@ export type ActionType = Node & Taggable & {
   /** Priority/relevance level 1-10 */
   priority?: Maybe<Scalars['Int']['output']>;
   seen: Scalars['Boolean']['output'];
+  /** Provenance: which producer family wrote this action (llm-narrative, divergence-anomaly, suggestion-engine, onboarding, unspecified) */
+  source: Scalars['String']['output'];
   tags: Array<EntityTagType>;
   text: Scalars['String']['output'];
   thread?: Maybe<ThreadType>;

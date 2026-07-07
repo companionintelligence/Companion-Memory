@@ -760,11 +760,13 @@ async def store_action_activity(
     writes: List[tuple[str, Dict[str, Any]]] = []
     action_ids: List[str] = []
 
+    # source='llm-narrative': these actions are free-LLM narrative, not computed —
+    # consumers filter on ci.actions.source (CI-Engineering #63).
     insert_query = """
         INSERT INTO ci.actions (
-            id, title, text, priority, user_id, seen, metadata, created_at, updated_at
+            id, title, text, priority, user_id, seen, source, metadata, created_at, updated_at
         ) VALUES (
-            :action_id, :title, :text, :priority, :user_id, :seen,
+            :action_id, :title, :text, :priority, :user_id, :seen, :source,
             CAST(:metadata AS jsonb), NOW(), NOW()
         )
     """
@@ -788,6 +790,7 @@ async def store_action_activity(
             "priority": action.get("priority", 5),
             "user_id": str(user_uuid),
             "seen": False,
+            "source": "llm-narrative",
             "metadata": json.dumps(metadata),
         }
 

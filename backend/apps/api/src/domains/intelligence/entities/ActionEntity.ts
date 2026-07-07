@@ -38,6 +38,14 @@ export class ActionEntity {
   @Column({ type: 'boolean', default: false })
   dismissed!: boolean;
 
+  /**
+   * Provenance discriminator (CI-Engineering #63): which producer family wrote
+   * this row — see ACTION_SOURCES. Consumers filter on it so LLM-invented
+   * narrative is never surfaced as evidence-linked.
+   */
+  @Column({ type: 'text', default: 'unspecified' })
+  source!: string;
+
   @Column({ type: 'text', name: 'thread_id', nullable: true })
   threadId!: string;
 
@@ -65,6 +73,7 @@ export class ActionEntity {
       metadata: entity.metadata,
       seen: entity.seen ?? false,
       dismissed: entity.dismissed ?? false,
+      source: entity.source ?? 'unspecified',
       threadId: entity.threadId,
       thread: entity.thread ? ThreadEntity.toEgressType(entity.thread) : undefined,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,

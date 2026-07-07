@@ -49,6 +49,12 @@ export class ActionType implements Node, Taggable {
   @Field(() => Boolean)
   dismissed!: boolean;
 
+  @Field(() => String, {
+    description:
+      'Provenance: which producer family wrote this action (llm-narrative, divergence-anomaly, suggestion-engine, onboarding, unspecified)',
+  })
+  source!: string;
+
   @Field(() => Int, { nullable: true, description: 'Priority/relevance level 1-10' })
   priority!: number | null;
 
@@ -76,6 +82,7 @@ export class ActionType implements Node, Taggable {
       imageUrl: action.imageUrl,
       seen: action.seen ?? false,
       dismissed: action.dismissed ?? false,
+      source: action.source ?? 'unspecified',
       priority: action.priority,
       metadata: {
         seen: Boolean(metadata.seen),
