@@ -22,11 +22,14 @@ import {
   type BulkIngestResponse,
   type BulkInventoryRecord,
   type BulkPositionRecord,
+  type ContentsLookupRequest,
+  type ContentsLookupResponse,
   bulkBrowserActivityRecordSchema,
   bulkCommunicationRecordSchema,
   bulkContentRecordSchema,
   bulkInventoryRecordSchema,
   bulkPositionRecordSchema,
+  contentsLookupSchema,
   ingestBrowserActivitySchema,
   ingestCommunicationsSchema,
   ingestContentsSchema,
@@ -41,7 +44,8 @@ import {
  * touching GraphQL. Mirrors `POST /v1/events` (EventsIngestController): same
  * auth (JwtOrApiKeyAuthGuard), same batch envelope style, same response shape.
  *
- * Every route accepts TWO request encodings, switched on Content-Type:
+ * Every ingest route accepts TWO request encodings, switched on Content-Type
+ * (the read-side `POST contents/lookup` probe is JSON-envelope only):
  *
  *   - `application/x-ndjson` (the DEFAULT bulk contract): one record per line,
  *     validated against the SAME per-kind record schema, parsed incrementally
@@ -114,6 +118,38 @@ export class BulkIngestController {
     const { records } = contentsEnvelopePipe.transform(body) as { records: BulkContentRecord[] };
 
     return toBulkResponse(records.length, await this.flushContents(serviceContext, records));
+  }
+
+  /**
+   * Read-side reconcile probe (JSON only — no NDJSON variant): which of these
+   * source_ids already exist as content rows for the authed user, and with what
+   * type/external_id. Lets a push client confirm media landed (external_id =
+   * the stored file id) before dropping local state it can never rebuild —
+   * CI-Import-Tools' purged-media reconcile is the first consumer.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Post('contents/lookup')
+  async lookupContents(
+    @Context() context: RequestContext,
+    @Body() body?: unknown,
+  ): Promise<ContentsLookupResponse> {
+    const serviceContext = toServiceContext(context);
+
+    const query = contentsLookupPipe.transform(body) as ContentsLookupRequest;
+
+    const rows = await this.contentService.findBySourceIds(serviceContext, {
+      sourceType: query.source_type,
+      sourceSystem: query.source_system ?? null,
+      sourceIds: query.source_ids,
+    });
+
+    return {
+      found: rows.map((row) => ({
+        source_id: row.sourceId,
+        type: row.type,
+        external_id: row.externalId,
+      })),
+    };
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -281,6 +317,7 @@ export class BulkIngestController {
 // `{ message: 'Validation failed', errors: [...] }` 400 shape as before.
 const communicationsEnvelopePipe = new ValidationPipe(ingestCommunicationsSchema);
 const contentsEnvelopePipe = new ValidationPipe(ingestContentsSchema);
+const contentsLookupPipe = new ValidationPipe(contentsLookupSchema);
 const inventoryEnvelopePipe = new ValidationPipe(ingestInventorySchema);
 const browserActivityEnvelopePipe = new ValidationPipe(ingestBrowserActivitySchema);
 const positionsEnvelopePipe = new ValidationPipe(ingestPositionsSchema);

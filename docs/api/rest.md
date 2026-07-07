@@ -67,11 +67,14 @@ The rest of the REST bulk-ingest plane: one batch route per bulk kind, all `JwtO
 |------|------|---------------------|
 | POST | `/v1/communications` | `CommunicationService.createMany` |
 | POST | `/v1/contents` | `ContentService.createMany` |
+| POST | `/v1/contents/lookup` | `ContentService.findBySourceIds` (read-side probe) |
 | POST | `/v1/inventory` | `ItemService.createMany` |
 | POST | `/v1/browser-activity` | `BrowserActivityService.createMany` |
 | POST | `/v1/positions` | `PositionService.create` (bulk) |
 
-Every route speaks **two encodings**, switched on `Content-Type`:
+`/v1/contents/lookup` is the plane's one **read** route — a bulk existence check by provenance triple so a push client can confirm what landed before dropping local state it cannot rebuild (e.g. the CI-Import-Tools purged-media reconcile clears a local media pointer only once the content row is confirmed with a non-null `external_id`). JSON only: `{ source_type, source_system?, source_ids: [1..10000] }` → `{ found: [{ source_id, type, external_id }] }` — absent `source_ids` simply have no entry; `source_system` omitted/null matches rows whose `source_system` IS NULL.
+
+Every **ingest** route speaks **two encodings**, switched on `Content-Type`:
 
 **1. NDJSON — the default bulk contract** (`application/x-ndjson`). One JSON record per line (same per-kind record schema as the envelope, `domains/ingest/types.ts`). The raw stream is parsed incrementally and flushed to the service in **batches of 1,000 as it arrives** — no overall request-size cap, bounded memory, suitable for unbounded exports. Defensive limits: **1 MB per line** (oversized lines are rejected, stream continues), rejection detail list capped at 1,000 (`rejectedTruncated: true` past that). Malformed / schema-invalid lines and failed batches are rejected **without aborting the stream**; batch flushes are idempotent on the provenance triple, so retrying a broken stream is safe. Blank lines and CRLF are tolerated.
 

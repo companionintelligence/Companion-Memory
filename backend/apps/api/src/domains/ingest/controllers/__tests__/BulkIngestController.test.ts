@@ -41,6 +41,7 @@ function makeController() {
     createMany: jest.fn(async (_context: unknown, data: unknown[]) =>
       data.map((_, i) => ({ id: `row-${i}` })),
     ),
+    findBySourceIds: jest.fn(async () => []),
   } as unknown as ContentService;
   const itemService = { createMany: echo } as unknown as ItemService;
   const browserActivityService = { createMany: echo } as unknown as BrowserActivityService;
@@ -143,6 +144,53 @@ describe('BulkIngestController', () => {
       expect(passedRecords[0].event_id).toBeUndefined();
       expect(passedRecords[1].event).toBeUndefined();
       expect(options).toEqual({ emitCreated: false });
+    });
+  });
+
+  describe('POST /v1/contents/lookup', () => {
+    it('maps the snake_case body onto findBySourceIds and the rows back to snake_case', async () => {
+      const { controller, contentService } = makeController();
+      (contentService.findBySourceIds as jest.Mock).mockResolvedValueOnce([
+        { sourceId: 'p-1', type: 'media', externalId: 'file-1' },
+        { sourceId: 'p-2', type: 'media', externalId: null },
+      ]);
+
+      const res = await controller.lookupContents(ctx, {
+        source_type: 'ci-import-tools',
+        source_system: 'apple_photos',
+        source_ids: ['p-1', 'p-2', 'p-3'],
+      });
+
+      expect(contentService.findBySourceIds).toHaveBeenCalledWith(
+        { userId: 'user-1' },
+        { sourceType: 'ci-import-tools', sourceSystem: 'apple_photos', sourceIds: ['p-1', 'p-2', 'p-3'] },
+      );
+      // p-3 has no row, so it has no entry; p-2 exists but has no stored binary.
+      expect(res).toEqual({
+        found: [
+          { source_id: 'p-1', type: 'media', external_id: 'file-1' },
+          { source_id: 'p-2', type: 'media', external_id: null },
+        ],
+      });
+    });
+
+    it('treats an omitted source_system as null (rows whose source_system IS NULL)', async () => {
+      const { controller, contentService } = makeController();
+
+      await controller.lookupContents(ctx, { source_type: 'ci-import-tools', source_ids: ['p-1'] });
+
+      expect(contentService.findBySourceIds).toHaveBeenCalledWith(
+        { userId: 'user-1' },
+        { sourceType: 'ci-import-tools', sourceSystem: null, sourceIds: ['p-1'] },
+      );
+    });
+
+    it('rejects an empty source_ids list', async () => {
+      const { controller } = makeController();
+
+      await expect(
+        controller.lookupContents(ctx, { source_type: 'ci-import-tools', source_ids: [] }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

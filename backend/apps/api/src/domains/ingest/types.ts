@@ -110,6 +110,38 @@ export type BulkContentRecord = z.infer<typeof bulkContentRecordSchema>;
 export type IngestContentsRequest = z.infer<typeof ingestContentsSchema>;
 
 // ---------------------------------------------------------------------------
+// POST /v1/contents/lookup → ContentService.findBySourceIds
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-side counterpart of POST /v1/contents: a bulk existence check by
+ * provenance triple, so a push client can CONFIRM what landed before dropping
+ * local state that can never be rebuilt (e.g. CI-Import-Tools' purged-media
+ * reconcile clears items.intermediate_location only for rows whose media
+ * content this lookup returns with a non-null external_id). One
+ * (source_type, source_system) pair per request — the triple index is
+ * user-scoped, so the query is a single indexed `source_id = ANY(...)` probe.
+ * `source_system: null` (or omitted) matches rows whose source_system IS NULL.
+ */
+export const contentsLookupSchema = z.object({
+  source_type: z.string().min(1),
+  source_system: z.string().min(1).nullish(),
+  source_ids: z.array(z.string().min(1)).min(1).max(MAX_BULK_INPUT_SIZE),
+});
+
+export type ContentsLookupRequest = z.infer<typeof contentsLookupSchema>;
+
+/**
+ * One entry per ci.content row that exists for the authed user under the
+ * requested (source_type, source_system) and a requested source_id — absent
+ * source_ids simply have no entry. `external_id` is the linked file id for
+ * media rows (null means the row exists but carries no stored binary).
+ */
+export interface ContentsLookupResponse {
+  found: { source_id: string; type: string | null; external_id: string | null }[];
+}
+
+// ---------------------------------------------------------------------------
 // POST /v1/inventory → ItemService.createMany
 // ---------------------------------------------------------------------------
 
