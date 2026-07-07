@@ -219,6 +219,12 @@ export const ConfigSchema = z.object({
      * enabled.
      */
     'shared.search': booleanStringSchema,
+    /**
+     * Enables the daily feature store compute schedule (nightly + hourly rolling
+     * cron enqueueing per-user jobs on the daily-metrics queue). The backfill
+     * endpoint and GraphQL reads are NOT gated — only the automatic schedule is.
+     */
+    'insights.daily_metrics': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

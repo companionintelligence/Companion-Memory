@@ -11,6 +11,7 @@ import { EntityResolutionModule } from '@ci/domains/entity-resolution';
 import { EtlModule } from '@ci/domains/etl';
 import { FilesModule } from '@ci/domains/files';
 import { GraphModule } from '@ci/domains/graph';
+import { InsightsModule } from '@ci/domains/insights';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
@@ -47,6 +48,7 @@ import { EventResolver } from './resolvers/EventResolver';
 import { FileResolver } from './resolvers/FileResolver';
 import { ForecastResolver } from './resolvers/ForecastResolver';
 import { GraphIngestResolver } from './resolvers/GraphIngestResolver';
+import { InsightsResolver } from './resolvers/InsightsResolver';
 import { ItemRelationshipResolver } from './resolvers/ItemRelationshipResolver';
 import { ItemResolver } from './resolvers/ItemResolver';
 import { KnownPlacesResolver } from './resolvers/KnownPlacesResolver';
@@ -83,6 +85,7 @@ import { UserResolver } from './resolvers/UserResolver';
     EtlModule,
     FilesModule,
     GraphModule,
+    InsightsModule,
     IntelligenceModule,
     MemoryModule,
     NotesModule,
@@ -110,6 +113,7 @@ import { UserResolver } from './resolvers/UserResolver';
     FileItemsLoader,
     FileResolver,
     GraphIngestResolver,
+    InsightsResolver,
     ItemFileLoader,
     ItemRelationshipResolver,
     ItemResolver,

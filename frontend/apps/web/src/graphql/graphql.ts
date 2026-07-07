@@ -555,6 +555,39 @@ export type CreateSavedSearchPayload = {
   success: Scalars['Boolean']['output'];
 };
 
+/** One day of the daily-metrics feature store */
+export type DailyMetricsType = {
+  __typename?: 'DailyMetricsType';
+  /** Mean sentiment of scored messages (-1..+1) */
+  avgSentiment?: Maybe<Scalars['Float']['output']>;
+  /** ISO-8601 timestamp of the last (re)compute */
+  computedAt: Scalars['String']['output'];
+  /** Per-metric confidence map (metric name -> 0..1) */
+  coverage: Scalars['JSON']['output'];
+  /** Local calendar day, YYYY-MM-DD */
+  date: Scalars['String']['output'];
+  /** Distance traveled in km */
+  kmTraveled?: Maybe<Scalars['Float']['output']>;
+  /** Conversations (threads + un-threaded messages) */
+  nConversations?: Maybe<Scalars['Int']['output']>;
+  /** Distinct web domains visited */
+  nDomains?: Maybe<Scalars['Int']['output']>;
+  /** Messages exchanged (null = no data) */
+  nMessages?: Maybe<Scalars['Int']['output']>;
+  /** Distinct places visited (~110m grid cells) */
+  nPlaces?: Maybe<Scalars['Int']['output']>;
+  /** Distinct contacts communicated with */
+  nUniqueContacts?: Maybe<Scalars['Int']['output']>;
+  /** Fraction of messages that were outbound (0..1) */
+  outboundRatio?: Maybe<Scalars['Float']['output']>;
+  /** Web/screen time in minutes */
+  screenMinutes?: Maybe<Scalars['Float']['output']>;
+  /** Total purchase spend that day */
+  spendTotal?: Maybe<Scalars['Float']['output']>;
+  /** IANA timezone the day was bucketed in */
+  timezone: Scalars['String']['output'];
+};
+
 export type DeleteByIdInput = {
   id: Scalars['String']['input'];
 };
@@ -713,6 +746,26 @@ export type GraphRelationshipInput = {
   type: Scalars['String']['input'];
 };
 
+/** A computed + narrated descriptive insight answer */
+export type InsightAnswerType = {
+  __typename?: 'InsightAnswerType';
+  /** The narrated sentence */
+  answer: Scalars['String']['output'];
+  /** Life-domain category, e.g. "Relationships" */
+  category: Scalars['String']['output'];
+  /** Stable question key, e.g. "rel.messages_week" */
+  key: Scalars['String']['output'];
+  provenance: InsightProvenanceType;
+  /** The question being answered */
+  question: Scalars['String']['output'];
+  /** Human timeframe label */
+  timeframe: Scalars['String']['output'];
+  /** Unit of the value, e.g. "km" */
+  unit?: Maybe<Scalars['String']['output']>;
+  /** Deterministically computed value (null = not enough data) */
+  value?: Maybe<Scalars['Float']['output']>;
+};
+
 export type InsightItemType = {
   __typename?: 'InsightItemType';
   keyActions: Array<Scalars['String']['output']>;
@@ -721,6 +774,29 @@ export type InsightItemType = {
   summaryText: Scalars['String']['output'];
   tags: Array<Scalars['String']['output']>;
   title: Scalars['String']['output'];
+};
+
+/** Provenance of a computed insight answer */
+export type InsightProvenanceType = {
+  __typename?: 'InsightProvenanceType';
+  /** How the daily series was collapsed (sum, avg, ...) */
+  aggregate: Scalars['String']['output'];
+  /** Total days in the window */
+  daysInRange: Scalars['Int']['output'];
+  /** Days in the window that actually had data */
+  daysWithData: Scalars['Int']['output'];
+  /** Window start, YYYY-MM-DD (inclusive) */
+  fromDate: Scalars['String']['output'];
+  /** Mean per-day coverage of the metric (0..1) */
+  meanCoverage: Scalars['Float']['output'];
+  /** Feature-store metric the answer reads */
+  metric: Scalars['String']['output'];
+  /** Raw capture tables the metric derives from */
+  sources: Array<Scalars['String']['output']>;
+  /** Human timeframe label, e.g. "the last 7 days" */
+  timeframe: Scalars['String']['output'];
+  /** Window end, YYYY-MM-DD (inclusive) */
+  toDate: Scalars['String']['output'];
 };
 
 export type ItemCondition =
@@ -1422,6 +1498,8 @@ export type Query = {
   connections: ConnectionConnection;
   content?: Maybe<ContentType>;
   contents: ContentConnection;
+  /** Stored daily feature-store rows for the signed-in user over an inclusive [from, to] date range, oldest first */
+  dailyMetrics: Array<DailyMetricsType>;
   event?: Maybe<EventType>;
   /** Distinct data sources / connectors (event.source_system) present for the user. */
   eventSources: Array<Scalars['String']['output']>;
@@ -1434,6 +1512,10 @@ export type Query = {
   files: FileConnection;
   /** Fetch the HBPE day-ahead forecast histogram */
   forecast?: Maybe<ForecastType>;
+  /** Answer one catalog question (by key) from the stored daily metrics; null for an unknown key */
+  insightAnswer?: Maybe<InsightAnswerType>;
+  /** Answer the whole descriptive question catalog for one anchor date */
+  insightAnswers: Array<InsightAnswerType>;
   item?: Maybe<ItemType>;
   items: ItemConnection;
   knownPlaceCandidates: Array<KnownPlaceCandidateType>;
@@ -1573,6 +1655,12 @@ export type QueryContentsArgs = {
 };
 
 
+export type QueryDailyMetricsArgs = {
+  from: Scalars['String']['input'];
+  to: Scalars['String']['input'];
+};
+
+
 export type QueryEventArgs = {
   id: Scalars['ID']['input'];
 };
@@ -1606,6 +1694,17 @@ export type QueryFilesArgs = {
 
 export type QueryForecastArgs = {
   horizon?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryInsightAnswerArgs = {
+  date?: InputMaybe<Scalars['String']['input']>;
+  questionKey: Scalars['String']['input'];
+};
+
+
+export type QueryInsightAnswersArgs = {
+  date?: InputMaybe<Scalars['String']['input']>;
 };
 
 
