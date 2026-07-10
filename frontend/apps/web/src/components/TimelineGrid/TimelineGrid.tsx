@@ -256,7 +256,7 @@ export function TimelineGrid({
   const visibleEndKey = weeks[weeks.length - 1]?.[DAYS_PER_WEEK - 1] ?? viewEndKey;
   const rowCount = weeks.length;
 
-  /** Week-row index → month label, shown where a month's 1st lands. */
+  /** Week-row index → month label, sorted, shown where a month's 1st lands. */
   const monthLabels = useMemo(() => {
     const labels = new Map<number, string>();
 
@@ -272,7 +272,7 @@ export function TimelineGrid({
       labels.set(0, fromKey(visibleStartKey).toLocaleDateString(undefined, { month: 'short' }));
     }
 
-    return labels;
+    return [...labels.entries()].sort(([a], [b]) => a - b);
   }, [weeks, visibleStartKey]);
 
   // ── Intensity ──
@@ -395,7 +395,7 @@ export function TimelineGrid({
     <div className={cn('flex h-full min-h-0 w-fit select-none flex-col gap-2', className)}>
       {/* Weekday header */}
       <div className="flex gap-1.5">
-        <div className="w-8 shrink-0" />
+        <div className="w-4 shrink-0" />
         <div
           className="grid"
           style={{
@@ -413,18 +413,25 @@ export function TimelineGrid({
 
       {/* Month gutter + cell grid */}
       <div ref={gridAreaRef} className="flex min-h-0 flex-1 gap-1.5">
+        {/*
+         * Labels read bottom-to-top (vertical-rl flipped 180°). Each one spans
+         * from its month's first week-row down to the next label's row and
+         * clips, so it can never overlap a neighbor or run past the grid.
+         */}
         <div
-          className="grid w-8 shrink-0 self-start"
+          className="grid w-4 shrink-0 self-start"
           style={{ gridTemplateRows: `repeat(${rowCount}, ${cellSize}px)`, rowGap: CELL_GAP_PX }}
         >
-          {[...monthLabels].map(([row, label]) => (
-            <span
+          {monthLabels.map(([row, label], i) => (
+            <div
               key={row}
-              className="self-center pr-1 text-right text-[10px] leading-none text-muted-foreground"
-              style={{ gridRowStart: row + 1 }}
+              className="flex items-start justify-end overflow-hidden pr-1"
+              style={{ gridRowStart: row + 1, gridRowEnd: (monthLabels[i + 1]?.[0] ?? rowCount) + 1 }}
             >
-              {label}
-            </span>
+              <span className="rotate-180 text-[10px] leading-none text-muted-foreground [writing-mode:vertical-rl]">
+                {label}
+              </span>
+            </div>
           ))}
         </div>
 
