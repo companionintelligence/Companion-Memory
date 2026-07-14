@@ -94,7 +94,7 @@ export function isNdjsonRequest(req: Pick<Request, 'headers'>): boolean {
 export async function ingestNdjsonStream<S extends z.ZodTypeAny>(
   req: Request,
   recordSchema: S,
-  flushBatch: (records: z.infer<S>[]) => Promise<number>,
+  flushBatch: (records: z.infer<S>[]) => Promise<{ ingested: number; duplicate: number }>,
   options: { batchSize?: number; maxLineLength?: number } = {},
 ): Promise<NdjsonIngestResponse> {
   const batchSize = options.batchSize ?? NDJSON_BATCH_SIZE;
@@ -127,9 +127,12 @@ export async function ingestNdjsonStream<S extends z.ZodTypeAny>(
     batchLines = [];
 
     try {
-      const accepted = await flushBatch(records);
-      ingested += Math.min(accepted, records.length);
-      duplicate += Math.max(0, records.length - accepted);
+      // The flush runs the capture->materialize->link pipeline and reports
+      // real counts (duplicate = already-captured + within-request repeats),
+      // not a shortfall derivation.
+      const res = await flushBatch(records);
+      ingested += res.ingested;
+      duplicate += res.duplicate;
     } catch (err) {
       // The services are all-or-nothing per batch, so the whole batch's lines
       // are rejected together; the stream continues with the next batch.

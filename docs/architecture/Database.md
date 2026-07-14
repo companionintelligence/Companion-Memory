@@ -228,8 +228,10 @@ Rules:
 1. **SQL first.** The migration is the source of truth. After changing the schema, update
    the matching TypeORM entity so reads/writes agree — entities never auto-migrate the
    schema.
-2. `yarn migrate` runs `scripts/check-migration-versions.ts` before `dbmate up`; CI runs a
-   migration-integrity check on PRs that touch `db/postgres/migrations/`.
+2. `yarn migrate` runs `bin/check-migration-versions.js` before `dbmate up`; CI runs a
+   migration-integrity check on PRs that touch `db/postgres/migrations/`. The checker is
+   dependency-free CommonJS so it also runs inside the production image, which installs
+   dependencies only; `make smoke-api` proves that before any release is pushed.
 3. The dbmate wrapper (`bin/dbmate.js`) builds the connection URL from the same
    `node-config` `db` block the API uses, and refuses destructive `--execute-file` scripts
    without confirmation.

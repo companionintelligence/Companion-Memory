@@ -36,7 +36,7 @@ sort, semantic. All of it is now captured by a save — not just the query.
 
 ### 2. Save & share  ·  _toolbar_
 
-Click **Save search** in the explorer toolbar. The dialog has three actions:
+Click **Save** in the explorer toolbar. The dialog has three actions:
 **Cancel**, **Save**, and **Save & share**. **Save & share** creates the saved search and
 immediately opens the share modal on it — no trip to the Saved Searches page.
 

@@ -3,6 +3,16 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 export interface IngestStatusSnapshot {
+  /**
+   * Static contract capabilities of this server's `/v1` plane, so a client can
+   * feature-detect from the same probe it already makes (GET /v1/ingest/status)
+   * instead of version-sniffing. `eventsSourceType`: POST /v1/events accepts an
+   * optional provenance `source_type` on each event (absent → the endpoint
+   * behaves exactly as before, stamping 'capture').
+   */
+  capabilities: {
+    eventsSourceType: true;
+  };
   /** Row counts of the bulk-ingest destination tables. */
   tables: {
     communications: number;
@@ -87,6 +97,9 @@ export class IngestStatusService {
     const tables = tableRows[0];
 
     return {
+      capabilities: {
+        eventsSourceType: true,
+      },
       tables: {
         communications: Number(tables?.communications ?? 0),
         events: Number(tables?.events ?? 0),

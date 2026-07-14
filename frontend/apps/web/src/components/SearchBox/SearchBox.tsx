@@ -25,6 +25,7 @@ import {
 import { ArrowDown, Search, X } from '@ci/shadcn/icons';
 
 import { DropdownContent } from './DropdownContent';
+import type { FilterDragPayload } from './filterDrag';
 import { DropdownProvider, useDropdown } from './useDropdown';
 
 const FormSchema = s.object({
@@ -43,12 +44,20 @@ const Keys = {
   ENTER: 'Enter',
   ARROW_UP: 'ArrowUp',
   ARROW_DOWN: 'ArrowDown',
+  ARROW_LEFT: 'ArrowLeft',
+  ARROW_RIGHT: 'ArrowRight',
 } as const;
 
 interface SearchResultItem {
   id: string;
   content: React.ReactNode;
   preview?: React.ReactNode;
+  /**
+   * The filter this row can apply, for rows that double as filter sources
+   * (person / place / tag). Same payload the row's drag carries — the arrow
+   * keys are the keyboard analogue of dragging it onto the filter drop area.
+   */
+  filter?: FilterDragPayload;
 }
 
 interface Props {
@@ -106,9 +115,10 @@ interface Props {
    */
   panelPinned?: boolean;
   /**
-   * Escape pressed while the panel is pinned (after the dismiss stage). The
-   * pin's owner decides what closing it means; without this, Escape on a
-   * pinned panel falls through to clearing the query.
+   * Escape pressed while the panel is pinned — the first stage of the Escape
+   * stack, ahead of highlight-clear / dismiss / clear. The pin's owner decides
+   * what closing it means; without this, Escape on a pinned panel falls
+   * through the rest of the stack.
    */
   onPanelUnpin?: () => void;
   onSearch?: (data: FormData & { entityDropdowns?: string[] }) => boolean | void | Promise<boolean | void>;
@@ -120,6 +130,13 @@ interface Props {
   onKeyDown?: (query: string, e: React.KeyboardEvent<HTMLInputElement>) => void;
   onClear?: () => void;
   onResultSelect?: (result: SearchResultItem) => void;
+  /**
+   * Right arrow on a highlighted result carrying a `filter` payload applies it —
+   * but only with the caret already at the end of the input, so mid-text caret
+   * movement stays native. Rows without a payload — and boxes without this
+   * callback — keep the arrow's native behavior everywhere.
+   */
+  onFilterAdd?: (filter: FilterDragPayload) => void;
   onSave?: (query: string, entityTypes: string[]) => void;
 }
 
@@ -150,6 +167,7 @@ function SearchBox(
     onKeyDown,
     onClear,
     onResultSelect,
+    onFilterAdd,
     onSave,
   }: Props,
   forwardedRef: ForwardedRef<HTMLInputElement>,
@@ -189,6 +207,8 @@ function SearchBox(
   // re-running on dependency identity churn rather than real query changes.
   const lastAutoSubmittedRef = useRef<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // Previous results list, for re-anchoring the highlight by id when it changes.
+  const prevResultsRef = useRef<SearchResultItem[]>(results);
 
   const selectedResult = selectedIndex >= 0 && selectedIndex < results.length ? results[selectedIndex] : null;
   const isLoading = loading || isAutoSubmitPending;
@@ -294,12 +314,15 @@ function SearchBox(
             (openOnFocus ? isFocusedRef.current : queryValue.length > 0) &&
             results.length > 0;
 
-          if (selectedIndex !== -1) {
+          // A pinned panel closes first — before the highlight or the results
+          // panel — so its owner's escape stack (e.g. close advanced filters,
+          // then collapse the bar) reads top-down.
+          if (panelPinned && onPanelUnpin) {
+            onPanelUnpin();
+          } else if (selectedIndex !== -1) {
             setSelectedIndex(-1);
           } else if (panelShowing) {
             setPanelDismissed(true);
-          } else if (panelPinned) {
-            onPanelUnpin?.();
           } else {
             handleClear();
           }
@@ -339,6 +362,26 @@ function SearchBox(
 
           break;
 
+        // The keyboard analogue of dragging a filter-source row onto the drop
+        // area: right adds the highlighted row's filter. Only hijacked when a
+        // filter payload is there to act on AND the caret already sits at the
+        // end of the input — anywhere earlier (or with a selection) the arrow
+        // keeps moving the caret.
+        case Keys.ARROW_RIGHT: {
+          const input = e.target as HTMLInputElement;
+          const caretAtEnd =
+            input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+
+          if (onFilterAdd && selectedResult?.filter && caretAtEnd) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            onFilterAdd(selectedResult.filter);
+          }
+
+          break;
+        }
+
         default:
           if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete') {
             setSelectedIndex(-1);
@@ -365,6 +408,8 @@ function SearchBox(
       panelPinned,
       onPanelUnpin,
       onResultSelect,
+      selectedResult,
+      onFilterAdd,
       handleClear,
       onKeyDown,
     ],
@@ -419,11 +464,20 @@ function SearchBox(
     };
   }, [queryValue, autoSubmit, autoSubmitEmpty, autoSubmitDelay, disabled, handleSubmit]);
 
-  // Reset selection when results change
+  // Results changed: keep the highlight on the same row — matched by id, since
+  // its index may have shifted and its content re-rendered (e.g. an action row
+  // whose label just toggled after Enter) — and drop it when the row is gone.
   useEffect(() => {
-    setSelectedIndex(-1);
+    const prevResults = prevResultsRef.current;
+    prevResultsRef.current = results;
     resultItemsRef.current = [];
     setIsAutoSubmitPending(false);
+
+    setSelectedIndex((prev) => {
+      const prevId = prev >= 0 && prev < prevResults.length ? prevResults[prev].id : null;
+
+      return prevId === null ? -1 : results.findIndex((result) => result.id === prevId);
+    });
   }, [results]);
 
   // Reset selection when query is cleared
@@ -538,8 +592,21 @@ function SearchBox(
                         px-2 py-1.5 cursor-pointer border-l-4
                         ${index === selectedIndex ? 'bg-accent text-accent-foreground border-blue-500' : 'hover:bg-muted/50 border-transparent'}
                       `}
-                  // Keep the input focused so the focus-driven panel doesn't close before the click lands.
-                  onMouseDown={(e) => e.preventDefault()}
+                  // Keep the input focused so the focus-driven panel doesn't close
+                  // before the click lands — except on draggable rows while the
+                  // panel is pinned: preventing mousedown default cancels native
+                  // HTML5 drag, and a pinned panel stays visible unfocused anyway.
+                  onMouseDown={(e) => {
+                    if (
+                      panelPinned &&
+                      e.target instanceof Element &&
+                      e.target.closest('[draggable="true"]')
+                    ) {
+                      return;
+                    }
+
+                    e.preventDefault();
+                  }}
                   onClick={() => onResultSelect?.(result)}
                 >
                   {result.content}

@@ -1,5 +1,6 @@
 import { Controller, Get, Param, NotFoundException, UseGuards } from '@nestjs/common';
 
+import { INTENTS_SCOPE, RequireScopes } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import {
   IntentCatalogService,
@@ -13,8 +14,12 @@ import {
  * Publishes the CI Intent catalog — the discoverable, typed capability declaration. Any agent
  * (CI-Hermes, CI-OpenClaw, an external MCP client) can read one catalog here instead of
  * re-implementing bespoke integration glue.
+ *
+ * Scope-limited connect keys need the `intents` scope to read it (CI-OpenClaw's
+ * key carries it); session/JWT and empty-scope keys are unaffected.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
+@RequireScopes(INTENTS_SCOPE)
 @Controller('api/intents')
 export class IntentsController {
   constructor(private readonly catalog: IntentCatalogService) {}

@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { MEMORY_SCOPE, RequireScopes } from '@ci/common/decorators';
 import { ApiKeyGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
@@ -66,6 +67,7 @@ export class MemoryController {
    * called once per session (system_prompt_block), not per turn.
    */
   @UseGuards(ApiKeyGuard)
+  @RequireScopes(MEMORY_SCOPE)
   @Get('context')
   async context(@Context() context: RequestContext) {
     const serviceContext = toServiceContext(context);
@@ -98,6 +100,7 @@ export class MemoryController {
    * entity IDs into readable names and content.
    */
   @UseGuards(ApiKeyGuard)
+  @RequireScopes(MEMORY_SCOPE)
   @Post('recall')
   async recall(@Context() context: RequestContext, @Body(new ValidationPipe(recallSchema)) input: RecallDto) {
     return this.recallService.recall(toServiceContext(context), {
@@ -115,6 +118,7 @@ export class MemoryController {
    *   - Hermes 'on_memory_write'
    */
   @UseGuards(ApiKeyGuard)
+  @RequireScopes(MEMORY_SCOPE)
   @HttpCode(201)
   @Post('write')
   async write(
@@ -132,6 +136,7 @@ export class MemoryController {
    *   - Hermes 'sync_turn'
    */
   @UseGuards(ApiKeyGuard)
+  @RequireScopes(MEMORY_SCOPE)
   @HttpCode(201)
   @Post('turn')
   async turn(@Context() context: RequestContext, @Body(new ValidationPipe(turnSchema)) input: TurnDto) {
@@ -196,7 +201,12 @@ export class MemoryController {
    * unprocessed fragments.  The LLM call runs in the background; the response
    * returns immediately with the number of queued fragments.
    */
+  // JWT/session principals (the browser settings UI) are unaffected by scope
+  // enforcement (no api-key scopes); an API key must carry the 'memory' scope,
+  // matching the other memory endpoints so an intentionally non-memory key
+  // can't compact.
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(MEMORY_SCOPE)
   @HttpCode(200)
   @Post('compact')
   async compact(@Context() context: RequestContext) {

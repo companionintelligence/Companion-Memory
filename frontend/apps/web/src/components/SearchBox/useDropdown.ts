@@ -71,6 +71,10 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
     }
   }, [changeSearchParams, includedEntityTypesParam]);
 
+  // Both callbacks must re-capture `setSearchParams` whenever it changes:
+  // react-router's setter closes over the params of the render it was created
+  // in, so a stale instance navigates to a URL rebuilt from those old params,
+  // resurrecting filters (e.g. ?bbox) removed since.
   const clearEntityTypes = useCallback(() => {
     setSelectedEntityTypes(AVAILABLE_ENTITY_TYPES);
 
@@ -81,7 +85,7 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
         return searchParams;
       });
     }
-  }, []);
+  }, [changeSearchParams, setSearchParams]);
 
   const selectAllEntityTypes = useCallback(() => {
     setSelectedEntityTypes([]);
@@ -93,7 +97,7 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
         return searchParams;
       });
     }
-  }, []);
+  }, [changeSearchParams, setSearchParams]);
 
   const toggleEntityType = useCallback(
     (entityType: string) => {

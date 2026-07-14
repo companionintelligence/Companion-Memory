@@ -3,12 +3,13 @@ import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { type NextFunction, type Request, type Response } from 'express';
 import request from 'supertest';
+import { DataSource } from 'typeorm';
 
 import { ContextService } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
-import { CommunicationService, ContentService, ItemService } from '@ci/domains/memory';
+import { CommunicationService, ContentService, EventService, ItemService } from '@ci/domains/memory';
 import { PositionService } from '@ci/domains/position';
 
 import { BulkIngestController } from '../controllers/BulkIngestController';
@@ -35,12 +36,39 @@ describe('Bulk ingest routes (/v1/*)', () => {
   const itemService = { createMany: jest.fn(echo) };
   const browserActivityService = { createMany: jest.fn(echo) };
   const positionService = { create: jest.fn(echo) };
+  const eventEcho = async (_context: unknown, data: unknown): Promise<Record<string, unknown>[]> =>
+    (Array.isArray(data) ? data : [data]).map((d, i) => ({
+      id: `event-${i}`,
+      sourceType: (d as Record<string, unknown>).source_type,
+      sourceSystem: (d as Record<string, unknown>).source_system,
+      sourceId: (d as Record<string, unknown>).source_id,
+    }));
+
+  const eventService = { create: jest.fn(eventEcho) };
+  // Capture-log INSERT always "inserts" (new capture); the trailing UPDATE
+  // returns nothing.
+  // The capture-log INSERT is set-based; RETURNING echoes the triple so the
+  // controller can map fresh rows back to envelope entries (params flatten 9
+  // binds per row: user_id, destination, source_type, source_system,
+  // source_id, ...).
+  const captureLogEcho = async (sql: string, params: unknown[] = []) =>
+    /INSERT INTO\s+ci\.capture_events/.test(sql)
+      ? Array.from({ length: params.length / 9 }, (_, r) => ({
+          capture_event_id: `cap-${r}`,
+          source_type: params[r * 9 + 2],
+          source_system: params[r * 9 + 3],
+          source_id: params[r * 9 + 4],
+        }))
+      : [];
+  const dataSourceQuery = jest.fn(captureLogEcho);
 
   beforeEach(() => {
     jest.clearAllMocks();
     mockCanActivate.mockImplementation(() => true);
     communicationService.createMany.mockImplementation(echo);
     itemService.createMany.mockImplementation(echo);
+    eventService.create.mockImplementation(eventEcho);
+    dataSourceQuery.mockImplementation(captureLogEcho);
   });
 
   beforeAll(async () => {
@@ -52,6 +80,8 @@ describe('Bulk ingest routes (/v1/*)', () => {
         { provide: ItemService, useValue: itemService },
         { provide: BrowserActivityService, useValue: browserActivityService },
         { provide: PositionService, useValue: positionService },
+        { provide: EventService, useValue: eventService },
+        { provide: DataSource, useValue: { query: dataSourceQuery } },
       ],
     })
       .overrideGuard(JwtOrApiKeyAuthGuard)
@@ -106,6 +136,28 @@ describe('Bulk ingest routes (/v1/*)', () => {
 
       expect(res.body.message).toBe('Validation failed');
       expect(communicationService.createMany).not.toHaveBeenCalled();
+    });
+
+    it('POST /v1/events ingests an { events } envelope through the capture log', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/v1/events')
+        .send({
+          events: [
+            {
+              source_system: 'gmail',
+              source_id: 'msg-1',
+              kind: 'communication.email',
+              occurred_at: '2026-01-01T00:00:00.000Z',
+              payload: { Subject: 'hi' },
+            },
+          ],
+        })
+        .expect(201);
+
+      expect(res.body).toEqual({ ingested: 1, duplicate: 0, rejected: [] });
+      expect(eventService.create).toHaveBeenCalledTimes(1);
+      // Raw-log INSERT + event_id back-link UPDATE.
+      expect(dataSourceQuery).toHaveBeenCalledTimes(2);
     });
   });
 
