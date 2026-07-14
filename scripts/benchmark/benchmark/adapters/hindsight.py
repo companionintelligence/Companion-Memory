@@ -149,12 +149,14 @@ class HindsightAdapter(MemoryAdapter):
                     fn(bank_id=self._bank)
                     break
                 except Exception:
+                    # Best-effort: try the next known cleanup shape instead.
                     pass
         close = getattr(client, "close", None)
         if callable(close):
             try:
                 close()
             except Exception:
+                # Best-effort: teardown must not fail the run over a close error.
                 pass
         self._client = None
 

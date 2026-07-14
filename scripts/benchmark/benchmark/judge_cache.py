@@ -30,7 +30,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from .schema import EvalQuestion
 from .scoring import Scorer
@@ -98,6 +98,7 @@ class JudgeCache:
             try:
                 os.unlink(tmp)
             except OSError:
+                # Best-effort: tmp file may already be gone; the re-raise below is what matters.
                 pass
             raise
         self.path = target
