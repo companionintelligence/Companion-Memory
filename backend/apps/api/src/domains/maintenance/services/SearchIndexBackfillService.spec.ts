@@ -5,6 +5,7 @@ import {
   ContentCreatedEvent,
   EventCreatedEvent,
   ItemCreatedEvent,
+  PersonCreatedEvent,
 } from '@ci/domains/memory/events';
 
 import { SearchIndexBackfillService } from './SearchIndexBackfillService';
@@ -81,12 +82,13 @@ describe('SearchIndexBackfillService', () => {
       item: [['i1', 'i2', 'i3'], []],
       'browser-activity': [['b1'], []],
       file: [['f1', 'f2'], []],
+      person: [['p1'], []],
     });
 
     const result = await service.backfill({ batchSize: 100 });
 
     expect(result).toEqual({
-      enqueued: 9,
+      enqueued: 10,
       perType: {
         communication: 2,
         event: 1,
@@ -94,6 +96,7 @@ describe('SearchIndexBackfillService', () => {
         item: 3,
         'browser-activity': 1,
         file: 2,
+        person: 1,
       },
       // No embeddings configured for this DS → drain count is 0 for every type.
       embedded: 0,
@@ -104,6 +107,7 @@ describe('SearchIndexBackfillService', () => {
         item: 0,
         'browser-activity': 0,
         file: 0,
+        person: 0,
       },
     });
 
@@ -127,6 +131,11 @@ describe('SearchIndexBackfillService', () => {
     expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
       { name: FileCreatedEvent, data: { fileId: 'f1' } },
       { name: FileCreatedEvent, data: { fileId: 'f2' } },
+    ]);
+    // person rows (extract_people stubs, created without a per-row event) ride
+    // the same bulk path so people extracted from communications become searchable.
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: PersonCreatedEvent, data: { personId: 'p1' } },
     ]);
 
     // content had an empty page — never enqueued — and nothing left the search-index queue.

@@ -33,6 +33,7 @@ import { PlaceType } from '../types/PlaceType';
 import { SearchInput } from '../types/SearchInput';
 import { SearchResultConnection } from '../types/SearchResultConnection';
 import { type SearchResult } from '../types/SearchResultType';
+import { TagType } from '../types/TagType';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
@@ -148,13 +149,13 @@ export class SearchResolver {
     // the viewer falls into the tidy "link unavailable" state rather than an error.
     if (input.shareToken != null && input.shareToken.length > 0) {
       if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
-        return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0 };
+        return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
       }
 
       return this.runSharedSearch(input);
     }
 
-    return this.executeSearch(toServiceContext(context), input);
+    return this.executeSearch(toServiceContext(context), input, { matchTags: true });
   }
 
   /**
@@ -169,7 +170,7 @@ export class SearchResolver {
     const saved = await this.savedSearchService.findByShareToken(input.shareToken ?? '');
 
     if (saved == null || saved.userId == null) {
-      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0 };
+      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
     }
 
     // All filter values come from the owner's stored saved search (never the
@@ -204,6 +205,7 @@ export class SearchResolver {
   private async executeSearch(
     serviceContext: UserServiceContext,
     input: SearchInput,
+    { matchTags = false }: { matchTags?: boolean } = {},
   ): Promise<SearchResultConnection> {
     const query = input.query != null && input.query.length > 0 ? input.query : undefined;
     const tags = input.tags && input.tags.length > 0 ? input.tags : undefined;
@@ -376,10 +378,17 @@ export class SearchResolver {
       cursor: searchCursorOf(result),
     }));
 
+    // Tag suggestions ride alongside the entity results (the header search box
+    // renders them as draggable filter rows). Shared searches never opt in — a
+    // share token must not let the viewer probe the owner's tag vocabulary.
+    const matchingTags =
+      matchTags && query != null ? await this.tagService.searchByLabel(serviceContext, query) : [];
+
     return {
       edges,
       pageInfo,
       totalCount,
+      matchingTags: matchingTags.map((tag) => TagType.toType(tag)),
     };
   }
 

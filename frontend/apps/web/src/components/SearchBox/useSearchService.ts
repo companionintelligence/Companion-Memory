@@ -7,12 +7,29 @@ import { gql } from '@/graphql';
 const SEARCH_QUERY = gql(`
   query SearchBoxQuery($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $semantic: Boolean) {
     search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, semantic: $semantic }) {
+      matchingTags {
+        id
+        label
+      }
+
       edges {
         node {
           __typename
 
           ... on Node {
             id
+          }
+
+          # Unmasked names so the header box can attach a who/where filter
+          # payload to person/place rows (arrow-key add/remove) without
+          # per-item useFragment. Aliased to stay clear of the result
+          # fragments' own selections.
+          ... on PersonType {
+            filterName: name
+          }
+
+          ... on PlaceType {
+            filterName: name
           }
 
           ...SearchResultCommunicationData
@@ -66,9 +83,12 @@ export function useSearchService({
   });
 
   const results = useMemo(() => (data?.search?.edges ?? []).map((edge) => edge.node), [data]);
+  // Tags whose label matches the query, surfaced as draggable filter rows.
+  const tags = useMemo(() => data?.search?.matchingTags ?? [], [data]);
 
   return {
     data: results,
+    tags,
     loading,
     error,
   };

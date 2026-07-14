@@ -1,7 +1,7 @@
 /**
- * REST bulk-ingest plane (`/v1/*`). Hosts the batch ingest endpoints for every
- * bulk kind — communications, contents, inventory, browser-activity, positions
- * (events stay on the memory domain's EventsIngestController; batch file
+ * REST bulk-ingest plane (`/v1/*`). Hosts the G1 unified capture ingest
+ * (POST /v1/events) and the batch ingest endpoints for every bulk kind —
+ * communications, contents, inventory, browser-activity, positions (batch file
  * upload lives on the files domain's BulkFilesController at POST /v1/files) —
  * plus the bulk lifecycle pair POST /v1/ingest/finish + GET /v1/ingest/status,
  * so a machine client can run a complete load → enrich → drain cycle over
@@ -10,13 +10,15 @@
  * Each bulk route speaks two encodings: `application/x-ndjson` (the default
  * bulk contract — one record per line, streamed and flushed in batches; see
  * ./ndjson.ts) and the `{ records: [...] }` JSON envelope (max 10,000
- * records).
+ * records). Events are JSON-envelope only (`{ events: [...] }`, max 1,000).
  *
- * The controllers own no persistence: each route delegates to the existing
+ * The bulk routes own no persistence: each delegates to the existing
  * chunk-safe, provenance-deduped bulk service exported by its home domain, and
  * the lifecycle endpoints delegate to the maintenance domain's orchestrator /
- * search-index backfill. See BulkIngestController and
- * IngestLifecycleController for the contract.
+ * search-index backfill. The events route additionally appends to the
+ * ci.capture_events raw log before materializing via the memory domain's
+ * EventService. See BulkIngestController and IngestLifecycleController for the
+ * contract.
  *
  * @module IngestModule
  */

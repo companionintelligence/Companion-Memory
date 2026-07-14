@@ -82,7 +82,8 @@ export function normalizeIdentifier(kind: IdentifierKind, raw: string | null | u
  * Structured name parts for a Person's `properties`, split from a display
  * name. snake_case keys mirror what PersonEntity.loadPropertiesFromJsonb reads
  * (properties.first_name / .last_name; middle_name rides along for when a
- * reader wants it). Rule: one token -> first only; two -> first + last; three
+ * reader wants it). Rule: one token -> no parts at all (a lone token is a
+ * display name/handle, not reliably a first name); two -> first + last; three
  * or more -> first token, last token, everything between as middle. Middle is
  * OMITTED (not empty) when absent.
  */
@@ -99,12 +100,8 @@ export function splitPersonName(fullName: string | null | undefined): PersonName
   }
 
   const tokens = fullName.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-  if (tokens.length === 0) {
+  if (tokens.length <= 1) {
     return null;
-  }
-
-  if (tokens.length === 1) {
-    return { first_name: tokens[0] };
   }
 
   if (tokens.length === 2) {
@@ -125,14 +122,42 @@ export interface ClassifiedIdentifier {
 }
 
 /**
+ * Phone-shaped end-to-end: nothing but digits and common phone punctuation
+ * (+ ( ) - . and whitespace). A string that merely CONTAINS digits is not a
+ * phone — chat handles routinely embed digit runs ("alexmz12", "griffin5131").
+ */
+const PHONE_SHAPE_REGEX = /^[+()\-.\s\d]+$/;
+
+/**
+ * Minimum digits for a phone classification (7 = the shortest local subscriber
+ * number). Below this, even an all-digit participant (SMS short codes, a handle
+ * that is just "42") classifies as a name — still a stable per-user identifier,
+ * but never collapsible with a real phone number.
+ */
+const PHONE_MIN_DIGITS = 7;
+
+function isPhoneShaped(trimmed: string): boolean {
+  if (!PHONE_SHAPE_REGEX.test(trimmed)) {
+    return false;
+  }
+
+  return trimmed.replace(/\D/g, '').length >= PHONE_MIN_DIGITS;
+}
+
+/**
  * Classify a raw communication participant string and normalize it with the
  * shared rule the identifier index uses — THE single classification rule for
  * people-extraction and people-linking (the stub backfill, the link backfill,
  * and the per-row link listener all resolve through this, so they agree
  * byte-for-byte on what counts as a match):
- *   - contains '@'   -> email
- *   - contains a digit -> phone (normalizePhone keeps the digits)
- *   - anything else  -> name (display-name-only participants, e.g. Messenger)
+ *   - contains '@'                    -> email
+ *   - phone-shaped (see isPhoneShaped) -> phone (normalizePhone keeps the digits)
+ *   - anything else                   -> name (display-name / handle
+ *     participants — Messenger names, Discord handles like "alexmz12")
+ *
+ * The phone branch used to fire on ANY digit-bearing string, which turned chat
+ * handles into bogus short "phone numbers" ("alexmz12" -> phone '12') and let
+ * unrelated handles sharing a digit run collide into one Person.
  */
 export function classifyParticipant(raw: string | null): ClassifiedIdentifier | null {
   if (raw == null) {
@@ -144,7 +169,7 @@ export function classifyParticipant(raw: string | null): ClassifiedIdentifier | 
     return null;
   }
 
-  const kind: IdentifierKind = trimmed.includes('@') ? 'email' : /\d/.test(trimmed) ? 'phone' : 'name';
+  const kind: IdentifierKind = trimmed.includes('@') ? 'email' : isPhoneShaped(trimmed) ? 'phone' : 'name';
   const valueNormalized = normalizeIdentifier(kind, trimmed);
   if (valueNormalized == null) {
     return null;

@@ -1,5 +1,30 @@
 import { Entity, PrimaryColumn, Column } from 'typeorm';
 
+/** One-line preview length cap — matches the importer's clip when it DOES send one. */
+const PREVIEW_MAX_CHARS = 140;
+
+/**
+ * Derive a preview from the content when none was stored. Importers only send
+ * `preview` when clipping actually shortened the content (≤140-char one-line
+ * messages arrive with content but no preview — most chat traffic), so readers
+ * that surface `preview` (search tsvector, list views) saw nothing for exactly
+ * the rows where content itself IS the preview. Same one-line + ellipsis shape
+ * as the importer's clip, so stored and derived previews are indistinguishable.
+ */
+function previewFromContent(content: string | null | undefined): string | null {
+  if (!content) {
+    return null;
+  }
+
+  const oneLine = content.replace(/\s+/g, ' ').trim();
+
+  if (oneLine.length === 0) {
+    return null;
+  }
+
+  return oneLine.length > PREVIEW_MAX_CHARS ? `${oneLine.slice(0, PREVIEW_MAX_CHARS - 1)}…` : oneLine;
+}
+
 @Entity({ schema: 'ci', name: 'communications' })
 export class CommunicationEntity {
   // Surrogate primary key (with the hypertable partition cols time + user_id) so
@@ -126,7 +151,7 @@ export class CommunicationEntity {
       connectionId: entity.connectionId,
       isEncrypted: entity.isEncrypted,
       isArchived: entity.isArchived,
-      preview: entity.preview,
+      preview: entity.preview ?? previewFromContent(entity.content),
       sourceType: entity.sourceType,
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,

@@ -2,11 +2,12 @@ import { Readable } from 'node:stream';
 
 import { BadRequestException } from '@nestjs/common';
 import type { Request } from 'express';
+import type { DataSource } from 'typeorm';
 
 import type { RequestContext } from '@ci/common/context';
 import { ValidationPipe } from '@ci/common/pipes';
 import type { BrowserActivityService } from '@ci/domains/browser-activity';
-import type { CommunicationService, ContentService, ItemService } from '@ci/domains/memory';
+import type { CommunicationService, ContentService, EventService, ItemService } from '@ci/domains/memory';
 import type { PositionService } from '@ci/domains/position';
 
 import {
@@ -30,8 +31,14 @@ function ndjsonReq(body: string): Request {
   return Object.assign(req, { headers: { 'content-type': 'application/x-ndjson' } }) as unknown as Request;
 }
 
-/** Mock every bulk service to echo one row per record it was handed. */
-function makeController() {
+/**
+ * Mock every bulk service to echo one row per record it was handed. For the
+ * events route, `captureInserted` scripts the set-based capture-log INSERT per
+ * candidate row (in statement order): true → the row inserted (new capture),
+ * false → ON CONFLICT hit (duplicate). The mock reconstructs the RETURNING
+ * triple from the statement's flattened 8-params-per-row bind list.
+ */
+function makeController(opts: { captureInserted?: boolean[] } = {}) {
   const echo = jest.fn(async (_context: unknown, data: unknown[]) =>
     data.map((_, i) => ({ id: `row-${i}` })),
   );
@@ -48,12 +55,54 @@ function makeController() {
     create: jest.fn(async (_context: unknown, data: unknown[]) => data.map((_, i) => ({ id: `row-${i}` }))),
   } as unknown as PositionService;
 
+  // Batched create: one egress row per input DTO, echoing the triple — the
+  // controller's materialized_id backfill matches log rows by triple.
+  const eventService = {
+    create: jest.fn(async (_context: unknown, data: unknown) =>
+      (Array.isArray(data) ? data : [data]).map((d, i) => ({
+        id: `event-${i}`,
+        sourceType: (d as Record<string, unknown>).source_type,
+        sourceSystem: (d as Record<string, unknown>).source_system,
+        sourceId: (d as Record<string, unknown>).source_id,
+      })),
+    ),
+  } as unknown as EventService;
+
+  const dataSource = {
+    query: jest.fn(async (sql: string, params: unknown[] = []) => {
+      if (/INSERT INTO\s+ci\.capture_events/.test(sql)) {
+        // 9 binds per row: user_id, destination, source_type, source_system,
+        // source_id, kind, occurred_at, observed_at, payload.
+        const rows: Record<string, unknown>[] = [];
+        for (let r = 0; r * 9 < params.length; r++) {
+          const isNew = (opts.captureInserted ?? [])[r] ?? true;
+          if (!isNew) {
+            continue;
+          }
+
+          rows.push({
+            capture_event_id: `cap-${r}`,
+            source_type: params[r * 9 + 2],
+            source_system: params[r * 9 + 3],
+            source_id: params[r * 9 + 4],
+          });
+        }
+
+        return rows;
+      }
+
+      return []; // UPDATE / DELETE
+    }),
+  } as unknown as DataSource;
+
   const controller = new BulkIngestController(
     communicationService,
     contentService,
     itemService,
     browserActivityService,
     positionService,
+    eventService,
+    dataSource,
   );
 
   return {
@@ -63,6 +112,8 @@ function makeController() {
     itemService,
     browserActivityService,
     positionService,
+    eventService,
+    dataSource,
   };
 }
 
@@ -75,7 +126,131 @@ const communicationRecord = (sourceId: string) => ({
   source_id: sourceId,
 });
 
+const ev = (id: string) => ({
+  source_system: 'gmail',
+  source_id: id,
+  kind: 'communication.email',
+  occurred_at: '2026-01-01T00:00:00.000Z',
+  payload: { Subject: 'hi' },
+});
+
 describe('BulkIngestController', () => {
+  describe('POST /v1/events (G1 capture ingest)', () => {
+    it('materializes new captures as ONE batched create and counts them as ingested', async () => {
+      const { controller, eventService } = makeController({ captureInserted: [true, true] });
+      const res = await controller.ingest(ctx, { events: [ev('a'), ev('b')] });
+      expect(res.ingested).toBe(2);
+      expect(res.duplicate).toBe(0);
+      expect(res.rejected).toEqual([]);
+      // The ARRAY form takes EventService's set-based path, which emits no
+      // per-row EventCreatedEvent — bulk loads must not trigger live indexing.
+      expect(eventService.create).toHaveBeenCalledTimes(1);
+      const dtos = (eventService.create as jest.Mock).mock.calls[0][1];
+      expect(Array.isArray(dtos)).toBe(true);
+      expect(dtos).toHaveLength(2);
+    });
+
+    it('appends the whole envelope to the raw log with ONE multi-row INSERT', async () => {
+      const { controller, dataSource } = makeController({ captureInserted: [true, true, true] });
+      await controller.ingest(ctx, { events: [ev('a'), ev('b'), ev('c')] });
+      const inserts = (dataSource.query as jest.Mock).mock.calls.filter(([sql]) =>
+        /INSERT INTO\s+ci\.capture_events/.test(sql),
+      );
+      expect(inserts).toHaveLength(1);
+      expect(inserts[0][1]).toHaveLength(3 * 9); // 9 binds per row, flattened
+    });
+
+    it('counts an already-seen (source_type, source_system, source_id) as duplicate, no event created', async () => {
+      const { controller, eventService } = makeController({ captureInserted: [false] });
+      const res = await controller.ingest(ctx, { events: [ev('a')] });
+      expect(res.duplicate).toBe(1);
+      expect(res.ingested).toBe(0);
+      expect(eventService.create).not.toHaveBeenCalled();
+    });
+
+    it('collapses within-request repeats of a source key as duplicates', async () => {
+      const { controller, eventService } = makeController({ captureInserted: [true] });
+      const res = await controller.ingest(ctx, { events: [ev('a'), ev('a')] });
+      expect(res.ingested).toBe(1);
+      expect(res.duplicate).toBe(1);
+      expect((eventService.create as jest.Mock).mock.calls[0][1]).toHaveLength(1);
+    });
+
+    it('routes capture events to EventService.create with the source triple + kind', async () => {
+      const { controller, eventService } = makeController({ captureInserted: [true] });
+      await controller.ingest(ctx, { events: [ev('a')] });
+      const dto = (eventService.create as jest.Mock).mock.calls[0][1][0];
+      expect(dto).toMatchObject({
+        source_type: 'capture',
+        source_system: 'gmail',
+        source_id: 'a',
+        event_type: 'communication.email',
+      });
+    });
+
+    it('backfills event_id onto the raw log with ONE set-based UPDATE', async () => {
+      const { controller, dataSource } = makeController({ captureInserted: [true, true] });
+      await controller.ingest(ctx, { events: [ev('a'), ev('b')] });
+      const updates = (dataSource.query as jest.Mock).mock.calls.filter(([sql]) =>
+        /UPDATE ci\.capture_events/.test(sql),
+      );
+      expect(updates).toHaveLength(1);
+      // (capture_event_id, event_id) pairs, zipped in input order.
+      expect(updates[0][1]).toEqual(['cap-0', 'event-0', 'cap-1', 'event-1']);
+    });
+
+    it('passes a client source_type through to the raw log and the materialized event', async () => {
+      const { controller, eventService, dataSource } = makeController({ captureInserted: [true] });
+      await controller.ingest(ctx, {
+        events: [{ ...ev('a'), source_type: 'ci-import-tools' }],
+      });
+
+      // Raw log INSERT: the first row's source_type rides as $3 (after
+      // user_id and destination).
+      const insertCall = (dataSource.query as jest.Mock).mock.calls.find(([sql]) =>
+        /INSERT INTO\s+ci\.capture_events/.test(sql),
+      );
+      expect(insertCall?.[1]?.[2]).toBe('ci-import-tools');
+
+      // Materialized event: the same triple, so it dedups against rows the
+      // importer previously created over GraphQL createEvents.
+      const dto = (eventService.create as jest.Mock).mock.calls[0][1][0];
+      expect(dto).toMatchObject({
+        source_type: 'ci-import-tools',
+        source_system: 'gmail',
+        source_id: 'a',
+      });
+    });
+
+    it("defaults an absent source_type to 'capture' (pre-passthrough behavior)", async () => {
+      const { controller, dataSource } = makeController({ captureInserted: [true] });
+      await controller.ingest(ctx, { events: [ev('a')] });
+      const insertCall = (dataSource.query as jest.Mock).mock.calls.find(([sql]) =>
+        /INSERT INTO\s+ci\.capture_events/.test(sql),
+      );
+      expect(insertCall?.[1]?.[2]).toBe('capture');
+    });
+
+    it('rejects the fresh captures when the batched materialization throws, compensating the raw log', async () => {
+      const { controller, eventService, dataSource } = makeController({ captureInserted: [true, true] });
+      (eventService.create as jest.Mock).mockImplementation(async () => {
+        throw new Error('boom');
+      });
+      const res = await controller.ingest(ctx, { events: [ev('a'), ev('b')] });
+      expect(res.ingested).toBe(0);
+      expect(res.rejected).toEqual([
+        { index: 0, reason: 'boom' },
+        { index: 1, reason: 'boom' },
+      ]);
+      // The raw-log rows are deleted so a re-send materializes instead of
+      // reading its own stranded captures back as duplicates.
+      const del = (dataSource.query as jest.Mock).mock.calls.find(([sql]) =>
+        /DELETE FROM ci\.capture_events/.test(sql),
+      );
+      expect(del?.[1]?.[0]).toEqual(['cap-0', 'cap-1']);
+    });
+  });
+
   describe('POST /v1/communications', () => {
     it('hands the whole batch to CommunicationService.createMany and reports it ingested', async () => {
       const { controller, communicationService } = makeController();
@@ -192,18 +367,26 @@ describe('BulkIngestController', () => {
   });
 
   describe('POST /v1/positions', () => {
-    it('reports rows the service collapsed intra-batch as duplicate', async () => {
+    it('counts a repeated triple as duplicate; triple-less fixes materialize directly', async () => {
       const { controller, positionService } = makeController();
-      // PositionService dedupes same-time records within the batch: 3 in, 2 out.
       (positionService.create as jest.Mock).mockResolvedValueOnce([{ id: 'p-1' }, { id: 'p-2' }]);
 
-      const record = { time: '2026-01-01T00:00:00.000Z', source: 'gps' as const };
+      const tripled = {
+        time: '2026-01-01T00:00:00.000Z',
+        source: 'gps' as const,
+        source_type: 'ci-import-tools',
+        source_system: 'gpx',
+        source_id: 'fix-1',
+      };
+      const bare = { time: '2026-01-01T00:01:00.000Z', source: 'gps' as const };
       const res = await controller.ingestPositions(ctx, jsonReq(), {
-        records: [record, record, { ...record, time: '2026-01-01T00:01:00.000Z' }],
+        // The same capture key twice → duplicate; the triple-less fix skips the
+        // log (no capture identity) and materializes directly.
+        records: [tripled, tripled, bare],
       });
 
       expect(res).toEqual({ ingested: 2, duplicate: 1, rejected: [] });
-      expect((positionService.create as jest.Mock).mock.calls[0][1]).toHaveLength(3);
+      expect((positionService.create as jest.Mock).mock.calls[0][1]).toHaveLength(2);
     });
 
     it('suppresses per-row created events and forwards the provenance triple (#1672)', async () => {
@@ -312,11 +495,17 @@ describe('BulkIngestController', () => {
       expect((itemService.createMany as jest.Mock).mock.calls[0][1]).toHaveLength(2);
     });
 
-    it('reports service-collapsed rows as duplicate (positions, same as the envelope path)', async () => {
+    it('reports a repeated capture key as duplicate (positions, same as the envelope path)', async () => {
       const { controller, positionService } = makeController();
       (positionService.create as jest.Mock).mockResolvedValueOnce([{ id: 'p-1' }]);
 
-      const record = { time: '2026-01-01T00:00:00.000Z', source: 'gps' };
+      const record = {
+        time: '2026-01-01T00:00:00.000Z',
+        source: 'gps',
+        source_type: 'ci-import-tools',
+        source_system: 'gpx',
+        source_id: 'fix-1',
+      };
       const res = await controller.ingestPositions(
         ctx,
         ndjsonReq(`${JSON.stringify(record)}\n${JSON.stringify(record)}\n`),
@@ -324,6 +513,7 @@ describe('BulkIngestController', () => {
       );
 
       expect(res).toEqual({ ingested: 1, duplicate: 1, rejected: [] });
+      expect((positionService.create as jest.Mock).mock.calls[0][1]).toHaveLength(1);
     });
   });
 });

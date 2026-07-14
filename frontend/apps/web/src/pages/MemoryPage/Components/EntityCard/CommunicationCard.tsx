@@ -102,16 +102,21 @@ export function CommunicationCard({ entity }: Props) {
       <div className="flex items-start gap-3">
         {getDirectionIcon()}
         <div className="flex-1 min-w-0">
-          <Tooltip>
-            <Tooltip.Trigger asChild>
-              <h3 className="truncate text-lg font-semibold leading-4 text-card-foreground cursor-default">
-                {data.subject || `${data.type[0].toUpperCase() + data.type.slice(1)} Communication`}
-              </h3>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              <p>{data.subject || `${data.type[0].toUpperCase() + data.type.slice(1)} Communication`}</p>
-            </Tooltip.Content>
-          </Tooltip>
+          {/* Chat-style sources have no subject — render no subject line at all
+              (the message body below is the card's text) instead of a
+              "<Type> Communication" placeholder. */}
+          {data.subject && (
+            <Tooltip>
+              <Tooltip.Trigger asChild>
+                <h3 className="truncate text-lg font-semibold leading-4 text-card-foreground cursor-default">
+                  {data.subject}
+                </h3>
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                <p>{data.subject}</p>
+              </Tooltip.Content>
+            </Tooltip>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
             {communicationType && (
               <>

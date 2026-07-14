@@ -150,6 +150,20 @@ const forwardArgs = program.args;
       },
     });
 
+    // status is null when the child never ran (dbmate missing, wrong arch) or
+    // died on a signal (OOM kill mid-migration). Exiting on it would report
+    // success: compose treats migrate-database as completed and boots the api
+    // against an unmigrated database.
+    if (result.error) {
+      console.error(`Failed to run dbmate: ${result.error.message}`);
+      process.exit(1);
+    }
+
+    if (result.signal) {
+      console.error(`dbmate was terminated by signal ${result.signal}.`);
+      process.exit(1);
+    }
+
     process.exit(result.status);
   }
 })();

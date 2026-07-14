@@ -224,6 +224,23 @@
     font-weight: 200;
     line-height: 1.0;
   }
+  /* Chrome/Safari paint autofilled inputs with their own opaque light background
+     and dark text, ignoring bg-input — which looks broken on the dark theme
+     (e.g. the Create API Key name field). Repaint the fill to match the input
+     background and force the themed text color; the 9999s transition defers the
+     UA background repaint indefinitely. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-text-fill-color: var(--foreground);
+    -webkit-box-shadow: 0 0 0 1000px var(--input) inset;
+    box-shadow: 0 0 0 1000px var(--input) inset;
+    caret-color: var(--foreground);
+    transition: background-color 9999s ease-in-out 0s;
+  }
 }
 
 .ci-primary-surface {
