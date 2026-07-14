@@ -14,9 +14,26 @@ import { SerializerService } from './SerializerService';
 const DEFAULT_MAX_RESULTS = 5;
 
 // Raw-message ("naive RAG") channel: how many source fragments to vector-search
-// and union into the recall block alongside the graph nodes + expansion. Full
-// union, no cap on the merge — tuning showed capping/re-ranking only hurts.
+// and union into the recall block alongside the graph nodes + expansion. The
+// merge itself is uncapped (tuning showed capping/re-ranking only hurts); the
+// noise control now lives in SearchService.searchMessages' cosine-distance floor
+// (gap G5) rather than in a post-hoc cap here.
 const MESSAGE_RESULTS = 10;
+
+// Cosine-distance floor for the message channel, forwarded to searchMessages.
+// `undefined` means "use the SearchService default" (0.5, matching semantic
+// mode) — kept explicit here so per-deployment tuning has one obvious knob.
+// See memory-and-search plan §5 ("searchMessages floor → start at 0.5").
+const MESSAGE_DISTANCE_FLOOR: number | undefined = undefined;
+
+// Seed mode for the entity/graph channel. DECISION (memory-and-search plan §5,
+// "Default recall seed mode boosted vs. hybrid → keep boosted; switch only if
+// the merged benchmark shows hybrid winning"): stays 'boosted'. Boosted is the
+// most reliable seed finder for entity-centric KG queries and, unlike 'hybrid',
+// never lets a pure-semantic single-channel hit outrank a keyword-anchored one.
+// This is a data-backed default pending PR #1587's regression gate; flip the
+// constant (not the call sites) if the benchmark reverses it.
+const SEED_MODE = 'boosted' as const;
 
 /**
  * L1 — per-turn keyword/semantic search against the knowledge graph.
@@ -58,7 +75,7 @@ export class RecallService {
       // semantic only when boosted is empty (genuinely paraphrased queries).
       let results = await this.searchService.search(context, {
         query,
-        mode: 'boosted',
+        mode: SEED_MODE,
         maxResults,
         excludeTypes: ['message'],
       });
@@ -123,7 +140,12 @@ export class RecallService {
       // husband Arjun"). Vector-search the raw messages and union their text in.
       // Use the original (unsanitised) query — natural language embeds better.
       try {
-        const messageHits = await this.searchService.searchMessages(context, dto.query, MESSAGE_RESULTS);
+        const messageHits = await this.searchService.searchMessages(
+          context,
+          dto.query,
+          MESSAGE_RESULTS,
+          MESSAGE_DISTANCE_FLOOR,
+        );
 
         if (messageHits.length > 0) {
           const memories = await this.agentMemory.findByIds(

@@ -56,6 +56,32 @@ export class AuthService {
     });
   }
 
+  /**
+   * Short-lived signed token that carries an OIDC-verified identity between the
+   * OIDC callback and the "create your account?" confirmation step. It proves
+   * the email/name came from a successful Portal sign-in (not client-supplied),
+   * so the confirm endpoint can create the account without re-trusting inputs.
+   * The `purpose` claim prevents it being accepted anywhere a session token is.
+   */
+  issueSignupIntentToken(email: string, name?: string): string {
+    return this.jwtService.sign(
+      { email, name, purpose: 'signup_intent' },
+      { secret: config.auth.jwt.refreshTokenSecret, expiresIn: '10m' },
+    );
+  }
+
+  verifySignupIntentToken(token: string): { email: string; name?: string } {
+    const payload = this.jwtService.verify<{ email?: string; name?: string; purpose?: string }>(token, {
+      secret: config.auth.jwt.refreshTokenSecret,
+    });
+
+    if (payload.purpose !== 'signup_intent' || !payload.email) {
+      throw new UnauthorizedException('Invalid signup intent token');
+    }
+
+    return { email: payload.email, name: payload.name };
+  }
+
   async rotateSessionToken(userId: string, token: string, meta: SessionMetadata): Promise<RotationResult> {
     const { session, graceMatch } = await this.findSession(userId, token, meta);
 

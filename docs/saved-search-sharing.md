@@ -36,7 +36,7 @@ sort, semantic. All of it is now captured by a save — not just the query.
 
 ### 2. Save & share  ·  _toolbar_
 
-Click **Save search** in the explorer toolbar. The dialog has three actions:
+Click **Save** in the explorer toolbar. The dialog has three actions:
 **Cancel**, **Save**, and **Save & share**. **Save & share** creates the saved search and
 immediately opens the share modal on it — no trip to the Saved Searches page.
 
@@ -116,8 +116,13 @@ Editing here keeps the saved search in sync everywhere it runs — the explorer 
   paging/sort only). `entityOwnerScope` makes a result node's media/relations/tags resolve
   under the node's owner so shared galleries render.
 - Access is **signed-in users only** — the resolvers stay behind the auth guard; the token
-  is not an anonymous surface. See the tenancy note in
-  [`architecture.md`](architecture/architecture.md) §8.
+  is not an anonymous surface. The whole surface is additionally gated by the
+  `shared.search` feature flag (**off by default** in `backend/apps/api/config/default.json`).
+  See the tenancy note in [`architecture.md`](architecture/architecture.md) §8 and the
+  API-side description in
+  [`docs/api/graphql.md` §2/§3.7](api/graphql.md#37-search--saved-searches).
+- Schema: `ci.saved_searches` — see
+  [`Database.md`](architecture/Database.md#connectors-auth-misc).
 
 ### Where the code lives
 

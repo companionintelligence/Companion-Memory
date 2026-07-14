@@ -5,6 +5,14 @@
 > openclaw — Config & Secret Injection from CI Hub" draft, which assumed Companion
 > Memory was an unknown third-party binary. **It is not: Companion Memory *is*
 > CI-Server.** That single fact rewrites the plan.
+>
+> **Update 2026-07-06:** the marketplace slug question below is settled differently than
+> proposed — `scripts/publish/manifest/config.json` now publishes as **`ci-memory`**
+> (not `companion`, and not the proposed `companion-memory`). Read every slug mention
+> below as `ci-memory`. The NestJS API still uses the native Ollama client with hardcoded
+> models (`domains/llm/services/OllamaService.ts`), so the core unification work in
+> §4b remains open. The 768-dim embedding coupling is documented in
+> [Database.md](Database.md#search-index--deferred-indexing).
 
 ---
 
@@ -291,10 +299,9 @@ These gate the whole integration:
 
 ## 9. Open questions / TODO
 
-- [ ] **Rename the slug `companion` → `companion-memory`.** Update
-      `scripts/publish/manifest/config.json` `id`, the Hub `SUPPORTED_APP_SLUGS` +
-      `APP_ENV_KEYS`, and the bootstrap URL. Existing `companion` installs become a
-      different app — plan a re-publish/migration (or carry an alias).
+- [x] **Slug renamed — landed as `ci-memory`** (not the proposed `companion-memory`):
+      `scripts/publish/manifest/config.json` `id` is now `ci-memory`. Remaining: use
+      `ci-memory` in the Hub `SUPPORTED_APP_SLUGS` + `APP_ENV_KEYS` and the bootstrap URL.
 - [ ] **Hub:** add `nomic-embed-text` (768) to `curated-models.ts`; re-enable the
       embeddings picker; verify `firePrePull` pulls it.
 - [ ] **Hub:** add the `companion-memory` entry to `APP_ENV_KEYS` +

@@ -6,12 +6,12 @@ import { SYSTEM_USER, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import {
+  classifyParticipant,
   EntityIdentifierService,
   type GraphEntityInputDto,
   GraphIngestService,
   type IdentifierKey,
-  type IdentifierKind,
-  normalizeIdentifier,
+  splitPersonName,
 } from '@ci/domains/graph';
 import { CommunicationService } from '@ci/domains/memory';
 import { CommunicationCreatedEvent, type CommunicationCreatedPayload } from '@ci/domains/memory/events';
@@ -101,7 +101,7 @@ export class CommunicationParticipantLinkListener {
     // participant wins the display name slot, mirroring the backfill.
     const seenByComposite = new Map<string, { key: IdentifierKey; rawName: string }>();
     const collect = (raw: string | null) => {
-      const key = classify(raw);
+      const key = classifyParticipant(raw);
       if (key == null) {
         return;
       }
@@ -146,13 +146,17 @@ export class CommunicationParticipantLinkListener {
         continue;
       }
 
-      const propertyKey = seen.key.kind === 'email' ? 'emails' : 'phones';
+      const propertyKey =
+        seen.key.kind === 'email' ? 'emails' : seen.key.kind === 'phone' ? 'phones' : 'names';
+      // Structured name parts for display-name participants (see the stub
+      // backfill's identical rule); email/phone raws are not names.
+      const nameParts = seen.key.kind === 'name' ? splitPersonName(seen.rawName) : null;
       newEntities.push({
         key: `${STUB_SOURCE_SYSTEM}:${seen.key.kind}:${seen.key.valueNormalized}`,
         entityType: 'Person',
         name: seen.rawName.length > 0 ? seen.rawName : seen.key.valueNormalized,
         sourceSystem: STUB_SOURCE_SYSTEM,
-        properties: { [propertyKey]: [seen.key.valueNormalized] },
+        properties: { [propertyKey]: [seen.key.valueNormalized], ...(nameParts ?? {}) },
       });
     }
 
@@ -177,7 +181,7 @@ export class CommunicationParticipantLinkListener {
         : existing;
 
     const lookup = (raw: string | null): string | null => {
-      const key = classify(raw);
+      const key = classifyParticipant(raw);
       if (key == null) {
         return null;
       }
@@ -240,25 +244,6 @@ export class CommunicationParticipantLinkListener {
  * CommunicationLinkBackfillService / PersonStubBackfillService — kept inline
  * because the three paths must agree byte-for-byte on what counts as a match.
  */
-function classify(raw: string | null): IdentifierKey | null {
-  if (raw == null) {
-    return null;
-  }
-
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const kind: IdentifierKind = trimmed.includes('@') ? 'email' : 'phone';
-  const valueNormalized = normalizeIdentifier(kind, trimmed);
-  if (valueNormalized == null) {
-    return null;
-  }
-
-  return { kind, valueNormalized };
-}
-
 function readString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }

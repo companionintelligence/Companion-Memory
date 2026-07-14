@@ -12,4 +12,5 @@ export interface UpdateUserDto {
   password?: string;
   onboarded?: boolean;
   entityId?: string;
+  timezone?: string;
 }

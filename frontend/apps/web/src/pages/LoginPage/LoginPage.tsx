@@ -46,7 +46,7 @@ export function LoginPage() {
           )}
 
           <Button className="w-full" asChild>
-            <a href={oidcHref}>Sign in with CI Portal</a>
+            <a href={oidcHref}>Sign in with Companion account</a>
           </Button>
 
           {showPasswordForm ? (

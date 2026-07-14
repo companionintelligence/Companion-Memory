@@ -1,8 +1,36 @@
 # Unified Capture Event Ingest — Spec (G1)
 
-> Status: **DRAFT** — proposal, not yet implemented.
+> Status: **PARTIALLY IMPLEMENTED** (originally a draft proposal).
 > Tracks `planning.md` → **G1: Unified capture event schema**.
 > Owner: CI-Server. Affects every capture client.
+
+## Implementation status (2026-07-06)
+
+**Shipped:**
+
+- **`POST /v1/events`** — batch capture ingest, zod-validated, idempotent on
+  `(user_id, source_system, source_id)`
+  (`backend/apps/api/src/domains/memory/controllers/EventsIngestController.ts`,
+  guarded by `JwtOrApiKeyAuthGuard`). Response shape `{ ingested, duplicate, rejected }`.
+  Reference: [docs/api/rest.md — Ingest](../api/rest.md#ingest-bulk-capture-write-path).
+- The **`ci.capture_events` raw log** (migration `20260621021634`) with a soft link to the
+  materialized `ci.events` row — layers 1–2 of §5.
+
+**Not (yet) built from this spec:** `POST /v1/events/:id/media`, `GET /v1/events/:id`,
+`GET /v1/timeline`, `DELETE /v1/events/:id`, the per-device API-key binding, the per-kind
+JSON-Schema registry, and the migration of existing typed controllers onto this path.
+
+**Superseded in part:** bulk *import* (as opposed to live capture) did not converge on
+`/v1/events` — CI-Import-Tools pushes through the **GraphQL bulk mutations**
+(`createEvents`, `createCommunications`, …) with the same provenance-triple idempotency and
+deferred search indexing. See
+[docs/api/graphql.md §4.7](../api/graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed)
+and the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md).
+
+The remainder of this document is the original spec, kept for the schema/enum design and
+the still-open phases.
+
+---
 
 ## 1. Problem
 
@@ -12,7 +40,7 @@ What's missing is the **single public HTTP surface** that every capture source w
 
 - `CI-Browser-Extension` posts to `browser-activity`
 - `Companion-Pipe` (screenpipe) has no documented integration path at all
-- `CI-Import-Tools` writes to its own local SQLite
+- `CI-Import-Tools` writes to its own local SQLite *(since resolved differently: it now pushes to CI-Server via the GraphQL bulk mutations — see the status block above)*
 - `CI-Even-Realities`, `CI-Pebble`, `CI-OMI`, `CI-MaixCAM` write through whichever controller a developer chose at the time
 - `CI-Active-Inference` produces derived events but has no destination
 

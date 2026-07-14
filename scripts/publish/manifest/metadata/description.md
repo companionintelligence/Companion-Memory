@@ -30,7 +30,7 @@ request leaving your machine.
 
 ## What you get
 
-- **A personal database** — PostgreSQL 15 with `pgvector` and TimescaleDB, so
+- **A personal database** — PostgreSQL 18 with `pgvector` and TimescaleDB, so
   your time-series activity and semantic vectors live together in one store you
   own outright.
 - **A REST + LLM API** — a NestJS backend with JWT authentication and
@@ -101,7 +101,7 @@ one install:
 | -------------- | -------------------------------------------------------------- |
 | **gateway**    | NGINX reverse proxy — the single public port (8642)            |
 | **api**        | NestJS REST/LLM API and authentication                         |
-| **database**   | PostgreSQL 15 + pgvector + TimescaleDB                         |
+| **database**   | PostgreSQL 18 + pgvector + TimescaleDB + PostGIS                         |
 | **summary**    | LLM summarization service (via Ollama)                         |
 | **hbpe**       | Behavioral-prediction sidecar (ONNX INT8)                     |
 | **orchestrator** | Durable workflow engine for background jobs                  |

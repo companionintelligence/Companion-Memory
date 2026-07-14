@@ -5,6 +5,7 @@ import { Avatar, Button } from '@ci/shadcn';
 import { Blocks, Cable, ChartPie, ListTodo, LogOut, Settings2, User } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
 import { PageContent } from '@/components/layout';
 import { ModelSelector } from '@/components/ModelSelector';
 import NotFoundPage from '@/components/NotFound';
@@ -73,6 +74,8 @@ function Profile() {
 }
 
 function Navigation() {
+  const { isFeatureEnabled } = useFeatures();
+
   return (
     <div className="flex flex-col justify-center">
       <div className="grid grid-cols-2 gap-4 p-3">
@@ -98,12 +101,14 @@ function Navigation() {
           </Link>
         </Button>
 
-        <Button variant="secondary" className="w-full justify-center p-6" asChild>
-          <Link to="/jobs">
-            <ListTodo className="h-4 w-4" />
-            Jobs
-          </Link>
-        </Button>
+        {isFeatureEnabled('jobs.page') && (
+          <Button variant="secondary" className="w-full justify-center p-6" asChild>
+            <Link to="/jobs">
+              <ListTodo className="h-4 w-4" />
+              Jobs
+            </Link>
+          </Button>
+        )}
 
         <Button variant="secondary" className="w-full justify-center p-6" asChild>
           <Link to="/connections">

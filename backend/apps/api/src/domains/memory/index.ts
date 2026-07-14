@@ -27,7 +27,6 @@ import { FilesModule } from '@ci/domains/files';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule, UserEntity } from '@ci/domains/user';
 
-import { EventsIngestController } from './controllers/EventsIngestController';
 import { GraphController } from './controllers/GraphController';
 import { BaseEntity } from './entities/BaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
@@ -102,7 +101,7 @@ import { UserContextService } from './services/UserContextService';
     PlaceService,
     KnownPlacesService,
   ],
-  controllers: [GraphController, EventsIngestController],
+  controllers: [GraphController],
   exports: [
     CommunicationService,
     ContentService,

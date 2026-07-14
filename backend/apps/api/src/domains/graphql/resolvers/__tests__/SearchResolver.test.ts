@@ -10,7 +10,10 @@ type Entry = { type: string; id: string; entity: Record<string, unknown> };
 
 function makeResolver() {
   const searchService = { search: jest.fn().mockResolvedValue([] as Identifier[]) };
-  const tagService = { getEntitiesForTags: jest.fn().mockResolvedValue([] as Identifier[]) };
+  const tagService = {
+    getEntitiesForTags: jest.fn().mockResolvedValue([] as Identifier[]),
+    searchByLabel: jest.fn().mockResolvedValue([]),
+  };
   const eventService = { getEntitiesForEvents: jest.fn().mockResolvedValue([] as Identifier[]) };
   const browserActivityService = {
     getEntitiesForBrowserActivities: jest.fn().mockResolvedValue([] as Identifier[]),

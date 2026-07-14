@@ -3,14 +3,17 @@
 > Status: **active — seed.** Foundation for ratcheting coverage toward the `planning.md` → CI-Server target of **>70% line coverage**.
 > Owner: CI-Server.
 
-## 1. Today
+## 1. Today (re-surveyed 2026-07-06)
 
 | Layer | Tooling | What exists |
 |---|---|---|
-| Unit / controller | Jest + `@nestjs/testing` + `supertest` | `auth/__tests__/SessionController.test.ts`, `auth/__tests__/SignupController.test.ts`, `auth/__tests__/Routes.e2e.test.ts`, `files/__tests__/Routes.e2e.test.ts`, `common/controllers/__tests__/HealthController.test.ts` (seed). |
-| Integration | Jest (same runner), Docker-backed Postgres + Minio + Temporal via `make local`. | Used by `Routes.e2e.test.ts` patterns. |
-| Browser / E2E | Playwright (`tests/BetaOneLoginFlow.spec.ts`). | One spec — the login flow. |
-| Coverage gate | Jest `coverageThreshold` | Set to **5% floor** as a starting fence; raise per area as tests land. |
+| Unit / controller | Jest + `@nestjs/testing` + `supertest` (`backend/apps/api/jest.config.mjs`, swc transform) | **82 spec/test files** colocated with source (`*.spec.ts` + `__tests__/*.test.ts`) — auth, memory bulk-ingest services, maintenance backfills, saved-search sharing, persistence helpers, graphql resolvers, and more. `yarn workspace @ci/be-api test`. |
+| Integration | Jest (same runner), Docker-backed Postgres + Minio + Temporal via `make dev`. | Used by the `Routes.e2e.test.ts` patterns in `auth/` and `files/`. |
+| Browser / E2E | Playwright — `tests/BetaOneLoginFlow.spec.ts` plus the full-stack suite in `tests/e2e/` (auth, chat, memory views/search/map, mobile, onboarding, settings). | The frontend additionally has its own vitest + Playwright harness under `frontend/apps/web/src/test/`. |
+| Coverage gate | Jest `coverageThreshold` | **Not currently set** in `jest.config.mjs` — the ratchet below (§4) remains the plan, not the present. |
+
+> Known flake: `SessionController` logout (204→404) under parallel jest — re-run or
+> `--runInBand`; it is not your change.
 
 ## 2. Where to invest, in order
 
@@ -20,7 +23,7 @@ This is the priority queue. Each item should land its own ratcheted coverage flo
 
 1. **`HealthController`** — done (seed).
 2. **`AuthService` + Csrf** — auth is the gate to everything else; bugs are silent breakage.
-3. **`EventsIngestController`** (new in G1) — the single highest-leverage controller. Target **>90% line coverage on this controller and its zod schemas** per `event-ingest-spec.md` §7.
+3. **`EventsIngestController`** — shipped, with `__tests__/EventsIngestController.test.ts`; keep ratcheting toward **>90% line coverage on this controller and its zod schemas** per [`event-ingest-spec.md`](event-ingest-spec.md) §7.
 4. **`browser-activity` write path** — first capture source migrated through G1; parity tests vs. legacy POST.
 
 ### Tier 2 — within one release of G1
@@ -54,7 +57,9 @@ This is the priority queue. Each item should land its own ratcheted coverage flo
 
 ## 4. Coverage ratchet
 
-The `coverageThreshold` in `jest.config.mjs` starts at 5% (a fence so the number can only go up). Every PR that adds tests should:
+There is **no `coverageThreshold` in `jest.config.mjs` yet** — the first PR to add one
+should set it to the then-current floor (a fence so the number can only go up). From there,
+every PR that adds tests should:
 
 1. Land the test.
 2. Read the resulting global coverage number from `yarn test --coverage` output.

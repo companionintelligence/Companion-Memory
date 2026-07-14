@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { INGEST_REFRESH_COLUMNS, computeChunkSize } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -189,12 +190,11 @@ export class CommunicationService {
     };
 
     const canonicalByTriple = new Map<string, CanonicalRow>();
-    // Refreshable, source-derived columns. Same set as the previous
-    // ON CONFLICT DO UPDATE list: a re-sync of these via the canonical row
-    // self-heals e.g. the importer's corrected email `direction` or a
-    // newly-populated `participants_metadata`. Never extend this with
-    // server-mutable columns — a re-import would clobber local edits.
-    const selfHealColumns = ['direction', 'participants_metadata', 'content', 'preview', 'subject'] as const;
+    // Refreshable, source-derived columns (the centralized ingest refresh
+    // contract — see INGEST_REFRESH_COLUMNS for what may/may not be listed).
+    // The UPDATE ... FROM (VALUES ...) below binds parameters in the map
+    // entry's order, so the two must stay in lockstep.
+    const selfHealColumns = INGEST_REFRESH_COLUMNS.communication;
 
     await this.dataSource.transaction(async (manager) => {
       if (dedupableUnique.length > 0) {
@@ -203,82 +203,92 @@ export class CommunicationService {
         // `won` flag — true if THIS statement claimed the triple (a row to
         // INSERT into ci.communications), false if a previous ingest already
         // owned it (a row to optionally self-heal).
-        const claimParams: unknown[] = [];
-        const claimValueClauses = dedupableUnique
-          .map((entity, i) => {
-            const offset = i * 6;
-            claimParams.push(
-              context.userId,
-              entity.sourceType,
-              entity.sourceSystem,
-              entity.sourceId,
-              entity.id,
-              entity.time,
+        //
+        // Split into param-budget-bounded chunks so a large batch never exceeds
+        // Postgres' 65535 bind-param limit — each VALUES row binds 6 params, so
+        // computeChunkSize(6) caps rows accordingly. Every chunk runs on the
+        // same `manager` (this transaction), so the whole claim stays atomic;
+        // results are aggregated across chunks.
+        const claimChunkSize = computeChunkSize(6);
+        for (let claimOffset = 0; claimOffset < dedupableUnique.length; claimOffset += claimChunkSize) {
+          const claimChunk = dedupableUnique.slice(claimOffset, claimOffset + claimChunkSize);
+          const claimParams: unknown[] = [];
+          const claimValueClauses = claimChunk
+            .map((entity, i) => {
+              const offset = i * 6;
+              claimParams.push(
+                context.userId,
+                entity.sourceType,
+                entity.sourceSystem,
+                entity.sourceId,
+                entity.id,
+                entity.time,
+              );
+
+              return (
+                `($${offset + 1}::uuid, $${offset + 2}::text, $${offset + 3}::text,` +
+                ` $${offset + 4}::text, $${offset + 5}::uuid, $${offset + 6}::timestamptz)`
+              );
+            })
+            .join(', ');
+
+          const claimSql = `
+            WITH input (user_id, source_type, source_system, source_id, communication_id, communication_time) AS (
+              VALUES ${claimValueClauses}
+            ),
+            upserted AS (
+              INSERT INTO ci.communications_source_dedup
+                  (user_id, source_type, source_system, source_id, communication_id, communication_time)
+              SELECT user_id, source_type, source_system, source_id, communication_id, communication_time
+                FROM input
+              ON CONFLICT (user_id, source_type, source_system, source_id) DO NOTHING
+              RETURNING user_id, source_type, source_system, source_id, communication_id, communication_time
+            )
+            SELECT i.source_type,
+                   i.source_system,
+                   i.source_id,
+                   COALESCE(u.communication_id, d.communication_id)     AS communication_id,
+                   COALESCE(u.communication_time, d.communication_time) AS communication_time,
+                   (u.communication_id IS NOT NULL)                     AS won
+              FROM input i
+              LEFT JOIN upserted u
+                ON u.user_id = i.user_id
+               AND u.source_type = i.source_type
+               AND u.source_system = i.source_system
+               AND u.source_id = i.source_id
+              LEFT JOIN ci.communications_source_dedup d
+                ON d.user_id = i.user_id
+               AND d.source_type = i.source_type
+               AND d.source_system = i.source_system
+               AND d.source_id = i.source_id
+          `;
+
+          const rawRows = (await manager.query(claimSql, claimParams)) as Array<{
+            source_type: string;
+            source_system: string;
+            source_id: string;
+            communication_id: string;
+            communication_time: Date | string;
+            won: boolean;
+          }>;
+
+          for (const row of rawRows) {
+            canonicalByTriple.set(
+              tripleKey({
+                sourceType: row.source_type,
+                sourceSystem: row.source_system,
+                sourceId: row.source_id,
+              }),
+              {
+                canonicalId: row.communication_id,
+                canonicalTime:
+                  row.communication_time instanceof Date
+                    ? row.communication_time
+                    : new Date(row.communication_time),
+                won: row.won,
+              },
             );
-
-            return (
-              `($${offset + 1}::uuid, $${offset + 2}::text, $${offset + 3}::text,` +
-              ` $${offset + 4}::text, $${offset + 5}::uuid, $${offset + 6}::timestamptz)`
-            );
-          })
-          .join(', ');
-
-        const claimSql = `
-          WITH input (user_id, source_type, source_system, source_id, communication_id, communication_time) AS (
-            VALUES ${claimValueClauses}
-          ),
-          upserted AS (
-            INSERT INTO ci.communications_source_dedup
-                (user_id, source_type, source_system, source_id, communication_id, communication_time)
-            SELECT user_id, source_type, source_system, source_id, communication_id, communication_time
-              FROM input
-            ON CONFLICT (user_id, source_type, source_system, source_id) DO NOTHING
-            RETURNING user_id, source_type, source_system, source_id, communication_id, communication_time
-          )
-          SELECT i.source_type,
-                 i.source_system,
-                 i.source_id,
-                 COALESCE(u.communication_id, d.communication_id)     AS communication_id,
-                 COALESCE(u.communication_time, d.communication_time) AS communication_time,
-                 (u.communication_id IS NOT NULL)                     AS won
-            FROM input i
-            LEFT JOIN upserted u
-              ON u.user_id = i.user_id
-             AND u.source_type = i.source_type
-             AND u.source_system = i.source_system
-             AND u.source_id = i.source_id
-            LEFT JOIN ci.communications_source_dedup d
-              ON d.user_id = i.user_id
-             AND d.source_type = i.source_type
-             AND d.source_system = i.source_system
-             AND d.source_id = i.source_id
-        `;
-
-        const rawRows = (await manager.query(claimSql, claimParams)) as Array<{
-          source_type: string;
-          source_system: string;
-          source_id: string;
-          communication_id: string;
-          communication_time: Date | string;
-          won: boolean;
-        }>;
-
-        for (const row of rawRows) {
-          canonicalByTriple.set(
-            tripleKey({
-              sourceType: row.source_type,
-              sourceSystem: row.source_system,
-              sourceId: row.source_id,
-            }),
-            {
-              canonicalId: row.communication_id,
-              canonicalTime:
-                row.communication_time instanceof Date
-                  ? row.communication_time
-                  : new Date(row.communication_time),
-              won: row.won,
-            },
-          );
+          }
         }
       }
 
@@ -298,12 +308,20 @@ export class CommunicationService {
         // the `ObjectLiteral` overload of `.values()`. Passing the entity class
         // directly narrows the type to `_QueryDeepPartialEntity<Entity>`, which
         // rejects nullable jsonb columns like `participantsMetadata`.
-        await manager
-          .createQueryBuilder()
-          .insert()
-          .into(this.communicationRepository.metadata.target)
-          .values(toInsert)
-          .execute();
+        //
+        // Split into param-budget-bounded chunks so a large batch never exceeds
+        // Postgres' 65535 bind-param limit (computeChunkSize is the same helper
+        // bulkInsertIdempotent uses). Every chunk runs on the same `manager`
+        // (this transaction), so the winners insert stays atomic.
+        const insertChunkSize = computeChunkSize(this.communicationRepository.metadata.columns.length);
+        for (let insertOffset = 0; insertOffset < toInsert.length; insertOffset += insertChunkSize) {
+          await manager
+            .createQueryBuilder()
+            .insert()
+            .into(this.communicationRepository.metadata.target)
+            .values(toInsert.slice(insertOffset, insertOffset + insertChunkSize))
+            .execute();
+        }
       }
 
       // Step 3: refresh self-heal columns on losers. Done as a single
@@ -317,46 +335,55 @@ export class CommunicationService {
         .filter((v): v is { entity: CommunicationEntity; canonical: CanonicalRow } => v !== null);
 
       if (losers.length > 0) {
-        const updateParams: unknown[] = [];
-        const updateValueClauses = losers
-          .map(({ entity, canonical }, i) => {
-            const offset = i * 7;
-            updateParams.push(
-              canonical.canonicalId,
-              canonical.canonicalTime,
-              entity.direction,
-              JSON.stringify(entity.participantsMetadata ?? {}),
-              entity.content,
-              entity.preview,
-              entity.subject,
-            );
-
-            return (
-              // direction is the enum ci.communication_direction — cast the
-              // param to it explicitly (schema-qualified so it resolves
-              // regardless of search_path), not ::text.
-              `($${offset + 1}::uuid, $${offset + 2}::timestamptz, $${offset + 3}::ci.communication_direction,` +
-              ` $${offset + 4}::jsonb, $${offset + 5}::text, $${offset + 6}::text, $${offset + 7}::text)`
-            );
-          })
-          .join(', ');
-
-        updateParams.push(context.userId);
-        const userIdParam = `$${updateParams.length}::uuid`;
-
         const setClauses = selfHealColumns.map((col) => `"${col}" = v.${col}`).join(', ');
 
-        await manager.query(
-          `
-            UPDATE ci.communications c
-               SET ${setClauses}
-              FROM (VALUES ${updateValueClauses}) AS v (id, time, direction, participants_metadata, content, preview, subject)
-             WHERE c.id = v.id
-               AND c.time = v.time
-               AND c.user_id = ${userIdParam}
-          `,
-          updateParams,
-        );
+        // Split into param-budget-bounded chunks so a large batch never exceeds
+        // Postgres' 65535 bind-param limit — each VALUES row binds 7 params, so
+        // computeChunkSize(7) caps rows accordingly (with headroom for the extra
+        // trailing user_id param). Every chunk runs on the same `manager` (this
+        // transaction), so the self-heal stays atomic.
+        const updateChunkSize = computeChunkSize(7);
+        for (let updateOffset = 0; updateOffset < losers.length; updateOffset += updateChunkSize) {
+          const loserChunk = losers.slice(updateOffset, updateOffset + updateChunkSize);
+          const updateParams: unknown[] = [];
+          const updateValueClauses = loserChunk
+            .map(({ entity, canonical }, i) => {
+              const offset = i * 7;
+              updateParams.push(
+                canonical.canonicalId,
+                canonical.canonicalTime,
+                entity.direction,
+                JSON.stringify(entity.participantsMetadata ?? {}),
+                entity.content,
+                entity.preview,
+                entity.subject,
+              );
+
+              return (
+                // direction is the enum ci.communication_direction — cast the
+                // param to it explicitly (schema-qualified so it resolves
+                // regardless of search_path), not ::text.
+                `($${offset + 1}::uuid, $${offset + 2}::timestamptz, $${offset + 3}::ci.communication_direction,` +
+                ` $${offset + 4}::jsonb, $${offset + 5}::text, $${offset + 6}::text, $${offset + 7}::text)`
+              );
+            })
+            .join(', ');
+
+          updateParams.push(context.userId);
+          const userIdParam = `$${updateParams.length}::uuid`;
+
+          await manager.query(
+            `
+              UPDATE ci.communications c
+                 SET ${setClauses}
+                FROM (VALUES ${updateValueClauses}) AS v (id, time, direction, participants_metadata, content, preview, subject)
+               WHERE c.id = v.id
+                 AND c.time = v.time
+                 AND c.user_id = ${userIdParam}
+            `,
+            updateParams,
+          );
+        }
       }
     });
 
@@ -379,28 +406,37 @@ export class CommunicationService {
 
     const hydratedById = new Map<string, CommunicationEntity>();
     if (canonicalRows.length > 0) {
-      const ids = canonicalRows.map((row) => row.id);
-      let minTime = canonicalRows[0].time;
-      let maxTime = canonicalRows[0].time;
-      for (const row of canonicalRows) {
-        if (row.time < minTime) {
-          minTime = row.time;
+      // Split the id IN-list into param-budget-bounded chunks so a large batch
+      // never exceeds Postgres' 65535 bind-param limit — each id binds one
+      // param (plus the two time bounds), so computeChunkSize(1) caps the list.
+      // Each chunk's own [min, max] time bound stays at least as tight as the
+      // whole batch's, so hypertable chunk exclusion still holds.
+      const hydrateChunkSize = computeChunkSize(1);
+      for (let hydrateOffset = 0; hydrateOffset < canonicalRows.length; hydrateOffset += hydrateChunkSize) {
+        const rowChunk = canonicalRows.slice(hydrateOffset, hydrateOffset + hydrateChunkSize);
+        const ids = rowChunk.map((row) => row.id);
+        let minTime = rowChunk[0].time;
+        let maxTime = rowChunk[0].time;
+        for (const row of rowChunk) {
+          if (row.time < minTime) {
+            minTime = row.time;
+          }
+
+          if (row.time > maxTime) {
+            maxTime = row.time;
+          }
         }
 
-        if (row.time > maxTime) {
-          maxTime = row.time;
+        const hydrated = await this.communicationRepository
+          .createQueryBuilder('c')
+          .where('c.user_id = :userId', { userId: context.userId })
+          .andWhere('c.id IN (:...ids)', { ids })
+          .andWhere('c.time BETWEEN :minTime AND :maxTime', { minTime, maxTime })
+          .getMany();
+
+        for (const row of hydrated) {
+          hydratedById.set(row.id, row);
         }
-      }
-
-      const hydrated = await this.communicationRepository
-        .createQueryBuilder('c')
-        .where('c.user_id = :userId', { userId: context.userId })
-        .andWhere('c.id IN (:...ids)', { ids })
-        .andWhere('c.time BETWEEN :minTime AND :maxTime', { minTime, maxTime })
-        .getMany();
-
-      for (const row of hydrated) {
-        hydratedById.set(row.id, row);
       }
     }
 

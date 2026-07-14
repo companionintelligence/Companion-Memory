@@ -103,16 +103,27 @@ type BrowserActivityType implements Node & Taggable {
   url: String!
 }
 
+type BulkGraphEntityMapping {
+  entityId: ID!
+  key: String!
+}
+
 input BulkGraphInput {
   entities: [GraphEntityInput!]!
   relationships: [GraphRelationshipInput!]
 }
 
 type BulkGraphPayload {
+  entities: [BulkGraphEntityMapping!]!
   entitiesProcessed: Int!
   errors: [String!]!
   relationshipsProcessed: Int!
   success: Boolean!
+}
+
+type BulkItemRelationshipResult {
+  inserted: Int!
+  skipped: Int!
 }
 
 type CommunicationConnection implements Connection {
@@ -655,6 +666,17 @@ type ItemEdge implements Edge {
   node: ItemType!
 }
 
+input ItemRelationshipInput {
+  fromSourceId: String!
+  fromSourceSystem: String!
+  fromSourceType: String!
+  metadata: JSON
+  relation: String!
+  toSourceId: String!
+  toSourceSystem: String!
+  toSourceType: String!
+}
+
 type ItemType implements Node & Taggable {
   acquiredAt: DateTime
   brand: String
@@ -732,6 +754,7 @@ type MessageType implements Node {
 
 type Mutation {
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
+  bulkIngestItemRelationships(input: [ItemRelationshipInput!]!): BulkItemRelationshipResult!
   createAnswer(input: CreateAnswerInput!): AnswerType!
   createAnswers(input: [CreateAnswerInput!]!): [AnswerType!]!
   createBrowserActivities(input: [CreateBrowserActivityInput!]!): [BrowserActivityType!]!
@@ -796,6 +819,7 @@ type Mutation {
   updateConnection(input: UpdateConnectionInput!): UpdateConnectionPayload!
   updateConnectionSyncJob(input: UpdateConnectionSyncJobInput!): UpdateConnectionSyncJobPayload!
   updateContent(input: UpdateContentInput!): ContentType
+  updateCurrentUser(input: UpdateCurrentUserInput!): UserType
   updateEvent(input: UpdateEventInput!): EventType
   updateFile(input: UpdateFileInput!): FileType
   updateItem(input: UpdateItemInput!): UpdateItemPayload!
@@ -1135,6 +1159,7 @@ input SearchInput {
 
 type SearchResultConnection {
   edges: [SearchResultEdge!]!
+  matchingTags: [TagType!]!
   pageInfo: PageInfo!
   totalCount: Int!
 }
@@ -1326,6 +1351,10 @@ input UpdateContentInput {
   url: String
 }
 
+input UpdateCurrentUserInput {
+  timezone: String
+}
+
 input UpdateEventInput {
   category: String
   confidenceScore: Float
@@ -1465,4 +1494,5 @@ type UserType implements Node {
   id: ID!
   name: String!
   onboarded: Boolean!
+  timezone: String!
 }

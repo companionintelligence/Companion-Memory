@@ -19,6 +19,7 @@ const EMPTY_CONNECTION: SearchResultConnection = {
   edges: [],
   pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
   totalCount: 0,
+  matchingTags: [],
 };
 
 function makeResolver() {

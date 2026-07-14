@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
-import { Badge, Button, Input, Label, Separator, Slider, cn } from '@ci/shadcn';
+import { Badge, Button, Input, Label, Slider, cn } from '@ci/shadcn';
 import { AlertCircle, Anchor, Loader2, Sparkles, Users } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
@@ -1057,18 +1057,6 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Knowledge Graph</h2>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span>
-            <span className="font-medium text-foreground">{visibleNodes.length}</span> nodes
-          </span>
-          <span>
-            <span className="font-medium text-foreground">{visibleLinks.length}</span> relationships
-          </span>
-        </div>
-      </div>
-
       <div className="rounded-lg border bg-muted/20 p-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1 rounded-md border bg-background p-1">
@@ -1242,14 +1230,12 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         </div>
       </div>
 
-      <Separator />
-
       <div className={detailGridClass}>
         <div className="space-y-4 min-w-0">
           <div className="rounded-lg border bg-muted/30 p-4 overflow-hidden">
             <h3 className="flex items-center gap-2 text-sm font-semibold">
               <Users className="h-4 w-4 text-primary" />
-              Graph Summary
+              Summary
             </h3>
             <dl className="mt-3 space-y-2 text-sm">
               <div className="flex items-center justify-between">
@@ -1289,7 +1275,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         </div>
 
         <div className="md:col-span-2 space-y-3 rounded-lg border bg-muted/10 p-4 overflow-hidden min-w-0">
-          <h3 className="text-sm font-semibold">Entity Details</h3>
+          <h3 className="text-sm font-semibold">Entity details</h3>
           {selectedNode ? (
             <div className="space-y-2 text-sm min-w-0">
               <div className="flex items-center gap-2 min-w-0">

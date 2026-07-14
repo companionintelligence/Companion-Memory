@@ -3,6 +3,7 @@ import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver }
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { EventService } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
@@ -84,7 +85,8 @@ export class EventResolver {
   @Mutation(() => [EventType])
   async createEvents(
     @Context() context: RequestContext,
-    @Args({ name: 'input', type: () => [CreateEventInput] }) input: CreateEventInput[],
+    @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
+    input: CreateEventInput[],
   ): Promise<EventType[]> {
     const serviceContext = toServiceContext(context);
 

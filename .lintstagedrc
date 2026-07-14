@@ -1,6 +1,6 @@
 {
   "*.{ts,tsx,js,mjs}": [
-    "oxlint --fix",
+    "oxlint --fix --no-error-on-unmatched-pattern",
     "eslint --fix",
     "prettier --write"
   ]
