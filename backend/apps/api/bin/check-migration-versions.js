@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 /**
  * Guard against dbmate version collisions.
  *
@@ -11,10 +13,15 @@
  * Never hand-write the timestamp — create migrations with:
  *   yarn workspace @ci/be-api migrate:make <name>
  * which stamps the actual UTC time to the second.
+ *
+ * Plain CommonJS under bin/, not TypeScript under scripts/, because `migrate`
+ * runs this in the production image, which installs dependencies only
+ * (`yarn workspaces focus --production`) and never copies scripts/ in. A
+ * ts-node entrypoint here exits 127 and takes the whole app install with it.
  */
 
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+const { readdirSync } = require('node:fs');
+const { join } = require('node:path');
 
 const MIGRATIONS_DIR = join(__dirname, '../db/postgres/migrations');
 
@@ -30,8 +37,8 @@ const GRANDFATHERED = new Set([
 
 const files = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql') && !GRANDFATHERED.has(name));
 
-const byVersion = new Map<string, string[]>();
-const malformed: string[] = [];
+const byVersion = new Map();
+const malformed = [];
 
 for (const file of files) {
   const match = /^(\d{14})_.+\.sql$/.exec(file);

@@ -32,6 +32,7 @@ describe('SearchResolver — event-type ("how") filter', () => {
     };
     const tagService = {
       getEntitiesForTags: jest.fn().mockResolvedValue(overrides.tagResults ?? []),
+      searchByLabel: jest.fn().mockResolvedValue([]),
     };
     const entityResolutionService = {
       resolve: jest.fn().mockResolvedValue(overrides.resolved ?? new Map()),

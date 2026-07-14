@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@apollo/client';
 import { GlobalUID, Portal } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
-import { Breadcrumb, cn, DropdownMenu, Sheet } from '@ci/shadcn';
+import { Breadcrumb, Button, cn, DropdownMenu, Sheet } from '@ci/shadcn';
 import { ChartNetwork, ChevronDown, Images, List, Map as MapIcon, type LucideIcon } from '@ci/shadcn/icons';
 import { useSearchParams, Link } from 'react-router-dom';
 
@@ -14,12 +14,7 @@ import { gql } from '@/graphql';
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { EntityDetails } from './Components/EntityDetails';
-import { ActiveFilterChips, countActiveFilters } from './Components/ExplorerToolbar/ActiveFilterChips';
-import {
-  AdvancedFilters,
-  AdvancedSearchToggle,
-  ResultCount,
-} from './Components/ExplorerToolbar/ExplorerToolbar';
+import { AdvancedFilters, AdvancedSearchToggle } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
@@ -259,14 +254,15 @@ export default function DesktopMemoryPage() {
     }
   }, []);
 
-  const activeFilterCount = countActiveFilters(searchParams);
   const activeView = VIEW_TABS.find((tab) => tab.value === activeTab) ?? VIEW_TABS[1];
 
   return (
     <>
-      {/* The view switcher is the last breadcrumb crumb: the current view's name
-          is the trigger, and the expansion mirrors the header plus-button's Add
-          panel (icon grid) so both header menus read as one pattern. */}
+      {/* The view switcher is the last breadcrumb crumb: a combo button showing
+          the current view's icon + name with a dropdown chevron, so it reads as
+          an interactive control rather than static breadcrumb text. The
+          expansion mirrors the header plus-button's Add panel (icon grid) so
+          both header menus read as one pattern. */}
       <Portal.Slot id="breadcrumbs">
         <Breadcrumb>
           <Breadcrumb.List>
@@ -282,14 +278,27 @@ export default function DesktopMemoryPage() {
             <Breadcrumb.Separator />
             <Breadcrumb.Item>
               <DropdownMenu modal={false}>
-                <DropdownMenu.Trigger
-                  aria-label={`${activeView.title} — change view`}
-                  className="hover:text-foreground flex cursor-pointer items-center gap-1 text-sm transition-colors"
-                >
-                  {activeView.label}
-                  <ChevronDown className="size-3.5" />
+                <DropdownMenu.Trigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={`${activeView.title} — change view`}
+                    className="group font-normal"
+                  >
+                    <activeView.Icon strokeWidth={1.5} />
+                    {activeView.label}
+                    <ChevronDown className="size-3.5 transition-transform group-data-[state=open]:rotate-180" />
+                  </Button>
                 </DropdownMenu.Trigger>
-                <DropdownMenu.Content className="rounded-lg p-2" side="bottom" align="start" sideOffset={4}>
+                <DropdownMenu.Content
+                  className="rounded-lg p-2"
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  // Radix refocuses the trigger on close, which lights the
+                  // button's focus-visible ring even after a mouse click.
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
                   <div className="grid grid-cols-4 gap-2">
                     {VIEW_TABS.map(({ value, label, title, Icon }) => (
                       <DropdownMenu.Item
@@ -323,35 +332,22 @@ export default function DesktopMemoryPage() {
         />
       </Portal.Slot>
 
-      {/* The advanced filters and active-filter chips render as a pinned section
-          at the top of the header SearchBox's dropdown panel (its panelHeader
-          slot), above any live search suggestions — so typing never covers them.
-          Chips also surface (without the full controls) whenever the panel opens
-          with filters active; when it's closed, the toggle's count badge stands in. */}
+      {/* The advanced filters render as a pinned section at the top of the
+          header SearchBox's dropdown panel (its panelHeader slot), above any
+          live search suggestions — so typing never covers them. Every applied
+          filter chips inside the drawer's drop area; while the drawer is
+          closed, the search box's "N filters" text stands in. */}
       <Portal.Slot id="nav-search-panel">
-        {(advancedOpen || activeFilterCount > 0) && (
+        {advancedOpen && (
           <DropdownProvider args={[{ changeSearchParams: true }]}>
-            <div className="flex flex-col gap-2 p-3">
-              {advancedOpen && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <AdvancedFilters modal={false} />
-                </div>
-              )}
-              {activeFilterCount > 0 && <ActiveFilterChips />}
+            <div className="p-3">
+              <AdvancedFilters modal={false} />
             </div>
           </DropdownProvider>
         )}
       </Portal.Slot>
 
       <PageContent className="p-0 gap-0">
-        {/* Result count only — filters and their chips live in the header search
-            panel. The map stays full-bleed. */}
-        {activeTab !== 'map' && (
-          <div className="flex justify-end px-4 pt-3">
-            <ResultCount />
-          </div>
-        )}
-
         <div className="flex min-h-0 flex-1 flex-col">
           {activeTab === 'list' && <ListView />}
           {activeTab === 'map' && <DesktopMapView />}

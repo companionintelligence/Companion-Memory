@@ -39,7 +39,9 @@ export function CommunicationGridItem({ communication, onClick }: Props) {
       <EntityGridItem.Header>
         <CommunicationIcon className="shrink-0" />
 
-        <div className="text-md font-semibold truncate">{heading || 'Message'}</div>
+        {/* No subject and no sender: render no heading at all — the preview
+            below is the item's text — instead of a "Message" placeholder. */}
+        {heading && <div className="text-md font-semibold truncate">{heading}</div>}
       </EntityGridItem.Header>
 
       <EntityGridItem.Content>

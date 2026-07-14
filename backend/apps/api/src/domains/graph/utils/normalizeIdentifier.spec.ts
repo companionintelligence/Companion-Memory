@@ -73,11 +73,37 @@ describe('classifyParticipant', () => {
     });
   });
 
-  it('classifies a digit-bearing string as phone', () => {
+  it('classifies a phone-shaped string as phone', () => {
     expect(classifyParticipant('+1 (415) 555-0100')).toEqual({
       kind: 'phone',
       valueNormalized: '4155550100',
     });
+    expect(classifyParticipant('415.555.0100')).toEqual({
+      kind: 'phone',
+      valueNormalized: '4155550100',
+    });
+    // 7 digits (shortest local subscriber number) still counts.
+    expect(classifyParticipant('555-0100')).toEqual({
+      kind: 'phone',
+      valueNormalized: '5550100',
+    });
+  });
+
+  it('classifies a digit-bearing handle as name, NOT phone (Discord usernames)', () => {
+    // The old any-digit rule turned these into bogus short "phone numbers"
+    // ('alexmz12' -> phone '12') and let unrelated handles sharing a digit run
+    // collide into one Person.
+    expect(classifyParticipant('alexmz12')).toEqual({ kind: 'name', valueNormalized: 'alexmz12' });
+    expect(classifyParticipant('griffin5131')).toEqual({
+      kind: 'name',
+      valueNormalized: 'griffin5131',
+    });
+    expect(classifyParticipant('david3dev')).toEqual({ kind: 'name', valueNormalized: 'david3dev' });
+  });
+
+  it('classifies short all-digit strings (SMS short codes) as name, not phone', () => {
+    expect(classifyParticipant('42')).toEqual({ kind: 'name', valueNormalized: '42' });
+    expect(classifyParticipant('862265')).toEqual({ kind: 'name', valueNormalized: '862265' });
   });
 
   it('classifies a display-name-only string as name (Messenger participants)', () => {
@@ -104,8 +130,8 @@ describe('splitPersonName', () => {
     expect(splitPersonName('Brian Paul')).not.toHaveProperty('middle_name');
   });
 
-  it('keeps a single token as first name only', () => {
-    expect(splitPersonName('Cher')).toEqual({ first_name: 'Cher' });
+  it('returns no parts for a single token (display name stays name-only)', () => {
+    expect(splitPersonName('Cher')).toBeNull();
   });
 
   it('routes everything between first and last into middle', () => {

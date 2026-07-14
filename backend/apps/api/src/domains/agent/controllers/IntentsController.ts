@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 
 import { Context, type RequestContext } from '@ci/common/context';
+import { INTENTS_SCOPE, RequireScopes } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import {
   IntentCatalogService,
@@ -30,8 +31,12 @@ import {
  *
  * Also exposes the uniform REST execution path (`POST /api/intents/:name/execute`) so pure-REST
  * harnesses execute curated intents without speaking MCP (CI-Engineering #59).
+ *
+ * Scope-limited connect keys need the `intents` scope to read it (CI-OpenClaw's
+ * key carries it); session/JWT and empty-scope keys are unaffected.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
+@RequireScopes(INTENTS_SCOPE)
 @Controller('api/intents')
 export class IntentsController {
   constructor(

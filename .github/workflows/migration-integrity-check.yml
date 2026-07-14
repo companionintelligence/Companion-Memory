@@ -7,6 +7,10 @@ on:
     types: [opened, synchronize, reopened, edited]
     paths:
       - 'backend/apps/api/db/postgres/migrations/**'
+      # The checker and its wiring, so a change to either is exercised by the
+      # job that runs it — not first discovered inside the production image.
+      - 'backend/apps/api/bin/check-migration-versions.js'
+      - 'backend/apps/api/package.json'
 
 jobs:
   check-versions:

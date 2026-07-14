@@ -36,7 +36,7 @@ describe('isNdjsonRequest', () => {
 
 describe('ingestNdjsonStream', () => {
   it('flushes batches of batchSize as the stream arrives and sums the summary', async () => {
-    const flush = jest.fn(async (records: { n: number }[]) => records.length);
+    const flush = jest.fn(async (records: { n: number }[]) => ({ ingested: records.length, duplicate: 0 }));
     const body = Array.from({ length: 2500 }, (_, i) => line(i)).join('');
 
     const res = await ingestNdjsonStream(reqFrom([body]), recordSchema, flush, { batchSize: 1000 });
@@ -50,7 +50,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('reassembles records split across chunk boundaries', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     // Split mid-record and mid-number.
     const chunks = ['{"n"', ': 1}\n{"n": 2', '2}\n{"n": 3}'];
 
@@ -60,8 +60,8 @@ describe('ingestNdjsonStream', () => {
     expect(flush.mock.calls[0][0]).toEqual([{ n: 1 }, { n: 22 }, { n: 3 }]);
   });
 
-  it('counts records the flush did not accept as duplicate', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length - 1);
+  it('accumulates the duplicate counts the flush reports (already-captured keys)', async () => {
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length - 1, duplicate: 1 }));
 
     const res = await ingestNdjsonStream(reqFrom([line(1) + line(1) + line(2)]), recordSchema, flush);
 
@@ -69,7 +69,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('rejects malformed and schema-invalid lines with 1-based numbers and continues', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     const body = [line(1), 'not json\n', '{"n":"NaN"}\n', line(4)].join('');
 
     const res = await ingestNdjsonStream(reqFrom([body]), recordSchema, flush);
@@ -82,7 +82,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('tolerates blank lines and CRLF while still counting them toward line numbers', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     const body = `${JSON.stringify({ n: 1 })}\r\n\r\n\nbad\n${JSON.stringify({ n: 2 })}`;
 
     const res = await ingestNdjsonStream(reqFrom([body]), recordSchema, flush);
@@ -93,7 +93,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('processes a final line that has no trailing newline', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
 
     const res = await ingestNdjsonStream(reqFrom(['{"n": 1}\n{"n": 2}']), recordSchema, flush);
 
@@ -101,7 +101,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('rejects an oversized line without buffering it and keeps streaming', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     // maxLineLength 32; the oversized line spans several chunks.
     const oversized = `{"n": 1, "pad": "${'x'.repeat(100)}"}`;
     const chunks = [
@@ -119,7 +119,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('rejects an oversized line that arrives complete within one chunk', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     const body = `${line(1)}{"n": 2, "pad": "${'x'.repeat(100)}"}\n${line(3)}`;
 
     const res = await ingestNdjsonStream(reqFrom([body]), recordSchema, flush, { maxLineLength: 32 });
@@ -130,7 +130,7 @@ describe('ingestNdjsonStream', () => {
 
   it('rejects the lines of a failed batch and continues with later batches', async () => {
     const flush = jest
-      .fn(async (records: unknown[]) => records.length)
+      .fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }))
       .mockRejectedValueOnce(new Error('deadlock detected'));
     const body = Array.from({ length: 5 }, (_, i) => line(i)).join('');
 
@@ -145,7 +145,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('caps stored rejection details and flags truncation', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     const body = Array.from({ length: NDJSON_MAX_REJECTED_DETAILS + 5 }, () => 'bad\n').join('');
 
     const res = await ingestNdjsonStream(reqFrom([body]), recordSchema, flush);
@@ -155,7 +155,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('unwinds (no hang, no final flush) when the client aborts mid-stream', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
 
     let pushed = false;
     const req = new Readable({
@@ -179,7 +179,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it("treats an 'aborted' event followed by a quiet stream end as premature", async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
     const req = new Readable({ read() {} });
     Object.assign(req, { headers: { 'content-type': 'application/x-ndjson' } });
 
@@ -196,7 +196,7 @@ describe('ingestNdjsonStream', () => {
   });
 
   it('returns an empty summary for an empty stream', async () => {
-    const flush = jest.fn(async (records: unknown[]) => records.length);
+    const flush = jest.fn(async (records: unknown[]) => ({ ingested: records.length, duplicate: 0 }));
 
     const res = await ingestNdjsonStream(reqFrom([]), recordSchema, flush);
 

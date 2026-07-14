@@ -104,6 +104,14 @@ export const ConfigSchema = z.object({
       // local *.localhost route still yields a publicly-reachable callback for CI-Portal.
       publicBaseUrl: z.string().optional().default(''),
     }),
+    // App-connect flow (CI-Hub brokers connecting agent apps to Companion Memory).
+    // `hubOrigins` is a comma-separated allowlist of CI-Hub origins that the
+    // consent flow is permitted to redirect back to after minting a scoped key —
+    // an open-redirect guard for the one cross-origin hop. Injected by CI-Hub as
+    // CI_HUB_ORIGINS at install. Empty disables the connect redirect entirely.
+    connect: z.object({
+      hubOrigins: z.string().optional().default(''),
+    }),
   }),
   db: z.object({
     type: z.literal('postgres'), // restrict to 'postgres' (or z.string() for other DBs)

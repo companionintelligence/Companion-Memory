@@ -280,6 +280,10 @@ dbshell: ## Open a psql shell to the PostgreSQL database
 dburl: ## Print this worktree's PostgreSQL connection URL (for DataGrip, psql, etc.)
 	@yarn workspace @ci/be-api dburl
 
+.PHONY: url
+url: ## Print this worktree's stack URL
+	@echo "https://$(PROJECT_NAME).localhost"
+
 .PHONY: dev
 dev: ## Run the development environment locally
 	@printf "$(call task_icon,dev,🧑‍💻) Starting development environment...\n\n"
@@ -507,9 +511,32 @@ production: health init ## Run the production deployment
 
 	@printf "\n"
 
+.PHONY: smoke-api
+smoke-api: ## Verify the API image can run `migrate` with production-only dependencies
+	@printf "$(call task_icon,smoke-api,🔍) Smoke-testing API image...\n\n"
+
+# migrate-database runs `yarn migrate`, so both halves of it must resolve inside
+# the image, which installs dependencies only: a devDependency in either exits
+# non-zero at startup and rolls back every app install. Neither half needs a
+# database here — check:migrations only reads migration filenames, and dbmate's
+# --help resolves bin/dbmate.js's imports without connecting. entrypoint.sh is
+# bypassed because it demands the eight runtime secrets. A missing image is an
+# error, not a pass: a gate that verified nothing must not report green.
+	@docker image inspect $(API_REPO):latest >/dev/null 2>&1 || { \
+		printf "  ✗ $(API_REPO):latest not found — run 'make build' first.\n\n"; \
+		exit 1; \
+	}
+
+	@docker run --rm --entrypoint sh $(API_REPO):latest -c \
+		'yarn check:migrations && node bin/dbmate.js --help >/dev/null'
+
+	@printf "\nAPI image can migrate. ✅\n\n"
+
 .PHONY: publish
 publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@$(MAKE) build ENV=production GPU=$(GPU)
+
+	@$(MAKE) smoke-api
 
 	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
 

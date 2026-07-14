@@ -60,6 +60,9 @@
       "issuerUrl": "",
       "publicBaseUrl": ""
     },
+    "connect": {
+      "hubOrigins": ""
+    },
     "portal": {
       "enabled": false,
       "issuer": "https://hub.ci.computer",

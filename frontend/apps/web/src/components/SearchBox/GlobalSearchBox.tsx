@@ -2,16 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { GlobalUID, Portal } from '@ci/common';
 import { cn } from '@ci/shadcn';
-import { Clock, Search, X } from '@ci/shadcn/icons';
+import { Clock, FilterX, Search, SearchX, SlidersHorizontal, X } from '@ci/shadcn/icons';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
 import {
   FILTER_PARAMS,
+  addEntityFilter,
   countActiveFilters,
-} from '@/pages/MemoryPage/Components/ExplorerToolbar/ActiveFilterChips';
+} from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
+import type { FilterDragPayload } from './filterDrag';
 import { CommunicationResult } from './results/CommunicationResult';
 import { ConceptResult } from './results/ConceptResult';
 import { ContentResult } from './results/ContentResult';
@@ -21,12 +23,19 @@ import { ItemResult } from './results/ItemResult';
 import { NoteResult } from './results/NoteResult';
 import { PersonResult } from './results/PersonResult';
 import { PlaceResult } from './results/PlaceResult';
+import { TagResult } from './results/TagResult';
 import { ThreadResult } from './results/ThreadResult';
-import { SearchBox } from './SearchBox';
+import { SearchBox, type SearchResultItem } from './SearchBox';
 import { useSearchService } from './useSearchService';
 
 const RECENT_PREFIX = 'recent:';
+// Tag suggestion ids carry the label, not a GlobalUID — selecting one applies
+// the tag as an explorer filter rather than opening a detail route.
+const TAG_PREFIX = 'tagfilter:';
 const SEARCH_ACTION_ID = 'action:search';
+const ADVANCED_ACTION_ID = 'action:advanced';
+const CLEAR_FILTERS_ACTION_ID = 'action:clear-filters';
+const CLEAR_QUERY_ACTION_ID = 'action:clear-query';
 
 /**
  * The unified search in the primary navigation header — visible on every page
@@ -81,12 +90,15 @@ export function GlobalSearchBox() {
   // `?advanced=1` implies the expanded box (the pinned filter panel hangs off
   // it). Closing the filters keeps the wide bar and refocuses the input — the
   // user is still mid-search — which re-arms the blur/Escape collapse rules.
-  // On a collapsed box the focus call is a no-op (hidden inputs can't focus),
-  // so the mount run and off-memory transitions change nothing.
+  // Only while focus is still in the overlay, though: when the close came from
+  // a window-level Escape after clicking out to the page, pulling focus back
+  // would pop the results dropdown open again (openOnFocus). That guard also
+  // covers the old no-op cases — the mount run and off-memory transitions run
+  // with focus elsewhere.
   useEffect(() => {
     if (advancedOpen) {
       setExpanded(true);
-    } else {
+    } else if (overlayRef.current?.contains(document.activeElement)) {
       inputRef.current?.focus();
     }
   }, [advancedOpen]);
@@ -142,7 +154,7 @@ export function GlobalSearchBox() {
   const excludeTypes =
     userExcludedTypes.length > 0 ? [...userExcludedTypes, 'answer', 'browser-activity'] : undefined;
 
-  const { data, loading, error } = useSearchService({
+  const { data, tags, loading, error } = useSearchService({
     searchQuery: query ?? '',
     semantic,
     includeTypes,
@@ -193,7 +205,112 @@ export function GlobalSearchBox() {
     [addRecentSearch, clearInput, navigate, onMemory, semantic, setSearchParams],
   );
 
-  const suggestions = useMemo(
+  // Open the advanced-filter drawer. On /memory that's the `?advanced=1` param
+  // (DesktopMemoryPage owns the toggle button and the drawer content); elsewhere
+  // the drawer doesn't exist, so go to the explorer with it open, carrying the
+  // typed query like a committed search.
+  const openAdvanced = useCallback(() => {
+    if (onMemory) {
+      setSearchParams(
+        (params) => {
+          params.set('advanced', '1');
+
+          return params;
+        },
+        { replace: true },
+      );
+
+      return;
+    }
+
+    const trimmed = (query ?? '').trim();
+    const params = new URLSearchParams();
+    params.set('advanced', '1');
+
+    if (trimmed) {
+      addRecentSearch(trimmed);
+      params.set('search', trimmed);
+    }
+
+    if (semantic) {
+      params.set('semantic', '1');
+    }
+
+    navigate(`/memory?${params.toString()}`);
+    clearInput();
+  }, [addRecentSearch, clearInput, navigate, onMemory, query, semantic, setSearchParams]);
+
+  const closeAdvanced = useCallback(() => {
+    setSearchParams(
+      (params) => {
+        params.delete('advanced');
+
+        return params;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
+
+  // The query only — the counterpart to `clearFilters`. Remounting SearchBox
+  // empties the input; on /memory the live `?search` param goes with it. The
+  // filters, the drawer state, and the expanded bar all stay.
+  //
+  // The remount is deferred (via the pending flag) until the `?search` delete
+  // has landed in the router state: bumping resetKey in the same batch remounts
+  // SearchBox one render early, while urlSearch still holds the old query — the
+  // fresh instance seeds its input from it, the refocus below then blocks the
+  // defaultQuery sync (it yields to a focused input), and the fresh instance's
+  // auto-submit writes the stale query straight back to the URL.
+  const [clearQueryPending, setClearQueryPending] = useState(false);
+
+  const clearQuery = useCallback(() => {
+    setQuery(null);
+    setClearQueryPending(true);
+
+    if (onMemory) {
+      setSearchParams(
+        (params) => {
+          params.delete('search');
+
+          return params;
+        },
+        { replace: true },
+      );
+    }
+  }, [onMemory, setSearchParams]);
+
+  useEffect(() => {
+    if (!clearQueryPending || (onMemory && urlSearch)) {
+      return;
+    }
+
+    setClearQueryPending(false);
+    setResetKey((key) => key + 1);
+  }, [clearQueryPending, onMemory, urlSearch]);
+
+  // A remount replaces the input with a fresh, unfocused one. Refocus so an
+  // in-place reset (the clear-query row) keeps the user typing; when the bump
+  // came with a collapse (clearInput) the input is hidden, so this is a no-op.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [resetKey]);
+
+  // Same reset as the drop area's `Clear all`: the filter set only. The query
+  // and the drawer state stay — the row acts in place, like the advanced toggle.
+  const clearFilters = useCallback(() => {
+    setSearchParams(
+      (params) => {
+        for (const param of FILTER_PARAMS) {
+          params.delete(param);
+        }
+
+        return params;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
+
+  const suggestions = useMemo<SearchResultItem[]>(
     () =>
       data.map((item) => {
         switch (item.__typename) {
@@ -218,11 +335,22 @@ export function GlobalSearchBox() {
           case 'NoteType':
             return { id: item.id, content: <NoteResult note={item} /> };
 
+          // Person/place rows carry their drag payload (`filterName` is the
+          // query-level unmasked name) so the right arrow can add them as
+          // who/where filters without a drag.
           case 'PersonType':
-            return { id: item.id, content: <PersonResult person={item} /> };
+            return {
+              id: item.id,
+              content: <PersonResult person={item} />,
+              filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
+            };
 
           case 'PlaceType':
-            return { id: item.id, content: <PlaceResult place={item} /> };
+            return {
+              id: item.id,
+              content: <PlaceResult place={item} />,
+              filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
+            };
 
           case 'ThreadType':
             return { id: item.id, content: <ThreadResult thread={item} /> };
@@ -234,17 +362,59 @@ export function GlobalSearchBox() {
     [data],
   );
 
-  const results = useMemo(() => {
+  const results = useMemo<SearchResultItem[]>(() => {
     const trimmed = (query ?? '').trim();
 
-    // Typing → a "search Memory" action followed by live entity suggestions.
+    // In-place actions that don't depend on a typed query: the advanced-search
+    // toggle, and clear-filters while filters are active. They lead the dropdown
+    // in both states — with no query, active filters still need both handles.
+    const advancedRow: SearchResultItem = {
+      id: ADVANCED_ACTION_ID,
+      content: (
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+          <span className="text-muted-foreground">
+            {advancedOpen ? 'Close advanced search' : 'Open advanced search'}
+          </span>
+        </div>
+      ),
+    };
+    const clearFiltersRows: SearchResultItem[] =
+      activeFilterCount > 0
+        ? [
+            {
+              id: CLEAR_FILTERS_ACTION_ID,
+              content: (
+                <div className="flex items-center gap-2">
+                  <FilterX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+                  <span className="text-muted-foreground">Clear search filters</span>
+                </div>
+              ),
+            },
+          ]
+        : [];
+
+    // Typing → the in-place actions plus a clear-query action and a "search
+    // Memory" action, then matching tags (draggable filter rows, few and
+    // precise), then live entity suggestions.
     if (trimmed) {
       return [
+        advancedRow,
+        {
+          id: CLEAR_QUERY_ACTION_ID,
+          content: (
+            <div className="flex items-center gap-2">
+              <SearchX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+              <span className="text-muted-foreground">Clear search query</span>
+            </div>
+          ),
+        },
+        ...clearFiltersRows,
         {
           id: SEARCH_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2 text-sm">
-              <Search className="h-4 w-4 text-muted-foreground" />
+            <div className="flex items-center gap-2">
+              <Search className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
               <span className="text-muted-foreground">
                 {onMemory ? 'Search Memory for' : 'Search all of Memory for'}
               </span>
@@ -252,33 +422,51 @@ export function GlobalSearchBox() {
             </div>
           ),
         },
+        ...tags.map((tag) => ({
+          id: `${TAG_PREFIX}${tag.label}`,
+          content: <TagResult label={tag.label} />,
+          filter: { kind: 'tag' as const, name: tag.label },
+        })),
         ...suggestions,
       ];
     }
 
-    // Empty + focused → recent searches.
-    return recentSearches.map((recent) => ({
-      id: `${RECENT_PREFIX}${recent}`,
-      content: (
-        <div className="flex items-center gap-2 text-sm">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <span className="flex-1 truncate">{recent}</span>
-          <button
-            type="button"
-            aria-label={`Remove "${recent}" from recent searches`}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              e.stopPropagation();
-              removeRecentSearch(recent);
-            }}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ),
-    }));
-  }, [onMemory, query, recentSearches, removeRecentSearch, suggestions]);
+    // Empty + focused → the same in-place actions, then recent searches.
+    return [
+      advancedRow,
+      ...clearFiltersRows,
+      ...recentSearches.map((recent) => ({
+        id: `${RECENT_PREFIX}${recent}`,
+        content: (
+          <div className="flex items-center gap-2">
+            <Clock className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+            <span className="flex-1 truncate">{recent}</span>
+            <button
+              type="button"
+              aria-label={`Remove "${recent}" from recent searches`}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                removeRecentSearch(recent);
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ),
+      })),
+    ];
+  }, [
+    activeFilterCount,
+    advancedOpen,
+    onMemory,
+    query,
+    recentSearches,
+    removeRecentSearch,
+    suggestions,
+    tags,
+  ]);
 
   // Live, debounced. Drives the suggestion query everywhere, and on /memory also
   // writes `?search` so the explorer filters as you type (replace: keep history clean).
@@ -307,7 +495,7 @@ export function GlobalSearchBox() {
   );
 
   // The X is a full reset: the query, every explorer filter (the same set as
-  // the chips row's "Clear all"), the pinned-filters state, and the expansion.
+  // the drop area's "Clear all"), the pinned-filters state, and the expansion.
   const handleClear = useCallback(() => {
     setQuery(null);
 
@@ -330,8 +518,52 @@ export function GlobalSearchBox() {
     setExpanded(false);
   }, [onMemory, setSearchParams]);
 
+  // Arrow-key analogue of dragging a person/place/tag row onto the explorer's
+  // filter drop area: right adds the highlighted row's filter. Same
+  // validation/dedupe as a drop; failures are silent no-ops here (the drop
+  // area owns the error surface). Only wired on /memory — matching the drag,
+  // whose drop target only exists there — so the arrow keeps its native caret
+  // behavior everywhere else. Removal stays on the drop area's chips.
+  const handleFilterAdd = useCallback(
+    (filter: FilterDragPayload) => {
+      setSearchParams((params) => {
+        addEntityFilter(params, filter.kind, filter.name);
+
+        return params;
+      });
+    },
+    [setSearchParams],
+  );
+
   const handleResultSelect = useCallback(
     ({ id }: { id: string }) => {
+      // Acts in place — the typed query and the dropdown stay; the row itself
+      // disappears once the filter count hits zero.
+      if (id === CLEAR_FILTERS_ACTION_ID) {
+        clearFilters();
+
+        return;
+      }
+
+      // The box stays open and focused; with the query gone the dropdown
+      // falls back to recent searches.
+      if (id === CLEAR_QUERY_ACTION_ID) {
+        clearQuery();
+
+        return;
+      }
+
+      // Toggles the drawer in place — the typed query and the dropdown stay.
+      if (id === ADVANCED_ACTION_ID) {
+        if (advancedOpen) {
+          closeAdvanced();
+        } else {
+          openAdvanced();
+        }
+
+        return;
+      }
+
       if (id === SEARCH_ACTION_ID) {
         commitSearch(query ?? '');
 
@@ -350,6 +582,14 @@ export function GlobalSearchBox() {
       }
 
       clearInput();
+
+      // Tag suggestion → the explorer filtered to the tag (its de facto detail
+      // page); fresh params, like any other detail navigation.
+      if (id.startsWith(TAG_PREFIX)) {
+        navigate(`/memory?tags=${encodeURIComponent(id.slice(TAG_PREFIX.length))}`);
+
+        return;
+      }
 
       const { type, id: decodedId } = GlobalUID.decode(id);
 
@@ -394,7 +634,18 @@ export function GlobalSearchBox() {
           break;
       }
     },
-    [addRecentSearch, clearInput, commitSearch, navigate, query],
+    [
+      addRecentSearch,
+      advancedOpen,
+      clearFilters,
+      clearInput,
+      clearQuery,
+      closeAdvanced,
+      commitSearch,
+      navigate,
+      openAdvanced,
+      query,
+    ],
   );
 
   // Expand + focus. The focus call only lands when already expanded (a hidden
@@ -404,9 +655,10 @@ export function GlobalSearchBox() {
     inputRef.current?.focus();
   });
 
-  // One Escape closes the whole expanded bar — pinned filters included — and
-  // nothing else: the typed text survives hidden, clearing stays on the X.
-  // Focus lands on the collapsed button so Enter/Space reopens.
+  // Escape closes the expanded bar and nothing else: the typed text survives
+  // hidden, clearing stays on the X. Focus lands on the collapsed button so
+  // Enter/Space reopens. (Reached via handleEscape, so the advanced drawer is
+  // already closed; the param delete is belt-and-braces.)
   const collapseBar = useCallback(() => {
     setSearchParams(
       (params) => {
@@ -419,6 +671,48 @@ export function GlobalSearchBox() {
     setExpanded(false);
     buttonRef.current?.focus();
   }, [setSearchParams]);
+
+  // The Escape stack: an open advanced drawer closes first (the bar stays
+  // expanded, and the input refocuses via the advancedOpen effect when focus
+  // was still in the overlay); the next Escape collapses the bar.
+  const handleEscape = useCallback(() => {
+    if (advancedOpen) {
+      closeAdvanced();
+
+      return;
+    }
+
+    collapseBar();
+  }, [advancedOpen, closeAdvanced, collapseBar]);
+
+  // The overlay's Escape handlers above are all focus-bound, and with the
+  // advanced drawer pinned a click on the page moves focus out without
+  // collapsing anything (by design) — leaving no handler to hear the key. This
+  // window-level listener keeps the Escape stack working from anywhere: events
+  // originating inside the overlay are skipped (the input and inset controls
+  // report through the handlers above), as are ones a Radix layer already
+  // dismissed on (it preventDefaults when it closes).
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+
+    const handleWindowKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) {
+        return;
+      }
+
+      if (e.target instanceof Node && overlayRef.current?.contains(e.target)) {
+        return;
+      }
+
+      handleEscape();
+    };
+
+    window.addEventListener('keydown', handleWindowKeyDown);
+
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+  }, [expanded, handleEscape]);
 
   return (
     <>
@@ -456,7 +750,7 @@ export function GlobalSearchBox() {
         // filter interaction).
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
-            collapseBar();
+            handleEscape();
           }
         }}
         // Panel closed ⇒ collapsed: when focus leaves the overlay entirely the
@@ -483,8 +777,14 @@ export function GlobalSearchBox() {
             onSubmit={({ query: submitted }) => commitSearch(submitted)}
             onClear={handleClear}
             onResultSelect={handleResultSelect}
+            onFilterAdd={onMemory ? handleFilterAdd : undefined}
+            // Escape stack, stage 1: an open advanced drawer closes via
+            // SearchBox's unpin stage (which swallows that press here — this
+            // handler captured advancedOpen before the unpin). Stage 2: the
+            // bar collapses.
+            onPanelUnpin={closeAdvanced}
             onKeyDown={(_value, e) => {
-              if (e.key === 'Escape') {
+              if (e.key === 'Escape' && !advancedOpen) {
                 collapseBar();
               }
             }}

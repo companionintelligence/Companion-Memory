@@ -113,6 +113,36 @@ export class TagService {
     return entity ? TagEntity.toEgressType(entity) : null;
   }
 
+  /**
+   * Substring-match the user's tag labels for search suggestions. Prefix
+   * matches rank ahead of mid-label matches, ties break alphabetically. Like
+   * findByLabel, this is a per-user vocabulary lookup so a non-system context
+   * is required.
+   */
+  async searchByLabel(context: UserServiceContext, query: string, limit = 5): Promise<Tag[]> {
+    const trimmed = query.trim().toLowerCase();
+
+    if (trimmed.length === 0) {
+      return [];
+    }
+
+    // Escape LIKE metacharacters so a literal % or _ in the query can't widen the match.
+    const escaped = trimmed.replace(/[\\%_]/g, '\\$&');
+
+    const entities = await this.tagRepository
+      .createQueryBuilder('t')
+      .where('t.user_id = :userId', { userId: context.userId })
+      .andWhere('t.deleted_at IS NULL')
+      .andWhere('t.label ILIKE :contains', { contains: `%${escaped}%` })
+      .orderBy('t.label ILIKE :prefix', 'DESC')
+      .addOrderBy('t.label', 'ASC')
+      .setParameter('prefix', `${escaped}%`)
+      .limit(limit)
+      .getMany();
+
+    return entities.map((entity) => TagEntity.toEgressType(entity));
+  }
+
   async update(context: ServiceContext, id: string, data: UpdateTagDto): Promise<Tag | null> {
     const label = this.validateLabel(data.label);
 

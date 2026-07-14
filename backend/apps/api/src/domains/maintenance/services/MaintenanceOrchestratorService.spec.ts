@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 
 import { EventEntity } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
+import { IndexSkipEntity } from '@ci/domains/search-ingress';
 
 import { MaintenanceOrchestratorService, ORCHESTRATE_STAGES } from './MaintenanceOrchestratorService';
 
@@ -35,9 +36,18 @@ function makeService() {
     getRawOne: jest.fn(async () => ({ count: '0' })),
   };
 
+  // Chainable COUNT(*) builder for the drain's skip-marker tally.
+  const skipCountQb = {
+    select: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn(async () => ({ count: '0' })),
+  };
+
   const dataSource = {
     getRepository: jest.fn((entity: unknown) => ({
-      createQueryBuilder: jest.fn(() => (entity === EventEntity ? eventCountQb : embeddingCountQb)),
+      createQueryBuilder: jest.fn(() =>
+        entity === EventEntity ? eventCountQb : entity === IndexSkipEntity ? skipCountQb : embeddingCountQb,
+      ),
     })),
     // media_dimensions candidate count.
     query: jest.fn(async () => [{ count: '0' }]),
@@ -125,6 +135,7 @@ function makeService() {
     dataSource,
     eventCountQb,
     embeddingCountQb,
+    skipCountQb,
     send,
     personStub,
     commLink,
@@ -416,22 +427,55 @@ describe('MaintenanceOrchestratorService', () => {
 
     const progress = lines.filter((l) => l.type === 'leg-progress');
     expect(progress).toEqual([
-      { type: 'leg-progress', leg: 'search_index', enqueued: 3, embedded: 1 },
-      { type: 'leg-progress', leg: 'search_index', enqueued: 3, embedded: 3 },
+      { type: 'leg-progress', leg: 'search_index', enqueued: 3, embedded: 1, skipped: 0 },
+      { type: 'leg-progress', leg: 'search_index', enqueued: 3, embedded: 3, skipped: 0 },
     ]);
 
     expect(summary.legs[0].result).toMatchObject({
       enqueued: 3,
-      drain: { enqueued: 3, embedded: 3, drained: true },
+      drain: { enqueued: 3, embedded: 3, skipped: 0, drained: true },
     });
   });
 
-  it('search_index drain: gives up at timeoutMs when the queue never drains (skip-marked rows)', async () => {
+  it('search_index drain: counts skip-marked rows toward completion, so a skip-heavy drain ends without the timeout', async () => {
+    const { service, searchIndex, embeddingCountQb, skipCountQb } = makeService();
+    const { lines, emit } = collectEmits();
+    service.drainPollIntervalMs = 1;
+    // 5 enqueued; the listeners embed 2 and DECLINE 3 (index_skips). An
+    // embedded-only poll would sit at 2 < 5 until the timeout — the 13k-row
+    // Discord sync that idled its full 10-minute budget on every run.
+    searchIndex.backfill.mockResolvedValueOnce({ enqueued: 5, perType: { communication: 5 } });
+    embeddingCountQb.getRawOne
+      .mockResolvedValueOnce({ count: '10' }) // baseline
+      .mockResolvedValueOnce({ count: '12' }); // poll: delta 2
+    skipCountQb.getRawOne
+      .mockResolvedValueOnce({ count: '3' }) // baseline
+      .mockResolvedValueOnce({ count: '6' }); // poll: delta 3
+
+    const summary = await service.orchestrate(
+      USER_ID,
+      { stages: ['search_index'], searchIndexDrain: { timeoutMs: 60_000 } },
+      emit,
+    );
+
+    // One poll sufficed: 2 embedded + 3 skipped covers the 5 enqueued.
+    expect(embeddingCountQb.getRawOne).toHaveBeenCalledTimes(2);
+    expect(skipCountQb.getRawOne).toHaveBeenCalledTimes(2);
+    expect(lines.filter((l) => l.type === 'leg-progress')).toEqual([
+      { type: 'leg-progress', leg: 'search_index', enqueued: 5, embedded: 2, skipped: 3 },
+    ]);
+    expect(summary.legs[0].result).toMatchObject({
+      drain: { enqueued: 5, embedded: 2, skipped: 3, drained: true },
+    });
+  });
+
+  it('search_index drain: gives up at timeoutMs when the queue is genuinely stalled (nothing embeds or skips)', async () => {
     const { service, searchIndex, embeddingCountQb } = makeService();
     const { emit } = collectEmits();
     service.drainPollIntervalMs = 1;
     searchIndex.backfill.mockResolvedValueOnce({ enqueued: 5, perType: { communication: 5 } });
     embeddingCountQb.getRawOne.mockResolvedValue({ count: '10' }); // flat: embedded delta stays 0
+    // skipCountQb stays at its default flat 0 → skipped delta stays 0 too.
 
     const summary = await service.orchestrate(
       USER_ID,
@@ -441,7 +485,7 @@ describe('MaintenanceOrchestratorService', () => {
 
     expect(summary.legs[0].ok).toBe(true);
     expect(summary.legs[0].result).toMatchObject({
-      drain: { enqueued: 5, embedded: 0, drained: false },
+      drain: { enqueued: 5, embedded: 0, skipped: 0, drained: false },
     });
   });
 

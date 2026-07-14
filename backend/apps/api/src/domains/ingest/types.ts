@@ -9,8 +9,8 @@ import { createPositionSchemaRoot } from '@ci/domains/position';
  * REST bulk-ingest envelopes for the `/v1/*` machine-ingest plane.
  *
  * Every kind shares ONE request shape — `{ records: [...] }` — mirroring
- * `POST /v1/events`' `{ events: [...] }` batch style, and ONE response shape
- * ({@link BulkIngestResponse}). Record schemas match each destination service's
+ * `POST /v1/events`' earlier `{ events: [...] }` batch style (captureEventSchema
+ * above), and ONE response shape ({@link BulkIngestResponse}). Record schemas match each destination service's
  * create DTO EXACTLY (field names and casing included), so the controller can
  * hand the parsed records to the service with only type coercions (ISO string →
  * Date) and no field renaming:
@@ -31,6 +31,41 @@ const bulkEnvelope = <T extends z.ZodTypeAny>(record: T) =>
   z.object({
     records: z.array(record).min(1).max(MAX_BULK_INPUT_SIZE),
   });
+
+// ---------------------------------------------------------------------------
+// POST /v1/events → capture raw log + EventService.create
+// ---------------------------------------------------------------------------
+
+// G1 unified-capture ingest envelope (event-ingest-spec §4.2), pragmatic v1
+// subset. Every capture source — importer, browser ext, pipe — POSTs this shape
+// to /v1/events. `kind` is open text for v1; a closed enum + per-kind payload
+// schema registry is a follow-up. Predates the `{ records: [...] }` bulk
+// envelope below, hence the `{ events: [...] }` key and 1,000-record cap.
+export const captureEventSchema = z.object({
+  // Provenance source_type, defaulted to 'capture' by the handler when absent
+  // (the value this endpoint always stamped). Lets a bulk importer present its
+  // real triple — e.g. ci-import-tools sends ('ci-import-tools', '<dataSource>',
+  // items.id) — so materialized events dedup against rows the same importer
+  // created over GraphQL createEvents, and content rows auto-link by the
+  // matching triple. Capture sources that omit it are unchanged.
+  source_type: z.string().min(1).optional(),
+  source_system: z.string().min(1),
+  source_id: z.string().min(1),
+  kind: z.string().min(1),
+  occurred_at: z.string().datetime(),
+  observed_at: z.string().datetime().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  payload: z.record(z.unknown()).default({}),
+  confidence_score: z.number().min(0).max(1).optional(),
+});
+
+export const ingestEventsSchema = z.object({
+  events: z.array(captureEventSchema).min(1).max(1000),
+});
+
+export type CaptureEvent = z.infer<typeof captureEventSchema>;
+export type IngestEventsRequest = z.infer<typeof ingestEventsSchema>;
 
 // ---------------------------------------------------------------------------
 // POST /v1/communications → CommunicationService.createMany
@@ -177,23 +212,22 @@ export type IngestPositionsRequest = z.infer<typeof ingestPositionsSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Shared bulk-ingest response, mirroring POST /v1/events' shape.
+ * Shared bulk-ingest response — one shape for POST /v1/events and every
+ * `{ records: [...] }` bulk kind. Every kind runs the same three-layer
+ * capture→materialize→link pipeline (BulkIngestController.captureAndMaterialize),
+ * so the accounting is uniform:
  *
- * Duplicate detection: every kind dedupes server-side on the provenance triple
- * (source_type, source_system, source_id) — positions dedupe on (user_id, time)
- * — but the bulk services return the created-OR-existing rows without exposing
- * the per-row inserted-vs-found flag (bulkInsertIdempotent computes it, the
- * services strip it before returning). So:
- *
- *   - `ingested` counts the records the service ACCEPTED (created now or
- *     already present — an idempotent re-send is counted here, not in
- *     `duplicate`);
- *   - `duplicate` counts only records collapsed WITHIN this request (two
- *     records sharing a triple / a position time), i.e.
- *     `records.length - accepted`;
- *   - `rejected` is per-record schema/processing failures. The bulk services
- *     are all-or-nothing per batch, so a service error rejects the whole
- *     request (HTTP error) rather than filling this array.
+ *   - `ingested` counts captures accepted THIS request: records whose
+ *     provenance triple appended a fresh raw-log row, plus triple-less records
+ *     (no capture identity — they materialize directly, deduped only by their
+ *     service's own key, e.g. positions on (user_id, time));
+ *   - `duplicate` counts records whose (destination, triple) capture key
+ *     already existed in the raw log — an idempotent re-send lands HERE — plus
+ *     within-request repeats of a key;
+ *   - `rejected` is per-record failures. Validation rejects individually
+ *     (NDJSON lines / envelope 400s); materialization is all-or-nothing per
+ *     batch, so a service failure rejects the batch's records together after
+ *     compensating their raw-log rows (they are safely re-sendable).
  */
 export interface BulkIngestResponse {
   ingested: number;

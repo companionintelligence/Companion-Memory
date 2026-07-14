@@ -21,3 +21,14 @@ export const ENTITY_TYPE_MAP = {
   Place: 'place',
   Thing: 'item',
 };
+
+/**
+ * `managed_by` value the API stamps on an api key minted by the Companion Memory
+ * consent flow. CI-Hub owns such a key's lifecycle (it rotates and revokes it), so
+ * the settings UI badges it and blocks renaming.
+ *
+ * The API contract value, kept here rather than inline in a component: the backend
+ * enforces on this literal, and if the two ever disagreed the UI would offer an Edit
+ * button the API rejects — the exact drift the provenance column removed.
+ */
+export const API_KEY_PROVENANCE_CONNECT = 'connect';

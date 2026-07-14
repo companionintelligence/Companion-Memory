@@ -342,9 +342,11 @@ export class PersonStubBackfillService {
           const propertyKey =
             seen.key.kind === 'email' ? 'emails' : seen.key.kind === 'phone' ? 'phones' : 'names';
           // Display-name participants also get structured first/middle/last
-          // parts (middle omitted when the name has only two tokens) so the
-          // Person surfaces firstName/lastName like contact-importer rows do.
-          // Email/phone raws are addresses, not names — no parts for those.
+          // parts (middle omitted when the name has only two tokens; no parts
+          // at all for a single token — a lone token isn't reliably a first
+          // name) so the Person surfaces firstName/lastName like
+          // contact-importer rows do. Email/phone raws are addresses, not
+          // names — no parts for those.
           const nameParts = seen.key.kind === 'name' ? splitPersonName(seen.rawName) : null;
           newEntities.push({
             key: `${STUB_SOURCE_SYSTEM}:${seen.key.kind}:${seen.key.valueNormalized}`,

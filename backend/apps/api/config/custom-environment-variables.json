@@ -25,6 +25,9 @@
       "issuerUrl": "OIDC_ISSUER_URL",
       "publicBaseUrl": "APP_BASE_URL"
     },
+    "connect": {
+      "hubOrigins": "CI_HUB_ORIGINS"
+    },
     "portal": {
       "enabled": {
         "__name": "PORTAL_OIDC_ENABLED",
