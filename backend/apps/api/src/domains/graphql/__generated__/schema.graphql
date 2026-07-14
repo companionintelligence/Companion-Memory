@@ -103,16 +103,27 @@ type BrowserActivityType implements Node & Taggable {
   url: String!
 }
 
+type BulkGraphEntityMapping {
+  entityId: ID!
+  key: String!
+}
+
 input BulkGraphInput {
   entities: [GraphEntityInput!]!
   relationships: [GraphRelationshipInput!]
 }
 
 type BulkGraphPayload {
+  entities: [BulkGraphEntityMapping!]!
   entitiesProcessed: Int!
   errors: [String!]!
   relationshipsProcessed: Int!
   success: Boolean!
+}
+
+type BulkItemRelationshipResult {
+  inserted: Int!
+  skipped: Int!
 }
 
 type CommunicationConnection implements Connection {
@@ -381,6 +392,7 @@ input CreateInventoryInput {
   currentValue: Float
   description: String
   identifierCodes: JSON
+  metadata: JSON
   name: String!
   purchasePrice: Float
   sourceId: String
@@ -470,6 +482,7 @@ type CreateRelationshipPayload {
 input CreateSavedSearchInput {
   description: String
   entityTypes: [String!]
+  filters: SavedSearchFiltersInput
   name: String
   query: String
   tags: [String!]
@@ -530,11 +543,17 @@ type EventType implements Node & Taggable {
   locationCoordinates: JSON
   locationEntityId: ID
   locationName: String
+  mediaContentType: String
+  mediaHeight: Int
+  mediaSize: Float
+  mediaUrl: String
+  mediaWidth: Int
   metadata: JSON
   organizer: PersonType
   organizerEntityId: ID
   participantEntityIds: [ID!]
   participants(after: String, before: String, first: Int, last: Int): PersonConnection!
+  previewUrl: String
   sourceId: ID
   sourceSystem: String
   sourceType: String
@@ -647,6 +666,17 @@ type ItemEdge implements Edge {
   node: ItemType!
 }
 
+input ItemRelationshipInput {
+  fromSourceId: String!
+  fromSourceSystem: String!
+  fromSourceType: String!
+  metadata: JSON
+  relation: String!
+  toSourceId: String!
+  toSourceSystem: String!
+  toSourceType: String!
+}
+
 type ItemType implements Node & Taggable {
   acquiredAt: DateTime
   brand: String
@@ -724,6 +754,7 @@ type MessageType implements Node {
 
 type Mutation {
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
+  bulkIngestItemRelationships(input: [ItemRelationshipInput!]!): BulkItemRelationshipResult!
   createAnswer(input: CreateAnswerInput!): AnswerType!
   createAnswers(input: [CreateAnswerInput!]!): [AnswerType!]!
   createBrowserActivities(input: [CreateBrowserActivityInput!]!): [BrowserActivityType!]!
@@ -775,6 +806,7 @@ type Mutation {
   removeEvent(id: String!): Boolean!
   removePlace(id: String!): Boolean!
   removeQuestion(id: String!): Boolean!
+  setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
   tagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
 
   """Manually trigger the HBPE pipeline for the current user"""
@@ -787,6 +819,7 @@ type Mutation {
   updateConnection(input: UpdateConnectionInput!): UpdateConnectionPayload!
   updateConnectionSyncJob(input: UpdateConnectionSyncJobInput!): UpdateConnectionSyncJobPayload!
   updateContent(input: UpdateContentInput!): ContentType
+  updateCurrentUser(input: UpdateCurrentUserInput!): UserType
   updateEvent(input: UpdateEventInput!): EventType
   updateFile(input: UpdateFileInput!): FileType
   updateItem(input: UpdateItemInput!): UpdateItemPayload!
@@ -998,6 +1031,7 @@ type Query {
   savedSearch(id: ID!): SavedSearchType
   savedSearches(after: String, before: String, first: Int, last: Int): SavedSearchConnection!
   search(input: SearchInput!): SearchResultConnection!
+  sharedSavedSearch(token: String!): SavedSearchType
   summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
   summary(id: ID!): SummaryType
   tag(id: ID!): TagType
@@ -1062,13 +1096,42 @@ type SavedSearchEdge implements Edge {
   node: SavedSearchType!
 }
 
+input SavedSearchFiltersInput {
+  connectors: [String!]
+  endTime: String
+  eventTypes: [String!]
+  hasLocation: Boolean
+  people: [String!]
+  places: [String!]
+  semantic: Boolean
+  sortBy: String
+  sortOrder: String
+  startTime: String
+}
+
+type SavedSearchFiltersType {
+  connectors: [String!]
+  endTime: String
+  eventTypes: [String!]
+  hasLocation: Boolean
+  people: [String!]
+  places: [String!]
+  semantic: Boolean
+  sortBy: String
+  sortOrder: String
+  startTime: String
+}
+
 type SavedSearchType implements Node {
   createdAt: DateTime!
   description: String
   entityTypes: [String!]
+  filters: SavedSearchFiltersType
   id: ID!
+  isPublic: Boolean!
   name: String
   query: String
+  shareToken: String
   tags: [String!]
   updatedAt: DateTime!
 }
@@ -1087,6 +1150,7 @@ input SearchInput {
   places: [String!]
   query: String
   semantic: Boolean
+  shareToken: String
   sortBy: String
   sortOrder: String
   startTime: String
@@ -1095,6 +1159,7 @@ input SearchInput {
 
 type SearchResultConnection {
   edges: [SearchResultEdge!]!
+  matchingTags: [TagType!]!
   pageInfo: PageInfo!
   totalCount: Int!
 }
@@ -1105,6 +1170,11 @@ type SearchResultEdge {
 }
 
 union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+
+input SetSavedSearchSharingInput {
+  id: ID!
+  isPublic: Boolean!
+}
 
 type SummaryConnection implements Connection {
   edges: [SummaryEdge!]!
@@ -1281,6 +1351,10 @@ input UpdateContentInput {
   url: String
 }
 
+input UpdateCurrentUserInput {
+  timezone: String
+}
+
 input UpdateEventInput {
   category: String
   confidenceScore: Float
@@ -1402,6 +1476,7 @@ type UpdateRelationshipPayload {
 input UpdateSavedSearchInput {
   description: String
   entityTypes: [String!]
+  filters: SavedSearchFiltersInput
   id: ID!
   name: String
   query: String
@@ -1419,4 +1494,5 @@ type UserType implements Node {
   id: ID!
   name: String!
   onboarded: Boolean!
+  timezone: String!
 }

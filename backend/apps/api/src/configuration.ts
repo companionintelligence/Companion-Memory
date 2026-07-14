@@ -42,6 +42,17 @@ export const ConfigSchema = z.object({
       jwksUri: z.string(),
       audience: z.string(),
     }),
+    // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
+    // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting
+    // it (shared secret provisioned as CI_HUB_FORWARD_AUTH_SECRET on both sides).
+    // Off by default so local/tailscale-exposed apps (which get no forward-auth
+    // from Traefik) keep working. See CI-Engineering/architecture/subsystems/
+    // security-trust-and-ops.md.
+    hubForwardAuth: z.object({
+      enabled: z.boolean(),
+      secret: z.string(),
+      maxSkewMs: z.coerce.number().int().positive(),
+    }),
     session: z.object({
       fieldPepper: z.string(),
       duration: z.string(),
@@ -87,7 +98,19 @@ export const ConfigSchema = z.object({
     }),
     oidc: z.object({
       issuerUrl: z.string(),
-      callbackUrl: z.string(),
+      // Public origin of this app (e.g. https://ci-memory-<org>.companionintelligence.com),
+      // injected by CI-Hub as APP_BASE_URL. When set, the OIDC redirect_uri is built from
+      // this stable origin instead of the inbound request host — so reaching the app at its
+      // local *.localhost route still yields a publicly-reachable callback for CI-Portal.
+      publicBaseUrl: z.string().optional().default(''),
+    }),
+    // App-connect flow (CI-Hub brokers connecting agent apps to Companion Memory).
+    // `hubOrigins` is a comma-separated allowlist of CI-Hub origins that the
+    // consent flow is permitted to redirect back to after minting a scoped key —
+    // an open-redirect guard for the one cross-origin hop. Injected by CI-Hub as
+    // CI_HUB_ORIGINS at install. Empty disables the connect redirect entirely.
+    connect: z.object({
+      hubOrigins: z.string().optional().default(''),
     }),
   }),
   db: z.object({
@@ -132,7 +155,7 @@ export const ConfigSchema = z.object({
     /** Max texts sent to Ollama's /api/embed in a single HTTP request. */
     batchSize: z.coerce.number().int().positive().default(32),
     /** Max concurrent in-flight Ollama embedding HTTP requests. */
-    concurrency: z.coerce.number().int().positive().default(4),
+    concurrency: z.coerce.number().int().positive().default(12),
     /**
      * How long (ms) the coalescing buffer waits for more texts before flushing a
      * batch. Small values keep latency low; larger values pack fuller batches
@@ -159,11 +182,15 @@ export const ConfigSchema = z.object({
     }, z.array(z.string()).default([])),
   }),
   // PGBoss worker tuning. concurrency is the global in-flight job ceiling across
-  // all queues; fetchBatchSize caps how many jobs a single fetch pulls. Raising
-  // these scales the decoupled embedding workers during a bulk import.
+  // all queues; fetchBatchSize caps how many jobs a single fetch pulls. This
+  // global pool is shared by every queue, so the search-index (embedding) workers
+  // only fill the Ollama coalescing buffer as fast as they get slots — the
+  // default is sized so a post-import backfill drains in hours, not days. Raise
+  // CI_QUEUE_CONCURRENCY / CI_EMBED_CONCURRENCY further (and CI_QUEUE_SUPPRESS the
+  // enrichment queues) to push a large import harder.
   queues: z.object({
-    concurrency: z.coerce.number().int().positive().default(10),
-    fetchBatchSize: z.coerce.number().int().positive().default(10),
+    concurrency: z.coerce.number().int().positive().default(32),
+    fetchBatchSize: z.coerce.number().int().positive().default(20),
   }),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
@@ -176,9 +203,30 @@ export const ConfigSchema = z.object({
     'new.insights.page': booleanStringSchema,
     'require.signup.codes': booleanStringSchema,
     'files.page': booleanStringSchema,
+    /** Wholesale gate for the Insights surface (/insights, /insights/:id, /prompts + nav entry points). */
+    'insights.page': booleanStringSchema,
+    /** Wholesale gate for the Chat page (/chat + nav entry points). */
+    'chat.page': booleanStringSchema,
+    /** Wholesale gate for the Jobs page (/jobs + nav entry points). */
+    'jobs.page': booleanStringSchema,
+    /** Enables the memory stats page (`/stats`): timeline totals plus entity
+     * breakdowns by data source and by tag. */
+    'stats.page': booleanStringSchema,
+    /** The standalone all-tags browse page (`/tags`). Restored — on by default —
+     * after #1512 removed it and left no way to see every tag in the system.
+     * Chips open the explorer filtered by the tag (`/memory?tags=<label>`). */
+    'tags.page': booleanStringSchema,
     hbpe: booleanStringSchema,
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,
+    /**
+     * Enables saved-search sharing: the `/shared/<token>` capability-link path
+     * (resolving a shared saved search and running it as its owner) and the
+     * frontend "make public" control. Off by default — the access model is still
+     * being hardened, so the shared-URL surface stays dark unless explicitly
+     * enabled.
+     */
+    'shared.search': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

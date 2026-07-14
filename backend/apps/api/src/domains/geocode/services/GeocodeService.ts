@@ -258,7 +258,12 @@ export class GeocodeService {
     }
 
     const cacheKey = `reverse:${lat.toFixed(4)},${lng.toFixed(4)}`;
-    const queryHash = GeocodeService.hashQuery(cacheKey);
+    // Hash the structured key DIRECTLY — do NOT route it through hashQuery, whose
+    // canonicalize() strips '-', '.' and ',' (it's built for free-text addresses).
+    // That would collapse all four coordinate quadrants into one cache row
+    // (37.42,-122.08 vs -37.42,122.08 vs ...), so the first quadrant to resolve
+    // poisons the others with a wrong-hemisphere place name.
+    const queryHash = createHash('sha256').update(cacheKey).digest('hex');
 
     // --- Cache check -------------------------------------------------------
     if (!options.bustCache) {

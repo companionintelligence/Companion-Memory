@@ -10,6 +10,9 @@ Job order:
   2. l1_stale_sweep       < 30 sec    — deactivate L1 clusters unused for 90 days.
   3. l2_stale_sweep       < 30 sec    — deactivate L2 clusters unused for 90 days.
   4. lora_fine_tune       <  5 min    — per-user LoRA adapter update.
+  4b. backfill_actuals    < 30 sec    — fill prediction_log.actual_* for elapsed
+                                        forecast buckets from observed token_stream
+                                        labels (Phase 5a / T5.1).
   5. drift_detection                  [Phase 5 stub]
   6. cache_invalidation               [Phase 5 stub]
 
@@ -25,6 +28,18 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 log = logging.getLogger(__name__)
+
+
+def __getattr__(name: str):
+    # Lazily re-export the Phase 5a backfill entry point so callers can reach it
+    # via this module (``from ci.pipeline.nightly_runner import
+    # backfill_prediction_actuals``) without importing psycopg2 at module load —
+    # keeping the Temporal workflow-sandbox reimport of this file DB-free, as the
+    # other activities do with their in-body imports.
+    if name == "backfill_prediction_actuals":
+        from ci.pipeline.actuals_backfill import backfill_prediction_actuals
+        return backfill_prediction_actuals
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2.0)
 _ACTIVITY_TIMEOUT = timedelta(minutes=5)
@@ -295,6 +310,29 @@ async def needs_bootstrap(user_id: str) -> dict:
     return await asyncio.get_event_loop().run_in_executor(None, _run)
 
 
+# ── Step 4b — Backfill prediction actuals (Phase 5a / T5.1) ─────────────────────
+
+
+@activity.defn(name="backfill_actuals")
+async def backfill_actuals(user_id: str) -> dict:
+    """
+    Step 4b: Fill hbpe.prediction_log.actual_l0/l1/l2 for elapsed forecast
+    buckets from the observed hbpe.token_stream labels of the day that has
+    since passed.
+
+    Enables retrospective accuracy measurement (§6 success metric: ≥95% of
+    buckets whose window has elapsed are backfilled). Idempotent — only rewrites
+    rows whose observed labels changed.
+    """
+    import asyncio
+
+    def _run() -> dict:
+        from ci.pipeline.actuals_backfill import backfill_prediction_actuals
+        return backfill_prediction_actuals(user_id)
+
+    return await asyncio.get_event_loop().run_in_executor(None, _run)
+
+
 # ── Phase 5 stubs ──────────────────────────────────────────────────────────────
 
 
@@ -435,6 +473,17 @@ class NightlyHBPEWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=1),
             ),
             "step4_lora",
+        )
+
+        # Step 4b — backfill prediction_log actuals for elapsed forecast windows
+        self._step = "backfill_actuals"
+        results["steps"]["step4b_backfill_actuals"] = await _safe_execute(
+            workflow.execute_activity(
+                backfill_actuals, user_id,
+                start_to_close_timeout=_SWEEP_TIMEOUT,
+                retry_policy=_RETRY,
+            ),
+            "step4b_backfill_actuals",
         )
 
         # Step 5 — drift detection (stub)

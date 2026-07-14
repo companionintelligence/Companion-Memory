@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { GeocodeCacheEntity } from '../../entities/GeocodeCacheEntity';
 import type { GeocodeProvider, GeocodeProviderResult } from '../GeocodeProvider';
 import {
@@ -299,13 +301,34 @@ describe('GeocodeService.reverseGeocode', () => {
     expect(repo.query).not.toHaveBeenCalled();
   });
 
-  it('namespaces the cache key (reverse:lat,lng) so it never collides with a forward address hash', async () => {
+  it('hashes the structured key directly (NOT via hashQuery) so the coordinate signs survive', async () => {
     const repo = makeCacheRepo();
     const provider = makeProvider(ROOFTOP_OK);
 
     await makeService(repo, provider).reverseGeocode(37.422, -122.084);
 
-    const expectedHash = GeocodeService.hashQuery('reverse:37.4220,-122.0840');
+    // The key is sha256 of the raw `reverse:lat,lng` string, not the canonicalized
+    // form (which would strip the '-', '.' and ',').
+    const expectedHash = createHash('sha256').update('reverse:37.4220,-122.0840').digest('hex');
     expect(repo.findOne).toHaveBeenCalledWith({ where: { queryHash: expectedHash } });
+  });
+
+  it('gives all four coordinate quadrants distinct cache keys (no sign collapse)', async () => {
+    const hashFor = async (lat: number, lng: number): Promise<string> => {
+      const repo = makeCacheRepo();
+      await makeService(repo, makeProvider(ROOFTOP_OK)).reverseGeocode(lat, lng);
+      const arg = (repo.findOne.mock.calls[0] as unknown[])[0] as { where: { queryHash: string } };
+
+      return arg.where.queryHash;
+    };
+
+    const hashes = new Set([
+      await hashFor(37.42, -122.08), // California (NW)
+      await hashFor(-37.42, 122.08), // near Australia (SE) — would collide under canonicalize
+      await hashFor(37.42, 122.08), // NE
+      await hashFor(-37.42, -122.08), // SW
+    ]);
+
+    expect(hashes.size).toBe(4);
   });
 });

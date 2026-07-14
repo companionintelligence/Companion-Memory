@@ -5,10 +5,12 @@ import { Camera, Inbox, MonitorCog, Search, type LucideIcon } from '@ci/shadcn/i
 import { Link } from 'react-router-dom';
 
 import logo from '@/assets/logo.svg';
+import { useFeatures } from '@/common/feature';
 import { CaptureModal } from '@/components/modals/CaptureModal';
 import { useCaptureModal } from '@/hooks';
 
 export function MobileNavigation() {
+  const { isFeatureEnabled } = useFeatures();
   const [{ isOpen }, { open, close }] = useCaptureModal();
 
   const handleCaptureClick = useCallback(
@@ -31,13 +33,19 @@ export function MobileNavigation() {
         <div className="flex flex-row items-center justify-between">
           <NavButton to="/feed" icon={Inbox} label="Feed" />
           <NavButton to="/search" icon={Search} label="Search" />
-          <Link
-            to="/chat"
-            aria-label="Chat"
-            className="flex self-stretch p-2 px-4 items-center justify-center"
-          >
-            <img src={logo} alt="" className="h-12 w-12" />
-          </Link>
+          {isFeatureEnabled('chat.page') ? (
+            <Link
+              to="/chat"
+              aria-label="Chat"
+              className="flex self-stretch p-2 px-4 items-center justify-center"
+            >
+              <img src={logo} alt="" className="h-12 w-12" />
+            </Link>
+          ) : (
+            <div className="flex self-stretch p-2 px-4 items-center justify-center">
+              <img src={logo} alt="" className="h-12 w-12" />
+            </div>
+          )}
           <NavButton icon={Camera} label="Capture" onClick={handleCaptureClick} />
           <NavButton to="/system" icon={MonitorCog} label="System" />
         </div>

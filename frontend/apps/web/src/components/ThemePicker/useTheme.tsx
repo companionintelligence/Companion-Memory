@@ -446,7 +446,7 @@ export function ThemeProvider({
   children,
   defaultTheme = 'system',
   defaultColorTheme = PRESET_THEMES[0],
-  storageKey = 'ci-ui-theme',
+  storageKey = 'vite-ui-theme',
   colorStorageKey = 'ci-ui-color-theme',
   colorOverridesStorageKey = 'ci-ui-color-overrides',
 }: ThemeProviderProps) {

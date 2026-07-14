@@ -79,5 +79,17 @@ const forwardArgs = program.args;
     stdio: 'inherit',
   });
 
+  // status is null when psql never ran — it is not installed in the API image —
+  // or died on a signal. Exiting on it would report success without a shell.
+  if (result.error) {
+    console.error(`Failed to run psql: ${result.error.message}`);
+    process.exit(1);
+  }
+
+  if (result.signal) {
+    console.error(`psql was terminated by signal ${result.signal}.`);
+    process.exit(1);
+  }
+
   process.exit(result.status);
 })();

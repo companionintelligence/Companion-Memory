@@ -44,10 +44,11 @@ describe('CommunicationGridItem', () => {
     expect(screen.getByText('To Alice')).toBeInTheDocument();
   });
 
-  it('falls back to "Message" with neither subject nor sender', () => {
+  it('renders no heading with neither subject nor sender — the preview is the only text', () => {
     renderWithProviders(<CommunicationGridItem communication={makeComm({ subject: null, from: null })} />);
 
-    expect(screen.getByText('Message')).toBeInTheDocument();
+    expect(screen.queryByText('Message')).not.toBeInTheDocument();
+    expect(screen.getByText('Are we still on for noon?')).toBeInTheDocument();
   });
 
   it('fires onClick', () => {

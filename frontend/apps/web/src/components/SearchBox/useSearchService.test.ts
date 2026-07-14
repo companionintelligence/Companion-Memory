@@ -13,9 +13,9 @@ vi.mock('@apollo/client', async (orig) => ({
 
 const mockedUseQuery = vi.mocked(useQuery);
 
-function setResult(edges: Array<{ node: unknown }> = []) {
+function setResult(edges: Array<{ node: unknown }> = [], matchingTags: unknown[] = []) {
   mockedUseQuery.mockReturnValue({
-    data: { search: { edges } },
+    data: { search: { edges, matchingTags } },
     loading: false,
     error: undefined,
   } as unknown as ReturnType<typeof useQuery>);
@@ -77,6 +77,15 @@ describe('useSearchService', () => {
     const { result } = renderHook(() => useSearchService({ searchQuery: 'coffee' }));
 
     expect(result.current.data).toEqual([]);
+    expect(result.current.tags).toEqual([]);
     expect(result.current.loading).toBe(true);
+  });
+
+  it('surfaces the matching tags alongside the entity results', () => {
+    setResult([{ node: { id: '1' } }], [{ id: 't1', label: 'culinary' }]);
+
+    const { result } = renderHook(() => useSearchService({ searchQuery: 'cul' }));
+
+    expect(result.current.tags).toEqual([{ id: 't1', label: 'culinary' }]);
   });
 });

@@ -40,7 +40,10 @@ const ProviderPage = lazy(() => import('@/pages/ProviderPage'));
 const SearchPage = lazy(() => import('@/pages/SearchPage'));
 const FilesPage = lazy(() => import('@/pages/FilesPage'));
 const SavedSearchesPage = lazy(() => import('@/pages/SavedSearchesPage'));
+const SharedSearchPage = lazy(() => import('@/pages/SharedSearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const StatsPage = lazy(() => import('@/pages/StatsPage'));
+const TagsPage = lazy(() => import('@/pages/TagsPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
 const SystemPage = lazy(() => import('@/pages/SystemPage'));
 const PromptsPage = lazy(() => import('@/pages/PromptsPage'));
@@ -48,7 +51,7 @@ const PromptsPage = lazy(() => import('@/pages/PromptsPage'));
 function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
-      <ThemeProvider defaultTheme="system" storageKey="ci-ui-theme">
+      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
         <BackgroundProvider>
           <DeviceLayoutProvider args={[]}>
             <AuthProvider args={[]}>
@@ -162,24 +165,28 @@ function AppRoutes() {
             />
           )}
 
-          <Route
-            path="/insights"
-            element={
-              <ProtectedRoute>
-                {isFeatureEnabled('new.insights.page') && <InsightsPage />}
-                {!isFeatureEnabled('new.insights.page') && <PromptsPage />}
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('insights.page') && (
+            <>
+              <Route
+                path="/insights"
+                element={
+                  <ProtectedRoute>
+                    {isFeatureEnabled('new.insights.page') && <InsightsPage />}
+                    {!isFeatureEnabled('new.insights.page') && <PromptsPage />}
+                  </ProtectedRoute>
+                }
+              />
 
-          <Route
-            path="/insights/:id"
-            element={
-              <ProtectedRoute>
-                <SummaryDetailPage />
-              </ProtectedRoute>
-            }
-          />
+              <Route
+                path="/insights/:id"
+                element={
+                  <ProtectedRoute>
+                    <SummaryDetailPage />
+                  </ProtectedRoute>
+                }
+              />
+            </>
+          )}
 
           {isFeatureEnabled('files.page') && (
             <Route
@@ -192,24 +199,50 @@ function AppRoutes() {
             />
           )}
 
-          <Route
-            path="/chat/:id?"
-            element={
-              <ProtectedRoute>
-                <ChatPage />
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('stats.page') && (
+            <Route
+              path="/stats"
+              element={
+                <ProtectedRoute>
+                  <StatsPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
+
+          {isFeatureEnabled('tags.page') && (
+            <Route
+              path="/tags"
+              element={
+                <ProtectedRoute>
+                  <TagsPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
+
+          {isFeatureEnabled('chat.page') && (
+            <Route
+              path="/chat/:id?"
+              element={
+                <ProtectedRoute>
+                  <ChatPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
 
           {/* Admin / System */}
-          <Route
-            path="/jobs"
-            element={
-              <ProtectedRoute>
-                <JobsPage />
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('jobs.page') && (
+            <Route
+              path="/jobs"
+              element={
+                <ProtectedRoute>
+                  <JobsPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
 
           <Route
             path="/connect"
@@ -302,6 +335,15 @@ function AppRoutes() {
           />
 
           <Route
+            path="/shared/:token"
+            element={
+              <ProtectedRoute>
+                <SharedSearchPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/concepts/:id"
             element={
               <ProtectedRoute>
@@ -364,7 +406,7 @@ function AppRoutes() {
             }
           />
 
-          {isFeatureEnabled('new.insights.page') && (
+          {isFeatureEnabled('insights.page') && isFeatureEnabled('new.insights.page') && (
             <Route
               path="/prompts"
               element={

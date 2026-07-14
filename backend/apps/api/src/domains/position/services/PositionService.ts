@@ -35,7 +35,11 @@ export class PositionService {
     this.logger.setContext(PositionService.name);
   }
 
-  async create(context: UserServiceContext, data: CreatePositionDto[]): Promise<Position[]> {
+  async create(
+    context: UserServiceContext,
+    data: CreatePositionDto[],
+    options: { emitCreated?: boolean } = {},
+  ): Promise<Position[]> {
     this.logger.log('Creating position records', {
       userId: context.userId,
       count: data.length,
@@ -85,10 +89,17 @@ export class PositionService {
     if (newPositions.length > 0) {
       const entitiesToSave = newPositions.map((item) => this.createPositionEntity(context, item));
       const saved = await this.positionRepository.save(entitiesToSave);
-      for (const position of saved) {
-        await this.eventService.send(PositionCreatedEvent, {
-          positionId: position.id,
-        });
+      // emitCreated:false is the bulk-ingest path (#1672): a GPS-track import is
+      // tens of thousands of rows, and a PositionCreatedEvent per row hammers
+      // the job queue for listeners that bulk clients drive via
+      // POST /v1/ingest/finish anyway (mirrors the emitCreated:false services
+      // behind the other /v1 routes).
+      if (options.emitCreated !== false) {
+        for (const position of saved) {
+          await this.eventService.send(PositionCreatedEvent, {
+            positionId: position.id,
+          });
+        }
       }
 
       createdEntities.push(...saved);
@@ -413,6 +424,9 @@ export class PositionService {
       referenceEntityId: item.reference_entity_id ?? null,
       relativeCoordinates: item.relative_coordinates ?? {},
       relativeOrientation: item.relative_orientation ?? {},
+      sourceType: item.source_type ?? null,
+      sourceSystem: item.source_system ?? null,
+      sourceId: item.source_id ?? null,
     });
   }
 

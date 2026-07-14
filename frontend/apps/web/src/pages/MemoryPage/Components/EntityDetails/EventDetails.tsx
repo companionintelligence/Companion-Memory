@@ -5,8 +5,9 @@ import { gql, useFragment } from '@/graphql';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
+import { eventDisplayTitle, formatBytes } from '../utils';
 
-import { EntityDetailScaffold } from './EntityDetailScaffold';
+import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 
 const UPDATE_EVENT = gql(`
   mutation UpdateEventDetail($input: UpdateEventInput!) {
@@ -201,18 +202,35 @@ export function EventDetails({ entity }: Props) {
   const mapCoordinates = readGeoJsonPoint(eventFields.mapCoordinates ?? eventFields.locationCoordinates);
   const coordinates = readPropertyCoordinates(props) ?? mapCoordinates;
   const locationItems: DetailItem[] = [
-    { label: 'Place', value: data.location?.name ?? eventFields.locationName ?? '' },
+    { label: 'Place', value: data.location?.name ?? data.locationName ?? eventFields.locationName ?? '' },
     { label: 'Address', value: props.address ?? '' },
     { label: 'Coordinates', value: formatCoordinates(coordinates) ?? '' },
     ...extraLocationDetails(props),
   ].filter((item) => item.value);
 
+  // Photo/video events: thumbnail (PREVIEW) for images, full source for video so
+  // it plays inline. Resolved server-side via the linked file (data.previewUrl /
+  // data.mediaUrl); null for non-media events, which render no media block.
+  const isVideo = data.mediaContentType?.startsWith('video/') ?? false;
+  const mediaSrc = resolveStaticUrl(isVideo ? data.mediaUrl : (data.previewUrl ?? data.mediaUrl));
+  const dimensions = data.mediaWidth && data.mediaHeight ? `${data.mediaWidth} × ${data.mediaHeight}` : null;
+
+  const title = eventDisplayTitle({
+    title: data.title,
+    startTime: data.startTime,
+    locationName: data.locationName ?? data.location?.name,
+    mediaContentType: data.mediaContentType,
+  });
+
   return (
     <EntityDetailScaffold
       entity={entity}
-      title={data.title || 'Event'}
+      title={title || 'Event'}
       subtitle="Event"
       taggable
+      media={
+        mediaSrc ? <EntityMedia src={mediaSrc} contentType={data.mediaContentType} alt={title} /> : undefined
+      }
       editFields={[
         { key: 'title', label: 'Title', value: data.title ?? '' },
         { key: 'description', label: 'Description', value: data.description ?? '', multiline: true },
@@ -230,6 +248,9 @@ export function EventDetails({ entity }: Props) {
         { label: 'Ends', value: formatDateTime(data.endTime) },
         { label: 'Duration', value: formatDuration(data.startTime, data.endTime) },
         { label: 'Type', value: formatTitleCase(eventFields.eventType) ?? 'Event' },
+        { label: 'Media type', value: data.mediaContentType },
+        { label: 'Dimensions', value: dimensions },
+        { label: 'Size', value: data.mediaSize != null ? formatBytes(data.mediaSize) : null },
       ]}
       detailSections={<DetailSection title="Location" items={locationItems} />}
       rawData={data}

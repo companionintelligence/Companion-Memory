@@ -32,9 +32,13 @@ describe('SearchResolver — event-type ("how") filter', () => {
     };
     const tagService = {
       getEntitiesForTags: jest.fn().mockResolvedValue(overrides.tagResults ?? []),
+      searchByLabel: jest.fn().mockResolvedValue([]),
     };
     const entityResolutionService = {
       resolve: jest.fn().mockResolvedValue(overrides.resolved ?? new Map()),
+    };
+    const savedSearchService = {
+      findByShareToken: jest.fn().mockResolvedValue(null),
     };
 
     const resolver = new SearchResolver(
@@ -42,8 +46,10 @@ describe('SearchResolver — event-type ("how") filter', () => {
       communicationService as never,
       entityResolutionService as never,
       eventService as never,
+      savedSearchService as never,
       searchService as never,
       tagService as never,
+      { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
     );
 
     return { resolver, eventService, searchService, tagService };

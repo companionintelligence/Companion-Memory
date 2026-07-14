@@ -1,9 +1,11 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
 import { z, type ZodTypeAny } from 'zod';
 
 import type { RequestContext } from '@ci/common/context';
+import { INTENTS_SCOPE } from '@ci/common/decorators';
+import { type ApiKeyScopedRequest, isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
-import { type JSONSchema, ToolRegistry } from '@ci/domains/tools';
+import { type JSONSchema, ToolRegistry, intentToolName } from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
 
@@ -38,6 +40,53 @@ export class McpToolService implements OnModuleInit {
     return [...this.tools.values()];
   }
 
+  /**
+   * The tools this caller can actually execute.
+   *
+   * A scope-limited key reaches MCP with the `mcp` scope alone, but the tools behind
+   * this endpoint are not one undifferentiated capability — they are the same two data
+   * planes the REST routes gate separately, so MCP gates them the same way rather than
+   * letting the transport become a way around the scopes:
+   *
+   * - GraphQL-derived tools run against the resolvers that serve `/graphql`, which
+   *   declare no `@RequireScopes` — deny-by-default already rejects a scope-limited key
+   *   on every one of them. Advertising them anyway would hand the model a catalog where
+   *   each call fails with an opaque `Forbidden resource`.
+   * - Native intents execute through the ToolRegistry, which performs NO authorization of
+   *   its own; `knowledge.search` alone reads across the whole personal graph. They are
+   *   the MCP face of the intent catalog, so they require the same {@link INTENTS_SCOPE}
+   *   the REST catalog does — otherwise an `mcp`-only key, 403'd on `/api/intents`, would
+   *   execute those very intents here.
+   *
+   * Both chat-agent connect keys already carry `intents` (see `scopesForApp`), so this
+   * confines the hole without narrowing any key in the field. Full-authority principals
+   * (sessions/JWT, and empty-scope keys such as the bulk importer's) still see every tool.
+   */
+  getToolsForRequest(req: ApiKeyScopedRequest): McpRegisteredTool[] {
+    if (!isScopeLimitedApiKey(req)) {
+      return this.getTools();
+    }
+
+    const mayRunIntents = this.mayRunIntents(req);
+
+    return this.getTools().filter((tool) => tool.source !== 'graphql' && mayRunIntents);
+  }
+
+  /**
+   * Whether this caller may execute native intents — i.e. it is a full-authority
+   * principal, or a scope-limited key carrying {@link INTENTS_SCOPE}.
+   *
+   * The single source of truth for that question, so the tools, the executor, and the
+   * intent-catalog resource cannot disagree about who gets the intent plane.
+   */
+  mayRunIntents(req: ApiKeyScopedRequest): boolean {
+    if (!isScopeLimitedApiKey(req)) {
+      return true;
+    }
+
+    return req.apiKeyScopes?.includes(INTENTS_SCOPE) ?? false;
+  }
+
   getSchemaSDL(): string {
     return this.graphqlAdapter.getSchemaSDL();
   }
@@ -52,7 +101,20 @@ export class McpToolService implements OnModuleInit {
       throw new Error(`Tool not found: ${name}`);
     }
 
+    // Belt-and-braces: getToolsForRequest already hides what this caller may not run,
+    // but a client can name any tool directly, and the layers below do not re-check —
+    // the GraphQL resolvers raise a bare `Forbidden resource`, and ToolRegistry performs
+    // no authorization at all. This is the enforcement point; the catalog filter is only
+    // the courtesy of not advertising what would fail.
+    const scopeLimited = isScopeLimitedApiKey(context.req);
+
     if (tool.source === 'graphql') {
+      if (scopeLimited) {
+        throw new ForbiddenException(
+          `Tool "${name}" reads the knowledge graph directly, which this scope-limited API key cannot access`,
+        );
+      }
+
       const graphqlTool = this.graphqlAdapter.getTools().find((t) => t.name === name);
 
       if (!graphqlTool) {
@@ -60,6 +122,12 @@ export class McpToolService implements OnModuleInit {
       }
 
       return this.executorService.executeTool(graphqlTool, args, context);
+    }
+
+    if (!this.mayRunIntents(context.req)) {
+      throw new ForbiddenException(
+        `Tool "${name}" runs a CI intent, which requires the "${INTENTS_SCOPE}" scope this API key does not carry`,
+      );
     }
 
     // Native tool execution
@@ -80,26 +148,35 @@ export class McpToolService implements OnModuleInit {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        // Carry the synthesized label so auto-wrapped CRUD is advertised (and gated) with the same
+        // privacy metadata as native intents rather than slipping through unlabelled.
+        privacy: tool.privacy,
         source: 'graphql',
       });
     }
   }
 
   private registerNativeTools() {
-    const schemas = this.toolRegistry.getAvailableTools();
+    // Every registered tool is a curated intent; advertise them all to MCP clients under their
+    // executable (underscored) names.
+    const schemas = this.toolRegistry.getAgentFacingTools();
 
     for (const schema of schemas) {
+      // schema.name is the dotted intent id; expose/execute by the MCP-safe executable name.
+      const toolName = intentToolName(schema.name);
+
       // Skip if a GraphQL tool with the same name already exists
-      if (this.tools.has(schema.name)) {
-        this.logger.debug(`Skipping native tool "${schema.name}" — name conflict with GraphQL tool`);
+      if (this.tools.has(toolName)) {
+        this.logger.debug(`Skipping native tool "${toolName}" — name conflict with GraphQL tool`);
 
         continue;
       }
 
-      this.tools.set(schema.name, {
-        name: schema.name,
+      this.tools.set(toolName, {
+        name: toolName,
         description: schema.description,
         inputSchema: this.jsonSchemaToZodShape(schema.parameters),
+        privacy: schema.privacy,
         source: 'native',
       });
     }

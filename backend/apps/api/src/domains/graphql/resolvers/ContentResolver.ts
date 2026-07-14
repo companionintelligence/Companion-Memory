@@ -1,4 +1,4 @@
-import { UseGuards } from '@nestjs/common';
+import { BadRequestException, UseGuards } from '@nestjs/common';
 import { Args, ID, Parent, Query, Mutation, Resolver, ResolveField } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -17,6 +17,15 @@ import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { Paginator } from '../utils/Paginator';
+
+/**
+ * Upper bound on rows accepted by a single createContents call. The batch runs
+ * as one set-based transaction (see ContentService.createMany); an unbounded
+ * array would build a giant OR-list + VALUES clause and pin a connection. The
+ * importer already chunks its pushes well under this, so this is a guardrail,
+ * not a throttle.
+ */
+export const CREATE_CONTENTS_MAX_BATCH = 5000;
 
 /**
  * Resolve an event reference to the raw uuid stored in ci.content.event_id.
@@ -46,6 +55,15 @@ export class ContentResolver {
     private readonly eventLoader: EventLoader,
   ) {}
 
+  /**
+   * Single-record content ingest. Routed through ContentService.createMany so it
+   * shares the same provenance-triple dedup + event auto-link as the batch path —
+   * a re-send with the same (userId, sourceType, sourceSystem, sourceId) returns
+   * the existing row instead of inserting a duplicate-without-triple. Passes
+   * `emitCreated: true` so this interactive create indexes live (the batch
+   * importer defers indexing to the post-load backfill sweep) — the event fires
+   * only when a row is genuinely inserted, so a dedup re-send stays a no-op.
+   */
   @Mutation(() => ContentType)
   async createContent(
     @Context() context: RequestContext,
@@ -53,19 +71,28 @@ export class ContentResolver {
   ): Promise<ContentType> {
     const serviceContext = toServiceContext(context);
 
-    const entity = await this.contentService.create(serviceContext, {
-      type: input.type,
-      title: input.title,
-      text: input.text,
-      url: input.url,
-      mimetype: input.mimetype,
-      external_id: input.externalId,
-      source_url: input.sourceUrl,
-      source_data: input.sourceData,
-      event: input.eventId ? { id: resolveEventId(input.eventId) } : undefined,
-    });
+    const [entity] = await this.contentService.createMany(
+      serviceContext,
+      [
+        {
+          type: input.type,
+          title: input.title,
+          text: input.text,
+          url: input.url,
+          mimetype: input.mimetype,
+          external_id: input.externalId,
+          source_url: input.sourceUrl,
+          source_data: input.sourceData,
+          source_type: input.sourceType,
+          source_system: input.sourceSystem,
+          source_id: input.sourceId,
+          event: input.eventId ? { id: resolveEventId(input.eventId) } : undefined,
+        },
+      ],
+      { emitCreated: true },
+    );
 
-    return ContentType.toType(entity[0]);
+    return ContentType.toType(entity);
   }
 
   /**
@@ -81,6 +108,12 @@ export class ContentResolver {
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateContentInput] }) input: CreateContentInput[],
   ): Promise<ContentType[]> {
+    if (input.length > CREATE_CONTENTS_MAX_BATCH) {
+      throw new BadRequestException(
+        `createContents accepts at most ${CREATE_CONTENTS_MAX_BATCH} items per call (got ${input.length}).`,
+      );
+    }
+
     const serviceContext = toServiceContext(context);
 
     const contents = await this.contentService.createMany(

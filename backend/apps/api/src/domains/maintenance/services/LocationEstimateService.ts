@@ -48,6 +48,18 @@ export interface EstimateBatchOptions {
   maxGapHours: number;
   /** `source_system`s eligible for estimation (physical-presence allowlist). */
   sourceSystems: string[];
+  /**
+   * Forced re-sweep: also consider rows that ALREADY carry an estimate
+   * (metadata.location_source = 'estimated') as candidates, so when better donor
+   * data lands later (e.g. a wave of GPS positions arrives) the existing estimates
+   * get re-coordinated against the now-richer donor pool. Defaults to false —
+   * standard incremental behaviour only touches coordinate-less rows.
+   *
+   * Predicate-relax (not destructive clear): a re-swept row whose donor lookup
+   * returns nothing stays on its old estimate, so the map never regresses
+   * mid-sweep. Only rows with a better donor in the gap get rewritten.
+   */
+  forced?: boolean;
 }
 
 export interface EstimateBatchResult {
@@ -81,10 +93,10 @@ export class LocationEstimateService {
   /**
    * The candidate filter, shared by {@link countCandidates} and the estimate
    * UPDATE so the count is EXACT (every counted row can actually be filled). A
-   * candidate is a coordinate-less, non-deleted, non-PREDICTED, physical-presence
-   * event that is not already estimated AND has at least one real donor location
-   * within the gap. `gapParam` is a bind-placeholder name ($3/$4) — a static
-   * string this class controls, never user input. The donor predicates use a
+   * candidate is a non-deleted, non-PREDICTED, physical-presence event without
+   * usable own coordinates that has at least one real donor location within the
+   * gap. `gapParam` and `forcedParam` are bind-placeholder names ($N) — static
+   * strings this class controls, never user input. The donor predicates use a
    * sargable BETWEEN window (not abs(...)) so the planner can use the
    * (user_id, time) / (user_id, start_time) indexes.
    *
@@ -98,16 +110,27 @@ export class LocationEstimateService {
    * starvation: ORDER BY start_time DESC LIMIT would otherwise fill its slots with
    * the newest candidates regardless of donor availability, so a run of donor-less
    * recent events could permanently shadow older fillable ones.
+   *
+   * When `forcedParam` evaluates true, previously-estimated rows are ALSO
+   * candidates (the `location_coordinates IS NULL` filter is relaxed to admit
+   * them, and the candidate-side `<> 'estimated'` exclusion is dropped). Donors
+   * stay real either way — an estimate is never seeded from another estimate.
    */
-  private candidatePredicate(gapParam: string): string {
+  private candidatePredicate(gapParam: string, forcedParam: string): string {
     const window = `e.start_time - make_interval(secs => ${gapParam}) AND e.start_time + make_interval(secs => ${gapParam})`;
 
     return `e.user_id = $1
-          AND e.location_coordinates IS NULL
+          AND (
+            e.location_coordinates IS NULL
+            OR (${forcedParam}::bool AND e.metadata->>'location_source' = 'estimated')
+          )
           AND e.is_deleted = false
           AND COALESCE(e.is_predicted, false) = false
           AND e.source_system = ANY($2)
-          AND COALESCE(e.metadata->>'location_source', '') <> 'estimated'
+          AND (
+            ${forcedParam}::bool
+            OR COALESCE(e.metadata->>'location_source', '') <> 'estimated'
+          )
           AND (
             EXISTS (
               SELECT 1 FROM ci.position p
@@ -124,11 +147,20 @@ export class LocationEstimateService {
           )`;
   }
 
-  /** Coordinate-less physical-presence events that have a donor within the gap. */
-  async countCandidates(userId: string, sourceSystems: string[], maxGapSeconds: number): Promise<number> {
+  /**
+   * Coordinate-less physical-presence events that have a donor within the gap.
+   * When `forced` is true, previously-estimated rows are also counted so a
+   * re-sweep against newly-arrived donors can re-coordinate them.
+   */
+  async countCandidates(
+    userId: string,
+    sourceSystems: string[],
+    maxGapSeconds: number,
+    forced = false,
+  ): Promise<number> {
     const rows: Array<{ count: string }> = await this.dataSource.query(
-      `SELECT count(*)::text AS count FROM ci.events e WHERE ${this.candidatePredicate('$3')}`,
-      [userId, sourceSystems, maxGapSeconds],
+      `SELECT count(*)::text AS count FROM ci.events e WHERE ${this.candidatePredicate('$3', '$4')}`,
+      [userId, sourceSystems, maxGapSeconds, forced],
     );
 
     return Number(rows[0]?.count ?? 0);
@@ -141,7 +173,8 @@ export class LocationEstimateService {
    */
   async estimateBatch(userId: string, opts: EstimateBatchOptions): Promise<EstimateBatchResult> {
     const maxGapSeconds = Math.round(opts.maxGapHours * 3600);
-    const candidates = await this.countCandidates(userId, opts.sourceSystems, maxGapSeconds);
+    const forced = opts.forced === true;
+    const candidates = await this.countCandidates(userId, opts.sourceSystems, maxGapSeconds, forced);
 
     if (candidates === 0) {
       return { candidates: 0, estimated: 0 };
@@ -151,7 +184,7 @@ export class LocationEstimateService {
       `WITH candidate AS (
          SELECT e.event_id, e.start_time
            FROM ci.events e
-          WHERE ${this.candidatePredicate('$4')}
+          WHERE ${this.candidatePredicate('$4', '$7')}
           ORDER BY e.start_time DESC
           LIMIT $3
        )
@@ -167,7 +200,8 @@ export class LocationEstimateService {
                 'donor_id', d.donor_id,
                 'delta_seconds', round(d.delta_seconds)::int,
                 'accuracy_meters', d.accuracy_meters,
-                'max_gap_hours', $6::numeric
+                'max_gap_hours', $6::numeric,
+                'forced', $7::bool
               ),
               updated_at = now()
          FROM candidate c
@@ -216,7 +250,7 @@ export class LocationEstimateService {
          ) d
         WHERE tgt.event_id = c.event_id
        RETURNING tgt.event_id`,
-      [userId, opts.sourceSystems, opts.limit, maxGapSeconds, ESTIMATED_CONFIDENCE, opts.maxGapHours],
+      [userId, opts.sourceSystems, opts.limit, maxGapSeconds, ESTIMATED_CONFIDENCE, opts.maxGapHours, forced],
     );
 
     const estimated = Array.isArray(updated) ? updated.length : 0;
@@ -226,6 +260,7 @@ export class LocationEstimateService {
       candidates,
       estimated,
       maxGapHours: opts.maxGapHours,
+      forced,
     });
 
     return { candidates, estimated };

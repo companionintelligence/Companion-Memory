@@ -34,6 +34,7 @@ import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
 import { GraphQLModule } from '@ci/domains/graphql';
+import { IngestModule } from '@ci/domains/ingest';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
@@ -60,6 +61,11 @@ import { UserModule } from '@ci/domains/user';
       password: config.db.password,
       entities: [path.join(__dirname, 'domains/**/*Entity.{ts,js}')],
       logging: [...(config.environment['database.query.logging'] ? (['error', 'query'] as const) : [])],
+      // Primary app schema is `ci`; tables are referenced schema-qualified, but
+      // user-defined types (e.g. the enum `ci.communication_direction`) are
+      // emitted UNqualified by TypeORM in casts, so `ci` must be on the
+      // search_path for them to resolve. `public` stays for extensions/pgboss.
+      extra: { options: '-c search_path=ci,public' },
     }),
     FeatureModule,
     LoggingModule,
@@ -77,6 +83,7 @@ import { UserModule } from '@ci/domains/user';
     FilesModule,
     GraphModule,
     GraphQLModule,
+    IngestModule,
     IntelligenceModule,
     LLMModule,
     McpModule,

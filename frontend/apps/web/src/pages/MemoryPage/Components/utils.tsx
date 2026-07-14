@@ -138,6 +138,91 @@ export function formatEventTimeRange(start: string, end?: string | null): string
   return `${dateTime(startDate)} – ${dateTime(endDate)}`;
 }
 
+const MEDIA_FILENAME_RE =
+  /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef|mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$/i;
+const VIDEO_FILENAME_RE = /\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$/i;
+
+/**
+ * Reduce a reverse-geocoded street address to a compact "City, ST" so it can
+ * sit inside an event title. Reverse geocoding yields full addresses like
+ * "1642 Rambla Pacifico St, Malibu, CA 90265, USA"; we keep the locality and
+ * the (zip-stripped) region. Best-effort — anything we can't parse confidently
+ * is returned trimmed but otherwise untouched.
+ */
+function shortPlace(locationName?: string | null): string | null {
+  const name = locationName?.trim();
+
+  if (!name) {
+    return null;
+  }
+
+  const parts = name
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) {
+    return name.length <= 28 ? name : null;
+  }
+
+  const withoutCountry = /^(usa|united states|us)$/i.test(parts[parts.length - 1])
+    ? parts.slice(0, -1)
+    : parts;
+
+  // The region chunk often carries a zip ("CA 90265") — drop the digits.
+  const region = withoutCountry[withoutCountry.length - 1]?.replace(/\s*\d{4,}.*$/, '').trim();
+  const city = withoutCountry.length >= 2 ? withoutCountry[withoutCountry.length - 2] : withoutCountry[0];
+
+  const result = [city, region].filter(Boolean).join(', ');
+
+  return result.length > 0 && result.length <= 28 ? result : null;
+}
+
+/**
+ * A human-readable title for an event. Imported photo/video events arrive titled
+ * with their raw filename or an opaque id ("DSC00838.jpg", "IMG_0301.MP4",
+ * "50231557_2415233981880"); when that's all we have, derive a readable
+ * "Photo · Malibu, CA · Jun 17, 2026" from the capture time and resolved place.
+ * An authored title (an LLM caption, a calendar summary — anything with
+ * whitespace that isn't a bare filename) is always preferred and passed through.
+ */
+export function eventDisplayTitle(input: {
+  title?: string | null;
+  startTime?: string | Date | null;
+  locationName?: string | null;
+  mediaContentType?: string | null;
+}): string {
+  const title = input.title?.trim() ?? '';
+  const isMediaEvent =
+    input.mediaContentType?.startsWith('image/') === true ||
+    input.mediaContentType?.startsWith('video/') === true ||
+    MEDIA_FILENAME_RE.test(title);
+
+  // Keep a genuinely authored title (has spaces and isn't a filename), and keep
+  // any title at all for non-media events — only media events get the rewrite.
+  const looksAuthored = /\s/.test(title) && !MEDIA_FILENAME_RE.test(title);
+
+  if (title && (looksAuthored || !isMediaEvent)) {
+    return title;
+  }
+
+  const isVideo = input.mediaContentType?.startsWith('video/') === true || VIDEO_FILENAME_RE.test(title);
+  const noun = isVideo ? 'Video' : 'Photo';
+
+  const place = shortPlace(input.locationName);
+
+  const date = input.startTime ? new Date(input.startTime) : null;
+  const datePart =
+    date && !isNaN(date.getTime())
+      ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : null;
+
+  const derived = [noun, place, datePart].filter((part): part is string => Boolean(part)).join(' · ');
+
+  // Fall back to the raw title if we somehow derived nothing (no date, no place).
+  return derived || title || noun;
+}
+
 interface DateBucket {
   key: string;
   label: string;

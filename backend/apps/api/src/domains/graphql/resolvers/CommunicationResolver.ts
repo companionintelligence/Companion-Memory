@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CommunicationService, CommunicationType as CommunicationTypeEnum } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
@@ -84,7 +85,8 @@ export class CommunicationResolver {
   @Mutation(() => [CommunicationType])
   async createCommunications(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateCommunicationInput] }) input: CreateCommunicationInput[],
+    @Args('input', { type: () => [CreateCommunicationInput] }, new MaxArraySizePipe())
+    input: CreateCommunicationInput[],
   ): Promise<CommunicationType[]> {
     const serviceContext = toServiceContext(context);
 

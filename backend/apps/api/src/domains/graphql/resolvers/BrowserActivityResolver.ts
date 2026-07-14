@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { BrowserActivityService, type CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -77,7 +78,8 @@ export class BrowserActivityResolver {
   @Mutation(() => [BrowserActivityType])
   async createBrowserActivities(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateBrowserActivityInput] }) input: CreateBrowserActivityInput[],
+    @Args('input', { type: () => [CreateBrowserActivityInput] }, new MaxArraySizePipe())
+    input: CreateBrowserActivityInput[],
   ): Promise<BrowserActivityType[]> {
     const serviceContext = toServiceContext(context);
 

@@ -330,7 +330,26 @@ export class FileService implements OnModuleInit {
   }
 
   async upload(context: UserServiceContext, file: UploadFileDto): Promise<SignedFile> {
-    const { inventoryCapture = false, model, ...uploadData } = file;
+    const { file: uploaded } = await this.uploadWithDedupInfo(context, file);
+
+    return uploaded;
+  }
+
+  /**
+   * Same upload pipeline as {@link upload} (hash-dedup against the store,
+   * create + FileUploadedEvent fan-out for new content), but ALSO reports
+   * whether the content was deduplicated against an already-stored file —
+   * `deduped: true` means no new file row/object was created and `file` is the
+   * pre-existing one. Extracted so the batch `POST /v1/files` endpoint can
+   * honor its per-input `{ filename, sha256, id, deduped }` contract without
+   * forking the pipeline; `upload` (and thus `POST /files/upload`) delegates
+   * here and behaves exactly as before.
+   */
+  async uploadWithDedupInfo(
+    context: UserServiceContext,
+    file: UploadFileDto,
+  ): Promise<{ file: SignedFile; deduped: boolean }> {
+    const { inventoryCapture = false, skipDescription = false, model, ...uploadData } = file;
     const hash = await this.getFileHash(uploadData);
 
     if (hash) {
@@ -346,11 +365,12 @@ export class FileService implements OnModuleInit {
             fileId: existing.id,
             userId: context.userId,
             inventoryCapture: true,
+            skipDescription,
             model,
           });
         }
 
-        return existing;
+        return { file: existing, deduped: true };
       }
     }
 
@@ -363,10 +383,11 @@ export class FileService implements OnModuleInit {
       fileId: created.id,
       userId: context.userId,
       inventoryCapture,
+      skipDescription,
       model,
     });
 
-    return created;
+    return { file: created, deduped: false };
   }
 
   async getFileContent(context: ServiceContext, key: string): Promise<Uint8Array> {
@@ -402,7 +423,7 @@ export class FileService implements OnModuleInit {
   }
 
   async update(context: ServiceContext, id: string, data: UpdateFileDto): Promise<SignedFile | null> {
-    await this.fileRepository.update(
+    const result = await this.fileRepository.update(
       {
         id,
         ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
@@ -410,9 +431,38 @@ export class FileService implements OnModuleInit {
       data,
     );
 
+    // No row matched (unknown id, or one owned by another user) — don't emit a
+    // spurious FileUpdatedEvent to downstream re-index listeners.
+    if (!result.affected) {
+      return null;
+    }
+
     await this.eventService.send(FileUpdatedEvent, { fileId: id });
 
     return this.findById(context, id);
+  }
+
+  /**
+   * Persist the intrinsic pixel dimensions onto a file row.
+   *
+   * A targeted write — deliberately NOT routed through {@link update}: it skips
+   * the `FileUpdatedEvent` (so the dimensions backfill recording ~18.8k files
+   * doesn't fan out a flood of no-op re-index jobs) and writes width/height,
+   * which the user-facing {@link UpdateFileDto} doesn't expose. User-scoped like
+   * the rest of the service (SYSTEM_USER bypasses the scope).
+   */
+  async setDimensions(
+    context: ServiceContext,
+    id: string,
+    dimensions: { width: number | null; height: number | null },
+  ): Promise<void> {
+    await this.fileRepository.update(
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+      { width: dimensions.width, height: dimensions.height },
+    );
   }
 
   async search(context: ServiceContext, query: FindOptionsWhere<FileEntity>): Promise<FileEntity[]> {

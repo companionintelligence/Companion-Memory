@@ -11,8 +11,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $shareToken: String, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, shareToken: $shareToken, first: $first, after: $after }) {
       totalCount
       pageInfo {
         hasNextPage
@@ -98,6 +98,20 @@ const SEARCH_QUERY = gql(`
             # location PlaceType; aliased + unmasked so the map can read it
             # without unmasking the card fragment.
             mapCoordinates: locationCoordinates
+
+            # Photo/video events carry their binary via a linked file; these
+            # aliased media fields let the gallery build real thumbnails + a
+            # lightbox (mirrors FileType/ContentType above). Null for non-media
+            # events. galleryLocationName feeds the derived "Photo · place ·
+            # date" tile caption (eventDisplayTitle).
+            # Distinct content-type alias: FileType.contentType is String! but
+            # EventType.mediaContentType is nullable String, so they can't share
+            # the galleryContentType response key (overlapping-fields rule).
+            galleryMediaContentType: mediaContentType
+            galleryPreviewUrl: previewUrl
+            gallerySourceUrl: mediaUrl
+            galleryTitle: title
+            galleryLocationName: locationName
           }
 
           ... on PlaceType {
@@ -169,6 +183,7 @@ function useEntityService({
   hasLocation,
   bbox,
   semantic,
+  shareToken,
 }: {
   searchQuery: string;
   includeTypes?: string[];
@@ -185,6 +200,10 @@ function useEntityService({
   hasLocation?: boolean;
   bbox?: number[];
   semantic?: boolean;
+  // Shared-search capability token. When set, the server runs the referenced
+  // public saved search as its owner and ignores every other filter above —
+  // this drives the read-only /shared viewer with the same view components.
+  shareToken?: string;
 }): ReturnType {
   const { data, loading, error, fetchMore, refetch } = useQuery(SEARCH_QUERY, {
     variables: {
@@ -212,6 +231,7 @@ function useEntityService({
       hasLocation: hasLocation || undefined,
       bbox: bbox && bbox.length === 4 ? bbox : undefined,
       semantic: semantic || undefined,
+      shareToken: shareToken || undefined,
       first: PAGE_SIZE,
     },
     fetchPolicy: 'cache-and-network',

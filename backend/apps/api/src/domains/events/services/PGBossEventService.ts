@@ -17,6 +17,11 @@ interface EventData {
   name: string;
 }
 
+// Rows per pg-boss insert() call in sendMany(). Bounds the single INSERT's
+// parameter/row count so a multi-million-row backfill streams in fixed chunks
+// instead of one enormous statement.
+const PGBOSS_INSERT_CHUNK = 2000;
+
 @Injectable()
 export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
   // Global in-flight job ceiling across all queues. Configurable (CI_QUEUE_CONCURRENCY)
@@ -216,6 +221,52 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     this.logger.debug(`Sent event ${name} to ${jobIds.length} queues`);
 
     return jobIds;
+  }
+
+  async sendMany(
+    queue: string,
+    events: Array<{ name: string; data: Record<string, unknown> }>,
+  ): Promise<void> {
+    if (events.length === 0) {
+      return;
+    }
+
+    if (!this.getRegisteredQueues().has(queue)) {
+      this.logger.warn(`Requested queue ${queue} does not exist. ${events.length} events will not be sent.`);
+
+      return;
+    }
+
+    if (this.suppressedQueues.has(queue)) {
+      // Unlike send()'s per-row fan-out (where skipping suppressed queues is the
+      // whole point and logging would spam), sendMany is a deliberate bulk
+      // enqueue of ONE named queue — dropping it silently makes a backfill
+      // report success while enqueuing nothing. Warn loudly instead.
+      this.logger.warn(
+        `Queue ${queue} is suppressed via CI_QUEUE_SUPPRESS — dropping ${events.length} bulk-enqueued events. ` +
+          `If this is a post-import backfill, unset the suppression and re-run.`,
+      );
+
+      return;
+    }
+
+    // pg-boss insert() bulk-creates jobs in ONE INSERT per chunk, routing through
+    // pg-boss's own job schema (so partitioning/defaults are handled for us). This
+    // replaces N awaited boss.send() round trips — the difference between the
+    // search-index backfill returning in seconds vs. blocking the request for
+    // minutes while it enqueues ~1M rows. job.name is the queue; job.data mirrors
+    // send()'s resolvedData ({ ...event, name }) so executeJob + listeners consume
+    // it identically.
+    const jobs: PgBoss.JobInsert[] = events.map((event) => ({
+      name: queue,
+      data: { ...event.data, name: event.name },
+    }));
+
+    for (let i = 0; i < jobs.length; i += PGBOSS_INSERT_CHUNK) {
+      await this.boss.insert(jobs.slice(i, i + PGBOSS_INSERT_CHUNK));
+    }
+
+    this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);
   }
 
   private async work(queueName: string): Promise<void> {

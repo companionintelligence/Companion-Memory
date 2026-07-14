@@ -27,7 +27,10 @@ export default async function globalSetup() {
   // 1) Pre-fetch CSRF — sets the csrfToken cookie in this context.
   await ctx.get('/api/authenticate/csrf');
   const { cookies } = await ctx.storageState();
-  const csrf = cookies.find((c) => c.name === 'csrfToken')?.value ?? '';
+  const csrf = cookies.find((c) => c.name === 'csrfToken')?.value;
+  if (!csrf) {
+    throw new Error('E2E login failed: csrfToken cookie was not set by /api/authenticate/csrf');
+  }
 
   // 2) Authenticate — the server sets the session cookie.
   const res = await ctx.post('/api/authenticate', {

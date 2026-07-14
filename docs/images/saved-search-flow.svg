@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .box { fill:#f8fafc; stroke:#cbd5e1; stroke-width:1.5; rx:10; }
+      .accent { fill:#ecfdf5; stroke:#10b981; }
+      .title { fill:#0f172a; font-size:15px; font-weight:600; }
+      .sub { fill:#475569; font-size:12px; }
+      .lane { fill:#94a3b8; font-size:13px; font-weight:700; letter-spacing:0.06em; }
+      .edge { stroke:#64748b; stroke-width:1.5; fill:none; }
+      .chip { fill:#10b981; font-size:11px; font-weight:700; }
+    </style>
+  </defs>
+
+  <text x="24" y="40" class="lane">SHARE A SAVED SEARCH</text>
+
+  <!-- Row 1: share flow -->
+  <g transform="translate(24,56)">
+    <rect class="box" width="200" height="92" rx="10"/>
+    <text x="16" y="30" class="title">1 · Build a search</text>
+    <text x="16" y="52" class="sub">Explorer: query + who /</text>
+    <text x="16" y="68" class="sub">where / when / how / sort</text>
+  </g>
+  <g transform="translate(254,56)">
+    <rect class="box accent" width="200" height="92" rx="10"/>
+    <text x="16" y="30" class="title">2 · Save &amp; share</text>
+    <text x="16" y="52" class="sub">New button in the Save</text>
+    <text x="16" y="68" class="sub">dialog (explorer toolbar)</text>
+  </g>
+  <g transform="translate(484,56)">
+    <rect class="box accent" width="210" height="92" rx="10"/>
+    <text x="16" y="30" class="title">3 · Share modal</text>
+    <text x="16" y="52" class="sub">Link Shared → capability</text>
+    <text x="16" y="68" class="sub">link · social · iframe embed</text>
+  </g>
+  <g transform="translate(724,56)">
+    <rect class="box" width="212" height="92" rx="10"/>
+    <text x="16" y="30" class="title">4 · Recipient</text>
+    <text x="16" y="52" class="sub">Opens /shared/&lt;token&gt;</text>
+    <text x="16" y="68" class="sub">(signed in; OIDC returns here)</text>
+  </g>
+
+  <path class="edge" d="M224 102 L254 102" marker-end="url(#arrow)"/>
+  <path class="edge" d="M454 102 L484 102" marker-end="url(#arrow)"/>
+  <path class="edge" d="M694 102 L724 102" marker-end="url(#arrow)"/>
+
+  <!-- down to viewer -->
+  <path class="edge" d="M830 148 L830 184" marker-end="url(#arrow)"/>
+  <g transform="translate(724,190)">
+    <rect class="box" width="212" height="92" rx="10"/>
+    <text x="16" y="30" class="title">5 · Read-only viewer</text>
+    <text x="16" y="52" class="sub">Runs AS THE OWNER · List /</text>
+    <text x="16" y="68" class="sub">Gallery / Map · no edit</text>
+  </g>
+
+  <text x="24" y="332" class="lane">MANAGE &amp; EDIT FILTERS</text>
+
+  <!-- Row 2: manage flow -->
+  <g transform="translate(24,348)">
+    <rect class="box" width="220" height="100" rx="10"/>
+    <text x="16" y="30" class="title">Saved Searches card</text>
+    <text x="16" y="52" class="sub">"Shared" badge +</text>
+    <text x="16" y="68" class="sub">filter-count chip</text>
+    <text x="16" y="90" class="chip">⚙ 5   ◦ Shared</text>
+  </g>
+  <g transform="translate(264,348)">
+    <rect class="box" width="220" height="100" rx="10"/>
+    <text x="16" y="30" class="title">Edit modal</text>
+    <text x="16" y="52" class="sub">Name / query / types / tags</text>
+    <text x="16" y="68" class="sub">+ a Filters section</text>
+  </g>
+  <g transform="translate(504,348)">
+    <rect class="box accent" width="240" height="100" rx="10"/>
+    <text x="16" y="30" class="title">Filters editor</text>
+    <text x="16" y="52" class="sub">Who / Where / How / Source</text>
+    <text x="16" y="68" class="sub">chips · dates · sort · toggles</text>
+  </g>
+
+  <path class="edge" d="M244 398 L264 398" marker-end="url(#arrow)"/>
+  <path class="edge" d="M484 398 L504 398" marker-end="url(#arrow)"/>
+
+  <text x="24" y="500" class="sub">A saved search round-trips the full search; the same `filters` drive restore in the explorer and a shared run on the server.</text>
+  <text x="24" y="520" class="sub">Shared searches are signed-in-only capability links; the token runs the owner's stored definition — viewer-supplied filters are ignored.</text>
+</svg>

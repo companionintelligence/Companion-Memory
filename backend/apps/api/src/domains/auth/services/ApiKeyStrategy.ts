@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { Strategy } from 'passport';
 
 import { ContextService, SYSTEM_USER } from '@ci/common/context';
+import { type ApiKeyScopedRequest } from '@ci/common/guards';
 import { UserService } from '@ci/domains/user';
 
 import { ApiKeyService } from './ApiKeyService';
@@ -69,6 +70,18 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
     ContextService.set({
       userId: user.id,
     });
+
+    // Expose the key's scopes so enforceApiKeyScopes (run inside the api-key auth
+    // guards) can enforce @RequireScopes on the route. Absence of this field on
+    // the request means "not an api-key principal" (full authority); an empty
+    // array means a legacy full-access key.
+    const scopedRequest = req as ApiKeyScopedRequest;
+
+    scopedRequest.apiKeyScopes = result.scopes;
+    // WHICH key authenticated, for surfaces that bind state to one caller's authority
+    // (the MCP session map). Scopes alone cannot tell two keys apart — both chat-agent
+    // connect keys carry an identical set on a single-owner appliance.
+    scopedRequest.apiKeyId = result.keyId;
 
     return user;
   }

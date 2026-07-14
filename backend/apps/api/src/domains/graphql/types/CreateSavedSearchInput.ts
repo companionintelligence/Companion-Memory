@@ -2,6 +2,8 @@ import { Field, InputType } from '@nestjs/graphql';
 
 import { IndexableEntity } from '@ci/domains/search-next';
 
+import { SavedSearchFiltersInput } from './SavedSearchFiltersType';
+
 @InputType()
 export class CreateSavedSearchInput {
   @Field(() => String, { nullable: true })
@@ -18,4 +20,7 @@ export class CreateSavedSearchInput {
 
   @Field(() => [String], { nullable: true })
   tags?: string[];
+
+  @Field(() => SavedSearchFiltersInput, { nullable: true })
+  filters?: SavedSearchFiltersInput;
 }

@@ -15,6 +15,7 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -46,6 +47,29 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* CI enriched palette v0.2.0 — semantic status + brand teal ramp utilities */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-teal-50: var(--teal-50);
+  --color-teal-100: var(--teal-100);
+  --color-teal-200: var(--teal-200);
+  --color-teal-300: var(--teal-300);
+  --color-teal-400: var(--teal-400);
+  --color-teal-500: var(--teal-500);
+  --color-teal-600: var(--teal-600);
+  --color-teal-700: var(--teal-700);
+  --color-teal-800: var(--teal-800);
+  --color-teal-900: var(--teal-900);
+  --color-teal-950: var(--teal-950);
+  /* CI brand-tinted elevation — map --shadow-sm/md/lg so the shadow utilities
+     render the teal-tinted brand shadow (inline keeps .dark overrides live). */
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
 }
 
 :root {
@@ -58,24 +82,24 @@
   --ci-primary-gradient-hover: linear-gradient(135deg, var(--ci-mint-hover), var(--ci-mint));
   --shadow-glow-ci: 0 0 20px -4px rgb(88 235 191 / 35%);
   --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.5 0.03 220 / 5%), transparent 52%);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
+  --background: oklch(0.964 0 89.876);
+  --foreground: oklch(0.158 0.028 227.251);
+  --card: oklch(0.977 0.003 286.351);
+  --card-foreground: oklch(0.19 0.032 234.379);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.19 0.032 234.379);
+  --primary: oklch(0.502 0.082 204.922);
   --primary-foreground: oklch(0.984 0.003 247.858);
   --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
+  --secondary-foreground: oklch(0.239 0.038 233.156);
   --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
+  --muted-foreground: oklch(0.554 0.046 257.526);
   --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
+  --accent-foreground: oklch(0.239 0.038 233.156);
+  --destructive: oklch(0.621 0.22 26.968);
   --border: oklch(0.929 0.013 255.508);
   --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
+  --ring: oklch(0.704 0.04 256.993);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -89,28 +113,65 @@
   --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
   --sidebar-border: oklch(0.929 0.013 255.508);
   --sidebar-ring: oklch(0.704 0.04 256.788);
+
+  /* CI enriched palette v0.2.0 — brand teal ramp + accent hues + radius scale (mode-independent) */
+  --teal-50: #eef7f8;
+  --teal-100: #d3e9ec;
+  --teal-200: #abd4d8;
+  --teal-300: #7fbcc2;
+  --teal-400: #4c9aa3;
+  --teal-500: #1c8791;
+  --teal-600: #0f717a;
+  --teal-700: #0d5f67;
+  --teal-800: #0e4a52;
+  --teal-900: #0a222e;
+  --teal-950: #041620;
+  --aqua: #00a9a7;
+  --aqua-light: #72ddd4;
+  --mint: #58ebbf;
+  --teal-accent: #2c676d;
+  --teal-mid: #409b9b;
+  --radius-sm: calc(var(--radius, 0.625rem) - 4px);
+  --radius-md: calc(var(--radius, 0.625rem) - 2px);
+  --radius-lg: var(--radius, 0.625rem);
+  --radius-xl: calc(var(--radius, 0.625rem) + 4px);
+  --radius-2xl: calc(var(--radius, 0.625rem) + 10px);
+
+  /* enriched — semantic status + gradients + elevation (light) */
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --warning: #d97706;
+  --warning-foreground: #ffffff;
+  --info: #0284c7;
+  --info-foreground: #ffffff;
+  --gradient-brand: linear-gradient(135deg, #0f717a, #00a9a7);
+  --gradient-hero: linear-gradient(135deg, #e8f9f8, #abd4d8);
+  --gradient-aurora: radial-gradient(120% 90% at 50% -10%, rgba(80, 150, 150, 0.1), transparent 60%);
+  --shadow-sm: 0 1px 2px rgba(15, 113, 122, 0.08);
+  --shadow-md: 0 4px 12px rgba(15, 113, 122, 0.1);
+  --shadow-lg: 0 12px 30px rgba(15, 113, 122, 0.14);
 }
 
 .dark {
   --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.34 0.04 220 / 14%), transparent 52%);
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
+  --background: oklch(0.19 0.032 234.379);
+  --foreground: oklch(0.691 0.03 185.201);
+  --card: oklch(0.239 0.038 233.156);
+  --card-foreground: oklch(0.691 0.03 185.201);
+  --popover: oklch(0.239 0.038 233.156);
+  --popover-foreground: oklch(0.691 0.03 185.201);
+  --primary: oklch(0.842 0.043 203.701);
+  --primary-foreground: oklch(0.19 0.032 234.379);
+  --secondary: oklch(0.239 0.038 233.156);
+  --secondary-foreground: oklch(0.977 0.004 236.496);
+  --muted: oklch(0.239 0.038 233.156);
+  --muted-foreground: oklch(0.676 0.019 253.397);
+  --accent: oklch(0.477 0.062 204.345);
+  --accent-foreground: oklch(0.977 0.004 236.496);
+  --destructive: oklch(0.696 0.157 21.99);
+  --border: oklch(0.477 0.062 204.345);
+  --input: oklch(0.636 0.051 224.103);
+  --ring: oklch(0.85 0.141 169.678);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -124,6 +185,18 @@
   --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.551 0.027 264.364);
+
+  /* CI enriched palette v0.2.0 — semantic status + gradients + elevation (dark) */
+  --success: #4ade80;
+  --success-foreground: #052e16;
+  --warning: #fbbf24;
+  --warning-foreground: #422006;
+  --info: #38bdf8;
+  --info-foreground: #082f49;
+  --gradient-aurora: radial-gradient(120% 90% at 50% -10%, rgba(64, 155, 155, 0.28), transparent 60%);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.45);
 }
 
 @layer base {
@@ -150,6 +223,23 @@
     font-family: 'Montserrat', system-ui, sans-serif;
     font-weight: 200;
     line-height: 1.0;
+  }
+  /* Chrome/Safari paint autofilled inputs with their own opaque light background
+     and dark text, ignoring bg-input — which looks broken on the dark theme
+     (e.g. the Create API Key name field). Repaint the fill to match the input
+     background and force the themed text color; the 9999s transition defers the
+     UA background repaint indefinitely. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-text-fill-color: var(--foreground);
+    -webkit-box-shadow: 0 0 0 1000px var(--input) inset;
+    box-shadow: 0 0 0 1000px var(--input) inset;
+    caret-color: var(--foreground);
+    transition: background-color 9999s ease-in-out 0s;
   }
 }
 

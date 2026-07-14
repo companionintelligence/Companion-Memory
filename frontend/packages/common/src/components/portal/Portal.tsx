@@ -1,4 +1,4 @@
-import { type ReactNode, type ForwardedRef, forwardRef } from 'react';
+import { type ReactNode, type ForwardedRef, forwardRef, useEffect, useReducer } from 'react';
 import { createPortal } from 'react-dom';
 
 interface PortalProps {
@@ -16,7 +16,18 @@ interface SlotProps {
 }
 
 function Slot({ id, children }: SlotProps) {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
   const elem = document.getElementById(id);
+
+  // The lookup above runs during render, so it can be stale by commit time: the
+  // target may not be in the DOM yet, or may have been remounted in the same
+  // commit (e.g. a target inside a keyed subtree, like SearchBox's toolsSlot).
+  // Re-check after commit and re-render once to re-portal into the live node.
+  useEffect(() => {
+    if (elem !== document.getElementById(id)) {
+      rerender();
+    }
+  });
 
   if (!elem) {
     return null;
