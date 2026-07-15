@@ -132,7 +132,7 @@ async def _resolve_system_status(user_id: str) -> str:
     permanent "Waiting to initialize…", falling back to COLD_START when no
     workflow is currently running.
     """
-    if _model_exists():
+    if _model_exists(user_id):
         return "READY"
     status = await _active_workflow_status(user_id)
     return status or "COLD_START"

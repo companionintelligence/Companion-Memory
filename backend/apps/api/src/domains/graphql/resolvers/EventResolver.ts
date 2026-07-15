@@ -3,6 +3,7 @@ import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver }
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { EventService } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
@@ -22,6 +23,7 @@ import { PersonEdge } from '../types/PersonEdge';
 import { PersonType } from '../types/PersonType';
 import { PlaceType } from '../types/PlaceType';
 import { UpdateEventInput } from '../types/UpdateEventInput';
+import { entityOwnerScope } from '../utils/entityOwnerScope';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -83,7 +85,8 @@ export class EventResolver {
   @Mutation(() => [EventType])
   async createEvents(
     @Context() context: RequestContext,
-    @Args({ name: 'input', type: () => [CreateEventInput] }) input: CreateEventInput[],
+    @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
+    input: CreateEventInput[],
   ): Promise<EventType[]> {
     const serviceContext = toServiceContext(context);
 
@@ -204,7 +207,7 @@ export class EventResolver {
     @Context() context: RequestContext,
     @Parent() parent: EventType,
   ): Promise<PersonType | null> {
-    const serviceContext = toServiceContext(context);
+    const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
     if (parent.__source.organizerEntityId == null) {
       return null;
@@ -221,7 +224,7 @@ export class EventResolver {
     @Parent() parent: EventType,
     @Args() pagination: PaginationArgs,
   ): Promise<PersonConnection> {
-    const serviceContext = toServiceContext(context);
+    const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
     const people =
       parent.__source.participantEntityIds == null
@@ -259,7 +262,7 @@ export class EventResolver {
 
   @ResolveField(() => PlaceType, { nullable: true })
   async location(@Context() context: RequestContext, @Parent() parent: EventType): Promise<PlaceType | null> {
-    const serviceContext = toServiceContext(context);
+    const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
     if (parent.__source.locationEntityId == null) {
       return null;
@@ -272,7 +275,7 @@ export class EventResolver {
 
   @ResolveField(() => [EntityTagType])
   async tags(@Context() context: RequestContext, @Parent() parent: EventType): Promise<EntityTagType[]> {
-    const serviceContext = toServiceContext(context);
+    const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
     const tags = await this.tagLoader.load(serviceContext, {
       type: 'event',
@@ -288,7 +291,7 @@ export class EventResolver {
    * page of events resolves its media in a single batch.
    */
   private resolveMedia(context: RequestContext, parent: EventType): Promise<EventMedia | null> {
-    return this.eventMediaLoader.load(toServiceContext(context), parent.__source.id);
+    return this.eventMediaLoader.load(entityOwnerScope(context, parent.__source.userId), parent.__source.id);
   }
 
   /** Thumbnail (PREVIEW variant) URL for a photo/video event. */

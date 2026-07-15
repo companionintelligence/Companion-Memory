@@ -16,48 +16,41 @@ export class EmbeddingService {
   ) {}
 
   async upsert(context: UserServiceContext, data: UpsertEmbeddingDto): Promise<Embedding | null> {
-    return this.embeddingRepo.manager.transaction(async (manager) => {
-      const repo = manager.getRepository(EmbeddingEntity);
+    // Single-statement upsert on the (entity_type, entity_id) unique key. Replaces
+    // the previous SELECT-then-INSERT/UPDATE-then-SELECT run inside an explicit
+    // transaction (3 statements + BEGIN/COMMIT) — a per-row cost that left >95% of
+    // the search-index queue undrained. `embedding` is vector(768); the pgvector
+    // text literal `[a,b,c]` mirrors the entity's column transformer.
+    const embeddingLiteral = `[${data.embedding.join(',')}]`;
 
-      const existing = await repo.findOne({
-        where: {
-          entityType: data.entityType,
-          entityId: data.entityId,
-          userId: context.userId,
-        },
-      });
+    const rows: Array<{
+      id: string;
+      entity_type: string;
+      entity_id: string;
+      user_id: string;
+      created_at: Date;
+      updated_at: Date;
+    }> = await this.embeddingRepo.query(
+      `INSERT INTO ci_search.embeddings (id, entity_type, entity_id, embedding, user_id)
+       VALUES ($1, $2, $3, $4::vector, $5)
+       ON CONFLICT (entity_type, entity_id)
+       DO UPDATE SET embedding = EXCLUDED.embedding, updated_at = now()
+       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at`,
+      [uuidv7(), data.entityType, data.entityId, embeddingLiteral, context.userId],
+    );
 
-      if (existing == null) {
-        const instance = repo.create({
-          id: uuidv7(),
-          entityType: data.entityType,
-          entityId: data.entityId,
-          embedding: data.embedding,
-          userId: context.userId,
-        });
+    const row = rows[0];
 
-        const entity = await repo.save(instance);
-
-        return EmbeddingEntity.toEgressType(entity);
-      }
-
-      await repo.update(
-        {
-          id: existing.id,
-        },
-        {
-          embedding: data.embedding,
-        },
-      );
-
-      const updated = await repo.findOne({
-        where: {
-          id: existing.id,
-        },
-      });
-
-      return updated ? EmbeddingEntity.toEgressType(updated) : null;
-    });
+    return row
+      ? {
+          id: row.id,
+          entityType: row.entity_type,
+          entityId: row.entity_id,
+          userId: row.user_id,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }
+      : null;
   }
 
   async remove(context: ServiceContext, data: RemoveEmbeddingDto): Promise<boolean> {

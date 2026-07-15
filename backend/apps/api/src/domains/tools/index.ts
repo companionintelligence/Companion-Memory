@@ -1,21 +1,20 @@
 /**
  * This module provides a framework for defining, registering, and executing "tools" that the
- * Large Language Model (LLM) can use to perform actions and retrieve information. It establishes
- * a pluggable architecture that allows for different tool providers, such as native, in-application
- * functions and external services.
+ * Large Language Model (LLM) can use to perform actions and retrieve information.
+ *
+ * Every tool IS an intent: each tool class declares its curated {@link IntentDefinition} schema
+ * (dotted name, domain, privacy label, NL phrases, parameters) inline next to its implementation.
+ * There is no separate intent catalog or wrapper — definition and behaviour live together.
  *
  * ### Key Components:
- * - **`ToolRegistry`**: A central service that holds a collection of all available tools from
- *   all registered providers. It serves as the single point of entry for the LLM to discover
- *   and execute tools.
- * - **Tool Providers (`NativeToolProvider`)**: These are responsible for
- *   supplying a set of tools from a specific source. The `NativeToolProvider` manages tools
- *   defined directly within the application, while other providers can interface with external
- *   systems.
- * - **Individual Tools (`GetUserPreferencesTool`, etc.)**: These are the concrete implementations
- *   of actions the LLM can invoke, each with a defined schema for its inputs and outputs.
- * - **`ToolsRegistrationService`**: An initialization service that runs when the module loads,
- *   registering all available tool providers with the central `ToolRegistry`.
+ * - **`ToolRegistry`**: central service holding all tools from all providers; the single entry
+ *   point for the LLM/MCP to discover and execute tools. Keys tools by their executable name
+ *   (dots→underscores) and donates every invocation as a behavioral signal.
+ * - **`NativeToolProvider`**: supplies the in-application tools.
+ * - **Individual tools** (`ReadKnowledgeTool`, `PeopleFindTool`, …): concrete implementations,
+ *   each carrying its own IntentDefinition. Domain-scoped search intents (`PeopleFindTool`, …)
+ *   delegate to `DatabaseSearchTool` with a fixed entity scope.
+ * - **`ToolsRegistrationService`**: registers the provider with the registry at boot.
  *
  * @module ToolsModule
  */
@@ -30,19 +29,26 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 
-import { DatabaseSearchTool } from './providers/native/DatabaseSearchTool';
-import { ForgetKnowledgeTool } from './providers/native/ForgetKnowledgeTool';
-import { GetEntertainmentPreferencesTool } from './providers/native/GetEntertainmentPreferencesTool';
-import { GetFamilyMembersTool } from './providers/native/GetFamilyMembersTool';
-import { GetStreamingAvailabilityTool } from './providers/native/GetStreamingAvailabilityTool';
-import { GetUserPreferencesTool } from './providers/native/GetUserPreferencesTool';
-import { NativeToolProvider } from './providers/native/NativeToolProvider';
-import { ReadKnowledgeTool } from './providers/native/ReadKnowledgeTool';
-import { WriteKnowledgeTool } from './providers/native/WriteKnowledgeTool';
+import { IntentCatalogService } from './catalog/IntentCatalogService';
+import { ToolInvokedListener } from './listeners/ToolInvokedListener';
+import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
+import { CalendarFindEventsTool } from './tools/CalendarFindEventsTool';
+import { DatabaseSearchTool } from './tools/DatabaseSearchTool';
+import { ForgetKnowledgeTool } from './tools/ForgetKnowledgeTool';
+import { GetEntertainmentPreferencesTool } from './tools/GetEntertainmentPreferencesTool';
+import { GetFamilyMembersTool } from './tools/GetFamilyMembersTool';
+import { GetStreamingAvailabilityTool } from './tools/GetStreamingAvailabilityTool';
+import { GetUserPreferencesTool } from './tools/GetUserPreferencesTool';
+import { MediaFindPhotosTool } from './tools/MediaFindPhotosTool';
+import { PeopleFindTool } from './tools/PeopleFindTool';
+import { PlacesFindTool } from './tools/PlacesFindTool';
+import { ReadKnowledgeTool } from './tools/ReadKnowledgeTool';
+import { WriteKnowledgeTool } from './tools/WriteKnowledgeTool';
 
-// Instantiate native tools
+// Instantiate native tools. Each is a curated intent (its schema is an IntentDefinition);
+// DatabaseSearchTool backs the four domain-scoped search intents below it.
 const nativeToolInstances = [
   ReadKnowledgeTool,
   WriteKnowledgeTool,
@@ -52,6 +58,10 @@ const nativeToolInstances = [
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
   DatabaseSearchTool,
+  PeopleFindTool,
+  PlacesFindTool,
+  CalendarFindEventsTool,
+  MediaFindPhotosTool,
 ];
 
 /**
@@ -68,7 +78,9 @@ const nativeToolInstances = [
   ],
   providers: [
     ToolRegistry,
-    // Native tools
+    // Consumes the durable tool.invoked signal (and registers its telemetry queue).
+    ToolInvokedListener,
+    // Native tools (each a curated intent)
     ...nativeToolInstances,
     // Native tool provider with injected tools
     {
@@ -82,12 +94,32 @@ const nativeToolInstances = [
     },
     // Registration service to wire everything together
     ToolsRegistrationService,
+    // Read API over the tool catalog (manifest), consumed by the agent REST controller + MCP.
+    IntentCatalogService,
   ],
-  exports: [ToolRegistry],
+  exports: [ToolRegistry, IntentCatalogService],
 })
 export class ToolsModule {}
 
 // Exports
 export { ToolRegistry };
-export type { JSONSchema, ToolSchema, ToolResult, ToolExecutionContext, ToolError } from './core/types';
-export type { ProviderHealthStatus } from './providers/ToolProvider';
+export { IntentCatalogService } from './catalog/IntentCatalogService';
+export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
+export { BaseTool } from './core/BaseTool';
+export { ToolInvokedEvent } from './events';
+export type { ToolInvokedPayload } from './events';
+export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
+export {
+  intentToolName,
+  type JSONSchema,
+  type ToolSchema,
+  type ToolResult,
+  type ToolExecutionContext,
+  type ToolError,
+  type IntentDefinition,
+  type IntentDomainKey,
+  type IntentAccess,
+  type IntentSensitivity,
+  type IntentPrivacy,
+  type CiEntityType,
+} from './core/types';

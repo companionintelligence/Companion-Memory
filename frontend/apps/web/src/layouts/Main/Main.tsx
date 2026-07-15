@@ -5,6 +5,7 @@ import { Toaster } from '@ci/shadcn';
 import { Outlet } from 'react-router-dom';
 
 import logo from '@/assets/logo.png';
+import { useTheme } from '@/components/ThemePicker';
 
 import { MobileNavigation } from './MobileNavigation/MobileNavigation';
 import { PrimaryNavigation } from './PrimaryNavigation';
@@ -12,11 +13,12 @@ import { SecondaryNavigation } from './SecondaryNavigation';
 
 export function Main() {
   const { isMobile } = useDeviceLayout();
+  const { themeState } = useTheme();
 
   if (isMobile) {
     return (
       <div className="flex flex-col h-lvh">
-        <Toaster position="top-right" />
+        <Toaster position="top-right" theme={themeState.mode} />
         <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
           <Suspense fallback={<LoadingPage />}>
             <Outlet />
@@ -47,7 +49,7 @@ export function Main() {
 
       <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">
         <Suspense fallback={<LoadingPage />}>
-          <Toaster />
+          <Toaster theme={themeState.mode} />
           <div className="flex flex-row h-full min-h-0">
             <Portal id="tertiary-navigation" className="h-full" />
             <main className="flex-1 min-w-0 relative">

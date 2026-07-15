@@ -14,7 +14,7 @@ export class HbpeService {
     this.logger.setContext('HbpeService');
   }
 
-  async getForecast(context: UserServiceContext, horizon = '48h'): Promise<ForecastResponse> {
+  async getForecast(context: UserServiceContext, horizon = '24h'): Promise<ForecastResponse> {
     const url = `${this.baseUrl}/histogram?horizon=${horizon}&user_id=${context.userId}`;
 
     let response: Response;

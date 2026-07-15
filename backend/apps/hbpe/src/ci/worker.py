@@ -21,6 +21,7 @@ from ci.pipeline.bootstrap import (
 )
 from ci.pipeline.nightly_runner import (
     NightlyHBPEWorkflow,
+    backfill_actuals,
     cache_invalidation,
     drift_detection,
     l1_stale_sweep,
@@ -70,6 +71,7 @@ async def main() -> None:
                     l2_stale_sweep,
                     needs_bootstrap,
                     lora_fine_tune,
+                    backfill_actuals,
                     drift_detection,
                     cache_invalidation,
                     serialize_token_stream,

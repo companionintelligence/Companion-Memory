@@ -18,6 +18,7 @@ import { ItemEdge } from '../types/ItemEdge';
 import { ItemType } from '../types/ItemType';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { UpdateFileInput } from '../types/UpdateFileInput';
+import { entityOwnerScope } from '../utils/entityOwnerScope';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -93,13 +94,13 @@ export class FileResolver {
 
   @ResolveField(() => String, { nullable: true })
   async previewUrl(@Context() context: RequestContext, @Parent() parent: FileType): Promise<string | null> {
-    const serviceContext = toServiceContext(context);
-
     const file = parent.__source;
 
     if (file == null) {
       return null;
     }
+
+    const serviceContext = entityOwnerScope(context, file.userId);
 
     const preview = await this.previewLoader.load(serviceContext, file.id);
 
@@ -112,13 +113,13 @@ export class FileResolver {
     @Parent() parent: FileType,
     @Args() pagination: PaginationArgs,
   ): Promise<ItemConnection | null> {
-    const serviceContext = toServiceContext(context);
-
     const file = parent.__source;
 
     if (file == null) {
       return null;
     }
+
+    const serviceContext = entityOwnerScope(context, file.userId);
 
     const fileId = file.id;
 
@@ -151,7 +152,7 @@ export class FileResolver {
 
   @ResolveField(() => [EntityTagType])
   async tags(@Context() context: RequestContext, @Parent() parent: FileType): Promise<EntityTagType[]> {
-    const serviceContext = toServiceContext(context);
+    const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
     const tags = await this.tagLoader.load(serviceContext, {
       type: 'file',

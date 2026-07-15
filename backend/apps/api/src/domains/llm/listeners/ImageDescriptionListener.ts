@@ -8,7 +8,10 @@ import { FileService, PreviewGeneratedEvent, type PreviewGeneratedPayload } from
 
 import { OllamaService } from '../services/OllamaService';
 
-const DEFAULT_MODEL = 'llama3.2-vision:11b';
+// Must be a vision-capable model actually present in the target Ollama, or
+// OllamaService.validateModel() throws before every call and 100% of image
+// jobs fail. `llava:7b` is the baseline vision model we ship/pull.
+const DEFAULT_MODEL = 'llava:7b';
 
 const PROMPT = `
   Analyze this image and provide a title and description.
@@ -42,6 +45,18 @@ export class ImageDescriptionListener {
 
   @OnEvent(PreviewGeneratedEvent, { queue: 'image-description' })
   async handle(payload: PreviewGeneratedPayload) {
+    // When the capture source opted out of server-side analysis (e.g. CI-Applet
+    // with its own vision endpoint, which writes the title/description directly
+    // via PATCH /files/:id), skip the Ollama pass entirely. Absent/false means
+    // the server generates the description as usual.
+    if (payload.skipDescription === true) {
+      this.logger.log('Upload handled analysis itself, skipping image description', {
+        previewId: payload.previewId,
+      });
+
+      return;
+    }
+
     const serviceContext = toServiceContext({
       userId: payload.userId,
     });

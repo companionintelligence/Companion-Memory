@@ -66,13 +66,6 @@ export class GraphService {
         direction,
       });
 
-      console.log(
-        `Depth ${depth}: Found ${relationships.length} relationships for layer with ${layerIds.length} nodes.`,
-        {
-          relationships,
-        },
-      );
-
       const nextLayer = new Set<string>();
 
       for (const rel of relationships) {

@@ -27,6 +27,7 @@ export type FileUploadedPayload = {
   fileId: string;
   userId: string;
   inventoryCapture: boolean;
+  skipDescription?: boolean;
   model?: string;
 };
 
@@ -56,6 +57,13 @@ export type PreviewGeneratedPayload = {
   userId: string;
   previewId: string;
   model?: string;
+  /**
+   * When true, the capture source (e.g. CI-Applet with its own vision endpoint)
+   * already produced a title/description — it writes them via PATCH /files/:id —
+   * so {@link ImageDescriptionListener} skips its Ollama pass. Absent/false means
+   * the server should generate the description as usual.
+   */
+  skipDescription?: boolean;
 };
 
 /**

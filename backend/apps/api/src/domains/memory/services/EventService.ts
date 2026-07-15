@@ -4,7 +4,7 @@ import { DataSource, In, IsNull, Repository, type FindOptionsOrder, type FindOpt
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
-import { bulkInsertIdempotent } from '@ci/common/persistence';
+import { bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
 import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -210,6 +210,9 @@ export class EventService {
       // 20260620213807); the arbiter must match it exactly.
       conflictTarget: '(source_type, source_system, source_id) WHERE source_id IS NOT NULL',
       tripleColumns: ['source_type', 'source_system', 'source_id'],
+      // Centralized refresh contract — currently empty, so conflicts stay
+      // DO NOTHING find-or-return.
+      conflictUpdateColumns: INGEST_REFRESH_COLUMNS.event,
     });
 
     // Bulk ingest does NOT emit a per-row EventCreatedEvent: the per-row pgboss
@@ -635,5 +638,32 @@ export class EventService {
       .getRawMany();
 
     return results.map((row: { event_type: string }) => row.event_type);
+  }
+
+  /**
+   * Timeline totals for the stats page: how many events the user's timeline
+   * holds and the earliest/latest `start_time` across them (the span of
+   * remembered history).
+   */
+  async getTimelineStats(context: ServiceContext): Promise<{
+    totalEvents: number;
+    earliest: Date | null;
+    latest: Date | null;
+  }> {
+    const row: { total: string; earliest: Date | null; latest: Date | null } | undefined =
+      await this.dataSource
+        .getRepository(EventEntity)
+        .createQueryBuilder('event')
+        .select('COUNT(*)', 'total')
+        .addSelect('MIN(event.start_time)', 'earliest')
+        .addSelect('MAX(event.start_time)', 'latest')
+        .where('event.user_id = :userId', { userId: context.userId })
+        .getRawOne();
+
+    return {
+      totalEvents: row ? parseInt(row.total, 10) : 0,
+      earliest: row?.earliest ?? null,
+      latest: row?.latest ?? null,
+    };
   }
 }

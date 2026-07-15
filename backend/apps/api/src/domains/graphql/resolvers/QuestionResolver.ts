@@ -3,6 +3,7 @@ import { Mutation, Query, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { QuestionService } from '@ci/domains/intelligence';
 
 import { CreateQuestionInput } from '../types/CreateQuestionInput';
@@ -41,7 +42,8 @@ export class QuestionResolver {
   @Mutation(() => [QuestionType])
   async createQuestions(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateQuestionInput] }) input: CreateQuestionInput[],
+    @Args('input', { type: () => [CreateQuestionInput] }, new MaxArraySizePipe())
+    input: CreateQuestionInput[],
   ): Promise<QuestionType[]> {
     const serviceContext = toServiceContext(context);
 

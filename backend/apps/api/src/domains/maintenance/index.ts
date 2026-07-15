@@ -19,10 +19,13 @@ import { MaintenanceController } from './controllers/MaintenanceController';
 import { CommunicationParticipantLinkListener } from './listeners/CommunicationParticipantLinkListener';
 import { EstimateLocationBatchListener } from './listeners/EstimateLocationBatchListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
+import { EmbedCoverageTelemetryService } from './services/EmbedCoverageTelemetryService';
 import { EventParticipantBackfillService } from './services/EventParticipantBackfillService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
 import { IndexDeferralService } from './services/IndexDeferralService';
+import { IngestResetService } from './services/IngestResetService';
 import { LocationEstimateService } from './services/LocationEstimateService';
+import { MaintenanceOrchestratorService } from './services/MaintenanceOrchestratorService';
 import { PersonStubBackfillService } from './services/PersonStubBackfillService';
 import { SearchIndexBackfillService } from './services/SearchIndexBackfillService';
 
@@ -43,12 +46,15 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
   controllers: [MaintenanceController],
   providers: [
     IndexDeferralService,
+    IngestResetService,
     CommunicationLinkBackfillService,
     PersonStubBackfillService,
     EventParticipantBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
+    EmbedCoverageTelemetryService,
     LocationEstimateService,
+    MaintenanceOrchestratorService,
     EstimateLocationBatchListener,
     CommunicationParticipantLinkListener,
   ],
@@ -59,7 +65,24 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
     EventParticipantBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
+    EmbedCoverageTelemetryService,
     LocationEstimateService,
+    MaintenanceOrchestratorService,
   ],
 })
 export class MaintenanceModule {}
+
+// Public surface for other domains (e.g. the /v1 bulk-ingest lifecycle
+// endpoints, which delegate finish/status to these services).
+export {
+  MaintenanceOrchestratorService,
+  ORCHESTRATE_STAGES,
+  type OrchestrateStage,
+  type OrchestrateSummary,
+} from './services/MaintenanceOrchestratorService';
+export {
+  SearchIndexBackfillService,
+  BACKFILLABLE_ENTITIES,
+  type BackfillableEntity,
+  type SearchIndexBackfillResult,
+} from './services/SearchIndexBackfillService';

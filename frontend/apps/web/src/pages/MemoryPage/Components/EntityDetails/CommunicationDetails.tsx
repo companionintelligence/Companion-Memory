@@ -36,11 +36,14 @@ export function CommunicationDetails({ entity }: Props) {
     .filter((name): name is string => Boolean(name))
     .join(', ');
 
+  // Chat-style sources have no subject: the preview becomes the title (its
+  // only rendering) rather than showing a synthesized "Inbound Chat" headline;
+  // the headline is a last resort for truly empty communications.
   return (
     <EntityDetailScaffold
       entity={entity}
-      title={data.subject || headline || 'Communication'}
-      subtitle={data.preview}
+      title={data.subject || data.preview || headline || 'Communication'}
+      subtitle={data.subject ? data.preview : undefined}
       taggable
       editFields={[
         { key: 'subject', label: 'Subject', value: data.subject ?? '' },

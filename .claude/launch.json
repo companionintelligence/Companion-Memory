@@ -6,7 +6,10 @@
       "runtimeExecutable": "yarn",
       "runtimeArgs": ["workspace", "@ci/fe-web", "dev"],
       "port": 5173,
-      "autoPort": true
+      "autoPort": true,
+      "env": {
+        "API_PROXY_TARGET": "http://localhost:3030"
+      }
     },
     {
       "name": "api",

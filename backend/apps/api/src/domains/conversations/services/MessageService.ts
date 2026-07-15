@@ -226,7 +226,7 @@ export class MessageService {
       return null;
     }
 
-    this.eventService.send(MessageUpdatedEvent, {
+    await this.eventService.send(MessageUpdatedEvent, {
       messageId: id,
     });
 
@@ -247,7 +247,7 @@ export class MessageService {
       return false;
     }
 
-    this.eventService.send(MessageDeletedEvent, {
+    await this.eventService.send(MessageDeletedEvent, {
       messageId: id,
     });
 
@@ -273,7 +273,7 @@ export class MessageService {
       return false;
     }
 
-    this.eventService.send(MessageDeletedEvent, {
+    await this.eventService.send(MessageDeletedEvent, {
       messageId: id,
     });
 

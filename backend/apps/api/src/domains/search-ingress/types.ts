@@ -31,6 +31,18 @@ export interface RemoveEmbeddingDto {
   entityId: string;
 }
 
+export interface RecordIndexSkipDto {
+  entityType: IndexableEntity;
+  entityId: string;
+  /** Why the row was not embedded (e.g. an `embedSkipReason` value). */
+  reason: string;
+}
+
+export interface ClearIndexSkipDto {
+  entityType: IndexableEntity;
+  entityId: string;
+}
+
 export interface RemoveVectorDto {
   entityType: IndexableEntity;
   entityId: string;

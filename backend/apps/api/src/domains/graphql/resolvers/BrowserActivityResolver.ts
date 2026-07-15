@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { BrowserActivityService, type CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 
 import { TagLoader } from '../loaders/TagLoader';
@@ -14,7 +15,6 @@ import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { UpdateBrowserActivityInput } from '../types/UpdateBrowserActivityInput';
-import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => BrowserActivityType)
@@ -31,14 +31,17 @@ export class BrowserActivityResolver {
   ): Promise<BrowserActivityConnection> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.browserActivityService.findAll(serviceContext);
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.browserActivityService.findPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+    );
 
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('browser-activity', entity.id),
-    });
-
-    const edges: BrowserActivityEdge[] = slice.map((entity) => {
+    const edges: BrowserActivityEdge[] = entities.map((entity) => {
       const node = BrowserActivityType.toType(entity);
 
       return {
@@ -46,6 +49,13 @@ export class BrowserActivityResolver {
         cursor: node.id,
       };
     });
+
+    const pageInfo = {
+      hasNextPage,
+      hasPreviousPage,
+      startCursor: edges.length > 0 ? edges[0].cursor : null,
+      endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+    };
 
     return {
       edges,
@@ -77,7 +87,8 @@ export class BrowserActivityResolver {
   @Mutation(() => [BrowserActivityType])
   async createBrowserActivities(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateBrowserActivityInput] }) input: CreateBrowserActivityInput[],
+    @Args('input', { type: () => [CreateBrowserActivityInput] }, new MaxArraySizePipe())
+    input: CreateBrowserActivityInput[],
   ): Promise<BrowserActivityType[]> {
     const serviceContext = toServiceContext(context);
 

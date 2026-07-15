@@ -83,6 +83,11 @@ interface CompleteOpenIDDto {
   params: Record<string, string>;
 }
 
+// Steam's fixed OpenID 2.0 OP endpoint. The value in the callback body is
+// attacker-controlled and must never be used as the verification target; we
+// always verify against this constant (mirrors SteamClient.authorizationEndpoint).
+const STEAM_OPENID_ENDPOINT = 'https://steamcommunity.com/openid/login';
+
 @Controller('connections')
 export class ConnectionsController {
   constructor(
@@ -374,6 +379,16 @@ export class ConnectionsController {
       throw new UnauthorizedException('Invalid OpenID claimed_id');
     }
 
+    // The op_endpoint arrives in the callback body and is fully attacker-
+    // controlled. Verifying against it is a blind SSRF (fetch any URL) AND an
+    // identity bypass (attacker's server answers "is_valid:true"). Steam's OP
+    // endpoint is a fixed, well-known constant — always verify against that and
+    // reject any callback that claims a different one.
+    if (opEndpoint !== STEAM_OPENID_ENDPOINT) {
+      this.logger.log('Untrusted OpenID op_endpoint', { opEndpoint });
+      throw new UnauthorizedException('Untrusted OpenID op_endpoint');
+    }
+
     // --- Direct Verification (Section 11.4.2) ---
     // Send all params back to the OP with openid.mode changed to check_authentication
     const verifyParams = new URLSearchParams();
@@ -386,7 +401,7 @@ export class ConnectionsController {
       }
     }
 
-    const verifyResponse = await fetch(opEndpoint, {
+    const verifyResponse = await fetch(STEAM_OPENID_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: verifyParams.toString(),

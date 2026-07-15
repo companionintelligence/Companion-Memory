@@ -75,4 +75,14 @@ export class SearchInput {
   /** Force conceptual (embedding) ranking for the free-text query instead of the auto heuristic. */
   @Field(() => Boolean, { nullable: true })
   semantic?: boolean;
+
+  /**
+   * Shared-search capability token. When set, the search is resolved from the
+   * referenced public saved search and run as its owner; all other filter
+   * inputs above are ignored (only `first`/`after`/`sortBy`/`sortOrder` apply).
+   * The caller must still be authenticated — sharing is limited to signed-in
+   * users. See SearchResolver.runSharedSearch.
+   */
+  @Field(() => String, { nullable: true })
+  shareToken?: string;
 }
