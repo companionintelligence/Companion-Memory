@@ -86,7 +86,8 @@
       "__name": "CI_EMBED_MIN_TEXT_LENGTH",
       "__format": "json"
     },
-    "types": "CI_EMBED_TYPES"
+    "types": "CI_EMBED_TYPES",
+    "autoInstallModel": "CI_EMBED_AUTO_INSTALL_MODEL"
   },
   "queues": {
     "concurrency": {

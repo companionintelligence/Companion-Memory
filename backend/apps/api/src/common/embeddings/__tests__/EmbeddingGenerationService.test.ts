@@ -1,13 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import config from '@ci/configuration';
+
 import { EmbeddingGenerationService } from '../services/EmbeddingGenerationService';
 
-// Capture the embed mock so each test can assert how many HTTP calls were made
-// and with what batched `input`.
+// Capture the embed/pull mocks so each test can assert how many HTTP calls
+// were made and with what batched `input`.
 const embedMock = jest.fn();
+const pullMock = jest.fn();
 
 jest.mock('ollama', () => ({
   Ollama: jest.fn().mockImplementation(() => ({
     embed: embedMock,
+    pull: pullMock,
   })),
 }));
 
@@ -33,10 +37,24 @@ function makeService(): EmbeddingGenerationService {
   return new EmbeddingGenerationService(logger);
 }
 
+/** Mimics the ollama client's ResponseError shape (status_code + message). */
+function modelNotFoundError(model: string): Error & { status_code: number } {
+  return Object.assign(new Error(`model "${model}" not found, try pulling it first`), { status_code: 404 });
+}
+
 describe('EmbeddingGenerationService', () => {
+  const originalAutoInstallModel = config.embedding.autoInstallModel;
+
   beforeEach(() => {
     embedMock.mockReset();
     embedMock.mockImplementation(defaultEmbedImpl);
+    pullMock.mockReset();
+    pullMock.mockResolvedValue({ status: 'success' });
+    config.embedding.autoInstallModel = true;
+  });
+
+  afterAll(() => {
+    config.embedding.autoInstallModel = originalAutoInstallModel;
   });
 
   describe('generateEmbeddings (explicit batch API)', () => {
@@ -143,6 +161,68 @@ describe('EmbeddingGenerationService', () => {
       const str = await service.generateEmbeddingString('hello');
 
       expect(str).toBe('[5,1]');
+    });
+  });
+
+  describe('auto-installing a missing embedding model', () => {
+    it('pulls the model and retries once when embed reports it missing', async () => {
+      embedMock.mockRejectedValueOnce(modelNotFoundError('nomic-embed-text'));
+      const service = makeService();
+
+      const vectors = await service.generateEmbeddings(['aa']);
+
+      expect(vectors).toEqual([[2, 1]]);
+      expect(pullMock).toHaveBeenCalledTimes(1);
+      expect(pullMock).toHaveBeenCalledWith(expect.objectContaining({ model: 'nomic-embed-text', stream: false }));
+      expect(embedMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not pull, and rethrows, when auto-install is disabled', async () => {
+      config.embedding.autoInstallModel = false;
+      const notFound = modelNotFoundError('nomic-embed-text');
+      embedMock.mockRejectedValue(notFound);
+      const service = makeService();
+
+      await expect(service.generateEmbeddings(['aa'])).rejects.toThrow(notFound.message);
+      expect(pullMock).not.toHaveBeenCalled();
+    });
+
+    it('does not pull, and rethrows, for errors unrelated to a missing model', async () => {
+      embedMock.mockRejectedValue(new Error('ollama down'));
+      const service = makeService();
+
+      await expect(service.generateEmbeddings(['aa'])).rejects.toThrow('ollama down');
+      expect(pullMock).not.toHaveBeenCalled();
+    });
+
+    it('shares one pull across concurrent embed calls that all hit the missing model', async () => {
+      embedMock.mockRejectedValueOnce(modelNotFoundError('nomic-embed-text'));
+      embedMock.mockRejectedValueOnce(modelNotFoundError('nomic-embed-text'));
+      const service = makeService();
+
+      const [v1, v2] = await Promise.all([service.generateEmbeddings(['aa']), service.generateEmbeddings(['bbb'])]);
+
+      expect(v1).toEqual([[2, 1]]);
+      expect(v2).toEqual([[3, 1]]);
+      expect(pullMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets a later call retry the pull after a failed pull attempt', async () => {
+      embedMock.mockRejectedValue(modelNotFoundError('nomic-embed-text'));
+      pullMock.mockRejectedValueOnce(new Error('registry unreachable'));
+      const service = makeService();
+
+      await expect(service.generateEmbeddings(['aa'])).rejects.toThrow('registry unreachable');
+
+      // Second attempt: the model is still reported missing on the first try,
+      // but this time the pull succeeds, so the retried embed goes through.
+      pullMock.mockResolvedValueOnce({ status: 'success' });
+      embedMock.mockRejectedValueOnce(modelNotFoundError('nomic-embed-text'));
+      embedMock.mockImplementationOnce(defaultEmbedImpl);
+
+      const vectors = await service.generateEmbeddings(['aa']);
+      expect(vectors).toEqual([[2, 1]]);
+      expect(pullMock).toHaveBeenCalledTimes(2);
     });
   });
 });

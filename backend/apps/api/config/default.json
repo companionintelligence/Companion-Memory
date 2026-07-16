@@ -112,7 +112,8 @@
     "concurrency": 4,
     "coalesceWindowMs": 15,
     "minTextLength": 3,
-    "types": []
+    "types": [],
+    "autoInstallModel": true
   },
   "queues": {
     "concurrency": 10,

@@ -32,7 +32,9 @@ interface PendingEmbedding {
  *
  * Model and host are configurable (CI_EMBED_MODEL / OLLAMA_EMBED_HOST) so a
  * GPU/alternate-host Ollama can be targeted without code changes; concurrency
- * (CI_EMBED_CONCURRENCY) bounds in-flight HTTP requests.
+ * (CI_EMBED_CONCURRENCY) bounds in-flight HTTP requests. If the configured
+ * model isn't present on the Ollama host, it's pulled automatically on first
+ * use (CI_EMBED_AUTO_INSTALL_MODEL=false to require an explicit pre-pull).
  */
 @Injectable()
 export class EmbeddingGenerationService {
@@ -52,6 +54,13 @@ export class EmbeddingGenerationService {
   private buffer: PendingEmbedding[] = [];
 
   private flushTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * In-flight `ollama pull` for the configured model, memoized so a burst of
+   * concurrent embed calls hitting "model not found" only triggers one pull.
+   * Cleared on failure so a later embed call can retry the pull.
+   */
+  private pullPromise: Promise<void> | null = null;
 
   constructor(private readonly logger: LoggerService) {
     this.logger.setContext(EmbeddingGenerationService.name);
@@ -168,9 +177,26 @@ export class EmbeddingGenerationService {
 
   /**
    * Single batched Ollama call. Validates that the response contains one vector
-   * per input.
+   * per input. If the configured model isn't present on the Ollama host and
+   * auto-install is enabled (default), pulls it once and retries the call —
+   * so a fresh deployment (or a newly-changed CI_EMBED_MODEL) self-heals
+   * instead of failing every embed until an operator runs `ollama pull` by hand.
    */
   private async embedBatch(batch: string[]): Promise<number[][]> {
+    try {
+      return await this.embedBatchOnce(batch);
+    } catch (error) {
+      if (!config.embedding.autoInstallModel || !isModelNotFoundError(error)) {
+        throw error;
+      }
+
+      await this.ensureModelPulled();
+
+      return this.embedBatchOnce(batch);
+    }
+  }
+
+  private async embedBatchOnce(batch: string[]): Promise<number[][]> {
     const response = await this.ollama.embed({
       model: this.model,
       input: batch,
@@ -184,6 +210,53 @@ export class EmbeddingGenerationService {
 
     return embeddings;
   }
+
+  /**
+   * Pulls the configured embedding model, memoizing the in-flight request so
+   * concurrent callers share one `ollama pull` instead of racing several.
+   */
+  private async ensureModelPulled(): Promise<void> {
+    if (!this.pullPromise) {
+      this.pullPromise = (async () => {
+        this.logger.warn(
+          `Embedding model "${this.model}" not found on Ollama host; pulling it now (this can take a while for large models)...`,
+        );
+
+        await this.ollama.pull({ model: this.model, stream: false });
+
+        this.logger.log(`Pulled embedding model "${this.model}".`);
+      })().catch((error: unknown) => {
+        // Let a later embed call retry the pull rather than getting stuck on
+        // a rejected promise forever (e.g. a transient network blip).
+        this.pullPromise = null;
+
+        throw error;
+      });
+    }
+
+    return this.pullPromise;
+  }
+}
+
+/**
+ * Ollama's client throws `ResponseError` (status_code 404) with a message
+ * like `model "foo" not found, try pulling it first` when the model isn't
+ * present locally. Match on status code first (cheap, precise); fall back to
+ * the message text since the client's ResponseError isn't a public export we
+ * can `instanceof`-check against.
+ */
+function isModelNotFoundError(error: unknown): boolean {
+  if (error == null || typeof error !== 'object') {
+    return false;
+  }
+
+  const { status_code: statusCode, message } = error as { status_code?: number; message?: string };
+
+  if (statusCode === 404) {
+    return true;
+  }
+
+  return typeof message === 'string' && /not found/i.test(message);
 }
 
 /** Format a numeric vector as a pgvector-compatible string literal. */

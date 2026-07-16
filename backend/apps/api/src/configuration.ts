@@ -152,6 +152,13 @@ export const ConfigSchema = z.object({
     host: z.string().optional(),
     /** Embedding model name (must match the pgvector column dimensionality). */
     model: z.string().default('nomic-embed-text'),
+    /**
+     * Auto-`ollama pull` the configured model the first time an embed call
+     * reports it missing, instead of failing every embed until an operator
+     * pulls it by hand. Safe to leave on for prod (a no-op once pulled); set
+     * CI_EMBED_AUTO_INSTALL_MODEL=false to require an explicit pre-pull.
+     */
+    autoInstallModel: booleanStringSchema.default(true),
     /** Max texts sent to Ollama's /api/embed in a single HTTP request. */
     batchSize: z.coerce.number().int().positive().default(32),
     /** Max concurrent in-flight Ollama embedding HTTP requests. */
