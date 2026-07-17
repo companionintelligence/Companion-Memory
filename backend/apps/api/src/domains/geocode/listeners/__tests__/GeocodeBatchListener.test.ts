@@ -83,6 +83,22 @@ function makeListener(
     findById: jest.fn(async (_ctx: unknown, id: string) => ({ id, metadata: {} })),
   };
 
+  const placeCalls: Array<{ userId: string; name: string; lat: number; lng: number }> = [];
+  const placeService = {
+    // Returns a deterministic id derived from the geocode key so tests can
+    // assert on which Place an event was linked to. created=true on the first
+    // call for a key, false thereafter.
+    findOrCreateForGeocode: jest.fn(
+      async (ctx: { userId: string }, input: { name: string; lat: number; lng: number }) => {
+        placeCalls.push({ userId: ctx.userId, ...input });
+
+        const key = `place:${ctx.userId}:${input.name.trim().toLowerCase()}:${input.lat.toFixed(3)}:${input.lng.toFixed(3)}`;
+
+        return { id: key, created: true };
+      },
+    ),
+  };
+
   const listener = new GeocodeBatchListener(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     dataSource as any,
@@ -91,10 +107,22 @@ function makeListener(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     eventService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    placeService as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     makeLogger() as any,
   );
 
-  return { listener, builder, geocodeService, eventService, geocodeCalls, reverseCalls, updates };
+  return {
+    listener,
+    builder,
+    geocodeService,
+    eventService,
+    placeService,
+    geocodeCalls,
+    reverseCalls,
+    updates,
+    placeCalls,
+  };
 }
 
 function okOutcome(lowConfidence = false): GeocodeOutcome {
@@ -299,5 +327,95 @@ describe('GeocodeBatchListener reverse direction', () => {
     await listener.handleBatch({ userId: USER, direction: 'reverse' });
 
     expect(eventService.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('GeocodeBatchListener Place linking', () => {
+  const okReverse = (placeName: string): ReverseGeocodeOutcome => ({
+    status: 'OK',
+    placeName,
+    cached: false,
+    retryable: false,
+  });
+
+  it('forward path links the event to a Place created from (name, geocoded coords)', async () => {
+    const rows = [{ event_id: 'e1', location_name: '1600 Amphitheatre Pkwy' }];
+    const { listener, placeService, placeCalls, updates } = makeListener(rows, () => okOutcome());
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(placeService.findOrCreateForGeocode).toHaveBeenCalledTimes(1);
+    // The PostGIS Point is [lng, lat]; the listener must unpack it as (lat, lng).
+    expect(placeCalls[0]).toEqual({
+      userId: USER,
+      name: '1600 Amphitheatre Pkwy',
+      lat: 37.4,
+      lng: -122.1,
+    });
+    expect(updates[0].data.location_entity_id).toBe(`place:${USER}:1600 amphitheatre pkwy:37.400:-122.100`);
+  });
+
+  it('reverse path links the event to a Place created from (placeName, candidate coords)', async () => {
+    const rows = [{ event_id: 'e1', lat: 37.4143, lng: -122.0774 }];
+    const { listener, placeCalls, updates } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => okReverse('1401 N Shoreline Blvd, Mountain View, CA'),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    expect(placeCalls[0]).toEqual({
+      userId: USER,
+      name: '1401 N Shoreline Blvd, Mountain View, CA',
+      lat: 37.4143,
+      lng: -122.0774,
+    });
+    // The name + entity-id are written in the same EventService.update payload
+    // so the index update is atomic.
+    expect(updates[0].data.location_name).toBe('1401 N Shoreline Blvd, Mountain View, CA');
+    expect(updates[0].data.location_entity_id).toBe(
+      `place:${USER}:1401 n shoreline blvd, mountain view, ca:37.414:-122.077`,
+    );
+  });
+
+  it('two events resolving to the same key link to the same Place id', async () => {
+    // Two coordinate-only events whose reverse-geocodes round to the same key
+    // (within 110 m, same name) MUST land on a single Place — the whole point
+    // of the find-or-create flow.
+    const rows = [
+      { event_id: 'a', lat: 37.4141, lng: -122.0772 },
+      { event_id: 'b', lat: 37.4144, lng: -122.0774 },
+    ];
+    const { listener, updates } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => okReverse('1401 N Shoreline Blvd, Mountain View, CA'),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    const nameWrites = updates.filter((u) => u.data.location_name !== undefined);
+    expect(nameWrites).toHaveLength(2);
+    expect(nameWrites[0].data.location_entity_id).toBe(nameWrites[1].data.location_entity_id);
+  });
+
+  it('a Place-write error does not block the coord/name update — falls through without location_entity_id', async () => {
+    // Resilience: PlaceService.findOrCreateForGeocode failure is logged and
+    // swallowed; the geocoded coord/name still gets persisted so progress
+    // isn't lost behind a flaky graph write.
+    const rows = [{ event_id: 'e1', lat: 37.4, lng: -122.1 }];
+    const { listener, placeService, updates } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => okReverse('Mountain View, CA'),
+    );
+
+    placeService.findOrCreateForGeocode.mockRejectedValueOnce(new Error('boom'));
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    expect(updates[0].data.location_name).toBe('Mountain View, CA');
+    expect(updates[0].data.location_entity_id).toBeUndefined();
   });
 });

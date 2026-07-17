@@ -1,5 +1,30 @@
 import { Entity, PrimaryColumn, Column } from 'typeorm';
 
+/** One-line preview length cap — matches the importer's clip when it DOES send one. */
+const PREVIEW_MAX_CHARS = 140;
+
+/**
+ * Derive a preview from the content when none was stored. Importers only send
+ * `preview` when clipping actually shortened the content (≤140-char one-line
+ * messages arrive with content but no preview — most chat traffic), so readers
+ * that surface `preview` (search tsvector, list views) saw nothing for exactly
+ * the rows where content itself IS the preview. Same one-line + ellipsis shape
+ * as the importer's clip, so stored and derived previews are indistinguishable.
+ */
+function previewFromContent(content: string | null | undefined): string | null {
+  if (!content) {
+    return null;
+  }
+
+  const oneLine = content.replace(/\s+/g, ' ').trim();
+
+  if (oneLine.length === 0) {
+    return null;
+  }
+
+  return oneLine.length > PREVIEW_MAX_CHARS ? `${oneLine.slice(0, PREVIEW_MAX_CHARS - 1)}…` : oneLine;
+}
+
 @Entity({ schema: 'ci', name: 'communications' })
 export class CommunicationEntity {
   // Surrogate primary key (with the hypertable partition cols time + user_id) so
@@ -21,7 +46,18 @@ export class CommunicationEntity {
   @Column({ type: 'uuid', nullable: true, name: 'device_id' })
   deviceId!: string | null;
 
-  @Column({ type: 'text' })
+  // The DB column is the Postgres enum `ci.communication_direction` (NOT NULL,
+  // no default). Declaring it as `text` made TypeORM emit a text-typed param in
+  // the bulk INSERT, which Postgres refuses to assign to the enum column
+  // ("column is of type ci.communication_direction but expression is of type
+  // text"). Declaring it `enum` makes TypeORM bind it as the enum type; the
+  // connection search_path includes `ci` (see application.ts) so the unqualified
+  // type name resolves.
+  @Column({
+    type: 'enum',
+    enum: ['inbound', 'outbound', 'internal', 'async', 'ongoing'],
+    enumName: 'communication_direction',
+  })
   direction!: string;
 
   @Column({ type: 'text', nullable: true, name: 'thread_id' })
@@ -115,7 +151,7 @@ export class CommunicationEntity {
       connectionId: entity.connectionId,
       isEncrypted: entity.isEncrypted,
       isArchived: entity.isArchived,
-      preview: entity.preview,
+      preview: entity.preview ?? previewFromContent(entity.content),
       sourceType: entity.sourceType,
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,

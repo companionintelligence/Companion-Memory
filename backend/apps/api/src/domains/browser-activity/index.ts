@@ -21,5 +21,6 @@ export { BrowserActivityEntity, type BrowserActivity };
 // Services
 export { BrowserActivityService };
 
-// DTOs
+// DTOs + validation schemas
 export type { CreateBrowserActivityDto, UpdateBrowserActivityDto } from './types';
+export { createBrowserActivitySchemaRoot } from './types';

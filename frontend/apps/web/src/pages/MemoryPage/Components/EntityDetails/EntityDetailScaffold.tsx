@@ -15,6 +15,8 @@ import { TagInput } from '@/components/TagInput';
 
 import type { MemoryEntity } from '../../../MemoryPage/useEntityService';
 
+import { useReadOnly } from './readOnly';
+
 /** A single editable field rendered read-only or as an input depending on edit mode. */
 export interface EditField {
   key: string;
@@ -224,11 +226,14 @@ export function EntityDetailScaffold({
   const currentTags = useMemo(() => readTags(entity), [entity]);
   const { tagEntities, untagEntities } = useTagEntityService();
   const { toast } = useToast();
+  // Shared-search viewer: the drawer is display-only. Suppress every mutation /
+  // navigation affordance (the writes are owner-scoped and would silently fail).
+  const readOnly = useReadOnly();
 
-  const canEdit = Boolean(onSave && editFields && editFields.length > 0);
+  const canEdit = !readOnly && Boolean(onSave && editFields && editFields.length > 0);
   // Tags-only edit mode: no persisted fields, just an editable TagInput. Lets
   // graph-node drawers manage tags without the field-editing wiring.
-  const canManageTags = Boolean(tagsEditable && taggable && ref.globalId);
+  const canManageTags = !readOnly && Boolean(tagsEditable && taggable && ref.globalId);
   const canEnterEditMode = canEdit || canManageTags;
 
   // The current persisted values, rebuilt from props every render so external
@@ -428,11 +433,14 @@ export function EntityDetailScaffold({
           </div>
         )}
 
-        {ref.rawId && <EntityRelationshipCards key={ref.rawId} entityId={ref.rawId} />}
+        {/* Relationship cards + the "Open full page" link both navigate to the
+            owner's per-entity routes (which resolve under the VIEWER's scope and
+            fall outside the shared search). Hide both in read-only mode. */}
+        {!readOnly && ref.rawId && <EntityRelationshipCards key={ref.rawId} entityId={ref.rawId} />}
 
         {rawData != null && <RawDataDetails data={rawData} />}
 
-        {detailPath && (
+        {!readOnly && detailPath && (
           <Link
             to={detailPath}
             className="inline-flex items-center gap-1 text-sm text-primary hover:underline"

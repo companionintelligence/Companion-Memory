@@ -3,9 +3,11 @@ import { Args, Query, Resolver } from '@nestjs/graphql';
 import { type FindOptionsOrder } from 'typeorm';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
+import { SavedSearchService } from '@ci/domains/files';
 import { CommunicationService, EventService, EventEntity, CommunicationEntity } from '@ci/domains/memory';
 import {
   SearchService,
@@ -31,6 +33,7 @@ import { PlaceType } from '../types/PlaceType';
 import { SearchInput } from '../types/SearchInput';
 import { SearchResultConnection } from '../types/SearchResultConnection';
 import { type SearchResult } from '../types/SearchResultType';
+import { TagType } from '../types/TagType';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
@@ -49,6 +52,14 @@ const FETCH_MULTIPLIER = 4;
 // a single page is never truncated — the old 25 cap fell short of the 30-row
 // client page, capping plain-text search and disabling load-more.
 const QUERY_CANDIDATE_LIMIT = 300;
+
+/** PageInfo for an empty connection (e.g. an unknown/revoked share token). */
+const EMPTY_PAGE_INFO = {
+  hasNextPage: false,
+  hasPreviousPage: false,
+  startCursor: null,
+  endCursor: null,
+};
 
 /** The time a result is ordered by (events use startTime, others use time). */
 function timeOf(result: SearchResult): Date {
@@ -116,8 +127,10 @@ export class SearchResolver {
     private readonly communicationService: CommunicationService,
     private readonly entityResolutionService: EntityResolutionService,
     private readonly eventService: EventService,
+    private readonly savedSearchService: SavedSearchService,
     private readonly searchService: SearchService,
     private readonly tagService: TagService,
+    private readonly featureService: FeatureService,
   ) {}
 
   @Query(() => SearchResultConnection)
@@ -125,8 +138,75 @@ export class SearchResolver {
     @Context() context: RequestContext,
     @Args('input') input: SearchInput,
   ): Promise<SearchResultConnection> {
-    const serviceContext = toServiceContext(context);
+    // Shared-search path: a signed-in viewer presents a capability token; the
+    // search is resolved from the owner's public saved search and run as the
+    // owner, ignoring all viewer-supplied filters (only pagination/sort carry
+    // over). The guard above still requires the viewer to be authenticated.
+    //
+    // Gated behind the 'shared.search' feature flag: while the access model is
+    // being hardened the shared-URL surface stays dark. When disabled a token
+    // resolves to an empty result — identical to an unknown/revoked token — so
+    // the viewer falls into the tidy "link unavailable" state rather than an error.
+    if (input.shareToken != null && input.shareToken.length > 0) {
+      if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
+        return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+      }
 
+      return this.runSharedSearch(input);
+    }
+
+    return this.executeSearch(toServiceContext(context), input, { matchTags: true });
+  }
+
+  /**
+   * Run a shared saved search as its owner. The viewer cannot influence which
+   * data is returned beyond paging/sort — the query, entity-type and tag filters
+   * are taken verbatim from the stored saved search, so a leaked token can only
+   * ever surface exactly what the owner chose to share. Unknown/revoked tokens
+   * yield an empty result rather than an error so the viewer can show a tidy
+   * "link expired" state.
+   */
+  private async runSharedSearch(input: SearchInput): Promise<SearchResultConnection> {
+    const saved = await this.savedSearchService.findByShareToken(input.shareToken ?? '');
+
+    if (saved == null || saved.userId == null) {
+      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+    }
+
+    // All filter values come from the owner's stored saved search (never the
+    // viewer's input), so the full who/where/when/how/sort/semantic set is safe
+    // to apply — it can only ever surface what the owner shared.
+    const filters = saved.filters ?? {};
+
+    return this.executeSearch(
+      { userId: saved.userId },
+      {
+        query: saved.query ?? undefined,
+        includeTypes: saved.entityTypes ?? undefined,
+        tags: saved.tags ?? undefined,
+        eventTypes: filters.eventTypes,
+        startTime: filters.startTime,
+        endTime: filters.endTime,
+        connectors: filters.connectors,
+        people: filters.people,
+        places: filters.places,
+        hasLocation: filters.hasLocation,
+        semantic: filters.semantic,
+        // Viewer paging carries over; sort prefers the viewer's choice, falling
+        // back to the owner's saved sort.
+        sortBy: input.sortBy ?? filters.sortBy,
+        sortOrder: input.sortOrder ?? filters.sortOrder,
+        first: input.first,
+        after: input.after,
+      },
+    );
+  }
+
+  private async executeSearch(
+    serviceContext: UserServiceContext,
+    input: SearchInput,
+    { matchTags = false }: { matchTags?: boolean } = {},
+  ): Promise<SearchResultConnection> {
     const query = input.query != null && input.query.length > 0 ? input.query : undefined;
     const tags = input.tags && input.tags.length > 0 ? input.tags : undefined;
     const eventTypes = input.eventTypes && input.eventTypes.length > 0 ? input.eventTypes : undefined;
@@ -298,10 +378,17 @@ export class SearchResolver {
       cursor: searchCursorOf(result),
     }));
 
+    // Tag suggestions ride alongside the entity results (the header search box
+    // renders them as draggable filter rows). Shared searches never opt in — a
+    // share token must not let the viewer probe the owner's tag vocabulary.
+    const matchingTags =
+      matchTags && query != null ? await this.tagService.searchByLabel(serviceContext, query) : [];
+
     return {
       edges,
       pageInfo,
       totalCount,
+      matchingTags: matchingTags.map((tag) => TagType.toType(tag)),
     };
   }
 

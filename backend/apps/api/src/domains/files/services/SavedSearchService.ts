@@ -1,3 +1,5 @@
+import * as crypto from 'node:crypto';
+
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -30,6 +32,7 @@ export class SavedSearchService {
       query: data.query,
       entityTypes: data.entityTypes,
       tags: this.assembleTags(data),
+      filters: data.filters ?? null,
       userId: context.userId,
     });
 
@@ -103,6 +106,50 @@ export class SavedSearchService {
     });
 
     return this.findById(context, id);
+  }
+
+  /**
+   * Turn link-sharing on or off for a saved search the caller owns. Enabling
+   * mints a fresh unguessable capability token (128 bits of entropy); disabling
+   * clears it, which revokes any outstanding share links. Re-enabling always
+   * rotates the token, so a previously shared link cannot be resurrected.
+   */
+  async setSharing(context: UserServiceContext, id: string, isPublic: boolean): Promise<SavedSearch | null> {
+    const result = await this.savedSearchRepository.update(
+      {
+        id,
+        userId: context.userId,
+      },
+      {
+        isPublic,
+        shareToken: isPublic ? crypto.randomBytes(16).toString('hex') : null,
+      },
+    );
+
+    if (result.affected === 0) {
+      return null;
+    }
+
+    return this.findById(context, id);
+  }
+
+  /**
+   * Resolve a saved search by its share token. Not user-scoped — this is the
+   * shared-viewer path: a signed-in viewer presents the token and the search is
+   * run as the owner (see SearchResolver). Only public searches with a token
+   * match, so clearing `isPublic` immediately stops resolution.
+   */
+  async findByShareToken(token: string): Promise<SavedSearch | null> {
+    if (!token) {
+      return null;
+    }
+
+    return this.savedSearchRepository.findOne({
+      where: {
+        shareToken: token,
+        isPublic: true,
+      },
+    });
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {

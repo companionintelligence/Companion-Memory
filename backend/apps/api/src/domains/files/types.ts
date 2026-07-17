@@ -26,10 +26,35 @@ export type UploadFileDto = Omit<
   'variant' | 'title' | 'description' | 'externalId' | 'parentId' | 'externalCreatedAt' | 'externalUpdatedAt'
 > & {
   inventoryCapture?: boolean;
+  /**
+   * When true, the capture source produced its own title/description (and writes
+   * them via PATCH /files/:id), so the server skips the Ollama description pass.
+   */
+  skipDescription?: boolean;
   model?: string;
 };
 
 export type UpdateFileDto = Pick<CreateFileDto, 'title' | 'description' | 'externalUpdatedAt'>;
+
+/**
+ * Secondary explorer dimensions a saved search persists alongside the primary
+ * query / entityTypes / tags, so it round-trips the full search the user built
+ * (and a shared search runs with all of them). Mirrors the LifeScope-parity
+ * SearchInput filter fields; pagination/viewport (first/after/bbox) are
+ * intentionally excluded as transient.
+ */
+export interface SavedSearchFilters {
+  eventTypes?: string[];
+  startTime?: string;
+  endTime?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  connectors?: string[];
+  people?: string[];
+  places?: string[];
+  hasLocation?: boolean;
+  semantic?: boolean;
+}
 
 export interface CreateSavedSearchDto {
   id?: string;
@@ -38,6 +63,7 @@ export interface CreateSavedSearchDto {
   query?: string;
   entityTypes?: IndexableEntity[];
   tags?: string[];
+  filters?: SavedSearchFilters | null;
 }
 
 export interface UpdateSavedSearchDto {
@@ -46,4 +72,5 @@ export interface UpdateSavedSearchDto {
   query?: string;
   entityTypes?: IndexableEntity[];
   tags?: string[];
+  filters?: SavedSearchFilters | null;
 }

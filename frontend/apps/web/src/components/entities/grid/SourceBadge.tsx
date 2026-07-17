@@ -21,6 +21,7 @@ const SOURCE_LABELS: Record<string, string> = {
   chromium: 'Chrome',
   claude: 'Claude',
   chatgpt: 'ChatGPT',
+  github_events: 'GitHub',
   // Communication `type` values (CommunicationType.type, not a connector).
   email: 'Email',
   sms: 'SMS',

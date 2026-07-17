@@ -24,6 +24,9 @@ export class UserType implements Node {
   @Field(() => Boolean)
   onboarded!: boolean;
 
+  @Field(() => String)
+  timezone!: string;
+
   @Field(() => PersonType, { nullable: true })
   entity?: PersonType | null;
 
@@ -35,6 +38,7 @@ export class UserType implements Node {
       name: user.name,
       email: user.email,
       onboarded: user.onboarded,
+      timezone: user.timezone,
     };
   }
 }

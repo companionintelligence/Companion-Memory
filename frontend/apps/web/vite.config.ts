@@ -154,6 +154,28 @@ export default defineConfig({
         xfwd: true,
         rewrite: (requestPath) => requestPath.replace(/^\/api/, ''),
       },
+      // Dev-only: the app renders object-store media (photo previews, file
+      // downloads) via same-origin `/static/...` URLs — signed MinIO paths with
+      // the `/static` prefix the app adds (see resolveStaticUrl / MediaTile).
+      // Under `make dev`, Caddy strips `/static` and proxies to MinIO, REWRITING
+      // the Host to the object store's signing host so the presigned SigV4
+      // signature still validates (presigned URLs are host-specific). When Vite
+      // runs standalone (accessed directly on :5173, e.g. over the tailnet), that
+      // Caddy hop is absent, so `/static/*` fell through to the SPA fallback and
+      // returned index.html — every <img> got HTML instead of bytes (broken
+      // thumbnails). Mirror Caddy here: strip `/static`, forward to MinIO, and
+      // force Host to the signing host so the signature matches.
+      '/static': {
+        target: process.env.STATIC_PROXY_TARGET || 'http://localhost:9000',
+        changeOrigin: false,
+        rewrite: (requestPath) => requestPath.replace(/^\/static/, ''),
+        configure: (proxy) => {
+          const signingHost = process.env.STATIC_PROXY_HOST || 'object-store:9000';
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Host', signingHost);
+          });
+        },
+      },
     },
     fs: {
       allow: ['.', path.resolve(__dirname, '../../packages')],

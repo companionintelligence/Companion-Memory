@@ -1,6 +1,8 @@
 import type { Preview, StoryContext, StoryFn } from '@storybook/react';
 import { MemoryRouter } from 'react-router-dom';
 
+import { FeaturesProvider } from '@/common/feature';
+
 import '../src/styles/index.css';
 
 const preview = {
@@ -19,7 +21,11 @@ const preview = {
 } satisfies Preview;
 
 export const decorators = [
-  (story: StoryFn, context: StoryContext) => <MemoryRouter>{story(context.args, context)}</MemoryRouter>,
+  (story: StoryFn, context: StoryContext) => (
+    <MemoryRouter>
+      <FeaturesProvider args={[]}>{story(context.args, context)}</FeaturesProvider>
+    </MemoryRouter>
+  ),
 ];
 
 export default preview;

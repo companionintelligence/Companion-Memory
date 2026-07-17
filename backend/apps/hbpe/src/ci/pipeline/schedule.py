@@ -75,20 +75,24 @@ async def setup_hbpe_schedules(client: Client) -> None:
              created=created, skipped=skipped, failed=failed)
 
 
-def _checkpoint_exists() -> bool:
-    """True once the base HMT model has been trained/exported at least once."""
-    from pathlib import Path
+def _checkpoint_exists(user_id: str) -> bool:
+    """True once the given *user's* HMT model has been trained/exported at least once.
 
-    ckpt_dir = Path(settings.models_dir) / "hmt"
-    return any(
-        (ckpt_dir / name).exists()
-        for name in ("hmt_int8.onnx", "hmt_fp32.onnx", "hmt_calibrated.pt", "hmt_checkpoint.pt")
-    )
+    Checks the per-user checkpoint directory ({models_dir}/hmt/users/{user_id})
+    via the canonical ``ci.model.checkpoints.model_exists`` helper rather than a
+    single global {models_dir}/hmt path. Every HMT artifact is per-user (the L1
+    token embedding/head are sized by the user's own vocab — see
+    ci/model/checkpoints.py), so a global gate would let the first user's
+    checkpoint permanently suppress bootstrap for every subsequent user.
+    """
+    from ci.model.checkpoints import model_exists
+
+    return model_exists(user_id)
 
 
 async def ensure_bootstrap_if_cold(client: Client) -> None:
     """
-    Start ``BootstrapHBPEWorkflow`` for each user when no HMT checkpoint exists.
+    Start ``BootstrapHBPEWorkflow`` for each user who has no HMT checkpoint yet.
 
     The nightly schedule only runs *incremental* updates and never trains the
     base model, so without this a fresh appliance would sit in COLD_START until
@@ -96,11 +100,11 @@ async def ensure_bootstrap_if_cold(client: Client) -> None:
     bootstrap already running for the user raises WorkflowAlreadyStartedError and
     is left alone, and a previous failed/aborted run (e.g. no data yet) is simply
     retried on the next worker start.
-    """
-    if _checkpoint_exists():
-        log.info("hbpe_bootstrap_skipped", reason="checkpoint_exists")
-        return
 
+    The cold check is evaluated *per user*: an existing checkpoint only suppresses
+    bootstrap for that same user, so a user added after the first one has bootstrapped
+    still gets their own base model trained.
+    """
     user_ids = _fetch_user_ids()
     if not user_ids:
         log.info("hbpe_bootstrap_skipped", reason="no_users_in_db")
@@ -109,7 +113,13 @@ async def ensure_bootstrap_if_cold(client: Client) -> None:
     from temporalio.exceptions import WorkflowAlreadyStartedError
     from ci.pipeline.bootstrap import BootstrapHBPEWorkflow
 
+    started = warm = 0
     for user_id in user_ids:
+        if _checkpoint_exists(user_id):
+            log.info("hbpe_bootstrap_skipped", reason="checkpoint_exists", user=user_id[:8])
+            warm += 1
+            continue
+
         workflow_id = f"hbpe-bootstrap-{user_id[:8]}"
         try:
             await client.start_workflow(
@@ -119,10 +129,14 @@ async def ensure_bootstrap_if_cold(client: Client) -> None:
                 task_queue=settings.task_queue,
             )
             log.info("hbpe_bootstrap_started", workflow_id=workflow_id, user=user_id[:8])
+            started += 1
         except WorkflowAlreadyStartedError:
             log.info("hbpe_bootstrap_already_running", workflow_id=workflow_id)
+            started += 1
         except Exception as exc:
             log.error("hbpe_bootstrap_start_failed", workflow_id=workflow_id, error=str(exc))
+
+    log.info("hbpe_bootstrap_sweep_done", started=started, warm=warm, users=len(user_ids))
 
 
 async def delete_hbpe_schedules(client: Client) -> None:

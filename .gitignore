@@ -40,6 +40,9 @@ backend/apps/*/LICENSE.md
 /playwright/.cache/
 /playwright/.auth/
 
+# Vitest coverage
+coverage/
+
 .beads/
 
 # Per-worktree overmind sockets created by scripts/dev-stack.ts

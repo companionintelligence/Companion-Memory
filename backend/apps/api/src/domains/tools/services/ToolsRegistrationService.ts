@@ -2,7 +2,8 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { NativeToolProvider } from '../providers/native/NativeToolProvider';
+import { isIntentDomain } from '../catalog/domains';
+import { NativeToolProvider } from '../providers/NativeToolProvider';
 import { ToolRegistry } from '../registry/ToolRegistry';
 
 /**
@@ -23,11 +24,24 @@ export class ToolsRegistrationService implements OnModuleInit {
 
     try {
       await this.toolRegistry.registerProvider(this.nativeProvider);
+      this.validateDomains();
 
       this.logger.debug('Successfully registered all tool providers');
     } catch (error) {
       this.logger.error('Failed to register tool providers', error as Error);
       throw error;
+    }
+  }
+
+  /**
+   * Fail fast if a tool declares an unregistered schema domain. Runs here, right after the tools
+   * are loaded, so the check sees the full registry (rather than racing module-init order).
+   */
+  private validateDomains(): void {
+    for (const schema of this.toolRegistry.getAvailableTools()) {
+      if (!isIntentDomain(schema.domain)) {
+        throw new Error(`Tool ${schema.name} references unknown domain "${schema.domain}"`);
+      }
     }
   }
 }

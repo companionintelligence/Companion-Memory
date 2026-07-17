@@ -15,6 +15,7 @@ import {
 } from '@ci/domains/memory/events';
 
 import { EmbeddingService } from '../services/EmbeddingService';
+import { IndexSkipService } from '../services/IndexSkipService';
 import { VectorService } from '../services/VectorService';
 import { type WeightedText } from '../types';
 
@@ -24,6 +25,7 @@ export class PersonSearchIndexListener {
     private readonly personService: PersonService,
     private readonly embeddingGenerationService: EmbeddingGenerationService,
     private readonly embeddingService: EmbeddingService,
+    private readonly indexSkipService: IndexSkipService,
     private readonly vectorService: VectorService,
     private readonly logger: LoggerService,
   ) {
@@ -96,6 +98,16 @@ export class PersonSearchIndexListener {
 
     if (searchDocument == null) {
       this.logger.log('Person has no search document, skipping embedding');
+
+      // Persist the skip so the backfill sweep (LEFT JOIN on ci_search.embeddings)
+      // stops re-finding this person on every run. Persons only skip on 'empty' —
+      // the message-tuned embedSkipReason heuristics (too-short/trivial) don't
+      // apply, because a bare short name is exactly what a person doc looks like.
+      await this.indexSkipService.recordSkip({
+        entityType: 'person',
+        entityId: person.id,
+        reason: 'empty',
+      });
     } else {
       const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
 
@@ -109,6 +121,12 @@ export class PersonSearchIndexListener {
           embedding,
         },
       );
+
+      // An updated person that gained a name/description is no longer skipped.
+      await this.indexSkipService.clearSkip({
+        entityType: 'person',
+        entityId: person.id,
+      });
 
       this.logger.log('Generated embedding for person');
     }

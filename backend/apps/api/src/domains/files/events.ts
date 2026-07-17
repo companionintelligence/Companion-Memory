@@ -27,6 +27,7 @@ export type FileUploadedPayload = {
   fileId: string;
   userId: string;
   inventoryCapture: boolean;
+  skipDescription?: boolean;
   model?: string;
 };
 
@@ -56,6 +57,27 @@ export type PreviewGeneratedPayload = {
   userId: string;
   previewId: string;
   model?: string;
+  /**
+   * When true, the capture source (e.g. CI-Applet with its own vision endpoint)
+   * already produced a title/description — it writes them via PATCH /files/:id —
+   * so {@link ImageDescriptionListener} skips its Ollama pass. Absent/false means
+   * the server should generate the description as usual.
+   */
+  skipDescription?: boolean;
+};
+
+/**
+ * Request to backfill `ci.files.width`/`height` for ORIGINAL image/video files
+ * that lack them (dimensions weren't captured at ingest before the preview pass
+ * recorded them). Consumed out-of-band by {@link MediaDimensionsBackfillListener}.
+ */
+export const MediaDimensionsBackfillRequestEvent = 'file.media-dimensions-backfill-request';
+
+export type MediaDimensionsBackfillRequestPayload = {
+  /** Owner whose files are probed. */
+  userId: string;
+  /** Max files to record dimensions for in this batch (default: listener's DEFAULT_LIMIT). */
+  limit?: number;
 };
 
 defineEvent<FileCreatedPayload>(FileCreatedEvent);
@@ -63,6 +85,7 @@ defineEvent<FileUpdatedPayload>(FileUpdatedEvent);
 defineEvent<FileUploadedPayload>(FileUploadedEvent);
 defineEvent<FileDeletedPayload>(FileRemovedEvent);
 defineEvent<PreviewGeneratedPayload>(PreviewGeneratedEvent);
+defineEvent<MediaDimensionsBackfillRequestPayload>(MediaDimensionsBackfillRequestEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
@@ -71,6 +94,7 @@ declare module '@ci/domains/events/registry' {
     [FileUploadedEvent]: FileUploadedPayload;
     [FileRemovedEvent]: FileDeletedPayload;
     [PreviewGeneratedEvent]: PreviewGeneratedPayload;
+    [MediaDimensionsBackfillRequestEvent]: MediaDimensionsBackfillRequestPayload;
   }
 }
 

@@ -22,11 +22,13 @@ interface Props {
 export function CommunicationRow({ communication, time, onClick }: Props) {
   const data = useFragment(COMMUNICATION_FRAGMENT, communication);
 
+  // Chat-style sources have no subject — show the preview as the row's only
+  // line instead of an "Untitled communication" placeholder.
   return (
     <EntityRow
       icon={<CommunicationIcon />}
-      title={data.subject || 'Untitled communication'}
-      subtitle={data.preview}
+      title={data.subject || data.preview}
+      subtitle={data.subject ? data.preview : undefined}
       time={time}
       onClick={onClick}
     />

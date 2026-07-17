@@ -44,6 +44,14 @@ export class CreateInventoryInput {
   @Field(() => GraphQLJSONObject, { nullable: true })
   identifierCodes?: Record<string, unknown>;
 
+  /**
+   * Full source metadata bag (importer-parsed fields without a first-class
+   * column home — e.g. Amazon `Source`, raw `Total`, future fields). Persists
+   * to inventory.metadata so importers stop dropping correctly-parsed data.
+   */
+  @Field(() => GraphQLJSONObject, { nullable: true })
+  metadata?: Record<string, unknown>;
+
   @Field(() => String, { nullable: true })
   sourceType?: string;
 

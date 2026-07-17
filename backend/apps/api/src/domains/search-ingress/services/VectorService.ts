@@ -31,12 +31,18 @@ function mapScalarToWeight(scalar: number): TsVectorWeight {
 }
 
 /**
- * Builds a weighted tsvector SQL expression and corresponding parameters.
- * Groups texts by weight category and creates setweight() calls for each.
+ * Builds a weighted tsvector SQL expression using POSITIONAL ($n) placeholders
+ * starting at `startIndex`, plus the ordered param values. Groups texts by weight
+ * category and emits one setweight() call per non-empty group. Positional (not
+ * named) params so the expression can be spliced into a raw parameterized
+ * `INSERT ... ON CONFLICT` upsert.
  */
-function buildWeightedVectorSql(texts: WeightedText[]): {
+function buildWeightedVectorSql(
+  texts: WeightedText[],
+  startIndex: number,
+): {
   sql: string;
-  params: Record<string, string>;
+  params: string[];
 } {
   // Group texts by weight category
   const weightGroups: Record<TsVectorWeight, string[]> = { A: [], B: [], C: [], D: [] };
@@ -50,14 +56,15 @@ function buildWeightedVectorSql(texts: WeightedText[]): {
 
   // Build SQL parts for each non-empty weight group
   const sqlParts: string[] = [];
-  const params: Record<string, string> = {};
+  const params: string[] = [];
+  let paramIndex = startIndex;
 
   for (const weight of ['A', 'B', 'C', 'D'] as TsVectorWeight[]) {
     const groupTexts = weightGroups[weight];
     if (groupTexts.length > 0) {
-      const paramName = `searchText${weight}`;
-      sqlParts.push(`setweight(to_tsvector('english', :${paramName}), '${weight}')`);
-      params[paramName] = groupTexts.join(' ');
+      sqlParts.push(`setweight(to_tsvector('english', $${paramIndex}), '${weight}')`);
+      params.push(groupTexts.join(' '));
+      paramIndex += 1;
     }
   }
 
@@ -75,75 +82,45 @@ export class VectorService {
   ) {}
 
   async upsert(context: UserServiceContext, data: UpsertVectorDto): Promise<Vector | null> {
-    const { sql: vectorSql, params: vectorParams } = buildWeightedVectorSql(data.searchableText);
+    // Single-statement upsert on the (entity_type, entity_id) unique key. The
+    // weighted tsvector is computed inline in the INSERT and copied via
+    // EXCLUDED.vector on conflict. Replaces the previous SELECT-then-
+    // INSERT/UPDATE-then-SELECT wrapped in an explicit transaction — the per-row
+    // cost that left the search-index queue >95% undrained.
+    //
+    // Positional params: $1 id, $2 entity_type, $3 entity_id, $4..$(3+k) the k
+    // tsvector weight groups, then user_id last.
+    const { sql: vectorSql, params: vectorParams } = buildWeightedVectorSql(data.searchableText, 4);
+    const userIdIndex = 4 + vectorParams.length;
 
-    return this.vectorRepo.manager.transaction(async (manager) => {
-      const repo = manager.getRepository(VectorEntity);
+    const rows: Array<{
+      id: string;
+      entity_type: string;
+      entity_id: string;
+      user_id: string;
+      created_at: Date;
+      updated_at: Date;
+    }> = await this.vectorRepo.query(
+      `INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)
+       VALUES ($1, $2, $3, ${vectorSql}, $${userIdIndex})
+       ON CONFLICT (entity_type, entity_id)
+       DO UPDATE SET vector = EXCLUDED.vector, updated_at = now()
+       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at`,
+      [uuidv7(), data.entityType, data.entityId, ...vectorParams, context.userId],
+    );
 
-      const existing = await repo.findOne({
-        where: {
-          entityType: data.entityType,
-          entityId: data.entityId,
-          userId: context.userId,
-        },
-      });
+    const row = rows[0];
 
-      if (existing == null) {
-        const id = uuidv7();
-
-        let queryBuilder = repo
-          .createQueryBuilder()
-          .insert()
-          .into(VectorEntity)
-          .values({
-            id: id,
-            entityType: data.entityType,
-            entityId: data.entityId,
-            vector: () => vectorSql,
-            userId: context.userId,
-          });
-
-        // Set all weight parameters
-        for (const [paramName, paramValue] of Object.entries(vectorParams)) {
-          queryBuilder = queryBuilder.setParameter(paramName, paramValue);
+    return row
+      ? {
+          id: row.id,
+          entityType: row.entity_type,
+          entityId: row.entity_id,
+          userId: row.user_id,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
         }
-
-        await queryBuilder.returning('*').execute();
-
-        const entity = await repo.findOne({
-          where: {
-            id,
-          },
-        });
-
-        return entity ? VectorEntity.toEgressType(entity) : null;
-      }
-
-      let queryBuilder = repo
-        .createQueryBuilder()
-        .update(VectorEntity)
-        .set({
-          vector: () => vectorSql,
-        })
-        .where('id = :id', {
-          id: existing.id,
-        });
-
-      // Set all weight parameters
-      for (const [paramName, paramValue] of Object.entries(vectorParams)) {
-        queryBuilder = queryBuilder.setParameter(paramName, paramValue);
-      }
-
-      await queryBuilder.returning('*').execute();
-
-      const entity = await repo.findOne({
-        where: {
-          id: existing.id,
-        },
-      });
-
-      return entity ? VectorEntity.toEgressType(entity) : null;
-    });
+      : null;
   }
 
   async remove(context: ServiceContext, data: RemoveVectorDto): Promise<boolean> {

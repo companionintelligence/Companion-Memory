@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 
-import { Controller, Get, HttpCode, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import parseDuration from 'parse-duration';
 import { Agent, fetch as undiciFetch } from 'undici';
@@ -13,10 +13,53 @@ import { UserService } from '@ci/domains/user';
 
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import {
+  OIDC_ORIGIN_BOUNCE_PARAM,
+  type OidcCallbackRequestOrigin,
+  resolveOidcCallbackUrl,
+  resolveOidcOriginBounce,
+} from '../utils/oidcCallbackUrl';
+import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
 
 const COOKIE_MAX_AGE = parseDuration(config.auth.jwt.refreshTokenExpiration) ?? 0;
 const STATE_COOKIE = 'oidc_state';
 const PKCE_COOKIE = 'oidc_pkce';
+// Carries the post-login destination (e.g. a /shared/<token> deep link) across
+// the full-page OIDC round-trip, which discards the SPA's in-memory router state.
+const REDIRECT_COOKIE = 'oidc_redirect';
+// Holds the signed signup-intent token between the callback (first-time sign-in,
+// no account yet) and the "create account?" confirmation step.
+const SIGNUP_INTENT_COOKIE = 'oidc_signup_intent';
+const SIGNUP_INTENT_MAX_AGE = 10 * 60 * 1000;
+
+/**
+ * Validate a post-login redirect target — an open-redirect guard. Returns the
+ * value only when it is a safe SAME-ORIGIN relative path: a single leading '/',
+ * never '//' (protocol-relative), no backslashes or control characters that a
+ * browser might normalise into an origin change, and no scheme. Anything else
+ * yields null, so the caller falls back to the home page.
+ */
+export function safeRelativePath(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) {
+    return null;
+  }
+
+  if (!value.startsWith('/') || value.startsWith('//')) {
+    return null;
+  }
+
+  // Reject backslash (0x5c) and control characters (incl. tab/newline) that a
+  // browser might normalise into an origin change, e.g. "/" + backslash + host.
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+
+    if (code < 0x20 || code === 0x5c || code === 0x7f) {
+      return null;
+    }
+  }
+
+  return value;
+}
 
 // Allow self-signed certificates when the OIDC issuer is on localhost (dev only).
 // Short keepAlive prevents stale connections to Wrangler's dev server from hanging.
@@ -58,15 +101,27 @@ export class OidcController {
   }
 
   /**
-   * Derive the callback URL from the current request's origin.
-   * This removes the need for a static OIDC_CALLBACK_URL env var —
-   * the callback is always relative to wherever CI-Server is running.
+   * Resolve the OIDC callback URL.
+   *
+   * Prefers the app's public base URL (CI-Hub injects it as APP_BASE_URL →
+   * config.auth.oidc.publicBaseUrl) so the redirect_uri is the app's stable
+   * public origin. Falls back to the inbound request's origin for local/dev
+   * installs without a public base URL. Building it from the request host alone
+   * breaks when the app is reached at its local *.localhost route, since the
+   * resulting localhost callback is unreachable for CI-Portal.
    */
   private getCallbackUrl(req: Request) {
-    const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-    const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || 'localhost';
+    return resolveOidcCallbackUrl(this.requestOrigin(req), config.auth.oidc.publicBaseUrl);
+  }
 
-    return `${proto}://${host}/api/authenticate/oidc/callback`;
+  /** The origin the browser used to reach this app, honouring the reverse proxy. */
+  private requestOrigin(req: Request): OidcCallbackRequestOrigin {
+    return {
+      forwardedProto: req.headers['x-forwarded-proto'],
+      forwardedHost: req.headers['x-forwarded-host'],
+      host: req.headers.host,
+      secure: req.secure,
+    };
   }
 
   /**
@@ -74,8 +129,8 @@ export class OidcController {
    */
   @Get()
   @HttpCode(302)
-  initiate(@Req() req: Request, @Res() res: Response) {
-    const { issuerUrl } = config.auth.oidc;
+  initiate(@Query('redirect') redirectParam: string | undefined, @Req() req: Request, @Res() res: Response) {
+    const { issuerUrl, publicBaseUrl } = config.auth.oidc;
 
     if (!issuerUrl) {
       // Redirect to the login page with an error rather than dead-ending the
@@ -84,6 +139,26 @@ export class OidcController {
       this.logger.error('OIDC initiate blocked: OIDC_ISSUER_URL is not configured');
 
       return res.redirect('/login?error=oidc_not_configured');
+    }
+
+    // Remember a safe same-origin destination (e.g. a /shared/<token> deep link,
+    // or the /api/connect consent page) so the callback can return there.
+    const redirect = safeRelativePath(redirectParam);
+
+    // The cookies below are set on the origin the browser used, but redirect_uri
+    // is always the public base URL. If those differ, the callback lands on an
+    // origin holding neither cookie and sign-in fails with `invalid_state`, so
+    // move onto the public origin before minting any of them.
+    const bounceUrl = resolveOidcOriginBounce(
+      this.requestOrigin(req),
+      publicBaseUrl,
+      redirect ?? undefined,
+      // Already bounced once — proceed here rather than risk a redirect loop.
+      req.query[OIDC_ORIGIN_BOUNCE_PARAM] !== undefined,
+    );
+
+    if (bounceUrl) {
+      return res.redirect(bounceUrl);
     }
 
     const callbackUrl = this.getCallbackUrl(req);
@@ -105,6 +180,20 @@ export class OidcController {
       path: '/',
       maxAge: 10 * 60 * 1000,
     });
+
+    // Clear any stale value when there is no redirect, so a plain sign-in never
+    // inherits a previous attempt's destination.
+    if (redirect) {
+      res.cookie(REDIRECT_COOKIE, redirect, {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 10 * 60 * 1000,
+      });
+    } else {
+      res.clearCookie(REDIRECT_COOKIE, { path: '/' });
+    }
 
     const authorizeUrl = new URL('/api/auth/oauth2/authorize', issuerUrl);
 
@@ -234,62 +323,164 @@ export class OidcController {
         return res.redirect('/login?error=no_email');
       }
 
-      // Find existing user or create a new one
-      let user = await this.userService.findByEmail(userInfo.email);
+      // Existing account for this Portal identity → sign in.
+      const user = await this.userService.findByEmail(userInfo.email);
 
-      if (!user) {
-        // Portal SSO must not bypass the signup-code gate: when codes are
-        // required, only users that already exist on this server may sign in.
-        const isSignupCodeRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
-
-        if (isSignupCodeRequired) {
-          this.logger.warn(
-            `OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`,
-          );
-
-          return res.redirect('/login?error=signup_code_required');
-        }
-
-        // Auto-create account for Portal-authenticated users.
-        // Generate a random password since they'll authenticate via OIDC.
-        user = await this.userService.create(
-          { userId: SYSTEM_USER },
-          {
-            name: userInfo.name || userInfo.email.split('@')[0],
-            email: userInfo.email,
-            password: randomBytes(32).toString('hex'),
-          },
-        );
+      if (user) {
+        return this.finishLogin(req, res, user);
       }
 
-      // Issue session tokens (same flow as local login)
-      const sessionToken = await this.authService.issueSessionToken(
-        user.id,
-        this.authService.getSessionMetadata(req),
+      // No account yet. The signup-code gate still applies: when codes are
+      // required, only users that already exist on this server may sign in.
+      const isSignupCodeRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
+
+      if (isSignupCodeRequired) {
+        this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
+
+        return res.redirect('/login?error=signup_code_required');
+      }
+
+      // First-time sign-in: do NOT create the account silently. Stash the
+      // OIDC-verified identity in a signed, short-lived cookie and send the user
+      // to the "create account?" confirmation (GET/POST confirm-account below).
+      // REDIRECT_COOKIE is left intact so the confirm POST can honour the
+      // original destination.
+      res.cookie(
+        SIGNUP_INTENT_COOKIE,
+        this.authService.issueSignupIntentToken(userInfo.email, userInfo.name),
+        {
+          httpOnly: true,
+          secure: req.secure,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: SIGNUP_INTENT_MAX_AGE,
+        },
       );
 
-      const csrfToken = this.csrfService.generateToken();
-
-      res.cookie(config.auth.cookies.sessionTokenName, sessionToken, {
-        httpOnly: true,
-        secure: req.secure,
-        sameSite: 'lax',
-        path: '/',
-        maxAge: COOKIE_MAX_AGE,
-      });
-
-      res.cookie(config.auth.cookies.csrfTokenName, csrfToken, {
-        httpOnly: false,
-        secure: req.secure,
-        sameSite: 'strict',
-        path: '/',
-      });
-
-      return res.redirect('/');
+      return res.redirect('/api/authenticate/oidc/confirm-account');
     } catch (err) {
       this.logger.error('OIDC callback error', err instanceof Error ? err.stack : String(err));
 
       return res.redirect('/login?error=oidc_failed');
     }
+  }
+
+  /**
+   * First-time sign-in confirmation page. Reads the signed signup-intent cookie
+   * (set by the callback) and asks the user to confirm creating an account. No
+   * JavaScript (gateway CSP); "Create account" is a same-origin form POST.
+   */
+  @Get('confirm-account')
+  async confirmAccountPage(@Req() req: Request, @Res() res: Response): Promise<void> {
+    let identity: { email: string; name?: string };
+
+    try {
+      identity = this.authService.verifySignupIntentToken(req.cookies?.[SIGNUP_INTENT_COOKIE]);
+    } catch {
+      res.redirect('/login?error=signup_expired');
+
+      return;
+    }
+
+    // CSRF cookie for the confirm POST (double-submit): same value is embedded
+    // in the form's hidden field.
+    const csrfToken = this.csrfService.generateToken();
+    res.cookie(config.auth.cookies.csrfTokenName, csrfToken, {
+      httpOnly: false,
+      secure: req.secure,
+      sameSite: 'strict',
+      path: '/',
+    });
+
+    const cspNonce = randomBytes(16).toString('base64');
+
+    res
+      .type('html')
+      .header(
+        'Content-Security-Policy',
+        `default-src 'none'; style-src 'nonce-${cspNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+      )
+      .header('X-Frame-Options', 'DENY')
+      .send(
+        renderSignupConfirmPage({ email: identity.email, csrfToken, cancelUrl: '/login', nonce: cspNonce }),
+      );
+  }
+
+  /**
+   * Create the account after the user confirms. Authorised by the signed
+   * signup-intent cookie (proves the email came from a verified Portal sign-in)
+   * and CSRF-guarded. Then signs the user in and returns to their destination.
+   */
+  @Post('confirm-account')
+  @HttpCode(302)
+  async confirmAccount(
+    @Body() body: { csrf?: string } | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    let identity: { email: string; name?: string };
+
+    try {
+      identity = this.authService.verifySignupIntentToken(req.cookies?.[SIGNUP_INTENT_COOKIE]);
+    } catch {
+      res.redirect('/login?error=signup_expired');
+
+      return;
+    }
+
+    // Signed double-submit CSRF: throws ForbiddenException (403) on mismatch.
+    this.csrfService.validateToken(req.cookies?.[config.auth.cookies.csrfTokenName], body?.csrf);
+
+    // Create only if it doesn't already exist (guards a double-submit / a
+    // concurrent tab that already confirmed).
+    const user =
+      (await this.userService.findByEmail(identity.email)) ??
+      (await this.userService.create(
+        { userId: SYSTEM_USER },
+        {
+          name: identity.name || identity.email.split('@')[0],
+          email: identity.email,
+          // Random password — the account authenticates via OIDC.
+          password: randomBytes(32).toString('hex'),
+        },
+      ));
+
+    res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
+
+    await this.finishLogin(req, res, user);
+  }
+
+  /**
+   * Issue the session + CSRF cookies (same as local login) and redirect to the
+   * stored post-login destination. Shared by the existing-user callback path and
+   * the confirm-account POST.
+   */
+  private async finishLogin(req: Request, res: Response, user: { id: string }): Promise<void> {
+    const sessionToken = await this.authService.issueSessionToken(
+      user.id,
+      this.authService.getSessionMetadata(req),
+    );
+
+    res.cookie(config.auth.cookies.sessionTokenName, sessionToken, {
+      httpOnly: true,
+      secure: req.secure,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: COOKIE_MAX_AGE,
+    });
+
+    res.cookie(config.auth.cookies.csrfTokenName, this.csrfService.generateToken(), {
+      httpOnly: false,
+      secure: req.secure,
+      sameSite: 'strict',
+      path: '/',
+    });
+
+    // Return to the deep link the user was headed for before being bounced to
+    // login (re-validated on read), then clear the one-shot cookie.
+    const storedRedirect = safeRelativePath(req.cookies?.[REDIRECT_COOKIE]);
+    res.clearCookie(REDIRECT_COOKIE, { path: '/' });
+
+    res.redirect(storedRedirect ?? '/');
   }
 }

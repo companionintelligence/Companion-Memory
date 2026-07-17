@@ -1,129 +1,77 @@
-# Bulk ingest runbook (issues #11, #12, #15)
+# Bulk ingest runbook
 
-High-throughput load path for the importer (CI-Import-Tools), the COPY-backed
-sibling of the GraphQL batch mutations. Use it for very large loads
-(~1M timeline rows) where per-mutation GraphQL overhead and the JSON body limit
-make the GraphQL path slow / 413-prone.
+High-throughput load path for the importer (CI-Import-Tools) and any other very large
+(~1M-row) historical load. Companion to the
+[ingest reset runbook](INGEST_RESET_RUNBOOK.md); schema background in
+[docs/architecture/Database.md](../../../../../docs/architecture/Database.md).
 
-This is a tested **vertical slice**: `communications` and `events`.
-`inventory` and `browser_activity` generalize by adding one `BulkTableSpec`
-(see `src/domains/memory/services/bulkTableSpecs.ts`).
-
----
-
-## 1. HTTP contract (#11)
-
-```
-POST /v1/bulk/communications
-POST /v1/bulk/events
-Content-Type: application/x-ndjson          # REQUIRED — see note
-Authorization: ApiKey <key>                 # or: Bearer <jwt>
-```
-
-- **Auth**: `JwtOrApiKeyAuthGuard` — the same guard `/v1/events` (unified
-  capture ingest) and `/api/maintenance/*` use. Reuse an existing API key.
-- **Why `application/x-ndjson` matters**: `BodyParserMiddleware` only buffers
-  `application/json`. NDJSON sails past it un-buffered, so the body is bounded
-  by time, not the 100 kb JSON limit that 413'd. Do **not** send
-  `application/json`.
-- **Body**: newline-delimited JSON — one record object per line. Blank lines
-  are tolerated. Send it as a stream (chunked) for best throughput; there is no
-  fixed per-request row cap, but ~10k–50k rows/request keeps memory and the
-  per-request transaction bounded.
-
-### Response `200`
-
-```jsonc
-{
-  "received": 50000,   // non-blank lines read
-  "inserted": 49873,   // rows actually written (RETURNING count)
-  "deduped":  120,     // rows skipped by ON CONFLICT (already present)
-  "rejected": [        // per-line parse/validation failures; rest still loaded
-    { "line": 41, "reason": "invalid JSON" },
-    { "line": 88, "reason": "Invalid enum value..." }
-  ]
-}
-```
-
-`received === inserted + deduped + rejected.length`.
-
-### Record shapes
-
-`communications` (one per line):
-
-```jsonc
-{
-  "time": "2026-01-02T03:04:05Z",  // ISO-8601 or epoch millis. Required.
-  "communication_type": "email",    // email|sms|call|chat|video_call|voice_note|post
-  "direction": "inbound",           // inbound|outbound|internal|async|ongoing
-  "content": "message body",         // required
-  "subject": "…", "preview": "…", "thread_id": "…",
-  "category": "…", "connection_id": "…",
-  // provenance triple — see idempotency below
-  "source_type": "import", "source_system": "gmail", "source_id": "msg-123"
-}
-```
-
-`events` (one per line):
-
-```jsonc
-{
-  "title": "Standup",                  // required
-  "start_time": "2026-01-02T09:00:00Z",// ISO-8601 or epoch millis. Required.
-  "end_time": "2026-01-02T09:15:00Z",  // optional
-  "description": "…", "event_type": "meeting", "category": "…",
-  "location_name": "…", "confidence_score": 0.9,
-  "source_type": "import", "source_system": "gcal", "source_id": "evt-123"
-}
-```
-
-`curl` example:
-
-```bash
-curl -sS -X POST https://ci-server.localhost/v1/bulk/communications \
-  -H "Authorization: ApiKey $CI_API_KEY" \
-  -H "Content-Type: application/x-ndjson" \
-  --data-binary @communications.ndjson
-```
+> **History:** an NDJSON→COPY sibling path (`POST /v1/bulk/communications|events`) existed
+> briefly and was **removed** in #1552 (`86ab0e2a`) — the importer never used it, and the
+> GraphQL list mutations write straight to the final tables with the same idempotency.
+> If you find references to `/v1/bulk/*`, they are stale.
 
 ---
 
-## 2. Idempotency + event emission (preserved exactly)
+## 1. The write path: GraphQL bulk mutations
 
-**Idempotency** is identical to the GraphQL path. The fold is a set-based
-`INSERT … SELECT … FROM <temp staging> ON CONFLICT (<triple>)
-WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, targeting the SAME
-partial unique indexes:
+All bulk loads go through the **GraphQL list mutations** — `createEvents`,
+`createCommunications`, `createContents`, `createInventoryItems`,
+`createBrowserActivities`, plus `bulkIngestGraph` / `bulkIngestItemRelationships` for the
+graph. Full contract (shapes, arbiters, error semantics):
+[docs/api/graphql.md §4.7–4.9](../../../../../docs/api/graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed).
 
-| Destination          | Conflict target (partial unique index)                                                          |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `ci.communications`  | `communications_source_triple_uniq` = `(user_id, time, source_type, source_system, source_id)`  |
-| `ci.events`          | `events_source_triple_uniq` = `(source_type, source_system, source_id)`                         |
+The load-relevant properties:
 
-Both indexes are partial on `source_id IS NOT NULL`. Rows **without** a
-`source_id` always insert (no dedupe key), matching the per-row services. A full
-re-sync of the same source rows is a no-op (counted as `deduped`).
-The communications index includes the hypertable partition columns
-(`user_id`, `time`) because every UNIQUE index on a TimescaleDB hypertable must.
+- **One round-trip carries an array** (`mutation(input: [CreateXInput!]!)`); the `/graphql`
+  route has a **10 MB** body limit (`common/middleware/BodyParserMiddleware.ts`) — size
+  batches to stay under it (the importer defaults to 200 rows/request, tunable via
+  `CI_PUSH_BATCH_SIZE`, and splits on 413).
+- **Idempotent on the provenance triple** `(source_type, source_system, source_id)` via
+  set-based `INSERT … ON CONFLICT` against partial unique indexes
+  (`common/persistence/bulkUpsert.ts`). Re-pushing the same rows is a no-op; rows without a
+  `source_id` always insert. Communications dedups via the companion table
+  `ci.communications_source_dedup` (hypertable UNIQUE indexes must include `time`, so the
+  pure-triple invariant lives off-table) and **self-heals** selected source-derived columns
+  on re-sync (`INGEST_REFRESH_COLUMNS`).
+- **Chunking is internal.** `bulkInsertIdempotent` splits any input into
+  bind-param-budget-sized sub-batches inside one transaction (#1667) — callers never hit
+  the 65535-parameter cliff and don't need their own sub-batching beyond the HTTP body
+  limit.
+- **Auth:** `JwtOrApiKeyAuthGuard` — same guard as `/v1/events` and `/api/maintenance/*`.
+  Reuse an existing API key (`x-api-key`).
 
-**Event emission**: for every row the INSERT actually wrote (i.e. each
-`RETURNING` id), the service emits the SAME signalling event the per-row service
-emits — `CommunicationCreatedEvent { communicationId }` /
-`EventCreatedEvent { eventId }`. Those drive the `search-index` queue listeners
-that generate the embedding (`ci_search.embeddings`) and tsvector
-(`ci_search.vectors`) so bulk-loaded rows are searchable just like API-created
-rows. Deduped rows emit **nothing** (no re-index on re-sync). Emission happens
-**after commit**, so a rolled-back row is never signalled.
+## 2. Deferred indexing — bulk rows are NOT searchable until the sweep
 
-> Throughput note: emitting N events still enqueues N search-index jobs. The
-> COPY makes the **write** fast; embedding generation remains the downstream
-> bottleneck and runs out-of-band on the `search-index` queue. For a 1M-row
-> load, defer/throttle the embedding workers as needed — the rows are persisted
-> and idempotent regardless.
+The bulk mutations pass `emitCreated:false`: **no per-row `*CreatedEvent` is emitted** (at
+~1M rows the per-row PGBoss fan-out was the dominant cost; #1552). Single-row `createX`
+mutations still emit, so interactive creates index live.
+
+Consequences for a bulk load:
+
+- Rows are persisted and idempotent immediately, but have **no `ci_search.embeddings` /
+  `ci_search.vectors` entries** until you run the post-load sweep:
+
+  ```
+  POST /api/maintenance/search-index/backfill
+  ```
+
+  which finds unindexed rows (LEFT JOIN) and re-emits their create events **onto the
+  `search-index` queue only**, driving the idempotent `*SearchIndexListener` upserts with
+  batched Ollama embedding.
+- Or run the whole enrichment chain in canonical order with
+  `POST /api/maintenance/orchestrate` (`extract_people → link_communications →
+  link_events → extract_graph → geocode → reverse_geocode → estimate_locations →
+  media_dimensions → search_index`; `ORCHESTRATE_STAGES` in
+  `src/domains/maintenance/services/MaintenanceOrchestratorService.ts`). Per-leg
+  endpoints and the full chain:
+  [docs/api/rest.md — maintenance](../../../../../docs/api/rest.md#maintenance--enrichment--apimaintenance--domainsmaintenancecontrollersmaintenancecontrollerts374).
+- Watch progress with `GET /api/maintenance/search-index/embedded-count` and
+  `GET /api/maintenance/ingest-status`. Drain speed is usually bounded by the queue worker
+  concurrency (`queues.concurrency` / `queues.fetchBatchSize` in config), not by Ollama.
 
 ---
 
-## 3. Index-deferral helper (#12) — OPT-IN, reversible
+## 3. Index-deferral helper — OPT-IN, reversible
 
 The classic bulk-load pattern: drop expensive secondary indexes before a very
 large load, recreate them after (one bulk build beats N row-by-row updates).
@@ -137,7 +85,7 @@ large load, recreate them after (one bulk build beats N row-by-row updates).
 #    ./.bulk-load-indexes.json so recreate is byte-for-byte reversible
 yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts drop
 
-# 2. run the import (POST /v1/bulk/...)
+# 2. run the import (GraphQL bulk mutations)
 
 # 3. after the load — recreate every dropped index from the saved defs
 yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts recreate
@@ -155,11 +103,12 @@ Pass the `dropped` array from `/drop` back into `/recreate`.
 ### What is dropped — and what is NOT
 
 Dropped (see `DEFERRABLE_INDEXES` in
-`src/domains/maintenance/services/IndexDeferralService.ts`):
+`src/domains/maintenance/services/IndexDeferralService.ts`; entries whose index no longer
+exists are skipped harmlessly):
 
-- FTS GIN tsvector indexes: `entities_fts_idx`, `facts_fts_idx`,
-  `document_chunks_fts_idx`, `messages_fts_idx`
-- pgvector HNSW: `messages_embedding_idx`
+- FTS GIN tsvector indexes: `entities_fts_idx`, `messages_fts_idx`
+- pgvector HNSW: `messages_embedding_idx`,
+  `ci_search.embeddings_embedding_hnsw_idx`
 - secondary btree/GIN on the bulk destinations:
   `communications_{thread,from,to,category,direction_type,device}_idx`,
   `events_{type_category,status,source}_idx`
@@ -167,20 +116,28 @@ Dropped (see `DEFERRABLE_INDEXES` in
 **Never dropped** (a hard guard refuses any unique/constraint index even if the
 list drifts):
 
-- `*_source_triple_uniq` — provenance idempotency (the `ON CONFLICT` target)
+- the provenance idempotency arbiters — `*_source_triple_uniq` and the
+  `ci.communications_source_dedup` PK (the `ON CONFLICT` targets)
 - primary keys / hypertable partition constraints
 - `ci_search.embeddings` & `ci_search.vectors` `UNIQUE (entity_type, entity_id)`
 
-> **pgvector finding**: there is currently **no** ANN (HNSW/IVFFlat) index on
-> `ci_search.embeddings.embedding` in the migrations — only the UNIQUE
-> constraint. So none is dropped today. When such an index is added it will be
-> the single most expensive index to maintain during load; add it to
-> `DEFERRABLE_INDEXES` at that point. `events_user_time_idx` (the main read
-> path) is intentionally kept — it is cheap and helps post-load queries.
+> **pgvector index**: the ANN index on `ci_search.embeddings.embedding` is
+> `embeddings_embedding_hnsw_idx` (HNSW, `vector_cosine_ops`; migration
+> `20260701120100_add_embeddings_hnsw_index.sql`). It is the single most
+> expensive index to maintain during a load, so it IS dropped/rebuilt by the
+> deferral helper. The companion `embeddings_user_id_idx` btree(user_id)
+> (`20260701120000`) is a cheap scalar btree and is intentionally NOT deferred.
+> `events_user_time_idx` (the main read path) is likewise kept — it is cheap and
+> helps post-load queries.
+>
+> **Appliance memory caveat**: HNSW build memory on ~400k × 768-dim rows is not
+> yet quantified on appliance hardware. On a live appliance with a large existing
+> corpus, build the index out-of-band with `CREATE INDEX CONCURRENTLY` and tune
+> `maintenance_work_mem` rather than letting a blocking migration run it inline.
 
 ---
 
-## 4. TimescaleDB-aware loading (#15)
+## 4. TimescaleDB-aware loading
 
 `ci.communications` is a hypertable partitioned on `(time, user_id)`, 4 space
 partitions, with **columnar compression after 30 days**
@@ -188,7 +145,7 @@ partitions, with **columnar compression after 30 days**
 
 Guidance for a very large historical load:
 
-1. **Insert in time order where possible.** Group/sort each NDJSON request by
+1. **Insert in time order where possible.** Group/sort each batch by
    `time` so a request lands in as few chunks as possible (less chunk
    thrashing, better cache locality). One request per day/week of source data
    is a good unit.
@@ -216,7 +173,7 @@ Guidance for a very large historical load:
 4. **Session knobs for the load window** (set per-session by the loader, not
    globally): larger `maintenance_work_mem` speeds the index **rebuild** in
    step 3 of the deferral helper; `SET synchronous_commit = off;` trades a tiny
-   durability window for throughput on the COPY transactions. Both are safe to
+   durability window for throughput on the load transactions. Both are safe to
    apply only during the load.
 
 Events (`ci.events`) is a **plain** table — none of the hypertable caveats
@@ -230,10 +187,17 @@ apply; the index-deferral helper alone is the relevant optimization there.
 # 0. (optional, deep historical) pause communications compression policy in psql
 # 1. drop deferrable secondary indexes
 yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts drop
-# 2. stream the data, time-ordered, ~10k–50k rows/request
-#    POST /v1/bulk/communications  and  /v1/bulk/events   (application/x-ndjson)
+# 2. push the data, time-ordered, via the GraphQL bulk mutations
+#    (createEvents / createCommunications / createContents / createInventoryItems /
+#     createBrowserActivities), then sync the graph (bulkIngestGraph +
+#     bulkIngestItemRelationships)
 # 3. recreate indexes
 yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts recreate
 # 4. (optional) re-add compression policy / recompress old chunks in psql
-# 5. let the search-index queue drain (embeddings/tsvectors for the new rows)
+# 5. run the enrichment chain: POST /api/maintenance/orchestrate
+#    (or at minimum POST /api/maintenance/search-index/backfill)
+# 6. poll GET /api/maintenance/ingest-status until the search-index queue drains
 ```
+
+To wipe everything and start over, see the
+[ingest reset runbook](INGEST_RESET_RUNBOOK.md).

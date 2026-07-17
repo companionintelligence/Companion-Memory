@@ -7,6 +7,10 @@
     "lint:fix": "oxlint --fix && eslint --fix --cache",
     "format": "prettier --write \"**/*.{ts,tsx,js,mjs}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs}\"",
+    "e2e": "playwright test --config playwright.e2e.config.ts",
+    "e2e:ui": "playwright test --config playwright.e2e.config.ts --ui",
+    "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
+    "e2e:report": "playwright show-report",
     "prepare": "husky"
   },
   "packageManager": "yarn@4.9.1",

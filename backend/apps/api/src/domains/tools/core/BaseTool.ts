@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
-import type { ToolSchema, ToolResult, ToolExecutionContext, ToolError } from './types';
+import type { IntentDefinition, ToolResult, ToolExecutionContext, ToolError } from './types';
 
 /**
  * Base class for all tools with built-in error handling and observability
@@ -14,9 +14,10 @@ export abstract class BaseTool<TInput = any, TOutput = any> {
   protected abstract logger: LoggerService;
 
   /**
-   * Tool schema definition - must be implemented by subclasses
+   * Tool schema definition - must be implemented by subclasses. Every tool is an intent, so the
+   * schema carries the curated intent metadata (domain, privacy, phrases) alongside parameters.
    */
-  abstract readonly schema: ToolSchema;
+  abstract readonly schema: IntentDefinition;
 
   /**
    * Core execution logic - must be implemented by subclasses

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Portal } from '@ci/common';
 import { Button, DropdownMenu, Separator, useToast } from '@ci/shadcn';
 import { NotebookPen, Upload, Camera, Plus, Cable, Search, User, Lightbulb, Package } from '@ci/shadcn/icons';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useUploadFile, useTriggerHbpe } from '@/api';
 import { AddPersonModal } from '@/components/modals/AddItemModal';
@@ -18,6 +18,11 @@ import { NavUser } from './NavUser';
 
 export function PrimaryNavigation() {
   const navigate = useNavigate();
+  // The global search box searches the VIEWER's own memory. On a shared-search
+  // page the body shows someone else's results, so the prominent search would be
+  // misleading (and navigate the viewer away). Hide it there; the page's own view
+  // tabs (nav-views) still render.
+  const isSharedView = useLocation().pathname.startsWith('/shared/');
   const { toast } = useToast();
   const [, { trigger }] = useTriggerHbpe();
 
@@ -65,25 +70,25 @@ export function PrimaryNavigation() {
 
   return (
     <>
-      <header className="flex flex-row items-center gap-3 p-2 px-4">
-        {/* Left: breadcrumb */}
-        <div className="flex shrink-0 flex-row items-center gap-2">
-          <Portal id="breadcrumbs" />
-        </div>
-
-        {/* Center: the unified search, stretched to fill the bar. Memory's advanced
-            filter toggle attaches here, followed by Memory's view switcher. */}
-        <div className="flex min-w-0 flex-1 items-stretch">
-          <div className="min-w-0 flex-1">
-            <GlobalSearchBox />
+      <header className="flex flex-row items-center gap-2 p-2 px-4">
+        {/* Left + center: breadcrumbs, Memory's view switcher, then the collapsed
+            search button right-aligned next to the actions cluster. All share one
+            relative region — the expanded search (GlobalSearchBox) overlays the
+            whole region, GitHub-style, instead of competing with them for width.
+            The right cluster stays visible. */}
+        <div className="relative flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex shrink-0 flex-row items-center gap-2">
+            <Portal id="breadcrumbs" />
           </div>
-          <Portal id="nav-tools" className="flex flex-row items-stretch empty:hidden" />
-          <Portal id="nav-views" className="ml-2 flex flex-row items-center empty:hidden" />
+          <Portal id="nav-views" className="flex flex-row items-center empty:hidden" />
+          <div className="flex min-w-0 flex-1 items-center justify-end">
+            {!isSharedView && <GlobalSearchBox />}
+          </div>
         </div>
 
-        {/* Right: page actions, tags, new, account */}
+        {/* Right: page actions, new, account (Tags lives in the account menu) */}
         <div className="flex shrink-0 flex-row items-center gap-2">
-          <Portal ref={actionsRef} id="actions" className="flex flex-row items-center" />
+          <Portal ref={actionsRef} id="actions" className="flex flex-row items-center empty:hidden" />
 
           {hasActions && <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />}
 

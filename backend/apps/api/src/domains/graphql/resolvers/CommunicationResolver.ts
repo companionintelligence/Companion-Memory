@@ -3,6 +3,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CommunicationService, CommunicationType as CommunicationTypeEnum } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
@@ -37,14 +38,17 @@ export class CommunicationResolver {
   ): Promise<CommunicationConnection> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.communicationService.findAll(serviceContext);
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.communicationService.findPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+    );
 
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('communication', entity.id),
-    });
-
-    const edges: CommunicationEdge[] = slice.map((entity) => {
+    const edges: CommunicationEdge[] = entities.map((entity) => {
       const node = CommunicationType.toType(entity);
 
       return {
@@ -52,6 +56,13 @@ export class CommunicationResolver {
         cursor: node.id,
       };
     });
+
+    const pageInfo = {
+      hasNextPage,
+      hasPreviousPage,
+      startCursor: edges.length > 0 ? edges[0].cursor : null,
+      endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+    };
 
     return {
       edges,
@@ -84,7 +95,8 @@ export class CommunicationResolver {
   @Mutation(() => [CommunicationType])
   async createCommunications(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateCommunicationInput] }) input: CreateCommunicationInput[],
+    @Args('input', { type: () => [CreateCommunicationInput] }, new MaxArraySizePipe())
+    input: CreateCommunicationInput[],
   ): Promise<CommunicationType[]> {
     const serviceContext = toServiceContext(context);
 

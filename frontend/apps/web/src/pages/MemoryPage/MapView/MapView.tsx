@@ -591,7 +591,7 @@ function MapTimelineConnector({
   );
 }
 
-export function DesktopMapView() {
+export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}) {
   const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
     useLocatedEntities();
   const rowElementsRef = useRef(new globalThis.Map<string, HTMLDivElement>());
@@ -639,7 +639,9 @@ export function DesktopMapView() {
         <SoftBlur />
       </Map.Panel>
 
-      <SearchAreaControl />
+      {/* "Search this area" writes ?bbox, which the shared viewer can't honour
+          (the server ignores viewer filters), so hide it in read-only mode. */}
+      {!readOnly && <SearchAreaControl />}
       <LoadMorePinsControl
         shown={located.length}
         hasNextPage={hasNextPage}
@@ -654,14 +656,14 @@ export function DesktopMapView() {
   );
 }
 
-export function MobileMapView() {
+export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {}) {
   const { located, routeLocations, setActiveEntity, hasNextPage, loadingMore, loadMore } =
     useLocatedEntities();
 
   return (
     <Map center={[37.7749, -122.4194]}>
       <Map.Controls position="top-right" />
-      <SearchAreaControl />
+      {!readOnly && <SearchAreaControl />}
       <LoadMorePinsControl
         shown={located.length}
         hasNextPage={hasNextPage}

@@ -3,6 +3,7 @@ import { Parent, Query, Mutation, ResolveField, Resolver, Args, ID } from '@nest
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MaxArraySizePipe } from '@ci/common/pipes';
 import { ItemService } from '@ci/domains/memory';
 
 import { ItemFileLoader } from '../loaders/ItemFileLoader';
@@ -114,7 +115,8 @@ export class ItemResolver {
   @Mutation(() => [ItemType])
   async createInventoryItems(
     @Context() context: RequestContext,
-    @Args('input', { type: () => [CreateInventoryInput] }) input: CreateInventoryInput[],
+    @Args('input', { type: () => [CreateInventoryInput] }, new MaxArraySizePipe())
+    input: CreateInventoryInput[],
   ): Promise<ItemType[]> {
     const serviceContext = toServiceContext(context);
 
@@ -132,6 +134,7 @@ export class ItemResolver {
         acquiredAt: item.acquiredAt,
         condition: item.condition,
         identifierCodes: item.identifierCodes,
+        metadata: item.metadata,
         sourceType: item.sourceType,
         sourceSystem: item.sourceSystem,
         sourceId: item.sourceId,

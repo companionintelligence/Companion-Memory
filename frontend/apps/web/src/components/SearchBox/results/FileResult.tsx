@@ -21,12 +21,10 @@ export function FileResult({ file }: Props) {
     return data.previewUrl ? `/static${data.previewUrl}` : undefined;
   }, [data.previewUrl]);
 
-  console.log('FileResult data:', data);
-
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2">
-        <img src={url} alt={data.filename || ''} className="w-6 h-6" />
+        <img src={url} alt={data.filename || ''} className="h-6 w-6" />
         <div className="font-medium">{data.filename}</div>
       </div>
       <div className="text-muted-foreground">File</div>

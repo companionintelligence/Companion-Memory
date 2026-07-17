@@ -85,7 +85,13 @@ export class ContentSearchIndexListener {
       return;
     }
 
-    if (content.user?.id == null) {
+    // Scope the index entry to the owner. Read the scalar user_id first: it is
+    // always present on a persisted row, whereas `user` is only set when the
+    // relation was eager-loaded. (Historically NULL user_id here silently dropped
+    // all importer content from the search index — see ContentEntity.userId.)
+    const ownerId = content.userId ?? content.user?.id ?? null;
+
+    if (ownerId == null) {
       this.logger.warn('Content has no associated user, cannot index');
 
       return;
@@ -100,7 +106,7 @@ export class ContentSearchIndexListener {
 
       await this.embeddingService.upsert(
         {
-          userId: content.user.id,
+          userId: ownerId,
         },
         {
           entityType: 'content',
@@ -119,7 +125,7 @@ export class ContentSearchIndexListener {
     } else {
       await this.vectorService.upsert(
         {
-          userId: content.user.id,
+          userId: ownerId,
         },
         {
           entityType: 'content',

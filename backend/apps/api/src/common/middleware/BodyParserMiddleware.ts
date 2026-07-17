@@ -20,6 +20,35 @@ const GRAPHQL_BODY_LIMIT = '10mb';
 const GRAPHQL_PATH = '/graphql';
 
 /**
+ * The `/v1/*` machine-ingest plane carries bulk payloads: `POST /v1/events`
+ * perception snapshots from CI-Applet (a single vizier baseline snapshot
+ * serializes to ~1MB+), and the batch ingest endpoints
+ * (`/v1/communications`, `/v1/contents`, `/v1/inventory`,
+ * `/v1/browser-activity`, `/v1/positions` — see BulkIngestController) which
+ * accept up to 10,000 records per request. All far over the 100kb default, so
+ * the whole `/v1` prefix gets the same 10mb limit as GraphQL. Like GraphQL,
+ * this is matched by path here rather than via @BodyLimit:
+ * BodyParserMiddleware is applied with `forRoutes('*')`, so it runs before
+ * routing and `req.route` (and thus per-route metadata) is undefined.
+ */
+const BULK_INGEST_BODY_LIMIT = '10mb';
+const BULK_INGEST_PREFIX = '/v1';
+
+/**
+ * NDJSON bulk streams (`Content-Type: application/x-ndjson`) on `/v1/*` are
+ * parsed INCREMENTALLY by the route handlers themselves (see
+ * domains/ingest/ndjson.ts): one record per line, unbounded stream, batched
+ * flushes. This middleware must therefore leave the raw request stream
+ * completely untouched — no buffering, no parsing, no size limit. The express
+ * json()/urlencoded() parsers below would already skip an NDJSON content type,
+ * but the bypass is explicit so a future parser addition (raw/text/etc.) can't
+ * silently start consuming the stream. Nest's default body parser is disabled
+ * globally (main.ts `bodyParser: false`), so skipping here guarantees the
+ * handler receives `req` with zero bytes consumed.
+ */
+const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
+
+/**
  * Middleware that dynamically applies JSON body size limits based on route metadata.
  * Uses the @BodyLimit decorator to determine the appropriate limit for each route.
  * Falls back to a default of 100kb if no limit is specified.
@@ -45,9 +74,20 @@ export class BodyParserMiddleware implements NestMiddleware {
     const routePath = (req.originalUrl || req.url || req.path).split('?')[0];
     const isGraphql =
       req.baseUrl === GRAPHQL_PATH || routePath === GRAPHQL_PATH || routePath.startsWith(`${GRAPHQL_PATH}/`);
+    const isBulkIngest = routePath === BULK_INGEST_PREFIX || routePath.startsWith(`${BULK_INGEST_PREFIX}/`);
 
-    // Use the specified limit, the GraphQL bulk-ingest limit, or default to 100kb.
-    const bodyLimit = limit || (isGraphql ? GRAPHQL_BODY_LIMIT : '100kb');
+    // NDJSON streaming bypass: hand the raw, unconsumed stream to the /v1
+    // route handler (see NDJSON_CONTENT_TYPE above).
+    const contentType = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+
+    if (isBulkIngest && contentType === NDJSON_CONTENT_TYPE) {
+      return next();
+    }
+
+    // Use the route's own limit, then the GraphQL / v1 bulk-ingest limits,
+    // else default to 100kb.
+    const bodyLimit =
+      limit || (isGraphql ? GRAPHQL_BODY_LIMIT : isBulkIngest ? BULK_INGEST_BODY_LIMIT : '100kb');
 
     // Chain both parsers so each checks the Content-Type header and only the
     // matching one actually parses the body. `next` is called exactly once at the end.

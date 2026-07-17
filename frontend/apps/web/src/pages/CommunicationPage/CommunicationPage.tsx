@@ -83,8 +83,10 @@ export function CommunicationPage() {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <CommunicationIcon />
+            {/* No subject (chat-style sources): the preview stands in as the
+                heading rather than a synthesized "<Type>" subject. */}
             <h1 className="text-2xl font-bold">
-              {communication.subject || renderTypeSubject(communication.type)}
+              {communication.subject || communication.preview || renderTypeSubject(communication.type)}
             </h1>
           </div>
           <Toggle
@@ -196,7 +198,7 @@ export function CommunicationPage() {
                 <Breadcrumb.Separator className="hidden md:block" />
                 <Breadcrumb.Item>
                   <Breadcrumb.Page>
-                    {communication.subject || renderTypeSubject(communication.type)}
+                    {communication.subject || communication.preview || renderTypeSubject(communication.type)}
                   </Breadcrumb.Page>
                 </Breadcrumb.Item>
               </>

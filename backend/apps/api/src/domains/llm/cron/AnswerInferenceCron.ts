@@ -32,7 +32,7 @@ export class AnswerInferenceCron {
 
     for (const [userId, questionIds] of unansweredQuestions) {
       for (const questionId of questionIds) {
-        this.eventService.send(Events.INFER_QUESTION_ANSWER, {
+        await this.eventService.send(Events.INFER_QUESTION_ANSWER, {
           ownerId: userId,
           questionId: questionId,
         });

@@ -113,6 +113,36 @@ export class TagService {
     return entity ? TagEntity.toEgressType(entity) : null;
   }
 
+  /**
+   * Substring-match the user's tag labels for search suggestions. Prefix
+   * matches rank ahead of mid-label matches, ties break alphabetically. Like
+   * findByLabel, this is a per-user vocabulary lookup so a non-system context
+   * is required.
+   */
+  async searchByLabel(context: UserServiceContext, query: string, limit = 5): Promise<Tag[]> {
+    const trimmed = query.trim().toLowerCase();
+
+    if (trimmed.length === 0) {
+      return [];
+    }
+
+    // Escape LIKE metacharacters so a literal % or _ in the query can't widen the match.
+    const escaped = trimmed.replace(/[\\%_]/g, '\\$&');
+
+    const entities = await this.tagRepository
+      .createQueryBuilder('t')
+      .where('t.user_id = :userId', { userId: context.userId })
+      .andWhere('t.deleted_at IS NULL')
+      .andWhere('t.label ILIKE :contains', { contains: `%${escaped}%` })
+      .orderBy('t.label ILIKE :prefix', 'DESC')
+      .addOrderBy('t.label', 'ASC')
+      .setParameter('prefix', `${escaped}%`)
+      .limit(limit)
+      .getMany();
+
+    return entities.map((entity) => TagEntity.toEgressType(entity));
+  }
+
   async update(context: ServiceContext, id: string, data: UpdateTagDto): Promise<Tag | null> {
     const label = this.validateLabel(data.label);
 
@@ -387,6 +417,37 @@ export class TagService {
     }));
 
     return mappedResults;
+  }
+
+  /**
+   * The user's most-used tags: each live tag with how many entities carry it,
+   * heaviest first. `entity_tag` is unique on (entity_type, entity_id, tag_id),
+   * so COUNT(*) per tag is exactly the number of distinct tagged entities.
+   * Ties break alphabetically so the ordering is stable across refreshes.
+   * Powers the stats page's "Entities by tag" breakdown.
+   */
+  async getTagUsageCounts(
+    context: UserServiceContext,
+    limit: number,
+  ): Promise<Array<{ label: string; count: number }>> {
+    const rows: Array<{ label: string; count: string }> = await this.dataSource
+      .getRepository(EntityTagEntity)
+      .createQueryBuilder('et')
+      .select('t.label', 'label')
+      .addSelect('COUNT(*)', 'count')
+      .innerJoin(TagEntity, 't', 't.id = et.tag_id')
+      .where('t.user_id = :userId', { userId: context.userId })
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('t.label')
+      .orderBy('count', 'DESC')
+      .addOrderBy('t.label', 'ASC')
+      .limit(limit)
+      .getRawMany();
+
+    return rows.map((row) => ({
+      label: row.label,
+      count: parseInt(row.count, 10),
+    }));
   }
 
   private validateLabel(label?: string): string {

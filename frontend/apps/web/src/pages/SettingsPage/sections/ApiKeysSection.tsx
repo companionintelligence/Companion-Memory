@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
+import { API_KEY_PROVENANCE_CONNECT } from '@ci/common/src/constants';
 import { Badge, Button, Calendar, Card, Dialog, Input, Label, Popover } from '@ci/shadcn';
-import { CalendarIcon, Check, ClipboardCopy, Pencil, Plus, Trash, X } from '@ci/shadcn/icons';
+import { CalendarIcon, Check, ClipboardCopy, KeyRound, Lock, Pencil, Plus, Trash, X } from '@ci/shadcn/icons';
 
 import { useAuth } from '@/hooks';
 
@@ -15,10 +16,26 @@ interface ApiKeyResponse {
   last_used_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Who owns the key's lifecycle: null = the user's own; 'connect' = CI-Hub's. */
+  managed_by: string | null;
 }
 
 interface CreateApiKeyResponse extends ApiKeyResponse {
   key: string;
+}
+
+// Companion Hub mints one key per connected app when you "Connect Memory" from
+// the Hub. These are lifecycle-owned by the Hub — it rotates and revokes them —
+// so the UI badges them and blocks renaming (a rename would orphan the Hub's
+// revoke and strand the key).
+//
+// Read the server's recorded provenance rather than re-deriving it from the name
+// and scopes. Those drift from the truth in both directions: a connect key can
+// hold an EMPTY scope set (the bulk importer's does), which the old scope check
+// missed — so the UI offered an Edit button the API then rejected — and a user's
+// own key named `app:...` was wrongly badged as the Hub's.
+function isHubManagedKey(key: { managed_by?: string | null }): boolean {
+  return key.managed_by === API_KEY_PROVENANCE_CONNECT;
 }
 
 export function ApiKeysSection() {
@@ -270,6 +287,28 @@ export function ApiKeysSection() {
                       </Badge>
                     )}
                   </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {isHubManagedKey(key) ? (
+                      <Badge
+                        variant="outline"
+                        className="border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400"
+                      >
+                        <Lock />
+                        Managed by Companion Hub
+                      </Badge>
+                    ) : key.scopes.length === 0 ? (
+                      <Badge variant="outline" className="text-xs">
+                        <KeyRound />
+                        Full access
+                      </Badge>
+                    ) : (
+                      key.scopes.map((scope) => (
+                        <Badge key={scope} variant="outline" className="text-xs">
+                          {scope}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                     <span>
                       Key: <code className="font-mono">{key.prefix}…</code>
@@ -280,7 +319,18 @@ export function ApiKeysSection() {
                   </div>
                 </div>
                 <div className="ml-4 flex items-center gap-1">
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(key)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => openEdit(key)}
+                    disabled={isHubManagedKey(key)}
+                    title={
+                      isHubManagedKey(key)
+                        ? 'Managed by Companion Hub — renaming would break the connection'
+                        : undefined
+                    }
+                  >
                     <Pencil className="h-4 w-4" />
                   </Button>
                   <Button
@@ -397,6 +447,13 @@ export function ApiKeysSection() {
               using this key will stop working. This action cannot be undone.
             </Dialog.Description>
           </Dialog.Header>
+          {deleteKey && isHubManagedKey(deleteKey) && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              This key is managed by Companion Hub for a connected app. Deleting it here will break that app's
+              memory connection — to disconnect cleanly, use <strong>Disconnect Memory</strong> on the app's
+              page in Hub instead.
+            </div>
+          )}
           <Dialog.Footer>
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
               Cancel

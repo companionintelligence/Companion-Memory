@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { OnEvent } from '@ci/domains/events';
-import { EventEntity, EventService } from '@ci/domains/memory';
+import { EventEntity, EventService, PlaceService } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent, type GeocodeBatchRequestPayload } from '@ci/domains/memory/events';
 
 import {
@@ -103,6 +103,7 @@ export class GeocodeBatchListener {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly geocodeService: GeocodeService,
     private readonly eventService: EventService,
+    private readonly placeService: PlaceService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GeocodeBatchListener.name);
@@ -146,11 +147,16 @@ export class GeocodeBatchListener {
           const outcome = await this.geocodeWithRetry(candidate.location_name, retry);
 
           if (outcome.status === 'OK' && outcome.point && outcome.confidence !== null) {
+            // PostGIS Point.coordinates is [lng, lat] (GeoJSON order).
+            const [lng, lat] = outcome.point.coordinates;
+            const place = await this.linkPlace(context, candidate.location_name, lat, lng);
+
             await this.eventService.update(context, candidate.event_id, {
               location_coordinates: outcome.point,
               // Inferred / coarse coords carry < 1.0 so HBPE/RAG don't treat
               // them as ground truth.
               confidence_score: outcome.confidence,
+              ...(place && { location_entity_id: place.id }),
             });
             // A coarse APPROXIMATE centroid (<= 0.4) — likely a non-address
             // label that slipped past the denylist resolving to a city center.
@@ -261,8 +267,13 @@ export class GeocodeBatchListener {
           );
 
           if (outcome.status === 'OK' && outcome.placeName) {
+            const lat = Number(candidate.lat);
+            const lng = Number(candidate.lng);
+            const place = await this.linkPlace(context, outcome.placeName, lat, lng);
+
             await this.eventService.update(context, candidate.event_id, {
               location_name: outcome.placeName,
+              ...(place && { location_entity_id: place.id }),
             });
             await this.tagLocationSource(context, candidate.event_id, 'reverse_geocoded');
             resolved++;
@@ -394,6 +405,34 @@ export class GeocodeBatchListener {
     query.orderBy('event.start_time', 'DESC').limit(opts.limit);
 
     return query.getRawMany<CandidateRow>();
+  }
+
+  /**
+   * Idempotent upsert of the {@link PlaceEntity} for a (name, lat, lng) tuple
+   * so the event can carry `location_entity_id` and "events at <place>" queries
+   * can traverse the graph. Returns null on any failure — the caller proceeds
+   * with the coordinate/name update so a transient Place-write error never
+   * blocks geocoding progress.
+   */
+  private async linkPlace(
+    context: UserServiceContext,
+    name: string,
+    lat: number,
+    lng: number,
+  ): Promise<{ id: string } | null> {
+    try {
+      return await this.placeService.findOrCreateForGeocode(context, { name, lat, lng });
+    } catch (error) {
+      this.logger.warn('Failed to find-or-create place for geocoded event', {
+        userId: context.userId,
+        name,
+        lat,
+        lng,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return null;
+    }
   }
 
   /**

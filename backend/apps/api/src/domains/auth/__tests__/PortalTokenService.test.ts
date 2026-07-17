@@ -11,7 +11,7 @@ jest.mock('@ci/configuration', () => {
           enabled: true,
           issuer: 'https://hub.test',
           jwksUri: 'https://hub.test/api/auth/jwks',
-          audience: 'ci-server,ci-import-tools',
+          audience: 'ci-server,ci-import-tools,ci-even',
         },
       },
     },
@@ -53,7 +53,7 @@ describe('PortalTokenService', () => {
       issuer: 'https://hub.test',
       // PORTAL_OIDC_AUDIENCE is a comma-separated list, split to an array so jose
       // accepts a token whose aud matches any first-party client.
-      audience: ['ci-server', 'ci-import-tools'],
+      audience: ['ci-server', 'ci-import-tools', 'ci-even'],
     });
   });
 

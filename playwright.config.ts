@@ -12,6 +12,10 @@ dotenv.config({
  */
 export default defineConfig({
   testDir: './tests',
+  // This config drives ONLY the external Checkly smoke check (it hits a deployed
+  // URL). Local full-stack E2E lives in tests/e2e/ and is driven by
+  // playwright.e2e.config.ts — restrict the match so those specs never run here.
+  testMatch: 'BetaOneLoginFlow.spec.ts',
   outputDir: './playwright-report',
   /* Run tests in files in parallel */
   fullyParallel: true,

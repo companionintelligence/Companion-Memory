@@ -3,7 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
-import { EntityIdentifierService, type IdentifierKey, normalizeIdentifier } from '@ci/domains/graph';
+import { classifyParticipant, EntityIdentifierService, type IdentifierKey } from '@ci/domains/graph';
 
 /** Default window width — one TimescaleDB-chunk-friendly slice per pass. */
 const DEFAULT_WINDOW_DAYS = 7;
@@ -199,11 +199,15 @@ export class CommunicationLinkBackfillService {
       return startTime <= endTime ? { start: startTime, end: endTime } : null;
     }
 
+    // The bounds MUST cover every row backfillWindow() will treat as a candidate,
+    // otherwise rows that only need to_entity_ids linked (from_entity_id already
+    // set) fall outside [min,max] and are silently skipped. Keep this predicate
+    // byte-identical to backfillWindow()'s candidate WHERE clause.
     const rows: Array<{ min_time: Date | null; max_time: Date | null }> = await this.dataSource.query(
       `SELECT MIN(time) AS min_time, MAX(time) AS max_time
          FROM ci.communications
         WHERE user_id = $1
-          AND from_entity_id IS NULL`,
+          AND (from_entity_id IS NULL OR to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)`,
       [userId],
     );
 
@@ -283,12 +287,12 @@ export class CommunicationLinkBackfillService {
       for (const row of candidates) {
         const meta = row.participants_metadata ?? {};
         if (row.from_entity_id == null) {
-          addKey(classify(readString(meta.from)));
+          addKey(classifyParticipant(readString(meta.from)));
         }
 
         if (row.to_entity_ids == null || row.to_entity_ids.length === 0) {
           for (const raw of readStringArray(meta.to)) {
-            addKey(classify(raw));
+            addKey(classifyParticipant(raw));
           }
         }
       }
@@ -296,7 +300,7 @@ export class CommunicationLinkBackfillService {
       const resolved = await this.entityIdentifierService.findEntityIdsByIdentifiers(userId, keys);
 
       const lookup = (raw: string | null): string | null => {
-        const key = classify(raw);
+        const key = classifyParticipant(raw);
         if (key == null) {
           return null;
         }
@@ -399,30 +403,6 @@ export class CommunicationLinkBackfillService {
 
     return { examined, fromLinked, toLinked };
   }
-}
-
-/**
- * Classify a raw participant string as an email or phone and normalize it with
- * the SAME shared rule the identifier index uses. Returns null for empty /
- * unclassifiable input. An '@' marks an email; otherwise it is a phone number.
- */
-function classify(raw: string | null): IdentifierKey | null {
-  if (raw == null) {
-    return null;
-  }
-
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const kind = trimmed.includes('@') ? 'email' : 'phone';
-  const valueNormalized = normalizeIdentifier(kind, trimmed);
-  if (valueNormalized == null) {
-    return null;
-  }
-
-  return { kind, valueNormalized };
 }
 
 function readString(value: unknown): string | null {

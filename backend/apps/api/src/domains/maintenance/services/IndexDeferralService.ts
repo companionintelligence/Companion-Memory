@@ -30,19 +30,32 @@ import { LoggerService } from '@ci/common/logging';
  *   - *_source_triple_uniq  → provenance idempotency (ON CONFLICT target)
  *   - *_pkey / PRIMARY KEY   → identity + hypertable partition constraints
  *   - ci_search.embeddings / ci_search.vectors UNIQUE (entity_type, entity_id)
- *   - There is currently NO pgvector ANN index on ci_search.embeddings in the
- *     migrations (only the UNIQUE constraint), so none is listed here. If/when
- *     an HNSW/IVFFlat index is added on ci_search.embeddings.embedding it
- *     belongs here — it is the single most expensive index to maintain at load.
+ *
+ * The pgvector HNSW index on ci_search.embeddings.embedding
+ * (`embeddings_embedding_hnsw_idx`, migration 20260701120100) IS listed below:
+ * it is the single most expensive index to maintain at load, so the bulk path
+ * drops and rebuilds it. The btree(user_id) index (embeddings_user_id_idx,
+ * 20260701120000) is deliberately NOT listed — a plain scalar btree is cheap to
+ * maintain incrementally, so there is no benefit to dropping it around a load.
  */
 export const DEFERRABLE_INDEXES: ReadonlyArray<{ schema: string; name: string; note: string }> = [
   // --- Full-text (GIN tsvector) — rebuilt cheaply in bulk -----------------
   { schema: 'ci', name: 'entities_fts_idx', note: 'GIN(search_vector) on ci.entities' },
-  { schema: 'ci', name: 'facts_fts_idx', note: 'GIN(fact_search_vector) on ci.facts' },
   { schema: 'ci', name: 'document_chunks_fts_idx', note: 'GIN(content_search_vector) on ci.document_chunks' },
   { schema: 'ci', name: 'messages_fts_idx', note: 'GIN(search_vector) on ci.messages' },
-  // --- pgvector ANN (HNSW) on messages ------------------------------------
-  { schema: 'ci', name: 'messages_embedding_idx', note: 'HNSW(message_embedding) on ci.messages' },
+  // NB: 'facts_fts_idx' (ci.facts table dropped) and 'messages_embedding_idx'
+  // (ci.messages.message_embedding column removed) were removed from this list —
+  // both no longer exist in the schema, so dropDeferredIndexes() would only ever
+  // no-op on them. Verified absent via pg_indexes / to_regclass('ci.facts').
+  // --- pgvector ANN (HNSW) on the search embeddings table -----------------
+  // The single most expensive index to maintain during a large load; the
+  // primary search read path (semantic/boosted/hybrid cosine). See migration
+  // 20260701120100_add_embeddings_hnsw_index.sql.
+  {
+    schema: 'ci_search',
+    name: 'embeddings_embedding_hnsw_idx',
+    note: 'HNSW(embedding vector_cosine_ops) on ci_search.embeddings',
+  },
   // --- Secondary btree/GIN on the bulk-ingest destinations ----------------
   { schema: 'ci', name: 'communications_thread_idx', note: 'btree(thread_id) on ci.communications' },
   { schema: 'ci', name: 'communications_from_idx', note: 'btree(from_entity_id) on ci.communications' },

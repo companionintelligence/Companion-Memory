@@ -66,12 +66,14 @@ export class ContentEntity {
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
 
-  // Raw FK column backing the `user` relation above. Exposed so the provenance
-  // unique index (userId, sourceType, sourceSystem, sourceId) and triple lookups
-  // can reference it directly. insert/update disabled — the `user` relation owns
-  // writes to user_id. Nullable in TS because the column is only populated when
-  // selected; toEgressType still derives userId from the loaded `user` relation.
-  @Column({ type: 'uuid', name: 'user_id', insert: false, update: false })
+  // Raw FK column backing the `user` relation above (same dual-mapping as
+  // EventEntity.userId). The owner is written by ContentService.create setting
+  // this scalar directly. It must stay insertable/updatable: when it was
+  // insert:false the relation's FK write was shadowed and user_id was persisted
+  // NULL on every insert, which silently broke every user_id-scoped read
+  // (search-index listener, idempotency dedupe, content exports). Nullable
+  // because the column maps to a nullable DB column.
+  @Column({ type: 'uuid', nullable: true, name: 'user_id' })
   userId!: string | null;
 
   @ManyToOne(() => EventEntity, { nullable: true })
@@ -98,7 +100,7 @@ export class ContentEntity {
       sourceType: entity.sourceType || null,
       sourceSystem: entity.sourceSystem || null,
       sourceId: entity.sourceId || null,
-      userId: entity.user?.id || null,
+      userId: entity.userId ?? entity.user?.id ?? null,
       eventId: entity.event?.id || null,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
       event: entity.event ? EventEntity.toEgressType(entity.event) : undefined,

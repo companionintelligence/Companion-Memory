@@ -2,7 +2,7 @@ import type { BaseSyntheticEvent } from 'react';
 import { useState } from 'react';
 
 import { Button, Card, Separator } from '@ci/shadcn';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 
 import { OidcButton } from '@/components/OidcButton';
 import { useAuth } from '@/hooks';
@@ -12,7 +12,13 @@ import { LoginForm, type LoginFormData } from './LoginForm';
 export function LoginPage() {
   const [, { login }] = useAuth();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const oidcError = searchParams.get('error');
+
+  // Where ProtectedRoute sent us from (e.g. a /shared/<token> deep link). The
+  // OIDC sign-in is a full-page navigation that discards router state, so carry
+  // the destination through as a query param the callback can return to.
+  const from = (location.state as { from?: string } | null)?.from;
   // CI Portal (OIDC) is the primary sign-in path. Email/password is kept behind
   // an opt-in toggle rather than shown as the default, so it isn't the first
   // thing users try where it isn't the configured method.
@@ -37,7 +43,7 @@ export function LoginPage() {
             <p className="text-destructive mb-4 text-center text-sm">Sign in failed. Please try again.</p>
           )}
 
-          <OidcButton label="Sign in with CI Portal" />
+          <OidcButton label="Sign in with Companion account" redirectTo={from} />
 
           {showPasswordForm ? (
             <>

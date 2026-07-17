@@ -17,13 +17,33 @@ interface EventData {
   name: string;
 }
 
+// Rows per pg-boss insert() call in sendMany(). Bounds the single INSERT's
+// parameter/row count so a multi-million-row backfill streams in fixed chunks
+// instead of one enormous statement.
+const PGBOSS_INSERT_CHUNK = 2000;
+
 @Injectable()
 export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
-  // Global in-flight job ceiling across all queues. Configurable (CI_QUEUE_CONCURRENCY)
-  // so the decoupled embedding/index workers can be scaled for bulk imports.
-  private semaphore = plimit(config.queues.concurrency);
+  // Global in-flight job ceiling across ALL queues (bounds total DB/Ollama load).
+  // Configurable (CI_QUEUE_CONCURRENCY) so the decoupled embedding/index workers
+  // can be scaled for bulk imports.
+  private globalSemaphore = plimit(config.queues.concurrency);
+
+  // Per-queue in-flight ceiling — one plimit per queue, created in onModuleInit.
+  // Sized BELOW the global ceiling (CI_QUEUE_PER_QUEUE_CONCURRENCY) so a burst of
+  // slow jobs on one queue can't take every global slot and starve another queue
+  // (the search-index backlog stall behind image-description/embedding jobs).
+  private readonly perQueueSemaphores = new Map<string, ReturnType<typeof plimit>>();
+
+  private readonly perQueueConcurrency = config.queues.perQueueConcurrency;
 
   private readonly fetchBatchSize = config.queues.fetchBatchSize;
+
+  // Shared dead-letter queue. Jobs that exhaust their retries are moved here
+  // (payload + failure output preserved) instead of vanishing when pgboss deletes
+  // failed jobs after deleteAfterHours — so a failure stays inspectable. Nothing
+  // works this queue, so entries accumulate; it carries a long retention.
+  private static readonly DEAD_LETTER_QUEUE = 'dead-letter';
 
   // Bulk-import escape hatch: send() fans an event out to EVERY registered queue
   // (each worker then filters by event name), so a large import enqueues ~Nqueues
@@ -104,10 +124,25 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
     this.logger.debug(`Discovered queues: ${Array.from(discoveredQueues).join(', ')}`);
 
-    // Create all discovered queues
+    // Create the shared dead-letter queue FIRST so the work queues can reference
+    // it. Long retention so exhausted-retry jobs stay inspectable; no worker
+    // consumes it (it is not a registered listener queue), so entries accumulate.
+    await this.boss.createQueue(PGBossEventService.DEAD_LETTER_QUEUE, {
+      name: PGBossEventService.DEAD_LETTER_QUEUE,
+      retentionDays: 30,
+    });
+
+    // Create all discovered queues, routing exhausted-retry jobs to the DLQ and
+    // giving each its own concurrency semaphore. createQueue is idempotent and
+    // won't update an existing queue's options, so updateQueue (a COALESCE merge)
+    // applies deadLetter to queues that already exist on a live DB too.
     for (const queue of discoveredQueues) {
-      await this.boss.createQueue(queue);
-      this.logger.debug(`Created queue: ${queue}`);
+      const options = { name: queue, deadLetter: PGBossEventService.DEAD_LETTER_QUEUE };
+
+      await this.boss.createQueue(queue, options);
+      await this.boss.updateQueue(queue, options);
+      this.perQueueSemaphores.set(queue, plimit(this.perQueueConcurrency));
+      this.logger.debug(`Created queue: ${queue} (deadLetter=${PGBossEventService.DEAD_LETTER_QUEUE})`);
     }
 
     try {
@@ -218,12 +253,74 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     return jobIds;
   }
 
+  async sendMany(
+    queue: string,
+    events: Array<{ name: string; data: Record<string, unknown> }>,
+  ): Promise<void> {
+    if (events.length === 0) {
+      return;
+    }
+
+    if (!this.getRegisteredQueues().has(queue)) {
+      this.logger.warn(`Requested queue ${queue} does not exist. ${events.length} events will not be sent.`);
+
+      return;
+    }
+
+    if (this.suppressedQueues.has(queue)) {
+      // Unlike send()'s per-row fan-out (where skipping suppressed queues is the
+      // whole point and logging would spam), sendMany is a deliberate bulk
+      // enqueue of ONE named queue — dropping it silently makes a backfill
+      // report success while enqueuing nothing. Warn loudly instead.
+      this.logger.warn(
+        `Queue ${queue} is suppressed via CI_QUEUE_SUPPRESS — dropping ${events.length} bulk-enqueued events. ` +
+          `If this is a post-import backfill, unset the suppression and re-run.`,
+      );
+
+      return;
+    }
+
+    // pg-boss insert() bulk-creates jobs in ONE INSERT per chunk, routing through
+    // pg-boss's own job schema (so partitioning/defaults are handled for us). This
+    // replaces N awaited boss.send() round trips — the difference between the
+    // search-index backfill returning in seconds vs. blocking the request for
+    // minutes while it enqueues ~1M rows. job.name is the queue; job.data mirrors
+    // send()'s resolvedData ({ ...event, name }) so executeJob + listeners consume
+    // it identically.
+    const jobs: PgBoss.JobInsert[] = events.map((event) => ({
+      name: queue,
+      data: { ...event.data, name: event.name },
+    }));
+
+    for (let i = 0; i < jobs.length; i += PGBOSS_INSERT_CHUNK) {
+      await this.boss.insert(jobs.slice(i, i + PGBOSS_INSERT_CHUNK));
+    }
+
+    this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);
+  }
+
   private async work(queueName: string): Promise<void> {
     this.running = true;
 
+    const perQueueSemaphore = this.perQueueSemaphores.get(queueName);
+
+    if (perQueueSemaphore == null) {
+      this.logger.error(`No per-queue semaphore for ${queueName}; worker will not start`);
+
+      return;
+    }
+
     while (this.running) {
-      const inFlightJobCount = this.semaphore.activeCount + this.semaphore.pendingCount;
-      const available = Math.max(this.semaphore.concurrency - inFlightJobCount, 0);
+      // Available slots are bounded by BOTH this queue's own ceiling and the
+      // global ceiling, so one queue can never consume more than its share of the
+      // global pool (no cross-queue starvation) nor exceed the total cap.
+      const perQueueInFlight = perQueueSemaphore.activeCount + perQueueSemaphore.pendingCount;
+      const perQueueAvailable = Math.max(perQueueSemaphore.concurrency - perQueueInFlight, 0);
+
+      const globalInFlight = this.globalSemaphore.activeCount + this.globalSemaphore.pendingCount;
+      const globalAvailable = Math.max(this.globalSemaphore.concurrency - globalInFlight, 0);
+
+      const available = Math.min(perQueueAvailable, globalAvailable);
 
       if (available === 0) {
         await new Promise((resolve) => setTimeout(resolve, this.backoffWhenFull));
@@ -242,17 +339,28 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       }
 
       for (const job of jobs) {
-        this.semaphore(async () => {
-          try {
-            await this.executeJob(queueName, job);
-            await this.boss.complete(queueName, job.id);
-          } catch (err) {
-            this.logger.error(
-              `Failed to complete job in queue ${queueName}`,
-              err instanceof Error ? err : new Error(String(err)),
-            );
-            await this.boss.fail(queueName, job.id);
-          }
+        // Hold a per-queue slot for the whole job, and a global slot for the work
+        // itself — so total in-flight respects both the per-queue and global caps.
+        perQueueSemaphore(async () => {
+          await this.globalSemaphore(async () => {
+            try {
+              await this.executeJob(queueName, job);
+              await this.boss.complete(queueName, job.id);
+            } catch (err) {
+              this.logger.error(
+                `Failed to complete job in queue ${queueName}`,
+                err instanceof Error ? err : new Error(String(err)),
+              );
+              // Persist the failure reason in the job's output so it survives in
+              // pgboss.job — without this arg the error is lost and a failed job
+              // is undiagnosable after the fact.
+              await this.boss.fail(queueName, job.id, {
+                message: err instanceof Error ? err.message : String(err),
+                stack: err instanceof Error ? err.stack : undefined,
+                failedAt: new Date().toISOString(),
+              });
+            }
+          });
         });
       }
     }
@@ -267,9 +375,23 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       this.logger.error(err instanceof Error ? err : new Error(String(err)));
     }
 
-    while (this.semaphore.activeCount + this.semaphore.pendingCount > 0) {
+    // Every in-flight job holds a per-queue slot for its whole lifetime (the
+    // global slot is nested inside), so draining all per-queue semaphores drains
+    // everything.
+    while (this.totalInFlightJobs() > 0) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+  }
+
+  /** Total jobs currently running or queued across every per-queue semaphore. */
+  private totalInFlightJobs(): number {
+    let count = 0;
+
+    for (const semaphore of this.perQueueSemaphores.values()) {
+      count += semaphore.activeCount + semaphore.pendingCount;
+    }
+
+    return count;
   }
 
   private async executeJob(queue: string, job: JobWithMetadata<EventData>): Promise<void> {

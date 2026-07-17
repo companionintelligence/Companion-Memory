@@ -5,7 +5,13 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { bulkInsertIdempotent } from '@ci/common/persistence';
+import {
+  bulkInsertIdempotent,
+  INGEST_REFRESH_COLUMNS,
+  keysetPaginate,
+  type KeysetPageArgs,
+  type KeysetPage,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -141,6 +147,9 @@ export class BrowserActivityService {
       scope: { user_id: context.userId },
       conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
       tripleColumns: ['source_type', 'source_system', 'source_id'],
+      // Centralized refresh contract — currently empty, so conflicts stay
+      // DO NOTHING find-or-return.
+      conflictUpdateColumns: INGEST_REFRESH_COLUMNS.browser_activity,
     });
 
     // Bulk ingest does NOT emit a per-row BrowserActivityCreatedEvent: the per-row
@@ -164,6 +173,26 @@ export class BrowserActivityService {
     });
 
     return results.map((entity) => BrowserActivityEntity.toEgressType(entity));
+  }
+
+  /**
+   * Keyset-paginated page for the GraphQL connection — ordered by (time, id)
+   * DESC over the (user_id, time) index. Reads one page (+1 sentinel) instead of
+   * the whole 330k-row table, and drops the eager `user` join the in-memory path
+   * carried (only user_id is needed downstream).
+   */
+  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<BrowserActivity>> {
+    const page = await keysetPaginate(this.browserActivityRepository, args, {
+      alias: 'browserActivity',
+      timeProp: 'time',
+      userIdProp: 'user_id',
+      userId: context.userId,
+    });
+
+    return {
+      ...page,
+      entities: page.entities.map((entity) => BrowserActivityEntity.toEgressType(entity)),
+    };
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(BrowserActivity | null)[]> {
