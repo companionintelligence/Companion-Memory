@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useCurrentUser } from './useCurrentUser';
 
-const h = vi.hoisted(() => ({ authToken: 'tok' as string | null }));
+const h = vi.hoisted(() => ({ authenticated: true }));
 
 vi.mock('./useAuth', () => ({
-  useAuth: () => [{ authToken: h.authToken, expired: false, loading: false, error: null }, {}],
+  useAuth: () => [
+    { authenticated: h.authenticated, expired: false, loading: false, error: null },
+    {},
+  ],
 }));
 
 vi.mock('@apollo/client', async (orig) => ({
@@ -18,7 +21,7 @@ vi.mock('@apollo/client', async (orig) => ({
 const mockedUseQuery = vi.mocked(useQuery);
 
 beforeEach(() => {
-  h.authToken = 'tok';
+  h.authenticated = true;
 });
 
 afterEach(() => mockedUseQuery.mockReset());
@@ -39,7 +42,7 @@ describe('useCurrentUser', () => {
   });
 
   it('skips the query when there is no auth token', () => {
-    h.authToken = null;
+    h.authenticated = false;
     mockedUseQuery.mockReturnValue({
       data: undefined,
       loading: false,
@@ -62,7 +65,7 @@ describe('useCurrentUser', () => {
 
     const { result } = renderHook(() => useCurrentUser());
 
-    // loading || (authToken && !data && !error) → true even though query loading is false.
+    // loading || (authenticated && !data && !error) → true even though query loading is false.
     expect(result.current.loading).toBe(true);
   });
 });
