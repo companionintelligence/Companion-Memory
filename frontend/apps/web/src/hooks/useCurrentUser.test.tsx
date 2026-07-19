@@ -7,10 +7,7 @@ import { useCurrentUser } from './useCurrentUser';
 const h = vi.hoisted(() => ({ authenticated: true }));
 
 vi.mock('./useAuth', () => ({
-  useAuth: () => [
-    { authenticated: h.authenticated, expired: false, loading: false, error: null },
-    {},
-  ],
+  useAuth: () => [{ authenticated: h.authenticated, expired: false, loading: false, error: null }, {}],
 }));
 
 vi.mock('@apollo/client', async (orig) => ({
