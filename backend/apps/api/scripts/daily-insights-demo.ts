@@ -53,15 +53,25 @@ function parseArgs(argv: string[]): Args {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--user') {user = argv[++i] ?? '';}
-    else if (arg === '--date') {date = argv[++i] ?? date;}
-    else if (arg === '--tz') {tz = argv[++i] ?? tz;}
-    else if (arg === '--window') {window = Number.parseInt(argv[++i] ?? '30', 10);}
-    else if (arg === '--ollama') {ollama = true;}
-    else if (arg.startsWith('--user=')) {user = arg.slice('--user='.length);}
-    else if (arg.startsWith('--date=')) {date = arg.slice('--date='.length);}
-    else if (arg.startsWith('--tz=')) {tz = arg.slice('--tz='.length);}
-    else if (arg.startsWith('--window=')) {window = Number.parseInt(arg.slice('--window='.length), 10);}
+    if (arg === '--user') {
+      user = argv[++i] ?? '';
+    } else if (arg === '--date') {
+      date = argv[++i] ?? date;
+    } else if (arg === '--tz') {
+      tz = argv[++i] ?? tz;
+    } else if (arg === '--window') {
+      window = Number.parseInt(argv[++i] ?? '30', 10);
+    } else if (arg === '--ollama') {
+      ollama = true;
+    } else if (arg.startsWith('--user=')) {
+      user = arg.slice('--user='.length);
+    } else if (arg.startsWith('--date=')) {
+      date = arg.slice('--date='.length);
+    } else if (arg.startsWith('--tz=')) {
+      tz = arg.slice('--tz='.length);
+    } else if (arg.startsWith('--window=')) {
+      window = Number.parseInt(arg.slice('--window='.length), 10);
+    }
   }
 
   if (!user) {
@@ -110,7 +120,9 @@ function makeOllamaGenerator(): TextGenerator {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model: 'gemma3:1b', prompt, stream: false }),
       });
-      if (!res.ok) {throw new Error(`ollama ${res.status}`);}
+      if (!res.ok) {
+        throw new Error(`ollama ${res.status}`);
+      }
 
       const data = (await res.json()) as { response?: string };
 

@@ -121,7 +121,9 @@ export interface RawDailyAggregates {
 }
 
 function num(value: unknown): number {
-  if (value === null || value === undefined) {return 0;}
+  if (value === null || value === undefined) {
+    return 0;
+  }
 
   const n = typeof value === 'number' ? value : Number(value);
 
@@ -129,7 +131,9 @@ function num(value: unknown): number {
 }
 
 function numOrNull(value: unknown): number | null {
-  if (value === null || value === undefined) {return null;}
+  if (value === null || value === undefined) {
+    return null;
+  }
 
   const n = typeof value === 'number' ? value : Number(value);
 
