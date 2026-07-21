@@ -17,6 +17,7 @@ import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
+const CapturePage = lazy(() => import('@/pages/CapturePage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
 const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
 const ConnectPage = lazy(() => import('@/pages/ConnectPage'));
@@ -150,6 +151,15 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <MemoryPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/capture"
+            element={
+              <ProtectedRoute>
+                <CapturePage />
               </ProtectedRoute>
             }
           />
