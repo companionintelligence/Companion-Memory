@@ -8,6 +8,7 @@ import { ChartNetwork, ChevronDown, Images, List, Map as MapIcon, type LucideIco
 import { useSearchParams, Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
+import { FileChunkModal } from '@/components/modals/FileChunkModal/FileChunkModal';
 import { AVAILABLE_ENTITY_TYPES, DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 
@@ -60,6 +61,12 @@ const VIEW_TABS: Array<{
 export default function DesktopMemoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [{ activeEntity }, { setActiveEntity }] = useEntityService();
+
+  // Document chunks open in their own dialog; every other entity uses the
+  // details sheet (EntityDetails has no FileChunkType branch).
+  const activeChunkEntity = activeEntity?.__typename === 'FileChunkType' ? activeEntity : null;
+  const activeSheetEntity =
+    activeEntity != null && activeEntity.__typename !== 'FileChunkType' ? activeEntity : null;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [searchId, setSearchId] = useState<string | null>(null);
 
@@ -356,11 +363,13 @@ export default function DesktopMemoryPage() {
         </div>
       </PageContent>
 
-      {activeEntity && (
+      {activeSheetEntity && (
         <Sheet open={detailsOpen} onOpenChange={toggleactiveEntity}>
-          <EntityDetails entity={activeEntity} />
+          <EntityDetails entity={activeSheetEntity} />
         </Sheet>
       )}
+
+      <FileChunkModal entity={activeChunkEntity} onClose={() => setActiveEntity(null)} />
     </>
   );
 }

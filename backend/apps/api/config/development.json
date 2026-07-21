@@ -11,6 +11,9 @@
     },
     "hbpe": {
       "host": "http://localhost:8002"
+    },
+    "parser": {
+      "host": "http://localhost:8003"
     }
   }
 }

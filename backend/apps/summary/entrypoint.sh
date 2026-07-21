@@ -66,15 +66,20 @@ export DATABASE_URL
 
 echo "Starting CI-Summary services..."
 
-# Start the FastAPI server in the background
-echo "Starting FastAPI API server on port 8001..."
+# Start the FastAPI summary API in the background
+echo "Starting FastAPI summary API server on port 8001..."
 uvicorn src.api:app --host 0.0.0.0 --port 8001 &
 API_PID=$!
 
-# Give the API a moment to start
+# Start the FastAPI parser API in the background
+echo "Starting FastAPI parser API server on port 8002..."
+uvicorn src.parser:app --host 0.0.0.0 --port 8002 &
+PARSER_PID=$!
+
+# Give the APIs a moment to start
 sleep 2
 
-# Start the Temporal worker service in the foreground
+# Start the Temporal worker
 echo "Starting Temporal worker..."
 python -m src.worker &
 WORKER_PID=$!
@@ -87,13 +92,13 @@ python -m src.startup &
 # Function to handle shutdown gracefully
 shutdown() {
     echo "Shutting down services..."
-    kill $API_PID $WORKER_PID 2>/dev/null || true
-    wait $API_PID $WORKER_PID 2>/dev/null || true
+    kill $API_PID $PARSER_PID $WORKER_PID 2>/dev/null || true
+    wait $API_PID $PARSER_PID $WORKER_PID 2>/dev/null || true
     exit 0
 }
 
 # Trap SIGTERM and SIGINT
 trap shutdown SIGTERM SIGINT
 
-# Wait for both processes
-wait $API_PID $WORKER_PID
+# Wait for all processes
+wait $API_PID $PARSER_PID $WORKER_PID

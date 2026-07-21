@@ -1,0 +1,1 @@
+export { AppletPairPage } from './AppletPairPage';

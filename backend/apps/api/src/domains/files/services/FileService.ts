@@ -224,7 +224,14 @@ export class FileService implements OnModuleInit {
    */
   async getEntitiesForFiles(
     context: ServiceContext,
-    options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
+    options: {
+      limit?: number;
+      startTime?: Date;
+      endTime?: Date;
+      afterTime?: Date;
+      afterId?: string;
+      order?: 'ASC' | 'DESC';
+    } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.fileRepository
       .createQueryBuilder('file')
@@ -240,7 +247,16 @@ export class FileService implements OnModuleInit {
       query = query.andWhere('file.created_at <= :endTime', { endTime: options.endTime });
     }
 
-    query = query.orderBy('file.created_at', options.order ?? 'DESC');
+    // Composite keyset: page strictly past (afterTime, afterId) in (created_at DESC, id DESC).
+    if (options.afterTime && options.afterId) {
+      query = query.andWhere(
+        '(file.created_at < :afterTime OR (file.created_at = :afterTime AND file.id < :afterId))',
+        { afterTime: options.afterTime, afterId: options.afterId },
+      );
+    }
+
+    // Deterministic tiebreak so same-timestamp rows page consistently.
+    query = query.orderBy('file.created_at', options.order ?? 'DESC').addOrderBy('file.id', 'DESC');
 
     if (options.limit) {
       query = query.limit(options.limit);

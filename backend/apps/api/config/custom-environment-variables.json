@@ -73,6 +73,9 @@
     },
     "hbpe": {
       "host": "HBPE_HOST"
+    },
+    "parser": {
+      "host": "PARSER_HOST"
     }
   },
   "embedding": {

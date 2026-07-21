@@ -36,6 +36,9 @@ services:
   summary-service:
     ports:
       - ${SUMMARY_HOST_PORT:-8001}:8001
+      # Document-parser FastAPI (src.parser). Host 8003 avoids the HBPE service's
+      # host 8002 mapping above; in-container it stays on 8002.
+      - ${PARSER_HOST_PORT:-8003}:8002
     # Pass the shared LLM config from .env (compose interpolates ${VAR} from the
     # root .env). Done explicitly rather than via env_file so host-oriented vars
     # like DATABASE_HOST=localhost don't leak in and break in-container DB/DNS.

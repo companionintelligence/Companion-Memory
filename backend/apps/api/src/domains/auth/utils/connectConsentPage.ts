@@ -191,8 +191,21 @@ export function renderConnectConsentPage(params: ConnectConsentParams): string {
  * URL is silently refused (the POST completes, then nothing happens). A
  * `<meta http-equiv="refresh">` is a top-level navigation, NOT a form submission,
  * so form-action does not apply — the same navigation kind the "Not now" <a> link
- * uses, which reaches CI-Hub fine. The <a> is a no-JS manual fallback. The dark
- * background matches the consent page so there's no white flash on the hop.
+ * uses, which reaches CI-Hub fine. The dark background matches the consent page
+ * so there's no white flash on the hop.
+ *
+ * The "Continue" <a> is the manual escape hatch for the browsers where the
+ * meta refresh never fires (Firefox's blockautorefresh setting,
+ * kiosk/enterprise policies, some privacy extensions) — without it those users
+ * would be stranded on an endless spinner, and this page cannot script its way
+ * out (nginx stamps `script-src 'self'`, so no inline JS). Since the refresh
+ * normally wins instantly, the link stays invisible for a few seconds
+ * (CSS-only reveal) so the ordinary hop shows just the spinner.
+ *
+ * The copy deliberately differs from the Hub's /memory-connect/finishing
+ * interstitial ("Applying your memory connection"): by the time this page
+ * renders, access IS granted — all that's left is carrying the browser back to
+ * where the connect flow started, so it says exactly that.
  *
  * `hubUrl` is an already-origin-allowlisted CI-Hub URL; it is HTML-escaped here
  * for the meta content and href attributes.
@@ -206,7 +219,7 @@ export function renderConnectRedirectPage(hubUrl: string): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="refresh" content="0; url=${url}" />
-  <title>Connecting…</title>
+  <title>Taking you back…</title>
   <style>
     :root { color-scheme: dark light; }
     * { box-sizing: border-box; }
@@ -219,16 +232,24 @@ export function renderConnectRedirectPage(hubUrl: string): string {
       border: 3px solid rgba(155, 178, 183, .25); border-top-color: #079d99;
       animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
     .msg { margin: 0; font-size: 15px; font-weight: 600; }
-    .link { font-size: 13px; color: #9bb2b7; text-decoration: underline; text-underline-offset: 3px; }
+    /* Hidden until the meta refresh has clearly not fired; the delay is the
+       only "detection" available without JS. */
+    .link { font-size: 13px; color: #9bb2b7; text-decoration: underline; text-underline-offset: 3px;
+      opacity: 0; animation: reveal .4s ease 4s forwards; }
     .link:hover { color: inherit; }
+    @keyframes reveal { to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation: none; }
+      /* No animations ⇒ no timed reveal — keep the fallback link visible. */
+      .link { animation: none; opacity: 1; }
+    }
   </style>
 </head>
 <body>
   <main class="wrap">
     <div class="spinner" aria-hidden="true"></div>
-    <p class="msg">Connecting to Companion Memory…</p>
+    <p class="msg">Access granted — taking you back…</p>
     <a class="link" href="${url}">Continue</a>
   </main>
 </body>

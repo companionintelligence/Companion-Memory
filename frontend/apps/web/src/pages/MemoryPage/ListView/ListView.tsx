@@ -21,6 +21,7 @@ import { CommunicationRow } from './rows/CommunicationRow';
 import { ConceptRow } from './rows/ConceptRow';
 import { ContentRow } from './rows/ContentRow';
 import { EventRow } from './rows/EventRow';
+import { FileChunkRow } from './rows/FileChunkRow';
 import { FileRow } from './rows/FileRow';
 import { ItemRow } from './rows/ItemRow';
 import { NoteRow } from './rows/NoteRow';
@@ -103,6 +104,9 @@ export function ListView() {
 
       case 'EventType':
         return <EventRow key={item.id} event={item} time={time} onClick={() => setActiveEntity(item)} />;
+
+      case 'FileChunkType':
+        return <FileChunkRow key={item.id} fileChunk={item} onClick={() => setActiveEntity(item)} />;
 
       case 'FileType':
         return <FileRow key={item.id} file={item} time={time} onClick={() => setActiveEntity(item)} />;

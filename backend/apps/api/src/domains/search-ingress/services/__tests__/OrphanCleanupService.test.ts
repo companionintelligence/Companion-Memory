@@ -137,9 +137,9 @@ describe('OrphanCleanupService.cleanOrphans', () => {
 
     const result = await service.cleanOrphans();
 
-    // 13 indexable types x 3 tables.
-    expect(result.results).toHaveLength(39);
-    expect(query).toHaveBeenCalledTimes(39);
+    // 14 indexable types x 3 tables.
+    expect(result.results).toHaveLength(42);
+    expect(query).toHaveBeenCalledTimes(42);
   });
 });
 

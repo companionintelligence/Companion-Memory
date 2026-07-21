@@ -28,8 +28,9 @@ RUN chmod +x entrypoint.sh && chown -R memorizer:memorizer /app
 
 USER memorizer
 
-# Expose API port
+# Expose API ports
 EXPOSE 8001
+EXPOSE 8002
 
 # ──────────────────────────────────────────────────
 # Environment Variables

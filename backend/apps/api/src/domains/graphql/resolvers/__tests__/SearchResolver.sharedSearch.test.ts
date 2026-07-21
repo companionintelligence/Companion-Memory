@@ -34,6 +34,8 @@ function makeResolver() {
     {} as never, // communicationService
     {} as never, // entityResolutionService
     {} as never, // eventService
+    {} as never, // fileService
+    {} as never, // fileChunkService
     savedSearchService as never,
     {} as never, // searchService
     {} as never, // tagService

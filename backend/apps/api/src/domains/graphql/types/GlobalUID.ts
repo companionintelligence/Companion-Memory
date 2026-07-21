@@ -9,6 +9,7 @@ type ResourceType =
   | 'content'
   | 'event'
   | 'file'
+  | 'file-chunk'
   | 'item'
   | 'message'
   | 'note'

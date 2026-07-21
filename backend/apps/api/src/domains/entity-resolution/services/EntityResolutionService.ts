@@ -22,6 +22,7 @@ import {
   PlaceService,
 } from '@ci/domains/memory';
 import { type Note, NoteService } from '@ci/domains/notes';
+import { type FileChunk, FileChunkService } from '@ci/domains/parsing';
 import { type EntityIdentifier, type IndexableEntity, type TaggableEntity } from '@ci/domains/search-next';
 
 type EntityType = IndexableEntity | TaggableEntity;
@@ -35,6 +36,9 @@ export type ResolvedEntity =
   | { type: 'content'; id: string; entity: Content }
   | { type: 'event'; id: string; entity: Event }
   | { type: 'file'; id: string; entity: SignedFile }
+  // A document chunk carries its parent file, joined here so search results can
+  // link back to the source document (the file is null if it was since deleted).
+  | { type: 'file-chunk'; id: string; entity: { chunk: FileChunk; file: SignedFile | null } }
   | { type: 'item'; id: string; entity: Item }
   | { type: 'note'; id: string; entity: Note }
   | { type: 'person'; id: string; entity: Person }
@@ -52,6 +56,7 @@ export class EntityResolutionService {
     private readonly contentService: ContentService,
     private readonly eventService: EventService,
     private readonly fileService: FileService,
+    private readonly fileChunkService: FileChunkService,
     private readonly itemService: ItemService,
     private readonly noteService: NoteService,
     private readonly personService: PersonService,
@@ -80,6 +85,7 @@ export class EntityResolutionService {
       contents,
       events,
       files,
+      fileChunks,
       items,
       notes,
       people,
@@ -94,6 +100,7 @@ export class EntityResolutionService {
       this.contentService.findByIds(context, grouped.get('content') ?? []),
       this.eventService.findByIds(context, grouped.get('event') ?? []),
       this.fileService.findByIds(context, grouped.get('file') ?? []),
+      this.fileChunkService.findByIds(grouped.get('file-chunk') ?? []),
       this.itemService.findByIds(context, grouped.get('item') ?? []),
       this.noteService.findByIds(context, grouped.get('note') ?? []),
       this.personService.findByIds(context, grouped.get('person') ?? []),
@@ -117,10 +124,32 @@ export class EntityResolutionService {
     this.addToMap(map, 'place', places);
     this.addToMap(map, 'thread', threads);
 
+    // File chunks join their parent file so results can link back to the source
+    // document. Parent files not already fetched for a 'file' identifier are
+    // loaded here in a single batched call.
+    if (fileChunks.length > 0) {
+      const parentFileIds = [...new Set(fileChunks.map((chunk) => chunk.fileId))];
+      const parentFiles = await this.fileService.findByIds(context, parentFileIds);
+      const fileById = new Map(
+        parentFiles.filter((file): file is SignedFile => file != null).map((file) => [file.id, file]),
+      );
+
+      for (const chunk of fileChunks) {
+        map.set(`file-chunk:${chunk.id}`, {
+          type: 'file-chunk',
+          id: chunk.id,
+          entity: { chunk, file: fileById.get(chunk.fileId) ?? null },
+        });
+      }
+    }
+
     return map;
   }
 
-  private addToMap<T extends ResolvedEntity['type']>(
+  // 'file-chunk' is excluded: its resolved entity is a { chunk, file } join with
+  // no top-level `id`, so it's added to the map directly in resolve() rather than
+  // through this id-keyed helper.
+  private addToMap<T extends Exclude<ResolvedEntity['type'], 'file-chunk'>>(
     map: Map<string, ResolvedEntity>,
     type: T,
     entities: (Extract<ResolvedEntity, { type: T }>['entity'] | null)[],

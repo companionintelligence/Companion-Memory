@@ -42,6 +42,7 @@ export interface EntitySource {
  * | content          | ci.content           | id          | —                             |
  * | event            | ci.events            | event_id    | —                             |
  * | file             | ci.entities          | entity_id   | entity_type = 'File'          |
+ * | file-chunk       | ci.file_chunks       | id          | —                             |
  * | item             | ci.inventory         | object_id   | —                             |
  * | message          | ci.agent_memories    | id          | —                             |
  * | note             | ci.notes             | id          | —                             |
@@ -71,6 +72,7 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     idColumn: 'entity_id',
     discriminator: { column: 'entity_type', value: 'File' },
   },
+  'file-chunk': { schema: 'ci', table: 'file_chunks', idColumn: 'id' },
   item: { schema: 'ci', table: 'inventory', idColumn: 'object_id' },
   message: { schema: 'ci', table: 'agent_memories', idColumn: 'id' },
   note: { schema: 'ci', table: 'notes', idColumn: 'id' },

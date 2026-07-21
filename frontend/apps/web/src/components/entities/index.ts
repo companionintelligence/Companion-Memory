@@ -5,6 +5,7 @@ export { CommunicationGridItem } from './grid/CommunicationGridItem';
 export { ConceptGridItem } from './grid/ConceptGridItem';
 export { ContentGridItem } from './grid/ContentGridItem';
 export { EventGridItem } from './grid/EventGridItem';
+export { FileChunkGridItem } from './grid/FileChunkGridItem';
 export { FileGridItem } from './grid/FileGridItem';
 export { ItemGridItem } from './grid/ItemGridItem';
 export type { ItemInventoryPreview } from './grid/ItemGridItem';

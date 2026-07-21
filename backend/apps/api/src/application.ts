@@ -42,6 +42,8 @@ import { McpModule } from '@ci/domains/mcp';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
+import { PairingModule } from '@ci/domains/pairing';
+import { ParsingModule } from '@ci/domains/parsing';
 import { PositionModule } from '@ci/domains/position';
 import { PowerSyncModule } from '@ci/domains/powersync';
 import { PredictionsModule } from '@ci/domains/predictions';
@@ -50,6 +52,7 @@ import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
+import { UserSnapshotsModule } from '@ci/domains/user-snapshots';
 
 @Module({
   imports: [
@@ -72,6 +75,7 @@ import { UserModule } from '@ci/domains/user';
     LoggingModule,
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
+    PairingModule,
     AgentModule,
     AuditModule,
     AuthModule,
@@ -79,6 +83,7 @@ import { UserModule } from '@ci/domains/user';
     BrowserActivityModule,
     ConnectionsModule,
     DeviceModule,
+    ParsingModule,
     EtlModule,
     EventsModule,
     FilesModule,
@@ -101,6 +106,7 @@ import { UserModule } from '@ci/domains/user';
     SearchNextModule,
     SummariesModule,
     UserModule,
+    UserSnapshotsModule,
   ],
   controllers: [HealthController],
   providers: [

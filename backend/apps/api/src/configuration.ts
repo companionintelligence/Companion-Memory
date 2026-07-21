@@ -176,6 +176,9 @@ export const ConfigSchema = z.object({
     hbpe: z.object({
       host: z.string(),
     }),
+    parser: z.object({
+      host: z.string(),
+    }),
   }),
   // Embedding/indexing pipeline knobs. These let a deployment point the embedder
   // at a GPU/alternate-host Ollama and tune throughput for bulk imports without

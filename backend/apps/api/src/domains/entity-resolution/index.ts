@@ -14,6 +14,7 @@ import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
+import { ParsingModule } from '@ci/domains/parsing';
 
 import { EntityResolutionService } from './services/EntityResolutionService';
 
@@ -25,6 +26,7 @@ import { EntityResolutionService } from './services/EntityResolutionService';
     IntelligenceModule,
     MemoryModule,
     NotesModule,
+    ParsingModule,
   ],
   providers: [EntityResolutionService],
   exports: [EntityResolutionService],

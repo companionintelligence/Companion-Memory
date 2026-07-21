@@ -45,6 +45,15 @@ export class FileType implements Node, Taggable {
   @Field(() => [EntityTagType])
   tags!: EntityTagType[];
 
+  @Field(() => String, { nullable: true })
+  parseStatus!: string | null;
+
+  @Field(() => String, { nullable: true })
+  parseError!: string | null;
+
+  @Field(() => Date, { nullable: true })
+  parsedAt!: Date | null;
+
   @Field(() => Date)
   createdAt!: Date;
 
@@ -64,6 +73,9 @@ export class FileType implements Node, Taggable {
       externalId: file.externalId,
       sourceUrl: file.url,
       tags: [], // Hydrated by resolver
+      parseStatus: file.parseStatus,
+      parseError: file.parseError,
+      parsedAt: file.parsedAt,
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
     };

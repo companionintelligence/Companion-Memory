@@ -6,6 +6,7 @@ import { ChartNetwork, Images, List, Map as MapIcon } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
+import { FileChunkModal } from '@/components/modals/FileChunkModal/FileChunkModal';
 
 import { useEntityService } from '../MemoryPage/useEntityService';
 
@@ -23,6 +24,12 @@ import { MobileMapView } from './MapView';
 
 export default function MobileMemoryPage() {
   const [{ activeEntity }, { setActiveEntity }] = useEntityService();
+
+  // Document chunks open in their own dialog; every other entity uses the
+  // details sheet (EntityDetails has no FileChunkType branch).
+  const activeChunkEntity = activeEntity?.__typename === 'FileChunkType' ? activeEntity : null;
+  const activeSheetEntity =
+    activeEntity != null && activeEntity.__typename !== 'FileChunkType' ? activeEntity : null;
   const [searchParams, setSearchParams] = useSearchParams();
 
   // The active view lives in the URL (`?view=`) so a query is shareable and
@@ -137,11 +144,13 @@ export default function MobileMemoryPage() {
           {activeTab === 'graph' && <GraphView variant="mobile" />}
         </>
       </PageContent>
-      {activeEntity && (
+      {activeSheetEntity && (
         <Sheet open={detailsOpen} onOpenChange={toggleactiveEntity}>
-          <EntityDetails entity={activeEntity} />
+          <EntityDetails entity={activeSheetEntity} />
         </Sheet>
       )}
+
+      <FileChunkModal entity={activeChunkEntity} onClose={() => setActiveEntity(null)} />
     </>
   );
 }

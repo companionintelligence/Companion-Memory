@@ -15,6 +15,7 @@ import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
+import { ParsingModule } from '@ci/domains/parsing';
 
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
 import { IndexSkipEntity } from './entities/IndexSkipEntity';
@@ -26,6 +27,7 @@ import { ConceptSearchIndexListener } from './listeners/ConceptSearchIndexListen
 import { ContentSearchIndexListener } from './listeners/ContentSearchIndexListener';
 import { EntityEmbeddingListener } from './listeners/EntityEmbeddingListener';
 import { EventSearchIndexListener } from './listeners/EventSearchIndexListener';
+import { FileChunkSearchIndexListener } from './listeners/FileChunkSearchIndexListener';
 import { FileSearchIndexListener } from './listeners/FileSearchIndexListener';
 import { ItemSearchIndexListener } from './listeners/ItemSearchIndexListener';
 import { MessageSearchIndexListener } from './listeners/MessageSearchIndexListener';
@@ -51,6 +53,7 @@ import { VectorService } from './services/VectorService';
     IntelligenceModule,
     MemoryModule,
     NotesModule,
+    ParsingModule,
   ],
   providers: [
     AnswerSearchIndexListener,
@@ -61,6 +64,7 @@ import { VectorService } from './services/VectorService';
     EmbeddingService,
     EntityEmbeddingListener,
     EventSearchIndexListener,
+    FileChunkSearchIndexListener,
     FileSearchIndexListener,
     IndexSkipService,
     ItemSearchIndexListener,

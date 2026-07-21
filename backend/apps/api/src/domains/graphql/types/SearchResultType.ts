@@ -7,6 +7,7 @@ import { CommunicationType } from './CommunicationType';
 import { ConceptType } from './ConceptType';
 import { ContentType } from './ContentType';
 import { EventType } from './EventType';
+import { FileChunkType } from './FileChunkType';
 import { FileType } from './FileType';
 import { GlobalUID } from './GlobalUID';
 import { ItemType } from './ItemType';
@@ -27,6 +28,7 @@ export const SearchResultType = createUnionType({
       ConceptType,
       ContentType,
       EventType,
+      FileChunkType,
       FileType,
       ItemType,
       NoteType,
@@ -52,6 +54,8 @@ export const SearchResultType = createUnionType({
         return ContentType;
       case 'event':
         return EventType;
+      case 'file-chunk':
+        return FileChunkType;
       case 'file':
         return FileType;
       case 'item':

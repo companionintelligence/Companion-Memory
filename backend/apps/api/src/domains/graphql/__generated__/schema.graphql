@@ -563,6 +563,21 @@ type EventType implements Node & Taggable {
   title: String
 }
 
+type FileChunkType implements Node {
+  chunkIndex: Int!
+  chunkerVersion: String!
+  content: String!
+  createdAt: DateTime!
+  file: FileType
+  fileId: ID!
+  id: ID!
+  parserName: String!
+  parserVersion: String!
+  sectionTitle: String
+  sourceLocator: JSON
+  updatedAt: DateTime!
+}
+
 type FileConnection implements Connection {
   edges: [FileEdge!]!
   pageInfo: PageInfo!
@@ -582,6 +597,9 @@ type FileType implements Node & Taggable {
   filename: String
   id: ID!
   items(after: String, before: String, first: Int, last: Int): ItemConnection
+  parseError: String
+  parseStatus: String
+  parsedAt: DateTime
   previewUrl: String
   size: Float
   sourceUrl: String
@@ -634,6 +652,24 @@ input GraphRelationshipInput {
   properties: JSON
   toKey: String!
   type: String!
+}
+
+input IngestUserSnapshotInput {
+  cwd: String
+  deviceId: ID!
+  focusApp: String
+  focusTitle: String
+  fsEventCount: Int!
+  monotonicMs: Float!
+  observedAt: DateTime!
+  payload: JSON!
+  sessionId: ID!
+  snapshotKind: String!
+}
+
+type IngestUserSnapshotPayload {
+  errorMessage: String
+  success: Boolean!
 }
 
 type InsightItemType {
@@ -789,6 +825,7 @@ type Mutation {
   deleteProviderKey(id: ID!): Boolean!
   deleteRelationship(input: DeleteByIdInput!): DeleteByIdPayload!
   deleteSavedSearch(input: DeleteByIdInput!): DeleteByIdPayload!
+  ingestUserSnapshot(input: IngestUserSnapshotInput!): IngestUserSnapshotPayload!
 
   """Mark an action as dismissed"""
   markActionAsDismissed(id: ID!): ActionType
@@ -807,6 +844,7 @@ type Mutation {
   removePlace(id: String!): Boolean!
   removeQuestion(id: String!): Boolean!
   setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
+  startPairing: StartPairingPayload!
   tagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
 
   """Manually trigger the HBPE pipeline for the current user"""
@@ -862,6 +900,17 @@ type PageInfo {
   hasNextPage: Boolean!
   hasPreviousPage: Boolean!
   startCursor: String
+}
+
+type PairingStatusPayload {
+  appletAccessToken: String
+  deviceId: String
+  errorMessage: String
+  status: String!
+  success: Boolean!
+  userEmail: String
+  userId: String
+  userName: String
 }
 
 type PersonConnection implements Connection {
@@ -1018,6 +1067,7 @@ type Query {
   note(id: ID!): NoteType
   notes(after: String, before: String, first: Int, last: Int): NoteConnection!
   oAuthCallbackUrl: String!
+  pairingStatus(pairingToken: String!, pollKey: String!): PairingStatusPayload!
   people(after: String, before: String, first: Int, last: Int): PersonConnection!
   person(id: ID!): PersonType
   place(id: ID!): PlaceType
@@ -1169,11 +1219,19 @@ type SearchResultEdge {
   node: SearchResultType!
 }
 
-union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
+union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileChunkType | FileType | ItemType | NoteType | PersonType | PlaceType | ThreadType
 
 input SetSavedSearchSharingInput {
   id: ID!
   isPublic: Boolean!
+}
+
+type StartPairingPayload {
+  errorMessage: String
+  pairingPath: String
+  pairingToken: String
+  pollKey: String
+  success: Boolean!
 }
 
 type SummaryConnection implements Connection {

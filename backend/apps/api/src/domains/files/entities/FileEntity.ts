@@ -62,6 +62,24 @@ export class FileEntity {
   @Column({ type: 'timestamptz', name: 'external_updated_at', nullable: true })
   externalUpdatedAt!: Date | null;
 
+  @Column({ type: 'text', name: 'parse_status', nullable: true })
+  parseStatus!: string | null;
+
+  @Column({ type: 'text', name: 'parse_error', nullable: true })
+  parseError!: string | null;
+
+  @Column({ type: 'timestamptz', name: 'parsed_at', nullable: true })
+  parsedAt!: Date | null;
+
+  @Column({ type: 'text', name: 'parser_name', nullable: true })
+  parserName!: string | null;
+
+  @Column({ type: 'text', name: 'parser_version', nullable: true })
+  parserVersion!: string | null;
+
+  @Column({ type: 'text', name: 'chunker_version', nullable: true })
+  chunkerVersion!: string | null;
+
   static toEgressType(entity: FileEntity): File {
     return {
       id: entity.id,
@@ -84,6 +102,12 @@ export class FileEntity {
       deletedAt: entity.deletedAt,
       externalCreatedAt: entity.externalCreatedAt,
       externalUpdatedAt: entity.externalUpdatedAt,
+      parseStatus: entity.parseStatus,
+      parseError: entity.parseError,
+      parsedAt: entity.parsedAt,
+      parserName: entity.parserName,
+      parserVersion: entity.parserVersion,
+      chunkerVersion: entity.chunkerVersion,
     };
   }
 }

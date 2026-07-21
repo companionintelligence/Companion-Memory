@@ -64,10 +64,18 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # which the PowerSync local-first sync engine consumes. These are safe defaults if
 # PowerSync is unused; raise the slot/sender counts if you add more replication
 # consumers. See infrastructure/powersync/.
+#
+# max_connections is raised from the stock 100 because the appliance runs
+# many pooled clients against one instance: the orchestrator (4 Temporal
+# service roles, each with a default + visibility pool), the API (TypeORM
+# plus a separate pg-boss pool), and the Python sidecars. At 100 the
+# orchestrator alone could pin ~76 slots and the API would fail to connect
+# with SQLSTATE 53300.
 CMD ["postgres", \
      "-c", "shared_preload_libraries=timescaledb", \
      "-c", "wal_level=logical", \
      "-c", "max_replication_slots=10", \
-     "-c", "max_wal_senders=10"]
+     "-c", "max_wal_senders=10", \
+     "-c", "max_connections=200"]
 
 EXPOSE 5432

@@ -10,6 +10,7 @@ import {
   ContentGridItem,
   EntityGrid,
   EventGridItem,
+  FileChunkGridItem,
   FileGridItem,
   ItemGridItem,
   NoteGridItem,
@@ -149,6 +150,11 @@ export function GalleryView() {
 
               case 'EventType':
                 return <EventGridItem key={item.id} event={item} onClick={() => setActiveEntity(item)} />;
+
+              case 'FileChunkType':
+                return (
+                  <FileChunkGridItem key={item.id} fileChunk={item} onClick={() => setActiveEntity(item)} />
+                );
 
               case 'FileType':
                 return <FileGridItem key={item.id} file={item} onClick={() => setActiveEntity(item)} />;

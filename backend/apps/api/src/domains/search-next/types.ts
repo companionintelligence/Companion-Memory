@@ -6,6 +6,7 @@ export const INDEXABLE_ENTITIES = [
   'content',
   'event',
   'file',
+  'file-chunk',
   'item',
   // Raw conversation fragments, embedded for the recall "naive RAG" channel.
   // Surfaced ONLY via SearchService.searchMessages; entity/graph searches
