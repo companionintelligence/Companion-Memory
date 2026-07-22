@@ -54,6 +54,10 @@ export interface ConnectConsentParams {
   /** Per-request CSP nonce; stamped on the inline <style> so the page's own
    *  styles apply while any injected inline style (no nonce) is blocked. */
   nonce: string;
+  /** True when this render is the one-shot retry after a CSRF failure on
+   *  /approve; echoed as a hidden field so a second consecutive failure renders
+   *  a hard error instead of redirect-looping. */
+  csrfRetry?: boolean;
 }
 
 /** Escape a string for safe interpolation into HTML text/attribute context. */
@@ -129,7 +133,10 @@ const CONSENT_STYLES = /* css */ `
  * by the caller.
  */
 export function renderConnectConsentPage(params: ConnectConsentParams): string {
-  const displayName = escapeHtml(params.appName?.trim() || params.appUrn);
+  // Normalise once: the trimmed name drives both the heading and the hidden
+  // app_name field that carries it through the CSRF self-heal round-trip.
+  const trimmedAppName = params.appName?.trim();
+  const displayName = escapeHtml(trimmedAppName || params.appUrn);
   const appUrn = escapeHtml(params.appUrn);
   const state = escapeHtml(params.state);
   const returnUrl = escapeHtml(params.returnUrl);
@@ -173,7 +180,17 @@ export function renderConnectConsentPage(params: ConnectConsentParams): string {
         <input type="hidden" name="app" value="${appUrn}" />
         <input type="hidden" name="state" value="${state}" />
         <input type="hidden" name="return" value="${returnUrl}" />
-        <input type="hidden" name="csrf" value="${csrfToken}" />
+        <input type="hidden" name="csrf" value="${csrfToken}" />${
+          trimmedAppName
+            ? `
+        <input type="hidden" name="app_name" value="${escapeHtml(trimmedAppName)}" />`
+            : ''
+        }${
+          params.csrfRetry
+            ? `
+        <input type="hidden" name="csrf_retry" value="1" />`
+            : ''
+        }
         <button class="btn primary" type="submit">Allow</button>
       </form>
     </div>

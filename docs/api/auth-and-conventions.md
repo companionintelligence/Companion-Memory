@@ -53,31 +53,38 @@ The **JWT passport strategy reads only the `Authorization: Bearer` header** — 
 
 #### Cookie attributes
 
-Session cookie (`SessionController.ts:78-84`, identical in signup + OIDC callback):
+Both cookies are set through `domains/auth/utils/authCookies.ts`, the single source of truth for their attributes — login, signup, and the OIDC callback all call the same helpers rather than repeating the option blocks:
 
 ```ts
+// setSessionCookie()
 res.cookie(config.auth.cookies.sessionTokenName, sessionToken, {
   httpOnly: true,
-  secure: req.secure,     // TLS-derived, NOT hardcoded true
+  secure: req.secure,        // TLS-derived, NOT hardcoded true
   sameSite: 'lax',
   path: '/',
-  maxAge: COOKIE_MAX_AGE, // 7d
+  maxAge: AUTH_COOKIE_MAX_AGE, // 7d, shared with the csrf cookie
 });
 ```
 
-CSRF cookie (`SessionController.ts:180-187`): `httpOnly: false` (JS reads it for the double-submit header), `secure: req.secure`, `sameSite: 'strict'`, no `maxAge`. Default cookie names (`default.json:29-32`): `sessionToken`, `csrfToken`.
+`AUTH_COOKIE_MAX_AGE` is derived from `auth.jwt.refreshTokenExpiration` and **throws at startup** if that value is not a parseable positive duration: Express treats `maxAge: 0` as an immediate expiry, so a silent fallback would delete both auth cookies on every response and lock every user out.
 
-> **Why `secure: req.secure` (not `true`) matters — the plain-HTTP Tailscale case.** Because the flag mirrors the actual connection, cookies still set over plain HTTP (e.g. a `*.ts.net` exposure) rather than being dropped. Combined with `sameSite: 'lax'`, this is what makes Memory login work over unencrypted Tailscale: set `APP_BASE_URL` to the frontend origin, and the lax+non-secure cookie survives the round-trip. On a TLS deployment `req.secure` is `true` (via `trust proxy`) and the cookie is properly `Secure`.
+CSRF cookie (`domains/auth/utils/authCookies.ts` — the single source of truth for its attributes): `httpOnly: false` (JS reads it for the double-submit header), `secure: req.secure`, `sameSite: 'strict'`, `maxAge` matching the session cookie (7d) so the pair lives and dies together — a browser restart no longer strands a valid session behind a missing csrf cookie. Default cookie names (`default.json:29-32`): `sessionToken`, `csrfToken`.
+
+**Stable-token model** (`CsrfService.ensureToken`): a CSRF token identifies a *browser*, not a request. Every issue/render site (`GET /authenticate/csrf`, refresh, the connect-consent and confirm-account pages) **reuses a valid existing cookie** and only mints when the cookie is absent or invalid; rotation happens **only at identity boundaries** — login, signup, OIDC sign-in (fixation hygiene) — and logout clears it. This keeps all tabs and server-rendered forms converged on one token, so a background session refresh can never invalidate a page rendered earlier (the CI-Server#1740 race). CSRF failures on the no-JS consent/confirm forms self-heal with a one-shot 303 back to their GET (re-rendering against the current cookie). The retry is bounded by a `csrf_retry` marker: a second consecutive failure on the connect flow returns the user to CI-Hub with `error=csrf_failed` rather than stranding them, and a failure with no live session goes straight back to the Hub — `connect()` would otherwise bounce a signed-out user onward to the cross-origin OIDC issuer, which the gateway's `form-action 'self'` blocks mid-redirect-chain.
+
+> **Why `secure: req.secure` (not `true`) matters — the plain-HTTP Tailscale case.** Because the flag mirrors the actual connection, cookies still set over plain HTTP (e.g. a `*.ts.net` exposure) rather than being dropped. Combined with `sameSite: 'lax'`, this is what makes Memory login work over unencrypted Tailscale: set `APP_BASE_URL` to the frontend origin, and the lax+non-secure cookie survives the round-trip.
+>
+> **`secure` depends on the gateway deriving the client's scheme.** `infrastructure/gateway/nginx.conf` listens plain on `8642`, so it used to set `proxy_set_header X-Forwarded-Proto $scheme` and overwrite whatever the edge put there. With `trust proxy 1` that made `req.secure` `false` on *every* request, including HTTPS ones — so `sessionToken` and `csrfToken`, both 7-day persistent, went out without `Secure` on an origin reached over TLS, readable (and writable, giving session/CSRF fixation) by any on-path attacker. The gateway now derives `$client_proto` and forwards *that*. Deployment testing on core-2 showed `X-Forwarded-Proto` alone is not enough: behind the Hub's Cloudflare tunnel the chain is Cloudflare → cloudflared → **Hub Traefik** → gateway, and Traefik overwrites `X-Forwarded-Proto` with its own plain-`http` entrypoint scheme, so it arrives as `http` on a genuine HTTPS request. Cloudflare's `CF-Visitor: {"scheme":"https"}` carries the true client scheme and survives that hop, so `$client_proto` **prefers `CF-Visitor`**, then a correctly-set `X-Forwarded-Proto` (first token, for a non-Cloudflare edge), then `$scheme` (a direct plain-HTTP LAN / Tailscale exposure, which keeps working unencrypted). Two consequences worth remembering: an appliance running an older gateway image still has the gap until it updates, and `resolveOidcOriginBounce` deliberately still compares host only for that reason.
 
 #### Flows — `@Controller('authenticate')` (`SessionController.ts:35`)
 
 | Endpoint | Method | Guard | Purpose |
 |---|---|---|---|
-| `/authenticate/csrf` | GET (204) | — | Issue a pre-auth `csrfToken` cookie |
-| `/authenticate` | POST (200) | `CsrfGuard` | Login → session cookie + return access token |
-| `/authenticate/refresh` | POST (200) | `CsrfGuard` | Rotate session token, return a new access token |
-| `/authenticate/logout` | POST (204) | — | Invalidate session, clear cookies |
-| `/signup` | POST | `CsrfGuard` | Create account → session cookie + access token |
+| `/authenticate/csrf` | GET (204) | — | Ensure a `csrfToken` cookie (reuses a valid one; idempotent) |
+| `/authenticate` | POST (200) | `CsrfGuard` | Login → session cookie + access token; **rotates** csrf |
+| `/authenticate/refresh` | POST (200) | `CsrfGuard` | Rotate session token, return a new access token; **reuses** csrf (slides maxAge) |
+| `/authenticate/logout` | POST (204) | `CsrfGuard` | Invalidate session, clear both cookies (client must send the double-submit header) |
+| `/signup` | POST | `CsrfGuard` | Create account → session cookie + access token; **rotates** csrf |
 
 **Session persistence** (`AuthService.ts:27-51`): the session row stores an **HMAC-SHA256 digest** of the token, IP, and user-agent (keyed by `auth.session.fieldPepper`) — the raw token is never stored. **Refresh with rotation + 30s grace window** (`AuthService.rotateSessionToken`): a valid refresh rotates the session token (old hash → `previous_token`); a token matching the *previous* hash within `session.refreshGracePeriod` yields a new access token without re-rotating, so racing tab refreshes don't invalidate each other.
 

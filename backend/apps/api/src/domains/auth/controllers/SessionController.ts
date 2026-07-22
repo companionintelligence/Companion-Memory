@@ -11,7 +11,6 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import parseDuration from 'parse-duration';
 import { z } from 'zod';
 
 import { ValidationPipe } from '@ci/common/pipes';
@@ -22,10 +21,13 @@ import { CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
 import { JwtPayload, LoginDto } from '../types';
-
-const COOKIE_MAX_AGE = parseDuration(config.auth.jwt.refreshTokenExpiration) ?? 0;
-
-const CSRF_COOKIE_NAME = config.auth.cookies.csrfTokenName;
+import {
+  clearCsrfCookie,
+  clearSessionCookie,
+  ensureCsrfCookie,
+  setCsrfCookie,
+  setSessionCookie,
+} from '../utils/authCookies';
 
 const localStrategySchema = z.object({
   username: z.string(),
@@ -44,13 +46,15 @@ export class SessionController {
    * Issue a pre-auth CSRF token cookie. The frontend should call this before
    * submitting the login form and include the token as an `X-CSRF-Token`
    * header on the POST /authenticate request.
+   *
+   * Reuses a valid existing cookie (only minting when absent/invalid), so the
+   * endpoint is idempotent and safe to call at any time — it can never
+   * invalidate a token already embedded in an open page or another tab.
    */
   @Get('csrf')
   @HttpCode(204)
   issueCsrfToken(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const token = this.csrfService.generateToken();
-
-    this.setCsrfCookie(req, res, token);
+    ensureCsrfCookie(this.csrfService, req, res);
   }
 
   @Post()
@@ -73,17 +77,13 @@ export class SessionController {
     );
 
     const accessToken = await this.authService.issueAccessToken(user.id);
-    const csrfToken = this.csrfService.generateToken();
 
-    res.cookie(config.auth.cookies.sessionTokenName, sessionToken, {
-      httpOnly: true,
-      secure: req.secure,
-      sameSite: 'lax',
-      path: '/',
-      maxAge: COOKIE_MAX_AGE,
-    });
+    setSessionCookie(req, res, sessionToken);
 
-    this.setCsrfCookie(req, res, csrfToken);
+    // Identity boundary: mint a fresh CSRF token (token-fixation hygiene). This
+    // and the other auth boundaries (signup, OIDC sign-in) are the only places
+    // that rotate — everywhere else reuses the existing valid cookie.
+    setCsrfCookie(req, res, this.csrfService.generateToken());
 
     return {
       accessToken,
@@ -119,18 +119,17 @@ export class SessionController {
     // The browser keeps the cookie from the first concurrent request that
     // performed the real rotation.
     if (sessionToken) {
-      res.cookie(config.auth.cookies.sessionTokenName, sessionToken, {
-        httpOnly: true,
-        secure: req.secure,
-        sameSite: 'lax',
-        path: '/',
-        maxAge: COOKIE_MAX_AGE,
-      });
-
-      const csrfToken = this.csrfService.generateToken();
-
-      this.setCsrfCookie(req, res, csrfToken);
+      setSessionCookie(req, res, sessionToken);
     }
+
+    // Reuse the existing CSRF token (sliding its maxAge) rather than minting a
+    // new one. Refresh is not an identity change, and rotating here invalidated
+    // every token embedded in an open page — the no-JS connect-consent form
+    // 403'd whenever the SPA's background refresh fired in another tab, and two
+    // tabs refreshing concurrently could 403 each other into a spurious logout
+    // (defeating the session-token grace period above, which exists precisely
+    // to tolerate that concurrency).
+    ensureCsrfCookie(this.csrfService, req, res);
 
     return {
       accessToken,
@@ -139,7 +138,26 @@ export class SessionController {
 
   @Post('logout')
   @HttpCode(204)
+  @UseGuards(CsrfGuard)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    // Clear the cookies FIRST, before any check that can throw. Logging out must
+    // always leave the browser clean: previously an already-expired or missing
+    // session threw here and skipped the clears, which mattered little when the
+    // csrf cookie died with the browser session — but it now carries a 7-day
+    // maxAge, so it would outlive the session it belongs to and keep being
+    // reused by ensureToken.
+    //
+    // CsrfGuard is what makes clearing-before-validating safe. Without it this
+    // ordering hands any third-party page a forced-logout primitive: a
+    // credential-less cross-site POST sends no cookies (lax/strict), so the
+    // handler throws — but the clears have already run and the deletion
+    // Set-Cookie headers ride out on the error response, signing the victim out
+    // repeatably. The guard rejects before the handler body, while a real
+    // browser holding a valid double-submit pair still reaches the clears even
+    // when its session has expired.
+    clearSessionCookie(req, res);
+    clearCsrfCookie(req, res);
+
     const token = this.getSessionToken(req);
     const payload = this.validateSessionToken(token);
     const userId = payload.sub;
@@ -150,15 +168,6 @@ export class SessionController {
     }
 
     await this.authService.invalidateSession(userId, token, this.authService.getSessionMetadata(req));
-
-    res.clearCookie(config.auth.cookies.sessionTokenName, {
-      httpOnly: true,
-      secure: req.secure,
-      sameSite: 'lax',
-      path: '/',
-    });
-
-    this.clearCsrfCookie(req, res);
   }
 
   private getSessionToken(req: Request) {
@@ -175,23 +184,5 @@ export class SessionController {
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
-  }
-
-  private setCsrfCookie(req: Request, res: Response, token: string): void {
-    res.cookie(CSRF_COOKIE_NAME, token, {
-      httpOnly: false,
-      secure: req.secure,
-      sameSite: 'strict',
-      path: '/',
-    });
-  }
-
-  private clearCsrfCookie(req: Request, res: Response): void {
-    res.clearCookie(CSRF_COOKIE_NAME, {
-      httpOnly: false,
-      secure: req.secure,
-      sameSite: 'strict',
-      path: '/',
-    });
   }
 }

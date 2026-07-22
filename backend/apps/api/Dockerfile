@@ -31,7 +31,11 @@ RUN apt-get update && \
     libwayland-client0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://github.com/amacneil/dbmate/releases/download/v2.27.0/dbmate-linux-amd64 \
+# TARGETARCH is set by BuildKit (amd64 on x86 builders, arm64 on arm builders);
+# fall back to dpkg for non-BuildKit builds. dbmate ships both architectures.
+ARG TARGETARCH
+RUN ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" && \
+    curl -fsSL "https://github.com/amacneil/dbmate/releases/download/v2.27.0/dbmate-linux-${ARCH}" \
         -o /usr/local/bin/dbmate && \
     chmod +x /usr/local/bin/dbmate
 

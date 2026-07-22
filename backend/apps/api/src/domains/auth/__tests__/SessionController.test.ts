@@ -1,4 +1,10 @@
-import { type INestApplication, type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
+import {
+  ForbiddenException,
+  type INestApplication,
+  type MiddlewareConsumer,
+  Module,
+  type NestModule,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
@@ -33,6 +39,13 @@ const mockCsrfService = {
   generateToken: jest.fn().mockReturnValue(MOCK_CSRF_TOKEN),
   validateToken: jest.fn(),
   verifyToken: jest.fn().mockReturnValue(true),
+  // Mirrors the real implementation on top of the mocked primitives, so tests
+  // exercise the reuse-if-valid contract by steering verifyToken/generateToken.
+  // The explicit return type is required: the body references `mockCsrfService`
+  // while it is still being initialised, so inference would be circular.
+  ensureToken: jest.fn((value?: string): string =>
+    value && mockCsrfService.verifyToken(value) ? value : mockCsrfService.generateToken(),
+  ),
 };
 
 const mockUserService = {
@@ -149,6 +162,23 @@ describe('SessionController', () => {
         .send({ username: 'bad@example.com', password: 'wrong' })
         .expect(401);
     });
+
+    it('should ROTATE the CSRF token on login (identity boundary)', async () => {
+      // Login is one of the few rotation points; the pre-auth token must not
+      // survive into the authenticated session (token-fixation hygiene).
+      const preAuthToken = 'pre-auth-random.pre-auth-signature';
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=${preAuthToken}`])
+        .set('X-CSRF-Token', preAuthToken)
+        .send({ username: 'test@example.com', password: 'password123' })
+        .expect(200);
+
+      const cookies = parseCookies(response);
+      expect(cookies[CSRF_COOKIE_NAME].value).toBe(MOCK_CSRF_TOKEN);
+      expect(cookies[CSRF_COOKIE_NAME].value).not.toBe(preAuthToken);
+    });
   });
 
   describe('POST /authenticate/refresh', () => {
@@ -218,13 +248,37 @@ describe('SessionController', () => {
       expect(cookies[COOKIE_NAME]).toBeUndefined();
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
     });
+
+    it('should REUSE the incoming CSRF token, even when the session rotates (CI-Server#1740)', async () => {
+      // Regression: refresh used to mint a fresh CSRF token on every session
+      // rotation, invalidating tokens embedded in open pages (the no-JS connect
+      // consent form) and racing concurrent tabs into spurious logouts.
+      const existingToken = 'existing-random.existing-signature';
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/refresh')
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${existingToken}`])
+        .set('X-CSRF-Token', existingToken)
+        .expect(200);
+
+      const cookies = parseCookies(response);
+      // Session token rotated…
+      expect(cookies[COOKIE_NAME].value).toBe('rotated-session-token');
+      // …but the CSRF token was echoed back unchanged, with a sliding maxAge.
+      expect(cookies[CSRF_COOKIE_NAME].value).toBe(existingToken);
+      expect(cookies[CSRF_COOKIE_NAME].maxAge).toBeDefined();
+      expect(mockCsrfService.generateToken).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /authenticate/logout', () => {
     it('should clear session token cookie', async () => {
+      // logout is CsrfGuard-protected, so a real request carries the double-submit
+      // pair; send it here rather than relying on the mocked validateToken.
       const response = await request(app.getHttpServer())
         .post('/authenticate/logout')
-        .set('Cookie', [`${COOKIE_NAME}=session-token-value`])
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(204);
 
       const cookies = parseCookies(response);
@@ -236,7 +290,8 @@ describe('SessionController', () => {
     it('should invalidate the session in the database', async () => {
       await request(app.getHttpServer())
         .post('/authenticate/logout')
-        .set('Cookie', [`${COOKIE_NAME}=session-token-value`])
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(204);
 
       expect(mockAuthService.invalidateSession).toHaveBeenCalledWith(
@@ -247,7 +302,46 @@ describe('SessionController', () => {
     });
 
     it('should return 400 when no session cookie is present', async () => {
-      await request(app.getHttpServer()).post('/authenticate/logout').expect(400);
+      await request(app.getHttpServer())
+        .post('/authenticate/logout')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(400);
+    });
+
+    it('should still clear both cookies when the session is already invalid', async () => {
+      // Logging out must always leave the browser clean. The csrf cookie now
+      // carries a 7-day maxAge, so skipping the clear on an expired session
+      // would leave it outliving the session it belongs to, still reusable by
+      // ensureToken.
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/logout')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(400);
+
+      const cookies = parseCookies(response);
+      for (const name of [COOKIE_NAME, CSRF_COOKIE_NAME]) {
+        expect(cookies[name]).toBeDefined();
+        expect(cookies[name].value === '' || cookies[name].expires?.getTime() === 0).toBe(true);
+      }
+    });
+
+    it('should NOT clear cookies for a credential-less cross-site POST', async () => {
+      // Clearing before validating is only safe behind CsrfGuard. A third-party
+      // page can POST here, but sameSite lax/strict means no cookies ride along,
+      // so the guard rejects before the handler body runs. Without the guard the
+      // clears would already have executed and their deletion Set-Cookie headers
+      // would ship on the error response — a repeatable forced-logout primitive
+      // for any site the victim visits.
+      mockCsrfService.validateToken.mockImplementation(() => {
+        throw new ForbiddenException('Missing CSRF token');
+      });
+
+      const response = await request(app.getHttpServer()).post('/authenticate/logout').expect(403);
+
+      expect(parseCookies(response)).toEqual({});
+      expect(mockAuthService.invalidateSession).not.toHaveBeenCalled();
     });
 
     it('should return 401 when user no longer exists', async () => {
@@ -255,14 +349,16 @@ describe('SessionController', () => {
 
       await request(app.getHttpServer())
         .post('/authenticate/logout')
-        .set('Cookie', [`${COOKIE_NAME}=session-token-value`])
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(401);
     });
 
     it('should clear CSRF token cookie on logout', async () => {
       const response = await request(app.getHttpServer())
         .post('/authenticate/logout')
-        .set('Cookie', [`${COOKIE_NAME}=session-token-value`])
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(204);
 
       const cookies = parseCookies(response);
@@ -281,6 +377,47 @@ describe('SessionController', () => {
       const cookies = parseCookies(response);
       expect(cookies[CSRF_COOKIE_NAME]).toBeDefined();
       expect(cookies[CSRF_COOKIE_NAME].value).toBe(MOCK_CSRF_TOKEN);
+    });
+
+    it('should pin the csrf cookie attributes the double-submit scheme depends on', async () => {
+      // These now live in one shared helper, so a single edit could silently
+      // break every call site: httpOnly:true would make getCsrfToken() in
+      // useAuth return undefined (breaking login/signup/refresh/logout), and
+      // sameSite:'lax' would drop the defence that actually stops a cross-site
+      // POST against the no-JS consent form.
+      const response = await request(app.getHttpServer()).get('/authenticate/csrf').expect(204);
+
+      const cookie = parseCookies(response)[CSRF_COOKIE_NAME];
+      expect(cookie.httpOnly).toBeFalsy();
+      expect(cookie.sameSite?.toLowerCase()).toBe('strict');
+      expect(cookie.path).toBe('/');
+      expect(cookie.maxAge).toBeDefined();
+    });
+
+    it('should echo a valid existing token instead of minting (idempotent priming)', async () => {
+      const existingToken = 'existing-random.existing-signature';
+
+      const response = await request(app.getHttpServer())
+        .get('/authenticate/csrf')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=${existingToken}`])
+        .expect(204);
+
+      const cookies = parseCookies(response);
+      expect(cookies[CSRF_COOKIE_NAME].value).toBe(existingToken);
+      expect(mockCsrfService.generateToken).not.toHaveBeenCalled();
+    });
+
+    it('should mint a fresh token when the existing cookie is invalid', async () => {
+      mockCsrfService.verifyToken.mockReturnValue(false);
+
+      const response = await request(app.getHttpServer())
+        .get('/authenticate/csrf')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=stale-or-foreign-token`])
+        .expect(204);
+
+      const cookies = parseCookies(response);
+      expect(cookies[CSRF_COOKIE_NAME].value).toBe(MOCK_CSRF_TOKEN);
+      expect(mockCsrfService.generateToken).toHaveBeenCalled();
     });
   });
 
@@ -333,7 +470,7 @@ describe('SessionController', () => {
       expect(cookies[CSRF_COOKIE_NAME].value).toBe(MOCK_CSRF_TOKEN);
     });
 
-    it('should rotate CSRF cookie on session rotation during refresh', async () => {
+    it('should re-set the same CSRF cookie on session rotation during refresh (sliding maxAge)', async () => {
       const response = await request(app.getHttpServer())
         .post('/authenticate/refresh')
         .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
@@ -343,9 +480,10 @@ describe('SessionController', () => {
       const cookies = parseCookies(response);
       expect(cookies[CSRF_COOKIE_NAME]).toBeDefined();
       expect(cookies[CSRF_COOKIE_NAME].value).toBe(MOCK_CSRF_TOKEN);
+      expect(mockCsrfService.generateToken).not.toHaveBeenCalled();
     });
 
-    it('should not rotate CSRF cookie on grace-period match', async () => {
+    it('should keep the same CSRF token on grace-period match', async () => {
       mockAuthService.rotateSessionToken.mockResolvedValue({ sessionToken: null });
 
       const response = await request(app.getHttpServer())
@@ -354,8 +492,11 @@ describe('SessionController', () => {
         .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(200);
 
+      // The cookie is re-set (sliding its maxAge alongside the session), but the
+      // value is the incoming token — never a fresh mint.
       const cookies = parseCookies(response);
-      expect(cookies[CSRF_COOKIE_NAME]).toBeUndefined();
+      expect(cookies[CSRF_COOKIE_NAME].value).toBe(MOCK_CSRF_TOKEN);
+      expect(mockCsrfService.generateToken).not.toHaveBeenCalled();
     });
   });
 });

@@ -14,7 +14,7 @@ export {
   setApiBaseUrl,
 } from './src/utils/apiBase';
 export { createHookContext } from './src/utils/createHookContext';
-export { fetchJson } from './src/utils/fetchJson';
+export { FetchJsonError, fetchJson } from './src/utils/fetchJson';
 export {
   addAppStateListener,
   addBackButtonListener,

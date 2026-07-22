@@ -25,6 +25,11 @@ set -euo pipefail
 #   GITHUB_ACTOR         Username paired with GITHUB_TOKEN          (default: github-actions)
 #   VERSION              Override version              (default: git tag or "latest")
 #   SKIP_IMAGE_PUSH      Skip Step 3 (docker login + image push)    (default: false)
+#   SKIP_PORTAL          Skip Portal ingest/publish (images only)   (default: false)
+#   TAG_SUFFIX           Suffix appended to the pushed version tag, e.g. "-amd64".
+#                        Used by the multi-arch publish workflow: each native
+#                        build leg pushes :VERSION-<arch>, and merge-manifests.sh
+#                        combines them into the :VERSION manifest list.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -82,36 +87,10 @@ for arg in "$@"; do
 done
 
 # ── Image Map ──────────────────────────────────────────────────────────
-# Maps: local-image-name → registry-repo-name
-#
-# Local images are built by `make build ENV=production` as ci/<name>.
-# Registry repos use companion/<name> as the public namespace.
-# Parallel arrays instead of associative array (bash 3.2 compat).
+# Shared with merge-manifests.sh — see scripts/publish/images.sh.
 
-IMAGE_LOCAL=(
-  ci/api
-  ci/database
-  ci/gateway
-  ci/object-store
-  ci/orchestrator
-  ci/summary-service
-  ci/setup-database
-  ci/setup-orchestrator
-  ci/setup-secrets
-  ci/hbpe-service
-)
-IMAGE_REMOTE=(
-  companion/api
-  companion/database
-  companion/gateway
-  companion/object-store
-  companion/orchestrator
-  companion/summary-service
-  companion/setup-database
-  companion/setup-orchestrator
-  companion/setup-secrets
-  companion/hbpe-service
-)
+# shellcheck source=scripts/publish/images.sh
+source "${SCRIPT_DIR}/images.sh"
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -394,7 +373,7 @@ main() {
     for i in $(seq 0 $((${#IMAGE_LOCAL[@]} - 1))); do
       local LOCAL_IMAGE="${IMAGE_LOCAL[$i]}"
       local REPO="${IMAGE_REMOTE[$i]}"
-      local REMOTE="${REGISTRY}/${REPO}:${VERSION}"
+      local REMOTE="${REGISTRY}/${REPO}:${VERSION}${TAG_SUFFIX:-}"
 
       # Check local image exists. `make production` builds images tagged
       # :latest, which we then re-tag as ${REMOTE} (i.e. :${VERSION}) below.
