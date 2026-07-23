@@ -40,9 +40,7 @@ function Header({ children }: HeaderProps) {
   // Icons use shrink-0; everything else (titles) must be allowed to shrink so
   // truncate/ellipsis can kick in inside the fixed gallery card width.
   return (
-    <div className="flex min-w-0 shrink-0 items-center gap-2 [&>:not(.shrink-0)]:min-w-0">
-      {children}
-    </div>
+    <div className="flex min-w-0 shrink-0 items-center gap-2 [&>:not(.shrink-0)]:min-w-0">{children}</div>
   );
 }
 
