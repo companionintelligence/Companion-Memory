@@ -133,7 +133,7 @@
     "new.insights.page": false,
     "require.signup.codes": true,
     "files.page": false,
-    "insights.page": false,
+    "insights.page": true,
     "chat.page": false,
     "jobs.page": false,
     "stats.page": false,
