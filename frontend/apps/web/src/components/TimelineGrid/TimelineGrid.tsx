@@ -45,7 +45,11 @@ export interface TimelineGridDatum {
 
 export interface TimelineGridProps {
   data?: TimelineGridDatum[];
-  /** Earliest day the window may reach back to. Unbounded when omitted. */
+  /**
+   * Earliest day scrolling may reach back to. Unbounded when omitted. Purely a
+   * scroll floor: the grid always fills its height with week rows, so days
+   * before `start` can still appear as empty cells.
+   */
   start?: string;
   /** Last day shown. Defaults to today. */
   end?: string;
@@ -223,18 +227,11 @@ export function TimelineGrid({
 
   const weeks = useMemo(() => {
     const endDate = fromKey(viewEndKey);
-    let firstWeekStart = addDays(addDays(endDate, -endDate.getDay()), -DAYS_PER_WEEK * (fitWeeks - 1));
+    const firstWeekStart = addDays(addDays(endDate, -endDate.getDay()), -DAYS_PER_WEEK * (fitWeeks - 1));
 
-    if (start) {
-      const startDate = fromKey(start);
-      const startWeek = addDays(startDate, -startDate.getDay());
-      if (toKey(firstWeekStart) < toKey(startWeek)) {
-        firstWeekStart = startWeek;
-      }
-    }
-
-    // Whole weeks only — days spilling past `end` or before `start` render as
-    // ordinary zero-count cells so the matrix is always completely full.
+    // Always a full fitWeeks × 7 matrix — `start` only floors the scrolling
+    // (maxBackWeeks), so a container taller than the history pads the top with
+    // ordinary zero-count cells rather than rendering a shorter grid.
     const out: string[][] = [];
     let cursor = firstWeekStart;
 
