@@ -13,6 +13,17 @@ import { type Note, NoteEntity } from '../entities/NoteEntity';
 import { NoteCreatedEvent, NoteUpdatedEvent, NoteRemovedEvent } from '../events';
 import type { CreateNoteDto, UpdateNoteDto } from '../types';
 
+/**
+ * Hourly UTC per-user note count. Declared locally so this domain carries no
+ * dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyNoteCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class NoteService {
   constructor(
@@ -219,5 +230,22 @@ export class NoteService {
     }
 
     return false;
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: notes counted by
+   * creation time, per user.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyNoteCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.noteRepository
+      .createQueryBuilder('note')
+      .select('note.userId', 'user_id')
+      .addSelect(`date_trunc('hour', note.createdAt, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }

@@ -21,6 +21,17 @@ import { RelationshipEntity } from '../entities/RelationshipEntity';
  * For entity-specific operations (Person, Concept, etc.), use the specialized services
  * in the /graph subdirectory.
  */
+/**
+ * Hourly UTC per-owner entity count. Declared locally so this domain carries
+ * no dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyEntityCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class GraphUtilityService {
   constructor(
@@ -744,5 +755,26 @@ export class GraphUtilityService {
     });
 
     return relationship;
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: graph entities
+   * counted by creation time, per owner. Follows this domain's counting
+   * convention (see getEntityCountsBySource): only active entities count.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyEntityCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.entityRepo
+      .createQueryBuilder('entity')
+      .select('entity.owner_user_id', 'user_id')
+      .addSelect(`date_trunc('hour', entity.created_at, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('entity.is_active = true')
+      .andWhere('entity.owner_user_id IS NOT NULL')
+      .andWhere('entity.created_at IS NOT NULL')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }
