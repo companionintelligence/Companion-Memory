@@ -68,6 +68,14 @@ export type ActionType = Node & Taggable & {
   updatedAt: Scalars['DateTime']['output'];
 };
 
+/** Activity count for one local calendar day, rolled up from hourly UTC buckets */
+export type ActivityBucketType = {
+  __typename?: 'ActivityBucketType';
+  count: Scalars['Int']['output'];
+  /** Local calendar day, yyyy-MM-dd, in the user profile timezone */
+  date: Scalars['String']['output'];
+};
+
 export type ActivityCountsType = {
   __typename?: 'ActivityCountsType';
   activities?: Maybe<Scalars['Int']['output']>;
@@ -1465,6 +1473,8 @@ export type Query = {
   __typename?: 'Query';
   action?: Maybe<ActionType>;
   actions: ActionConnection;
+  /** Precomputed activity counts per local calendar day, with day boundaries in the user profile timezone. Eventually consistent: refreshed from the source tables every 15 minutes. */
+  activityTimeline: Array<ActivityBucketType>;
   answer?: Maybe<AnswerType>;
   answers: AnswerConnection;
   browserActivities: BrowserActivityConnection;
@@ -1534,6 +1544,13 @@ export type QueryActionsArgs = {
   before?: InputMaybe<Scalars['String']['input']>;
   first?: InputMaybe<Scalars['Int']['input']>;
   last?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type QueryActivityTimelineArgs = {
+  end: Scalars['String']['input'];
+  sources?: InputMaybe<Array<Scalars['String']['input']>>;
+  start: Scalars['String']['input'];
 };
 
 

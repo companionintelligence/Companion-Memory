@@ -4,6 +4,7 @@ import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { Module } from '@nestjs/common';
 import { GraphQLModule as NestGraphQLModule } from '@nestjs/graphql';
 
+import { ActivityModule } from '@ci/domains/activity';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConnectionsModule } from '@ci/domains/connections';
 import { ConversationModule } from '@ci/domains/conversations';
@@ -40,6 +41,7 @@ import { ThreadLoader } from './loaders/ThreadLoader';
 import { ThreadMessagesLoader } from './loaders/ThreadMessagesLoader';
 import { ComplexityPlugin } from './plugins/ComplexityPlugin';
 import { ActionResolver } from './resolvers/ActionResolver';
+import { ActivityResolver } from './resolvers/ActivityResolver';
 import { AnswerResolver } from './resolvers/AnswerResolver';
 import { BrowserActivityResolver } from './resolvers/BrowserActivityResolver';
 import { CommunicationResolver } from './resolvers/CommunicationResolver';
@@ -82,6 +84,7 @@ import { UserSnapshotResolver } from './resolvers/UserSnapshotResolver';
       graphiql: false,
     }),
     PairingModule,
+    ActivityModule,
     BrowserActivityModule,
     ConnectionsModule,
     DeviceModule,
@@ -102,6 +105,7 @@ import { UserSnapshotResolver } from './resolvers/UserSnapshotResolver';
   ],
   providers: [
     ActionResolver,
+    ActivityResolver,
     ForecastResolver,
     PairingResolver,
     BrowserActivityResolver,
