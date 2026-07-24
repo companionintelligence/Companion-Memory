@@ -29,6 +29,17 @@ type Triple = { sourceType: string; sourceSystem: string | null; sourceId: strin
  */
 const tripleKey = (t: Triple): string => `${t.sourceType}\u0000${t.sourceSystem ?? ''}\u0000${t.sourceId}`;
 
+/**
+ * Hourly UTC per-user content count. Declared locally so this domain carries
+ * no dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyContentCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class ContentService {
   constructor(
@@ -543,5 +554,23 @@ export class ContentService {
     });
 
     return entities.map((entity) => ContentEntity.toEgressType(entity));
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: content counted by
+   * creation time, per user. Rows without an owner are skipped.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyContentCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.contentRepository
+      .createQueryBuilder('content')
+      .select('content.userId', 'user_id')
+      .addSelect(`date_trunc('hour', content.createdAt, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('content.userId IS NOT NULL')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }

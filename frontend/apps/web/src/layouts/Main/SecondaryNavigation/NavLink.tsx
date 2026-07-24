@@ -28,7 +28,7 @@ export function NavLink({ to, label, children, badgeCount = 0, ...props }: NavLi
           className={cn(
             'relative border-l-2 border-transparent p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition will-change-transform active:scale-95',
             isActive &&
-              'border-l-[#58ebbf] text-[#58ebbf] shadow-glow-ci hover:bg-accent hover:text-[#58ebbf]',
+              'border-l-primary text-primary hover:bg-accent hover:text-primary dark:shadow-glow-ci',
           )}
           {...props}
         >

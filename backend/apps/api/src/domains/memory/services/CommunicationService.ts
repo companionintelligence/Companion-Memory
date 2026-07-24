@@ -29,6 +29,17 @@ interface Options {
   afterId?: string;
 }
 
+/**
+ * Hourly UTC per-user communication count. Declared locally so this domain
+ * carries no dependency on aggregating consumers; they enforce the shape
+ * structurally where they consume it.
+ */
+export interface HourlyCommunicationCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class CommunicationService {
   constructor(
@@ -719,5 +730,23 @@ export class CommunicationService {
       id: row.communications_id,
       type: 'communication' as IndexableEntity,
     }));
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: communications
+   * counted by their event `time`, per user.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyCommunicationCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> =
+      await this.communicationRepository
+        .createQueryBuilder('communication')
+        .select('communication.userId', 'user_id')
+        .addSelect(`date_trunc('hour', communication.time, 'UTC')`, 'bucket_start')
+        .addSelect('COUNT(*)::int', 'count')
+        .groupBy('user_id')
+        .addGroupBy('bucket_start')
+        .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }

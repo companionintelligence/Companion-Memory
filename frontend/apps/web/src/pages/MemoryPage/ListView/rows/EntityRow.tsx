@@ -38,7 +38,7 @@ export function EntityRow({ icon, title, subtitle, time, onClick, className }: E
       onClick={onClick}
       onKeyDown={interactive ? handleKeyDown : undefined}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2 transition-colors',
+        'flex items-center gap-3 rounded-lg px-2 py-2 transition-colors',
         interactive &&
           'cursor-pointer hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none',
         className,

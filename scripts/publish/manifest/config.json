@@ -3,17 +3,28 @@
   "id": "ci-memory",
   "name": "Companion Memory",
   "version": "0.0.0",
-  "short_desc": "Personal database, RAG, and behavioral prediction — on your own hardware.",
+  "short_desc": "Companion Memory server is a fully self-hosted AI memory appliance that runs on your own hardware and does the extremely serious work of remembering your digital life so you, and your agents, can stop pretending you definitely had that context two seconds ago.",
   "author": "Companion Intelligence",
   "source": "https://github.com/companionintelligence/CI-Server",
   "port": 8642,
-  "categories": ["ai"],
+  "categories": ["companion-intelligence", "ai", "utilities"],
   "available": true,
   "supported_architectures": ["amd64", "arm64"],
   "tipi_version": 1,
-  "description": "Companion Memory is a fully self-hosted personal database and memory engine for Companion Intelligence: a NestJS REST/LLM API, retrieval-augmented search (RAG) over your own data, automatic summarization, and the HBPE behavioral-prediction engine — all running locally with Ollama and PostgreSQL. No cloud, no data brokers.",
+  "description": "Companion Memory server is a fully self-hosted AI memory appliance that runs on your own hardware and does the extremely serious work of remembering your digital life so you, and your agents, can stop pretending you definitely had that context two seconds ago. Companion Memory Server bundles the local gateway, API, PostgreSQL plus pgvector database, object storage, orchestration, summarization, and HBPE services so your personal memory stack runs entirely on your own hardware.",
   "website": "https://companionintelligence.com",
   "exposable": true,
+  "dynamic_config": true,
+  "cihub_app_version": 1,
+  "min_hub_version": "v0.2.27",
+  "hub_integration": {
+    "memory": {
+      "provider": {
+        "service": "gateway",
+        "port": 8642
+      }
+    }
+  },
   "demo_video": "./metadata/media/companion-memory-demo.mp4",
   "screenshots": [
     "https://github.com/user-attachments/assets/ba285919-36cd-435f-946c-912dfbbad034",

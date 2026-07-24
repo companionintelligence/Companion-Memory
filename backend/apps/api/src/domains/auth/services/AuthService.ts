@@ -11,7 +11,7 @@ import { v7 as uuidv7 } from 'uuid';
 import config from '@ci/configuration';
 
 import { SessionEntity } from '../entities/SessionEntity';
-import type { JwtPayload, RotationResult, SessionMetadata } from '../types';
+import type { IssuedSession, JwtPayload, RotationResult, SessionMetadata } from '../types';
 
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
 const REFRESH_GRACE_PERIOD = parseDuration(config.auth.session.refreshGracePeriod) ?? 0;
@@ -24,10 +24,17 @@ export class AuthService {
     private readonly sessionRepository: Repository<SessionEntity>,
   ) {}
 
-  async issueSessionToken(userId: string, meta: SessionMetadata): Promise<string> {
+  /**
+   * Create a session row and sign its cookie token. The id is minted FIRST so
+   * the JWT can carry it as the `sid` claim — that claim is what later lets a
+   * request's CSRF token be checked against the session that minted it, without
+   * a database read.
+   */
+  async issueSessionToken(userId: string, meta: SessionMetadata): Promise<IssuedSession> {
     const now = new Date().getTime();
 
-    const token = this.generateSessionToken(userId);
+    const sessionId = uuidv7();
+    const token = this.generateSessionToken(userId, sessionId);
     const expiresAt = new Date(now + SESSION_EXPIRES_IN);
 
     const hashedToken = this.digest(token);
@@ -35,7 +42,7 @@ export class AuthService {
     const hashedUserAgent = this.digest(meta.userAgent);
 
     const session = this.sessionRepository.create({
-      id: uuidv7(),
+      id: sessionId,
       token: hashedToken,
       ip: hashedIp,
       user_agent: hashedUserAgent,
@@ -47,7 +54,7 @@ export class AuthService {
 
     await this.sessionRepository.save(session);
 
-    return token;
+    return { sessionToken: token, sessionId };
   }
 
   validateSessionToken(token: string): JwtPayload {
@@ -88,14 +95,20 @@ export class AuthService {
     // Token matched the previous (pre-rotation) hash within the grace window.
     // Don't rotate again, just signal the caller to issue an access token
     // without setting a new session cookie. This handles N concurrent
-    // refreshes.
+    // refreshes. sessionId is still returned so the response can keep the CSRF
+    // cookie bound to this session.
     if (graceMatch) {
       return {
         sessionToken: null,
+        sessionId: session.id,
       };
     }
 
-    const nextToken = this.generateSessionToken(userId);
+    // The rotated token is signed with the SAME sid. For a legacy sid-less
+    // cookie this first rotation is the upgrade point: the new JWT embeds the
+    // session id, and the same response's ensureCsrfCookie re-binds the CSRF
+    // token from the anonymous scope to it.
+    const nextToken = this.generateSessionToken(userId, session.id);
 
     session.previous_token = session.token;
     session.token = this.digest(nextToken);
@@ -105,6 +118,7 @@ export class AuthService {
 
     return {
       sessionToken: nextToken,
+      sessionId: session.id,
     };
   }
 
@@ -191,9 +205,51 @@ export class AuthService {
     throw new UnauthorizedException('Invalid session');
   }
 
-  private generateSessionToken(userId: string) {
+  /**
+   * Resolve the CSRF scope of a request: the id of the session its cookie
+   * belongs to, or `null` when the request is effectively anonymous (no
+   * session cookie, an unverifiable one, or a legacy token without a `sid`
+   * claim).
+   *
+   * `ignoreExpiration` is deliberate: the CSRF scope identifies the principal
+   * a token was MINTED for, and expiry says nothing about that. Session
+   * validity is enforced where sessions are actually consumed — refresh and
+   * logout both re-verify with expiry via validateSessionToken, so an expired
+   * cookie still ends in a 401; API auth uses access tokens.
+   *
+   * What this buys is the ORDER of failure, not the outcome. Enforcing expiry
+   * here would make an expired (or clock-skewed) session cookie resolve to the
+   * anonymous scope, so its session-bound CSRF token would be rejected first
+   * and the request would 403 before ever reaching the 401 that describes the
+   * real problem — spending the SPA's one-shot CSRF retry on a token that was
+   * never the issue. The signature check still stands, so a forged cookie
+   * cannot choose a scope.
+   */
+  resolveCsrfScope(req: Request): string | null {
+    const token: unknown = req.cookies?.[config.auth.cookies.sessionTokenName];
+
+    if (typeof token !== 'string' || token === '') {
+      return null;
+    }
+
+    try {
+      const payload = this.jwtService.verify<JwtPayload>(token, {
+        secret: config.auth.jwt.refreshTokenSecret,
+        ignoreExpiration: true,
+      });
+
+      return payload.sid ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private generateSessionToken(userId: string, sessionId: string) {
     const payload = {
       sub: userId,
+      // Binds the cookie to its session row; resolveCsrfScope reads this claim
+      // to check a CSRF token against the session that minted it.
+      sid: sessionId,
     } satisfies JwtPayload;
 
     return this.jwtService.sign(payload, {

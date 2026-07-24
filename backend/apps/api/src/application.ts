@@ -21,6 +21,7 @@ import { IdFormatGuard } from '@ci/common/guards';
 import { LoggingModule, LoggerService, RequestLoggerMiddleware } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import config from '@ci/configuration';
+import { ActivityModule } from '@ci/domains/activity';
 import { AgentModule } from '@ci/domains/agent';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
@@ -75,6 +76,7 @@ import { UserSnapshotsModule } from '@ci/domains/user-snapshots';
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
     PairingModule,
+    ActivityModule,
     AgentModule,
     AuditModule,
     AuthModule,

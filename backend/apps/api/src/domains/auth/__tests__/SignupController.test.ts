@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import request from 'supertest';
 
 import { FeatureService } from '@ci/common/feature';
+import { LoggerService } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
@@ -17,12 +18,17 @@ import { parseCookies } from './utils/parseCookies';
 
 const COOKIE_NAME = config.auth.cookies.sessionTokenName;
 
+const MOCK_SESSION_ID = 'session-id-1';
+
 const mockUser = { id: 'user-1', name: 'New User', email: 'new@example.com' };
 
 const mockAuthService = {
-  issueSessionToken: jest.fn().mockResolvedValue('session-token-value'),
+  issueSessionToken: jest
+    .fn()
+    .mockResolvedValue({ sessionToken: 'session-token-value', sessionId: MOCK_SESSION_ID }),
   issueAccessToken: jest.fn().mockReturnValue('access-token-value'),
   getSessionMetadata: jest.fn().mockReturnValue({ ip: '127.0.0.1', userAgent: 'test' }),
+  resolveCsrfScope: jest.fn().mockReturnValue(null),
 };
 
 const mockUserService = {
@@ -45,6 +51,14 @@ const mockCsrfService = {
   verifyToken: jest.fn().mockReturnValue(true),
 };
 
+const mockLogger = {
+  setContext: jest.fn(),
+  log: jest.fn(),
+  warn: jest.fn(),
+  debug: jest.fn(),
+  error: jest.fn(),
+};
+
 @Module({
   controllers: [SignupController],
   providers: [
@@ -53,6 +67,8 @@ const mockCsrfService = {
     { provide: SignupCodeService, useValue: mockSignupCodeService },
     { provide: FeatureService, useValue: mockFeatureService },
     { provide: CsrfService, useValue: mockCsrfService },
+    // CsrfGuard (on /signup) injects the logger for its rejection warnings.
+    { provide: LoggerService, useValue: mockLogger },
   ],
 })
 class TestModule implements NestModule {
@@ -87,7 +103,10 @@ describe('SignupController', () => {
     jest.clearAllMocks();
     mockUserService.checkEmailAvailability.mockResolvedValue(false);
     mockUserService.create.mockResolvedValue(mockUser);
-    mockAuthService.issueSessionToken.mockResolvedValue('session-token-value');
+    mockAuthService.issueSessionToken.mockResolvedValue({
+      sessionToken: 'session-token-value',
+      sessionId: MOCK_SESSION_ID,
+    });
     mockAuthService.issueAccessToken.mockReturnValue('access-token-value');
     mockFeatureService.isFeatureEnabled.mockResolvedValue(false);
     mockSignupCodeService.findOne.mockResolvedValue({ signup_code: 'valid-code', used: false });
@@ -129,6 +148,12 @@ describe('SignupController', () => {
       const cookies = parseCookies(response);
 
       expect(cookies[COOKIE_NAME].maxAge).toBeDefined();
+    });
+
+    it('should mint the CSRF token bound to the newly issued session (identity boundary)', async () => {
+      await request(app.getHttpServer()).post('/signup').send(validPayload).expect(201);
+
+      expect(mockCsrfService.generateToken).toHaveBeenCalledWith(MOCK_SESSION_ID);
     });
 
     it('should return 400 when email is already in use', async () => {

@@ -29,6 +29,17 @@ import { FileVariant, type CreateFileDto, type UpdateFileDto, type UploadFileDto
 const BUCKET_REGION = config.staticfiles.bucket ?? 'us-east-1';
 const SIGNATURE_URL = config.staticfiles.auth.signatureUrl ?? config.staticfiles.storageUrl;
 
+/**
+ * Hourly UTC per-user file count. Declared locally so this domain carries no
+ * dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyFileCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class FileService implements OnModuleInit {
   private s3 = new S3Client({
@@ -539,5 +550,25 @@ export class FileService implements OnModuleInit {
       ...FileEntity.toEgressType(file),
       url: parsedUrl.pathname + parsedUrl.search,
     };
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: files counted by
+   * creation time, per user. Soft-deleted files are excluded automatically by
+   * the query builder (FileEntity has a @DeleteDateColumn); ownerless rows are
+   * skipped.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyFileCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.fileRepository
+      .createQueryBuilder('file')
+      .select('file.userId', 'user_id')
+      .addSelect(`date_trunc('hour', file.createdAt, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('file.userId IS NOT NULL')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }

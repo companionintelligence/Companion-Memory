@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { createHookContext, fetchJson } from '@ci/common';
+import { createHookContext, fetchJson, FetchJsonError } from '@ci/common';
 import { jwtDecode } from 'jwt-decode';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -25,6 +25,125 @@ function withCsrfHeader(headers?: HeadersInit): HeadersInit {
     ...headers,
     'X-CSRF-Token': token,
   };
+}
+
+/**
+ * Set (or re-validate) the csrf cookie. The endpoint reuses a valid existing
+ * token and only mints when the cookie is absent/invalid, so calling this can
+ * never invalidate another tab or an open server-rendered form.
+ */
+async function primeCsrfCookie(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/authenticate/csrf', {
+      credentials: 'include',
+    });
+
+    // The status matters: on a non-2xx the cookie was NOT (re)issued, so the
+    // caller must not treat a retry as meaningfully different from the attempt
+    // that just failed. Swallow the error rather than propagating — a priming
+    // blip should not by itself log out a user whose session is still valid;
+    // let the refresh attempt below decide that.
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * POST /authenticate/logout with the double-submit CSRF header.
+ *
+ * Logout is CsrfGuard-protected so a cross-site POST cannot force it, which
+ * means a stale or dropped csrf cookie would 403 the request and skip the
+ * server-side teardown (invalidateSession + cookie clears) — leaving a
+ * logged-out UI in front of a live 7-day session that the next mount refresh
+ * would silently resume. Mirror refreshSession: prime the cookie when it is
+ * missing, and on a 403 re-prime and retry exactly once so a request carrying a
+ * valid session always tears that session down. Priming cannot help a
+ * cross-site attacker — the primed cookie is sameSite=strict and unreadable
+ * cross-origin — so this does not reopen the forced-logout hole.
+ */
+async function postLogout(): Promise<void> {
+  if (!getCsrfToken()) {
+    await primeCsrfCookie();
+  }
+
+  const first = await fetch('/api/authenticate/logout', {
+    method: 'POST',
+    headers: withCsrfHeader(),
+    credentials: 'include',
+  });
+
+  if (first.ok || first.status !== 403) {
+    if (!first.ok) {
+      console.error('Logout request failed with status:', first.status);
+    }
+
+    return;
+  }
+
+  // A 403 means the cookie was absent or invalid (the SPA always sends the
+  // cookie value as the header, so the two never merely mismatch), so a
+  // *successful* prime re-issues — and thereby replaces — it with a valid token.
+  // Gate the retry on that success (primeCsrfCookie returns res.ok): a failed
+  // prime leaves the same rejected cookie in place, so the retry would only earn
+  // a second 403.
+  if (!(await primeCsrfCookie())) {
+    console.error('Logout request failed with status:', first.status);
+
+    return;
+  }
+
+  const retry = await fetch('/api/authenticate/logout', {
+    method: 'POST',
+    headers: withCsrfHeader(),
+    credentials: 'include',
+  });
+
+  if (!retry.ok) {
+    console.error('Logout retry failed with status:', retry.status);
+  }
+}
+
+/**
+ * POST /authenticate/refresh with the double-submit CSRF header.
+ *
+ * Primes the csrf cookie first when it is missing (e.g. a cleared cookie with a
+ * still-valid session), and on a 403 — a stale/invalid CSRF token, such as one
+ * signed with a rotated server secret — re-primes and retries exactly once.
+ * A 401 (invalid session) is never retried: that must fall through to login.
+ */
+async function refreshSession(): Promise<AuthResponse | undefined> {
+  if (!getCsrfToken()) {
+    await primeCsrfCookie();
+  }
+
+  try {
+    return await fetchJson<AuthResponse>('/api/authenticate/refresh', {
+      method: 'POST',
+      headers: withCsrfHeader(),
+      credentials: 'include',
+    });
+  } catch (err: unknown) {
+    if (!(err instanceof FetchJsonError) || err.status !== 403) {
+      throw err;
+    }
+
+    // A 403 means the cookie was absent or invalid (the SPA always sends the
+    // cookie value as the header, so the two never merely mismatch), so a
+    // *successful* prime re-issues — and thereby replaces — it with a valid
+    // token. Gate the retry on that success (primeCsrfCookie returns res.ok): a
+    // failed prime leaves the same rejected cookie in place, so the retry would
+    // only burn the one-shot budget on a certain second 403 and log the user out.
+    if (!(await primeCsrfCookie())) {
+      throw err;
+    }
+
+    return fetchJson<AuthResponse>('/api/authenticate/refresh', {
+      method: 'POST',
+      headers: withCsrfHeader(),
+      credentials: 'include',
+    });
+  }
 }
 
 interface JwtPayload {
@@ -72,9 +191,7 @@ function useAuth(): ReturnValue {
 
       try {
         // Obtain a pre-auth CSRF token before submitting credentials
-        await fetch('/api/authenticate/csrf', {
-          credentials: 'include',
-        });
+        await primeCsrfCookie();
 
         const data = await fetchJson<AuthResponse>('/api/authenticate', {
           method: 'POST',
@@ -103,15 +220,7 @@ function useAuth(): ReturnValue {
 
   const logout = useCallback(async () => {
     try {
-      const response = await fetch('/api/authenticate/logout', {
-        method: 'POST',
-        headers: withCsrfHeader(),
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        console.error('Logout request failed with status:', response.status);
-      }
+      await postLogout();
     } catch (error) {
       console.error('Logout failed on server:', error);
     }
@@ -132,9 +241,7 @@ function useAuth(): ReturnValue {
 
       try {
         // Obtain a pre-auth CSRF token before submitting signup
-        await fetch('/api/authenticate/csrf', {
-          credentials: 'include',
-        });
+        await primeCsrfCookie();
 
         const data = await fetchJson<AuthResponse>('/api/signup', {
           method: 'POST',
@@ -166,11 +273,7 @@ function useAuth(): ReturnValue {
     setRefreshError(null);
 
     try {
-      const data = await fetchJson<AuthResponse>('/api/authenticate/refresh', {
-        method: 'POST',
-        headers: withCsrfHeader(),
-        credentials: 'include',
-      });
+      const data = await refreshSession();
 
       setAccessToken(data?.accessToken ?? null);
     } catch (err: unknown) {
@@ -182,11 +285,7 @@ function useAuth(): ReturnValue {
   useEffect(() => {
     (async () => {
       try {
-        const data = await fetchJson<AuthResponse>('/api/authenticate/refresh', {
-          method: 'POST',
-          headers: withCsrfHeader(),
-          credentials: 'include',
-        });
+        const data = await refreshSession();
 
         setAccessToken(data?.accessToken ?? null);
       } catch {

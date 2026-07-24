@@ -11,17 +11,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish to CI-Portal
-    runs-on: ubuntu-latest
+  # ── Per-architecture native builds ──────────────────────────────────
+  #
+  # Each leg builds every companion/* image natively (no QEMU — the HBPE
+  # image compiles llama-cpp-python from source, which is intractable under
+  # emulation) and pushes it as :<version>-<arch>. The merge job below
+  # combines the two into the :<version> manifest list that the store's
+  # docker-compose.json references.
+  build:
+    name: Build & push (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
 
     env:
       REGISTRY: ${{ vars.REGISTRY || 'ghcr.io/companionintelligence' }}
-      PORTAL_API: ${{ vars.DEV_PORTAL_API }}
-      STORE_ADMIN_API_KEY: ${{ secrets.DEV_STORE_ADMIN_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
@@ -36,7 +50,8 @@ jobs:
           # GitHub-hosted runners ship with ~14 GB free, which is not enough
           # for `make production` to build every CI service image. Drop the
           # large pre-installed toolchains we don't need so the build doesn't
-          # run out of space.
+          # run out of space. (Paths that don't exist on the arm image are
+          # covered by the trailing || true.)
           echo "Disk space before cleanup:"
           df -h /
           sudo rm -rf \
@@ -74,6 +89,50 @@ jobs:
           corepack prepare --activate
           yarn --version
 
+      - name: Install jq
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      - name: Build and push ${{ matrix.arch }} images
+        env:
+          # Images only on this leg: the Portal ingest → publish registration
+          # happens once, in the merge job, after the manifest lists exist.
+          SKIP_PORTAL: 'true'
+          TAG_SUFFIX: '-${{ matrix.arch }}'
+        run: make publish
+
+  # ── Manifest merge + Portal registration ───────────────────────────
+  merge-and-register:
+    name: Merge manifests & publish to CI-Portal
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      REGISTRY: ${{ vars.REGISTRY || 'ghcr.io/companionintelligence' }}
+      PORTAL_API: ${{ vars.DEV_PORTAL_API }}
+      STORE_ADMIN_API_KEY: ${{ secrets.DEV_STORE_ADMIN_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve VERSION from tag
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#v}"
+          echo "Resolved VERSION=${version} from tag ${tag}"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -84,6 +143,10 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: Run publish script
-        run: make publish
+      - name: Merge per-arch tags into multi-arch manifest lists
+        run: scripts/publish/merge-manifests.sh
 
+      - name: Register with CI-Portal (ingest → publish)
+        env:
+          SKIP_IMAGE_PUSH: 'true'
+        run: scripts/publish/publish.sh

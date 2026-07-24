@@ -134,7 +134,7 @@ export function ListView() {
   // First load (no data yet): skeletons over a bare spinner.
   if (loading && data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto pl-1 pr-4 pb-2">
         <ListSkeleton count={10} />
       </div>
     );
@@ -143,7 +143,7 @@ export function ListView() {
   // Hard error with nothing to show.
   if (error && data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto pl-1 pr-4 pb-2">
         <ErrorState onRetry={refetch} />
       </div>
     );
@@ -160,7 +160,7 @@ export function ListView() {
   }
 
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pl-1 pr-4 pb-2">
       <div className="flex flex-col">
         {groups
           ? groups.map((group) => (

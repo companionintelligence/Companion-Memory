@@ -19,7 +19,10 @@ export function EntityGridItem({ className, children, onClick }: EntityGridItemP
   return (
     <div
       className={cn(
-        'flex flex-col border border-border bg-card text-card-foreground shadow-md rounded-lg cursor-pointer select-none p-3 gap-3 hover:shadow-lg transition-shadow duration-75',
+        // h-full + overflow-hidden keep card content inside the fixed gallery
+        // row height; min-w-0 lets truncate/line-clamp actually ellipsize in a
+        // CSS grid track instead of expanding the card.
+        'flex h-full min-h-0 min-w-0 flex-col overflow-hidden border border-border bg-card text-card-foreground shadow-md rounded-lg cursor-pointer select-none p-3 gap-3 hover:shadow-lg transition-shadow duration-75',
         className,
       )}
       onClick={handleClick}
@@ -34,7 +37,11 @@ interface HeaderProps {
 }
 
 function Header({ children }: HeaderProps) {
-  return <div className="flex items-center gap-2">{children}</div>;
+  // Icons use shrink-0; everything else (titles) must be allowed to shrink so
+  // truncate/ellipsis can kick in inside the fixed gallery card width.
+  return (
+    <div className="flex min-w-0 shrink-0 items-center gap-2 [&>:not(.shrink-0)]:min-w-0">{children}</div>
+  );
 }
 
 interface ContentProps {
@@ -43,7 +50,11 @@ interface ContentProps {
 }
 
 function Content({ children, className }: ContentProps) {
-  return <div className={cn('flex-1 flex flex-col gap-2 min-h-0', className)}>{children}</div>;
+  return (
+    <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden', className)}>
+      {children}
+    </div>
+  );
 }
 
 interface FooterProps {
@@ -52,7 +63,7 @@ interface FooterProps {
 }
 
 function Footer({ children, className }: FooterProps) {
-  return <div className={cn('flex items-center gap-2', className)}>{children}</div>;
+  return <div className={cn('flex min-w-0 shrink-0 items-center gap-2', className)}>{children}</div>;
 }
 
 interface MetaProps {

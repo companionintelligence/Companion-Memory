@@ -13,6 +13,17 @@ import type { CreateAnswerDto, UpdateAnswerDto } from '../types';
 
 import { QuestionService } from './QuestionService';
 
+/**
+ * Hourly UTC per-user answer count. Declared locally so this domain carries
+ * no dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyAnswerCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class AnswerService {
   constructor(
@@ -291,5 +302,23 @@ export class AnswerService {
     });
 
     return true;
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: answers counted by
+   * `answeredAt`, per user. AnswerEntity models the user only as a relation,
+   * so the FK column is referenced directly.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyAnswerCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.answerRepository
+      .createQueryBuilder('answer')
+      .select('answer.user_id', 'user_id')
+      .addSelect(`date_trunc('hour', answer.answeredAt, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }

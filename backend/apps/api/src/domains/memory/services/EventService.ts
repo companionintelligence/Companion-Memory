@@ -38,6 +38,17 @@ interface Options {
   bbox?: number[];
 }
 
+/**
+ * Hourly UTC per-user event count. Declared locally so this domain carries no
+ * dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyEventCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class EventService {
   constructor(
@@ -665,5 +676,22 @@ export class EventService {
       earliest: row?.earliest ?? null,
       latest: row?.latest ?? null,
     };
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: events counted by
+   * `startTime`, per user.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyEventCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.eventRepository
+      .createQueryBuilder('event')
+      .select('event.userId', 'user_id')
+      .addSelect(`date_trunc('hour', event.startTime, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }
