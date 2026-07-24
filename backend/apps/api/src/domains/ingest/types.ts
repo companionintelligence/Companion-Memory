@@ -53,6 +53,9 @@ export const captureEventSchema = z.object({
   source_id: z.string().min(1),
   kind: z.string().min(1),
   occurred_at: z.string().datetime(),
+  /** ISO 8601, when the event ended — for sources that know the span (viewing
+   *  sessions, calendar events, flights). Materializes as events.end_time. */
+  ended_at: z.string().datetime().optional(),
   observed_at: z.string().datetime().optional(),
   title: z.string().optional(),
   description: z.string().optional(),

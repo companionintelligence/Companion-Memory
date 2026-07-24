@@ -39,13 +39,14 @@ export function BrowserActivityGridItem({ browserActivity, onClick }: Props) {
         <div className="text-md font-semibold truncate">Page view</div>
       </EntityGridItem.Header>
 
-      <EntityGridItem.Content className="gap-8 items-center justify-center">
-        <div>{data.title}</div>
+      <EntityGridItem.Content className="min-w-0 items-center justify-center gap-2 text-center">
+        <div className="line-clamp-3 w-full min-w-0 break-words leading-tight">{data.title}</div>
         <a
           href={data.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="hover:underline text-blue-600 hover:text-blue-800"
+          className="block w-full min-w-0 truncate text-blue-600 hover:text-blue-800 hover:underline"
+          onClick={(e) => e.stopPropagation()}
         >
           {domain}
         </a>

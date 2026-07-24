@@ -47,6 +47,16 @@ type ActionType implements Node & Taggable {
   updatedAt: DateTime!
 }
 
+"""
+Activity count for one local calendar day, rolled up from hourly UTC buckets
+"""
+type ActivityBucketType {
+  count: Int!
+
+  """Local calendar day, yyyy-MM-dd, in the user profile timezone"""
+  date: String!
+}
+
 type ActivityCountsType {
   activities: Int
   apiLogs: Int
@@ -283,6 +293,7 @@ input CreateCommunicationInput {
   communicationType: String!
   content: String!
   direction: String
+  durationSeconds: Int
   fromEntityId: String
   participantsMetadata: JSON
   preview: String
@@ -1026,6 +1037,20 @@ type ProviderType implements Node {
 type Query {
   action(id: ID!): ActionType
   actions(after: String, before: String, first: Int, last: Int): ActionConnection!
+
+  """
+  Precomputed activity counts per local calendar day, with day boundaries in the user profile timezone. Eventually consistent: refreshed from the source tables every 15 minutes.
+  """
+  activityTimeline(
+    """Inclusive last day, yyyy-MM-dd"""
+    end: String!
+
+    """Restrict to these activity sources; all sources when omitted"""
+    sources: [String!]
+
+    """Inclusive first day, yyyy-MM-dd"""
+    start: String!
+  ): [ActivityBucketType!]!
   answer(id: ID!): AnswerType
   answers(after: String, before: String, first: Int, last: Int): AnswerConnection!
   browserActivities(after: String, before: String, first: Int, last: Int): BrowserActivityConnection!

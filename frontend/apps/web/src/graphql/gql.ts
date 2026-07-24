@@ -82,6 +82,7 @@ type Documents = {
     "\n  fragment FileGridItemFragment on FileType {\n    id\n    filename\n    previewUrl\n  }\n": typeof types.FileGridItemFragmentFragmentDoc,
     "\n  query GetInventoryItems {\n    items {\n      edges {\n        node {\n          id\n          name\n          category\n          description\n          brand\n          model\n          currentValue\n          file {\n            sourceUrl\n          }\n        }\n      }\n    }\n  }\n": typeof types.GetInventoryItemsDocument,
     "\n  query GetItem($id: ID!) {\n    item(id: $id) {\n      id\n      name\n      description\n      tags {\n        id\n        label\n      }\n    }\n  }\n": typeof types.GetItemDocument,
+    "\n  query ActivityTimeline($start: String!, $end: String!) {\n    activityTimeline(start: $start, end: $end) {\n      date\n      count\n    }\n  }\n": typeof types.ActivityTimelineDocument,
     "\n  fragment TimelineBrowserActivityCardData on BrowserActivityType {\n    id\n    title\n    url\n    actionType\n    duration\n    time\n    tags {\n      label\n    }\n  }\n": typeof types.TimelineBrowserActivityCardDataFragmentDoc,
     "\n  fragment TimelineCommunicationCardData on CommunicationType {\n    id\n    subject\n    preview\n    communicationContent: content\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n    to {\n      edges {\n        node {\n          id\n          name\n        }\n      }\n    }\n    tags {\n      label\n    }\n  }\n": typeof types.TimelineCommunicationCardDataFragmentDoc,
     "\n  fragment TimelineEventCardData on EventType {\n    id\n    title\n    description\n    sourceSystem\n    startTime\n    endTime\n    locationName\n    location {\n      ... on PlaceType {\n        id\n        name\n        properties\n      }\n    }\n    previewUrl\n    mediaUrl\n    mediaContentType\n    mediaWidth\n    mediaHeight\n    mediaSize\n    tags {\n      label\n    }\n  }\n": typeof types.TimelineEventCardDataFragmentDoc,
@@ -203,6 +204,7 @@ const documents: Documents = {
     "\n  fragment FileGridItemFragment on FileType {\n    id\n    filename\n    previewUrl\n  }\n": types.FileGridItemFragmentFragmentDoc,
     "\n  query GetInventoryItems {\n    items {\n      edges {\n        node {\n          id\n          name\n          category\n          description\n          brand\n          model\n          currentValue\n          file {\n            sourceUrl\n          }\n        }\n      }\n    }\n  }\n": types.GetInventoryItemsDocument,
     "\n  query GetItem($id: ID!) {\n    item(id: $id) {\n      id\n      name\n      description\n      tags {\n        id\n        label\n      }\n    }\n  }\n": types.GetItemDocument,
+    "\n  query ActivityTimeline($start: String!, $end: String!) {\n    activityTimeline(start: $start, end: $end) {\n      date\n      count\n    }\n  }\n": types.ActivityTimelineDocument,
     "\n  fragment TimelineBrowserActivityCardData on BrowserActivityType {\n    id\n    title\n    url\n    actionType\n    duration\n    time\n    tags {\n      label\n    }\n  }\n": types.TimelineBrowserActivityCardDataFragmentDoc,
     "\n  fragment TimelineCommunicationCardData on CommunicationType {\n    id\n    subject\n    preview\n    communicationContent: content\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n    to {\n      edges {\n        node {\n          id\n          name\n        }\n      }\n    }\n    tags {\n      label\n    }\n  }\n": types.TimelineCommunicationCardDataFragmentDoc,
     "\n  fragment TimelineEventCardData on EventType {\n    id\n    title\n    description\n    sourceSystem\n    startTime\n    endTime\n    locationName\n    location {\n      ... on PlaceType {\n        id\n        name\n        properties\n      }\n    }\n    previewUrl\n    mediaUrl\n    mediaContentType\n    mediaWidth\n    mediaHeight\n    mediaSize\n    tags {\n      label\n    }\n  }\n": types.TimelineEventCardDataFragmentDoc,
@@ -530,6 +532,10 @@ export function gql(source: "\n  query GetInventoryItems {\n    items {\n      e
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  query GetItem($id: ID!) {\n    item(id: $id) {\n      id\n      name\n      description\n      tags {\n        id\n        label\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetItem($id: ID!) {\n    item(id: $id) {\n      id\n      name\n      description\n      tags {\n        id\n        label\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  query ActivityTimeline($start: String!, $end: String!) {\n    activityTimeline(start: $start, end: $end) {\n      date\n      count\n    }\n  }\n"): (typeof documents)["\n  query ActivityTimeline($start: String!, $end: String!) {\n    activityTimeline(start: $start, end: $end) {\n      date\n      count\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

@@ -2,6 +2,7 @@ import type { Preview, StoryContext, StoryFn } from '@storybook/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { FeaturesProvider } from '@/common/feature';
+import { AuthProvider } from '@/hooks';
 
 import '../src/styles/index.css';
 
@@ -23,7 +24,9 @@ const preview = {
 export const decorators = [
   (story: StoryFn, context: StoryContext) => (
     <MemoryRouter>
-      <FeaturesProvider args={[]}>{story(context.args, context)}</FeaturesProvider>
+      <AuthProvider args={[]}>
+        <FeaturesProvider args={[]}>{story(context.args, context)}</FeaturesProvider>
+      </AuthProvider>
     </MemoryRouter>
   ),
 ];

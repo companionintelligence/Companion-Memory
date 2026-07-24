@@ -188,6 +188,16 @@ describe('BulkIngestController', () => {
       });
     });
 
+    it('materializes ended_at as the event end_time, omitted when absent', async () => {
+      const { controller, eventService } = makeController({ captureInserted: [true, true] });
+      await controller.ingest(ctx, {
+        events: [{ ...ev('a'), ended_at: '2026-01-01T01:30:00.000Z' }, ev('b')],
+      });
+      const dtos = (eventService.create as jest.Mock).mock.calls[0][1];
+      expect(dtos[0].end_time).toEqual(new Date('2026-01-01T01:30:00.000Z'));
+      expect(dtos[1]).not.toHaveProperty('end_time');
+    });
+
     it('backfills event_id onto the raw log with ONE set-based UPDATE', async () => {
       const { controller, dataSource } = makeController({ captureInserted: [true, true] });
       await controller.ingest(ctx, { events: [ev('a'), ev('b')] });

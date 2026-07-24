@@ -59,6 +59,15 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # shared_preload_libraries is required for TimescaleDB. Passing it via
 # the postgres CLI applies regardless of whether postgresql.conf has
 # been previously initialised on the persistent volume.
-CMD ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+#
+# max_connections is raised from the stock 100 because the appliance runs
+# many pooled clients against one instance: the orchestrator (4 Temporal
+# service roles, each with a default + visibility pool), the API (TypeORM
+# plus a separate pg-boss pool), and the Python sidecars. At 100 the
+# orchestrator alone could pin ~76 slots and the API would fail to connect
+# with SQLSTATE 53300.
+CMD ["postgres", \
+     "-c", "shared_preload_libraries=timescaledb", \
+     "-c", "max_connections=200"]
 
 EXPOSE 5432

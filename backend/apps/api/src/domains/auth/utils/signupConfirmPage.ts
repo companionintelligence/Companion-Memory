@@ -21,6 +21,10 @@ export interface SignupConfirmParams {
   cancelUrl: string;
   /** Per-request CSP nonce for the inline <style>. */
   nonce: string;
+  /** True when this render is the one-shot retry after a CSRF failure; echoed
+   *  as a hidden field so a second consecutive failure exits to /login instead
+   *  of looping. */
+  csrfRetry?: boolean;
 }
 
 function escapeHtml(value: string): string {
@@ -70,7 +74,12 @@ export function renderSignupConfirmPage(params: SignupConfirmParams): string {
     <div class="actions">
       <a class="btn secondary" href="${cancelUrl}">Cancel</a>
       <form method="POST" action="/api/authenticate/oidc/confirm-account">
-        <input type="hidden" name="csrf" value="${csrfToken}" />
+        <input type="hidden" name="csrf" value="${csrfToken}" />${
+          params.csrfRetry
+            ? `
+        <input type="hidden" name="csrf_retry" value="1" />`
+            : ''
+        }
         <button class="btn primary" type="submit">Create account</button>
       </form>
     </div>

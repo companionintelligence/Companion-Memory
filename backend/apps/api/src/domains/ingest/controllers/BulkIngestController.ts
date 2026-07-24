@@ -210,6 +210,7 @@ export class BulkIngestController {
               title: e.title ?? e.kind,
               description: e.description,
               start_time: new Date(e.occurred_at),
+              ...(e.ended_at ? { end_time: new Date(e.ended_at) } : {}),
               event_type: e.kind,
               source_type: e.source_type ?? 'capture',
               source_system: e.source_system,

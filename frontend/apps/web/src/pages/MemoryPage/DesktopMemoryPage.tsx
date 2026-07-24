@@ -14,6 +14,7 @@ import { gql } from '@/graphql';
 
 import { useEntityService } from '../MemoryPage/useEntityService';
 
+import { ActivityTimelineRail } from './ActivityTimelineRail';
 import { EntityDetails } from './Components/EntityDetails';
 import { AdvancedFilters, AdvancedSearchToggle } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { GalleryView } from './GalleryView';
@@ -356,7 +357,15 @@ export default function DesktopMemoryPage() {
 
       <PageContent className="p-0 gap-0">
         <div className="flex min-h-0 flex-1 flex-col">
-          {activeTab === 'list' && <ListView />}
+          {/* List view splits into two independently-scrolled panes: wheeling
+              over the left rail moves the heatmap's window through time, while
+              the result list on the right keeps its own scroll. */}
+          {activeTab === 'list' && (
+            <div className="flex min-h-0 flex-1">
+              <ActivityTimelineRail className="shrink-0 border-r" />
+              <ListView />
+            </div>
+          )}
           {activeTab === 'map' && <DesktopMapView />}
           {activeTab === 'gallery' && <GalleryView />}
           {activeTab === 'graph' && <GraphView variant="desktop" />}

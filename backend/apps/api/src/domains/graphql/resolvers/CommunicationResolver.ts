@@ -116,6 +116,7 @@ export class CommunicationResolver {
         to_entity_ids: item.toEntityIds,
         participants_metadata: item.participantsMetadata,
         attachments: item.attachments,
+        duration_seconds: item.durationSeconds,
         source_type: item.sourceType,
         source_system: item.sourceSystem,
         source_id: item.sourceId,

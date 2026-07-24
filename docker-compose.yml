@@ -7,7 +7,10 @@ services:
       - ci
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready"]
+      # -U is required: pg_isready otherwise defaults the role to $USER (root
+      # in this image), and every 5s probe logs a FATAL "role root does not
+      # exist". The probe still passed, but the noise buries real errors.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 5

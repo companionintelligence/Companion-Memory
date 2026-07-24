@@ -121,9 +121,15 @@ function resolveRequestOrigin(origin: OidcCallbackRequestOrigin): string {
  *
  * Compares HOST, never scheme. Cookies are keyed by host, not by scheme, so the
  * scheme is irrelevant to the bug — and comparing it would be actively dangerous:
- * the ci-memory gateway sets `X-Forwarded-Proto $scheme`, overwriting Traefik's
- * `https` with its own internal `http`. An origin comparison would therefore never
- * match on the public host and would bounce the browser to it forever.
+ * the ci-memory gateway used to set `X-Forwarded-Proto $scheme`, overwriting
+ * Traefik's `https` with its own internal `http`, so an origin comparison would
+ * never match on the public host and would bounce the browser to it forever.
+ *
+ * The gateway now forwards the client's scheme (`$client_proto` in
+ * `infrastructure/gateway/nginx.conf`, so that `secure: req.secure` produces
+ * Secure cookies on HTTPS installs), but keep comparing host only: any appliance
+ * still running an older gateway image sends the rewritten `http`, and the host
+ * comparison is correct either way.
  */
 export function resolveOidcOriginBounce(
   origin: OidcCallbackRequestOrigin,

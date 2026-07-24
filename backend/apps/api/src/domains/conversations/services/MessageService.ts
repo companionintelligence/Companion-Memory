@@ -11,6 +11,17 @@ import { MessageEntity, type Message } from '../entities/MessageEntity';
 import { MessageCreatedEvent, MessageUpdatedEvent, MessageDeletedEvent } from '../events';
 import type { CreateMessageDto, UpdateMessageDto } from '../types';
 
+/**
+ * Hourly UTC per-user message count. Declared locally so this domain carries
+ * no dependency on aggregating consumers; they enforce the shape structurally
+ * where they consume it.
+ */
+export interface HourlyMessageCount {
+  userId: string;
+  bucketStart: Date;
+  count: number;
+}
+
 @Injectable()
 export class MessageService {
   constructor(
@@ -278,5 +289,26 @@ export class MessageService {
     });
 
     return true;
+  }
+
+  /**
+   * Hourly UTC activity buckets for the activity rollup: messages counted by
+   * creation time, per user. Deleted/canceled messages don't count as
+   * activity. MessageEntity models the user only as a relation, so the FK
+   * column is referenced directly.
+   */
+  async aggregateHourlyActivity(): Promise<HourlyMessageCount[]> {
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.messageRepository
+      .createQueryBuilder('message')
+      .select('message.user_id', 'user_id')
+      .addSelect(`date_trunc('hour', message.createdAt, 'UTC')`, 'bucket_start')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('message.canceled = false')
+      .andWhere('message.createdAt IS NOT NULL')
+      .groupBy('user_id')
+      .addGroupBy('bucket_start')
+      .getRawMany();
+
+    return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
 }
