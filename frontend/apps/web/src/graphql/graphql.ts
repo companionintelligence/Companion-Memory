@@ -564,6 +564,34 @@ export type CreateSavedSearchPayload = {
   success: Scalars['Boolean']['output'];
 };
 
+/** Scalar metric values for one local calendar day */
+export type DailyMetricValuesType = {
+  __typename?: 'DailyMetricValuesType';
+  avgSentiment?: Maybe<Scalars['Float']['output']>;
+  kmTraveled?: Maybe<Scalars['Float']['output']>;
+  nConversations?: Maybe<Scalars['Int']['output']>;
+  nDomains?: Maybe<Scalars['Int']['output']>;
+  nMessages?: Maybe<Scalars['Int']['output']>;
+  nPlaces?: Maybe<Scalars['Int']['output']>;
+  nUniqueContacts?: Maybe<Scalars['Int']['output']>;
+  outboundRatio?: Maybe<Scalars['Float']['output']>;
+  screenMinutes?: Maybe<Scalars['Float']['output']>;
+  spendTotal?: Maybe<Scalars['Float']['output']>;
+};
+
+/** Precomputed daily feature-store row for one local calendar day. Eventually consistent: refreshed hourly (today + yesterday) and backfilled on boot. */
+export type DailyMetricsType = {
+  __typename?: 'DailyMetricsType';
+  computedAt: Scalars['DateTime']['output'];
+  /** Per-metric coverage in [0, 1]; keys match the snake_case metric names */
+  coverage: Scalars['JSON']['output'];
+  /** Local calendar day, yyyy-MM-dd */
+  date: Scalars['String']['output'];
+  metrics: DailyMetricValuesType;
+  /** IANA timezone used when the day was bucketed */
+  timezone: Scalars['String']['output'];
+};
+
 export type DeleteByIdInput = {
   id: Scalars['String']['input'];
 };
@@ -572,6 +600,43 @@ export type DeleteByIdPayload = {
   __typename?: 'DeleteByIdPayload';
   deletedId?: Maybe<Scalars['ID']['output']>;
   success: Scalars['Boolean']['output'];
+};
+
+/** Provenance for a deterministically computed descriptive answer */
+export type DescriptiveAnswerProvenanceType = {
+  __typename?: 'DescriptiveAnswerProvenanceType';
+  aggregate: Scalars['String']['output'];
+  daysInRange: Scalars['Int']['output'];
+  daysWithData: Scalars['Int']['output'];
+  from: Scalars['String']['output'];
+  meanCoverage: Scalars['Float']['output'];
+  metric: Scalars['String']['output'];
+  sources: Array<Scalars['String']['output']>;
+  timeframe: Scalars['String']['output'];
+  to: Scalars['String']['output'];
+};
+
+/** Compute-then-narrate answer: value is always deterministic from daily_metrics; answer is phrasing only */
+export type DescriptiveAnswerType = {
+  __typename?: 'DescriptiveAnswerType';
+  answer: Scalars['String']['output'];
+  category: Scalars['String']['output'];
+  key: Scalars['String']['output'];
+  provenance: DescriptiveAnswerProvenanceType;
+  question: Scalars['String']['output'];
+  timeframe: Scalars['String']['output'];
+  unit?: Maybe<Scalars['String']['output']>;
+  value?: Maybe<Scalars['Float']['output']>;
+};
+
+/** A catalog question the descriptive engine can answer */
+export type DescriptiveQuestionType = {
+  __typename?: 'DescriptiveQuestionType';
+  category: Scalars['String']['output'];
+  key: Scalars['String']['output'];
+  metric: Scalars['String']['output'];
+  question: Scalars['String']['output'];
+  timeframe: Scalars['String']['output'];
 };
 
 export type Edge = {
@@ -927,6 +992,8 @@ export type Mutation = {
   markSummaryAsDismissed?: Maybe<SummaryType>;
   /** Mark a summary as seen */
   markSummaryAsSeen?: Maybe<SummaryType>;
+  /** Recompute and upsert a trailing window of daily metrics for the signed-in user in the given timezone (UTC when omitted). */
+  refreshDailyMetrics: Array<DailyMetricsType>;
   removeAnswer: Scalars['Boolean']['output'];
   removeContent: Scalars['Boolean']['output'];
   removeEvent: Scalars['Boolean']['output'];
@@ -1162,6 +1229,12 @@ export type MutationMarkSummaryAsDismissedArgs = {
 
 export type MutationMarkSummaryAsSeenArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationRefreshDailyMetricsArgs = {
+  days?: InputMaybe<Scalars['Int']['input']>;
+  timezone?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -1490,6 +1563,12 @@ export type Query = {
   connections: ConnectionConnection;
   content?: Maybe<ContentType>;
   contents: ContentConnection;
+  /** Precomputed daily feature-store rows for the signed-in user over an inclusive yyyy-MM-dd range. */
+  dailyMetrics: Array<DailyMetricsType>;
+  /** Answers every catalog question for the signed-in user. Reads stored daily_metrics; run refreshDailyMetrics first if the window is empty. */
+  descriptiveAnswers: Array<DescriptiveAnswerType>;
+  /** The descriptive question catalog the compute-then-narrate engine can answer. */
+  descriptiveQuestions: Array<DescriptiveQuestionType>;
   event?: Maybe<EventType>;
   /** Distinct data sources / connectors (event.source_system) present for the user. */
   eventSources: Array<Scalars['String']['output']>;
@@ -1646,6 +1725,17 @@ export type QueryContentsArgs = {
   before?: InputMaybe<Scalars['String']['input']>;
   first?: InputMaybe<Scalars['Int']['input']>;
   last?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type QueryDailyMetricsArgs = {
+  from: Scalars['String']['input'];
+  to: Scalars['String']['input'];
+};
+
+
+export type QueryDescriptiveAnswersArgs = {
+  date?: InputMaybe<Scalars['String']['input']>;
 };
 
 

@@ -56,7 +56,7 @@ export const MONTH: Timeframe = { days: 30, label: 'the last 30 days' };
 /**
  * The descriptive question catalog (prototype slice). ~18 questions spanning
  * several of the ten life domains, each mapping to a metric that is actually
- * materialized in ci_derived.daily_metrics.
+ * materialized in ci.daily_metrics.
  */
 export const QUESTION_CATALOG: readonly QuestionSpec[] = [
   // ── Relationships ────────────────────────────────────────────────

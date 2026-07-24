@@ -504,6 +504,37 @@ type CreateSavedSearchPayload {
   success: Boolean!
 }
 
+"""Scalar metric values for one local calendar day"""
+type DailyMetricValuesType {
+  avgSentiment: Float
+  kmTraveled: Float
+  nConversations: Int
+  nDomains: Int
+  nMessages: Int
+  nPlaces: Int
+  nUniqueContacts: Int
+  outboundRatio: Float
+  screenMinutes: Float
+  spendTotal: Float
+}
+
+"""
+Precomputed daily feature-store row for one local calendar day. Eventually consistent: refreshed hourly (today + yesterday) and backfilled on boot.
+"""
+type DailyMetricsType {
+  computedAt: DateTime!
+
+  """Per-metric coverage in [0, 1]; keys match the snake_case metric names"""
+  coverage: JSON!
+
+  """Local calendar day, yyyy-MM-dd"""
+  date: String!
+  metrics: DailyMetricValuesType!
+
+  """IANA timezone used when the day was bucketed"""
+  timezone: String!
+}
+
 """
 A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
 """
@@ -516,6 +547,42 @@ input DeleteByIdInput {
 type DeleteByIdPayload {
   deletedId: ID
   success: Boolean!
+}
+
+"""Provenance for a deterministically computed descriptive answer"""
+type DescriptiveAnswerProvenanceType {
+  aggregate: String!
+  daysInRange: Int!
+  daysWithData: Int!
+  from: String!
+  meanCoverage: Float!
+  metric: String!
+  sources: [String!]!
+  timeframe: String!
+  to: String!
+}
+
+"""
+Compute-then-narrate answer: value is always deterministic from daily_metrics; answer is phrasing only
+"""
+type DescriptiveAnswerType {
+  answer: String!
+  category: String!
+  key: String!
+  provenance: DescriptiveAnswerProvenanceType!
+  question: String!
+  timeframe: String!
+  unit: String
+  value: Float
+}
+
+"""A catalog question the descriptive engine can answer"""
+type DescriptiveQuestionType {
+  category: String!
+  key: String!
+  metric: String!
+  question: String!
+  timeframe: String!
 }
 
 interface Edge {
@@ -849,6 +916,17 @@ type Mutation {
 
   """Mark a summary as seen"""
   markSummaryAsSeen(id: ID!): SummaryType
+
+  """
+  Recompute and upsert a trailing window of daily metrics for the signed-in user in the given timezone (UTC when omitted).
+  """
+  refreshDailyMetrics(
+    """Trailing window length ending on local today (1–366). Default 30."""
+    days: Int
+
+    """IANA timezone for day bucketing; defaults to UTC"""
+    timezone: String
+  ): [DailyMetricsType!]!
   removeAnswer(id: String!): Boolean!
   removeContent(id: String!): Boolean!
   removeEvent(id: String!): Boolean!
@@ -1065,6 +1143,32 @@ type Query {
   connections(after: String, before: String, first: Int, last: Int): ConnectionConnection!
   content(id: ID!): ContentType
   contents(after: String, before: String, first: Int, last: Int): ContentConnection!
+
+  """
+  Precomputed daily feature-store rows for the signed-in user over an inclusive yyyy-MM-dd range.
+  """
+  dailyMetrics(
+    """Inclusive first day, yyyy-MM-dd"""
+    from: String!
+
+    """Inclusive last day, yyyy-MM-dd"""
+    to: String!
+  ): [DailyMetricsType!]!
+
+  """
+  Answers every catalog question for the signed-in user. Reads stored daily_metrics; run refreshDailyMetrics first if the window is empty.
+  """
+  descriptiveAnswers(
+    """
+    Anchor day yyyy-MM-dd (inclusive end of every timeframe). Defaults to UTC today.
+    """
+    date: String
+  ): [DescriptiveAnswerType!]!
+
+  """
+  The descriptive question catalog the compute-then-narrate engine can answer.
+  """
+  descriptiveQuestions: [DescriptiveQuestionType!]!
   event(id: ID!): EventType
 
   """

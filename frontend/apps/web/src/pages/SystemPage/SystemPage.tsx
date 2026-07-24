@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-import { usePageTitle } from '@ci/common';
+import { useDeviceLayout, usePageTitle } from '@ci/common';
 import { Avatar, Button } from '@ci/shadcn';
 import { Blocks, Cable, ChartPie, ListTodo, LogOut, Settings2, User } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
@@ -8,11 +8,18 @@ import { Link } from 'react-router-dom';
 import { useFeatures } from '@/common/feature';
 import { PageContent } from '@/components/layout';
 import { ModelSelector } from '@/components/ModelSelector';
+import NotFoundPage from '@/components/NotFound';
 import { ThemeToggle } from '@/components/ThemePicker';
 import { useAuth, useCurrentUser } from '@/hooks';
 
 export function SystemPage() {
   usePageTitle('System - Companion Intelligence');
+
+  const { isMobile } = useDeviceLayout();
+
+  if (!isMobile) {
+    return <NotFoundPage />;
+  }
 
   return (
     <PageContent>

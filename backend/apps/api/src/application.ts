@@ -36,6 +36,7 @@ import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
 import { GraphQLModule } from '@ci/domains/graphql';
 import { IngestModule } from '@ci/domains/ingest';
+import { InsightsModule } from '@ci/domains/insights';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
@@ -91,6 +92,7 @@ import { UserSnapshotsModule } from '@ci/domains/user-snapshots';
     GraphModule,
     GraphQLModule,
     IngestModule,
+    InsightsModule,
     IntelligenceModule,
     LLMModule,
     McpModule,

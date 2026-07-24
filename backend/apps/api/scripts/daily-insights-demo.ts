@@ -20,7 +20,7 @@ import {
 // =====================================================================
 // daily-insights-demo — Daily Feature Store + compute-then-narrate CLI
 // =====================================================================
-// Computes a window of ci_derived.daily_metrics for one user, prints the
+// Computes a window of ci.daily_metrics for one user, prints the
 // anchor day's metric surface (with coverage), then answers the descriptive
 // question catalog via compute-then-narrate.
 //
@@ -28,7 +28,7 @@ import {
 //     --user <uuid> [--date YYYY-MM-DD] [--tz America/New_York] \
 //     [--window 30] [--ollama]
 //
-// Requires a reachable database (it reads ci.* and writes ci_derived.*).
+// Requires a reachable database (it reads ci.* and writes ci.*).
 // --ollama opts into an OllamaNarrator for phrasing; it transparently falls
 // back to the deterministic template if Ollama is unreachable.
 
@@ -150,7 +150,10 @@ async function main(): Promise<void> {
 
   await withDataSource(async (db) => {
     const repo = db.getRepository(DailyMetricEntity);
-    const metricsService = new DailyMetricsService(repo, logger);
+    // Demo only needs per-user computeWindow; refreshAll is unused here.
+    const userService = { findAll: async () => [] };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metricsService = new DailyMetricsService(repo, logger, userService as any);
 
     console.log(`Computing ${args.window} day(s) of metrics ending ${args.date} for ${args.user}...`);
     const window = await metricsService.computeWindow(context, args.date, args.window, args.tz);

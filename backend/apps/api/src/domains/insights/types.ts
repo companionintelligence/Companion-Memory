@@ -3,7 +3,7 @@
  * and the descriptive compute-then-narrate question/answer shapes.
  */
 
-/** Every scalar metric column materialized in ci_derived.daily_metrics. */
+/** Every scalar metric column materialized in ci.daily_metrics. */
 export type MetricKey =
   | 'n_messages'
   | 'n_conversations'

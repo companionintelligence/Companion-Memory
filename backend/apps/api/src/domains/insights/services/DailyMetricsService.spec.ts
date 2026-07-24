@@ -23,8 +23,10 @@ function makeRepo() {
 const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
 function makeService(repo: ReturnType<typeof makeRepo>) {
+  const userService = { findAll: jest.fn(async () => []) };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return new DailyMetricsService(repo as any, logger as any);
+  return new DailyMetricsService(repo as any, logger as any, userService as any);
 }
 
 const FULL_METRICS: MetricValues = {

@@ -101,16 +101,9 @@ function combineMatches(tagMatch?: TagMatch, eventMatch?: TagMatch): Set<string>
 
 function buildSubgraph(
   data: { nodes: GraphNode[]; links: GraphLink[] },
-  seedId: string | null,
+  seedId: string,
   maxDepth: number,
 ): Subgraph {
-  // A newly provisioned account may not have a self/person entity yet. The
-  // graph payload is still useful in that case, so show it whole instead of
-  // failing the view because there is no personal node to anchor a BFS on.
-  if (!seedId) {
-    return data;
-  }
-
   const visited = new Set<string>([seedId]);
   const queue: Array<{ id: string; depth: number }> = [{ id: seedId, depth: 0 }];
   const adjacency = new Map<string, GraphLink[]>();
@@ -266,16 +259,16 @@ export function useGraphOverview(
           fetchJson<GraphDataResponse>(dataUrl, { ...baseInit }),
         ]);
 
+        if (!contextResponse?.success || !contextResponse.context) {
+          throw new Error('Unable to resolve user context');
+        }
+
         if (!graphResponse?.success) {
           throw new Error('Graph data request failed');
         }
 
-        // The graph context is an enhancement that supplies a personal anchor
-        // and quick stats. It is legitimately absent for accounts created
-        // before their self entity is materialized, and must not prevent the
-        // imported graph from rendering.
-        const context = contextResponse?.success ? contextResponse.context : null;
-        const userEntityId = context?.currentUser.entityId ?? null;
+        const context = contextResponse.context!;
+        const userEntityId = context.currentUser.entityId;
         const filterMatchedEntityIds = combineMatches(graphResponse.tagMatch, graphResponse.eventMatch);
         const filterScope: FilterScope = {
           tags: graphResponse.tagMatch?.active === true,
@@ -299,8 +292,8 @@ export function useGraphOverview(
             error: null,
             userEntityId,
             subgraph,
-            quickStats: context?.quickStats ?? null,
-            currentUser: context?.currentUser ?? null,
+            quickStats: context.quickStats,
+            currentUser: context.currentUser,
             filterMatchedEntityIds,
             filterScope,
           });

@@ -12,8 +12,8 @@ const numericTransformer = {
     value === null || value === undefined ? null : Number(value),
 };
 
-/** Mirrors ci_derived.daily_metrics (see the create migration). */
-@Entity({ schema: 'ci_derived', name: 'daily_metrics' })
+/** Mirrors ci.daily_metrics (see the create migration). */
+@Entity({ schema: 'ci', name: 'daily_metrics' })
 export class DailyMetricEntity {
   @PrimaryColumn({ type: 'uuid', name: 'user_id' })
   userId!: string;

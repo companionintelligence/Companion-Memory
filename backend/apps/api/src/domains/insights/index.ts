@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { UserModule } from '@ci/domains/user';
+
+import { DailyMetricsCron } from './cron/DailyMetricsCron';
 import { DailyMetricEntity } from './entities/DailyMetricEntity';
 import { DescriptiveQuestionService } from './narrate/DescriptiveQuestionService';
 import { NARRATOR, TemplateNarrator } from './narrate/Narrator';
@@ -8,15 +11,16 @@ import { DailyMetricsService } from './services/DailyMetricsService';
 
 /**
  * The insights domain: the Daily Feature Store (DailyMetricsService over
- * ci_derived.daily_metrics) plus the descriptive compute-then-narrate question
+ * ci.daily_metrics) plus the descriptive compute-then-narrate question
  * engine (DescriptiveQuestionService). NARRATOR is bound to the dependency-free
  * TemplateNarrator by default; a deployment can rebind it to an Ollama-backed
  * OllamaNarrator without touching the compute path.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([DailyMetricEntity])],
+  imports: [TypeOrmModule.forFeature([DailyMetricEntity]), UserModule],
   providers: [
     DailyMetricsService,
+    DailyMetricsCron,
     DescriptiveQuestionService,
     { provide: NARRATOR, useClass: TemplateNarrator },
   ],
@@ -24,7 +28,7 @@ import { DailyMetricsService } from './services/DailyMetricsService';
 })
 export class InsightsModule {}
 
-export { DailyMetricsService } from './services/DailyMetricsService';
+export { DailyMetricsService, DEFAULT_REFRESH_WINDOW_DAYS } from './services/DailyMetricsService';
 export { DescriptiveQuestionService } from './narrate/DescriptiveQuestionService';
 export type { DescriptiveAnswer, AnswerOptions } from './narrate/DescriptiveQuestionService';
 export { DailyMetricEntity } from './entities/DailyMetricEntity';
