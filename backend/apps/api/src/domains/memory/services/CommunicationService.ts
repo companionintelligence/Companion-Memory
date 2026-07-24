@@ -737,14 +737,15 @@ export class CommunicationService {
    * counted by their event `time`, per user.
    */
   async aggregateHourlyActivity(): Promise<HourlyCommunicationCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.communicationRepository
-      .createQueryBuilder('communication')
-      .select('communication.userId', 'user_id')
-      .addSelect(`date_trunc('hour', communication.time, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
-      .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> =
+      await this.communicationRepository
+        .createQueryBuilder('communication')
+        .select('communication.userId', 'user_id')
+        .addSelect(`date_trunc('hour', communication.time, 'UTC')`, 'bucket_start')
+        .addSelect('COUNT(*)::int', 'count')
+        .groupBy('user_id')
+        .addGroupBy('bucket_start')
+        .getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

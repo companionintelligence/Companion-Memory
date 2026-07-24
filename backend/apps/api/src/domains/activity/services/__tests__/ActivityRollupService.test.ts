@@ -29,7 +29,10 @@ const EXPECTED_SOURCES = [
   'entities',
 ];
 
-function makeService(queryResult: unknown[] = [], user: { timezone: string } | null = { timezone: 'America/New_York' }) {
+function makeService(
+  queryResult: unknown[] = [],
+  user: { timezone: string } | null = { timezone: 'America/New_York' },
+) {
   const dataSource = { query: jest.fn().mockResolvedValue(queryResult) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const userService = { findById: jest.fn().mockResolvedValue(user) };

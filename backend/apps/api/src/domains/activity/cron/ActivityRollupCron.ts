@@ -39,7 +39,10 @@ export class ActivityRollupCron implements OnApplicationBootstrap {
     try {
       await this.activityRollupService.refreshAll();
     } catch (err) {
-      this.logger.error('Activity rollup refresh failed', err instanceof Error ? err : new Error(String(err)));
+      this.logger.error(
+        'Activity rollup refresh failed',
+        err instanceof Error ? err : new Error(String(err)),
+      );
     } finally {
       this.running = false;
     }
