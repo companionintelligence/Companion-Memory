@@ -16,8 +16,18 @@ const WEEKDAY_LETTERS = ['', 'M', '', 'W', '', 'F', ''];
 const CELL_GAP_PX = 3;
 const DEFAULT_CELL_PX = 12;
 
-/** Sequential ramp: one hue, light → dark. Index 0 is "no activity". */
-const LEVEL_CLASSES = ['bg-muted', 'bg-primary/30', 'bg-primary/55', 'bg-primary/80', 'bg-primary'] as const;
+/**
+ * Sequential ramp: one hue, light → dark. Index 0 is "no activity" — in light
+ * mode `bg-muted` (oklch 0.97) all but disappears against the page, so empty
+ * cells use a muted-foreground tint there and keep `bg-muted` in dark mode.
+ */
+const LEVEL_CLASSES = [
+  'bg-muted-foreground/20 dark:bg-muted',
+  'bg-primary/30',
+  'bg-primary/55',
+  'bg-primary/80',
+  'bg-primary',
+] as const;
 
 /**
  * Selected cells swap to this azure ramp with the same progression, so range
