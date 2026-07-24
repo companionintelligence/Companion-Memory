@@ -25,7 +25,10 @@ export function DateGroupHeader({ label, count, className, align = 'left' }: Dat
     <div
       className={cn(
         'sticky top-0 z-10 flex items-center gap-2 bg-background/85 py-2 backdrop-blur-sm',
-        rightAligned ? 'px-3' : '-mx-1 px-1',
+        // The negative margin lets the sticky backdrop bleed past the scroll
+        // container's edge; the inner padding then places the label flush with
+        // the rows' icon slot so headers and icons share one left edge.
+        rightAligned ? 'px-3' : '-mx-1 px-3',
         className,
       )}
     >
