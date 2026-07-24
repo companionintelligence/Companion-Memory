@@ -92,6 +92,19 @@ function orderRange(a: string, b: string): TimelineGridRange {
   return a <= b ? { start: a, end: b } : { start: b, end: a };
 }
 
+/**
+ * The endpoint a shift-click keeps as its anchor: the one farther from the
+ * clicked day, so the range grows (or shrinks) toward the click. Ties keep
+ * `start`.
+ */
+function fartherEndpoint(range: TimelineGridRange, key: string): string {
+  const clicked = fromKey(key).getTime();
+  const toStart = Math.abs(clicked - fromKey(range.start).getTime());
+  const toEnd = Math.abs(clicked - fromKey(range.end).getTime());
+
+  return toStart >= toEnd ? range.start : range.end;
+}
+
 function formatDay(key: string): string {
   return fromKey(key).toLocaleDateString(undefined, {
     weekday: 'short',
@@ -153,7 +166,8 @@ const GridCell = memo(function GridCell({
  * time runs downward into the past, weekdays left → right. Cells are a fixed
  * size — the height the component is given decides how many weeks of history
  * are visible, walking back from `end`. Click or drag cells to pick an
- * inclusive start/end day range. Mouse-wheel scrolling moves the window
+ * inclusive start/end day range; shift-click (or shift-drag) extends the
+ * existing range toward the click. Mouse-wheel scrolling moves the window
  * through time — down into the past, up back toward `end` — and reports each
  * visible window through `onTimeRangeChange`.
  *
@@ -316,6 +330,13 @@ export function TimelineGrid({
   // if they closed over dragAnchor, every memoized cell would re-render per drag step.
   const dragAnchorRef = useRef<string | null>(null);
 
+  // Same referential-stability trick for the selection, read on shift-click.
+  const selectionRef = useRef(selection);
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  });
+
   const [hovered, setHovered] = useState<{ key: string; rect: DOMRect } | null>(null);
 
   const handleCellPointerDown = useCallback((key: string, e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -323,8 +344,13 @@ export function TimelineGrid({
     // Touch implicitly captures the pointer, which would keep pointerenter
     // from reaching sibling cells mid-drag.
     e.currentTarget.releasePointerCapture?.(e.pointerId);
-    dragAnchorRef.current = key;
-    setDragAnchor(key);
+    // Shift-click extends the existing range instead of starting a new one:
+    // it anchors on the endpoint farther from the click, so releasing (or
+    // continuing to drag) spans from there to the pointer.
+    const current = selectionRef.current;
+    const anchor = e.shiftKey && current ? fartherEndpoint(current, key) : key;
+    dragAnchorRef.current = anchor;
+    setDragAnchor(anchor);
     setDragHead(key);
   }, []);
 
