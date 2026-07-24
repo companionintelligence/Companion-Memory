@@ -149,12 +149,13 @@ const GridCell = memo(function GridCell({
 // ── Public component ──────────────────────────────────────────────────────────
 
 /**
- * Vertical contribution-style heatmap: weeks flow top → bottom, weekdays left →
- * right. Cells are a fixed size — the height the component is given decides how
- * many weeks of history are visible, walking back from `end`. Click or drag
- * cells to pick an inclusive start/end day range. Mouse-wheel scrolling moves
- * the window through time — up into the past, down back toward `end` — and
- * reports each visible window through `onTimeRangeChange`.
+ * Vertical contribution-style heatmap: the newest week sits at the top and
+ * time runs downward into the past, weekdays left → right. Cells are a fixed
+ * size — the height the component is given decides how many weeks of history
+ * are visible, walking back from `end`. Click or drag cells to pick an
+ * inclusive start/end day range. Mouse-wheel scrolling moves the window
+ * through time — down into the past, up back toward `end` — and reports each
+ * visible window through `onTimeRangeChange`.
  *
  * Selection state lives in {@link TimelineGridSelectionProvider} — the grid must
  * render under one, and siblings can read or clear the range through
@@ -248,12 +249,19 @@ export function TimelineGrid({
     return out;
   }, [start, viewEndKey, fitWeeks]);
 
-  /** Bounds of the visible matrix — its first and last cells. */
+  /** Bounds of the visible matrix — its chronologically first and last cells. */
   const visibleStartKey = weeks[0]?.[0] ?? viewEndKey;
   const visibleEndKey = weeks[weeks.length - 1]?.[DAYS_PER_WEEK - 1] ?? viewEndKey;
   const rowCount = weeks.length;
 
-  /** Week-row index → month label, sorted, shown where a month's 1st lands. */
+  /** Weeks in render order — newest first, so "now" sits at the top. */
+  const displayWeeks = useMemo(() => [...weeks].reverse(), [weeks]);
+
+  /**
+   * Month labels as display-row spans `[start, end)`. Found chronologically
+   * (a label where a month's 1st lands, spanning to the next label), then
+   * mirrored into the reversed render order.
+   */
   const monthLabels = useMemo(() => {
     const labels = new Map<number, string>();
 
@@ -264,13 +272,20 @@ export function TimelineGrid({
       }
     });
 
-    // Anchor the top edge even when the window doesn't open on a month boundary.
+    // Anchor the chronological start — the display bottom — even when the
+    // window doesn't open on a month boundary.
     if (!labels.has(0)) {
       labels.set(0, fromKey(visibleStartKey).toLocaleDateString(undefined, { month: 'short' }));
     }
 
-    return [...labels.entries()].sort(([a], [b]) => a - b);
-  }, [weeks, visibleStartKey]);
+    const sorted = [...labels.entries()].sort(([a], [b]) => a - b);
+
+    return sorted.map(([row, label], i) => {
+      const nextRow = sorted[i + 1]?.[0] ?? rowCount;
+
+      return { start: rowCount - nextRow, end: rowCount - row, label };
+    });
+  }, [weeks, rowCount, visibleStartKey]);
 
   // ── Intensity ──
 
@@ -358,8 +373,9 @@ export function TimelineGrid({
       }
 
       acc -= weeksDelta * stepPx;
-      // Scrolling up (negative delta) moves into the past, down back toward `end`.
-      setBackWeeks((prev) => Math.min(Math.max(Math.min(prev, maxBackWeeks) - weeksDelta, 0), maxBackWeeks));
+      // Newest rows sit at the top, so scrolling down (positive delta) moves
+      // into the past and up comes back toward `end`.
+      setBackWeeks((prev) => Math.min(Math.max(Math.min(prev, maxBackWeeks) + weeksDelta, 0), maxBackWeeks));
       // The grid shifts under a stationary pointer, so the hover rect is stale.
       setHovered(null);
     };
@@ -419,11 +435,11 @@ export function TimelineGrid({
           className="grid w-4 shrink-0 self-start"
           style={{ gridTemplateRows: `repeat(${rowCount}, ${cellSize}px)`, rowGap: CELL_GAP_PX }}
         >
-          {monthLabels.map(([row, label], i) => (
+          {monthLabels.map(({ start, end, label }) => (
             <div
-              key={row}
+              key={start}
               className="flex items-start justify-end overflow-hidden pr-1"
-              style={{ gridRowStart: row + 1, gridRowEnd: (monthLabels[i + 1]?.[0] ?? rowCount) + 1 }}
+              style={{ gridRowStart: start + 1, gridRowEnd: end + 1 }}
             >
               <span className="rotate-180 text-[10px] leading-none text-muted-foreground [writing-mode:vertical-rl]">
                 {label}
@@ -441,7 +457,7 @@ export function TimelineGrid({
           }}
           onPointerLeave={() => setHovered(null)}
         >
-          {weeks.flat().map((dayKey) => {
+          {displayWeeks.flat().map((dayKey) => {
             const count = counts.get(dayKey) ?? 0;
             const inRange = activeRange && dayKey >= activeRange.start && dayKey <= activeRange.end;
             const isEndpoint = activeRange && (dayKey === activeRange.start || dayKey === activeRange.end);
