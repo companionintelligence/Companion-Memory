@@ -131,10 +131,13 @@ endef
 #   make build ENV=local|staging|production  GPU=cpu|cuda|rocm
 #
 # ENV selects which images are built (local omits API/gateway/secrets).
-# GPU selects the HBPE base image (cpu = the default Dockerfile).
+# GPU selects the HBPE base image (cpu = the default Dockerfile). Left
+# unset, it's auto-detected from this host's GPU hardware (see
+# scripts/detect-gpu.sh) — explicitly passing GPU=... on the command line
+# or environment always wins and skips detection.
 # ─────────────────────────────────────────────────────────────────────
 ENV ?= local
-GPU ?= cpu
+GPU ?= $(shell scripts/detect-gpu.sh)
 # REBUILD=1 forces `dev`/`local` to rebuild local images; unset reuses them.
 REBUILD ?=
 
@@ -217,7 +220,7 @@ reset: ## Reset the local development environment
 	@printf "\n$(GREEN)✓$(RESET) Reset complete.\n\n"
 
 .PHONY: build
-build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cuda|rocm (default cpu)
+build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cuda|rocm (default: auto-detected)
 	@echo "$(VALID_ENVS)" | grep -qw "$(ENV)" || { printf "$(RED)✗$(RESET) Invalid ENV '$(ENV)'. Choose one of: $(VALID_ENVS)\n\n"; exit 1; }
 	@echo "$(VALID_GPUS)" | grep -qw "$(GPU)" || { printf "$(RED)✗$(RESET) Invalid GPU '$(GPU)'. Choose one of: $(VALID_GPUS)\n\n"; exit 1; }
 

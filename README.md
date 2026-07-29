@@ -334,7 +334,7 @@ Run `make` from the project root to see all available commands with descriptions
 
 | Command | Description |
 |---------|-------------|
-| `make build` | Build images (`ENV=local\|staging\|production`, default `local`; `GPU=cpu\|cuda\|rocm`, default `cpu`) |
+| `make build` | Build images (`ENV=local\|staging\|production`, default `local`; `GPU=cpu\|cuda\|rocm`, auto-detected from this host's GPU if not passed — see `scripts/detect-gpu.sh`) |
 | `make staging` | Run the staging deployment |
 | `make production` | Run the production deployment |
 | `make publish` | Publish CI-Server images and metadata to the CI-Portal store |
