@@ -168,7 +168,7 @@
       "chapter": "memory",
       "seconds": 5,
       "caption": "One list. Every kind of thing you keep.",
-      "narration": "People, places, events, files, messages. One list, newest first.",
+      "narration": "Everything you keep, in one list, newest first.",
       "shots": [
         {
           "id": "memory-list-view",
@@ -256,7 +256,7 @@
       "chapter": "sources",
       "seconds": 5,
       "caption": "Connect a source once. It keeps arriving.",
-      "narration": "Connect browsers, devices and accounts once. New activity keeps arriving.",
+      "narration": "Connect a source once. New activity keeps arriving.",
       "shots": [
         {
           "id": "connect-providers",
@@ -277,7 +277,7 @@
       "seconds": 4.5,
       "title": "What it actually is",
       "caption": "One appliance. One memory. No cloud account.",
-      "narration": "Local database, local embeddings, local models. No cloud account required.",
+      "narration": "Local database, local models, no cloud account.",
       "items": [
         { "label": "Store", "value": "Postgres + pgvector" },
         { "label": "Models", "value": "Ollama, on device" },
@@ -291,7 +291,7 @@
       "seconds": 4,
       "cta": "UnCloud your life.",
       "url": "ci.computer",
-      "narration": "Companion Memory, from Companion Intelligence. UnCloud your life."
+      "narration": "Companion Memory. UnCloud your life."
     }
   ]
 }
