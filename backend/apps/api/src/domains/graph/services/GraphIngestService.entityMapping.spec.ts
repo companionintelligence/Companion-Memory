@@ -31,6 +31,7 @@ function makeService(opts: { existingKeys?: string[]; failEntities?: boolean } =
   const node = makeFakeNodeRepository({ seed, failSelect: opts.failEntities, failInsert: opts.failEntities });
   const rel = makeFakeRelationshipRepository();
   const entityIdentifierService = { upsertForEntities: jest.fn() };
+  const peoplePromotionService = { observeIngestedPeople: jest.fn().mockResolvedValue(undefined) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const service = new GraphIngestService(
@@ -40,6 +41,8 @@ function makeService(opts: { existingKeys?: string[]; failEntities?: boolean } =
     rel.repo as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     entityIdentifierService as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    peoplePromotionService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );

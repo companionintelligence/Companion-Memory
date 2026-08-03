@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { v7 as uuid7 } from 'uuid';
 
 import { toServiceContext, type UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -9,6 +8,7 @@ import { ConnectionEntity } from '@ci/domains/connections';
 import { EventService } from '@ci/domains/events';
 import { NodeService, RelationshipService } from '@ci/domains/graph';
 import { Person, PersonService } from '@ci/domains/memory';
+import { PeoplePromotionService } from '@ci/domains/people';
 import { UserService } from '@ci/domains/user';
 
 interface ParticipantInfo {
@@ -25,6 +25,7 @@ export class PromoteService {
     private readonly connectionRepository: Repository<ConnectionEntity>,
     private readonly eventService: EventService,
     private readonly personService: PersonService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly userService: UserService,
     private readonly nodeService: NodeService,
     private readonly relationshipService: RelationshipService,
@@ -84,42 +85,31 @@ export class PromoteService {
         return task;
       }
 
-      const existingPeople = await this.personService.search(context, {
-        properties: {
-          email,
-          owner_user_id: context.userId,
-        },
-      });
+      // Promotion replaces the properties-scan find-or-create: the email is a
+      // strong identifier, so the participant resolves through the identifier
+      // index to whichever Person already carries it (contact-importer row,
+      // communications stub, ...) instead of creating a per-source duplicate.
+      const task = this.peoplePromotionService
+        .observeProfile(context, {
+          sourceSystem: `etl:${source}`,
+          remoteKey: `email:${email}`,
+          displayName: participant.name,
+          emails: [email],
+          properties: {
+            contact_type: source,
+            connection_id: connectionId,
+          },
+        })
+        .then(async (observed) => {
+          const person = await this.personService.findById(context, observed.personEntityId);
+          if (person == null) {
+            throw new Error(`promoted participant resolved to missing person ${observed.personEntityId}`);
+          }
 
-      if (existingPeople.length > 0) {
-        const task = Promise.resolve(existingPeople[0]);
+          return person;
+        });
 
-        taskMap.set(email, task);
-
-        return task;
-      }
-
-      const id = uuid7();
-      const [firstName, ...restName] = participant.name.trim().split(/\s+/).filter(Boolean);
-      const lastName = restName.length > 0 ? restName.join(' ') : null;
-
-      const properties: Record<string, unknown> = {
-        email,
-        first_name: firstName || participant.name,
-        last_name: lastName,
-        contact_type: source,
-        owner_user_id: context.userId,
-        connection_id: connectionId,
-      };
-
-      const task = this.personService.create(context, {
-        id,
-        name: participant.name,
-        description: `Contact from ${source}`,
-        properties,
-      });
-
-      taskMap.set(participant.email, task);
+      taskMap.set(email, task);
 
       return task;
     });

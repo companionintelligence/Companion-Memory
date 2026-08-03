@@ -33,7 +33,7 @@ const MAX_GROUP_SIZE = 6;
  * from a bare display name have no email/phone to match on).
  *
  * Suggestions only — merging stays a user decision (LifeScope's correct
- * instinct), executed by PersonMergeService.
+ * instinct), executed by the people domain's PersonMergeService.
  */
 @Injectable()
 export class PersonDuplicateService {

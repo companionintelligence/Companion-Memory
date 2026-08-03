@@ -28,6 +28,7 @@ import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { ParsingModule } from '@ci/domains/parsing';
+import { PeopleModule } from '@ci/domains/people';
 import { SearchNextModule } from '@ci/domains/search-next';
 
 import { IntentCatalogService } from './catalog/IntentCatalogService';
@@ -43,7 +44,10 @@ import { GetFamilyMembersTool } from './tools/GetFamilyMembersTool';
 import { GetStreamingAvailabilityTool } from './tools/GetStreamingAvailabilityTool';
 import { GetUserPreferencesTool } from './tools/GetUserPreferencesTool';
 import { MediaFindPhotosTool } from './tools/MediaFindPhotosTool';
+import { PeopleDuplicatesTool } from './tools/PeopleDuplicatesTool';
 import { PeopleFindTool } from './tools/PeopleFindTool';
+import { PeopleLookupTool } from './tools/PeopleLookupTool';
+import { PeopleMergeTool } from './tools/PeopleMergeTool';
 import { PlacesFindTool } from './tools/PlacesFindTool';
 import { ReadKnowledgeTool } from './tools/ReadKnowledgeTool';
 import { WriteKnowledgeTool } from './tools/WriteKnowledgeTool';
@@ -60,6 +64,9 @@ const nativeToolInstances = [
   GetStreamingAvailabilityTool,
   DatabaseSearchTool,
   PeopleFindTool,
+  PeopleLookupTool,
+  PeopleDuplicatesTool,
+  PeopleMergeTool,
   PlacesFindTool,
   CalendarFindEventsTool,
   MediaFindPhotosTool,
@@ -76,6 +83,7 @@ const nativeToolInstances = [
     MemoryModule,
     IntelligenceModule,
     ParsingModule,
+    PeopleModule,
     SearchNextModule,
   ],
   providers: [

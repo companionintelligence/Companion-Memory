@@ -26,6 +26,7 @@ import { EventsModule } from '@ci/domains/events';
 import { GraphModule } from '@ci/domains/graph';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
+import { PeopleModule } from '@ci/domains/people';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { ToolsModule } from '@ci/domains/tools';
@@ -48,6 +49,9 @@ import { SerializerService } from './services/SerializerService';
     GraphModule,
     LLMModule,
     MemoryModule,
+    // MemoryCompactionService routes person creation through
+    // PeoplePromotionService.observeProfile.
+    PeopleModule,
     PredictionsModule,
     SearchNextModule,
     // Provides IntentCatalogService, which the IntentsController publishes.

@@ -6,6 +6,7 @@ import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
+import { PeoplePromotionService } from '@ci/domains/people';
 
 import { NodeEntity } from '../entities/NodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
@@ -107,6 +108,7 @@ export class GraphIngestService {
     @InjectRepository(RelationshipEntity)
     private readonly relationshipRepository: Repository<RelationshipEntity>,
     private readonly entityIdentifierService: EntityIdentifierService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GraphIngestService.name);
@@ -169,6 +171,15 @@ export class GraphIngestService {
     // ingest of the entities themselves — indexIdentifiers logs and swallows
     // its own errors.
     await this.indexIdentifiers(ownerId, identifierBatch);
+
+    // People promotion: every ingested Person also lands a source profile
+    // (its importer natural key is the profile remote_key, so the linked-key
+    // idempotency carries over) and strong-identifier collisions chain
+    // persons together via merge. Must run AFTER indexIdentifiers so the
+    // batch's own identifier claims are visible to collision detection.
+    // Best-effort like identifier indexing: a promotion failure never aborts
+    // the entity ingest.
+    await this.observeIngestedPeople(ownerId, input.entities, resolvedById);
 
     let relationshipsProcessed = 0;
     if (input.relationships.length > 0) {
@@ -409,6 +420,49 @@ export class GraphIngestService {
     } catch (err) {
       this.logger.warn('Failed to index entity identifiers', {
         entities: batch.length,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  /**
+   * Funnel the batch's Person entities through the people system: one
+   * `ci.person_profiles` row per ingested Person plus strong-identifier
+   * collision chaining (see PeoplePromotionService.observeIngestedPeople).
+   * Swallows + logs its own errors so promotion never fails the ingest.
+   */
+  private async observeIngestedPeople(
+    ownerId: string,
+    inputs: GraphEntityInputDto[],
+    resolvedById: Map<GraphEntityInputDto, string>,
+  ): Promise<void> {
+    const people = inputs
+      .filter((e) => e.entityType === 'Person')
+      .map((e) => {
+        const entityId = resolvedById.get(e);
+        if (entityId === undefined) {
+          return null;
+        }
+
+        return {
+          entityId,
+          key: e.key,
+          sourceSystem: e.sourceSystem,
+          name: e.name ?? null,
+          properties: e.properties ?? null,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry != null);
+
+    if (people.length === 0) {
+      return;
+    }
+
+    try {
+      await this.peoplePromotionService.observeIngestedPeople(ownerId, people);
+    } catch (err) {
+      this.logger.warn('People promotion failed for ingest batch', {
+        people: people.length,
         error: (err as Error).message,
       });
     }

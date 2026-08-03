@@ -25,6 +25,7 @@ import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
 import { MemoryModule } from '@ci/domains/memory';
+import { PeopleModule } from '@ci/domains/people';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule } from '@ci/domains/user';
 
@@ -78,6 +79,9 @@ import { SyncNowService } from './services/SyncNowService';
     GeocodeModule,
     GraphModule,
     MemoryModule,
+    // Contact/participant transforms funnel person creation through
+    // PeoplePromotionService.observeProfile.
+    PeopleModule,
     SearchNextModule,
     UserModule,
   ],

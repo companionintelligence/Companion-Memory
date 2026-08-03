@@ -8,6 +8,7 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { MediaDimensionsBackfillRequestEvent, MEDIA_DIMENSIONS_QUEUE } from '@ci/domains/files';
 import { EventEntity } from '@ci/domains/memory';
 import { EstimateLocationBatchRequestEvent, GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
+import { PeopleBackfillService, type PeopleDedupeOptions } from '@ci/domains/people';
 import { EmbeddingEntity, IndexSkipEntity } from '@ci/domains/search-ingress';
 
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
@@ -33,12 +34,15 @@ import { type SearchIndexBackfillOptions, SearchIndexBackfillService } from './S
  * The canonical execution order of the orchestrated enrichment legs. A request
  * may name any SUBSET of these stages, but they always execute in THIS order —
  * the legs have real data dependencies (extract_people seeds the identifier
- * index link_communications/link_events resolve against; geocoding should land
- * before the estimator so it only fills what nothing else could; search_index
- * runs last so the embeds cover the enriched rows).
+ * index link_communications/link_events resolve against; dedupe_people merges
+ * duplicate persons right after so the link legs resolve against canonical
+ * survivors; geocoding should land before the estimator so it only fills what
+ * nothing else could; search_index runs last so the embeds cover the enriched
+ * rows).
  */
 export const ORCHESTRATE_STAGES = [
   'extract_people',
+  'dedupe_people',
   'link_communications',
   'link_events',
   'extract_graph',
@@ -54,6 +58,7 @@ export type OrchestrateStage = (typeof ORCHESTRATE_STAGES)[number];
 /** Per-leg option passthrough — each field forwards verbatim to its leg. */
 export interface OrchestrateLegOptions {
   extractPeople?: PersonStubBackfillOptions;
+  dedupePeople?: PeopleDedupeOptions;
   linkCommunications?: Omit<CommunicationLinkBackfillOptions, 'onProgress'>;
   linkEvents?: Omit<EventParticipantBackfillOptions, 'onProgress'>;
   extractGraph?: Omit<GraphEnrichmentOptions, 'onProgress'>;
@@ -166,6 +171,7 @@ export class MaintenanceOrchestratorService {
     private readonly signallingEventService: SignallingEventService,
     private readonly logger: LoggerService,
     private readonly personStubBackfillService: PersonStubBackfillService,
+    private readonly peopleBackfillService: PeopleBackfillService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
@@ -307,6 +313,9 @@ export class MaintenanceOrchestratorService {
     switch (leg) {
       case 'extract_people':
         return this.personStubBackfillService.backfill(userId, options.extractPeople ?? {});
+
+      case 'dedupe_people':
+        return this.peopleBackfillService.dedupe(userId, options.dedupePeople ?? {});
 
       case 'link_communications':
         return this.communicationLinkBackfillService.backfill(userId, {

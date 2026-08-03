@@ -13,6 +13,7 @@ import { EventsModule } from '@ci/domains/events';
 import { GraphModule } from '@ci/domains/graph';
 import { LLMModule } from '@ci/domains/llm';
 import { EventEntity, MemoryModule } from '@ci/domains/memory';
+import { PeopleModule } from '@ci/domains/people';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
 
 import { MaintenanceController } from './controllers/MaintenanceController';
@@ -42,6 +43,8 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
     // Person-resolution read path (GraphQueryService, exported by MemoryModule).
     LLMModule,
     MemoryModule,
+    // The orchestrator's dedupe_people leg runs PeopleBackfillService.
+    PeopleModule,
   ],
   controllers: [MaintenanceController],
   providers: [

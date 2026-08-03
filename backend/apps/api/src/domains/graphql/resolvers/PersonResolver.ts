@@ -8,12 +8,21 @@ import { EntityIdentifierService, type IdentifierKind } from '@ci/domains/graph'
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
-import { PersonDuplicateService, PersonMergeService, PersonService } from '@ci/domains/memory';
+import { PersonDuplicateService, PersonService } from '@ci/domains/memory';
+import {
+  PeoplePromotionService,
+  PeopleService,
+  PersonDuplicateSuggestionService,
+  PersonMergeService,
+  USER_EDITED_FIELDS_KEY,
+} from '@ci/domains/people';
 
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
 import { CreatePersonInput } from '../types/CreatePersonInput';
+import { DetachPersonProfileInput } from '../types/DetachPersonProfileInput';
+import { DetachPersonProfilePayload } from '../types/DetachPersonProfilePayload';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { MergePeopleInput } from '../types/MergePeopleInput';
@@ -21,11 +30,14 @@ import { MergePeoplePayload } from '../types/MergePeoplePayload';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonConnection } from '../types/PersonConnection';
 import { PersonDuplicateGroupType } from '../types/PersonDuplicateGroupType';
+import { PersonDuplicateSuggestionType } from '../types/PersonDuplicateSuggestionType';
 import { PersonEdge } from '../types/PersonEdge';
 import { AddPersonIdentifierInput, RemovePersonIdentifierInput } from '../types/PersonIdentifierInput';
 import { PersonIdentifierType } from '../types/PersonIdentifierType';
 import { PersonInteractionStatsType } from '../types/PersonInteractionStatsType';
+import { PersonProfileType } from '../types/PersonProfileType';
 import { PersonType } from '../types/PersonType';
+import { RejectPersonDuplicateSuggestionPayload } from '../types/RejectPersonDuplicateSuggestionPayload';
 import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { Paginator } from '../utils/Paginator';
@@ -72,11 +84,14 @@ function parseIdentifierKind(raw: string): IdentifierKind | null {
 export class PersonResolver {
   constructor(
     private readonly personService: PersonService,
-    private readonly personMergeService: PersonMergeService,
     private readonly personDuplicateService: PersonDuplicateService,
     private readonly entityIdentifierService: EntityIdentifierService,
     private readonly personIdentifiersLoader: PersonIdentifiersLoader,
     private readonly personInteractionStatsLoader: PersonInteractionStatsLoader,
+    private readonly peopleService: PeopleService,
+    private readonly personMergeService: PersonMergeService,
+    private readonly peoplePromotionService: PeoplePromotionService,
+    private readonly suggestionService: PersonDuplicateSuggestionService,
     private readonly tagLoader: TagLoader,
   ) {}
 
@@ -168,10 +183,30 @@ export class PersonResolver {
 
     const id = GlobalUID.parse('person', input.id);
 
+    const propertiesPatch = structuredPropertiesPatch(input);
+
+    // Record which fields the user explicitly edited so merges never let a
+    // source value overwrite them (PersonMergeService gives these precedence).
+    const editedFields = [
+      ...(input.name !== undefined ? ['name'] : []),
+      ...(input.description !== undefined ? ['description'] : []),
+      ...Object.keys(propertiesPatch),
+    ];
+
+    if (editedFields.length > 0) {
+      const current = await this.personService.findById(serviceContext, id);
+      const currentEdited = Array.isArray(current?.properties?.[USER_EDITED_FIELDS_KEY])
+        ? (current.properties[USER_EDITED_FIELDS_KEY] as unknown[]).filter(
+            (v): v is string => typeof v === 'string',
+          )
+        : [];
+      propertiesPatch[USER_EDITED_FIELDS_KEY] = [...new Set([...currentEdited, ...editedFields])];
+    }
+
     const entity = await this.personService.patch(serviceContext, id, {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
-      propertiesPatch: structuredPropertiesPatch(input),
+      propertiesPatch,
     });
 
     if (entity == null) {
@@ -184,6 +219,122 @@ export class PersonResolver {
       success: true,
       person: entity ? PersonType.toType(entity) : undefined,
     };
+  }
+
+  /**
+   * Detach a source profile onto a fresh person ("that Discord account is NOT
+   * this Liam"). Writes sticky distinctions so automation never re-attaches
+   * the profile or re-merges the pair.
+   */
+  @Mutation(() => DetachPersonProfilePayload)
+  async detachPersonProfile(
+    @Context() context: RequestContext,
+    @Args('input') input: DetachPersonProfileInput,
+  ): Promise<DetachPersonProfilePayload> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { success: false };
+    }
+
+    const detached = await this.peoplePromotionService.detachProfile({ userId }, input.profileId);
+    if (detached == null) {
+      return { success: false };
+    }
+
+    const person = await this.personService.findById(serviceContext, detached.personEntityId);
+
+    return {
+      success: true,
+      person: person ? PersonType.toType(person) : undefined,
+    };
+  }
+
+  /** Pending weak-signal duplicate suggestions, highest confidence first. */
+  @Query(() => [PersonDuplicateSuggestionType])
+  async personDuplicateSuggestions(
+    @Context() context: RequestContext,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+    @Args('offset', { type: () => Int, nullable: true }) offset?: number,
+  ): Promise<PersonDuplicateSuggestionType[]> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return [];
+    }
+
+    const { suggestions } = await this.suggestionService.listPending(userId, {
+      limit: limit ?? undefined,
+      offset: offset ?? undefined,
+    });
+
+    return Promise.all(
+      suggestions.map(async (suggestion) => {
+        const [personA, personB] = await Promise.all([
+          this.personService.findById(serviceContext, suggestion.entityIdA),
+          this.personService.findById(serviceContext, suggestion.entityIdB),
+        ]);
+
+        return {
+          id: suggestion.id,
+          personA: personA ? PersonType.toType(personA) : null,
+          personB: personB ? PersonType.toType(personB) : null,
+          confidence: Number(suggestion.confidence),
+          signals: JSON.stringify(suggestion.signals ?? {}),
+          status: suggestion.status,
+          createdAt: suggestion.createdAt,
+        };
+      }),
+    );
+  }
+
+  /** Confirm a duplicate suggestion — merges person B into person A. */
+  @Mutation(() => MergePeoplePayload)
+  async acceptPersonDuplicateSuggestion(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<MergePeoplePayload> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { success: false };
+    }
+
+    const survivorId = await this.suggestionService.accept({ userId }, id);
+    if (survivorId == null) {
+      return { success: false };
+    }
+
+    const survivor = await this.personService.findById(serviceContext, survivorId);
+
+    return {
+      success: true,
+      person: survivor ? PersonType.toType(survivor) : undefined,
+    };
+  }
+
+  /**
+   * Dismiss a duplicate suggestion — records a sticky "not the same person"
+   * distinction so the pair is never suggested or auto-merged again.
+   */
+  @Mutation(() => RejectPersonDuplicateSuggestionPayload)
+  async rejectPersonDuplicateSuggestion(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<RejectPersonDuplicateSuggestionPayload> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { success: false };
+    }
+
+    const success = await this.suggestionService.reject({ userId }, id);
+
+    return { success };
   }
 
   @Mutation(() => DeleteByIdPayload)
@@ -210,9 +361,11 @@ export class PersonResolver {
   }
 
   /**
-   * Merge duplicate people into one canonical person: re-points identifiers,
-   * communications, events and graph edges, folds properties, and tombstones
-   * the sources. See PersonMergeService.
+   * Merge duplicate people into one canonical person: re-points profiles,
+   * identifiers, communications, events and graph edges, folds properties
+   * (user-edited fields win), tombstones the sources and writes audit rows.
+   * Explicit user action — overrides any recorded "not the same person"
+   * distinction for the pairs. See the people domain's PersonMergeService.
    */
   @Mutation(() => MergePeoplePayload)
   async mergePeople(
@@ -220,15 +373,30 @@ export class PersonResolver {
     @Args('input') input: MergePeopleInput,
   ): Promise<MergePeoplePayload> {
     const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { success: false };
+    }
 
     const sourceIds = input.sourceIds.map((gid) => GlobalUID.parse('person', gid));
     const targetId = GlobalUID.parse('person', input.targetId);
 
-    const person = await this.personMergeService.mergePeople(serviceContext, sourceIds, targetId);
+    let survivorId = targetId;
+    let anyMerged = false;
+    for (const sourceId of sourceIds) {
+      const result = await this.personMergeService.merge(userId, survivorId, sourceId, {
+        initiator: 'user',
+      });
+      survivorId = result.winnerEntityId;
+      anyMerged = anyMerged || result.merged;
+    }
+
+    const survivor = await this.personService.findById(serviceContext, survivorId);
 
     return {
-      success: true,
-      person: PersonType.toType(person),
+      success: anyMerged,
+      person: survivor ? PersonType.toType(survivor) : undefined,
     };
   }
 
@@ -318,6 +486,17 @@ export class PersonResolver {
 
     const id = GlobalUID.parse('person', gid);
 
+    // Tombstone-following: an id merged away resolves to its survivor (the
+    // returned node carries the SURVIVOR's id, so clients see the redirect).
+    if (typeof serviceContext.userId === 'string') {
+      const resolved = await this.peopleService.findByIdFollowingTombstone(
+        { userId: serviceContext.userId },
+        id,
+      );
+
+      return resolved ? PersonType.toType(resolved.person) : null;
+    }
+
     const entity = await this.personService.findById(serviceContext, id);
 
     return entity ? PersonType.toType(entity) : null;
@@ -381,6 +560,57 @@ export class PersonResolver {
     const stats = await this.personInteractionStatsLoader.load(serviceContext, parent.__source.id);
 
     return PersonInteractionStatsType.toType(stats);
+  }
+
+  /** The person's source profiles ("what Discord knows", "what Google knows"), oldest first. */
+  @ResolveField(() => [PersonProfileType])
+  async profiles(
+    @Context() context: RequestContext,
+    @Parent() parent: PersonType,
+  ): Promise<PersonProfileType[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const profiles = await this.peopleService.getProfilesForPerson(
+      serviceContext.userId,
+      parent.__source.id,
+    );
+
+    return profiles.map((profile) => PersonProfileType.toType(profile));
+  }
+
+  /** Deduped emails across the person's identifier index rows and profiles. */
+  @ResolveField(() => [String])
+  async emails(@Context() context: RequestContext, @Parent() parent: PersonType): Promise<string[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const identifiers = await this.peopleService.getIdentifiersForPerson(
+      serviceContext.userId,
+      parent.__source.id,
+    );
+
+    return identifiers.emails;
+  }
+
+  /** Deduped phone numbers across the person's identifier index rows and profiles. */
+  @ResolveField(() => [String])
+  async phones(@Context() context: RequestContext, @Parent() parent: PersonType): Promise<string[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const identifiers = await this.peopleService.getIdentifiersForPerson(
+      serviceContext.userId,
+      parent.__source.id,
+    );
+
+    return identifiers.phones;
   }
 
   private async entityIdentifiersFor(

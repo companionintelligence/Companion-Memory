@@ -23,6 +23,7 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { MediaDimensionsBackfillRequestEvent, MEDIA_DIMENSIONS_QUEUE } from '@ci/domains/files';
 import { EventEntity } from '@ci/domains/memory';
 import { EstimateLocationBatchRequestEvent, GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
+import { PeopleBackfillService, type PeopleDedupeResult } from '@ci/domains/people';
 import {
   EmbeddingEntity,
   type OrphanCleanupResult,
@@ -282,6 +283,14 @@ const extractPeopleFromCommunicationsSchema = linkCommunicationsSchema;
 
 type ExtractPeopleFromCommunicationsRequest = z.infer<typeof extractPeopleFromCommunicationsSchema>;
 
+// Body for POST /api/maintenance/dedupe-people. All optional.
+const dedupePeopleSchema = z.object({
+  /** Skip the closing weak-signal (name-only) suggestion sweep. */
+  skipSuggestions: z.boolean().optional(),
+});
+
+type DedupePeopleRequest = z.infer<typeof dedupePeopleSchema>;
+
 // Body for POST /api/maintenance/link-events. All optional. ci.events isn't a
 // hypertable, so there's no time-window knob to expose — just the per-page
 // candidate cap. Defaults sweep every candidate ci.events row for the user.
@@ -315,6 +324,7 @@ const orchestrateSchema = z.object({
   options: z
     .object({
       extractPeople: extractPeopleFromCommunicationsSchema.optional(),
+      dedupePeople: dedupePeopleSchema.optional(),
       linkCommunications: linkCommunicationsSchema.optional(),
       linkEvents: linkEventsSchema.optional(),
       extractGraph: extractGraphSchema.optional(),
@@ -380,6 +390,7 @@ export class MaintenanceController {
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly personStubBackfillService: PersonStubBackfillService,
+    private readonly peopleBackfillService: PeopleBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
@@ -711,6 +722,42 @@ export class MaintenanceController {
       endTime: body.endTime,
       windowDays: body.windowDays,
       windowLimit: body.windowLimit,
+    });
+  }
+
+  /**
+   * People-system retrofit + dedupe (issue #1810). Builds a
+   * `ci.person_profiles` row from every existing Person's import provenance,
+   * re-indexes its emails/phones/name into `ci.entity_identifiers`, merges
+   * persons sharing a strong identifier into their oldest member (losers
+   * tombstoned via merged_into_entity_id), then sweeps name collisions into
+   * `ci.person_duplicate_suggestions`. Idempotent; also runs as the
+   * orchestrator's `dedupe_people` leg. Run AFTER
+   * /extract-people-from-communications so communication-stub persons join
+   * the dedupe corpus.
+   */
+  @Post('dedupe-people')
+  async dedupePeople(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(dedupePeopleSchema)) body: DedupePeopleRequest,
+  ): Promise<PeopleDedupeResult> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return {
+        peopleScanned: 0,
+        profilesUpserted: 0,
+        identifiersIndexed: 0,
+        duplicateGroups: 0,
+        merged: 0,
+        suggestionsCreated: 0,
+        errors: [],
+      };
+    }
+
+    return this.peopleBackfillService.dedupe(userId, {
+      skipSuggestions: body.skipSuggestions,
     });
   }
 

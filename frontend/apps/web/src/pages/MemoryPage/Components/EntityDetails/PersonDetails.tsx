@@ -1,6 +1,7 @@
-import { useMutation } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client';
 
 import { PERSON_FRAGMENT } from '@/components/entities/grid/PersonGridItem';
+import { ConnectedProfiles } from '@/components/people/ConnectedProfiles';
 import { gql, useFragment } from '@/graphql';
 
 import type { MemoryEntityOf } from '../../useEntityService';
@@ -24,6 +25,26 @@ const UPDATE_PERSON = gql(`
   }
 `);
 
+const GET_PERSON_PROFILES = gql(`
+  query GetPersonProfiles($id: ID!) {
+    person(id: $id) {
+      id
+      emails
+      phones
+      profiles {
+        id
+        sourceSystem
+        displayName
+        handle
+        avatarUrl
+        emails
+        phones
+        pinnedByUser
+      }
+    }
+  }
+`);
+
 interface Props {
   entity: MemoryEntityOf<'PersonType'>;
 }
@@ -31,6 +52,11 @@ interface Props {
 export function PersonDetails({ entity }: Props) {
   const data = useFragment(PERSON_FRAGMENT, entity);
   const [updatePerson] = useMutation(UPDATE_PERSON);
+  const { data: profileData } = useQuery(GET_PERSON_PROFILES, {
+    variables: { id: entity.id },
+  });
+
+  const assembled = profileData?.person;
 
   return (
     <EntityDetailScaffold
@@ -62,6 +88,14 @@ export function PersonDetails({ entity }: Props) {
         });
       }}
       rawData={data}
-    />
+    >
+      {assembled != null && (
+        <ConnectedProfiles
+          emails={assembled.emails}
+          phones={assembled.phones}
+          profiles={assembled.profiles}
+        />
+      )}
+    </EntityDetailScaffold>
   );
 }

@@ -45,7 +45,8 @@ export class PersonEntity {
 
   /**
    * Non-NULL marks this row as a merge tombstone pointing at the canonical
-   * person (see PersonMergeService). Read paths exclude tombstones.
+   * person (see the people domain's PersonMergeService). Read paths exclude
+   * tombstones.
    */
   @Column({ type: 'uuid', name: 'merged_into_entity_id', nullable: true })
   mergedIntoEntityId!: string | null;

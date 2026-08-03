@@ -3,7 +3,8 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { EventService, PersonService } from '@ci/domains/memory';
+import { EventService } from '@ci/domains/memory';
+import { PeoplePromotionService } from '@ci/domains/people';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -20,7 +21,7 @@ interface SteamFriendData {
 @Injectable()
 export class SteamFriendsTransformService {
   constructor(
-    private readonly personService: PersonService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
@@ -54,39 +55,25 @@ export class SteamFriendsTransformService {
 
       for (const friend of friends) {
         try {
-          // Check if person already exists by steam_id in properties
-          const existingEntities = await this.personService.search(
+          // Promotion replaces the steam_id property-scan find-or-create:
+          // the profile upserts on (steam, steamid); the realname (when Steam
+          // exposes one) rides as a weak name identifier so the friend can be
+          // suggested against a contact with the same real name.
+          const observed = await this.peoplePromotionService.observeProfile(
             { userId },
             {
-              properties: {
-                steam_id: friend.steamid,
-                owner_user_id: userId,
-              },
-            },
-          );
-
-          if (existingEntities.length > 0) {
-            this.logger.debug('Steam friend already exists, skipping', {
-              steamid: friend.steamid,
-              personaname: friend.personaname,
-            });
-            skippedCount++;
-            continue;
-          }
-
-          // Create Person entity
-          await this.personService.create(
-            { userId },
-            {
-              name: friend.personaname,
-              description: `Steam friend: ${friend.personaname}`,
+              sourceSystem: 'steam',
+              remoteKey: friend.steamid,
+              displayName: friend.realname ?? friend.personaname,
+              handle: friend.personaname,
+              avatarUrl: friend.avatarfull || friend.avatar || null,
+              names: friend.realname ? [friend.realname] : [],
               properties: {
                 type: 'person',
                 steam_id: friend.steamid,
                 external_id: friend.steamid,
                 source_url: `https://steamcommunity.com/profiles/${friend.steamid}`,
                 avatar_url: friend.avatarfull || friend.avatar,
-                owner_user_id: userId,
                 connection_id: connection.id,
                 sources: ['steam'],
                 steam_data: {
@@ -99,6 +86,13 @@ export class SteamFriendsTransformService {
               },
             },
           );
+
+          if (!observed.created) {
+            // Already known (prior sync or another source) — mirror the old
+            // skip path: no duplicate friendship event on re-sync.
+            skippedCount++;
+            continue;
+          }
 
           personsCreatedCount++;
 

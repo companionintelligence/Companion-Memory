@@ -64,6 +64,21 @@ function makeService() {
       return { examined: 0, peopleCreated: 0 };
     }),
   };
+  const peopleBackfill = {
+    dedupe: jest.fn(async () => {
+      callOrder.push('dedupe_people');
+
+      return {
+        peopleScanned: 0,
+        profilesUpserted: 0,
+        identifiersIndexed: 0,
+        duplicateGroups: 0,
+        merged: 0,
+        suggestionsCreated: 0,
+        errors: [] as string[],
+      };
+    }),
+  };
   const commLink = {
     // Params kept so mockImplementationOnce overrides below can type their (userId, options) impls.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -113,6 +128,8 @@ function makeService() {
     logger as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     personStub as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    peopleBackfill as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     commLink as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -201,7 +218,7 @@ describe('MaintenanceOrchestratorService', () => {
 
     const starts = lines.filter((l) => l.type === 'leg-start');
     expect(starts.map((l) => l.leg)).toEqual([...ORCHESTRATE_STAGES]);
-    expect(starts.map((l) => l.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(starts.map((l) => l.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(starts.every((l) => l.of === ORCHESTRATE_STAGES.length)).toBe(true);
     expect(summary.legs).toHaveLength(ORCHESTRATE_STAGES.length);
     expect(summary.ok).toBe(true);

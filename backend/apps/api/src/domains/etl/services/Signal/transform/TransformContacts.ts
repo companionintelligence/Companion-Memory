@@ -1,10 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuidv7 } from 'uuid';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { PersonService } from '@ci/domains/memory';
+import { PeoplePromotionService } from '@ci/domains/people';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -13,7 +12,7 @@ import type { SignalContact } from '../sync/signalApi';
 @Injectable()
 export class SignalContactsTransformService {
   constructor(
-    private readonly personService: PersonService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly promoteService: PromoteService,
     private readonly logger: LoggerService,
   ) {
@@ -49,26 +48,23 @@ export class SignalContactsTransformService {
         contact.nickname ||
         contactNumber;
 
-      const existingPeople = await this.personService.search(context, {
+      // Promotion replaces the property-scan find-or-create: the profile
+      // upserts on (signal, number-or-uuid), a real phone number becomes a
+      // strong identifier (so a Signal contact chains into the same Person a
+      // Google contact with that number resolved to), and a uuid-only contact
+      // still gets a stable profile.
+      await this.peoplePromotionService.observeProfile(context, {
+        sourceSystem: 'signal',
+        remoteKey: contactNumber,
+        displayName,
+        handle: contact.nickname ?? null,
+        phones: contact.number ? [contact.number] : [],
         properties: {
-          owner_user_id: userId,
           signal_number: contactNumber,
+          connection_id: connection.id,
+          sources: ['signal'],
         },
       });
-
-      if (existingPeople.length === 0) {
-        await this.personService.create(context, {
-          id: uuidv7(),
-          name: displayName,
-          description: `Signal contact ${displayName}`,
-          properties: {
-            signal_number: contactNumber,
-            owner_user_id: userId,
-            connection_id: connection.id,
-            sources: ['signal'],
-          },
-        });
-      }
 
       this.logger.debug('Processed Signal contact', {
         contactNumber,

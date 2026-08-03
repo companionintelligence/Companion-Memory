@@ -13,6 +13,7 @@ import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/En
 import { PersonIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { AddRelationshipModal } from '@/components/modals/AddItemModal/AddRelationshipModal';
+import { ConnectedProfiles } from '@/components/people/ConnectedProfiles';
 import { TagInput } from '@/components/TagInput';
 import { gql } from '@/graphql';
 
@@ -62,6 +63,18 @@ const GET_PERSON = gql(`
       id
       name
       description
+      emails
+      phones
+      profiles {
+        id
+        sourceSystem
+        displayName
+        handle
+        avatarUrl
+        emails
+        phones
+        pinnedByUser
+      }
       tags {
         id
         label
@@ -217,6 +230,11 @@ export function PersonPage() {
                   )}
                 />
               </div>
+              <ConnectedProfiles
+                emails={person.emails}
+                phones={person.phones}
+                profiles={person.profiles}
+              />
             </Card.Content>
           </Card>
         </div>

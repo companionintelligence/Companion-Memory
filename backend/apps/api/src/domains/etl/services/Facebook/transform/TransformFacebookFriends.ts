@@ -4,7 +4,7 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { RelationshipService } from '@ci/domains/graph';
-import { PersonService } from '@ci/domains/memory';
+import { PeoplePromotionService } from '@ci/domains/people';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -22,7 +22,7 @@ interface FacebookFriend {
 @Injectable()
 export class FacebookFriendsTransformService {
   constructor(
-    private readonly personService: PersonService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly promoteService: PromoteService,
     private readonly relationshipService: RelationshipService,
     private readonly logger: LoggerService,
@@ -57,19 +57,8 @@ export class FacebookFriendsTransformService {
 
       for (const friend of friends) {
         try {
-          const searchProperties: Record<string, unknown> = {
-            owner_user_id: userId,
-            facebook_id: friend.id,
-          };
-
-          const existingEntities = await this.personService.search(
-            { userId },
-            { properties: searchProperties },
-          );
-
           const properties: Record<string, unknown> = {
             facebook_id: friend.id,
-            owner_user_id: userId,
             connection_id: connection.id,
             sources: ['facebook'],
             facebook_data: {
@@ -87,38 +76,33 @@ export class FacebookFriendsTransformService {
             }
           }
 
-          if (existingEntities.length > 0) {
-            // Update existing person
-            const existingEntity = existingEntities[0];
-            const currentProperties = (existingEntity.properties as Record<string, unknown>) ?? {};
-            const mergedProperties = { ...currentProperties, ...properties };
+          // Promotion replaces the facebook_id property-scan find-or-create.
+          // Facebook exports no email/phone, so the friend's name rides as a
+          // weak identifier (lookup only) and near-misses surface as duplicate
+          // suggestions rather than auto-merges.
+          const observed = await this.peoplePromotionService.observeProfile(
+            { userId },
+            {
+              sourceSystem: 'facebook',
+              remoteKey: friend.id,
+              displayName: friend.name,
+              avatarUrl: friend.picture?.data?.url ?? null,
+              names: [friend.name],
+              properties,
+            },
+          );
 
-            await this.personService.update({ userId }, existingEntity.id, {
-              properties: mergedProperties,
-              lastAccessed: new Date(),
-            });
-          } else {
-            const newPerson = await this.personService.create(
-              { userId },
-              {
-                name: friend.name,
-                description: `Facebook friend: ${friend.name}`,
-                properties,
-              },
-            );
-
-            await this.relationshipService.upsert(context, {
-              fromNodeId: userNode.entityId,
-              fromNodeType: 'person',
-              toNodeId: newPerson.id,
-              toNodeType: 'person',
-              type: 'FRIENDS_WITH',
-              properties: {
-                source: 'facebook',
-                connection_id: connection.id,
-              },
-            });
-          }
+          await this.relationshipService.upsert(context, {
+            fromNodeId: userNode.entityId,
+            fromNodeType: 'person',
+            toNodeId: observed.personEntityId,
+            toNodeType: 'person',
+            type: 'FRIENDS_WITH',
+            properties: {
+              source: 'facebook',
+              connection_id: connection.id,
+            },
+          });
         } catch (error) {
           this.logger.error('Error processing Facebook friend', {
             friendId: friend.id,

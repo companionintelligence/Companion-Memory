@@ -539,6 +539,15 @@ type DeleteByIdPayload {
   success: Boolean!
 }
 
+input DetachPersonProfileInput {
+  profileId: ID!
+}
+
+type DetachPersonProfilePayload {
+  person: PersonType
+  success: Boolean!
+}
+
 interface Edge {
   cursor: String!
   node: Node!
@@ -831,6 +840,7 @@ type MessageType implements Node {
 }
 
 type Mutation {
+  acceptPersonDuplicateSuggestion(id: ID!): MergePeoplePayload!
   addPersonIdentifier(input: AddPersonIdentifierInput!): [PersonIdentifierType!]!
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
   bulkIngestItemRelationships(input: [ItemRelationshipInput!]!): BulkItemRelationshipResult!
@@ -868,6 +878,7 @@ type Mutation {
   deleteProviderKey(id: ID!): Boolean!
   deleteRelationship(input: DeleteByIdInput!): DeleteByIdPayload!
   deleteSavedSearch(input: DeleteByIdInput!): DeleteByIdPayload!
+  detachPersonProfile(input: DetachPersonProfileInput!): DetachPersonProfilePayload!
   ingestUserSnapshot(input: IngestUserSnapshotInput!): IngestUserSnapshotPayload!
 
   """Mark an action as dismissed"""
@@ -882,6 +893,7 @@ type Mutation {
   """Mark a summary as seen"""
   markSummaryAsSeen(id: ID!): SummaryType
   mergePeople(input: MergePeopleInput!): MergePeoplePayload!
+  rejectPersonDuplicateSuggestion(id: ID!): RejectPersonDuplicateSuggestionPayload!
   removeAnswer(id: String!): Boolean!
   removeContent(id: String!): Boolean!
   removeEvent(id: String!): Boolean!
@@ -970,6 +982,16 @@ type PersonDuplicateGroupType {
   value: String!
 }
 
+type PersonDuplicateSuggestionType {
+  confidence: Float!
+  createdAt: DateTime!
+  id: ID!
+  personA: PersonType
+  personB: PersonType
+  signals: String!
+  status: String!
+}
+
 type PersonEdge implements Edge {
   cursor: String!
   node: PersonType!
@@ -991,6 +1013,20 @@ type PersonInteractionStatsType {
   lastInteractionAt: DateTime
 }
 
+type PersonProfileType {
+  avatarUrl: String
+  createdAt: DateTime!
+  displayName: String
+  emails: [String!]!
+  handle: String
+  id: ID!
+  phones: [String!]!
+  pinnedByUser: Boolean!
+  remoteKey: String!
+  sourceSystem: String!
+  updatedAt: DateTime!
+}
+
 type PersonType implements Node & Taggable {
   address: String
   avatarUrl: String
@@ -998,6 +1034,7 @@ type PersonType implements Node & Taggable {
   city: String
   country: String
   description: String
+  emails: [String!]!
   firstName: String
   gender: String
   id: ID!
@@ -1007,7 +1044,9 @@ type PersonType implements Node & Taggable {
   lastName: String
   middleName: String
   name: String
+  phones: [String!]!
   postalCode: String
+  profiles: [PersonProfileType!]!
   region: String
   streetAddress: String
   streetAddress2: String
@@ -1156,6 +1195,7 @@ type Query {
   pairingStatus(pairingToken: String!, pollKey: String!): PairingStatusPayload!
   people(after: String, before: String, first: Int, last: Int, query: String): PersonConnection!
   person(id: ID!): PersonType
+  personDuplicateSuggestions(limit: Int, offset: Int): [PersonDuplicateSuggestionType!]!
   personDuplicates(limit: Int): [PersonDuplicateGroupType!]!
   place(id: ID!): PlaceType
   places(after: String, before: String, first: Int, last: Int): PlaceConnection!
@@ -1195,6 +1235,10 @@ type QuestionType implements Node {
   isSeedQuestion: Boolean
   questionType: String
   text: String!
+}
+
+type RejectPersonDuplicateSuggestionPayload {
+  success: Boolean!
 }
 
 type RelationshipConnection implements Connection {

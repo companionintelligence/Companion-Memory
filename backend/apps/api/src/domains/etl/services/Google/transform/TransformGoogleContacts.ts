@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuid7 } from 'uuid';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { RelationshipService } from '@ci/domains/graph';
-import { PersonService } from '@ci/domains/memory';
+import { PeoplePromotionService } from '@ci/domains/people';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -52,16 +51,10 @@ interface GoogleContact {
   }>;
 }
 
-interface PropsToCheck {
-  owner_user_id: string;
-  email?: string;
-  phone?: string;
-}
-
 @Injectable()
 export class GoogleContactsTransformService {
   constructor(
-    private readonly personService: PersonService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly connectionService: ConnectionService,
     private readonly promoteService: PromoteService,
     private readonly relationshipService: RelationshipService,
@@ -193,123 +186,72 @@ export class GoogleContactsTransformService {
         phone: primaryPhone,
       });
 
-      const propsToCheck: PropsToCheck = {
-        owner_user_id: userId,
+      // Identifier arrays as string[] — the canonical contract shape the
+      // identifier index reads (the old writer stored Google's {value, type}
+      // objects, which the index could never resolve).
+      const emails = (contact.emailAddresses ?? [])
+        .map((e) => e.value)
+        .filter((v): v is string => typeof v === 'string' && v.length > 0);
+      const phones = (contact.phoneNumbers ?? [])
+        .map((p) => p.value)
+        .filter((v): v is string => typeof v === 'string' && v.length > 0);
+
+      const properties: Record<string, unknown> = {
+        first_name: givenName,
+        last_name: familyName,
+        source: 'google_contacts',
+        connection_id: connectionId,
+        google_contacts_synced: true,
+        last_synced_at: new Date().toISOString(),
       };
 
-      if (primaryEmail) {
-        propsToCheck.email = primaryEmail;
+      if (contact.addresses && contact.addresses.length > 0) {
+        properties.addresses = contact.addresses.map((a) => ({
+          value: a.formattedValue,
+          type: a.type,
+        }));
       }
 
-      if (primaryPhone) {
-        propsToCheck.phone = primaryPhone;
+      if (contact.organizations && contact.organizations.length > 0) {
+        properties.organization = contact.organizations[0].name;
+        properties.job_title = contact.organizations[0].title;
       }
 
-      const existingEntities = await this.personService.search(
+      if (contact.occupations && contact.occupations.length > 0) {
+        properties.occupation = contact.occupations[0].value;
+      }
+
+      if (contact.birthdays && contact.birthdays.length > 0 && contact.birthdays[0].date) {
+        const birthday = contact.birthdays[0].date;
+        properties.birthday = `${birthday.year || ''}${birthday.month || ''}${birthday.day || ''}`;
+      }
+
+      if (contact.photos && contact.photos.length > 0) {
+        properties.photo_url = contact.photos[0].url;
+      }
+
+      // One promotion call replaces the old search/create/update fork: the
+      // profile upserts on (google:contacts, resourceName), identifiers index,
+      // and the contact resolves to (or creates / chains into) its Person.
+      const observed = await this.peoplePromotionService.observeProfile(
         { userId },
         {
-          properties: { ...propsToCheck },
+          sourceSystem: 'google:contacts',
+          remoteKey: contact.resourceName ?? `name:${displayName}`,
+          displayName,
+          avatarUrl: contact.photos?.[0]?.url ?? null,
+          emails,
+          phones,
+          properties,
         },
       );
-      const existingEntity = existingEntities.length > 0 ? existingEntities[0] : undefined;
+      const contactEntityId = observed.personEntityId;
 
-      let contactEntityId: string;
-
-      if (!existingEntity) {
-        // Create new contact entity
-        contactEntityId = uuid7();
-
-        const properties: Record<string, unknown> = {
-          email: primaryEmail,
-          phone: primaryPhone,
-          first_name: givenName,
-          last_name: familyName,
-          source: 'google_contacts',
-          connection_id: connectionId,
-          owner_user_id: userId,
-        };
-
-        // Add all email addresses
-        if (contact.emailAddresses && contact.emailAddresses.length > 0) {
-          properties.emails = contact.emailAddresses.map((e) => ({
-            value: e.value,
-            type: e.type,
-          }));
-        }
-
-        // Add all phone numbers
-        if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
-          properties.phones = contact.phoneNumbers.map((p) => ({
-            value: p.value,
-            type: p.type,
-          }));
-        }
-
-        // Add addresses
-        if (contact.addresses && contact.addresses.length > 0) {
-          properties.addresses = contact.addresses.map((a) => ({
-            value: a.formattedValue,
-            type: a.type,
-          }));
-        }
-
-        // Add organization info
-        if (contact.organizations && contact.organizations.length > 0) {
-          properties.organization = contact.organizations[0].name;
-          properties.job_title = contact.organizations[0].title;
-        }
-
-        // Add occupation
-        if (contact.occupations && contact.occupations.length > 0) {
-          properties.occupation = contact.occupations[0].value;
-        }
-
-        // Add birthday
-        if (contact.birthdays && contact.birthdays.length > 0 && contact.birthdays[0].date) {
-          const birthday = contact.birthdays[0].date;
-          properties.birthday = `${birthday.year || ''}${birthday.month || ''}${birthday.day || ''}`;
-        }
-
-        // Add photo
-        if (contact.photos && contact.photos.length > 0) {
-          properties.photo_url = contact.photos[0].url;
-        }
-
-        await this.personService.create(
-          { userId },
-          {
-            id: contactEntityId,
-            name: displayName,
-            description: `Contact from Google Contacts`,
-            properties,
-          },
-        );
-
-        this.logger.log('Created new contact entity', {
-          contactEntityId,
-          name: displayName,
-        });
-      } else {
-        // Update existing entity
-        contactEntityId = existingEntity.id;
-
-        const currentProperties = (existingEntity.properties as Record<string, unknown>) ?? {};
-        const updatedProperties = {
-          ...currentProperties,
-          google_contacts_synced: true,
-          last_synced_at: new Date().toISOString(),
-        };
-
-        existingEntity.properties = updatedProperties;
-        await this.personService.update({ userId }, existingEntity.id, {
-          properties: updatedProperties,
-        });
-
-        this.logger.log('Updated existing contact entity', {
-          contactEntityId,
-          name: displayName,
-        });
-      }
+      this.logger.log(observed.created ? 'Created new contact entity' : 'Resolved contact entity', {
+        contactEntityId,
+        name: displayName,
+        merged: observed.mergedEntityIds.length,
+      });
 
       // Create KNOWS relationship (ensuring every entity has at least one relationship)
       const context = toServiceContext({ userId });

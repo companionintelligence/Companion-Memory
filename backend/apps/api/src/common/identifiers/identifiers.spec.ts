@@ -5,7 +5,7 @@ import {
   normalizeName,
   normalizePhone,
   splitPersonName,
-} from './normalizeIdentifier';
+} from './index';
 
 describe('normalizeEmail', () => {
   it('trims and lowercases', () => {

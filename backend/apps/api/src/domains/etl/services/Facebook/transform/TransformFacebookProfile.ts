@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuidv7 } from 'uuid';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { RelationshipService } from '@ci/domains/graph';
-import { PersonService } from '@ci/domains/memory';
+import { PeoplePromotionService } from '@ci/domains/people';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -23,7 +22,7 @@ interface FacebookProfile {
 @Injectable()
 export class FacebookProfileTransformService {
   constructor(
-    private readonly personService: PersonService,
+    private readonly peoplePromotionService: PeoplePromotionService,
     private readonly promoteService: PromoteService,
     private readonly relationshipService: RelationshipService,
     private readonly logger: LoggerService,
@@ -51,41 +50,8 @@ export class FacebookProfileTransformService {
         return;
       }
 
-      // Search for existing person by facebook_id first (most reliable)
-      let existingEntities = await this.personService.search(
-        { userId },
-        { properties: { facebook_id: profile.id, owner_user_id: userId } },
-      );
-      // If not found by facebook_id, try searching by email
-      if (existingEntities.length === 0 && profile.email) {
-        existingEntities = await this.personService.search(
-          { userId },
-          { properties: { email: profile.email, owner_user_id: userId } },
-        );
-      }
-
-      // If still not found, try searching by name (case-insensitive)
-      if (existingEntities.length === 0) {
-        const nameParts = profile.name.trim().split(/\s+/).filter(Boolean);
-        if (nameParts.length > 0) {
-          // Search for persons with matching name (case-insensitive)
-          const allPersons = await this.personService.search(
-            { userId },
-            { properties: { owner_user_id: userId } },
-          );
-          // Filter by case-insensitive name match
-          existingEntities = allPersons.filter((person) => {
-            const personName = person.name?.toLowerCase().trim();
-            const profileName = profile.name.toLowerCase().trim();
-
-            return personName === profileName;
-          });
-        }
-      }
-
       const properties: Record<string, unknown> = {
         facebook_id: profile.id,
-        owner_user_id: userId,
         connection_id: connection.id,
         sources: ['facebook'],
         facebook_data: {
@@ -129,62 +95,28 @@ export class FacebookProfileTransformService {
         properties.location = profile.location.name;
       }
 
-      if (existingEntities.length > 0) {
-        // Update existing person
-        const existingEntity = existingEntities[0];
-        const currentProperties = (existingEntity.properties as Record<string, unknown>) ?? {};
-        // Merge properties, ensuring Facebook data and birthday are updated
-        const currentFacebookData = (currentProperties.facebook_data as Record<string, unknown>) || {};
-        const newFacebookData = (properties.facebook_data as Record<string, unknown>) || {};
-        const mergedProperties = {
-          ...currentProperties,
-          ...properties,
-          // Ensure sources array includes 'facebook' if not already present
-          sources: Array.isArray(currentProperties.sources)
-            ? [...new Set([...currentProperties.sources, 'facebook'])]
-            : ['facebook'],
-          // Update facebook_data with latest info
-          facebook_data: {
-            ...currentFacebookData,
-            ...newFacebookData,
-          },
-          // Ensure birthday is set if provided
-          ...(profile.birthday ? { birthday: profile.birthday } : {}),
-          // Ensure facebook_id is set
-          ...(profile.id ? { facebook_id: profile.id } : {}),
-        };
-        // Update name if it's more complete
-        const updatedName =
-          existingEntity.name && existingEntity.name.length > profile.name.length
-            ? existingEntity.name
-            : profile.name;
-        await this.personService.update({ userId }, existingEntity.id, {
-          name: updatedName,
-          properties: mergedProperties,
-          lastAccessed: new Date(),
-        });
-        this.logger.log('Updated existing person with Facebook profile', {
-          userId,
-          entityId: existingEntity.id,
-          name: updatedName,
-          hasBirthday: !!profile.birthday,
-        });
-      } else {
-        const context = toServiceContext({ userId });
-        // Create new person
-        const entityId = uuidv7();
-        await this.personService.create(context, {
-          id: entityId,
-          name: profile.name,
-          description: `Facebook profile: ${profile.name}`,
-          properties,
-        });
+      const context = toServiceContext({ userId });
+
+      // Promotion replaces the three-tier facebook_id/email/name scan: the
+      // profile upserts on (facebook, profile:<id>); the account email is a
+      // strong identifier, so this chains into an existing Person carrying it
+      // (the old email search, but via the index) instead of duplicating.
+      const observed = await this.peoplePromotionService.observeProfile(context, {
+        sourceSystem: 'facebook',
+        remoteKey: `profile:${profile.id}`,
+        displayName: profile.name,
+        emails: profile.email ? [profile.email] : [],
+        names: [profile.name],
+        properties,
+      });
+
+      if (observed.created) {
         const { userNode } = await this.promoteService.getUserAndEntity(context, userId);
         // Create relationship to user
         await this.relationshipService.upsert(context, {
           fromNodeId: userNode.entityId,
           fromNodeType: 'person',
-          toNodeId: entityId,
+          toNodeId: observed.personEntityId,
           toNodeType: 'person',
           type: 'IS',
           properties: {
@@ -192,13 +124,19 @@ export class FacebookProfileTransformService {
             connection_id: connection.id,
           },
         });
-        this.logger.log('Created new person from Facebook profile', {
+      }
+
+      this.logger.log(
+        observed.created
+          ? 'Created new person from Facebook profile'
+          : 'Resolved Facebook profile to existing person',
+        {
           userId,
-          entityId,
+          entityId: observed.personEntityId,
           name: profile.name,
           hasBirthday: !!profile.birthday,
-        });
-      }
+        },
+      );
 
       this.logger.log('Facebook profile transformation completed', {
         userId,

@@ -48,6 +48,7 @@ import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
 import { PairingModule } from '@ci/domains/pairing';
 import { ParsingModule } from '@ci/domains/parsing';
+import { PeopleModule } from '@ci/domains/people';
 import { PositionModule } from '@ci/domains/position';
 import { PowerSyncModule } from '@ci/domains/powersync';
 import { PredictionsModule } from '@ci/domains/predictions';
@@ -105,6 +106,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     PredictionsModule,
     ToolsModule,
     MemoryModule,
+    PeopleModule,
     GeocodeModule,
     MaintenanceModule,
     NotesModule,

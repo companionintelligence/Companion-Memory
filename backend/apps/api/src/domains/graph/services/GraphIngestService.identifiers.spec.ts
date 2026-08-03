@@ -46,6 +46,7 @@ function makeService(identifierUpsert: jest.Mock) {
   const node = makeFakeNodeRepository({ seed });
   const rel = makeFakeRelationshipRepository();
   const entityIdentifierService = { upsertForEntities: identifierUpsert };
+  const peoplePromotionService = { observeIngestedPeople: jest.fn().mockResolvedValue(undefined) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const service = new GraphIngestService(
@@ -56,10 +57,12 @@ function makeService(identifierUpsert: jest.Mock) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     entityIdentifierService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    peoplePromotionService as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );
 
-  return { service, entityIdentifierService, logger };
+  return { service, entityIdentifierService, peoplePromotionService, logger };
 }
 
 function entity(props: Record<string, unknown> | null, key = KEY_1, name = 'John Doe'): GraphEntityInputDto {

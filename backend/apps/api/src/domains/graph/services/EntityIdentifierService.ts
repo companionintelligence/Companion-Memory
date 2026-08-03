@@ -2,11 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
+import { type IdentifierKind, normalizeIdentifier } from '@ci/common/identifiers';
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
 
 import { EntityIdentifierEntity } from '../entities/EntityIdentifierEntity';
-import { type IdentifierKind, normalizeIdentifier } from '../utils/normalizeIdentifier';
 
 /** A normalized (kind, value) pair used as a lookup key. */
 export interface IdentifierKey {

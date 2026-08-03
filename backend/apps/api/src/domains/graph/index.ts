@@ -10,6 +10,7 @@ import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
+import { PeopleModule } from '@ci/domains/people';
 import { UserModule } from '@ci/domains/user';
 
 import { type EntityIdentifier, EntityIdentifierEntity } from './entities/EntityIdentifierEntity';
@@ -44,6 +45,9 @@ import { RelationshipService } from './services/RelationshipService';
     EventsModule,
     MemoryModule,
     NotesModule,
+    // GraphIngestService funnels ingested Person entities through
+    // PeoplePromotionService (profiles + identity chaining).
+    PeopleModule,
     UserModule,
   ],
   providers: [
@@ -105,4 +109,4 @@ export {
   normalizeName,
   normalizePhone,
   splitPersonName,
-} from './utils/normalizeIdentifier';
+} from '@ci/common/identifiers';
