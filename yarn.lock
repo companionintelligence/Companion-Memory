@@ -2987,6 +2987,7 @@ __metadata:
     knip: "npm:^5.66.0"
     nodemon: "npm:^3.1.10"
     ollama: "npm:^0.5.17"
+    openai: "npm:^7.3.0"
     oxlint: "npm:^1.36.0"
     p-limit: "npm:^7.1.1"
     parse-duration: "npm:^2.1.4"
@@ -21695,6 +21696,30 @@ __metadata:
     is-docker: "npm:^2.1.1"
     is-wsl: "npm:^2.2.0"
   checksum: 10c0/bb6b3a58401dacdb0aad14360626faf3fb7fba4b77816b373495988b724fb48941cad80c1b65d62bb31a17609b2cd91c41a181602caea597ca80dfbcc27e84c9
+  languageName: node
+  linkType: hard
+
+"openai@npm:^7.3.0":
+  version: 7.3.0
+  resolution: "openai@npm:7.3.0"
+  peerDependencies:
+    "@aws-sdk/credential-provider-node": ">=3.972.0 <4"
+    "@smithy/hash-node": ">=4.3.0 <5"
+    "@smithy/signature-v4": ">=5.4.0 <6"
+    ws: ^8.18.0
+    zod: ^3.25 || ^4.0
+  peerDependenciesMeta:
+    "@aws-sdk/credential-provider-node":
+      optional: true
+    "@smithy/hash-node":
+      optional: true
+    "@smithy/signature-v4":
+      optional: true
+    ws:
+      optional: true
+    zod:
+      optional: true
+  checksum: 10c0/d86fd9780f040a8fe6f19ef5aacd8b798eed9712262457bcff68b0bb31b5b387cb359a5cfadbcccc64f99d27f162f86a2fce385d3f2c5be375d635b4da1de1c7
   languageName: node
   linkType: hard
 

@@ -16,7 +16,7 @@
   "exposable": true,
   "dynamic_config": true,
   "cihub_app_version": 1,
-  "min_hub_version": "v0.2.27",
+  "min_hub_version": "v0.2.48",
   "hub_integration": {
     "memory": {
       "provider": {
@@ -28,7 +28,8 @@
       "llm_base_url": "LLM_API_BASE",
       "llm_api_key": "LLM_API_KEY",
       "chat_model": "LLM_DEFAULT_CHAT_MODEL",
-      "embedding_model": "LLM_DEFAULT_EMBEDDING_MODEL"
+      "embedding_model": "LLM_DEFAULT_EMBEDDING_MODEL",
+      "ollama_embed_host": "OLLAMA_EMBED_HOST"
     }
   },
   "demo_video": "./metadata/media/companion-memory-demo.mp4",

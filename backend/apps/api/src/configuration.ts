@@ -138,6 +138,19 @@ export const ConfigSchema = z.object({
   graphql: z.object({
     maxQueryComplexity: z.number().int(),
   }),
+  // OpenAI-compatible chat backend (Hub-injected LLM_* env). When `apiBase`
+  // points anywhere other than the local Ollama's own /v1 surface (e.g. a
+  // Hub-selected vLLM instance), the NestJS chat path talks OpenAI protocol to
+  // it; otherwise the native Ollama client is used so Ollama-only features
+  // (thinking stream, model capabilities) keep working. `chatModel` replaces
+  // the previously hardcoded background-inference model.
+  llm: z
+    .object({
+      apiBase: z.string().optional(),
+      apiKey: z.string().default('ollama'),
+      chatModel: z.string().default('gemma3:1b'),
+    })
+    .default({}),
   services: z.object({
     ollama: z.object({
       host: z.string(),
@@ -264,6 +277,21 @@ const parsed = ConfigSchema.parse(config);
 // at for embeddings only without touching the prompt/inference host.
 if (!parsed.embedding.host) {
   parsed.embedding.host = parsed.services.ollama.host;
+}
+
+// Compose files pass LLM_* through as `${LLM_API_BASE:-}` style defaults, so an
+// unset variable arrives as the empty string — normalize that back to the
+// schema defaults rather than treating '' as a configured value.
+if (!parsed.llm.apiBase) {
+  parsed.llm.apiBase = undefined;
+}
+
+if (!parsed.llm.apiKey) {
+  parsed.llm.apiKey = 'ollama';
+}
+
+if (!parsed.llm.chatModel) {
+  parsed.llm.chatModel = 'gemma3:1b';
 }
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
