@@ -13,7 +13,7 @@
     "e2e:report": "playwright show-report",
     "prepare": "husky"
   },
-  "packageManager": "yarn@4.9.1",
+  "packageManager": "yarn@4.18.0",
   "workspaces": [
     "backend/apps/*",
     "frontend/apps/*",
