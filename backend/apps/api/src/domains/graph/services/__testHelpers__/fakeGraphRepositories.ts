@@ -7,7 +7,9 @@
  *   - a SELECT built via `.createQueryBuilder(alias).where(...).andWhere(Brackets)`
  *     resolved with `.getMany()`, and
  *   - a batched `.createQueryBuilder().insert().into(...).values(rows)
- *     .onConflict('… DO NOTHING').returning(cols).execute()`.
+ *     .onConflict('…').returning(cols).execute()` — DO UPDATE for nodes (a
+ *     conflicting row keeps its id and takes the incoming name/description/
+ *     properties), DO NOTHING for relationships.
  *
  * The fakes ignore the exact SQL text and instead apply the service's actual
  * idempotency predicate (entities: (owner,type,linkedTable,linkedId); rels:
@@ -53,7 +55,8 @@ const relCoord = (r: { userId: string; fromNodeId: string; toNodeId: string; typ
  * A fake repository over a row store keyed by the service's idempotency
  * coordinates. `failInsert`/`failSelect` let a spec force a batch-level DB error
  * to exercise the error-isolation path. Every inserted row's snapshot is captured
- * in `inserted` so specs can assert on what actually landed.
+ * in `inserted`, and every refreshed one in `updated`, so specs can assert on
+ * what actually landed — including that an unchanged row was left alone.
  */
 export function makeFakeNodeRepository(
   opts: { seed?: StoredNode[]; failSelect?: boolean; failInsert?: boolean } = {},
@@ -64,6 +67,7 @@ export function makeFakeNodeRepository(
   }
 
   const inserted: StoredNode[] = [];
+  const updated: StoredNode[] = [];
 
   const repo = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -145,17 +149,21 @@ export function makeFakeNodeRepository(
         const raw: Array<Record<string, unknown>> = [];
         for (const row of insertRows ?? []) {
           const key = nodeCoord(row);
-          if (store.has(key)) {
-            continue;
-          } // ON CONFLICT DO NOTHING
+          const current = store.get(key);
+          // ON CONFLICT DO UPDATE: the stored row keeps its entity_id (and every
+          // reference to it) and takes the incoming content. RETURNING yields
+          // the row that actually exists, which is what the service maps keys to.
+          const landed = current
+            ? { ...current, name: row.name, description: row.description, properties: row.properties }
+            : row;
 
-          store.set(key, row);
-          inserted.push(row);
+          store.set(key, landed);
+          (current ? updated : inserted).push(landed);
           raw.push({
-            entity_id: row.entityId,
-            entity_type: row.entityType,
-            linked_table: row.linkedTable,
-            linked_id: row.linkedId,
+            entity_id: landed.entityId,
+            entity_type: landed.entityType,
+            linked_table: landed.linkedTable,
+            linked_id: landed.linkedId,
           });
         }
 
@@ -166,7 +174,7 @@ export function makeFakeNodeRepository(
     return qb;
   }
 
-  return { repo, store, inserted };
+  return { repo, store, inserted, updated };
 }
 
 export function makeFakeRelationshipRepository(opts: { failSelect?: boolean; failInsert?: boolean } = {}) {

@@ -87,6 +87,38 @@ export interface GraphIngestResult {
 }
 
 /**
+ * JSON with object keys in sorted order, so two payloads that differ only in key
+ * order compare equal. Needed because a stored `properties` value comes back
+ * from jsonb in Postgres' own key order, which is not the order the source sent
+ * — a naive comparison would call every row stale on every ingest.
+ */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+        sorted[k] = (v as Record<string, unknown>)[k];
+      }
+      return sorted;
+    }
+    return v;
+  });
+}
+
+/**
+ * Whether an incoming row says anything the stored one doesn't. Rows that match
+ * are left untouched: a resync is overwhelmingly rows that haven't changed, and
+ * writing them all back would churn the table (and its indexes) for nothing.
+ */
+function isStale(current: NodeEntity, incoming: NodeEntity): boolean {
+  return (
+    (current.name ?? null) !== (incoming.name ?? null) ||
+    (current.description ?? null) !== (incoming.description ?? null) ||
+    stableJson(current.properties ?? {}) !== stableJson(incoming.properties ?? {})
+  );
+}
+
+/**
  * Idempotent bulk ingest of an external knowledge graph (the CI-Import-Tools
  * timeline) into `ci.entities` / `ci.relationships`.
  *
@@ -284,26 +316,46 @@ export class GraphIngestService {
     const idByCoord = new Map<string, string>();
 
     try {
-      // 1. Existence pre-check over the distinct linked-key coordinates.
+      // 1. Existence pre-check over the distinct linked-key coordinates. The
+      // rows are kept, not just their ids: what they currently hold is how step
+      // 2 tells a row that has something new to say from one that doesn't.
       const distinct = [...firstByCoord.values()];
       const existing = await this.findExistingNodes(ownerId, distinct);
+      const existingByCoord = new Map<string, NodeEntity>();
       for (const row of existing) {
-        idByCoord.set(coordKey(row.entityType, row.linkedTable!, row.linkedId!), row.entityId);
+        const ck = coordKey(row.entityType, row.linkedTable!, row.linkedId!);
+        idByCoord.set(ck, row.entityId);
+        existingByCoord.set(ck, row);
       }
 
-      // 2. Batched INSERT of the rows that weren't already present. ON CONFLICT
-      // DO NOTHING absorbs a lost race (the 23505 the old catch handled) without
-      // throwing; RETURNING yields the rows THIS statement inserted.
-      const toInsert = distinct.filter(
-        (p) => !idByCoord.has(coordKey(p.entityType, p.linkedTable, p.linkedId)),
-      );
-      if (toInsert.length > 0) {
+      // 2. Batched INSERT of the new rows AND the changed ones. ON CONFLICT DO
+      // UPDATE absorbs a lost race (the 23505 the old catch handled) without
+      // throwing; RETURNING yields every row the statement wrote.
+      //
+      // This used to be DO NOTHING, which made an entity's name/properties
+      // whatever the FIRST ingest happened to say, permanently: a source that
+      // later learned more about the same thing — an importer entity that
+      // accumulated a second price, an entity whose mention count grew — could
+      // never say so. A row's linked key is namespaced by its sourceSystem
+      // (linked_table = `import:<sourceSystem>`), so a refresh only ever
+      // overwrites what that same source wrote last time; it cannot clobber
+      // another source's or the enrichment pass's nodes.
+      const toWrite = distinct.filter((p) => {
+        const current = existingByCoord.get(coordKey(p.entityType, p.linkedTable, p.linkedId));
+        return current === undefined || isStale(current, p.row);
+      });
+      if (toWrite.length > 0) {
         // Split into param-budget-bounded chunks so a large batch never exceeds
         // Postgres' 65535 bind-param limit (computeChunkSize is the same helper
         // bulkInsertIdempotent uses). ON CONFLICT idempotency + RETURNING-based
         // resolution are unchanged; the returned rows are accumulated across
         // chunks.
-        const rows = toInsert.map((p) => p.row);
+        //
+        // `entity_id` is deliberately NOT in the SET list: a conflicting row
+        // keeps the id it was created with (and that everything else already
+        // references), so the uuidv7 minted for the insert attempt is simply
+        // discarded. RETURNING hands back the row's real id either way.
+        const rows = toWrite.map((p) => p.row);
         const chunkSize = computeChunkSize(this.nodeRepository.metadata.columns.length);
         for (let offset = 0; offset < rows.length; offset += chunkSize) {
           const insertResult = await this.nodeRepository
@@ -312,7 +364,9 @@ export class GraphIngestService {
             .into(this.nodeRepository.metadata.target)
             .values(rows.slice(offset, offset + chunkSize))
             .onConflict(
-              '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
+              '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL ' +
+                'DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, ' +
+                'properties = EXCLUDED.properties, updated_at = now()',
             )
             .returning(['entityId', 'entityType', 'linkedTable', 'linkedId'])
             .execute();
