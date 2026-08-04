@@ -101,9 +101,13 @@ export function OnboardingPage() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [hydrated, setHydrated] = useState(false);
-  const [resumeUpdatedAt, setResumeUpdatedAt] = useState<string | null>(null);
+  const [showWelcomeBackBanner, setShowWelcomeBackBanner] = useState(false);
 
   const currentStepKey = stepKeys[stepIndex] ?? 'intro';
+
+  const dismissWelcomeBackBanner = useCallback(() => {
+    setShowWelcomeBackBanner(false);
+  }, []);
 
   useEffect(() => {
     if (userLoading || hydrated) {
@@ -116,7 +120,7 @@ export function OnboardingPage() {
       form.reset(draft);
 
       if (progress?.updatedAt) {
-        setResumeUpdatedAt(progress.updatedAt);
+        setShowWelcomeBackBanner(true);
       }
 
       const oauthResume = localStorage.getItem(ONBOARDING_OAUTH_RESUME_KEY);
@@ -157,11 +161,12 @@ export function OnboardingPage() {
 
   const goToStep = useCallback(
     async (nextIndex: number) => {
+      dismissWelcomeBackBanner();
       await persistProgress(nextIndex);
       setStepIndex(nextIndex);
       scrollToTop();
     },
-    [persistProgress, scrollToTop],
+    [dismissWelcomeBackBanner, persistProgress, scrollToTop],
   );
 
   const handleNext = useCallback(() => {
@@ -260,7 +265,7 @@ export function OnboardingPage() {
               contentMaxWidth,
             )}
           >
-            {resumeUpdatedAt && (
+            {showWelcomeBackBanner && (
               <div className="pointer-events-none absolute inset-x-5 md:inset-x-8 top-1 z-20 flex justify-center">
                 <div className="pointer-events-auto max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
                   Welcome back. Everything you&apos;ve entered is saved.
