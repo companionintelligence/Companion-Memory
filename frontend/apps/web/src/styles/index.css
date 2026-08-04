@@ -264,6 +264,11 @@
   box-shadow: var(--shadow-glow-ci);
 }
 
+[data-slot='checkbox'] {
+  border-color: var(--border);
+  background-color: var(--background);
+}
+
 [data-slot='checkbox'][data-state='checked'],
 [data-slot='switch'][data-state='checked'] {
   background-color: var(--ci-phthalo-green);
