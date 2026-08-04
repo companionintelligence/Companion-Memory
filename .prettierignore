@@ -1,6 +1,7 @@
 .yarn
 node_modules
 .pnp.*
+.claude/worktrees/
 **/dist/**
 **/dev-dist/**
 **/build/**
