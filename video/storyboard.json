@@ -93,9 +93,8 @@
           "motion": "push-in",
           "capture": {
             "path": "/onboarding",
-            "waitFor": "h1:has-text(\"What should we focus on?\")",
+            "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "waitFor": "button:has-text(\"Next\")" },
               { "click": "button:has-text(\"Next\")" },
               { "waitFor": "h1:has-text(\"Time and place\")" },
               { "click": "button:has-text(\"Next\")" },
@@ -123,9 +122,8 @@
           "motion": "drift-down",
           "capture": {
             "path": "/onboarding",
-            "waitFor": "h1:has-text(\"Connect a source\")",
+            "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "waitFor": "button:has-text(\"Next\")" },
               { "click": "button:has-text(\"Next\")" },
               { "waitFor": "h1:has-text(\"Time and place\")" },
               { "click": "button:has-text(\"Next\")" },
@@ -200,10 +198,10 @@
           "motion": "push-in",
           "capture": {
             "path": "/memory?view=list&includedEntityTypes=Event",
-            "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]",
+            "waitFor": "div[role=\"button\"]",
             "before": [
-              { "waitFor": "div[role=\"button\"]" },
-              { "click": "div[role=\"button\"] >> nth=0" }
+              { "click": "div[role=\"button\"] >> nth=0" },
+              { "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]" }
             ],
             "mask": ["time"],
             "settle": 700

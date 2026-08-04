@@ -150,14 +150,34 @@ jobs:
           done
           curl -sf http://localhost:5173 >/dev/null
 
+      # EXPLICIT --only, not "everything". `ci-video capture` exits 1 if ANY shot
+      # fails (bin/ci-video.mjs cmdCapture), and there is no continue-on-error
+      # here — so a bare `npm run capture` takes the whole job down before the
+      # three identity-specific passes below ever run, and assets/shots/ stays
+      # empty. Four of the storyboard's fifteen shots are structurally impossible
+      # as the seeded, already-onboarded jsmith:
+      #   splash-screen / login-form  — `/` and `/login` are wrapped in
+      #     RedirectKnownUser (App.tsx:117-121, :147-152), which Navigates an
+      #     authenticated onboarded user to /feed.
+      #   onboarding-focus / onboarding-connect — OnboardingPage.tsx:231-233
+      #     returns <Navigate to="/feed" replace /> for an onboarded user, and
+      #     seed-users.ts:41 onboards jsmith.
+      # Those four belong to the passes below. This list is the other eleven.
+      #
+      # A shot added to storyboard.json but to no pass here is not silent: it
+      # has no PNG, and `ci-video check` (video-kit >= 0.1.2) fails on missing
+      # shot files unless --allow-slates is passed.
       - name: Capture (authenticated)
         working-directory: video
-        run: npm run capture
+        run: |
+          SHOTS=feed-overview,memory-list-view,memory-detail-sheet,memory-gallery-view
+          SHOTS=$SHOTS,memory-search-results,memory-map-view,memory-graph-view
+          SHOTS=$SHOTS,people-directory,insights-list,insight-detail-view,connect-providers
+          npm run capture -- --only "$SHOTS"
 
       # `/` and `/login` redirect an authenticated user to /feed, and capture
       # shares one browser context per viewport — so the two signed-out shots
-      # need their own pass. It must run second: it overwrites what the
-      # authenticated pass wrote for those two ids.
+      # need their own pass.
       - name: Capture (signed-out shots)
         working-directory: video
         env:
