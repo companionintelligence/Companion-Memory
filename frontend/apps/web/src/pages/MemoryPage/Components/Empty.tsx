@@ -10,7 +10,7 @@ interface EmptyProps {
 
 export function Empty({ title, description, icon: Icon, className }: EmptyProps) {
   return (
-    <div className={cn('flex flex-col items-center justify-center text-center py-12', className)}>
+    <div className={cn('flex flex-col items-center justify-center text-center px-6 py-12', className)}>
       {title && <h3 className="text-lg font-medium text-foreground mb-2">{title}</h3>}
 
       {description && <p className="text-muted-foreground mb-4">{description}</p>}

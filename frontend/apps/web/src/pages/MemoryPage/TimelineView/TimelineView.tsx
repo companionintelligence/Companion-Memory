@@ -119,8 +119,6 @@ export function TimelineView({
 
   if (timelineData.length === 0) {
     const isMapView = searchParams.get('view') === 'map';
-    // Narrow map side panel needs horizontal padding so copy isn't flush to the edge.
-    const emptyClassName = isMapView ? 'px-4' : undefined;
 
     // Results exist but none are timeline-renderable types — distinguish this
     // from a truly empty result so the user knows to switch to the List view.
@@ -130,7 +128,6 @@ export function TimelineView({
           title="No timeline events match this search"
           description="These results aren't time-based. Switch to List to see them."
           icon="🗂️"
-          className={emptyClassName}
         />
       );
     }
@@ -149,7 +146,6 @@ export function TimelineView({
               : 'Try removing a filter (or the Located filter on the map) to see more.'
           }
           icon="🔍"
-          className={emptyClassName}
         />
       );
     }
@@ -159,7 +155,6 @@ export function TimelineView({
         title="No memories yet"
         description="Your timeline will fill in as memories are created."
         icon="🧠"
-        className={emptyClassName}
       />
     );
   }
