@@ -123,6 +123,68 @@ describe('getEntityMedia', () => {
     });
   });
 
+  describe('provider pseudo-mimetypes', () => {
+    // Regression guard: an imported YouTube like carries mimetype
+    // 'video/youtube' and a watch-page URL. Treating that as a `video/*` media
+    // file rendered <img src={watch page}> (permanently broken) and
+    // <video src={watch page}> (never plays) for every liked video.
+    it('does not treat a YouTube watch page as playable video', () => {
+      expect(
+        getEntityMedia(
+          entity({
+            __typename: 'ContentType',
+            id: 'yt1',
+            galleryMimetype: 'video/youtube',
+            galleryContentUrl: 'https://www.youtube.com/watch?v=abc123',
+            galleryTitle: 'Side-chain Compression in Ableton',
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it.each(['video/youtube', 'video/vimeo', 'audio/spotify', 'audio/soundcloud'])(
+      'returns null for %s',
+      (mimetype) => {
+        expect(
+          getEntityMedia(
+            entity({
+              __typename: 'ContentType',
+              id: 'p',
+              galleryMimetype: mimetype,
+              galleryContentUrl: 'https://example.com/watch',
+            }),
+          ),
+        ).toBeNull();
+      },
+    );
+
+    it('is case-insensitive', () => {
+      expect(
+        getEntityMedia(
+          entity({
+            __typename: 'ContentType',
+            id: 'yt2',
+            galleryMimetype: 'Video/YouTube',
+            galleryContentUrl: 'https://www.youtube.com/watch?v=abc123',
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it('still resolves genuine video containers', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'v1',
+          galleryMimetype: 'video/mp4',
+          galleryContentUrl: '/content/real.mp4',
+        }),
+      );
+
+      expect(media?.kind).toBe('video');
+    });
+  });
+
   it('returns null for entity types without media', () => {
     expect(getEntityMedia(entity({ __typename: 'PersonType', id: 'p1' }))).toBeNull();
   });

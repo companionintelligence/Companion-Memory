@@ -22,8 +22,30 @@ export interface EntityMedia {
   title: string;
 }
 
+/**
+ * `type/provider` strings that name WHERE media lives rather than a decodable
+ * container. `video/youtube` is a watch page, not an H.264 stream: passing it to
+ * `<img src>` yields a permanently broken tile and to `<video src>` a player
+ * that never starts. Every imported YouTube like rendered that way.
+ *
+ * Filtering here rather than at the writer is deliberate — it heals rows that
+ * are already in ci.content with no backfill. These entities fall back to their
+ * plain text tile until the embed track gives them a real poster and a
+ * click-to-play player.
+ */
+const PROVIDER_PSEUDO_MIMETYPES = new Set([
+  'video/youtube',
+  'video/vimeo',
+  'audio/spotify',
+  'audio/soundcloud',
+]);
+
 function mediaKind(contentType?: string | null): EntityMediaKind | null {
   if (!contentType) {
+    return null;
+  }
+
+  if (PROVIDER_PSEUDO_MIMETYPES.has(contentType.toLowerCase())) {
     return null;
   }
 

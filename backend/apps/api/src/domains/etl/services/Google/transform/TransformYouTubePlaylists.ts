@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService } from '@ci/domains/memory';
+import { ContentService, type CreateContentDto } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+
+import { type YouTubeThumbnails, playlistProviderRef, youtubeEmbedSourceData } from './youtubeMedia';
 
 interface YouTubePlaylist {
   id?: string;
@@ -14,11 +16,7 @@ interface YouTubePlaylist {
     channelTitle?: string;
     channelId?: string;
     publishedAt?: string;
-    thumbnails?: {
-      default?: { url?: string };
-      medium?: { url?: string };
-      high?: { url?: string };
-    };
+    thumbnails?: YouTubeThumbnails;
   };
   contentDetails?: {
     itemCount?: number;
@@ -64,21 +62,22 @@ export class YouTubePlaylistsTransformService {
         playlistCount: playlists.length,
       });
 
-      await Promise.all(
-        playlists.map(
-          async (playlist) =>
-            await this.processPlaylist({
-              playlist,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      // Map first, then write ONCE: createMany dedupes on the provenance triple,
+      // so a re-sync inserts zero rows. The previous per-item create() had no ON
+      // CONFLICT and duplicated every playlist on every sync.
+      const records = playlists
+        .map((playlist) => this.toContentDto({ playlist, connectionId: connection.id, userId }))
+        .filter((record): record is CreateContentDto => record !== null);
+
+      if (records.length > 0) {
+        await this.contentService.createMany({ userId }, records, { emitCreated: true });
+      }
 
       this.logger.log('YouTube Playlists transformation completed', {
         userId,
         syncJobId,
         processedCount: playlists.length,
+        writtenCount: records.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Playlists', {
@@ -119,7 +118,12 @@ export class YouTubePlaylistsTransformService {
     return [];
   }
 
-  private async processPlaylist({
+  /**
+   * Maps one playlist to a content row, or `null` when it carries no id. Pure —
+   * no I/O — so a malformed item is skipped without affecting the rest of the
+   * batch.
+   */
+  private toContentDto({
     playlist,
     userId,
     connectionId,
@@ -127,57 +131,48 @@ export class YouTubePlaylistsTransformService {
     playlist: YouTubePlaylist;
     userId: string;
     connectionId: string;
-  }): Promise<void> {
-    try {
-      const playlistId = playlist.id;
-      if (!playlistId) {
-        this.logger.debug('Skipping playlist without id', {
-          userId,
-          connectionId,
-        });
-
-        return;
-      }
-
-      const title = playlist.snippet?.title || 'Untitled Playlist';
-      const description = playlist.snippet?.description || '';
-      const channelTitle = playlist.snippet?.channelTitle || '';
-      const channelId = playlist.snippet?.channelId || '';
-      const url = `https://www.youtube.com/playlist?list=${playlistId}`;
-      const itemCount = playlist.contentDetails?.itemCount ?? 0;
-
-      this.logger.log('Processing YouTube playlist', {
-        playlistId,
-        title,
-        itemCount,
-      });
-
-      await this.contentService.create(
-        { userId },
-        {
-          type: 'youtube_playlist',
-          title,
-          text: description,
-          url,
-          external_id: playlistId,
-          source_url: url,
-          source_data: { connectionId, channelTitle, channelId, itemCount },
-          user: { id: userId },
-        },
-      );
-
-      this.logger.log('YouTube playlist saved successfully', {
-        playlistId,
-        title,
-        itemCount,
-      });
-    } catch (error) {
-      this.logger.error('Error processing individual YouTube playlist', {
+  }): CreateContentDto | null {
+    const playlistId = playlist.id;
+    if (!playlistId) {
+      this.logger.debug('Skipping playlist without id', {
         userId,
         connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other playlists
+
+      return null;
     }
+
+    const title = playlist.snippet?.title || 'Untitled Playlist';
+    const description = playlist.snippet?.description || '';
+    const channelTitle = playlist.snippet?.channelTitle || '';
+    const channelId = playlist.snippet?.channelId || '';
+    const url = `https://www.youtube.com/playlist?list=${playlistId}`;
+    const itemCount = playlist.contentDetails?.itemCount ?? 0;
+
+    return {
+      type: 'youtube_playlist',
+      title,
+      text: description,
+      url,
+      external_id: playlistId,
+      source_url: url,
+      // Provenance triple: makes a re-sync idempotent against
+      // content_source_triple_uniq. Matches the ETL convention.
+      source_type: 'ETL',
+      source_system: 'youtube_playlists',
+      source_id: playlistId,
+      source_data: {
+        connectionId,
+        channelTitle,
+        channelId,
+        itemCount,
+        // playlists.list carries no duration — only videos.list does.
+        ...youtubeEmbedSourceData({
+          providerRef: playlistProviderRef(playlistId),
+          thumbnails: playlist.snippet?.thumbnails,
+        }),
+      },
+      user: { id: userId },
+    };
   }
 }

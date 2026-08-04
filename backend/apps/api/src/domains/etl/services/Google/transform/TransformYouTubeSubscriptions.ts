@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService } from '@ci/domains/memory';
+import { ContentService, type CreateContentDto } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+
+import { type YouTubeThumbnails, channelProviderRef, youtubeEmbedSourceData } from './youtubeMedia';
 
 interface YouTubeSubscription {
   id?: string;
@@ -17,11 +19,7 @@ interface YouTubeSubscription {
     resourceId?: {
       channelId?: string;
     };
-    thumbnails?: {
-      default?: { url?: string };
-      medium?: { url?: string };
-      high?: { url?: string };
-    };
+    thumbnails?: YouTubeThumbnails;
   };
 }
 
@@ -64,21 +62,22 @@ export class YouTubeSubscriptionsTransformService {
         subscriptionCount: subscriptions.length,
       });
 
-      await Promise.all(
-        subscriptions.map(
-          async (subscription) =>
-            await this.processSubscription({
-              subscription,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      // Map first, then write ONCE: createMany dedupes on the provenance triple,
+      // so a re-sync inserts zero rows. The previous per-item create() had no ON
+      // CONFLICT and duplicated every subscription on every sync.
+      const records = subscriptions
+        .map((subscription) => this.toContentDto({ subscription, connectionId: connection.id, userId }))
+        .filter((record): record is CreateContentDto => record !== null);
+
+      if (records.length > 0) {
+        await this.contentService.createMany({ userId }, records, { emitCreated: true });
+      }
 
       this.logger.log('YouTube Subscriptions transformation completed', {
         userId,
         syncJobId,
         processedCount: subscriptions.length,
+        writtenCount: records.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Subscriptions', {
@@ -119,7 +118,16 @@ export class YouTubeSubscriptionsTransformService {
     return [];
   }
 
-  private async processSubscription({
+  /**
+   * Maps one subscription to a content row, or `null` when it carries no
+   * channel id. Pure — no I/O — so a malformed item is skipped without
+   * affecting the rest of the batch.
+   *
+   * A subscription without a channel id is skipped rather than written: it has
+   * no URL, no external id and no triple, so it could never be deduped and
+   * would accumulate a fresh copy on every sync.
+   */
+  private toContentDto({
     subscription,
     userId,
     connectionId,
@@ -127,53 +135,51 @@ export class YouTubeSubscriptionsTransformService {
     subscription: YouTubeSubscription;
     userId: string;
     connectionId: string;
-  }): Promise<void> {
-    try {
-      const snippet = subscription.snippet;
-      if (!snippet) {
-        this.logger.debug('Skipping subscription without snippet', {
-          userId,
-          connectionId,
-        });
-
-        return;
-      }
-
-      const channelId = snippet.resourceId?.channelId || snippet.channelId || '';
-      const channelTitle = snippet.title || snippet.channelTitle || 'Untitled Channel';
-      const description = snippet.description || '';
-      const url = channelId ? `https://www.youtube.com/channel/${channelId}` : undefined;
-
-      this.logger.log('Processing YouTube subscription', {
-        channelId,
-        channelTitle,
-      });
-
-      await this.contentService.create(
-        { userId },
-        {
-          type: 'youtube_subscription',
-          title: channelTitle,
-          text: description,
-          url,
-          external_id: channelId || undefined,
-          source_url: url,
-          source_data: { connectionId },
-          user: { id: userId },
-        },
-      );
-
-      this.logger.log('YouTube subscription saved successfully', {
-        channelId,
-        channelTitle,
-      });
-    } catch (error) {
-      this.logger.error('Error processing individual YouTube subscription', {
+  }): CreateContentDto | null {
+    const snippet = subscription.snippet;
+    if (!snippet) {
+      this.logger.debug('Skipping subscription without snippet', {
         userId,
         connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other subscriptions
+
+      return null;
     }
+
+    const channelId = snippet.resourceId?.channelId || snippet.channelId || '';
+    if (!channelId) {
+      this.logger.debug('Skipping subscription without channel id', {
+        userId,
+        connectionId,
+      });
+
+      return null;
+    }
+
+    const channelTitle = snippet.title || snippet.channelTitle || 'Untitled Channel';
+    const description = snippet.description || '';
+    const url = `https://www.youtube.com/channel/${channelId}`;
+
+    return {
+      type: 'youtube_subscription',
+      title: channelTitle,
+      text: description,
+      url,
+      external_id: channelId,
+      source_url: url,
+      // Provenance triple: makes a re-sync idempotent against
+      // content_source_triple_uniq. Matches the ETL convention.
+      source_type: 'ETL',
+      source_system: 'youtube_subscriptions',
+      source_id: channelId,
+      source_data: {
+        connectionId,
+        ...youtubeEmbedSourceData({
+          providerRef: channelProviderRef(channelId),
+          thumbnails: snippet.thumbnails,
+        }),
+      },
+      user: { id: userId },
+    };
   }
 }
