@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+
+import { bestThumbnail, parseIso8601DurationSeconds, YOUTUBE_SOURCE_SYSTEM } from './youtubeMedia';
 
 interface YouTubePlaylistItem {
   id?: string;
@@ -15,9 +17,11 @@ interface YouTubePlaylistItem {
     channelId?: string;
     publishedAt?: string;
     thumbnails?: {
-      default?: { url?: string };
-      medium?: { url?: string };
-      high?: { url?: string };
+      default?: { url?: string; width?: number; height?: number };
+      medium?: { url?: string; width?: number; height?: number };
+      high?: { url?: string; width?: number; height?: number };
+      standard?: { url?: string; width?: number; height?: number };
+      maxres?: { url?: string; width?: number; height?: number };
     };
     resourceId?: {
       videoId?: string;
@@ -26,6 +30,8 @@ interface YouTubePlaylistItem {
   contentDetails?: {
     videoId?: string;
     videoPublishedAt?: string;
+    /** ISO 8601 duration, e.g. `PT4M13S`. Present on `videos.list` responses. */
+    duration?: string;
   };
 }
 
@@ -68,21 +74,22 @@ export class YouTubeLikesTransformService {
         itemCount: items.length,
       });
 
-      await Promise.all(
-        items.map(
-          async (item) =>
-            await this.processLikedVideo({
-              item,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      const contents = items
+        .map((item) => this.buildLikedVideoContent({ item, connectionId: connection.id, userId }))
+        .filter((dto): dto is CreateContentDto => dto !== null);
+
+      // createMany, not create: create() is a plain save and a re-sync of the same
+      // liked video raises 23505 against content_source_triple_uniq. createMany is
+      // one set-based INSERT ... ON CONFLICT DO NOTHING keyed on the provenance
+      // triple, so re-running a sync inserts zero rows. emitCreated stays true so
+      // these stay search-indexed (createMany defaults it to false for bulk import).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Likes transformation completed', {
         userId,
         syncJobId,
-        processedCount: items.length,
+        processedCount: contents.length,
+        skippedCount: items.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Likes', {
@@ -123,7 +130,7 @@ export class YouTubeLikesTransformService {
     return [];
   }
 
-  private async processLikedVideo({
+  private buildLikedVideoContent({
     item,
     userId,
     connectionId,
@@ -131,62 +138,52 @@ export class YouTubeLikesTransformService {
     item: YouTubePlaylistItem;
     userId: string;
     connectionId: string;
-  }): Promise<void> {
-    try {
-      console.log('processLikedVideo', item);
-      const videoId = item.id || item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
-      console.log('videoId', videoId);
-      if (!videoId) {
-        this.logger.debug('Skipping liked video without id', {
-          userId,
-          connectionId,
-        });
+  }): CreateContentDto | null {
+    const videoId = item.id || item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
 
-        return;
-      }
-
-      const title = item.snippet?.title || 'Untitled Video';
-      const description = item.snippet?.description || '';
-      const channelTitle = item.snippet?.channelTitle || '';
-      const channelId = item.snippet?.channelId || '';
-      const url = `https://www.youtube.com/watch?v=${videoId}`;
-
-      this.logger.log('Processing YouTube liked video', {
-        videoId,
-        title,
-        channelTitle,
-      });
-
-      console.log('creating content for liked video', {
-        videoId,
-        title,
-      });
-      await this.contentService.create(
-        { userId },
-        {
-          type: 'youtube_video_like',
-          title,
-          text: description,
-          url,
-          mimetype: 'video/youtube',
-          external_id: videoId,
-          source_url: url,
-          source_data: { connectionId, channelTitle, channelId },
-          user: { id: userId },
-        },
-      );
-
-      this.logger.log('YouTube liked video saved successfully', {
-        videoId,
-        title,
-      });
-    } catch (error) {
-      this.logger.error('Error processing individual YouTube liked video', {
+    if (!videoId) {
+      this.logger.debug('Skipping liked video without id', {
         userId,
         connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other videos
+
+      return null;
     }
+
+    const title = item.snippet?.title || 'Untitled Video';
+    const description = item.snippet?.description || '';
+    const channelTitle = item.snippet?.channelTitle || '';
+    const channelId = item.snippet?.channelId || '';
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+    // The provider already returns a poster and a runtime; both were parsed and
+    // dropped before. Persist them so the embed tiers can render a poster and a
+    // duration badge without a second API call (design §6, tier 0).
+    const thumbnail = bestThumbnail(item.snippet?.thumbnails);
+    const durationSeconds = parseIso8601DurationSeconds(item.contentDetails?.duration);
+
+    return {
+      type: 'youtube_video_like',
+      title,
+      text: description,
+      url,
+      mimetype: 'video/youtube',
+      external_id: videoId,
+      source_url: url,
+      source_type: 'ETL',
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `like:${videoId}`,
+      source_data: {
+        connectionId,
+        channelTitle,
+        channelId,
+        publishedAt: item.snippet?.publishedAt,
+        providerRef: `youtube:video:${videoId}`,
+        ...(thumbnail ? { thumbnail } : {}),
+        ...(item.contentDetails?.duration ? { durationIso: item.contentDetails.duration } : {}),
+        ...(durationSeconds !== null ? { durationSeconds } : {}),
+      },
+      user: { id: userId },
+    };
   }
 }

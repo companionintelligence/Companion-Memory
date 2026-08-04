@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+
+import { bestThumbnail, YOUTUBE_SOURCE_SYSTEM, type YouTubeThumbnailSet } from './youtubeMedia';
 
 interface YouTubeActivity {
   id?: string;
@@ -15,11 +17,7 @@ interface YouTubeActivity {
     channelTitle?: string;
     channelId?: string;
     publishedAt?: string;
-    thumbnails?: {
-      default?: { url?: string };
-      medium?: { url?: string };
-      high?: { url?: string };
-    };
+    thumbnails?: YouTubeThumbnailSet;
   };
   contentDetails?: {
     upload?: {
@@ -67,21 +65,19 @@ export class YouTubeActivitiesTransformService {
         activityCount: activities.length,
       });
 
-      await Promise.all(
-        activities.map(
-          async (activity) =>
-            await this.processActivity({
-              activity,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      const contents = activities
+        .map((activity) => this.buildActivityContent({ activity, connectionId: connection.id, userId }))
+        .filter((dto): dto is CreateContentDto => dto !== null);
+
+      // createMany dedupes on the provenance triple, so re-syncing the activity
+      // feed inserts zero rows (create() would raise 23505).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Activities transformation completed', {
         userId,
         syncJobId,
-        processedCount: activities.length,
+        processedCount: contents.length,
+        skippedCount: activities.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Activities', {
@@ -122,7 +118,7 @@ export class YouTubeActivitiesTransformService {
     return [];
   }
 
-  private async processActivity({
+  private buildActivityContent({
     activity,
     userId,
     connectionId,
@@ -130,70 +126,69 @@ export class YouTubeActivitiesTransformService {
     activity: YouTubeActivity;
     userId: string;
     connectionId: string;
-  }): Promise<void> {
-    try {
-      const snippet = activity.snippet;
-      const contentDetails = activity.contentDetails;
+  }): CreateContentDto | null {
+    const snippet = activity.snippet;
+    const contentDetails = activity.contentDetails;
 
-      if (!snippet) {
-        this.logger.debug('Skipping activity without snippet', {
-          userId,
-          connectionId,
-        });
+    if (!snippet) {
+      this.logger.debug('Skipping activity without snippet', {
+        userId,
+        connectionId,
+      });
 
-        return;
-      }
+      return null;
+    }
 
-      const type = snippet.type;
+    const type = snippet.type;
 
-      // Process upload activities
-      if (type === 'upload' && contentDetails?.upload) {
-        const upload = contentDetails.upload;
-        const videoId = upload.videoId;
-        const title = snippet.title || 'Untitled Video';
-        const description = snippet.description || '';
-        const url = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
-
-        this.logger.log('Processing YouTube upload activity', {
-          videoId,
-          title,
-        });
-
-        await this.contentService.create(
-          { userId },
-          {
-            type: 'youtube_activity_upload',
-            title,
-            text: description,
-            url,
-            external_id: videoId,
-            source_url: url,
-            source_data: { connectionId },
-            user: { id: userId },
-          },
-        );
-
-        this.logger.log('YouTube upload activity saved successfully', {
-          videoId,
-          title,
-        });
-
-        return;
-      }
-
-      // Log unsupported activity types for debugging
+    if (type !== 'upload' || !contentDetails?.upload) {
       this.logger.debug('Skipping unsupported YouTube activity', {
         type,
         userId,
         connectionId,
       });
-    } catch (error) {
-      this.logger.error('Error processing individual YouTube activity', {
+
+      return null;
+    }
+
+    const videoId = contentDetails.upload.videoId;
+
+    // Without a video id there is no url and no stable provenance, so every
+    // re-sync would insert another copy of the row.
+    if (!videoId) {
+      this.logger.debug('Skipping upload activity without a video id', {
         userId,
         connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other activities
+
+      return null;
     }
+
+    const title = snippet.title || 'Untitled Video';
+    const description = snippet.description || '';
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const thumbnail = bestThumbnail(snippet.thumbnails);
+
+    return {
+      type: 'youtube_activity_upload',
+      title,
+      text: description,
+      url,
+      mimetype: 'video/youtube',
+      external_id: videoId,
+      source_url: url,
+      source_type: 'ETL',
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `upload:${videoId}`,
+      source_data: {
+        connectionId,
+        channelTitle: snippet.channelTitle ?? '',
+        channelId: snippet.channelId ?? '',
+        publishedAt: snippet.publishedAt,
+        providerRef: `youtube:video:${videoId}`,
+        ...(thumbnail ? { thumbnail } : {}),
+      },
+      user: { id: userId },
+    };
   }
 }

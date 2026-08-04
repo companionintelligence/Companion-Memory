@@ -121,6 +121,38 @@ describe('getEntityMedia', () => {
     it('returns null when there is no media mimetype', () => {
       expect(getEntityMedia(entity({ __typename: 'ContentType', id: 'c3' }))).toBeNull();
     });
+
+    // The YouTube ETL writes mimetype 'video/youtube' with a watch-page URL, so
+    // classifying it as playable video rendered a permanently broken <video>.
+    it.each(['video/youtube', 'video/vimeo', 'audio/spotify'])(
+      'returns null for the provider pseudo-mimetype %s',
+      (mimetype) => {
+        expect(
+          getEntityMedia(
+            entity({
+              __typename: 'ContentType',
+              id: 'c-provider',
+              galleryMimetype: mimetype,
+              galleryContentUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+              galleryTitle: 'A liked video',
+            }),
+          ),
+        ).toBeNull();
+      },
+    );
+
+    it('is case-insensitive about provider pseudo-mimetypes', () => {
+      expect(
+        getEntityMedia(
+          entity({
+            __typename: 'ContentType',
+            id: 'c-provider-upper',
+            galleryMimetype: 'Video/YouTube',
+            galleryContentUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          }),
+        ),
+      ).toBeNull();
+    });
   });
 
   it('returns null for entity types without media', () => {

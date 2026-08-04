@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+
+import { bestThumbnail, YOUTUBE_SOURCE_SYSTEM, type YouTubeThumbnailSet } from './youtubeMedia';
 
 interface YouTubePlaylist {
   id?: string;
@@ -14,11 +16,7 @@ interface YouTubePlaylist {
     channelTitle?: string;
     channelId?: string;
     publishedAt?: string;
-    thumbnails?: {
-      default?: { url?: string };
-      medium?: { url?: string };
-      high?: { url?: string };
-    };
+    thumbnails?: YouTubeThumbnailSet;
   };
   contentDetails?: {
     itemCount?: number;
@@ -64,21 +62,19 @@ export class YouTubePlaylistsTransformService {
         playlistCount: playlists.length,
       });
 
-      await Promise.all(
-        playlists.map(
-          async (playlist) =>
-            await this.processPlaylist({
-              playlist,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      const contents = playlists
+        .map((playlist) => this.buildPlaylistContent({ playlist, connectionId: connection.id, userId }))
+        .filter((dto): dto is CreateContentDto => dto !== null);
+
+      // createMany dedupes on the provenance triple, so re-syncing the same
+      // playlists inserts zero rows (create() would raise 23505).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Playlists transformation completed', {
         userId,
         syncJobId,
-        processedCount: playlists.length,
+        processedCount: contents.length,
+        skippedCount: playlists.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Playlists', {
@@ -119,7 +115,7 @@ export class YouTubePlaylistsTransformService {
     return [];
   }
 
-  private async processPlaylist({
+  private buildPlaylistContent({
     playlist,
     userId,
     connectionId,
@@ -127,57 +123,46 @@ export class YouTubePlaylistsTransformService {
     playlist: YouTubePlaylist;
     userId: string;
     connectionId: string;
-  }): Promise<void> {
-    try {
-      const playlistId = playlist.id;
-      if (!playlistId) {
-        this.logger.debug('Skipping playlist without id', {
-          userId,
-          connectionId,
-        });
+  }): CreateContentDto | null {
+    const playlistId = playlist.id;
 
-        return;
-      }
-
-      const title = playlist.snippet?.title || 'Untitled Playlist';
-      const description = playlist.snippet?.description || '';
-      const channelTitle = playlist.snippet?.channelTitle || '';
-      const channelId = playlist.snippet?.channelId || '';
-      const url = `https://www.youtube.com/playlist?list=${playlistId}`;
-      const itemCount = playlist.contentDetails?.itemCount ?? 0;
-
-      this.logger.log('Processing YouTube playlist', {
-        playlistId,
-        title,
-        itemCount,
-      });
-
-      await this.contentService.create(
-        { userId },
-        {
-          type: 'youtube_playlist',
-          title,
-          text: description,
-          url,
-          external_id: playlistId,
-          source_url: url,
-          source_data: { connectionId, channelTitle, channelId, itemCount },
-          user: { id: userId },
-        },
-      );
-
-      this.logger.log('YouTube playlist saved successfully', {
-        playlistId,
-        title,
-        itemCount,
-      });
-    } catch (error) {
-      this.logger.error('Error processing individual YouTube playlist', {
+    if (!playlistId) {
+      this.logger.debug('Skipping playlist without id', {
         userId,
         connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other playlists
+
+      return null;
     }
+
+    const title = playlist.snippet?.title || 'Untitled Playlist';
+    const description = playlist.snippet?.description || '';
+    const channelTitle = playlist.snippet?.channelTitle || '';
+    const channelId = playlist.snippet?.channelId || '';
+    const url = `https://www.youtube.com/playlist?list=${playlistId}`;
+    const itemCount = playlist.contentDetails?.itemCount ?? 0;
+    const thumbnail = bestThumbnail(playlist.snippet?.thumbnails);
+
+    return {
+      type: 'youtube_playlist',
+      title,
+      text: description,
+      url,
+      external_id: playlistId,
+      source_url: url,
+      source_type: 'ETL',
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `playlist:${playlistId}`,
+      source_data: {
+        connectionId,
+        channelTitle,
+        channelId,
+        itemCount,
+        publishedAt: playlist.snippet?.publishedAt,
+        providerRef: `youtube:playlist:${playlistId}`,
+        ...(thumbnail ? { thumbnail } : {}),
+      },
+      user: { id: userId },
+    };
   }
 }

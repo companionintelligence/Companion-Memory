@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+
+import { bestThumbnail, YOUTUBE_SOURCE_SYSTEM, type YouTubeThumbnailSet } from './youtubeMedia';
 
 interface YouTubeSubscription {
   id?: string;
@@ -17,11 +19,7 @@ interface YouTubeSubscription {
     resourceId?: {
       channelId?: string;
     };
-    thumbnails?: {
-      default?: { url?: string };
-      medium?: { url?: string };
-      high?: { url?: string };
-    };
+    thumbnails?: YouTubeThumbnailSet;
   };
 }
 
@@ -64,21 +62,21 @@ export class YouTubeSubscriptionsTransformService {
         subscriptionCount: subscriptions.length,
       });
 
-      await Promise.all(
-        subscriptions.map(
-          async (subscription) =>
-            await this.processSubscription({
-              subscription,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      const contents = subscriptions
+        .map((subscription) =>
+          this.buildSubscriptionContent({ subscription, connectionId: connection.id, userId }),
+        )
+        .filter((dto): dto is CreateContentDto => dto !== null);
+
+      // createMany dedupes on the provenance triple, so a re-sync of an unchanged
+      // subscription list inserts zero rows (create() would raise 23505).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Subscriptions transformation completed', {
         userId,
         syncJobId,
-        processedCount: subscriptions.length,
+        processedCount: contents.length,
+        skippedCount: subscriptions.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Subscriptions', {
@@ -119,7 +117,7 @@ export class YouTubeSubscriptionsTransformService {
     return [];
   }
 
-  private async processSubscription({
+  private buildSubscriptionContent({
     subscription,
     userId,
     connectionId,
@@ -127,53 +125,54 @@ export class YouTubeSubscriptionsTransformService {
     subscription: YouTubeSubscription;
     userId: string;
     connectionId: string;
-  }): Promise<void> {
-    try {
-      const snippet = subscription.snippet;
-      if (!snippet) {
-        this.logger.debug('Skipping subscription without snippet', {
-          userId,
-          connectionId,
-        });
+  }): CreateContentDto | null {
+    const snippet = subscription.snippet;
 
-        return;
-      }
-
-      const channelId = snippet.resourceId?.channelId || snippet.channelId || '';
-      const channelTitle = snippet.title || snippet.channelTitle || 'Untitled Channel';
-      const description = snippet.description || '';
-      const url = channelId ? `https://www.youtube.com/channel/${channelId}` : undefined;
-
-      this.logger.log('Processing YouTube subscription', {
-        channelId,
-        channelTitle,
-      });
-
-      await this.contentService.create(
-        { userId },
-        {
-          type: 'youtube_subscription',
-          title: channelTitle,
-          text: description,
-          url,
-          external_id: channelId || undefined,
-          source_url: url,
-          source_data: { connectionId },
-          user: { id: userId },
-        },
-      );
-
-      this.logger.log('YouTube subscription saved successfully', {
-        channelId,
-        channelTitle,
-      });
-    } catch (error) {
-      this.logger.error('Error processing individual YouTube subscription', {
+    if (!snippet) {
+      this.logger.debug('Skipping subscription without snippet', {
         userId,
         connectionId,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other subscriptions
+
+      return null;
     }
+
+    const channelId = snippet.resourceId?.channelId || snippet.channelId || '';
+
+    // Without a channel id the row has no url, no external id and no stable
+    // provenance, so every re-sync would insert another copy of it. Drop it.
+    if (!channelId) {
+      this.logger.debug('Skipping subscription without a channel id', {
+        userId,
+        connectionId,
+      });
+
+      return null;
+    }
+
+    const channelTitle = snippet.title || snippet.channelTitle || 'Untitled Channel';
+    const description = snippet.description || '';
+    const url = `https://www.youtube.com/channel/${channelId}`;
+    const thumbnail = bestThumbnail(snippet.thumbnails);
+
+    return {
+      type: 'youtube_subscription',
+      title: channelTitle,
+      text: description,
+      url,
+      external_id: channelId,
+      source_url: url,
+      source_type: 'ETL',
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `subscription:${channelId}`,
+      source_data: {
+        connectionId,
+        channelId,
+        publishedAt: snippet.publishedAt,
+        providerRef: `youtube:channel:${channelId}`,
+        ...(thumbnail ? { thumbnail } : {}),
+      },
+      user: { id: userId },
+    };
   }
 }

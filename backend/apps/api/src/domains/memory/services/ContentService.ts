@@ -458,6 +458,14 @@ export class ContentService {
       updateData.sourceUrl = data.source_url;
     }
 
+    // sourceData is declared on UpdateContentDto and passed by ContentResolver's
+    // updateContent, but was never mapped here — every write to it was silently
+    // dropped. Replaces the whole document rather than merging: the DTO carries
+    // no patch semantics, so a merge would make key removal impossible.
+    if (data.source_data !== undefined) {
+      updateData.sourceData = data.source_data;
+    }
+
     const content = await this.contentRepository.findOne({
       where: {
         id: id,
