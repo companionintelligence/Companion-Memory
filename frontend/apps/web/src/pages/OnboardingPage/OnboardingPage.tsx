@@ -258,6 +258,14 @@ export function OnboardingPage() {
             <img src={logo} className="w-7 h-7" alt="" />
           </div>
 
+          {showWelcomeBackBanner && (
+            <div className={cn('w-full mx-auto px-5 md:px-8 -mt-1 mb-1 flex justify-center', contentMaxWidth)}>
+              <div className="max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
+                Welcome back. Everything you&apos;ve entered is saved.
+              </div>
+            </div>
+          )}
+
           <div
             ref={scrollRef}
             className={cn(
@@ -265,14 +273,6 @@ export function OnboardingPage() {
               contentMaxWidth,
             )}
           >
-            {showWelcomeBackBanner && (
-              <div className="pointer-events-none absolute inset-x-5 md:inset-x-8 top-1 z-20 flex justify-center">
-                <div className="pointer-events-auto max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
-                  Welcome back. Everything you&apos;ve entered is saved.
-                </div>
-              </div>
-            )}
-
             <div
               className={cn(
                 'flex flex-col items-center text-center w-full py-2',
