@@ -14,6 +14,7 @@
   "chapters": {
     "first-run": "First run",
     "memory": "Your memory",
+    "insights": "What it notices",
     "sources": "Your sources"
   },
   "media": {
@@ -88,14 +89,17 @@
         {
           "id": "onboarding-focus",
           "url": "ci-memory.local/onboarding",
-          "alt": "Onboarding step two, the focus-areas checklist, with two areas ticked",
+          "alt": "The onboarding focus-areas checklist, with two areas ticked",
           "motion": "push-in",
           "capture": {
             "path": "/onboarding",
-            "waitFor": "button:has-text(\"Next\")",
+            "waitFor": "h1:has-text(\"What should we focus on?\")",
             "before": [
+              { "waitFor": "button:has-text(\"Next\")" },
               { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "text=Your focus areas" },
+              { "waitFor": "h1:has-text(\"Time and place\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
               { "click": "[data-slot=\"checkbox\"] >> nth=0" },
               { "click": "[data-slot=\"checkbox\"] >> nth=2" }
             ],
@@ -109,30 +113,27 @@
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 5.5,
-      "caption": "Bring the history you already have.",
+      "caption": "Connect a source, or bring an export.",
       "narration": "Import the exports you already own, then connect what keeps producing.",
       "shots": [
         {
-          "id": "onboarding-import",
+          "id": "onboarding-connect",
           "url": "ci-memory.local/onboarding",
-          "alt": "The onboarding data-import step, offering import tools and live connections",
+          "alt": "The onboarding connect-source step, offering providers, the browser extension and the import tools",
           "motion": "drift-down",
           "capture": {
             "path": "/onboarding",
-            "waitFor": "button:has-text(\"Next\")",
+            "waitFor": "h1:has-text(\"Connect a source\")",
             "before": [
+              { "waitFor": "button:has-text(\"Next\")" },
               { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "text=Your focus areas" },
+              { "waitFor": "h1:has-text(\"Time and place\")" },
               { "click": "button:has-text(\"Next\")" },
-              { "wait": 200 },
+              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
               { "click": "button:has-text(\"Next\")" },
-              { "wait": 200 },
+              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
               { "click": "button:has-text(\"Next\")" },
-              { "wait": 200 },
-              { "click": "button:has-text(\"Next\")" },
-              { "wait": 200 },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Bring your existing data with you\")" }
+              { "waitFor": "h1:has-text(\"Connect a source\")" }
             ],
             "settle": 400
           }
@@ -154,8 +155,8 @@
           "motion": "push-in",
           "capture": {
             "path": "/feed",
-            "waitFor": "text=Actions",
-            "before": [{ "waitFor": "text=Insights & Summaries" }],
+            "waitFor": "h2:text-is(\"Actions\")",
+            "before": [{ "waitFor": "h2:text-is(\"Insights & Summaries\")" }],
             "mask": ["[aria-label=\"24-hour behavioral forecast strip\"]", "time"],
             "settle": 600
           }
@@ -185,17 +186,43 @@
       ]
     },
     {
+      "id": "memory-detail",
+      "kind": "screen",
+      "chapter": "memory",
+      "seconds": 6.5,
+      "caption": "Open a row and the whole record is there.",
+      "narration": "Open any row and the whole record is there: sources, people, places, dates.",
+      "shots": [
+        {
+          "id": "memory-detail-sheet",
+          "url": "ci-memory.local/memory",
+          "alt": "The entity details sheet open over the list, showing one event's full record",
+          "motion": "push-in",
+          "capture": {
+            "path": "/memory?view=list&includedEntityTypes=Event",
+            "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]",
+            "before": [
+              { "waitFor": "div[role=\"button\"]" },
+              { "click": "div[role=\"button\"] >> nth=0" }
+            ],
+            "mask": ["time"],
+            "settle": 700
+          }
+        }
+      ]
+    },
+    {
       "id": "memory-gallery",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 5.5,
-      "caption": "Or the same memory, as pictures.",
-      "narration": "The gallery is that same store, rendered as thumbnails you recognise.",
+      "caption": "Or the same memory, laid out as a grid.",
+      "narration": "The gallery spreads that same store into a grid you can scan at a glance.",
       "shots": [
         {
           "id": "memory-gallery-view",
           "url": "ci-memory.local/memory?view=gallery",
-          "alt": "The memory explorer gallery view, a dense grid of media tiles",
+          "alt": "The memory explorer gallery view, a dense grid of typed entity cards",
           "motion": "push-in",
           "capture": {
             "path": "/memory?view=gallery",
@@ -246,6 +273,94 @@
             "waitFor": ".leaflet-container",
             "mask": ["time", ".leaflet-control-attribution"],
             "settle": 1200
+          }
+        }
+      ]
+    },
+    {
+      "id": "memory-graph",
+      "kind": "screen",
+      "chapter": "memory",
+      "seconds": 6.5,
+      "caption": "The fourth view: how it all connects.",
+      "narration": "The graph shows how your people, places and ideas actually connect, computed locally.",
+      "shots": [
+        {
+          "id": "memory-graph-view",
+          "url": "ci-memory.local/memory?view=graph",
+          "alt": "The memory explorer graph view, hop-depth and neighbour controls above the force graph",
+          "motion": "push-in",
+          "capture": {
+            "path": "/memory?view=graph",
+            "waitFor": "[aria-label=\"Hop depth\"]",
+            "mask": ["time"],
+            "settle": 2500
+          }
+        }
+      ]
+    },
+    {
+      "id": "people",
+      "kind": "screen",
+      "chapter": "memory",
+      "seconds": 5.5,
+      "caption": "Everyone your memory has met.",
+      "narration": "It builds a directory of the people in your life, and spots the duplicates.",
+      "shots": [
+        {
+          "id": "people-directory",
+          "url": "ci-memory.local/people",
+          "alt": "The people directory, with the search box, the total count and the duplicate-merge suggestions",
+          "motion": "drift-down",
+          "capture": {
+            "path": "/people",
+            "waitFor": "input[placeholder=\"Search people by name...\"]",
+            "mask": ["time"],
+            "settle": 600
+          }
+        }
+      ]
+    },
+    {
+      "id": "insights",
+      "kind": "screen",
+      "chapter": "insights",
+      "seconds": 7,
+      "caption": "It reads the week and writes it up.",
+      "narration": "Your appliance reads the week and writes the summary itself, without sending anything out.",
+      "shots": [
+        {
+          "id": "insights-list",
+          "url": "ci-memory.local/insights",
+          "alt": "The insights and summaries page, listing the daily and weekly summaries it generated",
+          "motion": "push-in",
+          "capture": {
+            "path": "/insights",
+            "waitFor": "h2:has-text(\"Insights & Summaries\")",
+            "mask": ["time"],
+            "settle": 600
+          }
+        }
+      ]
+    },
+    {
+      "id": "insight-detail",
+      "kind": "screen",
+      "chapter": "insights",
+      "seconds": 6.5,
+      "caption": "Every summary shows its evidence.",
+      "narration": "Every summary opens up: the evidence behind it, the events, the patterns it found.",
+      "shots": [
+        {
+          "id": "insight-detail-view",
+          "url": "ci-memory.local/insights",
+          "alt": "One daily summary opened in full, with its period, tags and activity breakdown",
+          "motion": "drift-down",
+          "capture": {
+            "path": "/insights/01936cb0-0000-7000-8000-000000000003",
+            "waitFor": "h1:has-text(\"Daily Summary\")",
+            "mask": ["time"],
+            "settle": 500
           }
         }
       ]

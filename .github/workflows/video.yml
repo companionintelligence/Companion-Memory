@@ -43,6 +43,22 @@ jobs:
       APP_URL: http://localhost:5173
       AUTH_DEFAULT_USER_EMAIL: jsmith@example.com
       AUTH_DEFAULT_USER_PASSWORD: ']60.a6{CJ}lB*rHAp;w;'
+
+      # ── feature flags the storyboard depends on ─────────────────────────────
+      # Both map through backend/apps/api/config/custom-environment-variables.json,
+      # and the frontend reads flags at runtime from /api/_internal/features, so
+      # setting them here is enough — no rebuild.
+      #
+      # features.actions ships FALSE. FeedPage.tsx:414-416 gates the whole
+      # actions block on it AND renders the heading as
+      # `actionsEnabled ? 'Actions' : 'Questions'`, so with the default the feed
+      # shot's `h2:text-is("Actions")` can never match and the seeded actions
+      # (scripts/seed-database/seed-actions.ts) never appear.
+      ENABLE_ACTIONS: 'true'
+      # features.require.signup.codes ships TRUE and .env.default:65 leaves the
+      # override commented out. The fresh-user capture passes below sign up a
+      # throwaway account through /api/signup, which 400s without this.
+      ENABLE_REQUIRE_SIGNUP_CODES: 'false'
     steps:
       - uses: actions/checkout@v4
 
@@ -55,11 +71,32 @@ jobs:
           # 404 on install. Scoping keeps GHPR for @companionintelligence only.
           scope: "@companionintelligence"
 
+      # ⚠️ KNOWN BLOCKER — this step is where every run currently dies, in ~16s:
+      #
+      #   npm error 403 Forbidden - GET
+      #   https://npm.pkg.github.com/@companionintelligence%2fvideo-kit
+      #   - Permission permission_denied: read_package
+      #
+      # @companionintelligence/video-kit is a PRIVATE GitHub Packages package
+      # published from CI-Common. A repo-scoped GITHUB_TOKEN cannot read a
+      # package owned by a different repository unless that package explicitly
+      # grants this repo access. Nothing downstream has ever executed, which is
+      # why assets/shots/ contains only .gitkeep and every `screen` scene renders
+      # video-kit's "capture pending" slate.
+      #
+      # THE FIX IS NOT IN THIS FILE. In CI-Common's video-kit package settings →
+      # "Manage Actions access", add companionintelligence/CI-Server with the
+      # Read role. It needs no new secret, and the other 11 product repos hit the
+      # same wall. (There is no REST endpoint for this; the package
+      # /repositories API 404s. It is a web-UI change.)
+      #
+      # The fallback below costs nothing and needs no code change if someone
+      # would rather provision an org PAT with read:packages as GHPR_READ_TOKEN.
       - name: Install video project
         working-directory: video
         run: npm install
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GHPR_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Install Chromium
         working-directory: video
@@ -126,6 +163,26 @@ jobs:
         env:
           VIDEO_LOGGED_OUT: '1'
         run: npm run capture -- --only splash-screen,login-form
+
+      # The seeded user is already onboarded (seed-users.ts:41 calls
+      # userService.onboard), so OnboardingPage redirects it to /feed and the
+      # wizard is unreachable — see tests/e2e/onboarding.spec.ts:3-9. Each pass
+      # signs up its own throwaway account via /api/signup.
+      #
+      # TWO separate invocations, one shot each, on purpose: onboarding progress
+      # is persisted server-side per user, so a second shot sharing the account
+      # would resume mid-wizard behind a "Welcome back" banner.
+      - name: Capture (onboarding — focus areas, fresh account)
+        working-directory: video
+        env:
+          VIDEO_FRESH_USER: '1'
+        run: npm run capture -- --only onboarding-focus
+
+      - name: Capture (onboarding — connect a source, fresh account)
+        working-directory: video
+        env:
+          VIDEO_FRESH_USER: '1'
+        run: npm run capture -- --only onboarding-connect
 
       # Shots are byte-stable, so a diff here means the UI genuinely changed.
       # Surface it as a PR rather than silently committing to the branch.
