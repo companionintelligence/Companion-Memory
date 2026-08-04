@@ -2,11 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService, type CreateContentDto } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
-import { type YouTubeThumbnails, playlistProviderRef, youtubeEmbedSourceData } from './youtubeMedia';
+import { bestThumbnail, YOUTUBE_SOURCE_SYSTEM, type YouTubeThumbnailSet } from './youtubeMedia';
 
 interface YouTubePlaylist {
   id?: string;
@@ -16,7 +16,7 @@ interface YouTubePlaylist {
     channelTitle?: string;
     channelId?: string;
     publishedAt?: string;
-    thumbnails?: YouTubeThumbnails;
+    thumbnails?: YouTubeThumbnailSet;
   };
   contentDetails?: {
     itemCount?: number;
@@ -62,22 +62,19 @@ export class YouTubePlaylistsTransformService {
         playlistCount: playlists.length,
       });
 
-      // Map first, then write ONCE: createMany dedupes on the provenance triple,
-      // so a re-sync inserts zero rows. The previous per-item create() had no ON
-      // CONFLICT and duplicated every playlist on every sync.
-      const records = playlists
-        .map((playlist) => this.toContentDto({ playlist, connectionId: connection.id, userId }))
-        .filter((record): record is CreateContentDto => record !== null);
+      const contents = playlists
+        .map((playlist) => this.buildPlaylistContent({ playlist, connectionId: connection.id, userId }))
+        .filter((dto): dto is CreateContentDto => dto !== null);
 
-      if (records.length > 0) {
-        await this.contentService.createMany({ userId }, records, { emitCreated: true });
-      }
+      // createMany dedupes on the provenance triple, so re-syncing the same
+      // playlists inserts zero rows (create() would raise 23505).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Playlists transformation completed', {
         userId,
         syncJobId,
-        processedCount: playlists.length,
-        writtenCount: records.length,
+        processedCount: contents.length,
+        skippedCount: playlists.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Playlists', {
@@ -118,12 +115,7 @@ export class YouTubePlaylistsTransformService {
     return [];
   }
 
-  /**
-   * Maps one playlist to a content row, or `null` when it carries no id. Pure —
-   * no I/O — so a malformed item is skipped without affecting the rest of the
-   * batch.
-   */
-  private toContentDto({
+  private buildPlaylistContent({
     playlist,
     userId,
     connectionId,
@@ -133,6 +125,7 @@ export class YouTubePlaylistsTransformService {
     connectionId: string;
   }): CreateContentDto | null {
     const playlistId = playlist.id;
+
     if (!playlistId) {
       this.logger.debug('Skipping playlist without id', {
         userId,
@@ -148,6 +141,7 @@ export class YouTubePlaylistsTransformService {
     const channelId = playlist.snippet?.channelId || '';
     const url = `https://www.youtube.com/playlist?list=${playlistId}`;
     const itemCount = playlist.contentDetails?.itemCount ?? 0;
+    const thumbnail = bestThumbnail(playlist.snippet?.thumbnails);
 
     return {
       type: 'youtube_playlist',
@@ -156,21 +150,17 @@ export class YouTubePlaylistsTransformService {
       url,
       external_id: playlistId,
       source_url: url,
-      // Provenance triple: makes a re-sync idempotent against
-      // content_source_triple_uniq. Matches the ETL convention.
       source_type: 'ETL',
-      source_system: 'youtube_playlists',
-      source_id: playlistId,
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `playlist:${playlistId}`,
       source_data: {
         connectionId,
         channelTitle,
         channelId,
         itemCount,
-        // playlists.list carries no duration — only videos.list does.
-        ...youtubeEmbedSourceData({
-          providerRef: playlistProviderRef(playlistId),
-          thumbnails: playlist.snippet?.thumbnails,
-        }),
+        publishedAt: playlist.snippet?.publishedAt,
+        providerRef: `youtube:playlist:${playlistId}`,
+        ...(thumbnail ? { thumbnail } : {}),
       },
       user: { id: userId },
     };

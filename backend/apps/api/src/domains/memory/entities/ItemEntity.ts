@@ -2,6 +2,23 @@ import { AfterLoad, Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateC
 
 export type InventoryCondition = 'new' | 'like_new' | 'good' | 'fair' | 'poor' | 'broken' | 'n/a';
 
+/**
+ * Ownership state. Mirrors the inventory_lifecycle_state_check constraint —
+ * widening one without the other fails the write, so change both together.
+ */
+export type InventoryLifecycleState =
+  | 'active'
+  | 'stored'
+  | 'lent_out'
+  | 'lost'
+  | 'disposed'
+  | 'consumed'
+  | 'returned'
+  | 'archived';
+
+/** How this unit's identity was established. Mirrors inventory_identity_method_check. */
+export type InventoryIdentityMethod = 'user' | 'barcode' | 'receipt' | 'vision' | 'import' | 'inferred';
+
 @Entity({ schema: 'ci', name: 'inventory' })
 export class ItemEntity {
   @PrimaryColumn('uuid', { name: 'object_id' })
@@ -117,6 +134,65 @@ export class ItemEntity {
   @Column('text', { name: 'source_id', nullable: true })
   sourceId!: string | null;
 
+  // ---------------------------------------------------------------------------
+  // Object identity (migration 20260803223025_extend_inventory_object_identity)
+  //
+  // ci.inventory stays the table of record for OWNED UNITS; these columns give
+  // a unit its catalog model, its purchase provenance, an honest lifecycle, and
+  // a merge tombstone — the four things it could not express before.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Graph mirror (ci.entities, entity_type 'Object'). NOTE this column has
+   * existed since the original 20250925154200 create and is indexed; it was
+   * simply never mapped here, so nothing could read or write it.
+   */
+  @Column('uuid', { name: 'object_entity_id', nullable: true })
+  objectEntityId!: string | null;
+
+  /** The catalog model this unit is an instance of. NULL = unit is real, product not yet known. */
+  @Column('uuid', { name: 'product_id', nullable: true })
+  productId!: string | null;
+
+  @Column('uuid', { name: 'acquisition_receipt_id', nullable: true })
+  acquisitionReceiptId!: string | null;
+
+  /** The receipt line this unit was minted from — the back half of the provenance chain. */
+  @Column('uuid', { name: 'acquisition_line_item_id', nullable: true })
+  acquisitionLineItemId!: string | null;
+
+  /**
+   * Queryable ownership state. Supersedes disposedAt/disposalMethod as the
+   * filter (those keep the when and the how, and are not deprecated).
+   */
+  @Column('text', { name: 'lifecycle_state', default: 'active' })
+  lifecycleState!: InventoryLifecycleState;
+
+  @Column('int', { name: 'quantity', default: 1 })
+  quantity!: number;
+
+  /**
+   * 1.0 = user-entered or barcode-scanned; ~0.7 receipt-derived; ~0.4
+   * vision-guessed. 1.0 reads as ground truth to HBPE and RAG, so never write
+   * it for an inferred unit.
+   */
+  @Column('real', { name: 'identity_confidence', default: 1.0 })
+  identityConfidence!: number;
+
+  @Column('text', { name: 'identity_method', nullable: true })
+  identityMethod!: InventoryIdentityMethod | null;
+
+  /** Last confirmed sighting, denormalized from ci.object_observations for sort/filter. */
+  @Column('timestamptz', { name: 'last_seen_at', nullable: true })
+  lastSeenAt!: Date | null;
+
+  @Column('uuid', { name: 'last_seen_place_entity_id', nullable: true })
+  lastSeenPlaceEntityId!: string | null;
+
+  /** Merge tombstone. Non-NULL means this row lost a merge; every read filters IS NULL. */
+  @Column('uuid', { name: 'merged_into_object_id', nullable: true })
+  mergedIntoObjectId!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -169,6 +245,18 @@ export class ItemEntity {
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,
       sourceFileId: entity.sourceFileId,
+
+      objectEntityId: entity.objectEntityId,
+      productId: entity.productId,
+      acquisitionReceiptId: entity.acquisitionReceiptId,
+      acquisitionLineItemId: entity.acquisitionLineItemId,
+      lifecycleState: entity.lifecycleState,
+      quantity: entity.quantity,
+      identityConfidence: entity.identityConfidence,
+      identityMethod: entity.identityMethod,
+      lastSeenAt: entity.lastSeenAt,
+      lastSeenPlaceEntityId: entity.lastSeenPlaceEntityId,
+      mergedIntoObjectId: entity.mergedIntoObjectId,
 
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

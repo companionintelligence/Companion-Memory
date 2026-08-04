@@ -1,0 +1,237 @@
+{
+  "$comment": [
+    "Cross-repo canonicalisation contract. Executed by CI-Server's jest suite and,",
+    "once the identity module is vendored (design P3), by CI-Import-Tools' runner",
+    "against this same file. A row here is a promise about a URL shape; do not edit",
+    "an expectation to make a failing implementation pass.",
+    "`canonical: null` means the input yields no url identity and the caller must",
+    "fall back to a lower rung."
+  ],
+  "specVersion": 1,
+  "cases": [
+    {
+      "name": "youtu.be short link drops its timecode",
+      "input": "https://youtu.be/dQw4w9WgXcQ?t=30",
+      "canonical": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "provider": "youtube",
+      "providerRef": "youtube:video:dQw4w9WgXcQ"
+    },
+    {
+      "name": "watch page drops playlist position and campaign params",
+      "input": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx&index=3&pp=abc",
+      "canonical": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "provider": "youtube",
+      "providerRef": "youtube:video:dQw4w9WgXcQ"
+    },
+    {
+      "name": "mobile shorts collapses to the canonical watch page",
+      "input": "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+      "canonical": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "provider": "youtube",
+      "providerRef": "youtube:video:dQw4w9WgXcQ"
+    },
+    {
+      "name": "youtube music is the same video",
+      "input": "https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=xY",
+      "canonical": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "provider": "youtube",
+      "providerRef": "youtube:video:dQw4w9WgXcQ"
+    },
+    {
+      "name": "privacy-enhanced embed host is the same video",
+      "input": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+      "canonical": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "provider": "youtube",
+      "providerRef": "youtube:video:dQw4w9WgXcQ"
+    },
+    {
+      "name": "youtube playlist keeps its own identity",
+      "input": "https://www.youtube.com/playlist?list=PLtest123&si=xyz",
+      "canonical": "https://youtube.com/playlist?list=PLtest123",
+      "provider": "youtube",
+      "providerRef": "youtube:playlist:PLtest123"
+    },
+    {
+      "name": "youtube channel keeps its own identity",
+      "input": "https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw",
+      "canonical": "https://youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw",
+      "provider": "youtube",
+      "providerRef": "youtube:channel:UCuAXFkgsw1L7xaCfnd5JJOw"
+    },
+    {
+      "name": "spotify locale prefix and share token are dropped",
+      "input": "https://open.spotify.com/intl-de/track/6rqhFgbbKwnb9?si=abc",
+      "canonical": "https://open.spotify.com/track/6rqhFgbbKwnb9",
+      "provider": "spotify",
+      "providerRef": "spotify:track:6rqhFgbbKwnb9"
+    },
+    {
+      "name": "spotify native uri resolves to the same identity as its web url",
+      "input": "spotify:track:6rqhFgbbKwnb9",
+      "canonical": "https://open.spotify.com/track/6rqhFgbbKwnb9",
+      "provider": "spotify",
+      "providerRef": "spotify:track:6rqhFgbbKwnb9"
+    },
+    {
+      "name": "twitter.com is x.com and the username is not identity",
+      "input": "https://twitter.com/jack/status/20?ref_src=twsrc",
+      "canonical": "https://x.com/i/status/20",
+      "provider": "x",
+      "providerRef": "x:tweet:20"
+    },
+    {
+      "name": "any username resolves the same tweet",
+      "input": "https://x.com/anyone/status/20",
+      "canonical": "https://x.com/i/status/20",
+      "provider": "x",
+      "providerRef": "x:tweet:20"
+    },
+    {
+      "name": "vimeo drops its share token",
+      "input": "https://vimeo.com/76979871?share=copy",
+      "canonical": "https://vimeo.com/76979871",
+      "provider": "vimeo",
+      "providerRef": "vimeo:video:76979871"
+    },
+    {
+      "name": "no blanket m. strip — m.media-amazon.com is a real distinct host",
+      "input": "https://m.media-amazon.com/images/I/71x.jpg",
+      "canonical": "https://m.media-amazon.com/images/I/71x.jpg"
+    },
+    {
+      "name": "ref is identity off the allowlist, utm_ is never identity",
+      "input": "https://blog.acme.com/p?ref=hn&utm_source=x",
+      "canonical": "https://blog.acme.com/p?ref=hn"
+    },
+    {
+      "name": "shorteners yield no url identity and are never fetched",
+      "input": "https://bit.ly/3abc",
+      "canonical": null
+    },
+    {
+      "name": "t.co is a shortener too",
+      "input": "https://t.co/abcdef",
+      "canonical": null
+    },
+    {
+      "name": "http and https are one identity",
+      "input": "http://Example.COM/x",
+      "canonical": "https://example.com/x"
+    },
+    {
+      "name": "www is stripped and the trailing slash dropped",
+      "input": "https://www.example.com/a/b/",
+      "canonical": "https://example.com/a/b"
+    },
+    {
+      "name": "query parameters sort so order stops being identity",
+      "input": "https://example.com/?b=2&a=1",
+      "canonical": "https://example.com/?a=1&b=2"
+    },
+    {
+      "name": "fragments are dropped",
+      "input": "https://example.com/x#section",
+      "canonical": "https://example.com/x"
+    },
+    {
+      "name": "hashbang routes are path-bearing and survive",
+      "input": "https://example.com/app#!/route",
+      "canonical": "https://example.com/app#!/route"
+    },
+    {
+      "name": "dot segments resolve and duplicate slashes collapse",
+      "input": "https://example.com//a//./c/../b",
+      "canonical": "https://example.com/a/b"
+    },
+    {
+      "name": "an empty ref is noise, not identity",
+      "input": "https://example.com/p?ref=",
+      "canonical": "https://example.com/p"
+    },
+    {
+      "name": "non-default ports are identity and are preserved",
+      "input": "https://example.com:8443/x",
+      "canonical": "https://example.com:8443/x"
+    },
+    {
+      "name": "wikipedia language mobile mirror maps to its desktop host",
+      "input": "https://en.m.wikipedia.org/wiki/Otter",
+      "canonical": "https://en.wikipedia.org/wiki/Otter"
+    },
+    {
+      "name": "reddit ref params are host-scoped noise",
+      "input": "https://www.reddit.com/r/otters/comments/abc/title/?ref=share&ref_source=link",
+      "canonical": "https://reddit.com/r/otters/comments/abc/title"
+    },
+    {
+      "name": "unreserved percent-escapes decode and remaining escapes uppercase",
+      "input": "https://example.com/%7Euser/a%2fb",
+      "canonical": "https://example.com/~user/a%2Fb"
+    },
+    {
+      "name": "a bare host is recoverable",
+      "input": "example.com/x",
+      "canonical": "https://example.com/x"
+    },
+    {
+      "name": "non-web schemes have no url identity",
+      "input": "mailto:someone@example.com",
+      "canonical": null
+    },
+    {
+      "name": "javascript: has no url identity",
+      "input": "javascript:alert(1)",
+      "canonical": null
+    },
+    {
+      "name": "empty input has no url identity",
+      "input": "   ",
+      "canonical": null
+    },
+    {
+      "name": "soundcloud track is its artist/track permalink pair",
+      "input": "https://soundcloud.com/jsmith/night-run-demo-1?in=jsmith/sets/demos&utm_source=clipboard",
+      "canonical": "https://soundcloud.com/jsmith/night-run-demo-1",
+      "provider": "soundcloud",
+      "providerRef": "soundcloud:track:jsmith/night-run-demo-1"
+    },
+    {
+      "name": "soundcloud mobile mirror is the same track",
+      "input": "https://m.soundcloud.com/jsmith/night-run-demo-1",
+      "canonical": "https://soundcloud.com/jsmith/night-run-demo-1",
+      "provider": "soundcloud",
+      "providerRef": "soundcloud:track:jsmith/night-run-demo-1"
+    },
+    {
+      "name": "soundcloud set is distinct from a track",
+      "input": "https://soundcloud.com/jsmith/sets/demos",
+      "canonical": "https://soundcloud.com/jsmith/sets/demos",
+      "provider": "soundcloud",
+      "providerRef": "soundcloud:set:jsmith/demos"
+    },
+    {
+      "name": "soundcloud reserved paths are not tracks",
+      "input": "https://soundcloud.com/discover/sets/personalized-tracks",
+      "canonical": "https://soundcloud.com/discover/sets/personalized-tracks"
+    },
+    {
+      "name": "on.soundcloud.com is a shortener, not a mirror",
+      "input": "https://on.soundcloud.com/abc123",
+      "canonical": null
+    },
+    {
+      "name": "dailymotion drops the decorative title slug",
+      "input": "https://www.dailymotion.com/video/x8abcd_some-title-that-changes",
+      "canonical": "https://dailymotion.com/video/x8abcd",
+      "provider": "dailymotion",
+      "providerRef": "dailymotion:video:x8abcd"
+    },
+    {
+      "name": "dai.ly short form is the same video",
+      "input": "https://dai.ly/x8abcd",
+      "canonical": "https://dailymotion.com/video/x8abcd",
+      "provider": "dailymotion",
+      "providerRef": "dailymotion:video:x8abcd"
+    }
+  ]
+}

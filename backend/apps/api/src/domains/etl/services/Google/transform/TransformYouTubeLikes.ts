@@ -2,11 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService, type CreateContentDto } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
-import { type YouTubeThumbnails, videoProviderRef, youtubeEmbedSourceData } from './youtubeMedia';
+import { bestThumbnail, parseIso8601DurationSeconds, YOUTUBE_SOURCE_SYSTEM } from './youtubeMedia';
 
 interface YouTubePlaylistItem {
   id?: string;
@@ -16,7 +16,13 @@ interface YouTubePlaylistItem {
     channelTitle?: string;
     channelId?: string;
     publishedAt?: string;
-    thumbnails?: YouTubeThumbnails;
+    thumbnails?: {
+      default?: { url?: string; width?: number; height?: number };
+      medium?: { url?: string; width?: number; height?: number };
+      high?: { url?: string; width?: number; height?: number };
+      standard?: { url?: string; width?: number; height?: number };
+      maxres?: { url?: string; width?: number; height?: number };
+    };
     resourceId?: {
       videoId?: string;
     };
@@ -24,9 +30,7 @@ interface YouTubePlaylistItem {
   contentDetails?: {
     videoId?: string;
     videoPublishedAt?: string;
-    // SyncYouTubeLikes calls /youtube/v3/videos?part=snippet,contentDetails, and
-    // the videos resource carries an ISO-8601 duration. playlists.list and
-    // activities.list do NOT, which is why only this transform records one.
+    /** ISO 8601 duration, e.g. `PT4M13S`. Present on `videos.list` responses. */
     duration?: string;
   };
 }
@@ -70,24 +74,22 @@ export class YouTubeLikesTransformService {
         itemCount: items.length,
       });
 
-      // Map first (per-item, skipping anything unusable), then write ONCE.
-      // createMany dedupes on the provenance triple via
-      // content_source_triple_uniq, so a re-sync of the same likes inserts zero
-      // rows; the previous per-item create() was a plain save with no ON
-      // CONFLICT, so every sync duplicated the entire library.
-      const records = items
-        .map((item) => this.toContentDto({ item, connectionId: connection.id, userId }))
-        .filter((record): record is CreateContentDto => record !== null);
+      const contents = items
+        .map((item) => this.buildLikedVideoContent({ item, connectionId: connection.id, userId }))
+        .filter((dto): dto is CreateContentDto => dto !== null);
 
-      if (records.length > 0) {
-        await this.contentService.createMany({ userId }, records, { emitCreated: true });
-      }
+      // createMany, not create: create() is a plain save and a re-sync of the same
+      // liked video raises 23505 against content_source_triple_uniq. createMany is
+      // one set-based INSERT ... ON CONFLICT DO NOTHING keyed on the provenance
+      // triple, so re-running a sync inserts zero rows. emitCreated stays true so
+      // these stay search-indexed (createMany defaults it to false for bulk import).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Likes transformation completed', {
         userId,
         syncJobId,
-        processedCount: items.length,
-        writtenCount: records.length,
+        processedCount: contents.length,
+        skippedCount: items.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Likes', {
@@ -128,12 +130,7 @@ export class YouTubeLikesTransformService {
     return [];
   }
 
-  /**
-   * Maps one liked video to a content row, or `null` when it carries no usable
-   * video id. Pure — no I/O — so a malformed item is skipped without affecting
-   * the rest of the batch.
-   */
-  private toContentDto({
+  private buildLikedVideoContent({
     item,
     userId,
     connectionId,
@@ -143,6 +140,7 @@ export class YouTubeLikesTransformService {
     connectionId: string;
   }): CreateContentDto | null {
     const videoId = item.id || item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
+
     if (!videoId) {
       this.logger.debug('Skipping liked video without id', {
         userId,
@@ -158,34 +156,32 @@ export class YouTubeLikesTransformService {
     const channelId = item.snippet?.channelId || '';
     const url = `https://www.youtube.com/watch?v=${videoId}`;
 
+    // The provider already returns a poster and a runtime; both were parsed and
+    // dropped before. Persist them so the embed tiers can render a poster and a
+    // duration badge without a second API call (design §6, tier 0).
+    const thumbnail = bestThumbnail(item.snippet?.thumbnails);
+    const durationSeconds = parseIso8601DurationSeconds(item.contentDetails?.duration);
+
     return {
       type: 'youtube_video_like',
       title,
       text: description,
       url,
-      // A watch page is not a playable media file. The pseudo-type is kept
-      // because it records what this row IS, but the gallery no longer treats a
-      // `video/*` pseudo-type as a direct <video> source — see
-      // GalleryView/media.ts, which is where the broken render was fixed so
-      // that already-imported rows heal without a backfill.
       mimetype: 'video/youtube',
       external_id: videoId,
       source_url: url,
-      // Provenance triple: makes a re-sync idempotent against
-      // content_source_triple_uniq (user_id, source_type, source_system,
-      // source_id). Matches the ETL convention used by google_calendar.
       source_type: 'ETL',
-      source_system: 'youtube_likes',
-      source_id: videoId,
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `like:${videoId}`,
       source_data: {
         connectionId,
         channelTitle,
         channelId,
-        ...youtubeEmbedSourceData({
-          providerRef: videoProviderRef(videoId),
-          thumbnails: item.snippet?.thumbnails,
-          durationIso: item.contentDetails?.duration,
-        }),
+        publishedAt: item.snippet?.publishedAt,
+        providerRef: `youtube:video:${videoId}`,
+        ...(thumbnail ? { thumbnail } : {}),
+        ...(item.contentDetails?.duration ? { durationIso: item.contentDetails.duration } : {}),
+        ...(durationSeconds !== null ? { durationSeconds } : {}),
       },
       user: { id: userId },
     };

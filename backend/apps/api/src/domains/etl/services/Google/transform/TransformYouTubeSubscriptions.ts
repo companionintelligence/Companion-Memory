@@ -2,11 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { ContentService, type CreateContentDto } from '@ci/domains/memory';
+import { type CreateContentDto, ContentService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
-import { type YouTubeThumbnails, channelProviderRef, youtubeEmbedSourceData } from './youtubeMedia';
+import { bestThumbnail, YOUTUBE_SOURCE_SYSTEM, type YouTubeThumbnailSet } from './youtubeMedia';
 
 interface YouTubeSubscription {
   id?: string;
@@ -19,7 +19,7 @@ interface YouTubeSubscription {
     resourceId?: {
       channelId?: string;
     };
-    thumbnails?: YouTubeThumbnails;
+    thumbnails?: YouTubeThumbnailSet;
   };
 }
 
@@ -62,22 +62,21 @@ export class YouTubeSubscriptionsTransformService {
         subscriptionCount: subscriptions.length,
       });
 
-      // Map first, then write ONCE: createMany dedupes on the provenance triple,
-      // so a re-sync inserts zero rows. The previous per-item create() had no ON
-      // CONFLICT and duplicated every subscription on every sync.
-      const records = subscriptions
-        .map((subscription) => this.toContentDto({ subscription, connectionId: connection.id, userId }))
-        .filter((record): record is CreateContentDto => record !== null);
+      const contents = subscriptions
+        .map((subscription) =>
+          this.buildSubscriptionContent({ subscription, connectionId: connection.id, userId }),
+        )
+        .filter((dto): dto is CreateContentDto => dto !== null);
 
-      if (records.length > 0) {
-        await this.contentService.createMany({ userId }, records, { emitCreated: true });
-      }
+      // createMany dedupes on the provenance triple, so a re-sync of an unchanged
+      // subscription list inserts zero rows (create() would raise 23505).
+      await this.contentService.createMany({ userId }, contents, { emitCreated: true });
 
       this.logger.log('YouTube Subscriptions transformation completed', {
         userId,
         syncJobId,
-        processedCount: subscriptions.length,
-        writtenCount: records.length,
+        processedCount: contents.length,
+        skippedCount: subscriptions.length - contents.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming YouTube Subscriptions', {
@@ -118,16 +117,7 @@ export class YouTubeSubscriptionsTransformService {
     return [];
   }
 
-  /**
-   * Maps one subscription to a content row, or `null` when it carries no
-   * channel id. Pure — no I/O — so a malformed item is skipped without
-   * affecting the rest of the batch.
-   *
-   * A subscription without a channel id is skipped rather than written: it has
-   * no URL, no external id and no triple, so it could never be deduped and
-   * would accumulate a fresh copy on every sync.
-   */
-  private toContentDto({
+  private buildSubscriptionContent({
     subscription,
     userId,
     connectionId,
@@ -137,6 +127,7 @@ export class YouTubeSubscriptionsTransformService {
     connectionId: string;
   }): CreateContentDto | null {
     const snippet = subscription.snippet;
+
     if (!snippet) {
       this.logger.debug('Skipping subscription without snippet', {
         userId,
@@ -147,8 +138,11 @@ export class YouTubeSubscriptionsTransformService {
     }
 
     const channelId = snippet.resourceId?.channelId || snippet.channelId || '';
+
+    // Without a channel id the row has no url, no external id and no stable
+    // provenance, so every re-sync would insert another copy of it. Drop it.
     if (!channelId) {
-      this.logger.debug('Skipping subscription without channel id', {
+      this.logger.debug('Skipping subscription without a channel id', {
         userId,
         connectionId,
       });
@@ -159,6 +153,7 @@ export class YouTubeSubscriptionsTransformService {
     const channelTitle = snippet.title || snippet.channelTitle || 'Untitled Channel';
     const description = snippet.description || '';
     const url = `https://www.youtube.com/channel/${channelId}`;
+    const thumbnail = bestThumbnail(snippet.thumbnails);
 
     return {
       type: 'youtube_subscription',
@@ -167,17 +162,15 @@ export class YouTubeSubscriptionsTransformService {
       url,
       external_id: channelId,
       source_url: url,
-      // Provenance triple: makes a re-sync idempotent against
-      // content_source_triple_uniq. Matches the ETL convention.
       source_type: 'ETL',
-      source_system: 'youtube_subscriptions',
-      source_id: channelId,
+      source_system: YOUTUBE_SOURCE_SYSTEM,
+      source_id: `subscription:${channelId}`,
       source_data: {
         connectionId,
-        ...youtubeEmbedSourceData({
-          providerRef: channelProviderRef(channelId),
-          thumbnails: snippet.thumbnails,
-        }),
+        channelId,
+        publishedAt: snippet.publishedAt,
+        providerRef: `youtube:channel:${channelId}`,
+        ...(thumbnail ? { thumbnail } : {}),
       },
       user: { id: userId },
     };

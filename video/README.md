@@ -12,13 +12,21 @@ npm install
 npx playwright install --with-deps chromium
 npm run doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
 
-# with the stage up (see below):
-npm run capture       # drive the real UI -> assets/shots/*.png (both viewports)
+# with the stage up (see below) — four passes, in this order:
+npm run capture       # seeded jsmith; drives the real UI -> assets/shots/*.png (both viewports)
 VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
+VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-focus
+VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-connect
+
 npm run build         # storyboard.json -> build/{landscape,portrait}/index.html
 npm run check         # HyperFrames gate: lint, runtime, layout, motion, contrast
 npm run render        # -> out/ci-memory-landscape.mp4 and out/ci-memory-portrait.mp4
 ```
+
+> **A missing PNG does not fail the build.** video-kit substitutes a branded "capture pending"
+> slate for any shot whose file is absent (`scenes.mjs` `slateUri`), so a storyboard that declares
+> shots the stage cannot actually produce still renders green. Run `npm run status` — or just look
+> at `assets/shots/` — before believing a cut is complete.
 
 ## The stage
 
@@ -41,8 +49,22 @@ Those last two lines are the exact processes `playwright.e2e.config.ts` declares
 
 **Skipping the seed makes every screen in this video an empty state.**
 
-Capture runs twice on purpose: the authenticated pass films everything, then a
-`VIDEO_LOGGED_OUT=1` pass re-films `/` and `/login`, which redirect a signed-in user to `/feed`.
+Two feature flags are part of the stage, not the app defaults —
+`.github/workflows/video.yml` sets both on the job:
+
+| Variable | Why |
+|---|---|
+| `ENABLE_ACTIONS=true` | `features.actions` ships `false`, which hides the feed's actions carousel *and* renames its heading to "Questions". The seed already loads real actions. |
+| `ENABLE_REQUIRE_SIGNUP_CODES=false` | The fresh-account passes sign up through `/api/signup`, which 400s while signup codes are required. |
+
+Capture runs four times on purpose:
+
+1. **authenticated** — the seeded `jsmith`, films everything behind `ProtectedRoute`;
+2. **`VIDEO_LOGGED_OUT=1`** — re-films `/` and `/login`, which redirect a signed-in user to `/feed`;
+3. **`VIDEO_FRESH_USER=1`** ×2 — the seeded user is already onboarded, so the wizard is only
+   reachable from a throwaway account. One capture invocation per onboarding shot, because
+   onboarding progress is persisted per user and a shared account would resume mid-wizard.
+
 Determinism hazards are catalogued at the top of [`capture.config.mjs`](capture.config.mjs).
 
 ## Editing the video

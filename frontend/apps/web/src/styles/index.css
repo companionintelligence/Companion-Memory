@@ -154,18 +154,26 @@
 }
 
 .dark {
-  --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.34 0.04 220 / 14%), transparent 52%);
-  --background: oklch(0.19 0.032 234.379);
+  /* Dark ground: greener teal between Portal cursor glow (#066c80) and phthalo CTA (#0a6358). */
+  --ci-phthalo-green: #58ebbf;
+  --ci-phthalo-green-deep: #0f717a;
+  --ci-phthalo-green-hover: #72ddd4;
+  --ci-primary-ink: #041620;
+  --ci-primary-gradient: linear-gradient(135deg, var(--ci-phthalo-green), var(--ci-phthalo-green-deep));
+  --ci-primary-gradient-hover: linear-gradient(135deg, var(--ci-phthalo-green-hover), var(--ci-phthalo-green));
+  --shadow-glow-ci: 0 0 20px -4px rgb(88 235 191 / 32%);
+  --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.38 0.06 195 / 16%), transparent 52%);
+  --background: oklch(0.21 0.046 186);
   --foreground: oklch(0.691 0.03 185.201);
-  --card: oklch(0.239 0.038 233.156);
+  --card: oklch(0.26 0.05 186);
   --card-foreground: oklch(0.691 0.03 185.201);
-  --popover: oklch(0.239 0.038 233.156);
+  --popover: oklch(0.26 0.05 186);
   --popover-foreground: oklch(0.691 0.03 185.201);
   --primary: oklch(0.842 0.043 203.701);
-  --primary-foreground: oklch(0.19 0.032 234.379);
-  --secondary: oklch(0.239 0.038 233.156);
+  --primary-foreground: oklch(0.21 0.046 186);
+  --secondary: oklch(0.26 0.05 186);
   --secondary-foreground: oklch(0.977 0.004 236.496);
-  --muted: oklch(0.239 0.038 233.156);
+  --muted: oklch(0.26 0.05 186);
   --muted-foreground: oklch(0.78 0.018 253.397);
   --accent: oklch(0.477 0.062 204.345);
   --accent-foreground: oklch(0.977 0.004 236.496);
@@ -262,6 +270,11 @@
 
 .shadow-glow-ci {
   box-shadow: var(--shadow-glow-ci);
+}
+
+[data-slot='checkbox'] {
+  border-color: var(--border);
+  background-color: var(--background);
 }
 
 [data-slot='checkbox'][data-state='checked'],

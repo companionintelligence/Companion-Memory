@@ -23,15 +23,12 @@ export interface EntityMedia {
 }
 
 /**
- * `type/provider` strings that name WHERE media lives rather than a decodable
- * container. `video/youtube` is a watch page, not an H.264 stream: passing it to
- * `<img src>` yields a permanently broken tile and to `<video src>` a player
- * that never starts. Every imported YouTube like rendered that way.
- *
- * Filtering here rather than at the writer is deliberate — it heals rows that
- * are already in ci.content with no backfill. These entities fall back to their
- * plain text tile until the embed track gives them a real poster and a
- * click-to-play player.
+ * Mimetypes whose subtype names a *provider*, not a container or codec. The ETL
+ * writes these alongside a watch-page URL rather than a media file, so treating
+ * them as playable renders an `<img>`/`<video>` pointed at an HTML page — always
+ * broken. They resolve to no media, which leaves the entity as a plain tile
+ * until the embed player lands (see
+ * `docs/prd/unified-content-identity-lifecycle-embeds.md` §6).
  */
 const PROVIDER_PSEUDO_MIMETYPES = new Set([
   'video/youtube',

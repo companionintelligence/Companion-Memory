@@ -1,128 +1,120 @@
 /**
- * Shared YouTube media helpers for the four YouTube transforms.
+ * Shared helpers for the four YouTube transforms.
  *
- * The YouTube API already returns everything needed to render a real thumbnail
- * and a duration, and every transform was parsing `snippet.thumbnails` into its
- * local interface and then discarding it — so a liked video landed in ci.content
- * with a watch-page URL, `mimetype: 'video/youtube'`, and no poster at all.
- *
- * `provider` / `providerRef` are written alongside the thumbnail so a structural
- * player can be derived later without a second API call or any network fetch:
- * `youtube:video:<id>` is a pure function of the id, and the embed URL is a pure
- * function of that.
+ * All four write `ci.content` rows whose `url` is a watch/channel/playlist page
+ * rather than a media file. The poster and runtime the provider already returns
+ * were parsed into local interfaces and discarded; these helpers normalise them
+ * so they can be persisted once and reused by the embed player without a second
+ * API call. See `docs/prd/unified-content-identity-lifecycle-embeds.md` §6.
  */
 
-/** Thumbnail set as returned by videos.list / playlistItems.list / subscriptions.list. */
-export interface YouTubeThumbnails {
-  default?: { url?: string };
-  medium?: { url?: string };
-  high?: { url?: string };
-  standard?: { url?: string };
-  maxres?: { url?: string };
+/** `source_system` for every YouTube-derived `ci.content` row. */
+export const YOUTUBE_SOURCE_SYSTEM = 'youtube';
+
+export interface YouTubeThumbnail {
+  url?: string;
+  width?: number;
+  height?: number;
 }
 
-export const YOUTUBE_PROVIDER = 'youtube';
+export interface YouTubeThumbnailSet {
+  default?: YouTubeThumbnail;
+  medium?: YouTubeThumbnail;
+  high?: YouTubeThumbnail;
+  standard?: YouTubeThumbnail;
+  maxres?: YouTubeThumbnail;
+}
+
+export interface NormalizedThumbnail {
+  url: string;
+  width?: number;
+  height?: number;
+}
 
 /**
- * Best available thumbnail URL, largest first.
+ * Highest-resolution thumbnail the provider actually returned, or null.
  *
- * `maxres` is preferred when the API actually returns it — but it is NOT
- * synthesised from the video id, because `maxresdefault.jpg` 404s for any upload
- * below 720p and there is no way to check without a network request. Only URLs
- * the API itself reported are used.
+ * Preferring `maxres` here is safe precisely because it is read from the API
+ * response: the key is absent when no such rendition exists. That is a different
+ * operation from *constructing* `…/maxresdefault.jpg` from a video id, which
+ * 404s for every sub-720p upload — never do that.
  */
-export function pickThumbnailUrl(thumbnails?: YouTubeThumbnails): string | undefined {
+export function bestThumbnail(thumbnails?: YouTubeThumbnailSet | null): NormalizedThumbnail | null {
   if (!thumbnails) {
-    return undefined;
+    return null;
   }
 
-  return (
-    thumbnails.maxres?.url ??
-    thumbnails.standard?.url ??
-    thumbnails.high?.url ??
-    thumbnails.medium?.url ??
-    thumbnails.default?.url ??
-    undefined
-  );
+  const ordered = [
+    thumbnails.maxres,
+    thumbnails.standard,
+    thumbnails.high,
+    thumbnails.medium,
+    thumbnails.default,
+  ];
+
+  for (const candidate of ordered) {
+    const url = candidate?.url?.trim();
+
+    if (url) {
+      return {
+        url,
+        ...(typeof candidate?.width === 'number' ? { width: candidate.width } : {}),
+        ...(typeof candidate?.height === 'number' ? { height: candidate.height } : {}),
+      };
+    }
+  }
+
+  return null;
 }
 
-/** Stable provider reference for a video: `youtube:video:<id>`. */
-export function videoProviderRef(videoId: string): string {
-  return `${YOUTUBE_PROVIDER}:video:${videoId}`;
-}
+/** `PnYnMnDTnHnMnS` — the subset YouTube emits for `contentDetails.duration`. */
+const ISO8601_DURATION =
+  /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/;
 
-/** Stable provider reference for a channel: `youtube:channel:<id>`. */
-export function channelProviderRef(channelId: string): string {
-  return `${YOUTUBE_PROVIDER}:channel:${channelId}`;
-}
-
-/** Stable provider reference for a playlist: `youtube:playlist:<id>`. */
-export function playlistProviderRef(playlistId: string): string {
-  return `${YOUTUBE_PROVIDER}:playlist:${playlistId}`;
-}
-
-const ISO_DURATION = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/;
+const SECONDS_PER = {
+  year: 31_536_000,
+  month: 2_592_000,
+  week: 604_800,
+  day: 86_400,
+  hour: 3_600,
+  minute: 60,
+} as const;
 
 /**
- * Parses an ISO-8601 duration (`PT4M13S`, `PT1H2M3S`, `PT0S`) to whole seconds.
+ * ISO 8601 duration to whole seconds, or null when absent or unparseable.
  *
- * Returns `undefined` rather than 0 for anything unparseable, so a missing
- * duration stays distinguishable from a genuinely zero-length one. YouTube
- * reports `P0D` for live streams that never ended — that parses to 0, which is
- * correct: no known duration yet.
+ * Years and months are nominal (365d / 30d). YouTube runtimes never reach either
+ * unit, so the approximation is unreachable in practice — it exists only so a
+ * malformed value degrades to a number rather than throwing.
  */
-export function parseIsoDurationSeconds(iso?: string | null): number | undefined {
-  if (!iso) {
-    return undefined;
+export function parseIso8601DurationSeconds(duration?: string | null): number | null {
+  const trimmed = duration?.trim();
+
+  if (!trimmed) {
+    return null;
   }
 
-  const match = ISO_DURATION.exec(iso.trim());
+  const match = ISO8601_DURATION.exec(trimmed);
+
   if (!match) {
-    return undefined;
+    return null;
   }
 
-  const [, weeks, days, hours, minutes, seconds] = match;
+  const [, years, months, weeks, days, hours, minutes, seconds] = match;
 
-  // An all-empty match ("P", "PT") is not a duration.
-  if (!weeks && !days && !hours && !minutes && !seconds) {
-    return undefined;
+  // A bare `P`/`PT` matches the pattern but carries no components.
+  if (![years, months, weeks, days, hours, minutes, seconds].some((part) => part !== undefined)) {
+    return null;
   }
 
   const total =
-    Number(weeks ?? 0) * 604800 +
-    Number(days ?? 0) * 86400 +
-    Number(hours ?? 0) * 3600 +
-    Number(minutes ?? 0) * 60 +
+    Number(years ?? 0) * SECONDS_PER.year +
+    Number(months ?? 0) * SECONDS_PER.month +
+    Number(weeks ?? 0) * SECONDS_PER.week +
+    Number(days ?? 0) * SECONDS_PER.day +
+    Number(hours ?? 0) * SECONDS_PER.hour +
+    Number(minutes ?? 0) * SECONDS_PER.minute +
     Number(seconds ?? 0);
 
   return Math.round(total);
-}
-
-/**
- * The embed-facing half of a YouTube content row's `source_data`.
- *
- * Kept in one place so all four transforms agree on key names — the embed track
- * reads these, and a per-transform spelling would silently render half the
- * corpus unplayable.
- */
-export function youtubeEmbedSourceData({
-  providerRef,
-  thumbnails,
-  durationIso,
-}: {
-  providerRef: string;
-  thumbnails?: YouTubeThumbnails;
-  durationIso?: string | null;
-}): Record<string, unknown> {
-  const thumbnailUrl = pickThumbnailUrl(thumbnails);
-  const durationSeconds = parseIsoDurationSeconds(durationIso);
-
-  return {
-    provider: YOUTUBE_PROVIDER,
-    providerRef,
-    ...(thumbnailUrl ? { thumbnailUrl } : {}),
-    ...(thumbnails ? { thumbnails } : {}),
-    ...(durationIso ? { durationIso } : {}),
-    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-  };
 }

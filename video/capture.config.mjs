@@ -30,18 +30,39 @@
  * means capture does not depend on a prior `yarn e2e` run having left a fresh
  * state file behind.
  *
- * TWO-PASS CAPTURE. `ci-video capture` creates ONE browser context per viewport
+ * FOUR-PASS CAPTURE. `ci-video capture` creates ONE browser context per viewport
  * and shares it across every shot, so a single run is either logged in or logged
- * out — it cannot be both. Two shots in this storyboard are deliberately
- * logged-out (`splash-screen`, `login-form`): `/` and `/login` are both wrapped
- * in RedirectKnownUser, which sends an authenticated, onboarded user straight to
- * /feed. Capture them in a second pass with auth disabled:
+ * out — it cannot be both. This storyboard needs three different identities, in
+ * four invocations:
  *
- *   npm run capture                                                   # authenticated, all shots
- *   VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
+ *   npm run capture                                                   # seeded jsmith, all shots
+ *   VIDEO_LOGGED_OUT=1     npm run capture -- --only splash-screen,login-form
+ *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-focus
+ *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-connect
  *
- * Run them in that order — the second pass overwrites the two logged-out PNGs
- * that the first pass captured as /feed redirects.
+ * 1. AUTHENTICATED (default). Everything behind ProtectedRoute.
+ * 2. LOGGED OUT. `/` and `/login` are both wrapped in RedirectKnownUser, which
+ *    sends an authenticated, onboarded user straight to /feed. This pass must
+ *    run after the authenticated one — it overwrites the two PNGs the first
+ *    pass captured as /feed redirects.
+ * 3+4. FRESH USER, once per onboarding shot. The seeded user cannot film
+ *    onboarding at all: scripts/seed-database/seed-users.ts:41 calls
+ *    `userService.onboard(user.id)`, and OnboardingPage.tsx:231-233 returns
+ *    `<Navigate to="/feed" replace />` for an onboarded user — the wizard is
+ *    unreachable, exactly as tests/e2e/onboarding.spec.ts:3-9 says. So this
+ *    pass signs up a throwaway account per run (see VIDEO_FRESH_USER below).
+ *
+ *    It is TWO passes, not one, on purpose. OnboardingPage persists progress
+ *    server-side on every Next (persistProgress -> saveProgress) and rehydrates
+ *    from it on mount (OnboardingPage.tsx:108-135), so a second onboarding shot
+ *    sharing the account would resume mid-wizard AND render the "Welcome back.
+ *    Everything you've entered is saved." banner over the shot. One capture
+ *    invocation == one fresh account == one clean run through the wizard.
+ *
+ *    The fresh pass needs signup codes off — config/default.json ships
+ *    features.require.signup.codes=true and .env.default:65 leaves the override
+ *    commented out, so .github/workflows/video.yml sets
+ *    ENABLE_REQUIRE_SIGNUP_CODES=false on the job.
  *
  * ── Determinism hazards found in this repo ───────────────────────────────────
  * 1. SEED DATE-SHIFT (worst offender).
@@ -79,21 +100,59 @@
  *    server.arcgisonline.com. That is live external network: an offline runner
  *    renders an empty pane, and tile revisions change the bytes. The attribution
  *    control is masked; the tiles themselves cannot be.
- * 7. LAZY THUMBNAILS — GalleryView tiles use `loading="lazy"`
- *    (GalleryView/MediaTile.tsx) and their sources come from MinIO on :9000 via
- *    the /static proxy. With MinIO down the gallery degrades to file glyphs,
- *    which reads as a UI regression but is a missing service.
- * 8. FEATURE FLAGS decide which routes even exist.
- *    backend/apps/api/config/default.json:131-149 ships chat.page=false,
+ * 7. THE GALLERY HAS NO PHOTOS, AND MinIO IS NOT THE REASON.
+ *    GalleryView.tsx:37-39 builds tiles from `data.map(getEntityMedia)`, and
+ *    GalleryView/media.ts:46-95 returns media only for a FileType (needs
+ *    galleryContentType + a gallery URL) or an EventType linked to a file. The
+ *    seed creates NEITHER: main.ts:83-84 does
+ *    `.overrideProvider(FileService).useValue({})` and main.ts:186-188 comments
+ *    out `seedContent` ("Our seed content is logically incosistent"). Zero file
+ *    records exist, so every tile falls through to the typed-card branch at
+ *    GalleryView.tsx:130. Standing MinIO up (docker-compose.yml:44-52, the
+ *    `object-store` service) would change nothing on its own — there is nothing
+ *    to serve. The storyboard's gallery caption and narration were rewritten to
+ *    describe the grid that actually renders rather than promise thumbnails.
+ *    Filming real thumbnails needs BOTH the object-store service AND a step
+ *    that uploads sample images through the files API after the app is up.
+ * 8. FEATURE FLAGS decide which routes even exist, and which headings render.
+ *    backend/apps/api/config/default.json ships chat.page=false,
  *    files.page=false, jobs.page=false, stats.page=false — with the stock
  *    .env.default those routes render NotFound, so nothing here films them.
  *    insights.page / new.insights.page / tags.page / hbpe are on.
+ *    `actions` ships FALSE, and FeedPage.tsx:414-416 both gates the block on
+ *    `(actionsEnabled || question)` and renders its h2 as
+ *    `actionsEnabled ? 'Actions' : 'Questions'` — so the feed shot's
+ *    `h2:text-is("Actions")` only resolves because video.yml sets
+ *    ENABLE_ACTIONS=true (mapped in config/custom-environment-variables.json).
+ *    The frontend reads flags at runtime from /api/_internal/features
+ *    (common/feature/useFeatures.ts:34), so a job-level env var is enough.
  * 9. RESPONSIVE SPLIT — /memory renders DesktopMemoryPage above 768px and
  *    MobileMemoryPage below (packages/common useDeviceLayout, MOBILE_BREAKPOINT
  *    768), and capture films 1280px AND 360px with the SAME selectors. The
  *    desktop breadcrumb view-switcher (`aria-label="List view — change view"`,
  *    DesktopMemoryPage.tsx:293) does not exist on mobile, so no waitFor here
- *    uses it — every selector was chosen to resolve at both widths.
+ *    uses it — every selector was chosen to resolve at both widths. The details
+ *    sheet passes this test on purpose: DesktopMemoryPage.tsx:375-378 and
+ *    MobileMemoryPage.tsx:147-150 render the identical `<Sheet>`, so
+ *    `[data-slot="sheet-content"]` resolves at both. So does the graph view —
+ *    both pages render `<GraphView>` for ?view=graph, only the variant differs.
+ * 10. FORCE-GRAPH LAYOUT — a known residual drift, same class as hazard 5.
+ *    memory-graph-view films GraphExplorerModal's force simulation. Node
+ *    positions come out of the layout's own randomness, so the PNG bytes move
+ *    between runs even when nothing about the product changed. `settle` is
+ *    2500ms so the simulation is at rest rather than mid-fling, but expect this
+ *    shot to show up in the weekly drift PR. Its `waitFor`
+ *    (`[aria-label="Hop depth"]`) sits inside the branch reached only AFTER the
+ *    `visibleNodes.length === 0` early return at GraphExplorerModal.tsx:1053,
+ *    so an unseeded graph fails loudly instead of quietly filming the
+ *    "Your knowledge graph is still taking shape" placeholder.
+ * 11. DEEP-LINKED SUMMARY — insight-detail-view navigates straight to
+ *    /insights/01936cb0-0000-7000-8000-000000000003 rather than clicking the
+ *    first card on /insights. That uuid is pinned in
+ *    scripts/seed-database/data/summaries.ts:166 and written through verbatim by
+ *    seed-summaries.ts (SummaryService.ts:27 honours a supplied summaryId), so
+ *    both the route and the h1 ("Daily Summary") survive a re-seed. Clicking
+ *    nth=0 would not — list order is not pinned.
  */
 
 const BASE_URL = process.env.APP_URL ?? 'http://localhost:5173';
@@ -104,6 +163,29 @@ const EMAIL = process.env.AUTH_DEFAULT_USER_EMAIL ?? 'jsmith@example.com';
 const PASSWORD = process.env.AUTH_DEFAULT_USER_PASSWORD ?? ']60.a6{CJ}lB*rHAp;w;';
 
 const LOGGED_OUT = process.env.VIDEO_LOGGED_OUT === '1';
+
+// Pass 3/4: sign up a throwaway account instead of logging in as the seeded
+// (already-onboarded) jsmith, so the onboarding wizard is reachable at all.
+const FRESH_USER = process.env.VIDEO_FRESH_USER === '1';
+
+/**
+ * A per-context throwaway identity.
+ *
+ * `name` MUST differ from `email`. UserType.ts:45 computes
+ * `needsIdentityStep: user.name === user.email`, and OnboardingPage.tsx:88-93
+ * feeds that into buildOnboardingStepKeys — so the name is what decides whether
+ * the wizard is 7 steps or 8. Keeping them different pins the step list to
+ * ['intro','time-and-place','focus-areas','people','connect-source',
+ *  'trust-dial','run-first-sync'] (preference steps are off by default), which
+ * is what the storyboard's chained Next clicks count on. Each `before` step is
+ * still guarded by a waitFor on that step's own h1, so a wrong count fails
+ * loudly instead of filming the wrong screen.
+ */
+const freshIdentity = () => ({
+  name: 'Sam Rivera',
+  email: `video-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@example.com`,
+  password: 'correct horse battery staple',
+});
 
 export default {
   baseURL: BASE_URL,
@@ -142,6 +224,29 @@ export default {
       throw new Error(
         'capture login failed: /api/authenticate/csrf set no csrfToken cookie — is the API up on :3030 and is Vite proxying /api to it?',
       );
+    }
+
+    if (FRESH_USER) {
+      // SignupController mints the same httpOnly session cookie the login flow
+      // does, so nothing downstream changes — the context is simply a different,
+      // un-onboarded person. `signup_code` is omitted deliberately: it is only
+      // required when features.require.signup.codes is on, which video.yml turns
+      // off for this job.
+      const identity = freshIdentity();
+      const signup = await api.post(`${BASE_URL}/api/signup`, {
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+        data: identity,
+      });
+      if (!signup.ok()) {
+        throw new Error(
+          `capture signup failed (${signup.status()}) for ${identity.email} — ` +
+            'is ENABLE_REQUIRE_SIGNUP_CODES=false set on this job? ' +
+            (await signup.text()),
+        );
+      }
+      console.log(`  · ${viewport}: VIDEO_FRESH_USER=1 — signed up ${identity.email}`);
+
+      return;
     }
 
     const res = await api.post(`${BASE_URL}/api/authenticate`, {

@@ -121,61 +121,46 @@ describe('getEntityMedia', () => {
     it('returns null when there is no media mimetype', () => {
       expect(getEntityMedia(entity({ __typename: 'ContentType', id: 'c3' }))).toBeNull();
     });
-  });
 
-  describe('provider pseudo-mimetypes', () => {
-    // Regression guard: an imported YouTube like carries mimetype
-    // 'video/youtube' and a watch-page URL. Treating that as a `video/*` media
-    // file rendered <img src={watch page}> (permanently broken) and
-    // <video src={watch page}> (never plays) for every liked video.
-    it('does not treat a YouTube watch page as playable video', () => {
-      expect(
-        getEntityMedia(
-          entity({
-            __typename: 'ContentType',
-            id: 'yt1',
-            galleryMimetype: 'video/youtube',
-            galleryContentUrl: 'https://www.youtube.com/watch?v=abc123',
-            galleryTitle: 'Side-chain Compression in Ableton',
-          }),
-        ),
-      ).toBeNull();
-    });
-
+    // The YouTube ETL writes mimetype 'video/youtube' with a watch-page URL, so
+    // classifying it as playable video rendered a permanently broken <video>.
     it.each(['video/youtube', 'video/vimeo', 'audio/spotify', 'audio/soundcloud'])(
-      'returns null for %s',
+      'returns null for the provider pseudo-mimetype %s',
       (mimetype) => {
         expect(
           getEntityMedia(
             entity({
               __typename: 'ContentType',
-              id: 'p',
+              id: 'c-provider',
               galleryMimetype: mimetype,
-              galleryContentUrl: 'https://example.com/watch',
+              galleryContentUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+              galleryTitle: 'A liked video',
             }),
           ),
         ).toBeNull();
       },
     );
 
-    it('is case-insensitive', () => {
+    it('is case-insensitive about provider pseudo-mimetypes', () => {
       expect(
         getEntityMedia(
           entity({
             __typename: 'ContentType',
-            id: 'yt2',
+            id: 'c-provider-upper',
             galleryMimetype: 'Video/YouTube',
-            galleryContentUrl: 'https://www.youtube.com/watch?v=abc123',
+            galleryContentUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
           }),
         ),
       ).toBeNull();
     });
 
+    // Guards the deny-list against over-reach: stripping playability from the
+    // provider pseudo-types must not also strip it from a real container.
     it('still resolves genuine video containers', () => {
       const media = getEntityMedia(
         entity({
           __typename: 'ContentType',
-          id: 'v1',
+          id: 'c-real-video',
           galleryMimetype: 'video/mp4',
           galleryContentUrl: '/content/real.mp4',
         }),

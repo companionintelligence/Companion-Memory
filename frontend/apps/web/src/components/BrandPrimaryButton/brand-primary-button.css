@@ -9,7 +9,8 @@
 }
 
 .dark {
-  --ci-brand-btn-fg: #ffffff;
+  --ci-brand-btn-fg: var(--ci-primary-ink);
+  --ci-brand-btn-shadow-hover: 0 4px 16px rgb(88 235 191 / 35%);
 }
 
 button.ci-brand-btn-primary[data-slot='button'],
@@ -29,12 +30,3 @@ button.ci-brand-btn-primary.ci-primary-surface[data-slot='button']:hover {
   box-shadow: var(--ci-brand-btn-shadow-hover) !important;
 }
 
-.dark button.ci-brand-btn-primary[data-slot='button'],
-.dark button.ci-brand-btn-primary.ci-primary-surface[data-slot='button'] {
-  background-color: var(--ci-phthalo-green) !important;
-}
-
-.dark button.ci-brand-btn-primary[data-slot='button']:hover,
-.dark button.ci-brand-btn-primary.ci-primary-surface[data-slot='button']:hover {
-  background-color: var(--ci-phthalo-green-hover) !important;
-}
