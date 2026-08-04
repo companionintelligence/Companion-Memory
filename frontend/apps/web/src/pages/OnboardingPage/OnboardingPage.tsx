@@ -284,7 +284,7 @@ export function OnboardingPage() {
           </div>
 
           {showNav && (
-            <div className="flex items-center gap-2 sm:gap-3 px-4">
+            <div className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3">
               {stepIndex > 0 && (
                 <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
                   Back
