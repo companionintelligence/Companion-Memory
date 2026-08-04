@@ -101,10 +101,15 @@ services:
     volumes:
       - ./infrastructure/powersync:/config:ro
     environment:
+      # POWERSYNC_CONFIG_PATH is read by the runtime directly, so it keeps its
+      # own name. The three below are consumed via `!env` inside powersync.yaml,
+      # which only substitutes PS_*-prefixed names — anything else is a fatal
+      # startup error (exit 150). Values still come from the POWERSYNC_*-named
+      # entries in .env, matching the server-side naming.
       - POWERSYNC_CONFIG_PATH=/config/powersync.yaml
-      - POWERSYNC_REPLICATION_URI=${POWERSYNC_REPLICATION_URI}
-      - POWERSYNC_STORAGE_URI=${POWERSYNC_STORAGE_URI}
-      - POWERSYNC_JWT_SECRET_B64URL=${POWERSYNC_JWT_SECRET_B64URL}
+      - PS_REPLICATION_URI=${POWERSYNC_REPLICATION_URI}
+      - PS_STORAGE_URI=${POWERSYNC_STORAGE_URI}
+      - PS_JWT_SECRET_B64URL=${POWERSYNC_JWT_SECRET_B64URL}
     networks:
       - ci
     depends_on:

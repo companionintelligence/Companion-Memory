@@ -3,12 +3,17 @@
 #
 # Values marked `!env` are read from the container environment (set in
 # docker-compose.yml). `!env` is PowerSync's env-substitution tag.
+#
+# NOTE: `!env` only substitutes variables whose names start with `PS_` — the
+# service rejects any other name at startup ("Variables must start with \"PS_\"")
+# and exits 150 before reading a single row. docker-compose.yml therefore maps
+# the repo's POWERSYNC_*-named .env values onto these PS_* container vars.
 
 # ── Source database: the CI-Server Postgres, read via logical replication ────────
 replication:
   connections:
     - type: postgresql
-      uri: !env POWERSYNC_REPLICATION_URI
+      uri: !env PS_REPLICATION_URI
       # LAN/appliance Postgres; enable/relax TLS per your deployment.
       sslmode: disable
 
@@ -16,7 +21,13 @@ replication:
 #    Postgres, avoiding a separate MongoDB. Switch to `type: mongodb` if preferred. ─
 storage:
   type: postgresql
-  uri: !env POWERSYNC_STORAGE_URI
+  uri: !env PS_STORAGE_URI
+  # Required, and easy to miss because `replication` above sets its own copy: the
+  # storage connection defaults to requiring TLS, and the local `database` image
+  # serves none. Without this the client aborts mid-handshake — Postgres logs a
+  # bare "connection received" with no "connection authenticated", and the
+  # service dies with a detail-free "postgres query failed" (exit 150).
+  sslmode: disable
 
 # Port the PowerSync service listens on (matches the docker-compose mapping).
 port: 8080
@@ -31,7 +42,8 @@ client_auth:
 
   # DEV SCAFFOLD: a shared HS256 secret. CI-Server signs with POWERSYNC_JWT_SECRET
   # and sets kid=ci-powersync-hs256; the symmetric key here is the base64url of that
-  # same secret (POWERSYNC_JWT_SECRET_B64URL — see README for the derivation).
+  # same secret (POWERSYNC_JWT_SECRET_B64URL in .env, mapped to PS_JWT_SECRET_B64URL
+  # on the container — see README for the derivation).
   #
   # PRODUCTION: prefer asymmetric keys. Expose a JWKS endpoint from CI-Server and set
   #   jwks_uri: https://<ci-server>/api/powersync/keys
@@ -41,4 +53,4 @@ client_auth:
       - kty: oct
         alg: HS256
         kid: ci-powersync-hs256
-        k: !env POWERSYNC_JWT_SECRET_B64URL
+        k: !env PS_JWT_SECRET_B64URL

@@ -65,13 +65,22 @@ Server env (read by `config.powersync`, see `backend/apps/api/config/`):
 With `POWERSYNC_URL` / `POWERSYNC_JWT_SECRET` unset, the feature is dormant and
 `/api/powersync/token` returns **503** — safe to ship disabled.
 
-PowerSync service env (in `docker-compose.yml`):
+PowerSync service env (set in `.env`, mapped in `docker-compose.yml`):
 
-| Env | Example |
-|-----|---------|
-| `POWERSYNC_REPLICATION_URI` | `postgresql://companion:<DATABASE_PASSWORD>@database:5432/companion` |
-| `POWERSYNC_STORAGE_URI` | same Postgres (Postgres bucket storage, image ≥ 1.3.8) |
-| `POWERSYNC_JWT_SECRET_B64URL` | `base64url(POWERSYNC_JWT_SECRET)` — the symmetric JWKS key |
+| `.env` | Container var | Example |
+|--------|---------------|---------|
+| `POWERSYNC_REPLICATION_URI` | `PS_REPLICATION_URI` | `postgresql://companion:<DATABASE_PASSWORD>@database:5432/companion` |
+| `POWERSYNC_STORAGE_URI` | `PS_STORAGE_URI` | same Postgres (Postgres bucket storage, image ≥ 1.3.8) |
+| `POWERSYNC_JWT_SECRET_B64URL` | `PS_JWT_SECRET_B64URL` | `base64url(POWERSYNC_JWT_SECRET)` — the symmetric JWKS key |
+
+> ⚠️ The two columns differ on purpose. `powersync.yaml` pulls these through the
+> `!env` tag, and the service **only substitutes names beginning with `PS_`** —
+> referencing `POWERSYNC_REPLICATION_URI` directly makes it exit 150 at startup
+> with `Variables must start with "PS_"`, before it reads any config. The `.env`
+> side keeps the `POWERSYNC_` prefix so it reads consistently with the
+> server-side vars above; `docker-compose.yml` bridges the two. Defaults for all
+> three ship in `.env.default`. `POWERSYNC_CONFIG_PATH` is exempt — the runtime
+> reads it directly rather than through `!env`.
 
 Derive the JWKS key from the shared secret:
 
@@ -86,10 +95,15 @@ switch to asymmetric keys (RS256/EdDSA) via a JWKS endpoint** — see the commen
 
 ## Verify before relying on it
 
+Items 1 and 2 are confirmed against the currently pinned `1.23.0` on a local
+Postgres 18 stack: the service boots, runs its own storage migrations, activates
+`postgresql` storage, and starts the replicator. Re-check both when bumping the tag.
+
 1. Pin `journeyapps/powersync-service` to a tested tag (≥ 1.3.8 for Postgres storage)
    and confirm the `start -r unified` command + `POWERSYNC_CONFIG_PATH` for that tag.
 2. Confirm the `powersync.yaml` keys (`replication`/`storage`/`client_auth`/`sync_rules`)
-   and the `!env` substitution syntax against that release.
+   and the `!env` substitution syntax against that release. Note `storage` needs its
+   own `sslmode` — it does not inherit the one under `replication`.
 3. Confirm `request.user_id()` is the correct sync-rules accessor for the token `sub`
    (older docs use `token_parameters.user_id`).
 4. Check uuid↔text comparison of `user_id = bucket.user_id` in the replicated schema.
