@@ -35,9 +35,24 @@ import { ContentEntity } from './entities/ContentEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
-import { type Item, type InventoryCondition, ItemEntity } from './entities/ItemEntity';
+import {
+  type Item,
+  type InventoryCondition,
+  type InventoryIdentityMethod,
+  type InventoryLifecycleState,
+  ItemEntity,
+} from './entities/ItemEntity';
+import {
+  type ObjectObservation,
+  ObjectObservationEntity,
+  type ObservationResolutionMethod,
+  type ObservationSourceKind,
+} from './entities/ObjectObservationEntity';
 import { type Person, PersonEntity } from './entities/PersonEntity';
 import { type Place, PlaceEntity } from './entities/PlaceEntity';
+import { type ProductModel, ProductModelEntity } from './entities/ProductModelEntity';
+import { type Receipt, ReceiptEntity, type ReceiptExtractionState } from './entities/ReceiptEntity';
+import { type ReceiptLineItem, ReceiptLineItemEntity } from './entities/ReceiptLineItemEntity';
 import { RelationshipEntity } from './entities/RelationshipEntity';
 import { ThingEntity } from './entities/ThingEntity';
 import { GraphEventListener } from './listeners/GraphEventListener';
@@ -75,6 +90,10 @@ import { UserContextService } from './services/UserContextService';
       ThingEntity,
       GraphNodeEntity,
       ItemEntity,
+      ProductModelEntity,
+      ReceiptEntity,
+      ReceiptLineItemEntity,
+      ObjectObservationEntity,
       RelationshipEntity,
       FileEntity,
       BrowserActivityEntity,
@@ -136,9 +155,13 @@ export {
   EventEntity,
   FileEntity,
   ItemEntity,
+  ObjectObservationEntity,
   PersonEntity,
   ConceptEntity,
   PlaceEntity,
+  ProductModelEntity,
+  ReceiptEntity,
+  ReceiptLineItemEntity,
   ThingEntity,
   GraphNodeEntity,
   RelationshipEntity,
@@ -179,6 +202,17 @@ export type {
   KnownPlaceCandidate,
 } from './services/KnownPlacesService';
 export type { Concept, Event, Item, InventoryCondition, Person, Communication, Place };
+export type {
+  InventoryIdentityMethod,
+  InventoryLifecycleState,
+  ObjectObservation,
+  ObservationResolutionMethod,
+  ObservationSourceKind,
+  ProductModel,
+  Receipt,
+  ReceiptExtractionState,
+  ReceiptLineItem,
+};
 export {
   CommunicationDirection,
   CommunicationType,

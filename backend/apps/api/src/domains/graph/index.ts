@@ -15,6 +15,11 @@ import { UserModule } from '@ci/domains/user';
 import { type EntityIdentifier, EntityIdentifierEntity } from './entities/EntityIdentifierEntity';
 import { type ItemRelationship, ItemRelationshipEntity } from './entities/ItemRelationshipEntity';
 import { type Node, NodeEntity } from './entities/NodeEntity';
+import {
+  type ObjectIdentifier,
+  ObjectIdentifierEntity,
+  type ObjectIdentifierSubjectType,
+} from './entities/ObjectIdentifierEntity';
 import { type Relationship, RelationshipEntity } from './entities/RelationshipEntity';
 import {
   type EntityIdentifierBatchEntry,
@@ -26,6 +31,12 @@ import { GraphIngestService } from './services/GraphIngestService';
 import { GraphService } from './services/GraphService';
 import { ItemRelationshipService } from './services/ItemRelationshipService';
 import { NodeService } from './services/NodeService';
+import {
+  type ObjectIdentifierBatchEntry,
+  type ObjectIdentifierMatch,
+  ObjectIdentifierService,
+  type RawObjectIdentifier,
+} from './services/ObjectIdentifierService';
 import { RelationshipService } from './services/RelationshipService';
 
 /**
@@ -38,6 +49,7 @@ import { RelationshipService } from './services/RelationshipService';
       RelationshipEntity,
       EntityIdentifierEntity,
       ItemRelationshipEntity,
+      ObjectIdentifierEntity,
     ]),
     ConversationModule,
     EmbeddingModule,
@@ -53,6 +65,7 @@ import { RelationshipService } from './services/RelationshipService';
     GraphService,
     ItemRelationshipService,
     NodeService,
+    ObjectIdentifierService,
     RelationshipService,
   ],
   exports: [
@@ -62,6 +75,7 @@ import { RelationshipService } from './services/RelationshipService';
     GraphService,
     ItemRelationshipService,
     NodeService,
+    ObjectIdentifierService,
     RelationshipService,
   ],
 })
@@ -74,15 +88,27 @@ export {
   GraphService,
   ItemRelationshipService,
   NodeService,
+  ObjectIdentifierService,
   RelationshipService,
 };
-export { EntityIdentifierEntity, ItemRelationshipEntity, NodeEntity, RelationshipEntity };
+export {
+  EntityIdentifierEntity,
+  ItemRelationshipEntity,
+  NodeEntity,
+  ObjectIdentifierEntity,
+  RelationshipEntity,
+};
 export type {
   EntityIdentifier,
   EntityIdentifierBatchEntry,
   IdentifierKey,
   ItemRelationship,
   Node,
+  ObjectIdentifier,
+  ObjectIdentifierBatchEntry,
+  ObjectIdentifierMatch,
+  ObjectIdentifierSubjectType,
+  RawObjectIdentifier,
   Relationship,
 };
 export type {
@@ -106,3 +132,11 @@ export {
   normalizePhone,
   splitPersonName,
 } from './utils/normalizeIdentifier';
+export {
+  type NormalizedObjectIdentifier,
+  type ObjectIdentifierNamespace,
+  computeQualifier,
+  detectObjectIdentifier,
+  isGloballyUniqueNamespace,
+  normalizeObjectIdentifier,
+} from './utils/normalizeObjectIdentifier';
