@@ -288,7 +288,7 @@ export class GraphIngestService {
       const distinct = [...firstByCoord.values()];
       const existing = await this.findExistingNodes(ownerId, distinct);
       for (const row of existing) {
-        idByCoord.set(coordKey(row.entityType, row.linkedTable!, row.linkedId!), row.entityId);
+        idByCoord.set(coordKey(row.entityType, row.linkedTable!, row.linkedId!), canonicalIdOf(row));
       }
 
       // 2. Batched INSERT of the rows that weren't already present. ON CONFLICT
@@ -334,7 +334,7 @@ export class GraphIngestService {
       if (unresolved.length > 0) {
         const winners = await this.findExistingNodes(ownerId, unresolved);
         for (const row of winners) {
-          idByCoord.set(coordKey(row.entityType, row.linkedTable!, row.linkedId!), row.entityId);
+          idByCoord.set(coordKey(row.entityType, row.linkedTable!, row.linkedId!), canonicalIdOf(row));
         }
       }
     } catch (err) {
@@ -616,6 +616,24 @@ export class GraphIngestService {
 
     return rows[0] ? { id: rows[0].entity_id, type: rows[0].entity_type } : null;
   }
+}
+
+/**
+ * The live entity a resolved row stands for.
+ *
+ * A merge tombstone KEEPS its linked key — that is why the row survives at all —
+ * so it goes on winning the (owner, entity_type, linked_table, linked_id)
+ * lookup after the merge. Returning it would re-attach the merged-away source's
+ * next sync to a dead row: names and properties written onto a tombstone, and
+ * this batch's relationships wired to a node nothing reads. Follow the pointer
+ * instead, so a re-sync lands on the row the duplicate was merged INTO.
+ *
+ * One hop is enough by construction: PersonMergeService re-points existing
+ * tombstones at the new target as part of merging, so `merged_into_entity_id`
+ * never chains. That invariant is asserted in PersonMergeService.spec.
+ */
+function canonicalIdOf(row: NodeEntity): string {
+  return row.mergedIntoEntityId ?? row.entityId;
 }
 
 /**

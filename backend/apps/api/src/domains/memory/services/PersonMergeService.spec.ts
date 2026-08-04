@@ -181,7 +181,9 @@ describe('PersonMergeService', () => {
 
     // Sources tombstoned and their search rows dropped from BOTH stores
     // (embedding = semantic, vectors = keyword), with tags re-pointed.
-    const tombstone = statementsMatching(harness, 'SET merged_into_entity_id');
+    // `is_active = FALSE` is what distinguishes the tombstone UPDATE from the
+    // path-compression one, which also sets merged_into_entity_id.
+    const tombstone = statementsMatching(harness, 'SET merged_into_entity_id = $3, is_active = FALSE');
     expect(tombstone).toHaveLength(1);
     expect(tombstone[0].params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET]);
     expect(statementsMatching(harness, 'DELETE FROM ci_search.embeddings')).toHaveLength(1);
@@ -203,6 +205,20 @@ describe('PersonMergeService', () => {
 
     const identifierUpdate = statementsMatching(harness, 'UPDATE ci.entity_identifiers')[0];
     expect(identifierUpdate.params?.[1]).toEqual([SOURCE_A]);
+  });
+
+  it('re-points tombstones that already aimed at a source, keeping the chain one hop deep', async () => {
+    // Merging B into C must also drag along whatever was previously merged INTO
+    // B. Every resolver in the codebase follows exactly ONE hop
+    // (PersonService.resolveTombstone, GraphIngestService.canonicalIdOf), so a
+    // two-step chain would silently re-strand the first merge's sources.
+    const harness = makeHarness([personRow(TARGET), personRow(SOURCE_A)]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const compression = statementsMatching(harness, 'WHERE owner_user_id = $1 AND merged_into_entity_id');
+    expect(compression).toHaveLength(1);
+    expect(compression[0].params).toEqual([USER, [SOURCE_A], TARGET]);
   });
 
   it("never lets a source's is_self flag leak onto a non-self target", async () => {

@@ -39,7 +39,9 @@ export interface MergeCounts {
  *    emails/phones/names arrays are unioned),
  * 6. tombstones each source (is_active = FALSE, merged_into_entity_id =
  *    target) and deletes its search-index embedding,
- * 7. writes one ci.entity_merges audit row per source.
+ * 7. re-points any tombstone that already aimed at a source, so
+ *    merged_into_entity_id stays exactly one hop deep,
+ * 8. writes one ci.entity_merges audit row per source.
  *
  * The user's self person may be a merge TARGET (folding a stub of yourself
  * into you) but never a SOURCE — users.entity_id must keep pointing at a live
@@ -140,6 +142,20 @@ export class PersonMergeService {
         `UPDATE ci.entities
             SET merged_into_entity_id = $3, is_active = FALSE, updated_at = now()
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])`,
+        [ownerUserId, sources, targetId],
+      );
+
+      // Path compression. Merging B into C leaves any tombstone that already
+      // pointed at B aiming at a row that is now itself a tombstone, and every
+      // resolver in the codebase follows exactly ONE hop (PersonService's
+      // resolveTombstone, GraphIngestService's canonicalIdOf). Without this,
+      // the second merge in a chain silently re-strands the first one's
+      // sources. Re-pointing them here keeps `merged_into_entity_id` one hop
+      // deep for good, so readers stay a single lookup.
+      await em.query(
+        `UPDATE ci.entities
+            SET merged_into_entity_id = $3, updated_at = now()
+          WHERE owner_user_id = $1 AND merged_into_entity_id = ANY($2::uuid[])`,
         [ownerUserId, sources, targetId],
       );
 

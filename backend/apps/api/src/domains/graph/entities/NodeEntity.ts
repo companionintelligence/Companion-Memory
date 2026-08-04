@@ -29,6 +29,18 @@ export class NodeEntity {
   @Column({ name: 'linked_id', type: 'uuid', nullable: true })
   linkedId!: string | null;
 
+  /**
+   * Non-NULL marks this row as a merge tombstone pointing at the canonical
+   * entity. A tombstone KEEPS its linked key — that is the whole reason the row
+   * survives — so it goes on winning the linked-key lookup above, and every
+   * resolution path must follow this pointer rather than return the tombstone.
+   *
+   * Always exactly one hop: PersonMergeService re-points existing tombstones at
+   * the new target when it merges, so chains never form.
+   */
+  @Column({ name: 'merged_into_entity_id', type: 'uuid', nullable: true })
+  mergedIntoEntityId!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -45,6 +57,7 @@ export class NodeEntity {
       userId: entity.userId,
       linkedTable: entity.linkedTable,
       linkedId: entity.linkedId,
+      mergedIntoEntityId: entity.mergedIntoEntityId,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };

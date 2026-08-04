@@ -26,6 +26,12 @@ interface StoredNode {
   linkedTable: string | null;
   linkedId: string | null;
   userId: string;
+  /**
+   * Merge tombstone pointer. Seeded rows may set it to model the post-merge
+   * state: the loser keeps its linked key, so it still wins the linked-key
+   * SELECT and the service has to follow the pointer.
+   */
+  mergedIntoEntityId?: string | null;
 }
 
 interface StoredRel {
@@ -68,9 +74,9 @@ export function makeFakeNodeRepository(
   const repo = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     create: (row: any) => ({ ...row }),
-    // NodeEntity has 10 persisted columns; drives computeChunkSize in the
+    // NodeEntity has 11 persisted columns; drives computeChunkSize in the
     // service's batched INSERT (columns.length).
-    metadata: { target: 'NodeEntity', columns: { length: 10 } },
+    metadata: { target: 'NodeEntity', columns: { length: 11 } },
     manager: { query: jest.fn().mockResolvedValue([]) },
     // The service calls this both with an alias (existence SELECT) and without
     // (batched INSERT); the alias is irrelevant to the in-memory store.
