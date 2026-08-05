@@ -23,6 +23,12 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 #   COMPANION_USERNAME         Companion role name [companion]
 #   ORCHESTRATOR_DATABASE      Temporal database name [temporal]
 #   ORCHESTRATOR_USERNAME      Temporal role name [temporal]
+#   POWERSYNC_PASSWORD         PowerSync replication role password — the role is
+#                              skipped entirely when unset
+#   POWERSYNC_USERNAME         PowerSync replication role name [powersync]
+#   POWERSYNC_PUBLICATION      Publication the replicator reads [powersync]
+#   POWERSYNC_TABLES           Space-separated schema.table list to replicate
+#                              [ci.notes ci.files ci_search.tags]
 #   SECRETS_FILE               Path to secrets file [/run/secrets/.env.secrets]
 # ──────────────────────────────────────────────────
 
@@ -31,6 +37,7 @@ ENV DEFAULT_ADMIN_USERNAME=postgres \
     DEFAULT_COMPANION_USERNAME=companion \
     DEFAULT_COMPANION_DATABASE=companion \
     DEFAULT_ORCHESTRATOR_USERNAME=temporal \
-    DEFAULT_ORCHESTRATOR_DATABASE=temporal
+    DEFAULT_ORCHESTRATOR_DATABASE=temporal \
+    DEFAULT_POWERSYNC_USERNAME=powersync
 
 ENTRYPOINT ["entrypoint.sh"]

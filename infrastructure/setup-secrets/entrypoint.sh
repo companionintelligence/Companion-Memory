@@ -14,11 +14,29 @@ set -eu
 
 SECRETS_FILE="${SECRETS_FILE:-/run/secrets/.env.secrets}"
 
+random_password() {
+  head -c 32 /dev/urandom | base64 | tr -d '/+=\n'
+}
+
+# Append a key that a later version of this script started requiring. Deployments
+# that first booted before it existed keep their file (and every secret in it);
+# they just gain the missing entry. Existing values are never rewritten — that
+# would orphan data encrypted with the old key.
+ensure_secret() {
+  local key="$1" value="$2"
+  if ! grep -q "^${key}=" "$SECRETS_FILE"; then
+    echo "[bootstrap] Adding missing secret ${key} to ${SECRETS_FILE}"
+    printf '%s=%s\n' "$key" "$value" >> "$SECRETS_FILE"
+  fi
+}
+
 # ── Early Exit ───────────────────────────────────
 
 if [ -f "$SECRETS_FILE" ]; then
   chmod 644 "$SECRETS_FILE"
   echo "[bootstrap] Secrets file exists at ${SECRETS_FILE}, skipping generation."
+  ensure_secret POWERSYNC_DATABASE_USERNAME powersync
+  ensure_secret POWERSYNC_DATABASE_PASSWORD "$(random_password)"
   exit 0
 fi
 
@@ -29,11 +47,12 @@ mkdir -p "$(dirname "$SECRETS_FILE")"
 
 # ── Random Values ────────────────────────────────
 
-DB_ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')
-DB_APP_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')
-DB_ORCH_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')
-S3_USERNAME=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')
-S3_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')
+DB_ADMIN_PASSWORD=$(random_password)
+DB_APP_PASSWORD=$(random_password)
+DB_ORCH_PASSWORD=$(random_password)
+DB_SYNC_PASSWORD=$(random_password)
+S3_USERNAME=$(random_password)
+S3_PASSWORD=$(random_password)
 JWT_ACCESS_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
 JWT_REFRESH_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
 SESSION_PEPPER=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -70,6 +89,12 @@ DATABASE_NAME=companion
 ORCHESTRATOR_DATABASE_USERNAME=temporal
 ORCHESTRATOR_DATABASE_PASSWORD=${DB_ORCH_PASSWORD}
 ORCHESTRATOR_DATABASE_NAME=temporal
+
+# ──────────────────────────────
+# PowerSync replication role (read-only, REPLICATION attribute)
+# ──────────────────────────────
+POWERSYNC_DATABASE_USERNAME=powersync
+POWERSYNC_DATABASE_PASSWORD=${DB_SYNC_PASSWORD}
 
 # ──────────────────────────────
 # Object Store (MinIO)
