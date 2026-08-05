@@ -12,13 +12,7 @@ describe('resolveIdentities', () => {
       naturalKey: 'nat:v1:' + 'b'.repeat(64),
     });
 
-    expect(identities.map((identity) => identity.kind)).toEqual([
-      'src',
-      'url',
-      'sha256',
-      'txt',
-      'nat',
-    ]);
+    expect(identities.map((identity) => identity.kind)).toEqual(['src', 'url', 'sha256', 'txt', 'nat']);
   });
 
   it('requires all three triple legs before minting an src rung', () => {

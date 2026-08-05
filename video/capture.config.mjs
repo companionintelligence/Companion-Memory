@@ -225,6 +225,7 @@ export default {
 
     if (LOGGED_OUT) {
       console.log(`  · ${viewport}: VIDEO_LOGGED_OUT=1 — capturing the signed-out shots`);
+
       return;
     }
 
@@ -259,6 +260,7 @@ export default {
             (await signup.text()),
         );
       }
+
       console.log(`  · ${viewport}: VIDEO_FRESH_USER=1 — signed up ${identity.email}`);
 
       return;

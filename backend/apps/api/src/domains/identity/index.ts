@@ -29,16 +29,5 @@ export {
   hostScopedTrackingParams,
   isTrackingParam,
 } from './tracking';
-export {
-  IDENTITY_KIND_PRECEDENCE,
-  IDENTITY_SPEC_VERSION,
-  MAX_VALUE_NORMALIZED_LENGTH,
-} from './types';
-export type {
-  CanonicalUrl,
-  Dimension,
-  Identity,
-  IdentityInput,
-  IdentityKind,
-  SourceTriple,
-} from './types';
+export { IDENTITY_KIND_PRECEDENCE, IDENTITY_SPEC_VERSION, MAX_VALUE_NORMALIZED_LENGTH } from './types';
+export type { CanonicalUrl, Dimension, Identity, IdentityInput, IdentityKind, SourceTriple } from './types';

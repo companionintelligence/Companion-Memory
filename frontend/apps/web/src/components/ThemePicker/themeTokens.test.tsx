@@ -76,7 +76,9 @@ function stripCssComments(css: string): string {
 function primaryIn(css: string, selector: string): string {
   const cleaned = stripCssComments(css);
   const blocks = [
-    ...cleaned.matchAll(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([\\s\\S]*?)\\}`, 'g')),
+    ...cleaned.matchAll(
+      new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([\\s\\S]*?)\\}`, 'g'),
+    ),
   ];
   if (blocks.length === 0) {
     throw new Error(`selector ${selector} not found in token CSS`);

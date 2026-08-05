@@ -14,37 +14,35 @@ interface FixtureCase {
 // Read rather than import: be-api's tsconfig does not enable resolveJsonModule,
 // and this file is the cross-repo contract — it must stay plain JSON that
 // CI-Import-Tools can read with its own loader.
-const fixtures = JSON.parse(
-  readFileSync(join(__dirname, 'fixtures', 'identity-fixtures.json'), 'utf8'),
-) as { specVersion: number; cases: FixtureCase[] };
+const fixtures = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'identity-fixtures.json'), 'utf8')) as {
+  specVersion: number;
+  cases: FixtureCase[];
+};
 
 describe('canonicalizeUrl fixture contract', () => {
   it('pins a non-trivial number of cases', () => {
     expect(fixtures.cases.length).toBeGreaterThanOrEqual(30);
   });
 
-  it.each(fixtures.cases.map((testCase) => [testCase.name, testCase] as const))(
-    '%s',
-    (_name, testCase) => {
-      const result = canonicalizeUrl(testCase.input);
+  it.each(fixtures.cases.map((testCase) => [testCase.name, testCase] as const))('%s', (_name, testCase) => {
+    const result = canonicalizeUrl(testCase.input);
 
-      if (testCase.canonical === null) {
-        expect(result).toBeNull();
+    if (testCase.canonical === null) {
+      expect(result).toBeNull();
 
-        return;
-      }
+      return;
+    }
 
-      expect(result).not.toBeNull();
-      expect(result?.canonical).toBe(testCase.canonical);
+    expect(result).not.toBeNull();
+    expect(result?.canonical).toBe(testCase.canonical);
 
-      if (testCase.provider) {
-        expect(result?.provider).toBe(testCase.provider);
-        expect(result?.providerRef).toBe(testCase.providerRef);
-      } else {
-        expect(result?.provider).toBeUndefined();
-      }
-    },
-  );
+    if (testCase.provider) {
+      expect(result?.provider).toBe(testCase.provider);
+      expect(result?.providerRef).toBe(testCase.providerRef);
+    } else {
+      expect(result?.provider).toBeUndefined();
+    }
+  });
 });
 
 describe('canonicalizeUrl', () => {
