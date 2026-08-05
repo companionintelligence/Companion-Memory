@@ -166,16 +166,6 @@ export const ConfigSchema = z.object({
   graphql: z.object({
     maxQueryComplexity: z.number().int(),
   }),
-  // OpenAI-compatible chat backend (Hub-injected LLM_* env, or Settings → Model).
-  // When the chat port differs from Ollama's, the NestJS chat path speaks OpenAI
-  // protocol (vLLM, etc.); embeddings continue to use OLLAMA_HOST / OLLAMA_EMBED_HOST.
-  llm: z
-    .object({
-      apiBase: z.string().optional(),
-      apiKey: z.string().default('ollama'),
-      chatModel: z.string().default('gemma3:1b'),
-    })
-    .default({}),
   // Local-first sync (PowerSync). The server issues short-lived client tokens via
   // /api/powersync/token; the sync engine runs in the `powersync` container. Empty
   // url/jwtSecret = feature scaffolded but not enabled (the endpoint returns 503).
@@ -326,18 +316,6 @@ const parsed = ConfigSchema.parse(config);
 // at for embeddings only without touching the prompt/inference host.
 if (!parsed.embedding.host) {
   parsed.embedding.host = parsed.services.ollama.host;
-}
-
-if (!parsed.llm.apiBase) {
-  parsed.llm.apiBase = undefined;
-}
-
-if (!parsed.llm.apiKey) {
-  parsed.llm.apiKey = 'ollama';
-}
-
-if (!parsed.llm.chatModel) {
-  parsed.llm.chatModel = 'gemma3:1b';
 }
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so

@@ -68,11 +68,6 @@
       "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }
   },
-  "llm": {
-    "apiBase": "LLM_API_BASE",
-    "apiKey": "LLM_API_KEY",
-    "chatModel": "LLM_DEFAULT_CHAT_MODEL"
-  },
   "services": {
     "ollama": {
       "host": "OLLAMA_HOST"

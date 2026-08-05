@@ -5,14 +5,6 @@ services:
       - secrets:/run/secrets:ro
     environment:
       ENABLE_HBPE: ${ENABLE_HBPE:-true}
-      # OpenAI-compatible chat backend (Hub-injected on managed deploys). When
-      # unset, the API falls back to native Ollama on OLLAMA_HOST.
-      LLM_API_BASE: ${LLM_API_BASE:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
-      # Embeddings stay on native Ollama even when chat runs on vLLM/Lemonade;
-      # falls back to OLLAMA_HOST when unset.
-      OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
       # Error reporting is opt-out: on wherever a DSN is set. An unset DSN is not
       # a privacy setting, it is no configuration — the API then never contacts
       # Sentry. CI_TELEMETRY=off or CI_LOCAL_ONLY=true disable it even when a

@@ -10,10 +10,6 @@ import httpx
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .llm_endpoint_env import apply_persisted_llm_endpoint
-
-apply_persisted_llm_endpoint()
-
 logger = logging.getLogger(__name__)
 
 

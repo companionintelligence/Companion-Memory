@@ -16,32 +16,12 @@ import { ToolRegistry, intentToolName, type ToolSchema } from '@ci/domains/tools
 
 import type { OllamaModel } from '../types';
 
-import { LlmEndpointService } from './LlmEndpointService';
-
-/** Default model used for background inference tasks (extraction, Q&A, etc.). */
-export const PROMPT_MODEL = config.llm.chatModel;
+/** Default model used for background inference tasks (extraction, Q&A, etc.).
+ *  Import this constant rather than hardcoding the model name. */
+export const PROMPT_MODEL = 'gemma3:1b';
 const DEMO_VISION_MODEL = 'gemma3:27b';
 const DEMO_TEXT_MODEL = 'qwen3:14b';
 const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);
-
-const OPENAI_MODE_CAPABILITIES = ['completion', 'tools'];
-
-function chatChunkToGenerateResponse(chunk: ChatResponse): GenerateResponse {
-  return {
-    model: chunk.model,
-    created_at: chunk.created_at,
-    response: chunk.message.content,
-    done: chunk.done,
-    done_reason: chunk.done_reason,
-    context: [],
-    total_duration: chunk.total_duration,
-    load_duration: chunk.load_duration,
-    prompt_eval_count: chunk.prompt_eval_count,
-    prompt_eval_duration: chunk.prompt_eval_duration,
-    eval_count: chunk.eval_count,
-    eval_duration: chunk.eval_duration,
-  };
-}
 
 interface PromptOptions {
   model: string;
@@ -66,8 +46,11 @@ interface ValidateModelResult {
 
 @Injectable()
 export class OllamaService {
+  private readonly ollama = new Ollama({
+    host: config.services.ollama.host,
+  });
+
   constructor(
-    private readonly llmEndpointService: LlmEndpointService,
     private readonly toolRegistry: ToolRegistry,
     private readonly logger: LoggerService,
     private readonly featureService: FeatureService,
@@ -75,29 +58,8 @@ export class OllamaService {
     this.logger.setContext(OllamaService.name);
   }
 
-  private get ollama(): Ollama {
-    return new Ollama({ host: this.llmEndpointService.getOllamaHost() });
-  }
-
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getAvailableModels(context: RequestContext): Promise<OllamaModel[]> {
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
-
-    if (openAiDriver) {
-      const modelIds = await openAiDriver.listModels();
-
-      return modelIds
-        .map((id) => this.parseOllamaModel(id))
-        .filter((model) => !INTERNAL_MODELS.has(model.name))
-        .map((model) => ({
-          ...model,
-          capabilities: OPENAI_MODE_CAPABILITIES,
-          vision: false,
-          tools: true,
-          thinking: false,
-        }));
-    }
-
     const result = await this.ollama.list();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));
     const visibleModels = models.filter((model) => !INTERNAL_MODELS.has(model.name));
@@ -131,27 +93,8 @@ export class OllamaService {
     { model, signal }: PromptOptions,
   ): Promise<AsyncGenerator<GenerateResponse> & { buffer: string }> {
     const chunks: string[] = [];
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     const stream = (async function* (self) {
-      if (openAiDriver) {
-        const iterator = openAiDriver.chatStream({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          signal,
-        });
-
-        for await (const chunk of iterator) {
-          if (chunk.message.content) {
-            chunks.push(chunk.message.content);
-          }
-
-          yield chatChunkToGenerateResponse(chunk);
-        }
-
-        return;
-      }
-
       const iterator = await self.ollama.generate({
         model,
         prompt,
@@ -186,17 +129,6 @@ export class OllamaService {
   ): Promise<GenerateResponse> {
     await this.validateModel(context, model);
 
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
-
-    if (openAiDriver) {
-      const response = await openAiDriver.chat({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      return chatChunkToGenerateResponse(response);
-    }
-
     return this.ollama.generate({
       model,
       prompt,
@@ -213,7 +145,6 @@ export class OllamaService {
     const inputMessages = messages.slice();
     const availableTools = enableTools ? this.toolRegistry.getAgentFacingTools(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     const textChunks: string[] = [];
     const thinkChunks: string[] = [];
@@ -229,76 +160,61 @@ export class OllamaService {
         let lastChunk: ChatResponse | undefined;
         let handleAbort = () => {};
 
+        // Flush the chunk buffers at the start of every iteration.
         textChunks.splice(0, textChunks.length);
         thinkChunks.splice(0, thinkChunks.length);
 
+        // Pop off any previously required tool calls and evaluate them.
+        // Notably this will always be empty on the first iteration.
         const iterationToolCalls = toolCalls.splice(0, toolCalls.length);
         const toolEvaluations = await self.handleToolCalls(context, iterationToolCalls);
 
+        // Tool evaluations may result in new accumulated messages.
+        // We feed these forward into additional Ollama calls.
         accumulatedMessages.push(...toolEvaluations);
 
+        // We only enable tools in this iteration if:
+        //
+        //   1. Tools are enabled for the service call
+        //   2. Tools are configured / available in the system
+        //   3. We did not evaluate any tools from the previous iteration
+        //
+        // This is important to get right.
         const iterationWillCallTools = enableTools && ollamaTools.length > 0 && toolEvaluations.length === 0;
 
         try {
-          if (openAiDriver) {
-            const iterator = openAiDriver.chatStream({
-              model,
-              messages: inputMessages.concat(accumulatedMessages),
-              tools: iterationWillCallTools ? ollamaTools : undefined,
-              signal,
-            });
+          const iterator = await self.ollama.chat({
+            model,
+            messages: inputMessages.concat(accumulatedMessages),
+            stream: true,
+            ...(enableThinking && { think: true }),
+            ...(iterationWillCallTools && { tools: ollamaTools }),
+          });
 
-            for await (const chunk of iterator) {
-              lastChunk = chunk;
+          handleAbort = () => iterator.abort();
 
-              if (chunk.message.content) {
-                textChunks.push(chunk.message.content);
-              }
+          signal?.addEventListener('abort', handleAbort);
 
-              if (chunk.message.thinking) {
-                thinkChunks.push(chunk.message.thinking);
-              }
+          for await (const chunk of iterator) {
+            lastChunk = chunk;
 
-              if (chunk.message.tool_calls) {
-                toolCalls.push(...chunk.message.tool_calls);
-              }
-
-              yield chunk;
+            if (chunk.message.content) {
+              textChunks.push(chunk.message.content);
             }
-          } else {
-            const iterator = await self.ollama.chat({
-              model,
-              messages: inputMessages.concat(accumulatedMessages),
-              stream: true,
-              ...(enableThinking && { think: true }),
-              ...(iterationWillCallTools && { tools: ollamaTools }),
-            });
 
-            handleAbort = () => iterator.abort();
-
-            signal?.addEventListener('abort', handleAbort);
-
-            for await (const chunk of iterator) {
-              lastChunk = chunk;
-
-              if (chunk.message.content) {
-                textChunks.push(chunk.message.content);
-              }
-
-              if (chunk.message.thinking) {
-                thinkChunks.push(chunk.message.thinking);
-              }
-
-              if (chunk.message.tool_calls) {
-                toolCalls.push(...chunk.message.tool_calls);
-              }
-
-              yield chunk;
+            if (chunk.message.thinking) {
+              thinkChunks.push(chunk.message.thinking);
             }
+
+            if (chunk.message.tool_calls) {
+              toolCalls.push(...chunk.message.tool_calls);
+            }
+
+            yield chunk;
           }
 
           if (lastChunk?.done) {
-            self.logger.log('LLM prompt evaluation completed', {
+            self.logger.log('Ollama prompt evaluation completed', {
               model: lastChunk.model,
               totalDuration: lastChunk.total_duration ? lastChunk.total_duration / 1_000_000 : undefined,
               loadDuration: lastChunk.load_duration ? lastChunk.load_duration / 1_000_000 : undefined,
@@ -314,7 +230,7 @@ export class OllamaService {
           if (!(err instanceof DOMException && err.name === 'AbortError')) {
             const error = err as Error;
 
-            self.logger.error('LLM prompt evaluation completed', {
+            self.logger.error('Ollama prompt evaluation completed', {
               model: lastChunk?.model ?? model,
               doneReason: 'error',
               errorMessage: error?.message ?? String(err),
@@ -338,7 +254,7 @@ export class OllamaService {
           signal?.removeEventListener('abort', handleAbort);
 
           if (signal?.aborted) {
-            self.logger.log('LLM prompt evaluation completed', {
+            self.logger.log('Ollama prompt evaluation completed', {
               model: lastChunk?.model ?? model,
               doneReason: 'canceled',
             });
@@ -365,23 +281,15 @@ export class OllamaService {
     const inputMessages = messages.slice();
     const availableTools = enableTools ? this.toolRegistry.getAgentFacingTools(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     const accumulatedMessages: OllamaMessage[] = [];
 
-    const response = openAiDriver
-      ? await openAiDriver.chat({
-          model,
-          messages: inputMessages,
-          tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-          format,
-        })
-      : await this.ollama.chat({
-          model: model,
-          messages: inputMessages,
-          ...(format && { format }),
-          ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
-        });
+    const response = await this.ollama.chat({
+      model: model,
+      messages: inputMessages,
+      ...(format && { format }),
+      ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
+    });
 
     const willCallTools =
       enableTools && response.message.tool_calls && response.message.tool_calls.length > 0;
@@ -400,15 +308,6 @@ export class OllamaService {
 
     accumulatedMessages.push(...toolEvaluations);
 
-    if (openAiDriver) {
-      return openAiDriver.chat({
-        model,
-        messages: inputMessages.concat(accumulatedMessages),
-        tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-        format,
-      });
-    }
-
     return this.ollama.chat({
       model,
       messages: inputMessages.concat(accumulatedMessages),
@@ -424,9 +323,12 @@ export class OllamaService {
 
     const pinnedDemoModelsEnabled = await this.featureService.isFeatureEnabled('pinned.demo.models');
 
+    // If pinned demo models feature is enabled, always use demo models
     if (pinnedDemoModelsEnabled) {
+      // Check if any message contains image content
       const hasVisualContent = messages.some((message) => message.images && message.images.length > 0);
 
+      // Use vision model for images, text model for regular chat
       resolvedModel = hasVisualContent ? DEMO_VISION_MODEL : DEMO_TEXT_MODEL;
       resolvedThinking = hasVisualContent ? false : true;
       resolvedTools = hasVisualContent ? false : true;
@@ -442,7 +344,7 @@ export class OllamaService {
   }
 
   private parseOllamaModel(model: string): OllamaModel {
-    const [fullName, tag = 'latest'] = model.split(':');
+    const [fullName, tag = 'latest'] = model.split(':'); // `namespace/model:tag`
     const parts = fullName.split('/');
 
     if (parts.length === 2) {
@@ -464,6 +366,9 @@ export class OllamaService {
     };
   }
 
+  /**
+   * Initialize tools registry with available tools
+   */
   private async handleToolCalls(context: RequestContext, toolCalls: ToolCall[]): Promise<OllamaMessage[]> {
     if (toolCalls.length === 0) {
       this.logger.debug('No tool calls to evaluate, skipping handling', {
@@ -479,6 +384,7 @@ export class OllamaService {
       userId: context.userId,
     });
 
+    // Execute each tool call
     const toolResults = await Promise.all(
       toolCalls.map(async (toolCall) => {
         const { name, arguments: args } = toolCall.function;
@@ -507,6 +413,8 @@ export class OllamaService {
       }),
     );
 
+    // Build messages with tool results
+
     return toolResults.map(
       ({ result }) =>
         ({
@@ -516,10 +424,15 @@ export class OllamaService {
     );
   }
 
+  /**
+   * Convert our ToolSchema to Ollama Tool format
+   */
   private convertToOllamaTool(toolSchema: ToolSchema): Tool {
     return {
       type: 'function',
       function: {
+        // schema.name is the dotted intent id; the LLM must call back with the executable
+        // (underscored) name the ToolRegistry is keyed by.
         name: intentToolName(toolSchema.name),
         description: toolSchema.description,
         parameters: toolSchema.parameters,
@@ -528,18 +441,6 @@ export class OllamaService {
   }
 
   private async validateModel(_context: RequestContext, requestedModel: string) {
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
-
-    if (openAiDriver) {
-      const modelIds = await openAiDriver.listModels();
-
-      if (!modelIds.includes(requestedModel)) {
-        throw new Error(`Invalid model specified: ${requestedModel}`);
-      }
-
-      return;
-    }
-
     const result = await this.ollama.list();
     const validModel = result.models.find((model) => model.name === requestedModel);
 
@@ -553,10 +454,6 @@ export class OllamaService {
     options: { throwOnError?: boolean } = {},
   ): Promise<string[]> {
     const { throwOnError = true } = options;
-
-    if (this.llmEndpointService.usesOpenAiDriver()) {
-      return OPENAI_MODE_CAPABILITIES;
-    }
 
     try {
       const response = (await this.ollama.show({ model: requestedModel })) as {

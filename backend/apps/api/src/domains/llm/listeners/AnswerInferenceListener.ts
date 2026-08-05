@@ -5,7 +5,7 @@ import { LoggerService } from '@ci/common/logging';
 import { Events, EventPayloads, OnEvent } from '@ci/domains/events';
 import { Answer, AnswerService, QuestionService } from '@ci/domains/intelligence';
 
-import { OllamaService, PROMPT_MODEL } from '../services/OllamaService';
+import { OllamaService } from '../services/OllamaService';
 
 @Injectable()
 export class AnswerInferenceListener {
@@ -99,7 +99,7 @@ export class AnswerInferenceListener {
       // const associatedQuestions = await this.embeddingService.findNearest({}, question.text, 'question', 5);
 
       const llmResponse = await this.ollamaService.chat({}, ragThread, {
-        model: PROMPT_MODEL,
+        model: 'gemma3:1b',
       });
 
       this.logger.log('Inferred answer to question', {

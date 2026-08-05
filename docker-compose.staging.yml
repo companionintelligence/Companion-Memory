@@ -7,14 +7,6 @@ services:
       DATABASE_HOST: database
       OBJECT_STORE_URL: http://object-store:9000
       OLLAMA_HOST: http://host.docker.internal:11434
-      # OpenAI-compatible chat backend (Hub-injected on managed deploys). When
-      # unset, the API falls back to native Ollama on OLLAMA_HOST.
-      LLM_API_BASE: ${LLM_API_BASE:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
-      # Embeddings stay on native Ollama even when chat runs on vLLM/Lemonade;
-      # falls back to OLLAMA_HOST when unset.
-      OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
       HBPE_HOST: http://hbpe-service:8002
       # `api` exists only in the staging/production overrides — there is no base
       # definition to inherit this from, and `env_file: .env` above does not

@@ -167,12 +167,10 @@ generate_compose() {
       "image": "${reg}/companion/api:${ver}",
       "restart": "unless-stopped",
       "environment": [
-        { "key": "ENABLE_REQUIRE_SIGNUP_CODES", "value": "false" },
-        { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" }
+        { "key": "ENABLE_REQUIRE_SIGNUP_CODES", "value": "false" }
       ],
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data" },
         { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
@@ -239,11 +237,7 @@ generate_compose() {
       "image": "${reg}/companion/summary-service:${ver}",
       "restart": "unless-stopped",
       "extraHosts": ["host.docker.internal:host-gateway"],
-      "environment": [
-        { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" }
-      ],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data", "readOnly": true },
         { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
