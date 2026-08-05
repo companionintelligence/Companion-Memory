@@ -187,6 +187,51 @@
       "name": "empty input has no url identity",
       "input": "   ",
       "canonical": null
+    },
+    {
+      "name": "soundcloud track is its artist/track permalink pair",
+      "input": "https://soundcloud.com/jsmith/night-run-demo-1?in=jsmith/sets/demos&utm_source=clipboard",
+      "canonical": "https://soundcloud.com/jsmith/night-run-demo-1",
+      "provider": "soundcloud",
+      "providerRef": "soundcloud:track:jsmith/night-run-demo-1"
+    },
+    {
+      "name": "soundcloud mobile mirror is the same track",
+      "input": "https://m.soundcloud.com/jsmith/night-run-demo-1",
+      "canonical": "https://soundcloud.com/jsmith/night-run-demo-1",
+      "provider": "soundcloud",
+      "providerRef": "soundcloud:track:jsmith/night-run-demo-1"
+    },
+    {
+      "name": "soundcloud set is distinct from a track",
+      "input": "https://soundcloud.com/jsmith/sets/demos",
+      "canonical": "https://soundcloud.com/jsmith/sets/demos",
+      "provider": "soundcloud",
+      "providerRef": "soundcloud:set:jsmith/demos"
+    },
+    {
+      "name": "soundcloud reserved paths are not tracks",
+      "input": "https://soundcloud.com/discover/sets/personalized-tracks",
+      "canonical": "https://soundcloud.com/discover/sets/personalized-tracks"
+    },
+    {
+      "name": "on.soundcloud.com is a shortener, not a mirror",
+      "input": "https://on.soundcloud.com/abc123",
+      "canonical": null
+    },
+    {
+      "name": "dailymotion drops the decorative title slug",
+      "input": "https://www.dailymotion.com/video/x8abcd_some-title-that-changes",
+      "canonical": "https://dailymotion.com/video/x8abcd",
+      "provider": "dailymotion",
+      "providerRef": "dailymotion:video:x8abcd"
+    },
+    {
+      "name": "dai.ly short form is the same video",
+      "input": "https://dai.ly/x8abcd",
+      "canonical": "https://dailymotion.com/video/x8abcd",
+      "provider": "dailymotion",
+      "providerRef": "dailymotion:video:x8abcd"
     }
   ]
 }

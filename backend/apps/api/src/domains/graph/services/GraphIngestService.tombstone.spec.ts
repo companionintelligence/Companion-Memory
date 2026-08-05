@@ -159,6 +159,57 @@ describe('GraphIngestService — re-ingesting a merged-away linked key', () => {
     ]);
   });
 
+  it('does not write the source’s refresh onto the tombstone', async () => {
+    // #1832 turned the conflict action into DO UPDATE SET name, description,
+    // properties. A tombstone still OWNS its linked key, so without an explicit
+    // exclusion that update lands on the merged-away row — and its id then
+    // comes back through RETURNING as this key's resolution, quietly undoing
+    // the tombstone-following. The source's update is dropped instead.
+    const { service, node } = makeService([tombstoneRow()]);
+
+    const result = await service.ingest(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { userId: USER } as any,
+      {
+        entities: [
+          {
+            key: KEY,
+            entityType: 'Person',
+            name: 'Maxwell',
+            description: 'renamed upstream',
+            sourceSystem: 'apple_contacts',
+            properties: { emails: ['max@example.com'] },
+          },
+        ],
+        relationships: [],
+      },
+    );
+
+    expect(result.entities).toEqual([{ key: KEY, entityId: CANONICAL }]);
+    expect(node.updated).toHaveLength(0);
+    expect(node.store.get(`${USER}||Person||${LINKED_TABLE}||${GraphIngestService.linkedIdFor(KEY)}`)).
+      toMatchObject({ entityId: TOMBSTONE, name: 'Max' });
+  });
+
+  it('still refreshes a live row that has something new to say', async () => {
+    // The tombstone exclusion must not blunt #1832 for ordinary rows.
+    const { service, node } = makeService([{ ...tombstoneRow(), entityId: CANONICAL, mergedIntoEntityId: null }]);
+
+    await service.ingest(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { userId: USER } as any,
+      {
+        entities: [
+          { key: KEY, entityType: 'Person', name: 'Maxwell', sourceSystem: 'apple_contacts' },
+        ],
+        relationships: [],
+      },
+    );
+
+    expect(node.updated).toHaveLength(1);
+    expect(node.updated[0]).toMatchObject({ entityId: CANONICAL, name: 'Maxwell' });
+  });
+
   it('leaves a live row alone', async () => {
     const { service } = makeService([{ ...tombstoneRow(), entityId: CANONICAL, mergedIntoEntityId: null }]);
 

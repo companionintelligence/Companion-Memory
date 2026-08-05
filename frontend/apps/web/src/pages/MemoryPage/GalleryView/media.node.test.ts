@@ -124,7 +124,7 @@ describe('getEntityMedia', () => {
 
     // The YouTube ETL writes mimetype 'video/youtube' with a watch-page URL, so
     // classifying it as playable video rendered a permanently broken <video>.
-    it.each(['video/youtube', 'video/vimeo', 'audio/spotify'])(
+    it.each(['video/youtube', 'video/vimeo', 'audio/spotify', 'audio/soundcloud'])(
       'returns null for the provider pseudo-mimetype %s',
       (mimetype) => {
         expect(
@@ -152,6 +152,21 @@ describe('getEntityMedia', () => {
           }),
         ),
       ).toBeNull();
+    });
+
+    // Guards the deny-list against over-reach: stripping playability from the
+    // provider pseudo-types must not also strip it from a real container.
+    it('still resolves genuine video containers', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'c-real-video',
+          galleryMimetype: 'video/mp4',
+          galleryContentUrl: '/content/real.mp4',
+        }),
+      );
+
+      expect(media?.kind).toBe('video');
     });
   });
 

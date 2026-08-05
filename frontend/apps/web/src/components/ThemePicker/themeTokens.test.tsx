@@ -4,25 +4,21 @@ import path from 'node:path';
 import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-// Guards the canonical design-system token change from PR #1644: the web app's
-// `--primary` must resolve to Companion Intelligence teal (#0f717a light,
-// #abd4d8 dark) in every theme. We assert this two ways:
-//   1. Against the real source CSS (`styles/index.css`) — the single source of
-//      truth the app ships — so a token edit that drifts off-brand fails here.
-//   2. In jsdom after mounting a component under those same tokens, proving the
-//      custom property actually cascades/resolves at runtime (light and .dark).
+// Guards the canonical design-system token from @companionintelligence/tokens v0.3:
+// `--primary` must resolve to phthalo-mist (#0a6358 light, #c5e8dc dark).
+// We assert against the shared token CSS and in jsdom after mounting under those tokens.
 
-// import.meta.dirname is the filesystem dir of this test file (Node 20.11+/22).
-const INDEX_CSS = path.resolve(import.meta.dirname, '../../styles/index.css');
+const TOKENS_CSS = path.resolve(
+  import.meta.dirname,
+  '../../../../../../../ci-common/packages/tokens/src/globals.css',
+);
 
-// Companion Intelligence canonical teal, mirroring scripts/lint-canon.mjs.
 const CANON = {
-  light: [15, 113, 122], // #0f717a
-  dark: [171, 212, 216], // #abd4d8
+  light: [10, 99, 88], // #0a6358
+  dark: [197, 232, 220], // #c5e8dc
 };
-const TOLERANCE = 14; // euclidean sRGB distance, same budget as the canon lint gate
+const TOLERANCE = 14;
 
-// --- oklch -> sRGB[0..255], identical math to scripts/lint-canon.mjs ---
 const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
 const srgbGamma = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
@@ -43,57 +39,75 @@ function oklchToRgb(L: number, C: number, H: number): [number, number, number] {
   return [rl, gl, bl].map((v) => Math.round(clamp(srgbGamma(v), 0, 1) * 255)) as [number, number, number];
 }
 
-function parseOklch(value: string): [number, number, number] {
-  const match = value.match(/oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
-  if (!match) {
-    throw new Error(`not an oklch() value: ${value}`);
+function parseHex(value: string): [number, number, number] {
+  let hex = value.trim().replace(/^#/, '');
+  if (hex.length === 3) {
+    hex = hex
+      .split('')
+      .map((c) => c + c)
+      .join('');
   }
 
-  const [, L, C, H] = match;
+  return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+}
 
-  return oklchToRgb(Number(L), Number(C), Number(H));
+function parseColor(value: string): [number, number, number] {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('#')) {
+    return parseHex(trimmed);
+  }
+
+  const match = trimmed.match(/oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
+  if (match) {
+    return oklchToRgb(Number(match[1]), Number(match[2]), Number(match[3]));
+  }
+
+  throw new Error(`unsupported color notation: ${value}`);
 }
 
 function dist(a: number[], b: number[]): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-/** Pull the `--primary` declaration out of a specific CSS selector block. */
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 function primaryIn(css: string, selector: string): string {
-  const block = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([\\s\\S]*?)\\}`).exec(
-    css,
-  );
-  if (!block) {
-    throw new Error(`selector ${selector} not found in index.css`);
+  const cleaned = stripCssComments(css);
+  const blocks = [
+    ...cleaned.matchAll(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([\\s\\S]*?)\\}`, 'g')),
+  ];
+  if (blocks.length === 0) {
+    throw new Error(`selector ${selector} not found in token CSS`);
   }
 
-  const decl = /--primary\s*:\s*([^;]+);/.exec(block[1]);
-  if (!decl) {
-    throw new Error(`--primary not found in ${selector} block`);
+  for (const block of blocks) {
+    const decl = /--primary\s*:\s*([^;]+);/.exec(block[1]);
+    if (decl) {
+      return decl[1].trim();
+    }
   }
 
-  return decl[1].trim();
+  throw new Error(`--primary not found in ${selector} block`);
 }
 
 describe('canonical --primary token (source of truth)', () => {
-  const css = readFileSync(INDEX_CSS, 'utf8');
+  const css = readFileSync(TOKENS_CSS, 'utf8');
 
-  it(':root --primary resolves to CI teal #0f717a', () => {
-    const rgb = parseOklch(primaryIn(css, ':root'));
+  it(':root --primary resolves to phthalo #0a6358', () => {
+    const rgb = parseColor(primaryIn(css, ':root'));
     expect(dist(rgb, CANON.light)).toBeLessThanOrEqual(TOLERANCE);
   });
 
-  it('.dark --primary resolves to CI teal #abd4d8', () => {
-    const rgb = parseOklch(primaryIn(css, '.dark'));
+  it('.dark --primary resolves to sage #c5e8dc', () => {
+    const rgb = parseColor(primaryIn(css, '.dark'));
     expect(dist(rgb, CANON.dark)).toBeLessThanOrEqual(TOLERANCE);
   });
 });
 
-describe('--primary resolves to CI teal with the app token styles applied', () => {
-  // Mirror the shipped tokens into a <style> block so getComputedStyle can
-  // resolve them in jsdom (Vitest is configured with css:false, so the real
-  // stylesheet import is a no-op under test).
-  const css = readFileSync(INDEX_CSS, 'utf8');
+describe('--primary resolves with the app token styles applied', () => {
+  const css = readFileSync(TOKENS_CSS, 'utf8');
   const rootPrimary = primaryIn(css, ':root');
   const darkPrimary = primaryIn(css, '.dark');
 
@@ -111,18 +125,16 @@ describe('--primary resolves to CI teal with the app token styles applied', () =
     document.documentElement.classList.remove('light', 'dark');
   });
 
-  it('--primary resolves to CI teal on the document root in light mode', () => {
+  it('--primary resolves on the document root in light mode', () => {
     render(<div data-testid="themed">hi</div>);
-    // The :root custom property is declared on document.documentElement; read it
-    // there (jsdom resolves declared custom props via getComputedStyle).
     const resolved = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
-    expect(dist(parseOklch(resolved), CANON.light)).toBeLessThanOrEqual(TOLERANCE);
+    expect(dist(parseColor(resolved), CANON.light)).toBeLessThanOrEqual(TOLERANCE);
   });
 
-  it('--primary resolves to CI teal on the document root under .dark', () => {
+  it('--primary resolves on the document root under .dark', () => {
     document.documentElement.classList.add('dark');
     render(<div data-testid="themed">hi</div>);
     const resolved = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
-    expect(dist(parseOklch(resolved), CANON.dark)).toBeLessThanOrEqual(TOLERANCE);
+    expect(dist(parseColor(resolved), CANON.dark)).toBeLessThanOrEqual(TOLERANCE);
   });
 });

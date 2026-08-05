@@ -2,13 +2,15 @@
 # version-specific notes — verify keys against the pinned image's docs.
 #
 # Values marked `!env` are read from the container environment (set in
-# docker-compose.yml). `!env` is PowerSync's env-substitution tag.
+# docker-compose.yml). `!env` is PowerSync's env-substitution tag; it only
+# substitutes variables whose names start with `PS_` — any other name is a fatal
+# startup error (exit 150), so keep the prefix on every `!env` reference here.
 
 # ── Source database: the CI-Server Postgres, read via logical replication ────────
 replication:
   connections:
     - type: postgresql
-      uri: !env POWERSYNC_REPLICATION_URI
+      uri: !env PS_REPLICATION_URI
       # LAN/appliance Postgres; enable/relax TLS per your deployment.
       sslmode: disable
 
@@ -16,7 +18,10 @@ replication:
 #    Postgres, avoiding a separate MongoDB. Switch to `type: mongodb` if preferred. ─
 storage:
   type: postgresql
-  uri: !env POWERSYNC_STORAGE_URI
+  uri: !env PS_STORAGE_URI
+  # Defaults to verify-full, and the service ignores `?sslmode=` in the URI — so this
+  # has to be set here or startup fails while creating the storage schema.
+  sslmode: disable
 
 # Port the PowerSync service listens on (matches the docker-compose mapping).
 port: 8080
@@ -31,7 +36,7 @@ client_auth:
 
   # DEV SCAFFOLD: a shared HS256 secret. CI-Server signs with POWERSYNC_JWT_SECRET
   # and sets kid=ci-powersync-hs256; the symmetric key here is the base64url of that
-  # same secret (POWERSYNC_JWT_SECRET_B64URL — see README for the derivation).
+  # same secret (PS_JWT_SECRET_B64URL — see README for the derivation).
   #
   # PRODUCTION: prefer asymmetric keys. Expose a JWKS endpoint from CI-Server and set
   #   jwks_uri: https://<ci-server>/api/powersync/keys
@@ -41,4 +46,4 @@ client_auth:
       - kty: oct
         alg: HS256
         kid: ci-powersync-hs256
-        k: !env POWERSYNC_JWT_SECRET_B64URL
+        k: !env PS_JWT_SECRET_B64URL

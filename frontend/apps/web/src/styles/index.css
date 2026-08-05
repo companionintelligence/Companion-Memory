@@ -1,3 +1,11 @@
+/*
+ * CI-Server web app styles.
+ *
+ * Canonical design tokens from @companionintelligence/tokens v0.3
+ * (phthalo-mist palette, Manrope, WCAG-tuned muted text, --ci-* surfaces).
+ * Server-only extensions: color-scheme, --input-fill, autofill repaint,
+ * primary CTA surfaces, checkbox/switch chrome, texture + PWA utilities.
+ */
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -8,239 +16,55 @@
 @source "../../../../packages/editor";
 @source "../../../../packages/shadcn";
 
-@custom-variant dark (&:is(.dark *));
+@import "@companionintelligence/tokens/globals.css";
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 10px);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-  /* CI enriched palette v0.2.0 — semantic status + brand teal ramp utilities */
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
-  --color-info: var(--info);
-  --color-info-foreground: var(--info-foreground);
-  --color-teal-50: var(--teal-50);
-  --color-teal-100: var(--teal-100);
-  --color-teal-200: var(--teal-200);
-  --color-teal-300: var(--teal-300);
-  --color-teal-400: var(--teal-400);
-  --color-teal-500: var(--teal-500);
-  --color-teal-600: var(--teal-600);
-  --color-teal-700: var(--teal-700);
-  --color-teal-800: var(--teal-800);
-  --color-teal-900: var(--teal-900);
-  --color-teal-950: var(--teal-950);
-  /* CI brand-tinted elevation — map --shadow-sm/md/lg so the shadow utilities
-     render the teal-tinted brand shadow (inline keeps .dark overrides live). */
-  --shadow-sm: var(--shadow-sm);
-  --shadow-md: var(--shadow-md);
-  --shadow-lg: var(--shadow-lg);
+  --color-input-fill: var(--input-fill);
 }
 
 :root {
-  --radius: 0.625rem;
-  /* Companion phthalo CTA — saturated green falling into a black-green finish. */
-  --ci-phthalo-green: #0a6358;
-  --ci-phthalo-green-deep: #022c2b;
-  --ci-phthalo-green-hover: #0d7a6e;
-  --ci-primary-ink: #f0fdf4;
-  --ci-primary-gradient: linear-gradient(135deg, var(--ci-phthalo-green), var(--ci-phthalo-green-deep));
-  --ci-primary-gradient-hover: linear-gradient(135deg, var(--ci-phthalo-green-hover), var(--ci-phthalo-green));
-  --shadow-glow-ci: 0 0 20px -4px rgb(2 44 43 / 42%);
-  --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.5 0.03 220 / 5%), transparent 52%);
-  --background: oklch(0.964 0 89.876);
-  --foreground: oklch(0.158 0.028 227.251);
-  --card: oklch(0.977 0.003 286.351);
-  --card-foreground: oklch(0.19 0.032 234.379);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.19 0.032 234.379);
-  --primary: oklch(0.502 0.082 204.922);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.239 0.038 233.156);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.44 0.042 257.526);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.239 0.038 233.156);
-  --destructive: oklch(0.621 0.22 26.968);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.993);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
-
-  /* CI enriched palette v0.2.0 — brand teal ramp + accent hues + radius scale (mode-independent) */
-  --teal-50: #eef7f8;
-  --teal-100: #d3e9ec;
-  --teal-200: #abd4d8;
-  --teal-300: #7fbcc2;
-  --teal-400: #4c9aa3;
-  --teal-500: #1c8791;
-  --teal-600: #0f717a;
-  --teal-700: #0d5f67;
-  --teal-800: #0e4a52;
-  --teal-900: #0a222e;
-  --teal-950: #041620;
-  --aqua: #00a9a7;
-  --aqua-light: #72ddd4;
-  --mint: #58ebbf;
-  --teal-accent: #2c676d;
-  --teal-mid: #409b9b;
-  --radius-sm: calc(var(--radius, 0.625rem) - 4px);
-  --radius-md: calc(var(--radius, 0.625rem) - 2px);
-  --radius-lg: var(--radius, 0.625rem);
-  --radius-xl: calc(var(--radius, 0.625rem) + 4px);
-  --radius-2xl: calc(var(--radius, 0.625rem) + 10px);
-
-  /* enriched — semantic status + gradients + elevation (light) */
-  --success: #16a34a;
-  --success-foreground: #ffffff;
-  --warning: #d97706;
-  --warning-foreground: #ffffff;
-  --info: #0284c7;
-  --info-foreground: #ffffff;
-  --gradient-brand: linear-gradient(135deg, #0f717a, #00a9a7);
-  --gradient-hero: linear-gradient(135deg, #e8f9f8, #abd4d8);
-  --gradient-aurora: radial-gradient(120% 90% at 50% -10%, rgba(80, 150, 150, 0.1), transparent 60%);
-  --shadow-sm: 0 1px 2px rgba(15, 113, 122, 0.08);
-  --shadow-md: 0 4px 12px rgba(15, 113, 122, 0.1);
-  --shadow-lg: 0 12px 30px rgba(15, 113, 122, 0.14);
+  /* Browser-drawn control chrome follows color-scheme, not our tokens. */
+  color-scheme: light;
+  /* --input is the input border token; --input-fill is the opaque fill counterpart. */
+  --input-fill: var(--input);
 }
 
 .dark {
-  /* Dark ground: greener teal between Portal cursor glow (#066c80) and phthalo CTA (#0a6358). */
-  --ci-phthalo-green: #58ebbf;
-  --ci-phthalo-green-deep: #0f717a;
-  --ci-phthalo-green-hover: #72ddd4;
-  --ci-primary-ink: #041620;
-  --ci-primary-gradient: linear-gradient(135deg, var(--ci-phthalo-green), var(--ci-phthalo-green-deep));
-  --ci-primary-gradient-hover: linear-gradient(135deg, var(--ci-phthalo-green-hover), var(--ci-phthalo-green));
-  --shadow-glow-ci: 0 0 20px -4px rgb(88 235 191 / 32%);
-  --ci-background-lift: radial-gradient(1200px circle at 50% -20%, oklch(0.38 0.06 195 / 16%), transparent 52%);
-  --background: oklch(0.21 0.046 186);
-  --foreground: oklch(0.691 0.03 185.201);
-  --card: oklch(0.26 0.05 186);
-  --card-foreground: oklch(0.691 0.03 185.201);
-  --popover: oklch(0.26 0.05 186);
-  --popover-foreground: oklch(0.691 0.03 185.201);
-  --primary: oklch(0.842 0.043 203.701);
-  --primary-foreground: oklch(0.21 0.046 186);
-  --secondary: oklch(0.26 0.05 186);
-  --secondary-foreground: oklch(0.977 0.004 236.496);
-  --muted: oklch(0.26 0.05 186);
-  --muted-foreground: oklch(0.78 0.018 253.397);
-  --accent: oklch(0.477 0.062 204.345);
-  --accent-foreground: oklch(0.977 0.004 236.496);
-  --destructive: oklch(0.696 0.157 21.99);
-  --border: oklch(0.477 0.062 204.345);
-  --input: oklch(0.636 0.051 224.103);
-  --ring: oklch(0.85 0.141 169.678);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.208 0.042 265.755);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  color-scheme: dark;
+  /* Pre-rendered fallback — see color-mix upgrade below. */
+  --input-fill: #0a2e38;
+}
 
-  /* CI enriched palette v0.2.0 — semantic status + gradients + elevation (dark) */
-  --success: #4ade80;
-  --success-foreground: #052e16;
-  --warning: #fbbf24;
-  --warning-foreground: #422006;
-  --info: #38bdf8;
-  --info-foreground: #082f49;
-  --gradient-aurora: radial-gradient(120% 90% at 50% -10%, rgba(64, 155, 155, 0.28), transparent 60%);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.45);
+@supports (color: color-mix(in lab, red, red)) {
+  .dark {
+    --input-fill: color-mix(in oklab, var(--input) 20%, var(--background));
+  }
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
   html,
   body {
-    @apply font-sans bg-background text-foreground;
     margin: 0;
     padding: 0;
-    font-size: 16px;
-    font-weight: 400;
-    background-image: var(--ci-background-lift);
-    background-attachment: fixed;
-    line-height: 16px;
+    line-height: 1.5;
   }
+
   h1,
   h2,
   h3,
   h4,
   h5,
   h6 {
-    font-family: 'Montserrat', system-ui, sans-serif;
-    font-weight: 200;
-    line-height: 1.0;
+    font-family: var(--font-sans);
+    font-weight: 600;
+    line-height: 1.1;
   }
+
   .text-muted-foreground {
     font-weight: 400;
   }
-  /* Chrome/Safari paint autofilled inputs with their own opaque light background
-     and dark text, ignoring bg-input — which looks broken on the dark theme
-     (e.g. the Create API Key name field). Repaint the fill to match the input
-     background and force the themed text color; the 9999s transition defers the
-     UA background repaint indefinitely. */
+
+  /* Chrome/Safari autofill ignores themed backgrounds on dark inputs. */
   input:-webkit-autofill,
   input:-webkit-autofill:hover,
   input:-webkit-autofill:focus,
@@ -248,28 +72,29 @@
   textarea:-webkit-autofill,
   select:-webkit-autofill {
     -webkit-text-fill-color: var(--foreground);
-    -webkit-box-shadow: 0 0 0 1000px var(--input) inset;
-    box-shadow: 0 0 0 1000px var(--input) inset;
+    -webkit-box-shadow: 0 0 0 1000px var(--input-fill) inset;
+    box-shadow: 0 0 0 1000px var(--input-fill) inset;
     caret-color: var(--foreground);
     transition: background-color 9999s ease-in-out 0s;
   }
 }
 
 .ci-primary-surface {
-  background-color: var(--ci-phthalo-green);
-  background-image: var(--ci-primary-gradient);
+  background-color: var(--phthalo);
+  background-image: var(--gradient-button);
   border-color: transparent;
-  color: var(--ci-primary-ink);
-  box-shadow: var(--shadow-glow-ci);
+  color: var(--ci-button-foreground);
+  box-shadow: var(--ci-button-shadow);
 }
 
 .ci-primary-surface:hover {
-  background-image: var(--ci-primary-gradient-hover);
-  color: var(--ci-primary-ink);
+  background-image: linear-gradient(135deg, var(--phthalo-hover), var(--phthalo-deep));
+  color: var(--ci-button-foreground);
+  box-shadow: var(--ci-button-shadow-hover);
 }
 
 .shadow-glow-ci {
-  box-shadow: var(--shadow-glow-ci);
+  box-shadow: var(--ci-button-shadow);
 }
 
 [data-slot='checkbox'] {
@@ -279,44 +104,11 @@
 
 [data-slot='checkbox'][data-state='checked'],
 [data-slot='switch'][data-state='checked'] {
-  background-color: var(--ci-phthalo-green);
-  background-image: var(--ci-primary-gradient);
+  background-color: var(--phthalo);
+  background-image: var(--gradient-button);
   border-color: transparent;
-  color: var(--ci-primary-ink);
-  box-shadow: var(--shadow-glow-ci);
-}
-
-* {
-  scrollbar-color: var(--accent) var(--muted);
-  scrollbar-width: thin;
-}
-
-*::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-*::-webkit-scrollbar-track {
-  background: var(--muted);
-}
-
-*::-webkit-scrollbar-thumb {
-  background: var(--accent);
-  border: 2px solid var(--muted);
-  border-radius: 9999px;
-}
-
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--primary);
-}
-
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
+  color: var(--ci-button-foreground);
+  box-shadow: var(--ci-button-shadow);
 }
 
 .texture-surface {
@@ -329,7 +121,8 @@
 
 /* PWA standalone mode specific styles */
 @media (display-mode: standalone) {
-  html, body {
+  html,
+  body {
     min-height: 100lvh;
     overflow: hidden;
     margin: 0;
@@ -338,13 +131,14 @@
   }
 
   body {
-    /* Prevent dragging in PWA mode */
     -webkit-app-region: no-drag;
   }
 
-  /* Touch optimization for better mobile experience */
-  button, input, select, textarea, a {
-    /* Eliminate 300ms click delay on mobile */
+  button,
+  input,
+  select,
+  textarea,
+  a {
     touch-action: manipulation;
   }
 }

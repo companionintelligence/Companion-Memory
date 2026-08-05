@@ -101,15 +101,29 @@ services:
     volumes:
       - ./infrastructure/powersync:/config:ro
     environment:
+      # POWERSYNC_CONFIG_PATH is read by the service directly. The three PS_* vars
+      # are substituted into powersync.yaml via its `!env` tag, which rejects any
+      # name not starting with `PS_` — renaming these breaks startup (exit 150).
+      # Defaults keep a fresh checkout working without POWERSYNC entries in .env.
+      #
+      # The two URIs deliberately use different roles. Replication connects as
+      # `powersync`, which setup-database gives the REPLICATION attribute and
+      # SELECT on the replicated tables — nothing more. Storage connects as
+      # `companion`, because the service creates and migrates its own `powersync`
+      # schema for bucket storage, which a read-only role cannot do.
       - POWERSYNC_CONFIG_PATH=/config/powersync.yaml
-      - POWERSYNC_REPLICATION_URI=${POWERSYNC_REPLICATION_URI}
-      - POWERSYNC_STORAGE_URI=${POWERSYNC_STORAGE_URI}
-      - POWERSYNC_JWT_SECRET_B64URL=${POWERSYNC_JWT_SECRET_B64URL}
+      - PS_REPLICATION_URI=${PS_REPLICATION_URI:-postgresql://powersync:${POWERSYNC_DATABASE_PASSWORD}@database:5432/companion}
+      - PS_STORAGE_URI=${PS_STORAGE_URI:-postgresql://companion:${DATABASE_PASSWORD}@database:5432/companion}
+      - PS_JWT_SECRET_B64URL=${PS_JWT_SECRET_B64URL:-}
     networks:
       - ci
     depends_on:
       database:
         condition: service_healthy
+      # Creates the replication role and the publication the replicator reads.
+      # Starting first means a crash-loop until the replicator's next retry.
+      setup-database:
+        condition: service_completed_successfully
     restart: unless-stopped
     profiles: [ "local", "staging", "production" ]
 

@@ -63,3 +63,7 @@ infrastructure/cloudflare/config.yml
 # Local hot-swap compose override (live-testing branch builds against the
 # Hub-installed app); machine-specific, never committed
 .hotswap/
+
+# Nested git worktrees (Claude Code creates them here). Full copies of the
+# repo — never stage them, or root-level tooling will lint/format the copies.
+.claude/worktrees/

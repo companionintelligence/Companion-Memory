@@ -25,6 +25,7 @@
     "@ci/common": "workspace:*",
     "@ci/editor": "workspace:*",
     "@ci/shadcn": "workspace:*",
+    "@companionintelligence/tokens": "^0.3.1",
     "@sentry/react": "^10.69.0",
     "buffer": "^6.0.3",
     "clsx": "^2.1.1",

@@ -30,7 +30,12 @@ export interface EntityMedia {
  * until the embed player lands (see
  * `docs/prd/unified-content-identity-lifecycle-embeds.md` §6).
  */
-const PROVIDER_PSEUDO_MIMETYPES = new Set(['video/youtube', 'video/vimeo', 'audio/spotify']);
+const PROVIDER_PSEUDO_MIMETYPES = new Set([
+  'video/youtube',
+  'video/vimeo',
+  'audio/spotify',
+  'audio/soundcloud',
+]);
 
 function mediaKind(contentType?: string | null): EntityMediaKind | null {
   if (!contentType) {

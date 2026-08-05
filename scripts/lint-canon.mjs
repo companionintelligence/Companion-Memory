@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CI design-canon lint gate (v3). Zero deps. Usage: node scripts/lint-canon.mjs [targetDir]
-//  FAIL: any `--primary` custom property that is not CI teal (#0f717a / #abd4d8), any notation.
+//  FAIL: any `--primary` custom property that is not CI phthalo (#0a6358 / #c5e8dc), any notation.
 //  WARN (non-blocking): CI-token `var(--X)` used but never defined (partial-swap bug);
 //        enriched token used as a Tailwind utility but not mapped in `@theme` (v4 fallback-to-default bug);
 //        hardcoded hex in component source.
@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname, relative } from 'node:path';
 
 const TARGET = process.argv[2] || '.';
-const CANON = [{ rgb: [15, 113, 122] }, { rgb: [171, 212, 216] }]; // #0f717a / #abd4d8
+const CANON = [{ rgb: [10, 99, 88] }, { rgb: [197, 232, 220] }]; // #0a6358 / #c5e8dc
 const TOL = 14;
 const IGNORE = new Set([
   'node_modules',
@@ -310,12 +310,12 @@ if (fails.length) {
     console.log(`  FAIL ${x.rel}:${x.line}  --primary: ${x.val} -> rgb(${x.rgb.join(',')})`);
   }
 
-  console.log('\n  --primary must be CI teal #0f717a / #abd4d8 (any notation).\nlint-canon: FAILED');
+  console.log('\n  --primary must be CI phthalo #0a6358 / #c5e8dc (any notation).\nlint-canon: FAILED');
   process.exit(1);
 }
 
 console.log(
-  '✔ lint-canon: canon OK (all --primary are CI teal)' +
+  '✔ lint-canon: canon OK (all --primary are CI phthalo)' +
     (warns.length ? ` — ${warns.length} non-blocking warning(s) above` : ''),
 );
 process.exit(0);

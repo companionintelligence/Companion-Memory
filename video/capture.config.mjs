@@ -35,16 +35,26 @@
  * out — it cannot be both. This storyboard needs three different identities, in
  * four invocations:
  *
- *   npm run capture                                                   # seeded jsmith, all shots
+ *   npm run capture -- --only <the eleven ids below>   # seeded jsmith
  *   VIDEO_LOGGED_OUT=1     npm run capture -- --only splash-screen,login-form
  *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-focus
  *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-connect
  *
- * 1. AUTHENTICATED (default). Everything behind ProtectedRoute.
- * 2. LOGGED OUT. `/` and `/login` are both wrapped in RedirectKnownUser, which
- *    sends an authenticated, onboarded user straight to /feed. This pass must
- *    run after the authenticated one — it overwrites the two PNGs the first
- *    pass captured as /feed redirects.
+ * EVERY pass is explicitly scoped, including the first. `ci-video capture` exits
+ * 1 if any single shot fails (bin/ci-video.mjs cmdCapture), so a bare
+ * `npm run capture` — which would try all fifteen shots as jsmith, four of them
+ * structurally impossible for that identity — aborts the job before passes 2-4
+ * run and leaves assets/shots/ empty. The authoritative list lives in
+ * .github/workflows/video.yml; keep the two in step.
+ *
+ * 1. AUTHENTICATED. The eleven shots behind ProtectedRoute: feed-overview,
+ *    memory-{list-view,detail-sheet,gallery-view,search-results,map-view,
+ *    graph-view}, people-directory, insights-list, insight-detail-view,
+ *    connect-providers. NOT `/`, `/login` or `/onboarding` — see below.
+ * 2. LOGGED OUT. `/` and `/login` are both wrapped in RedirectKnownUser
+ *    (App.tsx:117-121, :147-152), which sends an authenticated, onboarded user
+ *    straight to /feed, so these two ids are excluded from pass 1 rather than
+ *    captured and overwritten.
  * 3+4. FRESH USER, once per onboarding shot. The seeded user cannot film
  *    onboarding at all: scripts/seed-database/seed-users.ts:41 calls
  *    `userService.onboard(user.id)`, and OnboardingPage.tsx:231-233 returns
@@ -145,7 +155,12 @@
  *    (`[aria-label="Hop depth"]`) sits inside the branch reached only AFTER the
  *    `visibleNodes.length === 0` early return at GraphExplorerModal.tsx:1053,
  *    so an unseeded graph fails loudly instead of quietly filming the
- *    "Your knowledge graph is still taking shape" placeholder.
+ *    "Your knowledge graph is still taking shape" placeholder. Be aware the
+ *    blast radius is the whole pass, not this shot: `ci-video capture` exits 1
+ *    on any failure, so an empty graph fails the ten other authenticated shots'
+ *    step too. That is the intended trade — a lenient selector here would film
+ *    the placeholder and ship it as if it were the graph — but it does mean a
+ *    graph regression reads as "video job broken", not "one shot missing".
  * 11. DEEP-LINKED SUMMARY — insight-detail-view navigates straight to
  *    /insights/01936cb0-0000-7000-8000-000000000003 rather than clicking the
  *    first card on /insights. That uuid is pinned in

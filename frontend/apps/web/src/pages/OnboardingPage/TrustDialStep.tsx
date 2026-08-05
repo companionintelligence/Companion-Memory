@@ -31,8 +31,12 @@ export function TrustDialStep({ value, onChange }: TrustDialStepProps) {
           <button
             key={opt.value}
             type="button"
+            // Selection was signalled by border/background alone, so which option is
+            // active reached assistive tech not at all (and colour-blind users only
+            // faintly). aria-pressed exposes the same state non-visually.
+            aria-pressed={selected === opt.value}
             className={cn(
-              'rounded-xl border border-border px-5 py-4 text-left transition-colors',
+              'cursor-pointer rounded-xl border border-border px-5 py-4 text-left transition-colors hover:border-teal-600/60',
               selected === opt.value && 'border-teal-600 bg-teal-500/10',
             )}
             onClick={() => onChange(opt.value)}

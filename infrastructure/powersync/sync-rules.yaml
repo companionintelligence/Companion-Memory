@@ -14,6 +14,11 @@
 # ci.content (NULL user_id), ci.entities/relationships (graph), ci_search.embeddings
 # (pgvector — huge, server-computed), HBPE tables.
 #
+# Adding a table here is only half the change: POWERSYNC_TABLES in
+# infrastructure/setup-database/entrypoint.sh drives both the replication role's
+# SELECT grants and the `powersync` publication. A table listed here but missing
+# there fails at replication time with "permission denied".
+#
 # TODO (verify exact table names first): add chat threads/messages (text only),
 # inventory/items, and ci_search.entity_tag (scoped via its tag's user_id). Their
 # table names did not match the assumed ci.threads/ci.messages/ci.inventory at

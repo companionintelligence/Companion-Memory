@@ -20,6 +20,9 @@ jobs:
   install:
     name: Install dependencies
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     container:
       image: node:22
     steps:
@@ -43,6 +46,8 @@ jobs:
       - name: Install dependencies
         if: steps.cache-modules.outputs.cache-hit != 'true'
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test:
     name: Run backend tests
@@ -69,6 +74,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run backend API tests
         run: yarn workspace @ci/be-api test
@@ -102,6 +109,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run frontend unit/component tests
         run: yarn workspace @ci/fe-web test --coverage
@@ -148,6 +157,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check ${{ matrix.name }}
         run: ${{ matrix.command }}
@@ -189,6 +200,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lint ${{ matrix.name }}
         run: ${{ matrix.command }}
@@ -218,6 +231,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check backend imports
         run: yarn workspace @ci/be-api depcheck
@@ -247,6 +262,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate GraphQL schema
         run: yarn workspace @ci/be-api graphql:generate

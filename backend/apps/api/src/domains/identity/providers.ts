@@ -29,6 +29,7 @@ export const HOST_ALIASES: Readonly<Record<string, string>> = {
   'm.twitter.com': 'x.com',
   'play.spotify.com': 'open.spotify.com',
   'player.vimeo.com': 'vimeo.com',
+  'm.soundcloud.com': 'soundcloud.com',
 };
 
 /**
@@ -77,6 +78,9 @@ export const SHORTENERS: ReadonlySet<string> = new Set([
   'trib.al',
   'rebrand.ly',
   'cutt.ly',
+  // SoundCloud's own short-link domain: the id is opaque, so unlike youtu.be it
+  // cannot be canonicalised offline.
+  'on.soundcloud.com',
   'shorturl.at',
   't.ly',
   'is.gd',
@@ -223,9 +227,97 @@ function matchVimeo(host: string, pathname: string): ProviderMatch | null {
     : null;
 }
 
+/**
+ * SoundCloud identity is the `<artist>/<track>` permalink pair — there is no
+ * opaque id in the URL at all, so the slugs ARE the id.
+ *
+ * The reserved list is load-bearing: without it `soundcloud.com/discover` and
+ * `soundcloud.com/you/likes` would mint provider refs for pages that are not
+ * tracks, and two unrelated users' `/discover` would collapse to one identity.
+ */
+const SOUNDCLOUD_SLUG = /^[a-z0-9][a-z0-9_-]{1,63}$/i;
+const SOUNDCLOUD_RESERVED = new Set([
+  'you',
+  'discover',
+  'search',
+  'stream',
+  'upload',
+  'settings',
+  'pages',
+  'terms',
+  'jobs',
+  'imprint',
+  'charts',
+  'tags',
+  'people',
+  'groups',
+  'notifications',
+  'messages',
+]);
+
+function matchSoundCloud(host: string, pathname: string): ProviderMatch | null {
+  if (host !== 'soundcloud.com') {
+    return null;
+  }
+
+  const parts = segments(pathname);
+  const [artist, second, third] = parts;
+
+  if (!artist || !SOUNDCLOUD_SLUG.test(artist) || SOUNDCLOUD_RESERVED.has(artist.toLowerCase())) {
+    return null;
+  }
+
+  // `/<artist>/sets/<playlist>` is a set, not a track.
+  if (second === 'sets') {
+    return third && SOUNDCLOUD_SLUG.test(third)
+      ? {
+          provider: 'soundcloud',
+          providerRef: `soundcloud:set:${artist}/${third}`,
+          canonical: `https://soundcloud.com/${artist}/sets/${third}`,
+        }
+      : null;
+  }
+
+  // Anything deeper than `/<artist>/<track>` is a sub-resource (/comments,
+  // /recommended), not the track itself.
+  if (parts.length !== 2 || !second || !SOUNDCLOUD_SLUG.test(second)) {
+    return null;
+  }
+
+  return {
+    provider: 'soundcloud',
+    providerRef: `soundcloud:track:${artist}/${second}`,
+    canonical: `https://soundcloud.com/${artist}/${second}`,
+  };
+}
+
+/**
+ * Dailymotion ids are followed by a decorative `_slug` that changes with the
+ * title, so it must be stripped or a retitled video forks into a new identity.
+ */
+const DAILYMOTION_ID = /^[a-z0-9]{5,12}$/i;
+
+function matchDailymotion(host: string, pathname: string): ProviderMatch | null {
+  if (host !== 'dailymotion.com' && host !== 'dai.ly') {
+    return null;
+  }
+
+  const parts = segments(pathname);
+  const raw = parts[0] === 'video' || parts[0] === 'embed' ? parts[1] : parts[0];
+  const id = raw?.split('_')[0];
+
+  return id && DAILYMOTION_ID.test(id)
+    ? {
+        provider: 'dailymotion',
+        providerRef: `dailymotion:video:${id}`,
+        canonical: `https://dailymotion.com/video/${id}`,
+      }
+    : null;
+}
+
 export const PROVIDER_RULES: ReadonlyArray<
   (host: string, pathname: string, query: URLSearchParams) => ProviderMatch | null
-> = [matchYouTube, matchSpotify, matchX, matchVimeo];
+> = [matchYouTube, matchSpotify, matchX, matchVimeo, matchSoundCloud, matchDailymotion];
 
 export function matchProvider(
   host: string,

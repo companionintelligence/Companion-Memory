@@ -8,6 +8,7 @@
   "main": "index.ts",
   "packageManager": "yarn@4.9.1",
   "dependencies": {
+    "@companionintelligence/tokens": "^0.3.1",
     "@hookform/resolvers": "^5.1.0",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",

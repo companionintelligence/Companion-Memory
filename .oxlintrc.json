@@ -8,6 +8,7 @@
     "**/coverage/**",
     ".yarn/**",
     ".pnp.*",
+    ".claude/worktrees/**",
     "**/docs/**",
     "**/__generated__/**",
     "**/components/ui/**",

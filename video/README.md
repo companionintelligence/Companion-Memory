@@ -12,8 +12,8 @@ npm install
 npx playwright install --with-deps chromium
 npm run doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
 
-# with the stage up (see below) — four passes, in this order:
-npm run capture       # seeded jsmith; drives the real UI -> assets/shots/*.png (both viewports)
+# with the stage up (see below) — four passes, each explicitly scoped:
+npm run capture -- --only feed-overview,memory-list-view,memory-detail-sheet,memory-gallery-view,memory-search-results,memory-map-view,memory-graph-view,people-directory,insights-list,insight-detail-view,connect-providers
 VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-focus
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-connect
@@ -23,10 +23,11 @@ npm run check         # HyperFrames gate: lint, runtime, layout, motion, contras
 npm run render        # -> out/ci-memory-landscape.mp4 and out/ci-memory-portrait.mp4
 ```
 
-> **A missing PNG does not fail the build.** video-kit substitutes a branded "capture pending"
-> slate for any shot whose file is absent (`scenes.mjs` `slateUri`), so a storyboard that declares
-> shots the stage cannot actually produce still renders green. Run `npm run status` — or just look
-> at `assets/shots/` — before believing a cut is complete.
+> **A missing PNG does not fail `build`, but it does fail `check`.** video-kit substitutes a
+> branded "capture pending" slate for any shot whose file is absent (`scenes.mjs` `slateUri`), so
+> `npm run build` still renders green. Since video-kit 0.1.2, `npm run check` fails on missing
+> shot files (`--allow-slates` opts out while drafting) — that is the gate that stops a narrated
+> slideshow of placeholders shipping as a product video. `npm run status` lists what is missing.
 
 ## The stage
 
@@ -57,10 +58,14 @@ Two feature flags are part of the stage, not the app defaults —
 | `ENABLE_ACTIONS=true` | `features.actions` ships `false`, which hides the feed's actions carousel *and* renames its heading to "Questions". The seed already loads real actions. |
 | `ENABLE_REQUIRE_SIGNUP_CODES=false` | The fresh-account passes sign up through `/api/signup`, which 400s while signup codes are required. |
 
-Capture runs four times on purpose:
+Capture runs four times on purpose, and **every pass names its shots explicitly** — including the
+first. `ci-video capture` exits 1 if any single shot fails, so an unscoped first pass (which would
+attempt all fifteen shots as `jsmith`, four of them unreachable for that identity) aborts the job
+before the other three passes run and leaves `assets/shots/` empty.
 
-1. **authenticated** — the seeded `jsmith`, films everything behind `ProtectedRoute`;
-2. **`VIDEO_LOGGED_OUT=1`** — re-films `/` and `/login`, which redirect a signed-in user to `/feed`;
+1. **authenticated** — the seeded `jsmith`; the eleven shots behind `ProtectedRoute`. Not `/`,
+   `/login` or `/onboarding`, which redirect this identity to `/feed`;
+2. **`VIDEO_LOGGED_OUT=1`** — `/` and `/login`, which redirect a signed-in user to `/feed`;
 3. **`VIDEO_FRESH_USER=1`** ×2 — the seeded user is already onboarded, so the wizard is only
    reachable from a throwaway account. One capture invocation per onboarding shot, because
    onboarding progress is persisted per user and a shared account would resume mid-wizard.
@@ -73,8 +78,17 @@ Everything editorial lives in [`storyboard.json`](storyboard.json) — scene ord
 captions, narration, and which screens appear. The **capture spec for each shot lives in the same
 file**, so the script and the screenshots cannot drift apart.
 
-Adding a beat is: add a scene, add its shot's `capture` block, `npm run capture -- --only <id>`,
-then `npm run build && npm run render`.
+Adding a beat is: add a scene, add its shot's `capture` block, add the shot id to the right pass in
+[`.github/workflows/video.yml`](../.github/workflows/video.yml), `npm run capture -- --only <id>`,
+then `npm run build && npm run render`. Forgetting the workflow list is caught by `npm run check`,
+which fails on a shot with no PNG.
+
+**`before` runs after `waitFor`, not before it.** video-kit's engine order is
+`goto` → `waitForSelector(capture.waitFor)` → the `before` actions → shutter, so `before` means
+"before the shutter". `capture.waitFor` must name a selector present on the **first** rendered
+state after `goto`; every state a `before` click navigates to is guarded by a `waitFor` *action*
+inside `before`. Putting a post-navigation selector in `capture.waitFor` deadlocks for 25s, drops
+the shot, and renders a "capture pending" slate.
 
 ## Media
 

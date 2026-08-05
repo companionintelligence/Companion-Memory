@@ -192,6 +192,11 @@ export function OnboardingPage() {
     [form],
   );
 
+  // Watched outside the memo below: reading it inside would subscribe (so the page
+  // re-renders on change) without being a dependency, so the memo kept handing back
+  // the element built from the first value and the dial looked unclickable.
+  const trustMode = form.watch('trust_mode');
+
   const stepContent = useMemo(() => {
     switch (currentStepKey) {
       case 'intro':
@@ -213,13 +218,13 @@ export function OnboardingPage() {
       case 'connect-source':
         return <ConnectSourceStep />;
       case 'trust-dial':
-        return <TrustDialStep value={form.watch('trust_mode')} onChange={setTrustMode} />;
+        return <TrustDialStep value={trustMode} onChange={setTrustMode} />;
       case 'run-first-sync':
         return <RunFirstSyncStep />;
       default:
         return <Intro />;
     }
-  }, [currentStepKey, form, setTrustMode]);
+  }, [currentStepKey, setTrustMode, trustMode]);
 
   const contentMaxWidth =
     currentStepKey === 'connect-source'
