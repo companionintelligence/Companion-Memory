@@ -69,27 +69,17 @@ jobs:
           # 404 on install. Scoping keeps GHPR for @companionintelligence only.
           scope: "@companionintelligence"
 
-      # ⚠️ KNOWN BLOCKER — this step is where every run currently dies, in ~16s:
+      # RESOLVED — this step used to 403 on @companionintelligence/video-kit
+      # (`permission_denied: read_package`) because a repo-scoped GITHUB_TOKEN
+      # cannot read a package owned by another repository until that package
+      # grants access. Access has since been granted and the package now installs;
+      # this step has been green in every recent run.
       #
-      #   npm error 403 Forbidden - GET
-      #   https://npm.pkg.github.com/@companionintelligence%2fvideo-kit
-      #   - Permission permission_denied: read_package
-      #
-      # @companionintelligence/video-kit is a PRIVATE GitHub Packages package
-      # published from CI-Common. A repo-scoped GITHUB_TOKEN cannot read a
-      # package owned by a different repository unless that package explicitly
-      # grants this repo access. Nothing downstream has ever executed, which is
-      # why assets/shots/ contains only .gitkeep and every `screen` scene renders
-      # video-kit's "capture pending" slate.
-      #
-      # THE FIX IS NOT IN THIS FILE. In CI-Common's video-kit package settings →
-      # "Manage Actions access", add companionintelligence/CI-Server with the
-      # Read role. It needs no new secret, and the other 11 product repos hit the
-      # same wall. (There is no REST endpoint for this; the package
-      # /repositories API 404s. It is a web-UI change.)
-      #
-      # The fallback below costs nothing and needs no code change if someone
-      # would rather provision an org PAT with read:packages as GHPR_READ_TOKEN.
+      # Keep the token expression. It is what makes the step work, and the
+      # GHPR_READ_TOKEN fallback is the escape hatch if package access is ever
+      # revoked (an org PAT with read:packages), since there is no REST endpoint
+      # for Actions package access — the /repositories API 404s and it is a
+      # web-UI change.
       - name: Install video project
         working-directory: video
         run: npm install
@@ -107,8 +97,30 @@ jobs:
       - name: Provide .env (dev defaults)
         run: cp .env.default .env
 
+      # NODE_AUTH_TOKEN is not optional here, and its absence does not read as an
+      # auth problem in the log. `.yarnrc.yml` maps the @companionintelligence
+      # scope to npm.pkg.github.com with `npmAuthToken: "${NODE_AUTH_TOKEN:-}"`,
+      # and setup-node's `registry-url` exports NODE_AUTH_TOKEN as the literal
+      # placeholder `XXXXX-XXXXX-XXXXX-XXXXX` to every step that does not override
+      # it. Yarn sends the placeholder as a bearer token, and the fetch step dies:
+      #
+      #   YN0041: @companionintelligence/tokens@npm:0.3.1: Invalid authentication
+      #           (as an unknown user)
+      #
+      # The tell is that the failing step's env dump prints that value in the
+      # clear — a real secret would be masked as ***.
+      #
+      # The peer-dependency lines printed just above it are WARNINGS, not the
+      # failure: YN0060 for @apollo/server vs @apollo/server-plugin-landing-page-
+      # graphql-playground (via @nestjs/apollo), and YN0002 for react / react-dom
+      # requested by @storybook/react-vite. Yarn prints them on every install,
+      # including green ones, and `--immutable` does not fail on them — the run
+      # got past post-resolution validation and into the fetch step. Do not relax
+      # the install or repin those ranges to chase this failure.
       - name: Install app dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GHPR_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       # The project's Postgres image bundles TimescaleDB + PostGIS + pgvector and
       # the role bootstrap that a stock pgvector image lacks.
