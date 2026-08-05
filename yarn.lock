@@ -3099,7 +3099,7 @@ __metadata:
     "@ci/common": "workspace:*"
     "@ci/editor": "workspace:*"
     "@ci/shadcn": "workspace:*"
-    "@companionintelligence/tokens": "npm:^0.3.0"
+    "@companionintelligence/tokens": "npm:^0.3.1"
     "@graphql-codegen/cli": "npm:^6.1.0"
     "@graphql-codegen/client-preset": "npm:^5.2.1"
     "@graphql-codegen/fragment-matcher": "npm:^6.0.0"
@@ -3178,7 +3178,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/shadcn@workspace:frontend/packages/shadcn"
   dependencies:
-    "@companionintelligence/tokens": "npm:^0.3.0"
+    "@companionintelligence/tokens": "npm:^0.3.1"
     "@hookform/resolvers": "npm:^5.1.0"
     "@radix-ui/react-accordion": "npm:^1.2.11"
     "@radix-ui/react-alert-dialog": "npm:^1.1.14"
@@ -3248,10 +3248,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@companionintelligence/tokens@npm:^0.3.0":
-  version: 0.3.0
-  resolution: "@companionintelligence/tokens@npm:0.3.0::__archiveUrl=https%3A%2F%2Fnpm.pkg.github.com%2Fdownload%2F%40companionintelligence%2Ftokens%2F0.3.0%2Fd541c1a9a0655a010e562954b7c66c09e82baa87"
-  checksum: 10c0/77e90b15ca88c724a292f1c14d438e818c3112aa5aacf8410ad5f4d5ec2fef731d75927fa39976c80ce6211fe5fce49a00d6d712188aeb49aac39b92a8a94a6b
+"@companionintelligence/tokens@npm:^0.3.1":
+  version: 0.3.1
+  resolution: "@companionintelligence/tokens@npm:0.3.1::__archiveUrl=https%3A%2F%2Fnpm.pkg.github.com%2Fdownload%2F%40companionintelligence%2Ftokens%2F0.3.1%2F0f7bd6bd60754087277b25a876c736a090ac894d"
+  checksum: 10c0/a275774a86fd5bd75c42addb6a2c7e8e5133be904aaacc4858e15da42e2c72afc3718585abc56a63295c680a1de22daaf8894cedc65fc59cd1b762bd27bb13ad
   languageName: node
   linkType: hard
 
