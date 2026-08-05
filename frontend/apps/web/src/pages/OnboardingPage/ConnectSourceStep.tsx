@@ -57,8 +57,8 @@ export function ConnectSourceStep() {
 
       <div className="space-y-4 max-w-5xl mx-auto w-full">
         <p className="text-lg sm:text-xl leading-snug text-muted-foreground text-center px-2">
-          On the computer you use most, download Companion Capture. It streams screenshots and activity
-          logs into your memory.
+          On the computer you use most, download Companion Capture. It streams screenshots and activity logs
+          into your memory.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
           <Card

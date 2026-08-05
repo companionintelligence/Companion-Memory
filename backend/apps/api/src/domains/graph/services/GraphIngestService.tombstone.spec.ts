@@ -187,21 +187,22 @@ describe('GraphIngestService — re-ingesting a merged-away linked key', () => {
 
     expect(result.entities).toEqual([{ key: KEY, entityId: CANONICAL }]);
     expect(node.updated).toHaveLength(0);
-    expect(node.store.get(`${USER}||Person||${LINKED_TABLE}||${GraphIngestService.linkedIdFor(KEY)}`)).
-      toMatchObject({ entityId: TOMBSTONE, name: 'Max' });
+    expect(
+      node.store.get(`${USER}||Person||${LINKED_TABLE}||${GraphIngestService.linkedIdFor(KEY)}`),
+    ).toMatchObject({ entityId: TOMBSTONE, name: 'Max' });
   });
 
   it('still refreshes a live row that has something new to say', async () => {
     // The tombstone exclusion must not blunt #1832 for ordinary rows.
-    const { service, node } = makeService([{ ...tombstoneRow(), entityId: CANONICAL, mergedIntoEntityId: null }]);
+    const { service, node } = makeService([
+      { ...tombstoneRow(), entityId: CANONICAL, mergedIntoEntityId: null },
+    ]);
 
     await service.ingest(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { userId: USER } as any,
       {
-        entities: [
-          { key: KEY, entityType: 'Person', name: 'Maxwell', sourceSystem: 'apple_contacts' },
-        ],
+        entities: [{ key: KEY, entityType: 'Person', name: 'Maxwell', sourceSystem: 'apple_contacts' }],
         relationships: [],
       },
     );

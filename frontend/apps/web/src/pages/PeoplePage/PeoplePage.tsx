@@ -194,9 +194,7 @@ function DuplicateGroupCard({
       setMergeError(null);
       await onMerged();
     } catch (error) {
-      setMergeError(
-        error instanceof Error ? error.message : 'Could not record that. Please try again.',
-      );
+      setMergeError(error instanceof Error ? error.message : 'Could not record that. Please try again.');
     }
   };
 
@@ -255,9 +253,7 @@ function DuplicateGroupCard({
           wrong suggestion is to merge people who are not the same, and the
           group returns on every load. */}
       <div className="mt-3 flex items-center justify-end gap-3 border-t pt-2">
-        {mergeError && !pendingTargetId && (
-          <span className="text-sm text-destructive">{mergeError}</span>
-        )}
+        {mergeError && !pendingTargetId && <span className="text-sm text-destructive">{mergeError}</span>}
         <Button size="sm" variant="ghost" disabled={loading || rejecting} onClick={() => void reject()}>
           {rejecting ? 'Saving…' : 'Not the same person'}
         </Button>

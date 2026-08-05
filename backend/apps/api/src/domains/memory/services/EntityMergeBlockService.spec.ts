@@ -81,9 +81,7 @@ describe('EntityMergeBlockService.blockAllPairs', () => {
   it('refuses a group that names fewer than two distinct entities', async () => {
     const { service } = makeService();
 
-    await expect(service.blockAllPairs(CONTEXT, [A], 'user_rejected')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(service.blockAllPairs(CONTEXT, [A], 'user_rejected')).rejects.toThrow(BadRequestException);
     await expect(service.blockAllPairs(CONTEXT, [A, A], 'user_rejected')).rejects.toThrow(
       BadRequestException,
     );
