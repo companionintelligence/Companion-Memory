@@ -32,6 +32,7 @@ import { BaseEntity } from './entities/BaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
+import { EntityMergeBlockEntity } from './entities/EntityMergeBlockEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
@@ -59,6 +60,7 @@ import { GraphEventListener } from './listeners/GraphEventListener';
 import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
+import { EntityMergeBlockService } from './services/EntityMergeBlockService';
 import { EventService } from './services/EventService';
 import { FileService } from './services/FileService';
 import { GraphEventService } from './services/GraphEventService';
@@ -80,6 +82,7 @@ import { UserContextService } from './services/UserContextService';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
+      EntityMergeBlockEntity,
       BaseEntity,
       CommunicationEntity,
       ContentEntity,
@@ -119,6 +122,7 @@ import { UserContextService } from './services/UserContextService';
     GraphEventListener,
     PersonService,
     PersonActivityService,
+    EntityMergeBlockService,
     PersonDuplicateService,
     PersonMergeService,
     ConceptService,
@@ -135,6 +139,7 @@ import { UserContextService } from './services/UserContextService';
     ItemService,
     PersonService,
     PersonActivityService,
+    EntityMergeBlockService,
     PersonDuplicateService,
     PersonMergeService,
     ConceptService,
@@ -176,6 +181,7 @@ export {
   ItemService,
   PersonService,
   PersonActivityService,
+  EntityMergeBlockService,
   PersonDuplicateService,
   PersonMergeService,
   ConceptService,
@@ -191,6 +197,8 @@ export {
 export type { Content } from './entities/ContentEntity';
 export type { PlaceKind } from './entities/PlaceEntity';
 export type { PlaceVisitStats } from './services/PlaceService';
+export { EntityMergeBlockEntity, orderPair, pairKey } from './entities/EntityMergeBlockEntity';
+export type { BlockReason } from './services/EntityMergeBlockService';
 export type { PersonDuplicateGroup, DuplicateReason } from './services/PersonDuplicateService';
 export type { PersonInteractionStats } from './services/PersonActivityService';
 export type { MergeCounts } from './services/PersonMergeService';

@@ -68,6 +68,12 @@ const MERGE_PEOPLE = gql(`
   }
 `);
 
+const REJECT_PERSON_DUPLICATES = gql(`
+  mutation RejectPersonDuplicates($personIds: [ID!]!) {
+    rejectPersonDuplicates(personIds: $personIds)
+  }
+`);
+
 type PersonNode = GetPeopleQuery['people']['edges'][number]['node'];
 type DuplicateGroup = GetPersonDuplicatesQuery['personDuplicates'][number];
 
@@ -151,6 +157,7 @@ function DuplicateGroupCard({
   onMerged: () => Promise<unknown>;
 }) {
   const [mergePeople, { loading }] = useMutation(MERGE_PEOPLE);
+  const [rejectDuplicates, { loading: rejecting }] = useMutation(REJECT_PERSON_DUPLICATES);
   const [pendingTargetId, setPendingTargetId] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
 
@@ -175,6 +182,21 @@ function DuplicateGroupCard({
       // Keep the dialog open and show what went wrong instead of silently
       // closing on failure.
       setMergeError(error instanceof Error ? error.message : 'The merge failed. Please try again.');
+    }
+  };
+
+  // Saying "not the same" has to STICK. Duplicate groups are recomputed from
+  // identifiers on every load, so without recording the rejection this exact
+  // group would be proposed again immediately.
+  const reject = async () => {
+    try {
+      await rejectDuplicates({ variables: { personIds: group.people.map((person) => person.id) } });
+      setMergeError(null);
+      await onMerged();
+    } catch (error) {
+      setMergeError(
+        error instanceof Error ? error.message : 'Could not record that. Please try again.',
+      );
     }
   };
 
@@ -227,6 +249,18 @@ function DuplicateGroupCard({
             )}
           </div>
         ))}
+      </div>
+
+      {/* The other half of the decision. Without it the only way to clear a
+          wrong suggestion is to merge people who are not the same, and the
+          group returns on every load. */}
+      <div className="mt-3 flex items-center justify-end gap-3 border-t pt-2">
+        {mergeError && !pendingTargetId && (
+          <span className="text-sm text-destructive">{mergeError}</span>
+        )}
+        <Button size="sm" variant="ghost" disabled={loading || rejecting} onClick={() => void reject()}>
+          {rejecting ? 'Saving…' : 'Not the same person'}
+        </Button>
       </div>
 
       <AlertDialog

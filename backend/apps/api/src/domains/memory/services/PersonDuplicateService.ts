@@ -5,7 +5,10 @@ import { Repository } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
+import { pairKey } from '../entities/EntityMergeBlockEntity';
 import { type Person, PersonEntity } from '../entities/PersonEntity';
+
+import { EntityMergeBlockService } from './EntityMergeBlockService';
 
 export type DuplicateReason = 'email' | 'phone' | 'name';
 
@@ -18,6 +21,35 @@ export interface PersonDuplicateGroup {
 
 /** Max people surfaced per group — a huge group is a junk value, not a dupe. */
 const MAX_GROUP_SIZE = 6;
+
+/**
+ * Remove members until no rejected pair remains in the group.
+ *
+ * The review UI merges a group WHOLE — pick a target, everything else folds
+ * into it — so a group containing one rejected pair proposes that rejection
+ * again as part of a bigger action. Members are kept greedily in rank order:
+ * each is admitted only if it is unblocked against everyone already admitted.
+ *
+ * For the ordinary two-person group this is simply "drop it". For a larger one
+ * it keeps the part of the suggestion the user never rejected — {A,B,C} with
+ * (A,B) blocked still offers {A,C} — rather than throwing away a live
+ * suggestion because a different pairing inside it was declined.
+ */
+function dropBlocked(people: Person[], blocked: Set<string>): Person[] {
+  if (blocked.size === 0) {
+    return people;
+  }
+
+  const kept: Person[] = [];
+
+  for (const person of people) {
+    if (kept.every((other) => !blocked.has(pairKey(person.id, other.id)))) {
+      kept.push(person);
+    }
+  }
+
+  return kept;
+}
 
 /**
  * Duplicate-person candidate detection for the merge review UI.
@@ -40,6 +72,7 @@ export class PersonDuplicateService {
   constructor(
     @InjectRepository(PersonEntity)
     private readonly personRepository: Repository<PersonEntity>,
+    private readonly mergeBlockService: EntityMergeBlockService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PersonDuplicateService.name);
@@ -107,15 +140,20 @@ export class PersonDuplicateService {
 
     const byId = new Map(entities.map((entity) => [entity.id, PersonEntity.toEgressType(entity)]));
 
+    // Pairs the user has already said are NOT the same person. Fetched once for
+    // the whole sweep rather than per group.
+    const blocked = await this.mergeBlockService.blockedPairsAmong(context, allIds);
+
     const groups: PersonDuplicateGroup[] = [];
     // A pair that shares an email usually shares the name too; suppress
     // strictly-weaker groups that add no new members over an earlier one.
     const seenMemberSets = new Set<string>();
 
     for (const row of rows) {
-      const people = row.entity_ids
-        .map((id) => byId.get(id))
-        .filter((person): person is Person => person != null);
+      const people = dropBlocked(
+        row.entity_ids.map((id) => byId.get(id)).filter((person): person is Person => person != null),
+        blocked,
+      );
 
       if (people.length < 2) {
         continue;

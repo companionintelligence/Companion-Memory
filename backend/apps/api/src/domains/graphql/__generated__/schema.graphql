@@ -886,6 +886,11 @@ type Mutation {
   """Mark a summary as seen"""
   markSummaryAsSeen(id: ID!): SummaryType
   mergePeople(input: MergePeopleInput!): MergePeoplePayload!
+
+  """
+  Mark a suggested duplicate group as distinct people, so it is never re-proposed
+  """
+  rejectPersonDuplicates(personIds: [ID!]!): Boolean!
   removeAnswer(id: String!): Boolean!
   removeContent(id: String!): Boolean!
   removeEvent(id: String!): Boolean!

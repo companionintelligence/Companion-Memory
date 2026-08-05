@@ -8,7 +8,12 @@ import { EntityIdentifierService, type IdentifierKind } from '@ci/domains/graph'
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
-import { PersonDuplicateService, PersonMergeService, PersonService } from '@ci/domains/memory';
+import {
+  EntityMergeBlockService,
+  PersonDuplicateService,
+  PersonMergeService,
+  PersonService,
+} from '@ci/domains/memory';
 
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
@@ -74,6 +79,7 @@ export class PersonResolver {
     private readonly personService: PersonService,
     private readonly personMergeService: PersonMergeService,
     private readonly personDuplicateService: PersonDuplicateService,
+    private readonly entityMergeBlockService: EntityMergeBlockService,
     private readonly entityIdentifierService: EntityIdentifierService,
     private readonly personIdentifiersLoader: PersonIdentifiersLoader,
     private readonly personInteractionStatsLoader: PersonInteractionStatsLoader,
@@ -230,6 +236,28 @@ export class PersonResolver {
       success: true,
       person: PersonType.toType(person),
     };
+  }
+
+  /**
+   * Record that a suggested duplicate group is NOT the same person.
+   *
+   * The counterpart to mergePeople, and the reason duplicate detection can
+   * afford to be derived: without somewhere to put the rejection, "no, those
+   * are two different people" would survive only until the next page load.
+   * Every pair in the group is blocked, because the group is what was offered.
+   */
+  @Mutation(() => Boolean, {
+    description: 'Mark a suggested duplicate group as distinct people, so it is never re-proposed',
+  })
+  async rejectPersonDuplicates(
+    @Context() context: RequestContext,
+    @Args('personIds', { type: () => [ID] }) personIds: string[],
+  ): Promise<boolean> {
+    const ids = personIds.map((gid) => GlobalUID.parse('person', gid));
+
+    await this.entityMergeBlockService.blockAllPairs(toServiceContext(context), ids, 'user_rejected');
+
+    return true;
   }
 
   /** Add a contact method / identifier to a person (source='user'). */

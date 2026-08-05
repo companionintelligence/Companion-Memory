@@ -1,5 +1,6 @@
 import type { UserServiceContext } from '@ci/common/context';
 
+import { pairKey } from '../entities/EntityMergeBlockEntity';
 import { PersonEntity } from '../entities/PersonEntity';
 
 import { PersonDuplicateService } from './PersonDuplicateService';
@@ -29,6 +30,7 @@ function entity(id: string, name: string): PersonEntity {
 function makeService(
   groupRows: Array<{ kind: string; val: string; entity_ids: string[] }>,
   entities: PersonEntity[],
+  blocked: Set<string> = new Set(),
 ) {
   const query = jest.fn(async () => groupRows);
 
@@ -44,10 +46,15 @@ function makeService(
 
   const logger = { setContext: jest.fn(), log: jest.fn() };
 
+  // No pair is blocked unless a test says so — the default is the world before
+  // anyone rejected anything.
+  const mergeBlocks = { blockedPairsAmong: jest.fn(async () => blocked) };
+
   return {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    service: new PersonDuplicateService(repository as any, logger as any),
+    service: new PersonDuplicateService(repository as any, mergeBlocks as any, logger as any),
     query,
+    mergeBlocks,
   };
 }
 
@@ -90,6 +97,34 @@ describe('PersonDuplicateService', () => {
     const groups = await service.findDuplicateGroups(CONTEXT);
 
     expect(groups).toHaveLength(0);
+  });
+
+  it('never re-proposes a pair the user has rejected', async () => {
+    // Groups are recomputed from identifiers on every call, so the block table
+    // is the only thing standing between a rejection and its immediate return.
+    const { service } = makeService(
+      [{ kind: 'email', val: 'dana@x.com', entity_ids: [PERSON_A, PERSON_B] }],
+      [entity(PERSON_A, 'Dana'), entity(PERSON_B, 'Dana Q')],
+      new Set([pairKey(PERSON_A, PERSON_B)]),
+    );
+
+    expect(await service.findDuplicateGroups(CONTEXT)).toHaveLength(0);
+  });
+
+  it('keeps the part of a larger group that was never rejected', async () => {
+    // {A,B,C} with (A,B) blocked still offers {A,C}: the UI merges a group
+    // whole, so B has to go, but throwing away C's live suggestion because a
+    // different pairing was declined would lose real signal.
+    const { service } = makeService(
+      [{ kind: 'name', val: 'dana', entity_ids: [PERSON_A, PERSON_B, PERSON_C] }],
+      [entity(PERSON_A, 'Dana'), entity(PERSON_B, 'Dana Q'), entity(PERSON_C, 'Dana W')],
+      new Set([pairKey(PERSON_A, PERSON_B)]),
+    );
+
+    const groups = await service.findDuplicateGroups(CONTEXT);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].people.map((person) => person.id)).toEqual([PERSON_A, PERSON_C]);
   });
 
   it('returns no groups without querying entities when SQL finds none', async () => {
