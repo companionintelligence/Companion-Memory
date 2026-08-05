@@ -84,15 +84,15 @@ describe('sectionFor', () => {
   it('hides a deferred task even when it is overdue', () => {
     // Deferring is the user saying "not yet"; nagging them anyway is the bug
     // the defer feature exists to prevent.
-    expect(
-      sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: '2026-02-01' }), TODAY, 'UTC'),
-    ).toBe('someday');
+    expect(sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: '2026-02-01' }), TODAY, 'UTC')).toBe(
+      'someday',
+    );
   });
 
   it('stops hiding a deferred task once its date arrives', () => {
-    expect(
-      sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: TODAY }), TODAY, 'UTC'),
-    ).toBe('overdue');
+    expect(sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: TODAY }), TODAY, 'UTC')).toBe(
+      'overdue',
+    );
   });
 
   it('respects the viewing timezone at the day boundary', () => {

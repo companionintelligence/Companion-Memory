@@ -73,9 +73,7 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
   afterAll(async () => {
     if (dataSource?.isInitialized) {
       // ON DELETE CASCADE takes the tasks with the users.
-      await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1)', [
-        [alice.userId, bob.userId],
-      ]);
+      await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1)', [[alice.userId, bob.userId]]);
       await dataSource.destroy();
     }
   });
@@ -159,8 +157,6 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
 
     const aliceTask = await service.create(alice, { title: "Alice's other task" });
 
-    await expect(
-      service.update(alice, aliceTask!.id, { parentId: bobsTask!.id }),
-    ).rejects.toThrow();
+    await expect(service.update(alice, aliceTask!.id, { parentId: bobsTask!.id })).rejects.toThrow();
   });
 });

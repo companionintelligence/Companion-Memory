@@ -105,11 +105,7 @@ export class TaskResolver {
     @Args('actualMinutes', { type: () => Int, nullable: true }) actualMinutes?: number,
   ): Promise<TaskType | null> {
     const serviceContext = toServiceContext(context);
-    const task = await this.taskService.complete(
-      serviceContext,
-      GlobalUID.parse('task', gid),
-      actualMinutes,
-    );
+    const task = await this.taskService.complete(serviceContext, GlobalUID.parse('task', gid), actualMinutes);
 
     return task ? TaskType.toType(task) : null;
   }

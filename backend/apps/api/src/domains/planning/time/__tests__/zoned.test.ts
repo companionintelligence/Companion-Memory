@@ -18,16 +18,12 @@ const UTC = 'UTC';
 describe('zonedWallTimeToUTC', () => {
   it('maps a wall clock to the right instant in a western zone', () => {
     // 2026-01-15 is PST (UTC-8), so 09:00 local === 17:00Z.
-    expect(zonedWallTimeToUTC('2026-01-15', '09:00', LA).toISOString()).toBe(
-      '2026-01-15T17:00:00.000Z',
-    );
+    expect(zonedWallTimeToUTC('2026-01-15', '09:00', LA).toISOString()).toBe('2026-01-15T17:00:00.000Z');
   });
 
   it('maps a wall clock to the right instant in an eastern zone', () => {
     // 2026-01-15 is AEDT (UTC+11), so 09:00 local === 22:00Z the previous day.
-    expect(zonedWallTimeToUTC('2026-01-15', '09:00', SYDNEY).toISOString()).toBe(
-      '2026-01-14T22:00:00.000Z',
-    );
+    expect(zonedWallTimeToUTC('2026-01-15', '09:00', SYDNEY).toISOString()).toBe('2026-01-14T22:00:00.000Z');
   });
 
   it('handles a non-hour offset', () => {
@@ -38,9 +34,7 @@ describe('zonedWallTimeToUTC', () => {
   });
 
   it('is the identity for UTC', () => {
-    expect(zonedWallTimeToUTC('2026-01-15', '09:00', UTC).toISOString()).toBe(
-      '2026-01-15T09:00:00.000Z',
-    );
+    expect(zonedWallTimeToUTC('2026-01-15', '09:00', UTC).toISOString()).toBe('2026-01-15T09:00:00.000Z');
   });
 
   // The two-pass settle exists for exactly these two days. A single-pass
@@ -99,9 +93,7 @@ describe('zonedWallTimeToUTC', () => {
       // FIRST (daylight, UTC-7) occurrence: both passes read an offset from an
       // instant that is still before the 09:00Z transition. Pinned here so a
       // refactor cannot silently flip which of the two hours a user gets.
-      expect(zonedWallTimeToUTC('2026-11-01', '01:30', LA).toISOString()).toBe(
-        '2026-11-01T08:30:00.000Z',
-      );
+      expect(zonedWallTimeToUTC('2026-11-01', '01:30', LA).toISOString()).toBe('2026-11-01T08:30:00.000Z');
     });
   });
 });
@@ -122,9 +114,7 @@ describe('utcToZonedWallTime', () => {
 
   it('renders local midnight as 00:00, never 24:00', () => {
     expect(utcToZonedWallTime(zonedWallTimeToUTC('2026-01-15', '00:00', LA), LA)).toBe('00:00');
-    expect(utcToZonedWallTime(zonedWallTimeToUTC('2026-01-15', '00:00', SYDNEY), SYDNEY)).toBe(
-      '00:00',
-    );
+    expect(utcToZonedWallTime(zonedWallTimeToUTC('2026-01-15', '00:00', SYDNEY), SYDNEY)).toBe('00:00');
   });
 });
 
@@ -226,9 +216,7 @@ describe('isoWeekKey', () => {
     // A week containing a DST transition must still be exactly one key for all
     // seven of its days. Spring forward falls on Sun 2026-03-08, whose ISO week
     // runs Mon 2026-03-02 .. Sun 2026-03-08.
-    const springWeek = ['02', '03', '04', '05', '06', '07', '08'].map((d) =>
-      isoWeekKey(`2026-03-${d}`),
-    );
+    const springWeek = ['02', '03', '04', '05', '06', '07', '08'].map((d) => isoWeekKey(`2026-03-${d}`));
 
     expect(new Set(springWeek).size).toBe(1);
 

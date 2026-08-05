@@ -67,11 +67,7 @@ export function localDateOf(instant: Date, timeZone?: string): string {
  * `deferUntil` are already user-local `YYYY-MM-DD` strings and are compared
  * lexicographically, which is correct for a zero-padded ISO date.
  */
-export function sectionFor(
-  task: SectionedTask,
-  today: string,
-  timeZone?: string,
-): SectionKey {
+export function sectionFor(task: SectionedTask, today: string, timeZone?: string): SectionKey {
   if (task.status === 'done' || task.status === 'skipped' || task.status === 'archived') {
     return 'done';
   }

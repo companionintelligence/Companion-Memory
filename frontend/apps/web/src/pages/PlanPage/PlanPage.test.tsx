@@ -85,18 +85,15 @@ describe('PlanPage', () => {
     const today = new Date();
     const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
 
-    renderWithProviders(
-      <PlanPage />,
-      {
-        mocks: [
-          tasksMock([
-            node({ id: 'a', title: 'Overdue thing', dueAt: yesterday.toISOString() }),
-            node({ id: 'b', title: 'Someday thing' }),
-            node({ id: 'c', title: 'Finished thing', status: 'done' }),
-          ]),
-        ],
-      },
-    );
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([
+          node({ id: 'a', title: 'Overdue thing', dueAt: yesterday.toISOString() }),
+          node({ id: 'b', title: 'Someday thing' }),
+          node({ id: 'c', title: 'Finished thing', status: 'done' }),
+        ]),
+      ],
+    });
 
     expect(await screen.findByText('Overdue thing')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /overdue/i })).toBeInTheDocument();

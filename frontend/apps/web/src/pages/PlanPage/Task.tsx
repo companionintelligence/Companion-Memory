@@ -35,9 +35,7 @@ const PRIORITY_LABELS: Record<number, string> = {
 
 /** `2026-01-15T17:00:00Z` -> `Jan 15`, in the viewer's own zone. */
 function formatDue(dueAt: string): string {
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(
-    new Date(dueAt),
-  );
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(dueAt));
 }
 
 export function Task({ task: taskMasked, onToggle, onDelete }: Props) {

@@ -147,25 +147,22 @@ describe('TaskService', () => {
       expect(repository.delete).toHaveBeenCalledWith({ id: 'task-1', userId: ALICE.userId });
     });
 
-    it.each(['update', 'complete', 'reopen', 'defer'] as const)(
-      'scopes %s to the caller',
-      async (method) => {
-        await setup([makeTask()]);
+    it.each(['update', 'complete', 'reopen', 'defer'] as const)('scopes %s to the caller', async (method) => {
+      await setup([makeTask()]);
 
-        // `update` takes a DTO, `defer` takes a date, the rest take nothing.
-        const arg = method === 'update' ? {} : method === 'defer' ? '2026-02-01' : undefined;
+      // `update` takes a DTO, `defer` takes a date, the rest take nothing.
+      const arg = method === 'update' ? {} : method === 'defer' ? '2026-02-01' : undefined;
 
-        await (service[method] as (c: UserServiceContext, id: string, a?: unknown) => Promise<unknown>)(
-          ALICE,
-          'task-1',
-          arg,
-        );
+      await (service[method] as (c: UserServiceContext, id: string, a?: unknown) => Promise<unknown>)(
+        ALICE,
+        'task-1',
+        arg,
+      );
 
-        expect(repository.findOne).toHaveBeenCalledWith({
-          where: { id: 'task-1', userId: ALICE.userId },
-        });
-      },
-    );
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { id: 'task-1', userId: ALICE.userId },
+      });
+    });
 
     it('stamps the creating user, ignoring any client-supplied owner', async () => {
       await service.create(ALICE, { title: 'Mine' } as never);
@@ -207,9 +204,7 @@ describe('TaskService', () => {
 
       // v7: version nibble 7, variant 8..b. Time-ordering is load-bearing —
       // `ORDER BY id` must stay chronological.
-      expect(created.id).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
+      expect(created.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     });
 
     it('honours a caller-supplied id (idempotent ingest)', async () => {

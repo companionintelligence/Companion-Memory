@@ -196,8 +196,7 @@ export function isoWeekKey(dateStr: string): string {
   const week1Monday = addDays(jan4, -(jan4Dow === 0 ? 6 : jan4Dow - 1));
   const monday = addDays(dateStr, -(dow === 0 ? 6 : dow - 1));
   const days = Math.round(
-    (new Date(`${monday}T12:00:00Z`).getTime() - new Date(`${week1Monday}T12:00:00Z`).getTime()) /
-      86_400_000,
+    (new Date(`${monday}T12:00:00Z`).getTime() - new Date(`${week1Monday}T12:00:00Z`).getTime()) / 86_400_000,
   );
 
   return `${year}-W${String(Math.floor(days / 7) + 1).padStart(2, '0')}`;

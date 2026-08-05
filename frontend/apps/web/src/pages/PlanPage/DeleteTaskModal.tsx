@@ -30,19 +30,14 @@ export function DeleteTaskModal({ taskId, onClose }: Props) {
 
       cache.modify({
         fields: {
-          tasks(
-            existingTasks: { edges: { node: Reference }[] } | Reference = { edges: [] },
-            { readField },
-          ) {
+          tasks(existingTasks: { edges: { node: Reference }[] } | Reference = { edges: [] }, { readField }) {
             if (isReference(existingTasks)) {
               return existingTasks;
             }
 
             return {
               ...existingTasks,
-              edges: existingTasks.edges.filter(
-                (edge) => readField('id', edge.node) !== deletedTaskId,
-              ),
+              edges: existingTasks.edges.filter((edge) => readField('id', edge.node) !== deletedTaskId),
             };
           },
         },

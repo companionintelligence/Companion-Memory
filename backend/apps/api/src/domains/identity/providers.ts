@@ -227,11 +227,7 @@ export const PROVIDER_RULES: ReadonlyArray<
   (host: string, pathname: string, query: URLSearchParams) => ProviderMatch | null
 > = [matchYouTube, matchSpotify, matchX, matchVimeo];
 
-export function matchProvider(
-  host: string,
-  pathname: string,
-  query: URLSearchParams,
-): ProviderMatch | null {
+export function matchProvider(host: string, pathname: string, query: URLSearchParams): ProviderMatch | null {
   for (const rule of PROVIDER_RULES) {
     const match = rule(host, pathname, query);
 
