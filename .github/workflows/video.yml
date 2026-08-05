@@ -143,6 +143,40 @@ jobs:
       - name: Run migrations
         run: yarn workspace @ci/be-api migrate
 
+      # The seed does not call Ollama directly — the per-domain
+      # *SearchIndexListener fire on every entity it creates, and those call
+      # EmbeddingGenerationService.generateEmbedding, which has no offline path.
+      # With nothing listening on 11434 the seed died on its first batch:
+      #
+      #   TypeError: fetch failed
+      #     at async Ollama.embed (ollama/dist/browser.cjs:430)
+      #     at async EmbeddingGenerationService.embedBatch
+      #        (src/common/embeddings/services/EmbeddingGenerationService.ts:174)
+      #
+      # Running a real Ollama is deliberate rather than stubbing embeddings out.
+      # `memory-search` films /memory?search=roadmap, and disabling dense
+      # embeddings would leave that shot's results to keyword indexing alone —
+      # which may well be what backs it, but "may well be" is exactly how a
+      # capture ends up filming an empty result set and passing every gate. The
+      # stage embeds for real, so the shot shows what a user sees.
+      #
+      # nomic-embed-text is the configured default (configuration.ts
+      # embedding.model) and is small enough to pull and run on CPU on a runner.
+      # OLLAMA_HOST already points at localhost:11434 via .env.default.
+      - name: Start Ollama (embeddings for the seed)
+        run: |
+          docker run -d --name ollama -p 11434:11434 ollama/ollama
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:11434/api/tags >/dev/null && echo "ollama up" && break
+            echo "waiting for ollama ($i)…"; sleep 2
+            if [ "$i" = "60" ]; then echo "ollama never responded"; docker logs ollama; exit 1; fi
+          done
+          docker exec ollama ollama pull nomic-embed-text
+          # Prove the endpoint the seed actually uses answers before relying on it.
+          curl -sf http://localhost:11434/api/embed \
+            -d '{"model":"nomic-embed-text","input":"warmup"}' >/dev/null \
+            || { echo "embed endpoint not usable"; docker logs ollama; exit 1; }
+
       # Without this every screen in the storyboard films an empty state.
       - name: Seed database
         run: cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
