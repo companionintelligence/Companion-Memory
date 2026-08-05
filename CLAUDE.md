@@ -48,7 +48,7 @@ yarn build
 ## Cross-repo connections
 
 - Consumed by: all clients via REST/GraphQL at ci-server.localhost
-- Receives data from: CI-Browser-Extension, CI-Connect, CI-Import-Tools, CI-Applet
+- Receives data from: CI-Browser-Extension, CI-Connect, CI-Import-Tools, CI-Capture
 - Hub installs it alongside marketplace apps via CI-Hub
 - HBPE sidecar reads ci.* and ci_search.* Postgres schemas
 - CI-Portal will become its OIDC IdP (issue #8)

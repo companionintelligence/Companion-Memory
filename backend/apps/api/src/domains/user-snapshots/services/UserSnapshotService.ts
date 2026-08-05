@@ -7,6 +7,9 @@ import { type UserServiceContext } from '@ci/common/context';
 
 import { UserSnapshotEntity } from '../entities/UserSnapshotEntity';
 
+// Frozen wire value. The client is now called Companion Capture (repo
+// CI-Capture), but this string must keep matching what it sends — see
+// `producer` in CI-Capture's src/db.rs. Renaming it here breaks ingest.
 const APPLET_PRODUCER = 'ci-applet-vizier';
 const SNAPSHOT_KINDS = new Set(['snapshot', 'patch']);
 

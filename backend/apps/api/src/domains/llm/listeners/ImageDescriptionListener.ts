@@ -45,7 +45,7 @@ export class ImageDescriptionListener {
 
   @OnEvent(PreviewGeneratedEvent, { queue: 'image-description' })
   async handle(payload: PreviewGeneratedPayload) {
-    // When the capture source opted out of server-side analysis (e.g. CI-Applet
+    // When the capture source opted out of server-side analysis (e.g. Companion Capture
     // with its own vision endpoint, which writes the title/description directly
     // via PATCH /files/:id), skip the Ollama pass entirely. Absent/false means
     // the server generates the description as usual.

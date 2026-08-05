@@ -21,7 +21,7 @@ const GRAPHQL_PATH = '/graphql';
 
 /**
  * The `/v1/*` machine-ingest plane carries bulk payloads: `POST /v1/events`
- * perception snapshots from CI-Applet (a single vizier baseline snapshot
+ * perception snapshots from Companion Capture (a single vizier baseline snapshot
  * serializes to ~1MB+), and the batch ingest endpoints
  * (`/v1/communications`, `/v1/contents`, `/v1/inventory`,
  * `/v1/browser-activity`, `/v1/positions` — see BulkIngestController) which

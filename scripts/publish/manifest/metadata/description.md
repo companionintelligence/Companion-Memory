@@ -46,7 +46,7 @@ request leaving your machine.
 - **Automatic summarization** — long articles, transcripts, and threads are
   condensed into recall-ready notes in the background.
 - **Connectors** — ingest from the CI Browser Extension, CI-Connect,
-  CI-Import-Tools, and CI-Applet, and link the accounts you already use —
+  CI-Import-Tools, and Companion Capture, and link the accounts you already use —
   Google, GitHub, Spotify, Slack, Discord, Notion, and more.
 - **Durable orchestration & background jobs** — long-running workflows keep your
   memory fresh and consistent without manual babysitting.
@@ -133,7 +133,7 @@ stays on your appliance.
 
 Companion Memory is the memory layer of the Companion Intelligence appliance. It
 receives data from CI-Browser-Extension, CI-Connect, CI-Import-Tools, and
-CI-Applet, and is consumed by every client over REST/GraphQL.
+Companion Capture, and is consumed by every client over REST/GraphQL.
 
 ---
 

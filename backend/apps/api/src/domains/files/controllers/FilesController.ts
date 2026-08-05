@@ -104,7 +104,7 @@ export class FilesController {
 
   /**
    * Update a file's user-facing metadata. Capture sources that run their own
-   * analysis (e.g. CI-Applet with a configured vision endpoint) call this to
+   * analysis (e.g. Companion Capture with a configured vision endpoint) call this to
    * write the title/description they generated, in place of the server's Ollama
    * image description.
    */

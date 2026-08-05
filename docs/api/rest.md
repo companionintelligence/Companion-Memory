@@ -23,7 +23,7 @@ Grounded in source; every route cites `file:line`.
 | Route | JSON body limit | Source |
 |-------|-----------------|--------|
 | `POST /graphql` | **10 mb** | `BodyParserMiddleware.ts` (path-matched; importer bulk mutations) |
-| `/v1/*` (whole machine-ingest plane) | **10 mb** JSON | `BodyParserMiddleware.ts` (CI-Applet perception snapshots, `{records}` bulk envelopes) |
+| `/v1/*` (whole machine-ingest plane) | **10 mb** JSON | `BodyParserMiddleware.ts` (Companion Capture perception snapshots, `{records}` bulk envelopes) |
 | `/v1/*` with `Content-Type: application/x-ndjson` | **no overall cap** — middleware bypassed, raw stream handed to the route handler | `BodyParserMiddleware.ts` NDJSON bypass; per-line 1 MB ceiling enforced in `domains/ingest/ndjson.ts` |
 | Any route with `@BodyLimit('…')` | that value | `BodyParserMiddleware.ts` |
 | **Everything else (default)** | **100 kb** | `BodyParserMiddleware.ts` |

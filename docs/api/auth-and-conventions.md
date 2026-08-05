@@ -218,7 +218,7 @@ Nest's parser is off (`main.ts:11`); `BodyParserMiddleware` (on `*`) picks a siz
 | Route | Limit | Why |
 |---|---|---|
 | `POST /graphql` (+ `/graphql/*`) | **`10mb`** | importer batch mutations (`BodyParserMiddleware.ts:19,55-57`) |
-| `POST /v1/events` | **`10mb`** | CI-Applet perception snapshots ~1MB+ (`:29,58-59`) |
+| `POST /v1/events` | **`10mb`** | Companion Capture perception snapshots ~1MB+ (`:29,58-59`) |
 | route with `@BodyLimit(...)` | that value | per-route override (`:44-47`) |
 | everything else | `100kb` | default (`:64`) |
 
