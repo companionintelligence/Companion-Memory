@@ -139,14 +139,23 @@ function sourceVar(source: string): string {
  * Keyword → class. Consulted only after `category` fails to name a class
  * outright, and applied against `category` first, then the title.
  *
- * Ordered most- to least-specific: "coffee with Sam" is SOCIAL, but "coffee
- * run" would be an ERRAND, and whichever pattern sits earlier wins. Titles are
- * user prose, so this is a heuristic and is allowed to be wrong — an unmatched
- * event lands in UNKNOWN and recedes, which is a better failure than a
+ * Ordered most- to least-specific, and whichever pattern sits earlier wins.
+ * Titles are user prose, so this is a heuristic and is allowed to be wrong — an
+ * unmatched event lands in UNKNOWN and recedes, which is a better failure than a
  * confident miscolour.
+ *
+ * The one place that ordering bit is the noun "run". English uses "<errand> run"
+ * for exactly the thing EXERCISE is not, and because EXERCISE sits above ERRAND
+ * the bare `run` alternative swallowed all of them: on real data a weekly
+ * "Grocery Run" rendered as an exercise chip and announced itself as one in its
+ * own accessible name. The errand sense therefore gets its own pattern ABOVE
+ * EXERCISE — which is also what makes this docstring's "coffee run" example
+ * true, rather than aspirational as it was.
  */
 const CLASS_PATTERNS: Array<[RegExp, ActivityClass]> = [
   [/\b(sleep|nap|bedtime|rest)\b/, 'SLEEP'],
+  // "<errand> run" before EXERCISE claims the word — see the note above.
+  [/\b(grocery|grocer|groceries|coffee|school|beer|milk|supply|supplies|errand)\s+run\b/, 'ERRAND'],
   [
     /\b(flight|flights|travel|transit|commute|train|drive|driving|airport|taxi|uber|departs?|arrives?)\b/,
     'TRANSIT',
@@ -157,7 +166,7 @@ const CLASS_PATTERNS: Array<[RegExp, ActivityClass]> = [
     'WORK',
   ],
   [
-    /\b(doctor|dentist|appointment|errand|errands|shopping|groceries|bank|pharmacy|pickup|pick-up|drop-?off|repair|haircut|dmv)\b/,
+    /\b(doctor|dentist|appointment|errand|errands|shopping|grocery|groceries|grocer|bank|pharmacy|pickup|pick-up|drop-?off|repair|haircut|dmv)\b/,
     'ERRAND',
   ],
   [/\b(dinner|lunch|brunch|drinks|party|birthday|wedding|social|catch-?up|coffee|date)\b/, 'SOCIAL'],

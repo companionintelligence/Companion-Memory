@@ -166,3 +166,34 @@ describe('TaskSlate — dragging a card away to dismiss it', () => {
     expect(onDecline).not.toHaveBeenCalled();
   });
 });
+
+describe('TaskSlate — the header hint', () => {
+  it('tells you what to do with the cards that are there', () => {
+    render(<TaskSlate candidates={[candidate()]} {...NOOP} />);
+
+    expect(screen.getByText('drag one onto a day below')).toBeInTheDocument();
+  });
+
+  it('says nothing at all when the rail is empty', () => {
+    // The slot is an affordance hint. It used to fall back to "unplaced" — a
+    // noun describing the zero cards that are not there, sitting where an
+    // instruction belongs. The empty-state paragraph is what explains an empty
+    // rail.
+    render(<TaskSlate candidates={[]} {...NOOP} />);
+
+    expect(screen.queryByText('unplaced')).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing waiting yet/)).toBeInTheDocument();
+  });
+
+  it('aligns the empty state to the top of the row, not its centre', () => {
+    // `self-center` centred the copy against the whole compose column (textarea
+    // plus the button beneath it), dropping it below the placeholder it reads
+    // next to — and centred it horizontally once the row stacks on mobile.
+    render(<TaskSlate candidates={[]} {...NOOP} />);
+
+    const empty = screen.getByText(/Nothing waiting yet/);
+
+    expect(empty.className).toContain('self-start');
+    expect(empty.className).not.toContain('self-center');
+  });
+});

@@ -383,8 +383,12 @@ export function TaskSlate({
     >
       <div className="mb-2.5 flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium text-foreground">Possibilities</h3>
+        {/* An affordance hint, so it only has something to say while there is
+            something to act on. The empty case used to read "unplaced", a noun
+            describing the zero cards that are not there — and the paragraph
+            below already explains an empty rail properly. */}
         <span className="text-[11px] text-muted-foreground">
-          {returnable ? 'drop to take it off the week' : hasCards ? 'drag one onto a day below' : 'unplaced'}
+          {returnable ? 'drop to take it off the week' : hasCards ? 'drag one onto a day below' : null}
         </span>
       </div>
 
@@ -394,18 +398,25 @@ export function TaskSlate({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
         {onBreakDown && <BrainDump onSubmit={onBreakDown} />}
 
+        {/* These three sit beside the compose box, so they align to its first
+            line rather than to its full height. `self-center` centred them
+            against the whole column — textarea AND the button under it — which
+            dropped the text ~14px below the placeholder it reads next to. It
+            also centred them HORIZONTALLY once the row stacks to a column on
+            mobile, where everything else is left-aligned. `pt-2` matches the
+            textarea's own top padding so the first lines share a baseline. */}
         {loading && !hasCards && (
-          <p className="self-center text-[12px] text-muted-foreground">Gathering suggestions…</p>
+          <p className="self-start pt-2 text-[12px] text-muted-foreground">Gathering suggestions…</p>
         )}
 
         {!loading && !hasCards && error && (
-          <p role="alert" className="max-w-md self-center text-[12px] leading-relaxed text-destructive">
+          <p role="alert" className="max-w-md self-start pt-2 text-[12px] leading-relaxed text-destructive">
             Could not load your suggestions. Try again shortly.
           </p>
         )}
 
         {!loading && !hasCards && !error && (
-          <p className="max-w-md self-center text-[12px] leading-relaxed text-muted-foreground">
+          <p className="max-w-md self-start pt-2 text-[12px] leading-relaxed text-muted-foreground">
             Nothing waiting yet. Type what you need to do, or wait for your feed and insights to turn
             something up.
           </p>

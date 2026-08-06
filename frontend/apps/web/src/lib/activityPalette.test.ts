@@ -56,6 +56,21 @@ describe('classifyEvent — which activity class a committed event belongs to', 
     expect(classifyEvent(event({ title: 'Runway deck', category: null }))).toBe('UNKNOWN');
   });
 
+  it('reads "<errand> run" as an errand, not exercise', () => {
+    // EXERCISE sits above ERRAND, so a bare `run` alternative used to swallow
+    // every errand sense of the noun — a weekly "Grocery Run" rendered as an
+    // exercise chip and said so in its own accessible name.
+    expect(classifyEvent(event({ title: 'Grocery Run', category: null }))).toBe('ERRAND');
+    expect(classifyEvent(event({ title: 'Coffee run', category: null }))).toBe('ERRAND');
+    expect(classifyEvent(event({ title: 'School run', category: null }))).toBe('ERRAND');
+  });
+
+  it('still reads an actual run as exercise', () => {
+    expect(classifyEvent(event({ title: 'Morning run', category: null }))).toBe('EXERCISE');
+    expect(classifyEvent(event({ title: 'Run 5k', category: null }))).toBe('EXERCISE');
+    expect(classifyEvent(event({ title: 'Long run with Dan', category: null }))).toBe('EXERCISE');
+  });
+
   it('gives every class a distinct colour, and only UNKNOWN the neutral', () => {
     const colors = new Map(
       ACTIVITY_CLASSES.map((cls) => [cls, eventColor(event({ category: cls }), 'type')]),
