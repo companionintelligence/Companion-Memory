@@ -57,4 +57,19 @@ describe('LoginForm', () => {
 
     expect(screen.getByText('Invalid credentials')).toBeInTheDocument();
   });
+
+  it('gives the error alert a surface of its own, not the card colour', () => {
+    // The alert sits inside a Card. While the destructive variant used `bg-card`
+    // the box was the same colour as its container, so a one-line error rendered
+    // as floating red text with ~40px of unexplained space above it — read by
+    // users as broken margins rather than as an alert.
+    h.error = new Error('Invalid credentials');
+    render(<LoginForm />);
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert.className).toContain('bg-destructive/5');
+    expect(alert.className).toContain('border-destructive/20');
+    expect(alert.className).not.toContain('bg-card');
+  });
 });

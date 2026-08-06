@@ -9,8 +9,14 @@ const alertVariants = cva(
     variants: {
       variant: {
         default: 'bg-card text-card-foreground',
+        // Carries its own surface. `bg-card` (upstream's choice) is the colour of
+        // the Card these alerts sit inside, so the box was invisible: on the auth
+        // pages it rendered as a red line of text with ~40px of unexplained space
+        // above it, which reads as broken spacing rather than as an alert.
+        // Matches the destructive-surface pattern already used elsewhere in the
+        // app (see ChatPage's error Card).
         destructive:
-          'text-destructive bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-destructive/90',
+          'text-destructive border-destructive/20 bg-destructive/5 [&>svg]:text-current *:data-[slot=alert-description]:text-destructive/90',
       },
     },
     defaultVariants: {

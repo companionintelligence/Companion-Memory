@@ -529,6 +529,24 @@ function useAuth(): ReturnValue {
     };
   }, []);
 
+  // A failed attempt belongs to the page it was made on. This hook's state is
+  // app-wide (it lives in a provider above the router), so without this a
+  // rejected login left "Invalid credentials" sitting on the signup form the
+  // user then navigated to — an error about a form they had not submitted,
+  // above fields they had just filled in.
+  //
+  // Keyed on pathname alone, not the whole location: the OIDC callback rewrites
+  // `search` on the same route while reporting its own failure through this same
+  // slot, and reacting to that would clear the message before it could be read.
+  //
+  // `refreshError` is deliberately left alone. It says the session expired,
+  // which stays true wherever the user navigates.
+  const pathname = location.pathname;
+
+  useEffect(() => {
+    setLoginError(null);
+  }, [pathname]);
+
   return [
     {
       // A native API key never "expires" from the client's point of view (there is

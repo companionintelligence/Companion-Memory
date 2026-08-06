@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from './useAuth';
@@ -204,6 +204,49 @@ describe('useAuth', () => {
 
     expect(result.current[0].authToken).toBeNull();
     expect(result.current[0].error).toBeTruthy();
+  });
+
+  it('drops a login error when the user navigates to another page', async () => {
+    // This state lives in a provider above the router, so a rejected login used
+    // to follow the user: failing on /login left "Invalid credentials" on the
+    // signup form they moved to next, above fields they had not submitted.
+    setFetch((url) => {
+      if (url.endsWith('/api/authenticate/refresh')) {
+        return emptyResponse(false, 401);
+      }
+
+      if (url.endsWith('/api/authenticate/csrf')) {
+        return emptyResponse();
+      }
+
+      if (url.endsWith('/api/authenticate')) {
+        return emptyResponse(false, 401);
+      }
+
+      return emptyResponse();
+    });
+
+    const { result } = renderHook(() => ({ auth: useAuth(), navigate: useNavigate() }), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <MemoryRouter initialEntries={['/login']}>
+          <AuthProvider args={[]}>{children}</AuthProvider>
+        </MemoryRouter>
+      ),
+    });
+
+    await waitFor(() => expect(result.current.auth[0].loading).toBe(false));
+
+    await act(async () => {
+      await result.current.auth[1].login('jsmith@example.com', 'wrong');
+    });
+
+    expect(result.current.auth[0].error).toBeTruthy();
+
+    await act(async () => {
+      result.current.navigate('/signup');
+    });
+
+    await waitFor(() => expect(result.current.auth[0].error).toBeNull());
   });
 
   it('logs out, clearing the token and calling the logout endpoint', async () => {
