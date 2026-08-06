@@ -54,8 +54,9 @@
  *    feed-overview, memory-{list-view,detail-sheet,search-results,graph-view},
  *    people-directory, insights-list, insight-detail-view, connect-providers.
  *    NOT `/`, `/login` or `/onboarding` — see below. NOT memory-map-view
- *    either: it is a tenth ProtectedRoute shot but the seed cannot populate it,
- *    so it is deliberately left uncaptured — see hazard 13.
+ *    either: it is a tenth ProtectedRoute shot, but the SEED cannot populate it
+ *    and a content-gated waitFor therefore fails the whole pass. It is captured
+ *    from the real-corpus stage instead — see hazard 13 and video/README.md.
  * 2. LOGGED OUT. `/` and `/login` are both wrapped in RedirectKnownUser
  *    (App.tsx:117-121, :147-152), which sends an authenticated, onboarded user
  *    straight to /feed, so these two ids are excluded from pass 1 rather than
@@ -214,38 +215,66 @@
  *    Note the section also carries ten "Coming soon." disabled cards further
  *    down (ServiceIntegrationsSection.tsx:95-183); the shot is framed at the
  *    heading so the enabled providers lead.
- * 13. THE MAP IS STRUCTURALLY EMPTY WITH THIS SEED — the scene is UNCAPTURED,
- *    for the same reason hazard 7 cut the gallery. Do not "fix" it by loosening
- *    the selector; the screen has nothing on it.
- *    MapView.tsx:630 opens on a hardcoded San Francisco centre
- *    ([37.7749, -122.4194]) and fetches only what falls inside the current
- *    viewport's `?bbox=`. That alone would be survivable — the seeded places are
- *    in Laguna Beach, so panning south would find them. The real blocker is one
- *    level down: the map plots the PostGIS column `ci.entities.location_point`,
- *    and **every row in a freshly seeded database has it NULL**. Verified:
- *      SELECT count(*) FROM ci.entities WHERE location_point IS NOT NULL;  -- 0
- *    The 33 `Location` entities DO carry real coordinates, but only inside
- *    `properties` JSONB ('latitude'/'longitude'), which is what the details
- *    sheet reads (hence Pizza Night showing 33.530831, -117.757571 while the map
- *    shows nothing). `PlaceService` accepts TOP-LEVEL `latitude`/`longitude` and
- *    is the only thing that populates `location_point` (PlaceService.ts:754),
- *    but data/places.ts nests them under `properties` and seed-places.ts passes
- *    only `{id, name, properties}` — so the typed column is never written. The
- *    geocode backfill that would otherwise fill it is skipped outright without
- *    GEOCODING_API_KEY / GOOGLE_MAPS_KEY (the seed says so on stdout).
- *    Result: /memory?view=map renders TimelineView's "No memories yet — Your
- *    timeline will fill in as memories are created." over an unpinned San
- *    Francisco. No markers, no clusters, stable across 20s — not a load race.
- *    Its `waitFor` was `.leaflet-container`, which is purely structural and
- *    resolves on an empty map, so unlike the graph (hazard 10) it failed OPEN
- *    and filmed the empty state. Filming that under the caption "Anything with a
- *    place gets one" is the exact lie this file exists to prevent.
- *    TO RE-ENABLE: teach seed-places.ts to lift `properties.latitude/longitude`
- *    into the top-level create call so `location_point` is written, re-seed, then
- *    give the shot a bbox around Laguna Beach and a CONTENT-GATED waitFor (a
- *    marker/cluster selector — never `.leaflet-container`). That is a backend
- *    fixture change with its own test blast radius, so it is deliberately NOT
- *    bundled into the video PR.
+ * 13. THE MAP. Now captured — but NOT from this seed, and the previous entry
+ *    here named the wrong column. Corrected, with the evidence, because the old
+ *    diagnosis sends the next person to fix a file that cannot fix the map.
+ *
+ *    WHAT THE MAP ACTUALLY PLOTS. Not `ci.entities.location_point`.
+ *    MemoryPage.tsx:45-46 forces `hasLocation: true` whenever `view=map`;
+ *    SearchResolver.ts:492 turns that into `eventsOnly`, so `PlaceType` can
+ *    never reach the client on this route at all. The pins come from
+ *    `ci.events.location_coordinates` — EventService.ts:559
+ *    (`event.location_coordinates IS NOT NULL`) plus the ST_Within(bbox) clause
+ *    at :571. `location_point` is read by exactly one query, PlaceService's
+ *    `findNearby`/`placesNear`, which this view does not call.
+ *
+ *    SO THE SEED NESTING BUG IS REAL BUT ORTHOGONAL. data/places.ts:13-20 does
+ *    nest lat/lng under `properties`, and `PlaceService.create()` (line 510)
+ *    ignores top-level latitude/longitude entirely — only `update()` (:754) and
+ *    `PlaceResolver.createPlace` (:107) convert them, and only into
+ *    `locationPoint`. Fixing seed-places.ts is correct on its own merits (it
+ *    fixes placesNear and the GIS index) and it will still leave the map empty.
+ *    THE SEED-SIDE FIX FOR THE MAP is in seed-events.ts:23-38 / data/events.ts:
+ *    seeded events pass `location_entity_id` and never `location_coordinates`,
+ *    and `EventService.toEntityFields` (:96-99) only copies that column when the
+ *    caller supplies it. Give each seeded event a
+ *    `location_coordinates: { type: 'Point', coordinates: [lng, lat] }` from its
+ *    linked place and the seed will plot. NOT DONE HERE — unverified fixture
+ *    changes are worse than a documented gap.
+ *
+ *    HOW THE COMMITTED SHOT WAS TAKEN. Against the owner's real archive
+ *    (826,478 items) pushed into a throwaway stage — see video/README.md,
+ *    "The real-corpus stage". 83 of those events carry genuine WGS84
+ *    coordinates, so the map plots real clusters. Note the transport matters:
+ *    the importer's DEFAULT `/v1` lane drops geo (captureEventSchema in
+ *    domains/ingest/types.ts:44 has no location field; the importer folds
+ *    `locationCoordinates`/`locationName` into `payload`, and
+ *    BulkIngestController's materialize never lifts them back out). The
+ *    GraphQL lane (`CI_PUSH_TRANSPORT=graphql`) writes the typed columns, and
+ *    that is the lane the stage recipe uses.
+ *
+ *    THE waitFor IS NOW CONTENT-GATED, as hazard 10 demands:
+ *    `.leaflet-marker-pane .custom-map-marker, .leaflet-marker-pane
+ *    .memory-map-cluster` (Marker.tsx:100, MapView.tsx:152). Never
+ *    `.leaflet-container` — it is structural and resolves on an empty map,
+ *    which is how this shot previously failed OPEN and filmed "No memories
+ *    yet" under the caption "Anything with a place gets one".
+ *
+ *    FRAMING IS A PRIVACY CONSTRAINT, NOT A STYLE CHOICE. At >=768px the map
+ *    renders `Map.Panel position="left" className="w-[300px]"` holding
+ *    TimelineView, and against the real archive every card in it is a full
+ *    street address (Uber trip titles are "<pickup> → <dropoff>"). The owner's
+ *    rule for these cuts is aggregate views only, so the panel is masked at
+ *    the shutter (it is the only mask here that redacts rather than
+ *    de-jitters) AND the scene declares `motion: "hold"` with a
+ *    `focus.landscape` rectangle that starts at x=0.284 — just right of the
+ *    panel — so no rendered frame contains it either. The markers themselves
+ *    carry no labels (Marker.tsx:74-114 renders no text and no <Popup>) and
+ *    cluster bubbles render only an integer, so the map canvas is safe at any
+ *    zoom the shot uses. Do not click a cluster in `before`: MapView.tsx:203
+ *    opens a popup with event titles, and MapView.tsx:290 zooms to maxZoom 17.
+ *    FitBoundsOnce (MapView.tsx:495) caps at zoom 13 and lands at continental
+ *    scale for this corpus; two consecutive captures were byte-identical.
  * 14. `Form.Control` RENAMES data-slot, so `[data-slot="checkbox"]` matches
  *    NOTHING inside a form. shadcn's Checkbox does render data-slot="checkbox",
  *    but FocusAreas.tsx:76 wraps it in `<Form.Control>`, which is a Radix `Slot`

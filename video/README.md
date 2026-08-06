@@ -10,17 +10,16 @@ job, no schedule, no uploaded artifact, and no committed `.mp4`. A cut is a buil
 one when you need it, use it, then delete it. What lives in git is the *input* — the storyboard,
 the narration audio, and the screenshots under `assets/shots/`.
 
-> **28 of 30 shots are committed** (14 shots × 2 viewports), captured against a real seeded stack.
-> The two that are missing are `memory-map-view` and `memory-map-view.mobile`, and they are missing
-> **on purpose**: with the stock seed the map has nothing on it, so filming it would ship an
-> explicit "No memories yet" empty state under the caption "Anything with a place gets one." The
-> full diagnosis — including the one-line seed change that would fix it — is hazard 13 in
-> [`capture.config.mjs`](capture.config.mjs).
+> **All 30 shots are committed** (15 shots × 2 viewports), and `npm run check` passes without
+> `--allow-slates`. Twenty-eight of them were captured against the seeded stack below. The last
+> two — `memory-map-view` and `memory-map-view.mobile` — could not be, and were captured against
+> **the real-corpus stage** instead; see [The real-corpus stage](#the-real-corpus-stage).
 >
-> Consequence: `npm run build` is green (the map scene renders a "capture pending" slate) but
-> `npm run check` **fails** on the two missing files until either the seed is fixed and the shot
-> taken, or the `memory-map` scene is cut from the storyboard the way the gallery scene was.
-> `npm run check -- --allow-slates` opts out while that decision is pending.
+> The old note here said the map was empty because `ci.entities.location_point` is NULL on a fresh
+> seed. That is true and it is not the reason. `/memory?view=map` is events-only and plots
+> `ci.events.location_coordinates`; the seed never writes that column either. Hazard 13 in
+> [`capture.config.mjs`](capture.config.mjs) has the corrected diagnosis and the seed diff that
+> would let the stock stage film this scene.
 
 **To re-capture and rebuild, from this repo:**
 
@@ -128,13 +127,117 @@ above are the authoritative list.
 
 1. **authenticated** — the seeded `jsmith`; the nine filmable shots behind `ProtectedRoute`. Not
    `/`, `/login` or `/onboarding`, which redirect this identity to `/feed`; and not
-   `memory-map-view`, which the seed cannot populate (hazard 13);
+   `memory-map-view`, which the seed cannot populate (hazard 13) and whose content-gated `waitFor`
+   would therefore take the other nine shots down with it;
 2. **`VIDEO_LOGGED_OUT=1`** — `/` and `/login`, which redirect a signed-in user to `/feed`;
 3. **`VIDEO_FRESH_USER=1`** ×3 — the seeded user is already onboarded, so the wizard is only
    reachable from a throwaway account. One capture invocation per onboarding shot, because
    onboarding progress is persisted per user and a shared account would resume mid-wizard.
 
 Determinism hazards are catalogued at the top of [`capture.config.mjs`](capture.config.mjs).
+
+## The real-corpus stage
+<a id="the-real-corpus-stage"></a>
+
+The seed is a 64-person fixture. It is the right stage for every screen in this cut except one, and
+it is the wrong stage for any claim about scale. `memory-map-view{,.mobile}` were captured against
+the owner's real archive — **826,478 items, 23 sources** — loaded into a throwaway appliance.
+
+**The corpus never leaves this machine and no third party is called.** Geocoding is deliberately
+NOT run: 83 of the 826,478 items carry genuine WGS84 coordinates already (79 Uber trips, 4 Google
+Maps places) and those are what the committed map plots. Forward-geocoding the ~1,400 calendar
+events that carry a `Location` string would add roughly 700 more pins, but it posts those strings
+to Google's Geocoding API — a data-egress decision for the owner to make, not the capture job.
+
+### The rule that governs what may be filmed against it
+
+**Aggregate views only. No individual may be identifiable in any frame.** Film entity-graph and
+density visualisations, counts, totals, source coverage, settings, and the map at a zoom where no
+street address is legible. Do not film message threads or lists, email bodies, contact or people
+lists, photo grids, purchase history, calendar entries with attendee names, filenames containing
+personal names, or a map zoomed to a residence. If a scene can only be satisfied by one of those,
+**leave it uncaptured and say so** — the seeded shot is the honest stand-in, because its people are
+fictional.
+
+That rule is why the desktop map masks its left panel: at >=768px `MapView` renders a 300px
+`TimelineView` rail, and against this corpus every card in it is a street address.
+
+### Recipe
+
+Ports are in the 3191+ band and the compose project is its own, so this never adopts or tears down
+a stack another agent is running. Run it from **your own worktree**, never a shared clone.
+
+```bash
+# 0. worktree + deps (yarn 4 PnP; the cache is shared, the install is seconds)
+git worktree add /tmp/ci-memory-corpus -b <branch> origin/main
+cd /tmp/ci-memory-corpus
+export PATH="$HOME/.nvm/versions/node/v22.15.1/bin:$PATH"      # .nvmrc is exact
+export YARN_CACHE_FOLDER=/Users/<you>/devel/ci/CI-Server/.yarn/cache
+YARN_ENABLE_IMMUTABLE_INSTALLS=false yarn install
+
+# 1. .env — own ports, own compose project
+cp .env.default .env
+cat >> .env <<'ENV'
+COMPOSE_PROJECT_NAME=civideo-real-memory
+DB_HOST_PORT=3202
+DATABASE_PORT=3202
+PORT=3203
+ENABLE_REQUIRE_SIGNUP_CODES=false
+ENV
+
+# 2. Postgres. Raise the lock table BEFORE the load — the July 2026 ingest of this
+#    same corpus killed a stock Postgres with "out of shared memory".
+export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+docker compose -p civideo-real-memory -f docker-compose.yml -f docker-compose.local.yml \
+  --profile local up -d database setup-database
+docker exec -u postgres civideo-real-memory-database-1 \
+  psql -U postgres -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
+docker restart civideo-real-memory-database-1
+yarn workspace @ci/be-api migrate
+
+# 3. one user, onboarded, plus an API key for the importer
+#    POST /api/signup, then UPDATE ci.users SET onboarded=true, role='admin',
+#    then POST /api/keys with the returned JWT. The key is shown once.
+
+# 4. drop deferrable indexes for the bulk load, start api + web
+yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts drop   # run from backend/apps/api
+#   api:  cd backend/apps/api && yarn dev                 (:3203)
+#   web:  cd frontend/apps/web && WEB_PORT=3201 API_PROXY_TARGET=http://localhost:3203 yarn dev
+#   Start both under tmux, not a plain background job: `yarn dev` traps SIGINT and
+#   dies with its process group when the shell that launched it is reaped.
+
+# 5. CI-Import-Tools, pointed at a COPY of the corpus (the push writes a watermark
+#    back into the SQLite file — never run it against the original archive).
+#    The GraphQL lane is mandatory: the default /v1 lane drops event geo, so the
+#    map would be empty. ~45 min for 826,478 items.
+CI_DB_PATH=/tmp/corpus.db CI_ADMIN_ADDR=127.0.0.1:12009 CI_OIDC_DISABLE=1 \
+CI_ALLOW_UNAUTHENTICATED=1 CI_PUSH_TRANSPORT=graphql CI_PUSH_BATCH_SIZE=1000 \
+CI_PUSH_CONCURRENCY=4 NODE_OPTIONS=--max-old-space-size=12288 \
+  node node_modules/.bin/tsx src/server.ts        # from CI-Import-Tools/backend
+
+curl -X POST http://127.0.0.1:12009/api/wizard/ci-server/sync -H 'Content-Type: application/json' \
+  -d '{"url":"http://localhost:3203","apiKey":"<key>","full":true,"batchSize":1000,"concurrency":4}'
+#    `"full": true` IS LOAD-BEARING. The watermark in the SQLite `settings` table is
+#    server-agnostic, so an incremental push to a brand-new appliance silently skips
+#    the 640,000 items that sit at or before it and you film a fifth of the corpus.
+
+# 6. entities + relationships (the push moves items only), then put the indexes back
+curl -X POST http://127.0.0.1:12009/api/wizard/pipeline/run -H 'Content-Type: application/json' \
+  -d '{"url":"http://localhost:3203","apiKey":"<key>","stages":["sync_graph","extract_people","extract_graph"]}'
+yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts recreate
+
+# 7. capture, aggregate shots only
+cd video && APP_URL=http://localhost:3201 npm run capture -- --only memory-map-view
+```
+
+Verified end state: `ci.events` 200,287 · `ci.communications` 293,291 · `ci.content` 190,722 ·
+`ci.browser_activity` 330,017 · `ci.inventory` 2,366 — 1,016,683 rows from 826,478 items —
+`ci.entities` 17,649, and 83 events with `location_coordinates`. Two consecutive captures of
+`memory-map-view.mobile` were byte-identical, so this shot is as reproducible as the seeded ones.
+
+**The importer process was OOM-killed twice at `CI_PUSH_CONCURRENCY=8` / `batchSize=5000`.** It
+resumes from the watermark, so a restart costs only the in-flight batch — but 4/1000 ran to
+completion and is the setting above.
 
 ## Editing the video
 
@@ -167,8 +270,10 @@ of what the product looked like, and captures are byte-stable, so a diff in them
 genuinely changed. They are also what lets anyone render a cut without standing up the whole
 appliance.
 
-Both are there now: the audio, and **28 of the 30 PNGs** (`npm run status` lists the two that are
-not — see the note at the top). `video/.gitignore` does *not* exclude `assets/shots/`, which is
+Both are there now: the audio, and **all 30 PNGs** — 28 from the seeded stage, and
+`memory-map-view{,.mobile}` from [the real-corpus stage](#the-real-corpus-stage). Those two are
+the only frames in the repo taken against real personal data, and they are aggregate-only by
+construction: clusters and counts, no labels, no panel. `video/.gitignore` does *not* exclude `assets/shots/`, which is
 deliberate and load-bearing: only a few of the twelve CI products have a working capture stage, so
 gitignoring the shots would mean nobody but the stage's author could ever render the cut.
 
@@ -177,6 +282,25 @@ release assets. Re-render when you need one.
 
 See [CI-Engineering `projects/product-video-pipeline/`](https://github.com/companionintelligence/CI-Engineering/tree/main/projects/product-video-pipeline)
 for the full contract.
+
+## The `tools/stages.json` entry
+
+CI-Engineering's `tools/stages.json` still says `"capture": null` for this product and repeats the
+retired "every `location_point` is NULL" diagnosis. Replace that entry with:
+
+```json
+"companion-memory": {
+  "name": "Companion Memory",
+  "repo": "CI-Server",
+  "capture": "video/make.sh",
+  "captureRealCorpus": "video/stage.real-corpus.sh",
+  "comment": "All 30 shots are committed and both cuts render; `check` passes with no --allow-slates. TWO STAGES. video/make.sh stands up Postgres+PostGIS+pgvector, 188 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures FIVE passes under three identities (authenticated, VIDEO_LOGGED_OUT, VIDEO_FRESH_USER x3) with ENABLE_REQUIRE_SIGNUP_CODES=false — it produces 28 of the 30 shots. It deliberately does NOT capture memory-map-view: the seed writes no ci.events.location_coordinates, so that shot's content-gated waitFor times out and takes the other nine shots in its pass with it. video/stage.real-corpus.sh produces those two, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo). AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
+}
+```
+
+`make-videos.mjs` renders only, so neither script is invoked by the cross-product runner — but the
+entry is where the next person looks to find out how this product boots, and the stale one sends
+them to fix the wrong file.
 
 ## Why Playwright is pinned exactly
 

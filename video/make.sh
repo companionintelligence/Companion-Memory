@@ -147,8 +147,12 @@ npx playwright install chromium
 # 1 on any single failure, so an unscoped run would attempt all fifteen shots as
 # jsmith, five of them structurally unreachable, and abort before passes 2-5.
 #
-# memory-map-view is absent from pass 1 on purpose — with the stock seed the map
-# has nothing on it. See hazard 13 in capture.config.mjs.
+# memory-map-view is absent from pass 1 on purpose, and STILL IS. Its committed
+# shots were taken against the real-corpus stage (video/README.md, "The
+# real-corpus stage"); the stock seed writes no ci.events.location_coordinates,
+# so the shot's content-gated waitFor would time out and take the other nine
+# shots in this pass down with it. Re-shoot it from the real-corpus stage, or
+# fix seed-events.ts first — hazard 13 in capture.config.mjs has the diff.
 AUTHED_SHOTS=feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,people-directory,insights-list,insight-detail-view,connect-providers
 
 if [ ${#ONLY[@]} -gt 0 ]; then
@@ -173,11 +177,11 @@ say "building the compositions"
 npm run build
 
 say "checking them"
-# --allow-slates: memory-map-view is a known, documented gap (hazard 13), so the
-# missing-shot gate would fail every run until the seed is fixed. Drop this flag
-# the moment that shot exists — it is the gate that stops a narrated slideshow
-# of placeholders shipping as a product video.
-npm run check -- --allow-slates
+# No --allow-slates any more: all 30 shots exist, so the missing-shot gate is
+# live again. That gate is the only thing standing between this repo and a
+# narrated slideshow of placeholders shipping as a product video — if it starts
+# failing, capture the shot or cut the scene. Do not re-add the flag.
+npm run check
 
 if [ "$RENDER" = 1 ]; then
   say "rendering"

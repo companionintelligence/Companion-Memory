@@ -353,16 +353,30 @@
         {
           "id": "memory-map-view",
           "url": "ci-memory.local/memory?view=map",
-          "alt": "The memory explorer map view with located events plotted",
-          "motion": "push-in",
+          "alt": "The memory explorer map view, located events clustered across a continent",
+          "motion": "hold",
+          "focus": {
+            "landscape": {
+              "x": 0.284,
+              "y": 0.18,
+              "w": 0.716,
+              "h": 0.7
+            }
+          },
           "capture": {
             "path": "/memory?view=map",
-            "waitFor": ".leaflet-container",
+            "waitFor": ".leaflet-marker-pane .custom-map-marker, .leaflet-marker-pane .memory-map-cluster",
+            "before": [
+              {
+                "eval": "async () => { for (let i = 0; i < 4; i += 1) { const b = [...document.querySelectorAll('button')].find((x) => /Load more pins/.test(x.textContent || '')); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 2500)); } }"
+              }
+            ],
             "mask": [
               "time",
-              ".leaflet-control-attribution"
+              ".leaflet-control-attribution",
+              "[class*=\"w-[300px]\"]"
             ],
-            "settle": 1200
+            "settle": 7000
           }
         }
       ]
