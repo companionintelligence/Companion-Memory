@@ -25,10 +25,10 @@
     {
       "id": "open",
       "kind": "intro",
-      "seconds": 4,
+      "seconds": 5,
       "title": "Companion Memory",
-      "caption": "Your data. Your hardware. Your AI.",
-      "narration": "Companion Memory. The private brain of your appliance."
+      "caption": "Other agents are double agents.",
+      "narration": "Other agents are double agents. Companion Memory works only for you."
     },
     {
       "id": "front-door",
@@ -139,6 +139,39 @@
       ]
     },
     {
+      "id": "trust-dial",
+      "kind": "screen",
+      "chapter": "first-run",
+      "seconds": 5.5,
+      "caption": "You set how much it may do on its own.",
+      "narration": "Cautious, balanced, or hands off — you set the dial.",
+      "shots": [
+        {
+          "id": "onboarding-trust",
+          "url": "ci-memory.local/onboarding",
+          "alt": "The onboarding trust dial, offering cautious, balanced and hands-off",
+          "motion": "push-in",
+          "capture": {
+            "path": "/onboarding",
+            "waitFor": "button:has-text(\"Next\")",
+            "before": [
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Time and place\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Connect a source\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"How much trust?\")" }
+            ],
+            "settle": 400
+          }
+        }
+      ]
+    },
+    {
       "id": "feed",
       "kind": "screen",
       "chapter": "memory",
@@ -149,12 +182,11 @@
         {
           "id": "feed-overview",
           "url": "ci-memory.local/feed",
-          "alt": "The feed, with the actions carousel above insights and summaries",
+          "alt": "The feed, with the day's suggested actions in the carousel",
           "motion": "push-in",
           "capture": {
             "path": "/feed",
-            "waitFor": "h2:text-is(\"Actions\")",
-            "before": [{ "waitFor": "h2:text-is(\"Insights & Summaries\")" }],
+            "waitFor": "text=Make family dinner tonight",
             "mask": ["[aria-label=\"24-hour behavioral forecast strip\"]", "time"],
             "settle": 600
           }
@@ -205,28 +237,6 @@
             ],
             "mask": ["time"],
             "settle": 700
-          }
-        }
-      ]
-    },
-    {
-      "id": "memory-gallery",
-      "kind": "screen",
-      "chapter": "memory",
-      "seconds": 5.5,
-      "caption": "Or the same memory, laid out as a grid.",
-      "narration": "The gallery spreads that same store into a grid you can scan at a glance.",
-      "shots": [
-        {
-          "id": "memory-gallery-view",
-          "url": "ci-memory.local/memory?view=gallery",
-          "alt": "The memory explorer gallery view, a dense grid of typed entity cards",
-          "motion": "push-in",
-          "capture": {
-            "path": "/memory?view=gallery",
-            "waitFor": "main .grid.gap-4 > *",
-            "mask": ["time"],
-            "settle": 800
           }
         }
       ]
@@ -313,6 +323,7 @@
           "capture": {
             "path": "/people",
             "waitFor": "input[placeholder=\"Search people by name...\"]",
+            "before": [{ "waitFor": "text=Possible duplicates" }],
             "mask": ["time"],
             "settle": 600
           }
@@ -346,8 +357,8 @@
       "kind": "screen",
       "chapter": "insights",
       "seconds": 6.5,
-      "caption": "Every summary shows its evidence.",
-      "narration": "Every summary opens up: the evidence behind it, the events, the patterns it found.",
+      "caption": "Each summary opens into the patterns behind it.",
+      "narration": "Every summary opens up: the day's rhythm, the patterns it found, the tags it assigned.",
       "shots": [
         {
           "id": "insight-detail-view",
@@ -368,17 +379,23 @@
       "kind": "screen",
       "chapter": "sources",
       "seconds": 5,
-      "caption": "Connect a source once. It keeps arriving.",
-      "narration": "Connect a source once. New activity keeps arriving.",
+      "caption": "Connect Google or Microsoft once. It keeps arriving.",
+      "narration": "After that, every new item lands on your own hardware.",
       "shots": [
         {
           "id": "connect-providers",
           "url": "ci-memory.local/connect",
-          "alt": "The connect page listing browser extensions, devices and providers",
+          "alt": "The connect page scrolled to Service Integrations, listing Microsoft, Google and the other providers",
           "motion": "drift-down",
           "capture": {
             "path": "/connect",
             "waitFor": "text=Browser Extensions",
+            "before": [
+              { "waitFor": "h2:has-text(\"Service Integrations\")" },
+              {
+                "eval": "Array.from(document.querySelectorAll('h2')).find((h) => h.textContent.trim() === 'Service Integrations').scrollIntoView({ block: 'start' })"
+              }
+            ],
             "settle": 600
           }
         }
@@ -394,8 +411,8 @@
       "items": [
         { "label": "Store", "value": "Postgres + pgvector" },
         { "label": "Models", "value": "Ollama, on device" },
-        { "label": "Ingest", "value": "capture, import, connect" },
-        { "label": "Egress", "value": "none by default" }
+        { "label": "Your records", "value": "stay on your hardware" },
+        { "label": "Monthly fee", "value": "$0" }
       ]
     },
     {

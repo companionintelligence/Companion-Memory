@@ -30,27 +30,30 @@
  * means capture does not depend on a prior `yarn e2e` run having left a fresh
  * state file behind.
  *
- * FOUR-PASS CAPTURE. `ci-video capture` creates ONE browser context per viewport
+ * FIVE-PASS CAPTURE. `ci-video capture` creates ONE browser context per viewport
  * and shares it across every shot, so a single run is either logged in or logged
  * out — it cannot be both. This storyboard needs three different identities, in
- * four invocations:
+ * five invocations:
  *
- *   npm run capture -- --only <the eleven ids below>   # seeded jsmith
+ *   npm run capture -- --only <the ten ids below>      # seeded jsmith
  *   VIDEO_LOGGED_OUT=1     npm run capture -- --only splash-screen,login-form
  *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-focus
  *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-connect
+ *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-trust
  *
  * EVERY pass is explicitly scoped, including the first. `ci-video capture` exits
  * 1 if any single shot fails (bin/ci-video.mjs cmdCapture), so a bare
- * `npm run capture` — which would try all fifteen shots as jsmith, four of them
- * structurally impossible for that identity — aborts the job before passes 2-4
+ * `npm run capture` — which would try all fifteen shots as jsmith, five of them
+ * structurally impossible for that identity — aborts the job before passes 2-5
  * run and leaves assets/shots/ empty. The authoritative list lives in
- * .github/workflows/video.yml; keep the two in step.
+ * video/README.md's Quick start block; keep the two in step. (There is no
+ * .github/workflows/video.yml any more — #1853 deleted it and moved the build
+ * local; anything this file used to delegate to that job is spelled out here.)
  *
- * 1. AUTHENTICATED. The eleven shots behind ProtectedRoute: feed-overview,
- *    memory-{list-view,detail-sheet,gallery-view,search-results,map-view,
- *    graph-view}, people-directory, insights-list, insight-detail-view,
- *    connect-providers. NOT `/`, `/login` or `/onboarding` — see below.
+ * 1. AUTHENTICATED. The ten shots behind ProtectedRoute: feed-overview,
+ *    memory-{list-view,detail-sheet,search-results,map-view,graph-view},
+ *    people-directory, insights-list, insight-detail-view, connect-providers.
+ *    NOT `/`, `/login` or `/onboarding` — see below.
  * 2. LOGGED OUT. `/` and `/login` are both wrapped in RedirectKnownUser
  *    (App.tsx:117-121, :147-152), which sends an authenticated, onboarded user
  *    straight to /feed, so these two ids are excluded from pass 1 rather than
@@ -62,7 +65,7 @@
  *    unreachable, exactly as tests/e2e/onboarding.spec.ts:3-9 says. So this
  *    pass signs up a throwaway account per run (see VIDEO_FRESH_USER below).
  *
- *    It is TWO passes, not one, on purpose. OnboardingPage persists progress
+ *    It is THREE passes, not one, on purpose. OnboardingPage persists progress
  *    server-side on every Next (persistProgress -> saveProgress) and rehydrates
  *    from it on mount (OnboardingPage.tsx:108-135), so a second onboarding shot
  *    sharing the account would resume mid-wizard AND render the "Welcome back.
@@ -71,8 +74,8 @@
  *
  *    The fresh pass needs signup codes off — config/default.json ships
  *    features.require.signup.codes=true and .env.default:65 leaves the override
- *    commented out, so .github/workflows/video.yml sets
- *    ENABLE_REQUIRE_SIGNUP_CODES=false on the job.
+ *    commented out, so export ENABLE_REQUIRE_SIGNUP_CODES=false on the API
+ *    process before capturing (video/README.md, "The stage").
  *
  * ── Determinism hazards found in this repo ───────────────────────────────────
  * 1. SEED DATE-SHIFT (worst offender).
@@ -110,7 +113,9 @@
  *    server.arcgisonline.com. That is live external network: an offline runner
  *    renders an empty pane, and tile revisions change the bytes. The attribution
  *    control is masked; the tiles themselves cannot be.
- * 7. THE GALLERY HAS NO PHOTOS, AND MinIO IS NOT THE REASON.
+ * 7. THE GALLERY HAS NO PHOTOS, AND MinIO IS NOT THE REASON — so the gallery
+ *    scene is CUT, not captured. Kept here because the next person to reach for
+ *    `?view=gallery` needs to know why it is not in the storyboard.
  *    GalleryView.tsx:37-39 builds tiles from `data.map(getEntityMedia)`, and
  *    GalleryView/media.ts:46-95 returns media only for a FileType (needs
  *    galleryContentType + a gallery URL) or an EventType linked to a file. The
@@ -118,24 +123,23 @@
  *    `.overrideProvider(FileService).useValue({})` and main.ts:186-188 comments
  *    out `seedContent` ("Our seed content is logically incosistent"). Zero file
  *    records exist, so every tile falls through to the typed-card branch at
- *    GalleryView.tsx:130. Standing MinIO up (docker-compose.yml:44-52, the
- *    `object-store` service) would change nothing on its own — there is nothing
- *    to serve. The storyboard's gallery caption and narration were rewritten to
- *    describe the grid that actually renders rather than promise thumbnails.
- *    Filming real thumbnails needs BOTH the object-store service AND a step
- *    that uploads sample images through the files API after the app is up.
+ *    GalleryView.tsx:130 and a store visitor sees a Gallery tab with no images.
+ *    Standing MinIO up (docker-compose.yml:44-52, the `object-store` service)
+ *    would change nothing on its own — there is nothing to serve. Re-adding the
+ *    scene needs BOTH the object-store service AND a step that uploads sample
+ *    images through the files API after the app is up.
  * 8. FEATURE FLAGS decide which routes even exist, and which headings render.
  *    backend/apps/api/config/default.json ships chat.page=false,
  *    files.page=false, jobs.page=false, stats.page=false — with the stock
  *    .env.default those routes render NotFound, so nothing here films them.
  *    insights.page / new.insights.page / tags.page / hbpe are on.
- *    `actions` ships FALSE, and FeedPage.tsx:414-416 both gates the block on
- *    `(actionsEnabled || question)` and renders its h2 as
- *    `actionsEnabled ? 'Actions' : 'Questions'` — so the feed shot's
- *    `h2:text-is("Actions")` only resolves because video.yml sets
- *    ENABLE_ACTIONS=true (mapped in config/custom-environment-variables.json).
- *    The frontend reads flags at runtime from /api/_internal/features
- *    (common/feature/useFeatures.ts:34), so a job-level env var is enough.
+ *    `actions` now ships TRUE (config/default.json:162, flipped in 1295f2fd1).
+ *    FeedPage.tsx:414-416 gates the whole actions block on
+ *    `(actionsEnabled || question)` and renders its heading as
+ *    `actionsEnabled ? 'Actions' : 'Questions'`, so with stock config the feed
+ *    shot gets the actions carousel and ENABLE_ACTIONS=true is now redundant
+ *    (harmless, but no longer load-bearing). The frontend reads flags at runtime
+ *    from /api/_internal/features (common/feature/useFeatures.ts:34).
  * 9. RESPONSIVE SPLIT — /memory renders DesktopMemoryPage above 768px and
  *    MobileMemoryPage below (packages/common useDeviceLayout, MOBILE_BREAKPOINT
  *    768), and capture films 1280px AND 360px with the SAME selectors. The
@@ -146,6 +150,21 @@
  *    MobileMemoryPage.tsx:147-150 render the identical `<Sheet>`, so
  *    `[data-slot="sheet-content"]` resolves at both. So does the graph view —
  *    both pages render `<GraphView>` for ?view=graph, only the variant differs.
+ *
+ *    /feed FAILED this test and was fixed. FeedPage.tsx:288 returns an entirely
+ *    separate mobile tree, and the two section headings — `<h2>Actions</h2>`
+ *    (:416) and `<h2>Insights & Summaries</h2>` (:459) — exist ONLY in the
+ *    desktop branch below it. feed-overview used to wait on both, so the 360px
+ *    capture could never resolve them: 25s deadlock, dropped shot, "capture
+ *    pending" slate in the portrait cut only. Its guard is now
+ *    `text=Make family dinner tonight` — the first seeded action
+ *    (scripts/seed-database/data/actions.ts:13), rendered as a BentoCard title
+ *    in BOTH branches, and content-gated the way hazard 10 gates the graph:
+ *    an unseeded feed renders "All Caught Up!" (FeedPage.tsx:300, :420-424) and
+ *    the shot now fails loudly instead of filming an empty product with an
+ *    exclamation mark in it. Embla keeps every slide in the DOM with a real
+ *    bounding box (Carousel.tsx:96-101), so the selector resolves regardless of
+ *    which card the carousel happens to rest on.
  * 10. FORCE-GRAPH LAYOUT — a known residual drift, same class as hazard 5.
  *    memory-graph-view films GraphExplorerModal's force simulation. Node
  *    positions come out of the layout's own randomness, so the PNG bytes move
@@ -168,6 +187,19 @@
  *    seed-summaries.ts (SummaryService.ts:27 honours a supplied summaryId), so
  *    both the route and the h1 ("Daily Summary") survive a re-seed. Clicking
  *    nth=0 would not — list order is not pinned.
+ * 12. /connect MUST BE SCROLLED, and the `scroll` verb cannot do it.
+ *    The unscrolled 1280x720 viewport lands on ConnectPage.tsx:35-70, where the
+ *    Firefox (:60) and Safari (:67) cards are `disabled` and the Safari copy
+ *    (:66) puts "seamless" — a word banned by the messaging canon — on screen.
+ *    connect-providers therefore scrolls to Service Integrations
+ *    (ConnectPage.tsx:163-168), which names Microsoft, Google, Meta, Spotify,
+ *    Steam, GitHub and Signal. It uses `eval` + scrollIntoView, NOT the `scroll`
+ *    verb: `scroll` is `window.scrollTo` (video-kit capture.mjs:144-146) and the
+ *    window does not scroll here — PageContent.tsx is `h-full overflow-auto`, so
+ *    the scroller is an inner div and `scroll` would be a silent no-op.
+ *    Note the section also carries ten "Coming soon." disabled cards further
+ *    down (ServiceIntegrationsSection.tsx:95-183); the shot is framed at the
+ *    heading so the enabled providers lead.
  */
 
 const BASE_URL = process.env.APP_URL ?? 'http://localhost:5173';
