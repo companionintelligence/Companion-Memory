@@ -99,8 +99,11 @@
               { "waitFor": "h1:has-text(\"Time and place\")" },
               { "click": "button:has-text(\"Next\")" },
               { "waitFor": "h1:has-text(\"What should we focus on?\")" },
-              { "click": "[data-slot=\"checkbox\"] >> nth=0" },
-              { "click": "[data-slot=\"checkbox\"] >> nth=2" }
+              { "click": "#focus-area-personal_fitness" },
+              { "click": "#focus-area-communication" },
+              {
+                "eval": "() => { const el = [...document.querySelectorAll('*')].find((e) => e.scrollHeight > e.clientHeight + 2 && e.clientHeight > 100 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)); if (el) el.scrollTop = 0; }"
+              }
             ],
             "settle": 400
           }
@@ -186,7 +189,7 @@
           "motion": "push-in",
           "capture": {
             "path": "/feed",
-            "waitFor": "text=Make family dinner tonight",
+            "waitFor": "text=Watch a movie together",
             "mask": ["[aria-label=\"24-hour behavioral forecast strip\"]", "time"],
             "settle": 600
           }
@@ -251,11 +254,11 @@
       "shots": [
         {
           "id": "memory-search-results",
-          "url": "ci-memory.local/memory?search=roadmap",
-          "alt": "The memory explorer filtered down to results matching roadmap",
+          "url": "ci-memory.local/memory?search=coffee",
+          "alt": "The memory explorer filtered down to results matching coffee",
           "motion": "push-in",
           "capture": {
-            "path": "/memory?view=list&search=roadmap",
+            "path": "/memory?view=list&search=coffee",
             "waitFor": "div[role=\"button\"]",
             "mask": ["time"],
             "settle": 600
@@ -301,6 +304,11 @@
           "capture": {
             "path": "/memory?view=graph",
             "waitFor": "[aria-label=\"Hop depth\"]",
+            "before": [
+              {
+                "eval": "() => { const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); if (Math.min(r.bottom, innerHeight) - Math.max(r.top, 0) >= r.height * 0.6) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += r.top - 8; }"
+              }
+            ],
             "mask": ["time"],
             "settle": 2500
           }
@@ -318,12 +326,12 @@
         {
           "id": "people-directory",
           "url": "ci-memory.local/people",
-          "alt": "The people directory, with the search box, the total count and the duplicate-merge suggestions",
+          "alt": "The people directory, with the search box, the total count and the contact list",
           "motion": "drift-down",
           "capture": {
             "path": "/people",
             "waitFor": "input[placeholder=\"Search people by name...\"]",
-            "before": [{ "waitFor": "text=Possible duplicates" }],
+            "before": [{ "waitFor": "text=Sarah Smith" }],
             "mask": ["time"],
             "settle": 600
           }

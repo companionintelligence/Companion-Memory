@@ -10,10 +10,17 @@ job, no schedule, no uploaded artifact, and no committed `.mp4`. A cut is a buil
 one when you need it, use it, then delete it. What lives in git is the *input* — the storyboard,
 the narration audio, and the screenshots under `assets/shots/`.
 
-> ⚠️ **No shots are committed yet.** `assets/shots/` holds only a `.gitkeep`, so the only cut this
-> repo can produce today is 18 narrated scenes over 15 "capture pending" slates, and `npm run check`
-> fails. Standing the stage up and committing all 30 PNGs (15 shots × 2 viewports) is the
-> outstanding work; everything else in this directory is ready.
+> **28 of 30 shots are committed** (14 shots × 2 viewports), captured against a real seeded stack.
+> The two that are missing are `memory-map-view` and `memory-map-view.mobile`, and they are missing
+> **on purpose**: with the stock seed the map has nothing on it, so filming it would ship an
+> explicit "No memories yet" empty state under the caption "Anything with a place gets one." The
+> full diagnosis — including the one-line seed change that would fix it — is hazard 13 in
+> [`capture.config.mjs`](capture.config.mjs).
+>
+> Consequence: `npm run build` is green (the map scene renders a "capture pending" slate) but
+> `npm run check` **fails** on the two missing files until either the seed is fixed and the shot
+> taken, or the `memory-map` scene is cut from the storyboard the way the gallery scene was.
+> `npm run check -- --allow-slates` opts out while that decision is pending.
 
 The one command, run from a CI-Engineering checkout on the same machine:
 
@@ -37,7 +44,7 @@ npx playwright install --with-deps chromium
 npm run doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
 
 # with the stage up (see below) — five passes, each explicitly scoped:
-npm run capture -- --only feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-map-view,memory-graph-view,people-directory,insights-list,insight-detail-view,connect-providers
+npm run capture -- --only feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,people-directory,insights-list,insight-detail-view,connect-providers
 VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-focus
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-connect
@@ -91,8 +98,9 @@ attempt all fifteen shots as `jsmith`, five of them unreachable for that identit
 other four passes run and leaves `assets/shots/` empty. The five passes in the Quick start block
 above are the authoritative list.
 
-1. **authenticated** — the seeded `jsmith`; the eleven shots behind `ProtectedRoute`. Not `/`,
-   `/login` or `/onboarding`, which redirect this identity to `/feed`;
+1. **authenticated** — the seeded `jsmith`; the nine filmable shots behind `ProtectedRoute`. Not
+   `/`, `/login` or `/onboarding`, which redirect this identity to `/feed`; and not
+   `memory-map-view`, which the seed cannot populate (hazard 13);
 2. **`VIDEO_LOGGED_OUT=1`** — `/` and `/login`, which redirect a signed-in user to `/feed`;
 3. **`VIDEO_FRESH_USER=1`** ×3 — the seeded user is already onboarded, so the wizard is only
    reachable from a throwaway account. One capture invocation per onboarding shot, because
@@ -131,9 +139,10 @@ of what the product looked like, and captures are byte-stable, so a diff in them
 genuinely changed. They are also what lets anyone render a cut without standing up the whole
 appliance.
 
-Today only the audio is there. **`assets/shots/` is empty apart from `.gitkeep` — all 30 PNGs are
-still outstanding** (15 shots × 2 viewports; `npm run status` lists them). `video/.gitignore` does
-*not* exclude them, so committing the output of the five capture passes above is all it takes.
+Both are there now: the audio, and **28 of the 30 PNGs** (`npm run status` lists the two that are
+not — see the note at the top). `video/.gitignore` does *not* exclude `assets/shots/`, which is
+deliberate and load-bearing: only a few of the twelve CI products have a working capture stage, so
+gitignoring the shots would mean nobody but the stage's author could ever render the cut.
 
 `out/` is **not** committed, and the MP4s are not stored anywhere else either — no artifacts, no
 release assets. Re-render when you need one.
