@@ -23,9 +23,9 @@ import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 type Triple = { sourceType: string; sourceSystem: string | null; sourceId: string };
 
 /**
- * Stable string key for a triple, matching the `IS NOT DISTINCT FROM` semantics
- * of the lookup (a null source_system is its own bucket). Used to join input rows
- * to the events fetched in one set-based query.
+ * Stable string key for a triple, matching the NULL-safe semantics of the lookup
+ * below (a null source_system is its own bucket). Used to join input rows to the
+ * events fetched in one set-based query.
  */
 const tripleKey = (t: Triple): string => `${t.sourceType}\u0000${t.sourceSystem ?? ''}\u0000${t.sourceId}`;
 
@@ -216,11 +216,18 @@ export class ContentService {
    * query to find every event in ci.events whose (user_id, source_type,
    * source_system, source_id) triple matches a triple-carrying input row, and
    * return a map from triple-key to event id. Replaces the old per-row
-   * resolveEventByTriple findOne. `source_system` is matched with
-   * `IS NOT DISTINCT FROM` so a NULL system equals a NULL system, preserving the
-   * prior `sourceSystem ?? IsNull()` semantics. Only rows with both source_type
-   * and source_id are considered (mirroring the old guard); rows without a triple
-   * never auto-link.
+   * resolveEventByTriple findOne. `source_system` is matched NULL-safely (a NULL
+   * system equals a NULL system, preserving the prior `sourceSystem ?? IsNull()`
+   * semantics) via a two-armed `= :val` / `IS NULL` condition rather than
+   * `IS NOT DISTINCT FROM` — Postgres cannot use a btree index (including
+   * events_source_triple_uniq, the index this exact lookup is meant to hit) to
+   * satisfy an `IS NOT DISTINCT FROM` qual, which turns this into a full scan of
+   * the user's events once the table is large (see the identical fix + EXPLAIN
+   * ANALYZE writeup in common/persistence/bulkUpsert.ts's tripleBrackets).
+   * source_type and source_id are always non-null here (the loop below skips
+   * rows missing either), so they can always use plain `=`. Only rows with both
+   * source_type and source_id are considered (mirroring the old guard); rows
+   * without a triple never auto-link.
    */
   private async resolveEventIdsByTriple(
     context: UserServiceContext,
@@ -257,13 +264,17 @@ export class ContentService {
       .andWhere(
         new Brackets((qb: WhereExpressionBuilder) => {
           distinctTriples.forEach((triple, i) => {
+            const systemParam = `evt_system_${i}`;
+            const systemCond =
+              triple.sourceSystem == null ? 'event.sourceSystem IS NULL' : `event.sourceSystem = :${systemParam}`;
+
             qb.orWhere(
               `(event.sourceType = :evt_type_${i}` +
-                ` AND event.sourceSystem IS NOT DISTINCT FROM :evt_system_${i}` +
+                ` AND ${systemCond}` +
                 ` AND event.sourceId = :evt_id_${i})`,
               {
                 [`evt_type_${i}`]: triple.sourceType,
-                [`evt_system_${i}`]: triple.sourceSystem,
+                ...(triple.sourceSystem != null ? { [systemParam]: triple.sourceSystem } : {}),
                 [`evt_id_${i}`]: triple.sourceId,
               },
             );

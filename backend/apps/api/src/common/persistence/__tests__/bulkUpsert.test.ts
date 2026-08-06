@@ -326,7 +326,7 @@ describe('bulkInsertIdempotent', () => {
     expect(table.size).toBe(2);
   });
 
-  it('treats a NULL source_system as equal to a NULL source_system (IS NOT DISTINCT FROM)', async () => {
+  it('treats a NULL source_system as equal to a NULL source_system (NULL-safe match)', async () => {
     const existing = row({ id: 'existing', sourceSystem: null, sourceId: 's1' });
     const { repo } = makeFakeRepository([existing]);
 
