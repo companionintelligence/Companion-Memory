@@ -22,16 +22,35 @@ the narration audio, and the screenshots under `assets/shots/`.
 > taken, or the `memory-map` scene is cut from the storyboard the way the gallery scene was.
 > `npm run check -- --allow-slates` opts out while that decision is pending.
 
-The one command, run from a CI-Engineering checkout on the same machine:
+**To re-capture and rebuild, from this repo:**
+
+```bash
+./video/make.sh                              # stage the app, capture all 5 passes, check, render
+./video/make.sh --no-render                  # capture and check only — much faster
+./video/make.sh --only memory-list-view      # re-shoot one shot
+./video/make.sh --keep-up                    # leave the stage running to debug against
+```
+
+`make.sh` sources [`stage.sh`](stage.sh), which stands the whole appliance up — Postgres 18 with
+TimescaleDB/PostGIS/pgvector, 188 migrations, the seed, the API and Vite — runs the five capture
+passes, and tears it all down again on the way out, including on failure. It picks free ports in
+the 3191+ band and uses its own compose project, so it will not collide with a dev stack someone
+else is running. See "The stage" below for what it does and why.
+
+**To render a cut from the shots already committed** — no stage, no Docker — from a CI-Engineering
+checkout on the same machine:
 
 ```bash
 node tools/make-videos.mjs companion-memory            # build both cuts from committed shots
-node tools/make-videos.mjs companion-memory --capture  # re-capture the shots first (needs the stage, below)
 node tools/make-videos.mjs --list                      # what else it can build
 ```
 
 It resolves video-kit from the CI-Common checkout on disk, so there is no npm registry, no token,
 and no `403` — which is the reason CI never managed to produce a video in the first place.
+
+> That runner **renders only**; it refuses `--capture` by design, because staging an app is not a
+> single shell command and `stages.json` cannot express five passes under three identities. Capture
+> belongs to `video/make.sh`, above.
 
 ## Quick start
 
@@ -63,7 +82,9 @@ npm run render        # -> out/ci-memory-landscape.mp4 and out/ci-memory-portrai
 
 ## The stage
 
-CI-Server is not a static front end — capture needs the whole appliance. From the repo root:
+CI-Server is not a static front end — capture needs the whole appliance.
+**[`stage.sh`](stage.sh) does all of this for you**; `./video/make.sh` sources it. What follows is
+the same recipe by hand, for when you are debugging the stage itself rather than using it:
 
 ```bash
 cp .env.default .env
@@ -71,11 +92,18 @@ make distribute-license
 docker build -f infrastructure/database/Dockerfile       -t ci/database:latest       infrastructure/database
 docker build -f infrastructure/setup-database/Dockerfile -t ci/setup-database:latest infrastructure/setup-database
 docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d database setup-database
-yarn workspace @ci/be-api migrate                            # ~147 dbmate migrations
+yarn workspace @ci/be-api migrate                            # 188 dbmate migrations
 cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
 cd ../../.. && yarn workspace @ci/be-api dev &               # :3030
 WEB_PORT=5173 API_PROXY_TARGET=http://localhost:3030 yarn workspace @ci/fe-web dev &   # :5173
 ```
+
+Two differences worth knowing when you compare the two. By hand you get the conventional ports and
+compose project; `stage.sh` deliberately does not, because these clones are shared — it picks free
+ports from 3191 up and namespaces its containers under `civideo-ci-memory`, so it can never adopt
+or tear down a stack someone else is running. And `stage.sh` health-checks *through* Vite at
+`/api/_internal/features`, treating **401 as success** — that endpoint is auth-gated, so waiting
+for a 200 waits forever.
 
 Those last two lines are the exact processes `playwright.e2e.config.ts` declares in its
 `webServer` block.
