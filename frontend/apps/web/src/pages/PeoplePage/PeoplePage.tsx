@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { EmptyState, LoadingPage, Portal, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, LoadingPage, Portal, usePageTitle } from '@ci/common';
 import { AlertDialog, Avatar, Badge, Breadcrumb, Button, Card, Input } from '@ci/shadcn';
 import { Merge, Users } from '@ci/shadcn/icons';
 import { Link, useNavigate } from 'react-router-dom';
@@ -219,7 +219,7 @@ function DuplicateGroupCard({
             </Avatar>
 
             <div className="min-w-0 flex-1">
-              <Link to={`/people/${person.id}`} className="truncate font-medium hover:underline">
+              <Link to={`/people/${GlobalUID.parse('person', person.id)}`} className="truncate font-medium hover:underline">
                 {person.name || 'Unnamed'}
               </Link>
               {person.isSelf && (
@@ -375,7 +375,7 @@ export function PeoplePage() {
         ) : (
           <div className="flex flex-col gap-2">
             {people.map((person) => (
-              <PersonRow key={person.id} person={person} onOpen={() => navigate(`/people/${person.id}`)} />
+              <PersonRow key={person.id} person={person} onOpen={() => navigate(`/people/${GlobalUID.parse('person', person.id)}`)} />
             ))}
           </div>
         )}

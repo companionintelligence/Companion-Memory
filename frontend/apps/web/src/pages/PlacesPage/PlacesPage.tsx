@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { EmptyState, LoadingPage, Portal, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, LoadingPage, Portal, usePageTitle } from '@ci/common';
 import { Badge, Breadcrumb, Button, Card, Input } from '@ci/shadcn';
 import { MapPin } from '@ci/shadcn/icons';
 import { Link, useNavigate } from 'react-router-dom';
@@ -321,7 +321,7 @@ export function PlacesPage() {
                   key={place.id}
                   variant="place"
                   position={[place.latitude, place.longitude]}
-                  onClick={() => navigate(`/places/${place.id}`)}
+                  onClick={() => navigate(`/places/${GlobalUID.parse('place', place.id)}`)}
                 />
               ))}
             </Map>
@@ -333,7 +333,7 @@ export function PlacesPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {places.map((place) => (
-              <PlaceRow key={place.id} place={place} onOpen={() => navigate(`/places/${place.id}`)} />
+              <PlaceRow key={place.id} place={place} onOpen={() => navigate(`/places/${GlobalUID.parse('place', place.id)}`)} />
             ))}
           </div>
         )}
