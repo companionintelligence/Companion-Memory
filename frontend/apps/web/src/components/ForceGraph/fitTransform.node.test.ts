@@ -29,7 +29,9 @@ describe('fitTransform', () => {
     const nodes = [node(500, 420), node(560, 470), node(620, 440), node(540, 500)];
 
     const fit = fitTransform(nodes, WIDTH, HEIGHT);
-    if (!fit) throw new Error('expected a fit');
+    if (!fit) {
+      throw new Error('expected a fit');
+    }
 
     const projected = nodes.map((n) => project(n, fit));
     const midX = (Math.min(...projected.map((p) => p.x)) + Math.max(...projected.map((p) => p.x))) / 2;
@@ -43,7 +45,9 @@ describe('fitTransform', () => {
     const nodes = [node(500, 420, 'Katherine O’Malley'), node(560, 470, 'Brad Reynolds')];
 
     const fit = fitTransform(nodes, WIDTH, HEIGHT);
-    if (!fit) throw new Error('expected a fit');
+    if (!fit) {
+      throw new Error('expected a fit');
+    }
 
     const projected = nodes.map((n) => project(n, fit));
     const midX = (Math.min(...projected.map((p) => p.x)) + Math.max(...projected.map((p) => p.x))) / 2;
@@ -59,7 +63,9 @@ describe('fitTransform', () => {
     ];
 
     const fit = fitTransform(nodes, WIDTH, HEIGHT);
-    if (!fit) throw new Error('expected a fit');
+    if (!fit) {
+      throw new Error('expected a fit');
+    }
 
     for (const n of nodes) {
       const p = project(n, fit);
@@ -76,7 +82,9 @@ describe('fitTransform', () => {
     const tight = fitTransform([node(500, 300), node(540, 330), node(520, 360)], WIDTH, HEIGHT);
     const sprawling = fitTransform([node(-800, -600), node(1800, 1400), node(500, 300)], WIDTH, HEIGHT);
 
-    if (!tight || !sprawling) throw new Error('expected fits');
+    if (!tight || !sprawling) {
+      throw new Error('expected fits');
+    }
 
     expect(tight.scale).toBeGreaterThan(1);
     expect(sprawling.scale).toBeLessThan(1);
@@ -95,7 +103,9 @@ describe('fitTransform', () => {
     ];
 
     const fit = fitTransform(nodes, WIDTH, HEIGHT, anchor);
-    if (!fit) throw new Error('expected a fit');
+    if (!fit) {
+      throw new Error('expected a fit');
+    }
 
     const projectedAnchor = project(nodes[0], fit);
 
@@ -118,7 +128,9 @@ describe('fitTransform', () => {
     const single = fitTransform([node(400, 300, 'A')], WIDTH, HEIGHT);
     const enormous = fitTransform([node(-100000, -100000), node(100000, 100000)], WIDTH, HEIGHT);
 
-    if (!single || !enormous) throw new Error('expected fits');
+    if (!single || !enormous) {
+      throw new Error('expected fits');
+    }
 
     expect(single.scale).toBeLessThanOrEqual(MAX_ZOOM);
     expect(enormous.scale).toBeGreaterThanOrEqual(MIN_ZOOM);
