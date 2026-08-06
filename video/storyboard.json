@@ -253,8 +253,12 @@
           "capture": {
             "path": "/feed",
             "waitFor": "text=Watch a movie together",
+            "before": [
+              {
+                "eval": "() => { const el = document.querySelector('[data-testid=\"tomorrows-forecast\"]'); if (el) el.style.display = 'none'; }"
+              }
+            ],
             "mask": [
-              "[aria-label=\"24-hour behavioral forecast strip\"]",
               "time"
             ],
             "settle": 600
@@ -399,7 +403,7 @@
             "waitFor": "[aria-label=\"Hop depth\"]",
             "before": [
               {
-                "eval": "() => { const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); if (Math.min(r.bottom, innerHeight) - Math.max(r.top, 0) >= r.height * 0.6) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += r.top - 8; }"
+                "eval": "() => { const HEADER = 64; const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); const d = Math.max(0, Math.min(r.bottom - innerHeight, r.top - HEADER)); if (d < 1) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += d; }"
               }
             ],
             "mask": [

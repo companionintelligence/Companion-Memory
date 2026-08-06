@@ -4,6 +4,8 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { GraphLink, GraphNode } from '@/api/useGraphOverview';
 import { colorForRawType } from '@/components/entities/entityVisuals';
 
+import { clampScale, fitTransform } from './fitTransform';
+
 type ForceNode = GraphNode & {
   x: number;
   y: number;
@@ -118,6 +120,15 @@ function ForceGraphBase({
   const translateStartRef = useRef({ x: 0, y: 0 });
   const previousPositionsRef = useRef<Map<string, ForceNode>>(new Map());
   const anchoredKey = useMemo(() => anchoredNodeIds.join('|'), [anchoredNodeIds]);
+  const nodesKey = useMemo(() => nodes.map((node) => node.id).join('|'), [nodes]);
+  const fittedKeyRef = useRef<string | null>(null);
+  const viewerMovedCameraRef = useRef(false);
+
+  // A new node set is a new picture, so it earns a new frame even if the viewer
+  // moved the camera around the old one.
+  useEffect(() => {
+    viewerMovedCameraRef.current = false;
+  }, [nodesKey]);
 
   const renderLinks = useMemo<SimulationLink[]>(
     () =>
@@ -219,6 +230,29 @@ function ForceGraphBase({
       const snapshot = nodeCopies.map((node) => ({ ...node }));
       setSimNodes(snapshot);
       previousPositionsRef.current = new Map(snapshot.map((node) => [node.id, node]));
+    };
+
+    // Identifies the picture being framed: the same nodes at the same canvas size
+    // are the same shot, so they are fitted once.
+    const fitKey = `${nodesKey}@${boundsWidth}x${boundsHeight}`;
+
+    const fitToNodes = () => {
+      if (viewerMovedCameraRef.current || fittedKeyRef.current === fitKey) {
+        return;
+      }
+
+      // A pinned centre node is an explicit "put this in the middle"; the fit
+      // reframes around it rather than overriding it.
+      const anchor = centerNodeId ? { x: boundsWidth / 2, y: boundsHeight / 2 } : null;
+      const fitted = fitTransform(nodeCopies, boundsWidth, boundsHeight, anchor);
+
+      if (!fitted) {
+        return;
+      }
+
+      fittedKeyRef.current = fitKey;
+      setScale(fitted.scale);
+      setTranslate(fitted.translate);
     };
 
     const tick = () => {
@@ -328,6 +362,7 @@ function ForceGraphBase({
         animationFrame = requestAnimationFrame(tick);
       } else {
         publishSnapshot();
+        fitToNodes();
       }
     };
 
@@ -338,39 +373,36 @@ function ForceGraphBase({
       cancelAnimationFrame(animationFrame);
       previousPositionsRef.current = new Map(nodeCopies.map((node) => [node.id, { ...node }]));
     };
-  }, [anchoredKey, centerNodeId, height, nodes, renderLinks, width]);
+  }, [anchoredKey, centerNodeId, height, nodes, nodesKey, renderLinks, width]);
 
-  const clampScale = useCallback((value: number) => Math.min(3, Math.max(0.35, value)), []);
+  const handleWheel = useCallback((event: WheelEvent) => {
+    if (event.cancelable) {
+      event.preventDefault();
+    }
 
-  const handleWheel = useCallback(
-    (event: WheelEvent) => {
-      if (event.cancelable) {
-        event.preventDefault();
-      }
+    const svgElement = svgRef.current;
+    if (!svgElement) {
+      return;
+    }
 
-      const svgElement = svgRef.current;
-      if (!svgElement) {
-        return;
-      }
+    const rect = svgElement.getBoundingClientRect();
+    const cursorX = event.clientX - rect.left;
+    const cursorY = event.clientY - rect.top;
 
-      const rect = svgElement.getBoundingClientRect();
-      const cursorX = event.clientX - rect.left;
-      const cursorY = event.clientY - rect.top;
+    setScale((prevScale) => {
+      const delta = -event.deltaY * 0.0015;
+      const nextScale = clampScale(prevScale * (1 + delta));
 
-      setScale((prevScale) => {
-        const delta = -event.deltaY * 0.0015;
-        const nextScale = clampScale(prevScale * (1 + delta));
+      setTranslate((prevTranslate) => ({
+        x: cursorX - ((cursorX - prevTranslate.x) * nextScale) / prevScale,
+        y: cursorY - ((cursorY - prevTranslate.y) * nextScale) / prevScale,
+      }));
 
-        setTranslate((prevTranslate) => ({
-          x: cursorX - ((cursorX - prevTranslate.x) * nextScale) / prevScale,
-          y: cursorY - ((cursorY - prevTranslate.y) * nextScale) / prevScale,
-        }));
+      return nextScale;
+    });
 
-        return nextScale;
-      });
-    },
-    [clampScale],
-  );
+    viewerMovedCameraRef.current = true;
+  }, []);
 
   useEffect(() => {
     const svgElement = svgRef.current;
@@ -416,6 +448,10 @@ function ForceGraphBase({
 
       const dx = event.clientX - panStartRef.current.x;
       const dy = event.clientY - panStartRef.current.y;
+
+      if (dx !== 0 || dy !== 0) {
+        viewerMovedCameraRef.current = true;
+      }
 
       setTranslate({
         x: translateStartRef.current.x + dx,

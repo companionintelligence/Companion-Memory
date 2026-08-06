@@ -239,6 +239,24 @@ Verified end state: `ci.events` 200,287 · `ci.communications` 293,291 · `ci.co
 resumes from the watermark, so a restart costs only the in-flight batch — but 4/1000 ran to
 completion and is the setting above.
 
+## Reading the committed PNGs: what is a mask and what is a bug
+
+A Playwright mask paints a flat `#0A222E` rectangle over an element at the shutter. In a committed
+shot that is indistinguishable from a component that rendered nothing, and a screenshot audit has
+already mistaken one for the other twice. Before filing an "empty state" against a frame, check it
+against this list:
+
+| Shot | The flat rectangle | What it is |
+|---|---|---|
+| `memory-map-view` | the 300px column down the left of the map | **A deliberate redaction.** At ≥768px the map renders `TimelineView` there, and against the real archive every card in it is a street address. Masked at the shutter, and meant to be cropped out of the cut as well — the scene is `motion: "hold"` with `focus.landscape` starting at `x = 0.284`, just right of the panel. See hazard 13 in `capture.config.mjs`. ⚠️ **`focus` needs video-kit ≥ 0.4.0** (`src/camera.mjs`); an older kit ignores the key silently and the flat panel stays in frame for the whole 4.5s scene. The redaction still holds — the rectangle is opaque — but check the kit before you believe the framing. |
+| every shot with a list | individual `<time>` elements | Relative timestamps ("3:42 PM" / "Jun 14") that move with the clock. |
+
+`feed-overview` used to belong on that list — its 24-hour forecast strip was masked, leaving a dead
+grey bar under a live "Tomorrow's Forecast" heading and a full colour legend. That read as a broken
+product, so the whole section is now hidden at the shutter instead of masked (hazard 4).
+
+Nothing else in `assets/shots/` is masked. A flat rectangle anywhere else IS a bug.
+
 ## Editing the video
 
 Everything editorial lives in [`storyboard.json`](storyboard.json) — scene order, durations,

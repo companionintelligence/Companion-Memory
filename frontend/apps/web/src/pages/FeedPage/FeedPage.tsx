@@ -358,7 +358,7 @@ export function FeedPage() {
         )}
 
         {hbpeEnabled && forecast && (
-          <div className="px-2 pb-4">
+          <div className="px-2 pb-4" data-testid="tomorrows-forecast">
             <h3 className="text-sm font-semibold text-foreground mb-2">Tomorrow's Forecast</h3>
             <ForecastStrip
               buckets={forecast.buckets}
@@ -400,7 +400,11 @@ export function FeedPage() {
 
       <PageContent>
         {hbpeEnabled && forecast && (
-          <>
+          // `display: contents` so the heading and the strip stay direct flex items of
+          // PageContent (identical layout), while still being one addressable section —
+          // video/capture.config.mjs hides it at the shutter rather than masking it, which
+          // left a dead grey bar under a live heading in the committed shot.
+          <div className="contents" data-testid="tomorrows-forecast">
             <h2 className="text-2xl font-bold text-foreground">Tomorrow's Forecast</h2>
             <ForecastStrip
               buckets={forecast.buckets}
@@ -408,7 +412,7 @@ export function FeedPage() {
               systemStatus={forecast.systemStatus}
               stalled={forecastStalled}
             />
-          </>
+          </div>
         )}
 
         {(actionsEnabled || Boolean(question)) && (

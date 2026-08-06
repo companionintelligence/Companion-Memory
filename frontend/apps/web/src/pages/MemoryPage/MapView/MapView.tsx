@@ -14,6 +14,7 @@ import { boundsToBbox, bboxCenter, formatBbox, parseBbox } from '../bbox';
 import { formatEventTimeRange } from '../Components';
 import { TimelineView } from '../TimelineView';
 
+import { clusterDiameterPx, mergeCollidingClusters, type PixelCluster } from './clusterOverlap';
 import { readCoordinates, readGeoJsonPoint } from './mapCoordinates';
 import './memory-map.css';
 
@@ -109,12 +110,18 @@ function useLocatedEntities() {
 // membership is stable under panning — only zoom reprojects — so we only
 // recompute on zoom). Buckets of one render the normal entity pin; larger
 // buckets render a count bubble that zooms to fit its members on click.
+//
+// The grid alone is not enough: its edges are hard, so two dense neighbouring
+// cells can place their centroids a few pixels apart and draw one bubble on top
+// of another. Everything below therefore works in PROJECTED PIXELS — the space
+// the collision actually happens in — and mergeCollidingClusters folds any two
+// markers whose discs would touch into one before we unproject back to lat/lng.
 const CLUSTER_CELL_PX = 80;
 
 type Cluster = { id: string; lat: number; lng: number; items: LocatedEntity[] };
 
 function clusterize(map: L.Map, located: LocatedEntity[], zoom: number): Cluster[] {
-  const cells = new globalThis.Map<string, LocatedEntity[]>();
+  const cells = new globalThis.Map<string, PixelCluster<LocatedEntity>>();
 
   for (const item of located) {
     const point = map.project([item.coords.lat, item.coords.lng], zoom);
@@ -122,26 +129,39 @@ function clusterize(map: L.Map, located: LocatedEntity[], zoom: number): Cluster
     const bucket = cells.get(key);
 
     if (bucket) {
-      bucket.push(item);
+      bucket.x += point.x;
+      bucket.y += point.y;
+      bucket.items.push(item);
     } else {
-      cells.set(key, [item]);
+      cells.set(key, { x: point.x, y: point.y, items: [item] });
     }
   }
 
-  const clusters: Cluster[] = [];
+  // Cell sums become cell centroids, still in pixels.
+  const gridded = [...cells.values()].map(({ x, y, items }) => ({
+    x: x / items.length,
+    y: y / items.length,
+    items,
+  }));
 
-  for (const [id, items] of cells) {
-    const lat = items.reduce((sum, item) => sum + item.coords.lat, 0) / items.length;
-    const lng = items.reduce((sum, item) => sum + item.coords.lng, 0) / items.length;
+  return mergeCollidingClusters(gridded).map((cluster) => {
+    const { lat, lng } = map.unproject([cluster.x, cluster.y], zoom);
 
-    clusters.push({ id, lat, lng, items });
-  }
-
-  return clusters;
+    // The id has to change with membership AND position: it keys the React list,
+    // so a merged cluster reusing its old cell key would keep a stale icon
+    // showing the old count. Two clusters cannot share this one — same size at
+    // the same rounded pixel would have collided and been merged.
+    return {
+      id: `${cluster.items.length}@${Math.round(cluster.x)},${Math.round(cluster.y)}`,
+      lat,
+      lng,
+      items: cluster.items,
+    };
+  });
 }
 
 function makeClusterIcon(count: number): L.DivIcon {
-  const size = count < 10 ? 38 : count < 100 ? 46 : 54;
+  const size = clusterDiameterPx(count);
 
   // Inline styles (not Tailwind) so the size can scale with the count without
   // relying on dynamically-generated utility classes.

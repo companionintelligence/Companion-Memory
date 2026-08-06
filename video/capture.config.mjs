@@ -103,7 +103,25 @@
  *    "3:42 PM", "Jun 14" and "Jun 14, 2025" depending on today. Masked.
  * 4. HBPE FORECAST STRIP — the feed's `role="img"` strip
  *    (components/ForecastStrip/ForecastStrip.tsx:288) plots per-bucket
- *    probabilities from the behavioural model. Masked.
+ *    probabilities from the behavioural model, and re-forecasts between runs.
+ *    IT USED TO BE MASKED, AND THAT WAS THE WRONG CALL. A mask paints the strip
+ *    #0A222E and leaves everything around it: the "Tomorrow's Forecast" heading
+ *    above, the "Generated 7:11 AM" label and the full WORK/EXERCISE/SOCIAL/…
+ *    legend below. What shipped in feed-overview.png (both viewports) is a live
+ *    heading over a dead grey bar with a legend for colours that never appear —
+ *    a product that looks broken rather than one whose most distinctive widget
+ *    was de-jittered. The audit that reviewed the committed shots read it
+ *    exactly that way and filed it as an empty state.
+ *    The WHOLE SECTION is now hidden at the shutter instead, via the
+ *    `data-testid="tomorrows-forecast"` wrapper FeedPage.tsx puts round the
+ *    heading and the strip (`display: contents`, so the app's layout is
+ *    unchanged). The frame becomes the feed's Actions, which is what the scene's
+ *    caption is about, and nothing half-rendered is claimed as working.
+ *    A BETTER SHOT IS AVAILABLE TO WHOEVER WANTS IT: a real, colour-coded 24-hour
+ *    behaviour strip is one of the most distinctive things this product does. It
+ *    needs a pinned forecast — a fixture behind the /forecast query, or a seeded
+ *    HBPE run with a frozen `generatedAt` — so the bytes stop moving. Until then
+ *    it stays out of frame rather than in it as a rectangle.
  * 5. ACTIVITY TIMELINE RAIL — NOT masked, and the known residual drift.
  *    MemoryPage/ActivityTimelineRail.tsx bounds its grid on today's local day
  *    key and colours each cell by per-day counts, so it moves whenever the seed
@@ -195,6 +213,19 @@
  *    step too. That is the intended trade — a lenient selector here would film
  *    the placeholder and ship it as if it were the graph — but it does mean a
  *    graph regression reads as "video job broken", not "one shot missing".
+ *
+ *    FRAMING, and why the shot's `before` scrolls. The desktop canvas is a fixed
+ *    640px (GraphExplorerModal.tsx:1032) under ~250px of header, breadcrumb and
+ *    filter chips, in a 720px capture viewport: 170px of the canvas is below the
+ *    fold and the committed shot slices "Cycling" and "BBQ" in half at the frame
+ *    edge. The old `before` only scrolled when LESS THAN 60% of the canvas was
+ *    visible, which 73% is not, so it never fired. It now scrolls by exactly
+ *    `min(bottom - innerHeight, top - 64)` — enough to bring the canvas fully
+ *    into frame, never so much that it slides under the fixed header. The filter
+ *    chips scroll off; a whole, legible graph is the better shot.
+ *    The other half of that fix is in the product: ForceGraph now fits the view
+ *    to the settled nodes (components/ForceGraph/fitTransform.ts), so the cluster
+ *    fills its canvas instead of sitting as a small blob in the middle of it.
  * 11. DEEP-LINKED SUMMARY — insight-detail-view navigates straight to
  *    /insights/01936cb0-0000-7000-8000-000000000003 rather than clicking the
  *    first card on /insights. That uuid is pinned in
@@ -268,7 +299,16 @@
  *    the shutter (it is the only mask here that redacts rather than
  *    de-jitters) AND the scene declares `motion: "hold"` with a
  *    `focus.landscape` rectangle that starts at x=0.284 — just right of the
- *    panel — so no rendered frame contains it either. The markers themselves
+ *    panel — so no rendered frame contains it either.
+ *    ⚠️ THAT SECOND HALF IS KIT-DEPENDENT. `focus` landed in video-kit 0.4.0
+ *    (src/camera.mjs); an older kit ignores the key with no warning and renders
+ *    the whole frame, masked panel and all. The redaction is unaffected — the
+ *    rectangle is opaque and nothing legible is under it — but the framing claim
+ *    holds only when the kit being rendered from is 0.4.0 or newer. Check the
+ *    CI-Common checkout's branch and the kit's package.json version first; a
+ *    working tree parked on an old branch is the documented failure mode, and
+ *    every video/package.json in the fleet still declares `^0.1.0`.
+ *    The markers themselves
  *    carry no labels (Marker.tsx:74-114 renders no text and no <Popup>) and
  *    cluster bubbles render only an integer, so the map canvas is safe at any
  *    zoom the shot uses. Do not click a cluster in `before`: MapView.tsx:203
