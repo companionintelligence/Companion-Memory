@@ -82,12 +82,20 @@ export function BentoCard({
         {dismissButton}
         {imageUrl && (
           <div
-            className="relative top-0 left-0 right-0 min-h-42 bg-cover bg-center rounded-t-lg -mx-4 -mt-4 text-4xl font-bold text-center text-white p-4"
+            className={cn(
+              'relative top-0 left-0 right-0 min-h-42 bg-cover bg-center rounded-t-lg -mx-4 -mt-4 text-2xl font-bold text-center text-white p-4',
+              // The dismiss button is `absolute right-3 top-3`; without a reserved
+              // gutter a two-word title ("Weather update") runs straight underneath it.
+              onDismiss && 'pr-12',
+            )}
             style={{
               backgroundImage: `
-              linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0)),
+              linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0.15) 60%, rgba(0,0,0,0)),
               url(${imageUrl})
             `,
+              // Bright imagery (the weather card's cloud cover) washed the title out
+              // even through the scrim.
+              textShadow: '0 1px 3px rgba(0,0,0,0.6)',
             }}
           >
             {title}

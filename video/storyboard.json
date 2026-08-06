@@ -411,30 +411,25 @@
       ]
     },
     {
-      "id": "people",
+      "id": "memory-stats",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 5.5,
-      "caption": "Everyone your memory has met.",
-      "narration": "It builds a directory of the people in your life, and spots the duplicates.",
+      "caption": "It keeps count of everything it holds.",
+      "narration": "It tracks the shape of your memory: how much it holds, where it came from, and how far back it goes.",
       "shots": [
         {
-          "id": "people-directory",
-          "url": "ci-memory.local/people",
-          "alt": "The people directory, with the search box, the total count and the contact list",
+          "id": "memory-stats",
+          "url": "ci-memory.local/stats",
+          "alt": "The memory stats page: totals for events, entities and relationships, the date range, and the breakdowns by tag and by data source",
           "motion": "drift-down",
           "capture": {
-            "path": "/people",
-            "waitFor": "input[placeholder=\"Search people by name...\"]",
-            "before": [
-              {
-                "waitFor": "text=Sarah Smith"
-              }
-            ],
+            "path": "/stats",
+            "waitFor": "text=Entities by data source",
             "mask": [
               "time"
             ],
-            "settle": 600
+            "settle": 700
           }
         }
       ]

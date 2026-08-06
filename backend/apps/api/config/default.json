@@ -153,7 +153,7 @@
     "insights.page": true,
     "chat.page": false,
     "jobs.page": false,
-    "stats.page": false,
+    "stats.page": true,
     "tags.page": true,
     "hbpe": true,
     "agent.memory.compaction": false,

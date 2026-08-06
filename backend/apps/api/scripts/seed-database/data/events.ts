@@ -87,7 +87,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '84a2b8dc-8e4b-420a-b243-d9c35ec45528',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deadlifts and carries. Added 10 lb to the trap bar.',
     start_time: new Date('2025-12-04T07:00:00Z'),
     end_time: new Date('2025-12-04T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -267,7 +267,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '0a0a2ad9-7347-4b66-8d1e-8ca46ec0dd0d',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Push day. Shoulders felt the ride from yesterday.',
     start_time: new Date('2025-12-09T07:00:00Z'),
     end_time: new Date('2025-12-09T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -332,7 +332,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '48413766-80bb-4e3a-8a9b-b22851c77c1e',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Split squats and rows. Slow tempo, lighter load.',
     start_time: new Date('2025-12-11T07:00:00Z'),
     end_time: new Date('2025-12-11T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -352,7 +352,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '3f3b23a4-de9e-4bbe-b327-c05753b6a50d',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Talked through the deploy that rolled back twice.',
     start_time: new Date('2025-12-12T15:00:00Z'),
     end_time: new Date('2025-12-12T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -377,7 +377,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '118f988c-3ab4-45c1-b7c3-b739558aa7e4',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Headwind the whole way out, effortless coming back.',
     start_time: new Date('2025-12-13T07:00:00Z'),
     end_time: new Date('2025-12-13T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -387,7 +387,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'aa00ee93-e66b-4c71-9457-8313617771c9',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Lucas played the full second half. Two assists.',
     start_time: new Date('2025-12-13T10:00:00Z'),
     end_time: new Date('2025-12-13T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -432,7 +432,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '898dfc23-541b-496d-87be-0b04afc60c32',
     title: 'Books & Coffee',
-    description: 'Browsing bestsellers.',
+    description: 'Picked up the new Robert Caro. Stayed for a second flat white.',
     start_time: new Date('2025-12-14T11:00:00Z'),
     end_time: new Date('2025-12-14T12:00:00Z'),
     location_entity_id: places.LAGUNA_BEACH_BOOKS.id,
@@ -482,7 +482,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '1e362b46-cf0f-4ff2-be21-ce52b52ed882',
     title: 'Coffee & Architecture',
-    description: 'Discussing home layout ideas.',
+    description: 'Sketched the kitchen-to-garden sightline on a napkin.',
     start_time: new Date('2025-12-15T19:00:00Z'),
     end_time: new Date('2025-12-15T20:00:00Z'),
     location_entity_id: places.ZINC_CAFE.id,
@@ -492,7 +492,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'ae27dd5f-8541-4698-adf9-005e231729ec',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deloading this week. Everything at 60%.',
     start_time: new Date('2025-12-16T07:00:00Z'),
     end_time: new Date('2025-12-16T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -537,7 +537,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '068c0541-5cfe-49dd-b7d9-c91a393b938c',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Hit a clean set of five on the front squat.',
     start_time: new Date('2025-12-18T07:00:00Z'),
     end_time: new Date('2025-12-18T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -547,7 +547,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '6b6ab47f-8275-4469-89d5-bb22e5aa99cc',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Agreed to cap work-in-progress at three per person.',
     start_time: new Date('2025-12-19T15:00:00Z'),
     end_time: new Date('2025-12-19T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -582,7 +582,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'dd0f862e-3ff9-412b-a17f-afe13c9ee9b9',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Took the inland loop for a change. More climbing.',
     start_time: new Date('2025-12-20T07:00:00Z'),
     end_time: new Date('2025-12-20T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -592,7 +592,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '501412f9-9868-4d77-b8b7-9d64a040b812',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Rained through the whole match. Lost 2-1.',
     start_time: new Date('2025-12-20T10:00:00Z'),
     end_time: new Date('2025-12-20T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -692,7 +692,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '8d7b36db-7df4-41d5-b95f-9fc3de5dfc71',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Short session before work. Core and grip only.',
     start_time: new Date('2025-12-23T07:00:00Z'),
     end_time: new Date('2025-12-23T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -782,7 +782,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '0695fab0-5735-4983-a7f2-45a66666c370',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Mostly positive. Shipping cadence is holding.',
     start_time: new Date('2025-12-26T15:00:00Z'),
     end_time: new Date('2025-12-26T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -797,7 +797,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '626b2fce-e14b-4b30-82b5-54a69a7c6a49',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Rode with the Saturday group. Held the pace.',
     start_time: new Date('2025-12-27T07:00:00Z'),
     end_time: new Date('2025-12-27T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -807,7 +807,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'c8bb955b-2975-42a6-8cad-d595b5e09647',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Away game, long drive. Worth it — he scored.',
     start_time: new Date('2025-12-27T10:00:00Z'),
     end_time: new Date('2025-12-27T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -887,7 +887,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'fb17599a-b0e9-44c5-aae9-97043d035b8d',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deadlifts and carries. Added 10 lb to the trap bar.',
     start_time: new Date('2025-12-30T07:00:00Z'),
     end_time: new Date('2025-12-30T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -942,7 +942,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '251a2445-2924-4411-9105-94f790741ab4',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Push day. Shoulders felt the ride from yesterday.',
     start_time: new Date('2026-01-01T07:00:00Z'),
     end_time: new Date('2026-01-01T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -972,7 +972,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '07634950-6251-4817-9e51-cc4441b3754a',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Long one. Revisited the on-call rotation.',
     start_time: new Date('2026-01-02T15:00:00Z'),
     end_time: new Date('2026-01-02T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -997,7 +997,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '8d2ff1fd-a377-491b-acad-59a23f7b64aa',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Cut it short at 40k — rear tyre losing air.',
     start_time: new Date('2026-01-03T07:00:00Z'),
     end_time: new Date('2026-01-03T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -1007,7 +1007,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'e5fa5daa-fc37-40db-bc6a-b00580ebb632',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Sat with the other parents. Nil-nil.',
     start_time: new Date('2026-01-03T10:00:00Z'),
     end_time: new Date('2026-01-03T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -1017,7 +1017,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'be91afa2-cff0-4ab1-9d81-45598749bcc4',
     title: 'Books & Coffee',
-    description: 'Browsing bestsellers.',
+    description: 'Finished the last two chapters of the systems-design book.',
     start_time: new Date('2026-01-03T15:00:00Z'),
     end_time: new Date('2026-01-03T16:00:00Z'),
     location_entity_id: places.LAGUNA_BEACH_BOOKS.id,
@@ -1102,7 +1102,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '322d8bf5-e7cc-42ec-98ab-8eab9da31917',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Split squats and rows. Slow tempo, lighter load.',
     start_time: new Date('2026-01-06T07:00:00Z'),
     end_time: new Date('2026-01-06T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1122,7 +1122,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '8a5415be-f4c5-4d04-87d8-cc1537e802b7',
     title: 'Coffee & Architecture',
-    description: 'Discussing home layout ideas.',
+    description: 'Argued about whether the loft needs a second stair.',
     start_time: new Date('2026-01-06T18:00:00Z'),
     end_time: new Date('2026-01-06T19:00:00Z'),
     location_entity_id: places.ZINC_CAFE.id,
@@ -1167,7 +1167,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'de9df035-57d4-4454-aaf6-a761a3c34f05',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deloading this week. Everything at 60%.',
     start_time: new Date('2026-01-08T07:00:00Z'),
     end_time: new Date('2026-01-08T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1202,7 +1202,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '3185b34b-eae2-49a1-99d7-f6cc954c6e08',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Cold start, clear sky, best ride in weeks.',
     start_time: new Date('2026-01-10T07:00:00Z'),
     end_time: new Date('2026-01-10T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -1287,7 +1287,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '0c1f286a-226d-485f-b9be-d4274f411c48',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Hit a clean set of five on the front squat.',
     start_time: new Date('2026-01-13T07:00:00Z'),
     end_time: new Date('2026-01-13T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1367,7 +1367,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '518511aa-e7f4-4601-a4a2-e543fb6d634c',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Short session before work. Core and grip only.',
     start_time: new Date('2026-01-15T07:00:00Z'),
     end_time: new Date('2026-01-15T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1377,7 +1377,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '9190e4c1-3fc2-4fc4-ab71-627b8cc3356d',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Talked through the deploy that rolled back twice.',
     start_time: new Date('2026-01-16T15:00:00Z'),
     end_time: new Date('2026-01-16T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -1427,7 +1427,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '70f8e114-2d35-48a9-b120-2968b49b94f1',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Lucas played the full second half. Two assists.',
     start_time: new Date('2026-01-17T10:00:00Z'),
     end_time: new Date('2026-01-17T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -1592,7 +1592,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '6f5a7b6e-7dbf-46dc-9f73-c87d7688e12d',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deadlifts and carries. Added 10 lb to the trap bar.',
     start_time: new Date('2026-01-22T07:00:00Z'),
     end_time: new Date('2026-01-22T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1612,7 +1612,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'f3b03a87-3dfd-496d-894d-88756fab24f7',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Agreed to cap work-in-progress at three per person.',
     start_time: new Date('2026-01-23T15:00:00Z'),
     end_time: new Date('2026-01-23T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -1642,7 +1642,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'd7bbed5b-1189-493f-9c76-0649fd9b36a6',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Headwind the whole way out, effortless coming back.',
     start_time: new Date('2026-01-24T07:00:00Z'),
     end_time: new Date('2026-01-24T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -1652,7 +1652,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '41547918-2c7a-4cb7-85ce-2ccd6d201c60',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Rained through the whole match. Lost 2-1.',
     start_time: new Date('2026-01-24T10:00:00Z'),
     end_time: new Date('2026-01-24T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -1732,7 +1732,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'b07704bd-7956-4bb1-996f-4de026b3fd7e',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Push day. Shoulders felt the ride from yesterday.',
     start_time: new Date('2026-01-27T07:00:00Z'),
     end_time: new Date('2026-01-27T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1742,7 +1742,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '6d05fd9a-bafc-43bd-af8d-181cf7cf813b',
     title: 'Books & Coffee',
-    description: 'Browsing bestsellers.',
+    description: 'Staff-pick table had three I already own. Left with none.',
     start_time: new Date('2026-01-27T19:00:00Z'),
     end_time: new Date('2026-01-27T20:00:00Z'),
     location_entity_id: places.LAGUNA_BEACH_BOOKS.id,
@@ -1787,7 +1787,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '6dcfe977-f215-4507-9fa5-89732b8195d7',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Split squats and rows. Slow tempo, lighter load.',
     start_time: new Date('2026-01-29T07:00:00Z'),
     end_time: new Date('2026-01-29T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1807,7 +1807,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '7cac694a-86be-451c-afe0-a7a5a0d0484c',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Mostly positive. Shipping cadence is holding.',
     start_time: new Date('2026-01-30T15:00:00Z'),
     end_time: new Date('2026-01-30T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -1822,7 +1822,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'eba86d99-5eb0-408b-af87-9c835bc25a58',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Took the inland loop for a change. More climbing.',
     start_time: new Date('2026-01-31T07:00:00Z'),
     end_time: new Date('2026-01-31T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -1832,7 +1832,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '89d5daeb-3d56-4123-b187-5cb422cd46b4',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Away game, long drive. Worth it — he scored.',
     start_time: new Date('2026-01-31T10:00:00Z'),
     end_time: new Date('2026-01-31T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -1877,7 +1877,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'd72b21de-471b-419c-b6d6-95020e7135b0',
     title: 'Books & Coffee',
-    description: 'Browsing bestsellers.',
+    description: 'Read the first fifty pages of a novel, bought it on the way out.',
     start_time: new Date('2026-02-01T12:00:00Z'),
     end_time: new Date('2026-02-01T13:00:00Z'),
     location_entity_id: places.LAGUNA_BEACH_BOOKS.id,
@@ -1927,7 +1927,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '0ad709e1-ee84-4d01-98e3-c82eeb309578',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deloading this week. Everything at 60%.',
     start_time: new Date('2026-02-03T07:00:00Z'),
     end_time: new Date('2026-02-03T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -1972,7 +1972,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '17061666-48a4-4265-8e86-4281dc72bccd',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Hit a clean set of five on the front squat.',
     start_time: new Date('2026-02-05T07:00:00Z'),
     end_time: new Date('2026-02-05T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -2002,7 +2002,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'f267e7b9-3aec-43a8-bdd5-35832678a057',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Long one. Revisited the on-call rotation.',
     start_time: new Date('2026-02-06T15:00:00Z'),
     end_time: new Date('2026-02-06T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -2027,7 +2027,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '73293458-1638-4ca9-b81f-8efb6368beda',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Rode with the Saturday group. Held the pace.',
     start_time: new Date('2026-02-07T07:00:00Z'),
     end_time: new Date('2026-02-07T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -2037,7 +2037,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '3071428b-9c61-43d6-8330-aeb64a46e3b6',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Sat with the other parents. Nil-nil.',
     start_time: new Date('2026-02-07T10:00:00Z'),
     end_time: new Date('2026-02-07T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -2122,7 +2122,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '495e3b85-aaba-435f-a69f-f7c9e4602566',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Short session before work. Core and grip only.',
     start_time: new Date('2026-02-10T07:00:00Z'),
     end_time: new Date('2026-02-10T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -2212,7 +2212,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'e625cd2e-b592-4670-ac19-f5dcfaaf22c0',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Cut it short at 40k — rear tyre losing air.',
     start_time: new Date('2026-02-14T07:00:00Z'),
     end_time: new Date('2026-02-14T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -2317,7 +2317,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: 'bccd85ad-0a3a-4c2f-867c-07fdfa1c5725',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deadlifts and carries. Added 10 lb to the trap bar.',
     start_time: new Date('2026-02-17T07:00:00Z'),
     end_time: new Date('2026-02-17T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -2362,7 +2362,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '0848f7c2-4bed-4e21-bf0b-a70898445c33',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Push day. Shoulders felt the ride from yesterday.',
     start_time: new Date('2026-02-19T07:00:00Z'),
     end_time: new Date('2026-02-19T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -2397,7 +2397,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '33ec6d6c-4252-4f1a-b9f0-1523a85e7be6',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Talked through the deploy that rolled back twice.',
     start_time: new Date('2026-02-20T15:00:00Z'),
     end_time: new Date('2026-02-20T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -2412,7 +2412,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '3e2fb371-cff5-478a-9305-167d3bf3d0ba',
     title: 'Books & Coffee',
-    description: 'Browsing bestsellers.',
+    description: 'Quiet corner table. Notes for the architecture review.',
     start_time: new Date('2026-02-20T18:00:00Z'),
     end_time: new Date('2026-02-20T19:00:00Z'),
     location_entity_id: places.LAGUNA_BEACH_BOOKS.id,
@@ -2422,7 +2422,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '8f5997ce-921d-404d-a898-1ce15896d37f',
     title: 'Long Ride',
-    description: 'Zone 2 endurance ride along the coast.',
+    description: 'Cold start, clear sky, best ride in weeks.',
     start_time: new Date('2026-02-21T07:00:00Z'),
     end_time: new Date('2026-02-21T10:00:00Z'),
     location_entity_id: places.CRYSTAL_COVE_TRAILHEAD.id,
@@ -2432,7 +2432,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '22a31f85-c23b-4a39-a588-8426814c3913',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Lucas played the full second half. Two assists.',
     start_time: new Date('2026-02-21T10:00:00Z'),
     end_time: new Date('2026-02-21T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,
@@ -2442,7 +2442,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '5a2e7c59-96dc-469f-b9c4-71487f888b3c',
     title: 'Coffee & Architecture',
-    description: 'Discussing home layout ideas.',
+    description: 'Went through cabinetry samples over two long blacks.',
     start_time: new Date('2026-02-21T18:00:00Z'),
     end_time: new Date('2026-02-21T19:00:00Z'),
     location_entity_id: places.ZINC_CAFE.id,
@@ -2532,7 +2532,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '757dfeb4-4a46-40f5-85b6-c3580bf85ba8',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Split squats and rows. Slow tempo, lighter load.',
     start_time: new Date('2026-02-24T07:00:00Z'),
     end_time: new Date('2026-02-24T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -2587,7 +2587,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '9a4fa4da-162d-43a0-8a8e-00df73817c69',
     title: 'Coffee & Architecture',
-    description: 'Discussing home layout ideas.',
+    description: 'Talked through the roofline change with the drawings out.',
     start_time: new Date('2026-02-25T18:00:00Z'),
     end_time: new Date('2026-02-25T19:00:00Z'),
     location_entity_id: places.ZINC_CAFE.id,
@@ -2597,7 +2597,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '9244d6c3-2e6e-4833-a406-39e06f4a0bd7',
     title: 'Strength Training',
-    description: 'Functional strength session.',
+    description: 'Deloading this week. Everything at 60%.',
     start_time: new Date('2026-02-26T07:00:00Z'),
     end_time: new Date('2026-02-26T08:00:00Z'),
     location_entity_id: places.SMITH_FAMILY_HOME.id,
@@ -2607,7 +2607,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '3d691dd2-db7c-4fb1-949b-e8b27adae689',
     title: 'Team Retro',
-    description: 'Weekly retrospective.',
+    description: 'Agreed to cap work-in-progress at three per person.',
     start_time: new Date('2026-02-27T15:00:00Z'),
     end_time: new Date('2026-02-27T16:00:00Z'),
     location_entity_id: places.TECHNOVA_SYSTEMS_HQ.id,
@@ -2632,7 +2632,7 @@ export const EVENTS: SeedEvent[] = [
   {
     id: '7032ac4b-81b5-456e-a135-2544037761c4',
     title: 'Soccer Game',
-    description: 'Cheering on Lucas.',
+    description: 'Rained through the whole match. Lost 2-1.',
     start_time: new Date('2026-02-28T10:00:00Z'),
     end_time: new Date('2026-02-28T12:00:00Z'),
     location_entity_id: places.ALTA_LAGUNA_PARK.id,

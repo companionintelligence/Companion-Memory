@@ -651,19 +651,41 @@ export class GraphUtilityService {
   }
 
   /**
-   * Count active entities per data source. Provenance is the importer-supplied
-   * `properties.data_source` key (CI-Import-Tools sets it on ingested entities;
-   * this repo passes the payload's properties through untouched). Entities
-   * without the key group under `Unknown`.
+   * Count active entities per data source.
+   *
+   * Provenance is resolved in priority order, because no single key is set on
+   * every entity:
+   *
+   *  1. `properties.data_source`  — what CI-Import-Tools stamps on ingested rows.
+   *  2. `properties.importerType` — what the importer/tool write-path sets.
+   *  3. `linked_table`            — the origin table for entities materialised
+   *                                 from first-party records (people, places,
+   *                                 events, concepts, users …).
+   *
+   * Grouping on `data_source` alone previously put *every* entity in `Unknown`
+   * (17,649 of them on a real archive) because nothing in this repo writes that
+   * key — it is only ever set by an external importer. `linked_table` is
+   * populated for locally-derived entities, so the breakdown is now real.
+   * `Unknown` remains only for entities with genuinely no provenance.
+   *
+   * `NULLIF(..., '')` keeps empty-string properties from masking a usable
+   * lower-priority source.
    */
   async getEntityCountsBySource(ownerUserId: string): Promise<Array<{ source: string; count: number }>> {
+    const sourceExpr = `COALESCE(
+      NULLIF(entity.properties ->> 'data_source', ''),
+      NULLIF(entity.properties ->> 'importerType', ''),
+      NULLIF(entity.linked_table, ''),
+      'Unknown'
+    )`;
+
     const rows: Array<{ source: string; count: string }> = await this.entityRepo
       .createQueryBuilder('entity')
-      .select(`COALESCE(entity.properties ->> 'data_source', 'Unknown')`, 'source')
+      .select(sourceExpr, 'source')
       .addSelect('COUNT(*)', 'count')
       .where('entity.is_active = true')
       .andWhere('entity.owner_user_id = :ownerUserId', { ownerUserId })
-      .groupBy('source')
+      .groupBy(sourceExpr)
       .orderBy('count', 'DESC')
       .getRawMany();
 

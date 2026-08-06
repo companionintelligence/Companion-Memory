@@ -530,7 +530,24 @@ function ForceGraphBase({
                     stroke={isSelected ? 'hsl(var(--primary-foreground))' : 'rgba(15, 23, 42, 0.2)'}
                     strokeWidth={isSelected ? 2 : 1}
                   />
-                  <text x={radius + 4} y={4} className="text-xs" fill="hsl(var(--foreground))">
+                  {/*
+                    Dense clusters overlap labels ("Mark Thompson" over "Maya Patel",
+                    "Emma Smith" over "Anita Garcia"), which turned them into
+                    unreadable mush. `paint-order: stroke` draws a background-coloured
+                    halo behind each glyph so the topmost label stays legible wherever
+                    two collide. Selected/highlighted labels also render above the
+                    rest via a larger halo and bolder weight.
+                  */}
+                  <text
+                    x={radius + 4}
+                    y={4}
+                    className={isSelected || isHighlighted ? 'text-xs font-semibold' : 'text-xs'}
+                    fill="hsl(var(--foreground))"
+                    stroke="hsl(var(--background))"
+                    strokeWidth={isSelected || isHighlighted ? 4 : 3}
+                    strokeLinejoin="round"
+                    style={{ paintOrder: 'stroke fill' }}
+                  >
                     {node.name ?? node.entity_type}
                   </text>
                 </g>
