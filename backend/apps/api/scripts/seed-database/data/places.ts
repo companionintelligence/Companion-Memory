@@ -12,9 +12,17 @@ export const SMITH_FAMILY_HOME: SeedPlace = {
   description: "Our primary residence in the hills of Laguna Beach, offering the 'sanctuary' Sarah needs.",
   properties: {
     type: 'Residence',
-    latitude: 33.53083080367612,
-    longitude: -117.75757100320266,
-    address: '1685 Del Mar Ave, Laguna Beach, CA 92651', // Near Moulton Meadows Park
+    // Deliberately NOT a resolvable address. The demo persona is fictional, but
+    // this record is rendered verbatim in the entity detail sheet — including in
+    // product screenshots published to the public app store — so it must not
+    // point at a real home. The previous value ('1685 Del Mar Ave') was a real,
+    // geocodable Laguna Beach property belonging to an uninvolved third party,
+    // published alongside exact coordinates, "Residence", and a bedroom count.
+    // "Sanctuary Ridge" is a fictional street; the coordinates are the public
+    // Moulton Meadows Park green, not a dwelling.
+    latitude: 33.5406,
+    longitude: -117.7712,
+    address: '4 Sanctuary Ridge, Laguna Beach, CA 92651',
     bedrooms: 4,
     neighborhood: 'Top of the World',
   },

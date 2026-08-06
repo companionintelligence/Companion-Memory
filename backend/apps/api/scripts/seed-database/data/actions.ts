@@ -56,8 +56,13 @@ export const ACTIONS: SeedAction[] = [
   },
   {
     id: '01993a46-5476-4d6f-8f69-00d7f52adea4',
-    title: 'Weather update',
-    text: "Today's weather forecast for your area:\n\n* **Current:** 72°F, Sunny\n* **Tonight:** 65°F, Clear\n* **Tomorrow:** 75°F, Partly Cloudy\n\nPerfect weather for outdoor activities this weekend!",
+    // The seed image is a satellite shot of a tropical storm system. The copy
+    // used to read "72°F, Sunny — perfect weather for outdoor activities",
+    // which made the card look either fabricated or broken. Copy now matches
+    // the image, and shows the companion doing something worth doing: noticing
+    // the conflict with an existing plan and offering to act on it.
+    title: 'Storm system tracking your way',
+    text: 'A tropical system is forecast to reach the coast on Saturday afternoon:\n\n* **Friday:** 74°F, breezy and clearing\n* **Saturday:** 68°F, heavy rain from midday, gusts to 45 mph\n* **Sunday:** 71°F, clearing overnight\n\nYour trail hike is booked for Saturday morning — that window still looks dry, but the drive home does not. Want me to move it to Sunday?',
     imageUrl: '/actions/weather.jpg',
     threadId: threads.WEATHER_UPDATE.id,
     tags: ['Weather', 'Forecast', 'Planning'],
