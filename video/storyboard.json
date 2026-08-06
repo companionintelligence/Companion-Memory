@@ -9,7 +9,8 @@
   },
   "meta": {
     "fps": 30,
-    "transitionSeconds": 0.5
+    "transitionSeconds": 0.5,
+    "pacing": "fit"
   },
   "chapters": {
     "first-run": "First run",
@@ -68,10 +69,24 @@
             "path": "/login",
             "waitFor": "a:has-text(\"Sign in with Companion account\")",
             "before": [
-              { "click": "button:has-text(\"Sign in with email instead\")" },
-              { "waitFor": "input[name=\"email\"]" },
-              { "fill": ["input[name=\"email\"]", "jsmith@example.com"] },
-              { "fill": ["input[name=\"password\"]", "correct horse battery staple"] }
+              {
+                "click": "button:has-text(\"Sign in with email instead\")"
+              },
+              {
+                "waitFor": "input[name=\"email\"]"
+              },
+              {
+                "fill": [
+                  "input[name=\"email\"]",
+                  "jsmith@example.com"
+                ]
+              },
+              {
+                "fill": [
+                  "input[name=\"password\"]",
+                  "correct horse battery staple"
+                ]
+              }
             ],
             "settle": 400
           }
@@ -95,12 +110,24 @@
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Time and place\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
-              { "click": "#focus-area-personal_fitness" },
-              { "click": "#focus-area-communication" },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Time and place\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"What should we focus on?\")"
+              },
+              {
+                "click": "#focus-area-personal_fitness"
+              },
+              {
+                "click": "#focus-area-communication"
+              },
               {
                 "eval": "() => { const el = [...document.querySelectorAll('*')].find((e) => e.scrollHeight > e.clientHeight + 2 && e.clientHeight > 100 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)); if (el) el.scrollTop = 0; }"
               }
@@ -127,14 +154,30 @@
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Time and place\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Connect a source\")" }
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Time and place\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"What should we focus on?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Who are you usually around?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Connect a source\")"
+              }
             ],
             "settle": 400
           }
@@ -158,16 +201,36 @@
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Time and place\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Connect a source\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"How much trust?\")" }
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Time and place\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"What should we focus on?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Who are you usually around?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Connect a source\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"How much trust?\")"
+              }
             ],
             "settle": 400
           }
@@ -190,7 +253,10 @@
           "capture": {
             "path": "/feed",
             "waitFor": "text=Watch a movie together",
-            "mask": ["[aria-label=\"24-hour behavioral forecast strip\"]", "time"],
+            "mask": [
+              "[aria-label=\"24-hour behavioral forecast strip\"]",
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -212,7 +278,9 @@
           "capture": {
             "path": "/memory?view=list",
             "waitFor": "div[role=\"button\"]",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -235,10 +303,16 @@
             "path": "/memory?view=list&includedEntityTypes=Event",
             "waitFor": "div[role=\"button\"]",
             "before": [
-              { "click": "div[role=\"button\"] >> nth=0" },
-              { "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]" }
+              {
+                "click": "div[role=\"button\"] >> nth=0"
+              },
+              {
+                "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]"
+              }
             ],
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 700
           }
         }
@@ -260,7 +334,9 @@
           "capture": {
             "path": "/memory?view=list&search=coffee",
             "waitFor": "div[role=\"button\"]",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -282,7 +358,10 @@
           "capture": {
             "path": "/memory?view=map",
             "waitFor": ".leaflet-container",
-            "mask": ["time", ".leaflet-control-attribution"],
+            "mask": [
+              "time",
+              ".leaflet-control-attribution"
+            ],
             "settle": 1200
           }
         }
@@ -309,7 +388,9 @@
                 "eval": "() => { const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); if (Math.min(r.bottom, innerHeight) - Math.max(r.top, 0) >= r.height * 0.6) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += r.top - 8; }"
               }
             ],
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 2500
           }
         }
@@ -331,8 +412,14 @@
           "capture": {
             "path": "/people",
             "waitFor": "input[placeholder=\"Search people by name...\"]",
-            "before": [{ "waitFor": "text=Sarah Smith" }],
-            "mask": ["time"],
+            "before": [
+              {
+                "waitFor": "text=Sarah Smith"
+              }
+            ],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -354,7 +441,9 @@
           "capture": {
             "path": "/insights",
             "waitFor": "h2:has-text(\"Insights & Summaries\")",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -376,7 +465,9 @@
           "capture": {
             "path": "/insights/01936cb0-0000-7000-8000-000000000003",
             "waitFor": "h1:has-text(\"Daily Summary\")",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 500
           }
         }
@@ -399,7 +490,9 @@
             "path": "/connect",
             "waitFor": "text=Browser Extensions",
             "before": [
-              { "waitFor": "h2:has-text(\"Service Integrations\")" },
+              {
+                "waitFor": "h2:has-text(\"Service Integrations\")"
+              },
               {
                 "eval": "Array.from(document.querySelectorAll('h2')).find((h) => h.textContent.trim() === 'Service Integrations').scrollIntoView({ block: 'start' })"
               }
@@ -417,10 +510,22 @@
       "caption": "One appliance. One memory. No cloud account.",
       "narration": "Local database, local models, no cloud account.",
       "items": [
-        { "label": "Store", "value": "Postgres + pgvector" },
-        { "label": "Models", "value": "Ollama, on device" },
-        { "label": "Your records", "value": "stay on your hardware" },
-        { "label": "Monthly fee", "value": "$0" }
+        {
+          "label": "Store",
+          "value": "Postgres + pgvector"
+        },
+        {
+          "label": "Models",
+          "value": "Ollama, on device"
+        },
+        {
+          "label": "Your records",
+          "value": "stay on your hardware"
+        },
+        {
+          "label": "Monthly fee",
+          "value": "$0"
+        }
       ]
     },
     {
