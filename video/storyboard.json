@@ -30,8 +30,7 @@
       "title": "Companion Memory",
       "caption": "Other agents are double agents.",
       "narration": "Other agents are double agents. Companion Memory works only for you.",
-      "mark": "./assets/app-icon.jpg",
-      "reveal": "paced"
+      "mark": "./assets/app-icon.jpg"
     },
     {
       "id": "front-door",
