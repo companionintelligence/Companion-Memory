@@ -332,3 +332,44 @@ indistinguishable from a real UI change in review.
 
 So the range is gone. Re-pin deliberately when you want the newer browser, and re-capture the whole
 shot set in the same commit.
+
+## Why video-kit is pinned exactly, and which kit answered
+
+Same argument, one layer up. `video/package.json` pins `@companionintelligence/video-kit` to an
+exact version too, and `make.sh` prints which one actually resolved on every run:
+
+```
+kit: video-kit 0.7.2 — GitHub Packages registry: pinned 0.7.2
+```
+
+That line is deliberately the same shape as the one CI-Engineering's `tools/` prints (`kitLabel` in
+[`tools/lib/workspace.mjs`](https://github.com/companionintelligence/CI-Engineering/blob/main/tools/lib/workspace.mjs))
+and the one the generic `make.sh` prints, so both halves of the pipeline report identically and a
+single grep for `^kit:` finds either.
+
+**This repo is the one that installs the kit from the registry.** The other eight video repos
+resolve it from the CI-Common checkout on disk, so their hazard is a working tree parked on a stale
+branch — that is what the `── which kit answered ──` guard in the generic runner refuses on
+(CI-Common [#56](https://github.com/companionintelligence/CI-Common/pull/56)), and it has nothing to
+check here. The registry hazard is a floating range instead: `npm install` takes the newest matching
+version at the time of the run, the kit decides pacing, camera and composition, and this repo
+commits its shots. A kit that changed on its own re-renders the cut and lands in review looking like
+a real UI diff — next to the two documented drift shots, which is a bad place to have to tell them
+apart.
+
+Two details worth knowing before you change the pin, because they are not what you would guess:
+
+- **`^0.7.0` floated patches, not minors.** npm's caret pins the minor on `0.x`, so that spec meant
+  `>=0.7.0 <0.8.0`. It did silently move 0.7.0 → 0.7.2 (one of which was a pacing change), but it
+  could never have reached 0.9.1 or 0.10.0.
+- **The registry only carries 0.1.1, 0.1.2 and 0.7.2.** Publishing is driven by a `video-kit-v*`
+  tag; 0.8.0 through 0.10.0 were released in CI-Common's `package.json` but never tagged, so there
+  is nothing to install.
+
+So this repo sits on the 0.7.x line while the disk-resolved repos are on 0.10.0. Getting current is
+a deliberate, separate change: tag and publish the kit, bump the pin here, then re-shoot and commit
+the shots in the same commit as the bump — never the bump alone.
+
+There is no lockfile under `video/` and there should not be; `.gitignore` explains why. That
+rationale depends on the pins in `package.json` being exact, which — as of this section — they now
+both are.

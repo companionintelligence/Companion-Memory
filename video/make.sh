@@ -16,10 +16,19 @@
 #
 # ⚠️ THIS COPY IS NOT THE GENERIC make.sh. Everywhere else in the fleet this file
 # is identical across repos and all repo-specific logic lives in video/stage.sh.
-# Companion Memory needs one real departure: capture runs FIVE times, under three
-# different identities, because `ci-video capture` shares one browser context
-# per viewport and cannot be signed in and signed out at once. See the capture
-# section below. Port any other change to this file from the generic one.
+# Companion Memory needs TWO real departures, and they are the only two:
+#
+#   1  capture runs FIVE times, under three different identities, because
+#      `ci-video capture` shares one browser context per viewport and cannot be
+#      signed in and signed out at once. See the capture section below.
+#   2  video-kit is installed from the private GitHub Packages registry, not
+#      resolved from a CI-Common checkout on disk. So the generic file's
+#      `── which kit answered ──` staleness guard does not apply here — there is
+#      no working tree to be stale — and this file carries the registry-shaped
+#      equivalent instead: an exact pin, a resolution check, and the same
+#      announcement. Do NOT reconcile that block against the generic one.
+#
+# Port any other change to this file from the generic one.
 #
 set -euo pipefail
 
@@ -124,6 +133,86 @@ cd "$VIDEO_DIR"
 
 say "installing the video toolchain"
 npm install --silent
+
+# ── which kit answered ───────────────────────────────────────────────────────
+# The install above pulls @companionintelligence/video-kit from the private
+# GitHub Packages registry, so this repo has no CI-Common working tree that
+# could be stale. That is why the fleet's stale-kit guard — CI-Common #56, the
+# `── which kit answered ──` block in the generic template/make.sh — was
+# deliberately not ported here: it has nothing to check.
+#
+# The registry-shaped hazard is the same one wearing different clothes. A
+# floating range means `npm install` resolves whatever the registry's newest
+# matching version is AT THE TIME OF THE RUN, and nothing here ever said which
+# one it got. The kit decides pacing, camera and composition, so a version
+# picked up on its own re-renders the cut and moves the shots — and this repo
+# COMMITS its shots and already carries two documented drift shots (the
+# activity-timeline rail and the force-graph layout). A silent kit change
+# arrives in review looking exactly like a real UI diff, which is the most
+# expensive way there is to discover it.
+#
+# Not hypothetical, and narrower than it first looks — the specifics matter
+# because they say what this guard can and cannot save you from:
+#
+#   * The old spec was `^0.7.0`. On a 0.x version npm's caret pins the MINOR,
+#     so that range is `>=0.7.0 <0.8.0` — it floats across patches only. It
+#     silently moved 0.7.0 -> 0.7.2 when those published on 2026-08-07, one of
+#     which was a PACING change (CI-Common #44). It could never have reached
+#     0.9.1 or 0.10.0, and no range starting `^0.7` ever will.
+#   * The registry carries 0.1.1, 0.1.2 and 0.7.2 — nothing else. Publishing is
+#     driven by a `video-kit-v*` tag, and 0.8.0 through 0.10.0 were released in
+#     CI-Common's package.json but never tagged, so they do not exist to install.
+#
+# So this half of the pipeline is on the 0.7.x line while the eight repos that
+# resolve the kit off disk are on 0.10.0. Announcing the version is what makes
+# that visible; closing it means publishing a tag and re-shooting deliberately,
+# which is its own commit and not this one's business.
+#
+# Pin exactly, verify what resolved, announce it every run. The label uses the
+# same shape and vocabulary as `kitLabel` in CI-Engineering tools/lib/workspace.mjs
+# and the generic make.sh, so both halves of the pipeline report identically and
+# one grep for `^kit:` finds either.
+KIT_NAME="@companionintelligence/video-kit"
+KIT_SPEC="$(node -p "require('./package.json').devDependencies['$KIT_NAME']" 2>/dev/null || echo '')"
+[ -n "$KIT_SPEC" ] && [ "$KIT_SPEC" != "undefined" ] \
+  || die "video/package.json declares no $KIT_NAME devDependency — the kit cannot be pinned"
+
+# The resolved version and the path it came from. The path is what makes a
+# mismatch diagnosable: node resolution walks UP from video/, so a hoisted copy
+# at the repo root can win over video/node_modules. ("./package.json" is in the
+# kit's exports map, so this resolves rather than throwing ERR_PACKAGE_PATH_NOT_EXPORTED.)
+KIT_HAVE="$(node -p "require('$KIT_NAME/package.json').version" 2>/dev/null || true)"
+KIT_FROM="$(node -p "require.resolve('$KIT_NAME/package.json')" 2>/dev/null || true)"
+[ -n "$KIT_HAVE" ] \
+  || die "$KIT_NAME does not resolve from $VIDEO_DIR after 'npm install' — capture cannot run"
+
+# An exact pin is the only spec a string comparison can actually verify. A range
+# is handled deliberately rather than silently: it cannot promise the next run
+# resolves the same build.
+case "$KIT_SPEC" in
+  [0-9]*) KIT_PIN="$KIT_SPEC" ;;
+  *)      KIT_PIN="" ;;
+esac
+
+if [ -n "$KIT_PIN" ] && [ "$KIT_HAVE" != "$KIT_PIN" ]; then
+  die "video-kit version mismatch — refusing to capture.
+     video/package.json pins : $KIT_PIN
+     actually resolved       : $KIT_HAVE
+     resolved from           : $KIT_FROM
+     A shot set is byte-stable only within one kit; building from $KIT_HAVE
+     would re-render the cut and rewrite committed shots that reviewers read as
+     a real UI change. Clear video/node_modules and re-run, or reconcile the pin."
+fi
+
+if [ -n "$KIT_PIN" ]; then
+  printf '\033[0;2mkit:\033[0m \033[0;32m%s\033[0m\n' \
+    "video-kit $KIT_HAVE — GitHub Packages registry: pinned $KIT_PIN"
+else
+  warn "kit: video-kit $KIT_HAVE — GitHub Packages registry: spec '$KIT_SPEC' is a range, not an exact pin.
+     Resolved $KIT_HAVE for this run, but a later run may resolve a different
+     build and re-render every scene. Pin an exact version, then re-shoot
+     deliberately in the same commit."
+fi
 
 # Unlike the generic make.sh, this repo installs Playwright as part of the
 # toolchain above: video/package.json pins it exactly and `npm install` here
