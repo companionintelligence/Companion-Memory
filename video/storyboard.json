@@ -29,7 +29,9 @@
       "seconds": 5,
       "title": "Companion Memory",
       "caption": "Other agents are double agents.",
-      "narration": "Other agents are double agents. Companion Memory works only for you."
+      "narration": "Other agents are double agents. Companion Memory works only for you.",
+      "mark": "./assets/app-icon.jpg",
+      "reveal": "paced"
     },
     {
       "id": "front-door",
@@ -539,7 +541,8 @@
           "label": "Monthly fee",
           "value": "$0"
         }
-      ]
+      ],
+      "reveal": "paced"
     },
     {
       "id": "close",
@@ -547,7 +550,8 @@
       "seconds": 4,
       "cta": "UnCloud your life.",
       "url": "ci.computer",
-      "narration": "Companion Memory. UnCloud your life."
+      "narration": "Companion Memory. UnCloud your life.",
+      "mark": "brand:logo.full"
     }
   ]
 }
