@@ -1,4 +1,4 @@
-import { labelForSource } from '@/lib/sourceNames';
+import { labelForSource, titleCaseSourceKey } from '@/lib/sourceNames';
 
 import type { EntitySourceKind, SourceCount } from './useStatsService';
 
@@ -52,7 +52,8 @@ export function sourceLabel(source: string): string {
 export interface SourceGroup {
   kind: EntitySourceKind;
   label: string;
-  rows: Array<{ label: string; count: number }>;
+  /** `key` is the raw source — unique within a group, unlike the label. */
+  rows: Array<{ key: string; label: string; count: number }>;
 }
 
 /**
@@ -69,11 +70,30 @@ function kindOf(row: SourceCount): EntitySourceKind {
  * arrive sorted by count and grouping preserves that order.
  */
 export function groupSourcesByKind(rows: readonly SourceCount[]): SourceGroup[] {
-  return SOURCE_KIND_ORDER.map((kind) => ({
-    kind,
-    label: sourceKindLabel(kind),
-    rows: rows
+  return SOURCE_KIND_ORDER.map((kind) => {
+    const groupRows = rows
       .filter((row) => kindOf(row) === kind)
-      .map((row) => ({ label: sourceLabel(row.source), count: row.count })),
-  })).filter((group) => group.rows.length > 0);
+      .map((row) => ({ key: row.source, label: sourceLabel(row.source), count: row.count }));
+
+    // Distinct sources can share a short connector label ("Contacts" covers
+    // both apple_contacts and google_contacts). Identical rows in one section
+    // are indistinguishable, so colliding rows fall back to the full
+    // title-cased key instead: "Apple Contacts" / "Google Contacts".
+    const labelUses = new Map<string, number>();
+    for (const row of groupRows) {
+      labelUses.set(row.label, (labelUses.get(row.label) ?? 0) + 1);
+    }
+
+    for (const row of groupRows) {
+      if ((labelUses.get(row.label) ?? 0) > 1) {
+        row.label = titleCaseSourceKey(row.key.replace(/^import:/, ''));
+      }
+    }
+
+    return {
+      kind,
+      label: sourceKindLabel(kind),
+      rows: groupRows,
+    };
+  }).filter((group) => group.rows.length > 0);
 }

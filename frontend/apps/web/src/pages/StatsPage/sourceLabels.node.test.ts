@@ -38,13 +38,37 @@ describe('groupSourcesByKind', () => {
 
   it('groups rows into sections in display order', () => {
     expect(groupSourcesByKind(rows)).toEqual([
-      { kind: 'imported', label: 'Imported from elsewhere', rows: [{ label: 'LinkedIn', count: 2360 }] },
+      {
+        kind: 'imported',
+        label: 'Imported from elsewhere',
+        rows: [{ key: 'LinkedIn', label: 'LinkedIn', count: 2360 }],
+      },
       {
         kind: 'derived',
         label: 'Worked out on this device',
-        rows: [{ label: 'Message participants', count: 627 }],
+        rows: [
+          {
+            key: 'import:communications:participant',
+            label: 'Message participants',
+            count: 627,
+          },
+        ],
       },
-      { kind: 'self', label: 'You', rows: [{ label: 'Your own profile', count: 1 }] },
+      { kind: 'self', label: 'You', rows: [{ key: 'self', label: 'Your own profile', count: 1 }] },
+    ]);
+  });
+
+  it('disambiguates sources that share a connector label within one section', () => {
+    const colliding: SourceCount[] = [
+      { source: 'google_contacts', kind: 'imported', count: 900 },
+      { source: 'apple_contacts', kind: 'imported', count: 400 },
+      { source: 'gmail', kind: 'imported', count: 100 },
+    ];
+
+    expect(groupSourcesByKind(colliding)[0].rows).toEqual([
+      { key: 'google_contacts', label: 'Google Contacts', count: 900 },
+      { key: 'apple_contacts', label: 'Apple Contacts', count: 400 },
+      { key: 'gmail', label: 'Gmail', count: 100 },
     ]);
   });
 
@@ -70,7 +94,7 @@ describe('groupSourcesByKind', () => {
     const future = [{ source: 'gmail', kind: 'inferred' as never, count: 5 }];
 
     expect(groupSourcesByKind(future)).toEqual([
-      { kind: 'unknown', label: 'Unattributed', rows: [{ label: 'Gmail', count: 5 }] },
+      { kind: 'unknown', label: 'Unattributed', rows: [{ key: 'gmail', label: 'Gmail', count: 5 }] },
     ]);
   });
 });

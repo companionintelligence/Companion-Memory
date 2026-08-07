@@ -161,6 +161,9 @@ function StatTile({ label, value, detail }: StatTileProps) {
 }
 
 interface BarRow {
+  /** Stable identity when labels can repeat (e.g. two sources sharing a
+   * connector label); defaults to the label for callers with unique labels. */
+  key?: string;
   label: string;
   count: number;
 }
@@ -256,7 +259,7 @@ function BarListCard({
                 const rowTitle = `${row.label}: ${formatCount(row.count)} (${share < 1 ? '<1' : Math.round(share)}% of total)`;
                 const rowClass =
                   'grid grid-cols-[minmax(0,14rem)_1fr_auto] items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/50';
-                const rowKey = `${section.key}-${row.label}`;
+                const rowKey = `${section.key}-${row.key ?? row.label}`;
 
                 return href ? (
                   <Link key={rowKey} to={href} title={rowTitle} className={`group ${rowClass}`}>
