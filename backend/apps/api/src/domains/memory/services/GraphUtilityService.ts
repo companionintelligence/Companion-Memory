@@ -729,6 +729,11 @@ export class GraphUtilityService {
    * `import:`-prefixed route is an external import unless it is one of the
    * {@link DERIVED_IMPORT_KEYS} CI-Server itself writes under that prefix.
    *
+   * Grouping is on `(source, kind)`, so one name reached through two different
+   * branches — an importer literally called `files` alongside the `files`
+   * linked_table — reports as two rows rather than silently merging entities
+   * of different provenance. The UI separates them by section.
+   *
    * `NULLIF(..., '')` keeps empty-string properties from masking a usable
    * lower-priority source.
    */
@@ -770,7 +775,7 @@ export class GraphUtilityService {
         SELECT source, kind, COUNT(*)::int AS count
         FROM resolved
         GROUP BY source, kind
-        ORDER BY count DESC, source ASC
+        ORDER BY count DESC, source ASC, kind ASC
         `,
         [ownerUserId, SELF_SOURCE_KEY, UNKNOWN_SOURCE_KEY, GENERIC_SOURCE_KEYS, DERIVED_IMPORT_KEYS],
       );
