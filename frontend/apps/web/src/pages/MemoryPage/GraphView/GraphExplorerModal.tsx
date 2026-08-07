@@ -11,6 +11,7 @@ import { colorForRawType } from '@/components/entities/entityVisuals';
 import { ForceGraph, ForceGraph3D } from '@/components/ForceGraph';
 import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { useAuth } from '@/hooks';
+import { formatEnumLabel } from '@/lib/utils';
 import { Empty } from '@/pages/MemoryPage/Components';
 import { useEntityService } from '@/pages/MemoryPage/useEntityService';
 
@@ -1211,7 +1212,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
                       onClick={() => handleRelationshipTypeToggle(type)}
                       aria-pressed={isActive}
                     >
-                      {type}
+                      {formatEnumLabel(type)}
                     </Button>
                   );
                 })}

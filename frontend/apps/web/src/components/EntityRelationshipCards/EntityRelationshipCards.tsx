@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 
 import { useNodeGraphService } from '@/api/useNodeGraphService';
 import { Tag } from '@/components/Tag';
+import { formatEnumLabel } from '@/lib/utils';
 
 const CARD_MIN_WIDTH = 180;
 const CARD_GAP_PX = 12;
@@ -93,13 +94,6 @@ const IGNORED_RELATIONSHIP_PROPERTIES = new Set([
   'updated_at',
 ]);
 
-function formatRelationshipLabel(value: string): string {
-  return value
-    .toLowerCase()
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
 
 function formatPropertyLabel(key: string): string {
   return key
@@ -472,7 +466,7 @@ export function EntityRelationshipCards({ entityId }: Props) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            {formatRelationshipLabel(card.relationshipType)}
+            {formatEnumLabel(card.relationshipType)}
           </p>
           <p className="text-sm font-semibold leading-tight line-clamp-2">{card.otherEntityName}</p>
         </div>

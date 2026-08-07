@@ -109,7 +109,20 @@ function StatsBody({ stats }: { stats: MemoryStats }) {
         />
         <StatTile
           label="Date range"
-          value={earliest && latest ? `${earliest} → ${latest}` : '—'}
+          value={
+            earliest && latest ? (
+              // Each date is atomic; only the arrow is a break opportunity. Left to
+              // ordinary spaces the browser broke *inside* a date — "2026-05-" /
+              // "08 → 2026-" / "08-05" — which reads as a truncated value rather
+              // than a wrapped one, and does it at every width below `lg`.
+              <>
+                <span className="whitespace-nowrap tabular-nums">{earliest}</span>{' '}
+                <span className="whitespace-nowrap tabular-nums">→ {latest}</span>
+              </>
+            ) : (
+              '—'
+            )
+          }
           detail="Earliest → latest timeline event"
         />
       </div>
@@ -138,7 +151,7 @@ function StatsBody({ stats }: { stats: MemoryStats }) {
 
 interface StatTileProps {
   label: string;
-  value: string;
+  value: React.ReactNode;
   detail: string;
 }
 

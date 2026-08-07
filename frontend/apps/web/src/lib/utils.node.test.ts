@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cn, getMediaType } from './utils';
+import { cn, formatEnumLabel, getMediaType } from './utils';
 
 describe('cn', () => {
   it('joins class names', () => {
@@ -34,5 +34,21 @@ describe('getMediaType', () => {
     ['undefined', undefined],
   ])('returns null for %s', (_label, input) => {
     expect(getMediaType(input)).toBeNull();
+  });
+});
+
+describe('formatEnumLabel', () => {
+  it.each([
+    ['SPOUSE', 'Spouse'],
+    ['WORKS_WITH', 'Works With'],
+    ['CHILD_OF', 'Child Of'],
+    ['FRIENDS_WITH', 'Friends With'],
+    ['UNKNOWN', 'Unknown'],
+  ])('humanises %s', (raw, expected) => {
+    expect(formatEnumLabel(raw)).toBe(expected);
+  });
+
+  it('leaves an empty value empty', () => {
+    expect(formatEnumLabel('')).toBe('');
   });
 });
