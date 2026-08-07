@@ -32,6 +32,53 @@ export interface HourlyEntityCount {
   count: number;
 }
 
+/**
+ * Which class of provenance a stats bucket represents. Lets the UI separate
+ * "came from somewhere else" from "this appliance worked it out", which the
+ * raw source string cannot express — `import:communications:participant` reads
+ * as an import but is derived locally.
+ */
+export type EntitySourceKind = 'self' | 'imported' | 'derived' | 'unknown';
+
+export interface EntitySourceCount {
+  /**
+   * Resolved provenance key. Either a human source name supplied by an importer
+   * ("LinkedIn") or an internal key ({@link DERIVED_SOURCE_KEYS}); callers are
+   * expected to map it for display rather than show it raw.
+   */
+  source: string;
+  kind: EntitySourceKind;
+  count: number;
+}
+
+/** Sentinel for the owner's own node — see {@link GraphUtilityService.getEntityCountsBySource}. */
+const SELF_SOURCE_KEY = 'self';
+
+/** Sentinel for entities carrying no provenance signal at all. */
+const UNKNOWN_SOURCE_KEY = 'Unknown';
+
+/**
+ * `linked_table` values CI-Server writes for entities it derives from data the
+ * appliance already holds. The `import:` prefix on these is a storage
+ * convention (the linked-key upsert namespaces on it) and not evidence of an
+ * external source, so classifying by prefix alone would call them imports.
+ */
+const DERIVED_SOURCE_KEYS = [
+  'import:communications:participant',
+  'import:graph_llm',
+  'import:self',
+  'files',
+  'users',
+];
+
+/**
+ * `linked_table` values that name no origin. `import:importer` is what lands
+ * when an importer posts `sourceSystem: "importer"` — true of every row
+ * CI-Import-Tools has written so far. Rejecting them lets a lower-priority key
+ * answer instead of showing the user a tautology.
+ */
+const GENERIC_SOURCE_KEYS = ['import:importer', 'importer', 'import:'];
+
 @Injectable()
 export class GraphUtilityService {
   constructor(
@@ -654,45 +701,74 @@ export class GraphUtilityService {
    * Count active entities per data source.
    *
    * Provenance is resolved in priority order, because no single key is set on
-   * every entity:
+   * every entity and the keys that *are* set do not all mean the same thing:
    *
-   *  1. `properties.data_source`  — what CI-Import-Tools stamps on ingested rows.
-   *  2. `properties.importerType` — what the importer/tool write-path sets.
-   *  3. `linked_table`            — the origin table for entities materialised
-   *                                 from first-party records (people, places,
-   *                                 events, concepts, users …).
+   *  1. `properties.is_self`      — the owner's own node. Not a source at all;
+   *                                 short-circuits so it never lands in `Unknown`.
+   *  2. `properties.Source`       — the human-readable origin an importer
+   *                                 supplies alongside each record ("LinkedIn").
+   *                                 The only key here that names a real source.
+   *  3. `properties.data_source`  — the documented importer field. Reserved: no
+   *                                 writer sets it yet (0 rows on a live archive),
+   *                                 kept so it wins the moment one does.
+   *  4. `linked_table`            — the origin table / import route, minus the
+   *                                 content-free values in {@link GENERIC_SOURCE_KEYS}.
+   *  5. `properties.importerType` — the *record shape* ("contact"), not an
+   *                                 origin. Last resort: better than nothing,
+   *                                 but it answers a different question.
    *
-   * Grouping on `data_source` alone previously put *every* entity in `Unknown`
-   * (17,649 of them on a real archive) because nothing in this repo writes that
-   * key — it is only ever set by an external importer. `linked_table` is
-   * populated for locally-derived entities, so the breakdown is now real.
-   * `Unknown` remains only for entities with genuinely no provenance.
+   * Ranking `data_source` first and `importerType` second (the previous order)
+   * labelled 2,360 LinkedIn connections "contact" while `Source: "LinkedIn"`
+   * sat unread on every one of them.
+   *
+   * `kind` reports which class of provenance won, so callers can group instead
+   * of mixing importer names, internal route keys and synthetic buckets on one
+   * axis. It is classified from the resolved value rather than tracked per
+   * branch: the branches' value spaces are disjoint in practice, and an
+   * importer that literally named its source `files` would only mislabel its
+   * own rows.
    *
    * `NULLIF(..., '')` keeps empty-string properties from masking a usable
    * lower-priority source.
    */
-  async getEntityCountsBySource(ownerUserId: string): Promise<Array<{ source: string; count: number }>> {
-    const sourceExpr = `COALESCE(
-      NULLIF(entity.properties ->> 'data_source', ''),
-      NULLIF(entity.properties ->> 'importerType', ''),
-      NULLIF(entity.linked_table, ''),
-      'Unknown'
-    )`;
+  async getEntityCountsBySource(ownerUserId: string): Promise<EntitySourceCount[]> {
+    const rows: Array<{ source: string; kind: EntitySourceKind; count: number }> =
+      await this.entityRepo.manager.query(
+        `
+        WITH resolved AS (
+          SELECT CASE
+                   WHEN properties ->> 'is_self' = 'true' THEN $2
+                   ELSE COALESCE(
+                     NULLIF(properties ->> 'Source', ''),
+                     NULLIF(properties ->> 'data_source', ''),
+                     CASE
+                       WHEN linked_table = ANY($4::text[]) THEN NULL
+                       ELSE NULLIF(linked_table, '')
+                     END,
+                     NULLIF(properties ->> 'importerType', ''),
+                     $3
+                   )
+                 END AS source
+          FROM ci.entities
+          WHERE is_active = true
+            AND owner_user_id = $1
+        )
+        SELECT source,
+               CASE
+                 WHEN source = $2 THEN 'self'
+                 WHEN source = $3 THEN 'unknown'
+                 WHEN source = ANY($5::text[]) THEN 'derived'
+                 ELSE 'imported'
+               END AS kind,
+               COUNT(*)::int AS count
+        FROM resolved
+        GROUP BY source
+        ORDER BY count DESC, source ASC
+        `,
+        [ownerUserId, SELF_SOURCE_KEY, UNKNOWN_SOURCE_KEY, GENERIC_SOURCE_KEYS, DERIVED_SOURCE_KEYS],
+      );
 
-    const rows: Array<{ source: string; count: string }> = await this.entityRepo
-      .createQueryBuilder('entity')
-      .select(sourceExpr, 'source')
-      .addSelect('COUNT(*)', 'count')
-      .where('entity.is_active = true')
-      .andWhere('entity.owner_user_id = :ownerUserId', { ownerUserId })
-      .groupBy(sourceExpr)
-      .orderBy('count', 'DESC')
-      .getRawMany();
-
-    return rows.map((row) => ({
-      source: row.source,
-      count: parseInt(row.count, 10),
-    }));
+    return rows;
   }
 
   /**

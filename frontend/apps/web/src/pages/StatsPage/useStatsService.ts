@@ -4,8 +4,13 @@ import { fetchJson } from '@ci/common';
 
 import { useAuth } from '@/hooks';
 
+/** Mirrors `EntitySourceKind` in the API's GraphUtilityService. */
+export type EntitySourceKind = 'self' | 'imported' | 'derived' | 'unknown';
+
 export interface SourceCount {
+  /** Raw provenance key — map it through `sourceLabel` before displaying. */
   readonly source: string;
+  readonly kind: EntitySourceKind;
   readonly count: number;
 }
 

@@ -338,9 +338,10 @@ export class GraphController {
 
   /**
    * Memory-wide totals for the stats page: timeline event count + date span,
-   * entity/relationship totals, entities per data source (the importer's
-   * `properties.data_source`), and the user's {@link STATS_TAG_LIMIT}
-   * most-used tags.
+   * entity/relationship totals, entities per data source (each bucket tagged
+   * with the class of provenance that produced it — see
+   * {@link GraphUtilityService.getEntityCountsBySource}), and the user's
+   * {@link STATS_TAG_LIMIT} most-used tags.
    */
   @Get('stats')
   async getMemoryStats(@Context() ctx: RequestContext) {
