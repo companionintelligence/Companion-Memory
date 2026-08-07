@@ -125,10 +125,75 @@ cd "$VIDEO_DIR"
 say "installing the video toolchain"
 npm install --silent
 
+# Unlike the generic make.sh, this repo installs Playwright as part of the
+# toolchain above: video/package.json pins it exactly and `npm install` here
+# honours that pin, so there is no separate pinned-install step to run.
+#
+# What is still missing is the CHECK. Node resolution walks UP from video/, and
+# this repo's root devDependencies carry @playwright/test ^1.57.0 — a range that
+# resolves to whatever the root happens to hoist. video/node_modules normally
+# wins, but nothing here has ever verified that it did. A half-finished install,
+# a stale tree, or a future workspace/hoisting change would silently hand
+# capture the root's Playwright instead.
+#
+# That is not cosmetic. Capture is byte-stable only within one resolved
+# Playwright build; shooting on the wrong one rewrites every committed shot by a
+# fraction of a percent of pixels — pure text antialiasing — and arrives in
+# review looking like a real UI change. This repo commits its shots and already
+# has two documented drift shots, so a silent version change is most expensive
+# here of anywhere in the fleet. Verify, and refuse to shoot on a mismatch.
+PW_SPEC="$(node -p "require('./package.json').devDependencies.playwright" 2>/dev/null || echo '')"
+[ -n "$PW_SPEC" ] && [ "$PW_SPEC" != "undefined" ] \
+  || die "video/package.json declares no playwright devDependency — capture cannot be pinned"
+
+# The resolved version, and the path it came from. The path is what makes a
+# mismatch diagnosable: "1.60.0, from the repo root" rather than a bare "1.60.0".
+PW_HAVE="$(node -p "require('playwright/package.json').version" 2>/dev/null || true)"
+PW_FROM="$(node -p "require.resolve('playwright/package.json')" 2>/dev/null || true)"
+[ -n "$PW_HAVE" ] \
+  || die "playwright does not resolve from $VIDEO_DIR after 'npm install' — capture cannot run"
+
+# An exact pin is the only spec a string comparison can actually verify, and it
+# is what this repo uses. A range is handled deliberately rather than silently:
+# it cannot promise the next shoot resolves the same build.
+case "$PW_SPEC" in
+  [0-9]*) PW_PIN="$PW_SPEC" ;;
+  *)      PW_PIN="" ;;
+esac
+
+if [ -n "$PW_PIN" ] && [ "$PW_HAVE" != "$PW_PIN" ]; then
+  die "Playwright version mismatch — refusing to capture.
+     video/package.json pins : $PW_PIN
+     actually resolved       : $PW_HAVE
+     resolved from           : $PW_FROM
+     Capture is only byte-stable within one build; shooting on $PW_HAVE would
+     rewrite every committed shot with antialiasing noise that reads as a real
+     UI diff. Remove that copy or reconcile the pin, then re-run."
+fi
+if [ -z "$PW_PIN" ]; then
+  warn "video/package.json declares playwright '$PW_SPEC' — a range, not an exact pin.
+     Resolved $PW_HAVE for this run, but a later shoot may resolve a different
+     build and rewrite every shot. Pin an exact version for byte-stable capture."
+fi
+if [ -n "$PW_PIN" ]; then
+  say "Playwright $PW_HAVE (matches the pin), from $PW_FROM"
+else
+  say "Playwright $PW_HAVE (spec '$PW_SPEC', unpinned), from $PW_FROM"
+fi
+
 say "installing Chromium for Playwright"
 # Idempotent and cached under ~/Library/Caches/ms-playwright, so a no-op after
 # the first run. No --with-deps: that is an apt path and does nothing on macOS.
-npx playwright install chromium
+#
+# Driven through the Playwright resolved just above, NOT `npx playwright`. npx
+# walks up the same way node does and resolves a BINARY, which is a different
+# lookup from the `require('playwright')` the kit's capture.mjs performs — so it
+# can install the browser build for the root's Playwright rather than the pinned
+# one. The browser must match the Playwright that will actually drive it.
+# `playwright/cli.js` is not in the package's exports map, so the path is derived
+# from the package.json that resolution above already located.
+PW_DIR="$(node -p "require('path').dirname(require.resolve('playwright/package.json'))")"
+node "$PW_DIR/cli.js" install chromium
 
 # ── capture: FIVE passes, not one ────────────────────────────────────────────
 # This is the one place Companion Memory departs from the generic make.sh, and
