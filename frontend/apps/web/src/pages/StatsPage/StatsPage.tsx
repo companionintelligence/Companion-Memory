@@ -175,16 +175,9 @@ interface BarSection {
   rows: BarRow[];
 }
 
-interface BarListCardProps {
+interface BarListCardBaseProps {
   title: string;
   description?: string;
-  /** Flat list. Mutually exclusive with {@link BarListCardProps.sections}. */
-  rows?: BarRow[];
-  /**
-   * Grouped list. Bars scale against the max across *all* sections, so a long
-   * bar means the same thing wherever it appears.
-   */
-  sections?: BarSection[];
   /** When set, each row becomes a link to this href (e.g. the explorer scoped to the row's tag). */
   getRowHref?: (row: BarRow) => string;
   /** Custom label cell (e.g. the app's Tag chip); defaults to plain text. */
@@ -193,16 +186,29 @@ interface BarListCardProps {
   headerAction?: React.ReactNode;
 }
 
+/**
+ * Exactly one of `rows` / `sections` — the `never` arms make that a compile
+ * error rather than a documented convention, so neither "passed both" (which
+ * would silently ignore `rows`) nor "passed neither" (an always-empty card)
+ * can reach the runtime fallback.
+ *
+ * `rows` is a flat list; `sections` is a grouped one whose bars scale against
+ * the max across *all* sections, so a long bar means the same thing wherever
+ * it appears.
+ */
+type BarListCardProps = BarListCardBaseProps &
+  ({ rows: BarRow[]; sections?: never } | { sections: BarSection[]; rows?: never });
+
 function BarListCard({
   title,
   description,
-  rows,
-  sections,
   getRowHref,
   renderLabel,
   headerAction,
+  ...listProps
 }: BarListCardProps) {
-  const resolvedSections: BarSection[] = sections ?? [{ key: 'all', rows: rows ?? [] }];
+  const resolvedSections: BarSection[] =
+    listProps.sections ?? [{ key: 'all', rows: listProps.rows }];
   const allRows = resolvedSections.flatMap((section) => section.rows);
   const total = allRows.reduce((sum, row) => sum + row.count, 0);
   const max = allRows.reduce((best, row) => Math.max(best, row.count), 0);
