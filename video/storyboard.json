@@ -26,6 +26,7 @@
     {
       "id": "open",
       "kind": "intro",
+      "reveal": "paced",
       "seconds": 5,
       "title": "Companion Memory",
       "caption": "Other agents are double agents.",
