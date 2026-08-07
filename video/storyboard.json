@@ -403,7 +403,7 @@
             "waitFor": "[aria-label=\"Hop depth\"]",
             "before": [
               {
-                "eval": "() => { const HEADER = 64; const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); const d = Math.max(0, Math.min(r.bottom - innerHeight, r.top - HEADER)); if (d < 1) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += d; }"
+                "eval": "() => { const HEADER = 64; const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); const d = Math.max(0, r.top - HEADER); if (d < 1) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += d; }"
               }
             ],
             "mask": [

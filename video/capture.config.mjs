@@ -52,7 +52,12 @@
  *
  * 1. AUTHENTICATED. The nine currently-filmable shots behind ProtectedRoute:
  *    feed-overview, memory-{list-view,detail-sheet,search-results,graph-view},
- *    people-directory, insights-list, insight-detail-view, connect-providers.
+ *    memory-stats, insights-list, insight-detail-view, connect-providers.
+ *    (memory-stats replaced people-directory in #1871 — a 64-row directory of
+ *    named individuals, cut on the aggregate-only rule. The pass lists were not
+ *    updated with the storyboard at the time, and because --only is a silent
+ *    filter that left memory-stats uncapturable through make.sh; see the note
+ *    above AUTHED_SHOTS in video/make.sh.)
  *    NOT `/`, `/login` or `/onboarding` — see below. NOT memory-map-view
  *    either: it is a tenth ProtectedRoute shot, but the SEED cannot populate it
  *    and a content-gated waitFor therefore fails the whole pass. It is captured
@@ -219,10 +224,21 @@
  *    filter chips, in a 720px capture viewport: 170px of the canvas is below the
  *    fold and the committed shot slices "Cycling" and "BBQ" in half at the frame
  *    edge. The old `before` only scrolled when LESS THAN 60% of the canvas was
- *    visible, which 73% is not, so it never fired. It now scrolls by exactly
- *    `min(bottom - innerHeight, top - 64)` — enough to bring the canvas fully
- *    into frame, never so much that it slides under the fixed header. The filter
- *    chips scroll off; a whole, legible graph is the better shot.
+ *    visible, which 73% is not, so it never fired. Its replacement,
+ *    `min(bottom - innerHeight, top - 64)`, fixed the desktop and was NEVER
+ *    CHECKED AT 360px, where it is a SILENT NO-OP — the exact trap hazard 9
+ *    describes. At mobile width the canvas FITS inside the viewport, so
+ *    `bottom - innerHeight` is NEGATIVE, `min` picks it, `max(0, …)` clamps the
+ *    result to 0 and nothing scrolls at all. The 9:16 frame that produced was a
+ *    quarter filter chips — CHILD_OF / DISLIKES / FRIENDS_WITH / PARENT_OF /
+ *    PREFERS / SIBLING_OF / SPOUSE / WORKS_WITH, raw relationship enums in
+ *    SCREAMING_SNAKE_CASE — above a graph adrift in the leftover space.
+ *    It is now simply `max(0, top - 64)`: align the canvas top just under the
+ *    fixed header. Correct at BOTH widths with no branch — a canvas taller than
+ *    the viewport is already maximally visible once its top is at the header,
+ *    and one shorter than the viewport brings what follows it (on mobile, the
+ *    Summary card with its node and relationship counts) into frame beneath.
+ *    The filter chips scroll off; a whole, legible graph is the better shot.
  *    The other half of that fix is in the product: ForceGraph now fits the view
  *    to the settled nodes (components/ForceGraph/fitTransform.ts), so the cluster
  *    fills its canvas instead of sitting as a small blob in the middle of it.

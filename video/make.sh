@@ -153,7 +153,23 @@ npx playwright install chromium
 # so the shot's content-gated waitFor would time out and take the other nine
 # shots in this pass down with it. Re-shoot it from the real-corpus stage, or
 # fix seed-events.ts first — hazard 13 in capture.config.mjs has the diff.
-AUTHED_SHOTS=feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,people-directory,insights-list,insight-detail-view,connect-providers
+#
+# ⚠️ THIS LIST IS NOT VALIDATED AGAINST THE STORYBOARD, so keeping it in step is
+# manual and a drift here is SILENT IN BOTH DIRECTIONS. `ci-video capture`
+# implements --only as `shots.filter((s) => only.includes(s.id))`
+# (video-kit src/capture.mjs:176) — a plain filter, not a lookup. An id named
+# here that no longer exists in storyboard.json matches nothing and is skipped
+# without a word; a shot added to storyboard.json but not named here is simply
+# never requested, and the only thing that catches it is `ci-video check`
+# failing on the slate several steps later.
+#
+# That is exactly what happened between #1871 and this commit: #1871 replaced
+# the /people scene with /stats, and this list kept `people-directory` (gone
+# from the storyboard) while never gaining `memory-stats` (added to it). So
+# pass 1 silently captured eight shots instead of nine and memory-stats was
+# unreachable through make.sh at all — which is why both of its viewports were
+# still missing after a "successful" capture run.
+AUTHED_SHOTS=feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,memory-stats,insights-list,insight-detail-view,connect-providers
 
 if [ ${#ONLY[@]} -gt 0 ]; then
   # --only is for re-shooting one shot; the caller owns the identity, so pass

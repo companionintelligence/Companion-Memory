@@ -62,7 +62,7 @@ npx playwright install --with-deps chromium
 npm run doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
 
 # with the stage up (see below) — five passes, each explicitly scoped:
-npm run capture -- --only feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,people-directory,insights-list,insight-detail-view,connect-providers
+npm run capture -- --only feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,memory-stats,insights-list,insight-detail-view,connect-providers
 VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-focus
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-connect
