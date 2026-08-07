@@ -199,6 +199,11 @@
           "url": "ci-memory.local/onboarding",
           "alt": "The onboarding trust dial, offering cautious, balanced and hands-off",
           "motion": "push-in",
+          "_focusNote": "Third of three consecutive onboarding screens built from the same template — a centred column on an empty field — so at rest scenes 4, 5 and 6 are the same composition with different words. This is the one that punches in, because it is the one whose narration reads the on-screen options out loud: 'Cautious, balanced, or hands off — you set the dial.' The wide reads happen in the two scenes before it.\n\nThe rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in either pilot film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.",
+          "focus": {
+            "landscape": { "x": 0.17, "y": 0.26, "w": 0.66, "h": 0.66 },
+            "portrait": { "x": 0.03, "y": 0.06, "w": 0.94, "h": 0.8 }
+          },
           "capture": {
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
@@ -305,6 +310,11 @@
           "url": "ci-memory.local/memory",
           "alt": "The entity details sheet open over the list, showing one event's full record",
           "motion": "push-in",
+          "_focusNote": "Establish, then punch in — the scene before this one is the same list at rest, which is what earns the crop here. The narration promises 'sources, people, places, dates', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the four things the line names.\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
+          "focus": {
+            "landscape": { "x": 0.28, "y": 0.14, "w": 0.72, "h": 0.72 },
+            "portrait": { "x": 0.0, "y": 0.03, "w": 1.0, "h": 0.9 }
+          },
           "capture": {
             "path": "/memory?view=list&includedEntityTypes=Event",
             "waitFor": "div[role=\"button\"]",
@@ -429,6 +439,10 @@
           "url": "ci-memory.local/stats",
           "alt": "The memory stats page: totals for events, entities and relationships, the date range, and the breakdowns by tag and by data source",
           "motion": "drift-down",
+          "_focusNote": "The numbers ARE the claim here — 238 events, 181 entities, 269 relationships, and the date range that answers 'how far back it goes' — so the framing is set by the widest thing the line names, not by how tight the camera could go. The four tiles span 0.90 of the plate; the window is 0.92, which pins the scale at 1.373x. Every rectangle I tried that asked for more sliced EVENTS off the left and DATE RANGE off the right, because past the request the clamp anchors the window to an edge and stops honouring what you pointed at.\n\ndrift-down keeps its travel at this scale (136px of headroom), so the shot reads the tiles and then moves down into the tag breakdown — the only scene in the film where the camera goes somewhere rather than closer.\n\nLANDSCAPE ONLY. On mobile the tiles are a full-width 2x2, so a portrait rectangle can only ask for full-bleed, and at full-bleed drift-down has no headroom and silently degrades to a push. Leaving 9:16 out keeps the legacy move and keeps the storyboard honest about what the film does.",
+          "focus": {
+            "landscape": { "x": 0.05, "y": 0.05, "w": 0.92, "h": 0.6 }
+          },
           "capture": {
             "path": "/stats",
             "waitFor": "text=Entities by data source",
