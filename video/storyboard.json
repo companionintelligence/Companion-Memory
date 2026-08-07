@@ -29,17 +29,18 @@
       "reveal": "paced",
       "seconds": 5,
       "title": "Companion Memory",
-      "caption": "Other agents are double agents.",
+      "caption": "A home for your digital memory.",
       "narration": "Other agents are double agents. Companion Memory works only for you.",
       "mark": "./assets/app-icon.jpg"
     },
     {
       "id": "front-door",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 4.5,
       "caption": "It runs on your appliance, not a rented server.",
-      "narration": "It opens on hardware you own. Nothing has left home.",
+      "narration": "It opens on hardware you own, and your records never leave it.",
       "shots": [
         {
           "id": "splash-screen",
@@ -56,6 +57,7 @@
     },
     {
       "id": "sign-in",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 4.5,
@@ -97,6 +99,7 @@
     },
     {
       "id": "first-run-focus",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 5.5,
@@ -141,6 +144,7 @@
     },
     {
       "id": "first-run-import",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 5.5,
@@ -188,18 +192,19 @@
     },
     {
       "id": "trust-dial",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 5.5,
-      "caption": "You set how much it may do on its own.",
-      "narration": "Cautious, balanced, or hands off — you set the dial.",
+      "caption": "First run asks how much it should do on its own.",
+      "narration": "Cautious, balanced, or hands off — first run asks where you want it to sit.",
       "shots": [
         {
           "id": "onboarding-trust",
           "url": "ci-memory.local/onboarding",
           "alt": "The onboarding trust dial, offering cautious, balanced and hands-off",
           "motion": "push-in",
-          "_focusNote": "Third of three consecutive onboarding screens built from the same template — a centred column on an empty field — so at rest scenes 4, 5 and 6 are the same composition with different words. This is the one that punches in, because it is the one whose narration reads the on-screen options out loud: 'Cautious, balanced, or hands off — you set the dial.' The wide reads happen in the two scenes before it.\n\nThe rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in either pilot film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.",
+          "_focusNote": "Third of three consecutive onboarding screens built from the same template — a centred column on an empty field — so at rest scenes 4, 5 and 6 are the same composition with different words. This is the one that punches in, because it is the one whose narration reads the on-screen options out loud: 'Cautious, balanced, or hands off — first run asks where you want it to sit.' The wide reads happen in the two scenes before it.\n\nThe rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in either pilot film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.",
           "focus": {
             "landscape": { "x": 0.17, "y": 0.26, "w": 0.66, "h": 0.66 },
             "portrait": { "x": 0.03, "y": 0.06, "w": 0.94, "h": 0.8 }
@@ -246,11 +251,12 @@
     },
     {
       "id": "feed",
+      "transition": "hold",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 5,
-      "caption": "The feed is what changed while you were out.",
-      "narration": "The feed surfaces what changed, and what still needs you.",
+      "caption": "The feed leads with what still needs you.",
+      "narration": "The feed opens on the day's suggested actions, with the summaries underneath.",
       "shots": [
         {
           "id": "feed-overview",
@@ -275,6 +281,7 @@
     },
     {
       "id": "memory-list",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 5,
@@ -299,18 +306,19 @@
     },
     {
       "id": "memory-detail",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 6.5,
       "caption": "Open a row and the whole record is there.",
-      "narration": "Open any row and the whole record is there: sources, people, places, dates.",
+      "narration": "Every field is there — what happened, where it happened, and exactly when.",
       "shots": [
         {
           "id": "memory-detail-sheet",
           "url": "ci-memory.local/memory",
           "alt": "The entity details sheet open over the list, showing one event's full record",
           "motion": "push-in",
-          "_focusNote": "Establish, then punch in — the scene before this one is the same list at rest, which is what earns the crop here. The narration promises 'sources, people, places, dates', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the four things the line names.\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
+          "_focusNote": "Establish, then punch in — the scene before this one is the same list at rest, which is what earns the crop here. The narration promises 'what happened, where it happened, and exactly when', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the three things the line names. (The line used to promise 'sources, people, places, dates'. This record links neither a source nor a person, so two of those four were never in frame; the line now names only what the crop actually shows.)\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden. RE-CHECKED against a focus-preview end frame and the rendered cut: agreed, keep it. The scrim under the sheet is bg-black/70, so the sliced column sits at roughly a third of the sheet's brightness and the eye never goes there; and every tighter rectangle that clears the list costs a field the narration names. The alternative worth knowing about is w=0.526 at x=0.474, which cuts the sliced column from 34% of frame to 9.5% — it was rejected because a 0.526 window is only 0.526 of the plate tall too, so it loses BEDROOMS, NEIGHBORHOOD and the Details block.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
           "focus": {
             "landscape": { "x": 0.28, "y": 0.14, "w": 0.72, "h": 0.72 },
             "portrait": { "x": 0.0, "y": 0.03, "w": 1.0, "h": 0.9 }
@@ -336,6 +344,7 @@
     },
     {
       "id": "memory-search",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 5,
@@ -360,6 +369,7 @@
     },
     {
       "id": "memory-map",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 4.5,
@@ -399,6 +409,7 @@
     },
     {
       "id": "memory-graph",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 6.5,
@@ -428,11 +439,12 @@
     },
     {
       "id": "memory-stats",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "memory",
       "seconds": 5.5,
       "caption": "It keeps count of everything it holds.",
-      "narration": "It tracks the shape of your memory: how much it holds, where it came from, and how far back it goes.",
+      "narration": "It tracks the shape of your memory: how much it holds, how far back it goes, and what it is mostly about.",
       "shots": [
         {
           "id": "memory-stats",
@@ -456,6 +468,7 @@
     },
     {
       "id": "insights",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "insights",
       "seconds": 7,
@@ -480,6 +493,7 @@
     },
     {
       "id": "insight-detail",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "insights",
       "seconds": 6.5,
@@ -504,6 +518,7 @@
     },
     {
       "id": "sources",
+      "transition": "cut",
       "kind": "screen",
       "chapter": "sources",
       "seconds": 5,
@@ -533,6 +548,7 @@
     },
     {
       "id": "recap",
+      "transition": "cut",
       "kind": "feature",
       "seconds": 4.5,
       "title": "What it actually is",
@@ -560,6 +576,7 @@
     },
     {
       "id": "close",
+      "transition": "cut",
       "kind": "outro",
       "seconds": 4,
       "cta": "UnCloud your life.",
