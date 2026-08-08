@@ -66,6 +66,26 @@
       "mark": "./assets/app-icon.jpg"
     },
     {
+      "id": "your-traces",
+      "kind": "screen",
+      "transition": "cut",
+      "seconds": 8,
+      "caption": "Your life creates context every day.",
+      "narration": "Your life already leaves a trail. Mail, calendar, photos, purchases — across two dozen services that each keep a piece.",
+      "shots": [
+        {
+          "id": "graphic-traces",
+          "alt": "Two dozen service marks — Gmail, Google Drive, Dropbox, WhatsApp, Instagram, Spotify, Steam, GitHub and the rest — orbiting the Companion Intelligence mark on threads that run into it.",
+          "motion": "drift-down",
+          "_focusNote": "NOT A CAPTURE. This plate is Companion Intelligence's own artwork from ci.computer/memory (`CI-graphic-CollectDigitalTraces`), composited onto the kit's ground colour #041620 at each viewport's native plate size — 3840x2160 and 1080x1920 — so it is never stretched out of its 1:1 aspect. It lives under assets/shots/ because `shotPath` is the only full-frame image slot the grammar has; see video/README.md § 'The two graphic plates' and the GRAPHIC_SHOTS list in video/make.sh, which excludes it from the capture-pass guard for that reason.\n\nfocus is the full plate (w 1, h 1) ON PURPOSE: that asks for coverScale exactly, which drops the browser card and its chrome and makes the artwork the frame from the first frame to the last. A graphic wearing browser chrome would read as a screenshot of a web page, which it is not. drift-down rather than push-in for the same reason — with `focus` a push-in STARTS at rest, i.e. on the card, and this shot must never show one. At coverScale there is no headroom to drift, so the kit degrades it to an 8% push and says so in the build log; that is the intended move, not a fallback.\n\nThe subject is composed into the upper 74% of both plates because the caption scrim owns roughly the bottom quarter of a full-bleed frame.",
+          "focus": {
+            "landscape": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 },
+            "portrait": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }
+          }
+        }
+      ]
+    },
+    {
       "id": "bring-it-home",
       "kind": "screen",
       "chapter": "bring",
@@ -132,7 +152,7 @@
       "transition": "cut",
       "seconds": 7,
       "caption": "Open a row and the whole record is there.",
-      "narration": "Open one, and the whole record is there. What happened, where it happened, and exactly when.",
+      "narration": "Open one, and the whole record is there. The place, the address, the exact coordinates.",
       "shots": [
         {
           "id": "memory-detail-sheet",
@@ -244,6 +264,43 @@
       ]
     },
     {
+      "id": "how-it-works",
+      "kind": "screen",
+      "chapter": "ask",
+      "transition": "cut",
+      "seconds": 9,
+      "caption": "Input surfaces. Digital memory. Your agents.",
+      "narration": "Underneath, raw data becomes people, places, things, events and space — searchable, related, graphed, vectorised. On your box.",
+      "shots": [
+        {
+          "id": "graphic-architecture",
+          "alt": "Companion Intelligence's architecture diagram: INPUT SURFACES (devices, API plug-ins, native apps, browser) feeding DIGITAL MEMORY (raw data, normalized shapes, database, the user's RL model, insights), feeding AGENTS (Hermes, OpenClaw, OpenCode, NanoClaw, Claude, Codex) under UNIVERSAL MCP SUPPORT.",
+          "motion": "drift-down",
+          "_focusNote": "NOT A CAPTURE — the same arrangement as `graphic-traces`, and the same reasons. This is the explainer from the 2026 Q3 Companion Intelligence short deck, the one ci.computer/memory publishes under 'How does Companion Memory work?'. It is composited on #041620 at 3840x2160 and 1080x1920 rather than scaled into the 16:9 shot slot, because the source is 2500x1236 (2.02:1) and the slot would have stretched it.\n\nWHAT EACH VIEWPORT CAN ACTUALLY READ, because the line has to be true of both: in landscape the whole diagram is legible down to the box labels — PERSON, PLACE, THING, CONTENT, EVENT, SPACE and FT SEARCH / RELATIONS / GRAPH / VECTOR, which is exactly what the narration names. In portrait the plate is 1060px wide and the three panel headings (INPUT SURFACES, DIGITAL MEMORY, AGENTS) plus the box labels still read, but the smallest type is texture. The caption names the three panels for that reason: it is the claim both cuts can carry.",
+          "focus": {
+            "landscape": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 },
+            "portrait": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "your-agents",
+      "kind": "feature",
+      "chapter": "ask",
+      "transition": "cut",
+      "reveal": "paced",
+      "seconds": 8,
+      "title": "Universal MCP support",
+      "caption": "The agents you already use, on a memory that is yours.",
+      "narration": "Which is why the agents you already use plug straight into it, over one MCP server that answers only to you.",
+      "items": [
+        { "label": "MCP server", "value": "companion-memory" },
+        { "label": "Speaks to", "value": "Claude, Codex, OpenCode" },
+        { "label": "And to", "value": "Hermes, OpenClaw, NanoClaw" }
+      ]
+    },
+    {
       "id": "your-call",
       "kind": "screen",
       "chapter": "control",
@@ -289,7 +346,7 @@
       "reveal": "paced",
       "seconds": 6,
       "title": "What stays yours",
-      "caption": "One appliance. One memory. No account to cancel.",
+      "caption": "We don't collect your context.",
       "narration": "Local database. Local models. No account, and nothing to cancel.",
       "items": [
         { "label": "Store", "value": "Postgres + pgvector" },
@@ -305,8 +362,8 @@
       "seconds": 4.5,
       "minSeconds": 4,
       "cta": "UnCloud your life.",
-      "url": "ci.computer",
-      "narration": "Companion Memory, from Companion Intelligence. UnCloud your life.",
+      "url": "ci.computer/memory",
+      "narration": "Companion Memory, from Companion Intelligence. UnCloud your life, at ci dot computer slash memory.",
       "mark": "brand:logo.full"
     }
   ]

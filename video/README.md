@@ -10,11 +10,14 @@ job, no schedule, no uploaded artifact, and no committed `.mp4`. A cut is a buil
 one when you need it, use it, then delete it. What lives in git is the *input* — the storyboard,
 the narration audio, and the screenshots under `assets/shots/`.
 
-> **The storyboard references 7 shots — 14 files — and all of them are committed**, so
-> `npm run check` passes without `--allow-slates`. All seven come from the seeded stack below.
+> **The storyboard references 9 shots — 18 files — and all of them are committed**, so
+> `npm run check` passes without `--allow-slates`. Seven come from the seeded stack below. **Two are
+> not captures at all**: `graphic-traces` and `graphic-architecture` are Companion Intelligence's
+> own artwork from [ci.computer/memory](https://ci.computer/memory) — see
+> [The two graphic plates](#the-two-graphic-plates).
 >
-> **Sixteen more PNGs are committed and referenced by nothing.** The narrative re-cut cut the film
-> from 18 scenes to 12, and `splash-screen`, `login-form`, `onboarding-focus`, `feed-overview`,
+> **Sixteen more PNGs are committed and referenced by nothing.** The narrative re-cut took the film
+> from 18 scenes to 15 and changed which screens it needs; `splash-screen`, `login-form`, `onboarding-focus`, `feed-overview`,
 > `memory-map-view`, `memory-stats`, `insight-detail-view` and `connect-providers` — both viewports
 > each — left the storyboard with it. They are kept on purpose (see
 > [What is committed](#what-is-committed)), but be clear about what that means: `ci-video capture`
@@ -34,14 +37,14 @@ the narration audio, and the screenshots under `assets/shots/`.
 **To re-capture and rebuild, from this repo:**
 
 ```bash
-./video/make.sh                              # stage the app, capture all 5 passes, check, render
+./video/make.sh                              # stage the app, capture all 3 passes, check, render
 ./video/make.sh --no-render                  # capture and check only — much faster
 ./video/make.sh --only memory-list-view      # re-shoot one shot
 ./video/make.sh --keep-up                    # leave the stage running to debug against
 ```
 
 `make.sh` sources [`stage.sh`](stage.sh), which stands the whole appliance up — Postgres 18 with
-TimescaleDB/PostGIS/pgvector, 188 migrations, the seed, the API and Vite — runs the five capture
+TimescaleDB/PostGIS/pgvector, 188 migrations, the seed, the API and Vite — runs the three capture
 passes, and tears it all down again on the way out, including on failure. It picks free ports in
 the 3191+ band and uses its own compose project, so it will not collide with a dev stack someone
 else is running. See "The stage" below for what it does and why.
@@ -58,7 +61,7 @@ It resolves video-kit from the CI-Common checkout on disk, so there is no npm re
 and no `403` — which is the reason CI never managed to produce a video in the first place.
 
 > That runner **renders only**; it refuses `--capture` by design, because staging an app is not a
-> single shell command and `stages.json` cannot express five passes under three identities. Capture
+> single shell command and `stages.json` cannot express three passes under two identities. Capture
 > belongs to `video/make.sh`, above.
 
 ## Quick start
@@ -255,6 +258,64 @@ Verified end state: `ci.events` 200,287 · `ci.communications` 293,291 · `ci.co
 resumes from the watermark, so a restart costs only the in-flight batch — but 4/1000 ran to
 completion and is the setting above.
 
+## The two graphic plates
+<a id="the-two-graphic-plates"></a>
+
+Two scenes are **not pictures of the product**. `your-traces` and `how-it-works` show Companion
+Intelligence's own artwork from [ci.computer/memory](https://ci.computer/memory): the
+collect-digital-traces graphic, and the architecture explainer from the 2026 Q3 short deck that the
+site publishes under *"How does Companion Memory work?"*.
+
+They live under `assets/shots/` because **`shotPath` is the only full-frame image slot the scene
+grammar has** — `scene.mark` is intro/outro-only and renders a small square, and `items[].icon` is
+a chip glyph. Nothing else in the kit puts an image across the frame. That is a real cost: a
+directory the rest of this README describes as "the record of what the product looked like" now
+holds two files that are not that, so they are named `graphic-*`, listed in `GRAPHIC_SHOTS` in
+[`make.sh`](make.sh), and excluded there from the capture-pass check — with `make.sh` refusing if
+a name in that list is not actually used by a scene, so the exclusion cannot outlive its reason.
+
+**Regenerate them, never hand-scale them.** The sources are 1080×1080 and 2500×1236; the shot slot
+is 16:9 and stretches whatever it is given, so each plate is composited onto the kit's ground
+colour `#041620` at the viewport's own native plate size and the artwork is never distorted:
+
+```bash
+SRC=/path/to/downloads   # CI-graphic-CollectDigitalTraces (1080x1080), 2026 Q3 short deck (2500x1236)
+
+ffmpeg -f lavfi -i "color=c=0x041620:s=3840x2160" -i "$SRC/collect-traces.png" \
+  -filter_complex "[1:v]scale=1420:1420[g];[0:v][g]overlay=(W-w)/2:900-(h/2):format=auto" \
+  -frames:v 1 -y assets/shots/graphic-traces.png
+ffmpeg -f lavfi -i "color=c=0x041620:s=1080x1920" -i "$SRC/collect-traces.png" \
+  -filter_complex "[1:v]scale=930:930[g];[0:v][g]overlay=(W-w)/2:830-(h/2):format=auto" \
+  -frames:v 1 -y assets/shots/graphic-traces.mobile.png
+
+ffmpeg -f lavfi -i "color=c=0x041620:s=3840x2160" -i "$SRC/deck.png" \
+  -filter_complex "[1:v]scale=3060:-1[g];[0:v][g]overlay=(W-w)/2:860-(h/2):format=auto" \
+  -frames:v 1 -y assets/shots/graphic-architecture.png
+ffmpeg -f lavfi -i "color=c=0x041620:s=1080x1920" -i "$SRC/deck.png" \
+  -filter_complex "[1:v]scale=960:-1[g];[0:v][g]overlay=(W-w)/2:820-(h/2):format=auto" \
+  -frames:v 1 -y assets/shots/graphic-architecture.mobile.png
+```
+
+**Those offsets are not taste, they are the two clamps.** A `focus` of the whole plate resolves to
+coverScale, and the camera then shows **92.6% of the plate, from (0.036, 0.034)** — so ~3.6% of
+each edge is cropped, and the caption scrim owns roughly the bottom quarter of what is left. The
+first version of the portrait architecture plate was scaled to fit the full 1080 and lost the left
+edge of INPUT SURFACES and the right edge of AGENTS to that crop. Run
+`ci-video focus-preview --scene how-it-works --format both` and **look at the picture** after any
+change; `--at start` shows the other end of the move.
+
+Two more things about these scenes that are easy to get wrong:
+
+- **Do not set `frame`.** It defaults per format — browser in landscape, phone in portrait — and
+  those are the two frames whose aspect matches the plates. Pinning `frame: "browser"` was the
+  first attempt and it broke portrait badly: a 16:9 card has to be scaled 3.34× to cover a 9:16
+  canvas, which cropped the plate to 34% of itself and left the shot static.
+- **`motion` is `drift-down`, not `push-in`.** With a `focus`, a push-in *starts at rest* — on the
+  browser card, with chrome and a URL bar. These are graphics, not screenshots of a web page, and
+  a frame of chrome around one would say otherwise. `drift-down` starts *at* the focus state, so
+  the artwork is the frame from the first frame; where there is no headroom to drift, the kit
+  degrades it to an 8% push and prints that in the build log.
+
 ## Reading the committed PNGs: what is a mask and what is a bug
 
 A Playwright mask paints a flat `#0A222E` rectangle over an element at the shutter. In a committed
@@ -369,7 +430,7 @@ retired "every `location_point` is NULL" diagnosis. Replace that entry with:
   "repo": "CI-Server",
   "capture": "video/make.sh",
   "captureRealCorpus": "video/stage.real-corpus.sh",
-  "comment": "The storyboard references 7 shots (14 files), all committed, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 188 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. SIXTEEN further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product; memory-map-view is already stale against CI-Server #1891. A SECOND STAGE, video/stage.real-corpus.sh, is what produced the map pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); it is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
+  "comment": "The storyboard references 9 shots (18 files), all committed — seven captured, two committed graphic plates from ci.computer/memory that capture cannot produce and make.sh's GRAPHIC_SHOTS list excludes from its pass check, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 188 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. SIXTEEN further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product; memory-map-view is already stale against CI-Server #1891. A SECOND STAGE, video/stage.real-corpus.sh, is what produced the map pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); it is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
 }
 ```
 

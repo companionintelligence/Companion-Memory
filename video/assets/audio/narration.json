@@ -87,9 +87,8 @@
       "seconds": 6.048
     },
     "close": {
-      "text": "Companion Memory, from Companion Intelligence. UnCloud your life.",
-      "seconds": 5.544,
-      "adopted": true
+      "text": "Companion Memory, from Companion Intelligence. UnCloud your life, at ci dot computer slash memory.",
+      "seconds": 7.872
     },
     "the-deal": {
       "text": "An assistant is only useful if it remembers you. Where you live. Who your doctor is. When the house is empty.",
@@ -108,8 +107,8 @@
       "seconds": 4.896
     },
     "the-record": {
-      "text": "Open one, and the whole record is there. What happened, where it happened, and exactly when.",
-      "seconds": 6.48
+      "text": "Open one, and the whole record is there. The place, the address, the exact coordinates.",
+      "seconds": 6.576
     },
     "ask-it": {
       "text": "Search it, and the whole store narrows in place. Nothing is uploaded, and nothing leaves the box.",
@@ -126,6 +125,18 @@
     "your-call": {
       "text": "How much it does on its own is a dial you set. Cautious, balanced, or hands off.",
       "seconds": 6.36
+    },
+    "your-traces": {
+      "text": "Your life already leaves a trail. Mail, calendar, photos, purchases — across two dozen services that each keep a piece.",
+      "seconds": 8.928
+    },
+    "how-it-works": {
+      "text": "Underneath, raw data becomes people, places, things, events and space — searchable, related, graphed, vectorised. On your box.",
+      "seconds": 10.752
+    },
+    "your-agents": {
+      "text": "Which is why the agents you already use plug straight into it, over one MCP server that answers only to you.",
+      "seconds": 6.816
     }
   }
 }

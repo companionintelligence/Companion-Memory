@@ -332,6 +332,23 @@ node "$PW_DIR/cli.js" install chromium
 AUTHED_SHOTS=memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
 FRESH_SHOTS="onboarding-connect onboarding-trust"
 
+# ── shots that are not captures ──────────────────────────────────────────────
+# Two scenes in this film are Companion Intelligence's OWN ARTWORK from
+# ci.computer/memory rather than pictures of the product: the collect-digital-
+# traces graphic and the architecture explainer out of the 2026 Q3 short deck.
+# `shotPath` — assets/shots/<id>.png — is the only full-frame image slot the
+# scene grammar has, so they live there, and the storyboard declares them as
+# shots. They are NOT capturable: there is no URL to point Playwright at and no
+# product state to reach, and asking capture for them would fail the pass.
+#
+# So they are subtracted from the check below rather than being an exception to
+# it. Naming them here is the point: without this list they would look exactly
+# like a shot somebody forgot to add to a pass, which is the failure the check
+# exists to catch. Re-generate them from video/README.md § "The two graphic
+# plates" if the artwork on the site changes; they are composited at each
+# viewport's native plate size, so they must never be produced by hand-scaling.
+GRAPHIC_SHOTS="graphic-traces graphic-architecture"
+
 # Both directions, and both are fatal. An id named here that the storyboard
 # dropped would be silently skipped; a shot the storyboard declares that no pass
 # names is never requested at all and only surfaces as a missing-shot failure in
@@ -339,8 +356,19 @@ FRESH_SHOTS="onboarding-connect onboarding-trust"
 requested="$( { echo "$AUTHED_SHOTS" | tr ',' '\n'; echo "$FRESH_SHOTS" | tr ' ' '\n'; } | sed '/^$/d' | sort -u)"
 declared="$(node -p "
   const sb = require('./storyboard.json');
-  [...new Set(sb.scenes.flatMap((s) => (s.shots ?? []).map((h) => h.id)))].sort().join('\n');
+  const graphics = new Set('$GRAPHIC_SHOTS'.split(/\s+/).filter(Boolean));
+  [...new Set(sb.scenes.flatMap((s) => (s.shots ?? []).map((h) => h.id)))]
+    .filter((id) => !graphics.has(id))
+    .sort()
+    .join('\n');
 ")"
+# A graphic named above that the storyboard no longer uses is its own kind of
+# rot — the plate stays committed and nothing points at it — so say so too.
+for g in $GRAPHIC_SHOTS; do
+  node -p "require('./storyboard.json').scenes.some((s) => (s.shots ?? []).some((h) => h.id === '$g'))" \
+    | grep -q true || die "GRAPHIC_SHOTS names '$g', but no scene in storyboard.json uses it.
+     Either drop it from that list or drop assets/shots/$g{,.mobile}.png with it."
+done
 orphaned="$(comm -23 <(echo "$requested") <(echo "$declared"))"
 unshot="$(comm -13 <(echo "$requested") <(echo "$declared"))"
 [ -z "$orphaned" ] || die "these ids are named in make.sh but not declared in storyboard.json —
@@ -371,8 +399,9 @@ say "building the compositions"
 npm run build
 
 say "checking them"
-# No --allow-slates any more: all 14 shot files the storyboard needs exist (7
-# shots x 2 viewports), so the missing-shot gate is live. That gate is the only
+# No --allow-slates any more: all 18 shot files the storyboard needs exist (9
+# shots x 2 viewports — seven captured here, two committed graphic plates), so
+# the missing-shot gate is live. That gate is the only
 # thing standing between this repo and a
 # narrated slideshow of placeholders shipping as a product video — if it starts
 # failing, capture the shot or cut the scene. Do not re-add the flag.
