@@ -610,6 +610,13 @@
         <span class="sub">116 FKs · 82 CHECKs</span>
       </div>
     </div>
+    <p class="note"><strong>Baseline caveat.</strong> These counts were measured on branch
+      <span class="m">qa-fixes</span>, which carries one migration <span class="m">main</span> does
+      not: <span class="m">20260802053709_create_tasks.sql</span>, creating
+      <span class="m">ci.tasks</span> and <span class="m">ci.task_dependencies</span>. Against
+      <span class="m">main</span> today the schema is <strong>61 tables</strong>; it becomes 63 when
+      the open planning PR lands. Every other figure on this page is unaffected — neither table
+      appears in any finding.</p>
     <p class="note">CI-Server counts are base tables only, excluding PostGIS
       <span class="m">spatial_ref_sys</span>, dbmate <span class="m">schema_migrations</span> and
       four PostGIS / pg_stat_statements views. By schema: <span class="m">ci</span> 49 ·
