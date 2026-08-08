@@ -331,6 +331,7 @@ export function PeoplePage() {
   const duplicateGroups = duplicatesData?.personDuplicates ?? [];
 
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -340,7 +341,7 @@ export function PeoplePage() {
 
   // Append the next server page (cursor-based) onto the accumulated results.
   const loadMore = useCallback(() => {
-    if (!hasNextPage || loadingMore || !pageInfo?.endCursor) {
+    if (!hasNextPage || loadingMore || loadMoreError != null || !pageInfo?.endCursor) {
       return;
     }
 
@@ -364,8 +365,18 @@ export function PeoplePage() {
           },
         };
       },
-    }).finally(() => setLoadingMore(false));
-  }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);
+    })
+      .catch((cause: unknown) => {
+        // fetchMore rejects on network/GraphQL errors, and an unhandled rejection
+        // is only half the problem: the sentinel is still on screen, so clearing
+        // `loadingMore` would rebuild the observer, which re-fires immediately on
+        // observe() and spins a request loop (measured at ~220 requests in 300ms
+        // against a persistently failing page). Latch the error instead — it
+        // unmounts the sentinel and gates `loadMore` until the user retries.
+        setLoadMoreError(cause instanceof Error ? cause.message : 'Something went wrong.');
+      })
+      .finally(() => setLoadingMore(false));
+  }, [fetchMore, hasNextPage, loadingMore, loadMoreError, pageInfo?.endCursor]);
 
   // Fetch the next server page when the sentinel scrolls into view.
   useEffect(() => {
@@ -404,7 +415,11 @@ export function PeoplePage() {
           <Input
             placeholder="Search people by name..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              // New query, new cursor space — a stale failure must not gate it.
+              setLoadMoreError(null);
+            }}
             className="max-w-md"
           />
           <div className="text-sm text-muted-foreground">{totalCount} people</div>
@@ -450,7 +465,18 @@ export function PeoplePage() {
               ))}
             </div>
 
-            {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+            {hasNextPage && loadMoreError == null && <div ref={sentinelRef} className="h-8" />}
+
+            {loadMoreError != null && (
+              <div className="flex flex-col items-center gap-2 py-3">
+                <div className="text-sm text-muted-foreground">
+                  Couldn&apos;t load more people: {loadMoreError}
+                </div>
+                <Button variant="outline" size="sm" onClick={() => setLoadMoreError(null)}>
+                  Try again
+                </Button>
+              </div>
+            )}
 
             <div className="py-3 text-center text-xs text-muted-foreground">
               {people.length} of {totalCount} loaded

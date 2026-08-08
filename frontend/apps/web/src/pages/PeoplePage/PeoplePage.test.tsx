@@ -108,16 +108,34 @@ function pageInfo({ hasNextPage = false, endCursor = null as string | null } = {
  * its callbacks, and restore the original afterwards — replacing the global
  * permanently would leak into every later test file.
  */
-function captureIntersectionObserver() {
+function captureIntersectionObserver({ fireOnObserve = false } = {}) {
   const callbacks: IntersectionObserverCallback[] = [];
   const original = globalThis.IntersectionObserver;
+  let observeCount = 0;
 
   class CapturingObserver {
+    private readonly callback: IntersectionObserverCallback;
+
     constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
       callbacks.push(callback);
     }
 
-    observe() {}
+    observe() {
+      observeCount += 1;
+
+      // A real observer invokes its callback asynchronously when the target is
+      // already intersecting. Modelling that is the whole point for the retry
+      // test: it is what turns "rebuild the observer" into a request loop.
+      if (fireOnObserve) {
+        queueMicrotask(() =>
+          this.callback(
+            [{ isIntersecting: true } as IntersectionObserverEntry],
+            {} as IntersectionObserver,
+          ),
+        );
+      }
+    }
 
     unobserve() {}
 
@@ -131,6 +149,7 @@ function captureIntersectionObserver() {
   globalThis.IntersectionObserver = CapturingObserver as unknown as typeof IntersectionObserver;
 
   return {
+    observeCount: () => observeCount,
     scrollSentinelIntoView: async () => {
       await act(async () => {
         for (const callback of callbacks) {
@@ -294,6 +313,76 @@ describe('PeoplePage', () => {
       // Page two is appended, not swapped in.
       expect(await screen.findByText('Beatrice Clarke')).toBeInTheDocument();
       expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    } finally {
+      observer.restore();
+    }
+  });
+
+  /**
+   * A failed next-page fetch must not retry on its own. The sentinel is still on
+   * screen when the request fails, so simply clearing the in-flight flag rebuilds
+   * the observer, which re-fires on observe() and spins a request loop — measured
+   * at ~220 requests in 300ms before this was latched.
+   */
+  it('stops after one failed page and offers a retry instead of looping', async () => {
+    const observer = captureIntersectionObserver({ fireOnObserve: true });
+
+    const failingPage = {
+      request: {
+        query: GET_PEOPLE,
+        variables: { query: null, first: PAGE_SIZE, after: PERSON_GLOBAL_ID },
+      },
+      error: new Error('network boom'),
+    };
+
+    try {
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          {
+            request: { query: GET_PEOPLE, variables: { query: null, first: PAGE_SIZE } },
+            result: {
+              data: {
+                people: {
+                  __typename: 'PersonConnection' as const,
+                  totalCount: 99,
+                  pageInfo: pageInfo({ hasNextPage: true, endCursor: PERSON_GLOBAL_ID }),
+                  edges: [
+                    {
+                      __typename: 'PersonEdge' as const,
+                      cursor: PERSON_GLOBAL_ID,
+                      node: personNode(),
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          // Deliberately only ONE failing mock. A retry loop would blow past it
+          // and start logging "No more mocked responses".
+          failingPage,
+          {
+            request: { query: GET_PERSON_DUPLICATES },
+            result: { data: { personDuplicates: [] } },
+          },
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+
+      // The retry affordance replaces the sentinel once the page fails.
+      expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+
+      const settled = observer.observeCount();
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+
+      // No further observers are attached while the error is latched, so nothing
+      // re-requests the failed cursor.
+      expect(observer.observeCount()).toBe(settled);
+      // And the footer is not wedged mid-load.
+      expect(screen.getByText(/loaded/).textContent).not.toContain('loading');
     } finally {
       observer.restore();
     }
