@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -13,14 +13,17 @@ import { type Concept, ConceptEntity } from '../entities/ConceptEntity';
 import { ConceptCreatedEvent, ConceptRemovedEvent, ConceptUpdatedEvent } from '../events';
 import { CreateConceptDto, UpdateConceptDto } from '../types';
 
+import { EntityService } from './EntityService';
+
 @Injectable()
-export class ConceptService {
+export class ConceptService extends EntityService<ConceptEntity, Concept> {
   constructor(
     @InjectRepository(ConceptEntity)
-    private readonly conceptRepository: Repository<ConceptEntity>,
+    conceptRepository: Repository<ConceptEntity>,
     private readonly logger: LoggerService,
     private readonly eventService: EventService,
   ) {
+    super(conceptRepository, ConceptEntity);
     this.logger.setContext(ConceptService.name);
   }
 
@@ -38,47 +41,55 @@ export class ConceptService {
     const { emitCreated = true } = options;
 
     // Idempotency on the stable external key (see PersonService.create) — a
-    // re-synced concept (email thread, book, topic) must not duplicate.
+    // re-synced concept (email thread, book, topic) must not duplicate. The
+    // `entity_type = 'Concept'` half is enforced automatically by the STI child
+    // repository, so it is not restated here.
     const linkedWhere =
       data.linkedTable && data.linkedId
         ? {
-            entityType: 'Concept',
             linkedTable: data.linkedTable,
             linkedId: data.linkedId,
-            user: { id: context.userId },
+            userId: context.userId,
           }
         : null;
 
     if (linkedWhere) {
-      const existing = await this.conceptRepository.findOne({ where: linkedWhere });
+      const existing = await this.repository.findOne({ where: linkedWhere });
       if (existing) {
         return ConceptEntity.toEgressType(existing);
       }
     }
 
-    const instance = this.conceptRepository.create({
-      id: data.id ?? uuid7(),
-      name: data.name ?? null,
-      description: data.description ?? null,
-      linkedTable: data.linkedTable ?? null,
-      linkedId: data.linkedId ?? null,
-      entityType: 'Concept',
-      searchContent: data.searchContent ?? null,
-      lastAccessed: data.lastAccessed,
-      user: {
-        id: context.userId,
-      },
-      properties: data.properties ?? {},
-    });
-
+    // Insert in a transaction (persistCreate is the seam where mutation
+    // recording will land). Reaching past the catch means a genuine insert
+    // happened (an idempotent race winner returns early), so the created event
+    // always fires here.
     let entity: ConceptEntity;
     try {
-      entity = await this.conceptRepository.save(instance);
+      entity = await this.repository.manager.transaction((manager) => {
+        const instance = this.repository.create({
+          id: data.id ?? uuid7(),
+          name: data.name ?? null,
+          description: data.description ?? null,
+          linkedTable: data.linkedTable ?? null,
+          linkedId: data.linkedId ?? null,
+          searchContent: data.searchContent ?? null,
+          lastAccessed: data.lastAccessed,
+          userId: context.userId,
+          properties: data.properties ?? {},
+        });
+
+        return this.persistCreate(manager, instance);
+      });
     } catch (err) {
+      // Lost a race to a concurrent insert of the same linked key (23505) —
+      // return the winner. The recovery query must run outside the failed
+      // transaction: the unique violation aborts it, so any further query on
+      // that manager would fail with 25P02 instead.
       if (linkedWhere && (err as { code?: string })?.code === '23505') {
-        const existing = await this.conceptRepository.findOne({ where: linkedWhere });
-        if (existing) {
-          return ConceptEntity.toEgressType(existing);
+        const winner = await this.repository.findOne({ where: linkedWhere });
+        if (winner) {
+          return ConceptEntity.toEgressType(winner);
         }
       }
 
@@ -91,7 +102,12 @@ export class ConceptService {
       });
     }
 
-    return ConceptEntity.toEgressType(entity);
+    // Reload so @AfterLoad projects the jsonb helpers (type/category/aliases)
+    // and DB-side defaults (e.g. last_accessed) are present. `save` runs
+    // neither, so the saved instance alone would egress them empty.
+    const created = await this.repository.findOne({ where: { id: entity.id } });
+
+    return ConceptEntity.toEgressType(created ?? entity);
   }
 
   /**
@@ -115,19 +131,18 @@ export class ConceptService {
       return [];
     }
 
+    // `entity_type` is not set here: the STI child metadata carries the
+    // discriminator and TypeORM's insert builder emits it for every row.
     const entities = data.map((item) =>
-      this.conceptRepository.create({
+      this.repository.create({
         id: item.id ?? uuid7(),
         name: item.name ?? null,
         description: item.description ?? null,
         linkedTable: item.linkedTable ?? null,
         linkedId: item.linkedId ?? null,
-        entityType: 'Concept',
         searchContent: item.searchContent ?? null,
         lastAccessed: item.lastAccessed,
-        user: {
-          id: context.userId,
-        },
+        userId: context.userId,
         properties: item.properties ?? {},
       }),
     );
@@ -140,15 +155,15 @@ export class ConceptService {
     // a no-op and a lost insert race is absorbed without throwing. Unlinked rows
     // (no linked_table/linked_id) fall outside the partial index and always
     // insert, matching create()'s behaviour.
-    const chunkSize = computeChunkSize(this.conceptRepository.metadata.columns.length);
+    const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
     for (let offset = 0; offset < entities.length; offset += chunkSize) {
-      await this.conceptRepository
+      await this.repository
         .createQueryBuilder()
         .insert()
         // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
         // of `.values()`; passing the entity class narrows to
         // `_QueryDeepPartialEntity`, which rejects the jsonb `properties` column.
-        .into(this.conceptRepository.metadata.target)
+        .into(this.repository.metadata.target)
         .values(entities.slice(offset, offset + chunkSize))
         .onConflict(
           '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
@@ -169,10 +184,10 @@ export class ConceptService {
   ): Promise<Concept[]> {
     const ids = entities.map((entity) => entity.id);
 
-    const qb = this.conceptRepository
+    const qb = this.repository
       .createQueryBuilder('concept')
-      .where('concept.entity_type = :entityType', { entityType: 'Concept' })
-      .andWhere('concept.owner_user_id = :userId', { userId: context.userId })
+      // The STI child repository scopes the query to `entity_type = 'Concept'`.
+      .where('concept.owner_user_id = :userId', { userId: context.userId })
       .andWhere(
         new Brackets((outer) => {
           outer.where('concept.entity_id IN (:...ids)', { ids });
@@ -205,42 +220,6 @@ export class ConceptService {
     });
   }
 
-  async findAll(context: ServiceContext): Promise<Concept[]> {
-    const entities = await this.conceptRepository.find({
-      where: {
-        entityType: 'Concept',
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-    });
-
-    return entities.map((entity) => ConceptEntity.toEgressType(entity));
-  }
-
-  async findByIds(context: ServiceContext, ids: string[]): Promise<(Concept | null)[]> {
-    if (ids.length === 0) {
-      return [];
-    }
-
-    const entities = await this.conceptRepository.find({
-      where: {
-        id: In(ids),
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-    });
-
-    const map = new Map(entities.map((entity) => [entity.id, ConceptEntity.toEgressType(entity)]));
-
-    return ids.map((id) => map.get(id) ?? null);
-  }
-
   /**
    * Lightweight identifiers for the most-recent concepts, for the unified
    * search/explorer feed. Full entities are batch-resolved downstream.
@@ -249,11 +228,11 @@ export class ConceptService {
     context: ServiceContext,
     options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
-    let query = this.conceptRepository
+    let query = this.repository
       .createQueryBuilder('concept')
       .select('concept.id', 'id')
-      .where('concept.entity_type = :entityType', { entityType: 'Concept' })
-      .andWhere('concept.owner_user_id = :userId', { userId: context.userId });
+      // The STI child repository scopes the query to `entity_type = 'Concept'`.
+      .where('concept.owner_user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
       query = query.andWhere('concept.created_at >= :startTime', { startTime: options.startTime });
@@ -274,41 +253,16 @@ export class ConceptService {
     return rows.map((row) => ({ id: row.id, type: 'concept' as IndexableEntity }));
   }
 
-  async findById(context: ServiceContext, id: string): Promise<Concept | null> {
-    const entity = await this.conceptRepository.findOne({
-      where: {
-        id,
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-    });
-
-    return entity ? ConceptEntity.toEgressType(entity) : null;
-  }
-
   async update(context: ServiceContext, id: string, data: UpdateConceptDto): Promise<Concept | null> {
     const { properties, ...rest } = data;
 
-    const result = await this.conceptRepository.update(
-      {
-        id,
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-      {
-        ...rest,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        properties: properties as any,
-      },
-    );
+    const after = await this.applyUpdate(context, id, {
+      ...rest,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      properties: properties as any, // TypeORM will handle JSON serialization
+    });
 
-    if (result.affected === 0) {
+    if (!after) {
       return null;
     }
 
@@ -316,20 +270,13 @@ export class ConceptService {
       conceptId: id,
     });
 
-    return this.findById(context, id);
+    return ConceptEntity.toEgressType(after);
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const result = await this.conceptRepository.delete({
-      id,
-      ...(context.userId !== SYSTEM_USER && {
-        user: {
-          id: context.userId,
-        },
-      }),
-    });
+    const removed = await this.delete(context, id);
 
-    if (result.affected === 0) {
+    if (!removed) {
       return false;
     }
 
@@ -340,10 +287,9 @@ export class ConceptService {
     return true;
   }
 
-  async search(context: ServiceContext, query: UpdateConceptDto): Promise<ConceptEntity[]> {
-    let executable = this.conceptRepository
-      .createQueryBuilder('entity')
-      .where('entity.entity_type = :entityType', { entityType: 'Concept' });
+  async search(context: ServiceContext, query: UpdateConceptDto): Promise<Concept[]> {
+    // The STI child repository scopes the query to `entity_type = 'Concept'`.
+    let executable = this.repository.createQueryBuilder('entity');
 
     if (context.userId !== SYSTEM_USER) {
       executable = executable.andWhere('entity.owner_user_id = :userId', { userId: context.userId });
@@ -375,6 +321,8 @@ export class ConceptService {
       }
     }
 
-    return executable.getMany();
+    const entities = await executable.getMany();
+
+    return entities.map((entity) => ConceptEntity.toEgressType(entity));
   }
 }

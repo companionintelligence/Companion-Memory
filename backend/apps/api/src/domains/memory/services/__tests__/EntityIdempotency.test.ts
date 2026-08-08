@@ -121,7 +121,7 @@ describe('ConceptService.create — linked idempotency', () => {
   const linked = { name: 'Project X', linkedTable: 'ci-import-tools:thread', linkedId: 'thr-1' };
 
   it('is idempotent on the linked key', async () => {
-    repo.findOne.mockResolvedValue({ id: 'existing-concept', entityType: 'Concept' });
+    repo.findOne.mockResolvedValue({ id: 'existing-concept' });
     const result = await service.create(ctx, linked);
     expect(result.id).toBe('existing-concept');
     expect(repo.save).not.toHaveBeenCalled();
