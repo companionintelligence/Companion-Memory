@@ -13,10 +13,10 @@
     "pacing": "fit"
   },
   "chapters": {
-    "first-run": "First run",
-    "memory": "Your memory",
-    "insights": "What it notices",
-    "sources": "Your sources"
+    "bring": "Bring it home",
+    "keep": "One memory",
+    "ask": "On your own box",
+    "control": "Your call"
   },
   "media": {
     "music": null,
@@ -24,225 +24,77 @@
   },
   "scenes": [
     {
+      "id": "the-deal",
+      "kind": "feature",
+      "reveal": "paced",
+      "seconds": 9,
+      "minSeconds": 7,
+      "title": "It only works if it remembers you.",
+      "caption": "The deal every assistant asks you to make.",
+      "narration": "An assistant is only useful if it remembers you. Where you live. Who your doctor is. When the house is empty.",
+      "items": [
+        { "label": "Home", "value": "where you live" },
+        { "label": "Health", "value": "who your doctor is" },
+        { "label": "Calendar", "value": "when the house is empty" }
+      ]
+    },
+    {
+      "id": "the-catch",
+      "kind": "feature",
+      "transition": "cut",
+      "reveal": "paced",
+      "seconds": 8,
+      "title": "So where does that live?",
+      "caption": "Most people quietly stop telling it the truth.",
+      "narration": "And all of that gets remembered on a machine you will never see. So most people quietly stop telling it the truth.",
+      "items": [
+        { "label": "The hardware", "value": "someone else's" },
+        { "label": "The terms", "value": "someone else's" },
+        { "label": "The off switch", "value": "someone else's" }
+      ]
+    },
+    {
       "id": "open",
       "kind": "intro",
+      "transition": "cut",
       "reveal": "paced",
       "seconds": 5,
+      "minSeconds": 4.5,
       "title": "Companion Memory",
       "caption": "A home for your digital memory.",
       "narration": "Other agents are double agents. Companion Memory works only for you.",
       "mark": "./assets/app-icon.jpg"
     },
     {
-      "id": "front-door",
-      "transition": "cut",
+      "id": "bring-it-home",
       "kind": "screen",
-      "chapter": "first-run",
-      "seconds": 4.5,
-      "caption": "Store, search and database: all on your appliance.",
-      "narration": "It opens on hardware you own, and your records are stored and searched there.",
-      "shots": [
-        {
-          "id": "splash-screen",
-          "url": "ci-memory.local",
-          "alt": "The logged-out splash page for Companion Memory",
-          "motion": "push-in",
-          "capture": {
-            "path": "/",
-            "waitFor": "h1:has-text(\"Companion Intelligence\")",
-            "settle": 400
-          }
-        }
-      ]
-    },
-    {
-      "id": "sign-in",
+      "chapter": "bring",
       "transition": "cut",
-      "kind": "screen",
-      "chapter": "first-run",
-      "seconds": 4.5,
-      "caption": "Sign in with your Companion account.",
-      "narration": "Sign in through Companion Portal, or with email if you prefer.",
-      "shots": [
-        {
-          "id": "login-form",
-          "url": "ci-memory.local/login",
-          "alt": "The login card with the email form revealed and filled in",
-          "motion": "push-in",
-          "capture": {
-            "path": "/login",
-            "waitFor": "a:has-text(\"Sign in with Companion account\")",
-            "before": [
-              {
-                "click": "button:has-text(\"Sign in with email instead\")"
-              },
-              {
-                "waitFor": "input[name=\"email\"]"
-              },
-              {
-                "fill": [
-                  "input[name=\"email\"]",
-                  "jsmith@example.com"
-                ]
-              },
-              {
-                "fill": [
-                  "input[name=\"password\"]",
-                  "correct horse battery staple"
-                ]
-              }
-            ],
-            "settle": 400
-          }
-        }
-      ]
-    },
-    {
-      "id": "first-run-focus",
-      "transition": "cut",
-      "kind": "screen",
-      "chapter": "first-run",
-      "seconds": 5.5,
-      "caption": "Tell it what you actually care about.",
-      "narration": "First run asks what matters to you, then builds around that.",
-      "shots": [
-        {
-          "id": "onboarding-focus",
-          "url": "ci-memory.local/onboarding",
-          "alt": "The onboarding focus-areas checklist, with two areas ticked",
-          "motion": "push-in",
-          "capture": {
-            "path": "/onboarding",
-            "waitFor": "button:has-text(\"Next\")",
-            "before": [
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Time and place\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"What should we focus on?\")"
-              },
-              {
-                "click": "#focus-area-personal_fitness"
-              },
-              {
-                "click": "#focus-area-communication"
-              },
-              {
-                "eval": "() => { const el = [...document.querySelectorAll('*')].find((e) => e.scrollHeight > e.clientHeight + 2 && e.clientHeight > 100 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)); if (el) el.scrollTop = 0; }"
-              }
-            ],
-            "settle": 400
-          }
-        }
-      ]
-    },
-    {
-      "id": "first-run-import",
-      "transition": "cut",
-      "kind": "screen",
-      "chapter": "first-run",
-      "seconds": 5.5,
-      "caption": "Connect a source, or bring an export.",
-      "narration": "Import the exports you already own, then connect what keeps producing.",
+      "seconds": 9,
+      "caption": "Your accounts, pulled into your own box.",
+      "narration": "Point it at the accounts you already have, and it pulls your mail, your calendar and your photos into your own house.",
       "shots": [
         {
           "id": "onboarding-connect",
           "url": "ci-memory.local/onboarding",
           "alt": "The onboarding connect-source step, offering providers, the browser extension and the import tools",
-          "motion": "drift-down",
-          "capture": {
-            "path": "/onboarding",
-            "waitFor": "button:has-text(\"Next\")",
-            "before": [
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Time and place\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"What should we focus on?\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Who are you usually around?\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Connect a source\")"
-              }
-            ],
-            "settle": 400
-          }
-        }
-      ]
-    },
-    {
-      "id": "trust-dial",
-      "transition": "cut",
-      "kind": "screen",
-      "chapter": "first-run",
-      "seconds": 5.5,
-      "caption": "First run asks how much it should do on its own.",
-      "narration": "Cautious, balanced, or hands off — first run asks where you want it to sit.",
-      "shots": [
-        {
-          "id": "onboarding-trust",
-          "url": "ci-memory.local/onboarding",
-          "alt": "The onboarding trust dial, offering cautious, balanced and hands-off",
           "motion": "push-in",
-          "_focusNote": "Third of three consecutive onboarding screens built from the same template — a centred column on an empty field — so at rest scenes 4, 5 and 6 are the same composition with different words. This is the one that punches in, because it is the one whose narration reads the on-screen options out loud: 'Cautious, balanced, or hands off — first run asks where you want it to sit.' The wide reads happen in the two scenes before it.\n\nThe rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in either pilot film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.",
+          "_focusNote": "The first product frame in the film, and the first thing that has to stop looking like the two title cards before it. At rest this shot is the fleet's default composition — a browser window floating on a dark field — and the craft audit counted 21 of 30 sampled frames in the old cut as exactly that. So the move ends full-bleed on the provider grid: the Microsoft, Google and Meta cards are the only saturated colour anywhere in this product, and at 1.5x they fill the frame with four blocks of blue, violet and green. It is the largest single change of register in the cut and it is bought with a rectangle, not a re-shoot.\n\nThe rectangle keeps the 'Pull your email and calendar in automatically' sub-heading and the whole top row INCLUDING each card's caption line, because those captions are what verifies the narration: Google's reads 'Gmail, Calendar, Drive, Photos, and YouTube', which is the sentence's 'mail, calendar and photos' printed on screen. Framing tighter on the logos alone would have made the line unsupported by its own frame.\n\nLANDSCAPE ONLY. On a phone the six cards stack full-width, so a portrait rectangle could only ask for full-bleed and would buy nothing over the legacy move.",
           "focus": {
-            "landscape": { "x": 0.17, "y": 0.26, "w": 0.66, "h": 0.66 },
-            "portrait": { "x": 0.03, "y": 0.06, "w": 0.94, "h": 0.8 }
+            "landscape": { "x": 0.07, "y": 0.12, "w": 0.86, "h": 0.56 }
           },
           "capture": {
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
             "before": [
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Time and place\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"What should we focus on?\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Who are you usually around?\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"Connect a source\")"
-              },
-              {
-                "click": "button:has-text(\"Next\")"
-              },
-              {
-                "waitFor": "h1:has-text(\"How much trust?\")"
-              }
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Time and place\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Connect a source\")" }
             ],
             "settle": 400
           }
@@ -250,75 +102,44 @@
       ]
     },
     {
-      "id": "feed",
-      "transition": "hold",
+      "id": "one-memory",
       "kind": "screen",
-      "chapter": "memory",
-      "seconds": 5,
-      "caption": "The feed leads with what still needs you.",
-      "narration": "The feed opens on the day's suggested actions, with the summaries underneath.",
-      "shots": [
-        {
-          "id": "feed-overview",
-          "url": "ci-memory.local/feed",
-          "alt": "The feed, with the day's suggested actions in the carousel",
-          "motion": "push-in",
-          "capture": {
-            "path": "/feed",
-            "waitFor": "text=Watch a movie together",
-            "before": [
-              {
-                "eval": "() => { const el = document.querySelector('[data-testid=\"tomorrows-forecast\"]'); if (el) el.style.display = 'none'; }"
-              }
-            ],
-            "mask": [
-              "time"
-            ],
-            "settle": 600
-          }
-        }
-      ]
-    },
-    {
-      "id": "memory-list",
+      "chapter": "keep",
       "transition": "cut",
-      "kind": "screen",
-      "chapter": "memory",
-      "seconds": 5,
+      "seconds": 6,
       "caption": "One list. Every kind of thing you keep.",
-      "narration": "Everything you keep, in one list, newest first.",
+      "narration": "Everything you keep lands in one list, on one machine, newest first.",
       "shots": [
         {
           "id": "memory-list-view",
           "url": "ci-memory.local/memory",
           "alt": "The memory explorer list view, grouped by date",
           "motion": "drift-down",
+          "_focusNote": "Deliberately the ONLY wide read in the second half of the film, and deliberately un-focused. The scene after it is a punch-in on one row of this exact list, and a crop only reads as a crop if the audience has seen the whole thing first — the same establish-then-punch pair the old cut had, kept because it was the one piece of camera grammar it got right.",
           "capture": {
             "path": "/memory?view=list",
             "waitFor": "div[role=\"button\"]",
-            "mask": [
-              "time"
-            ],
+            "mask": ["time"],
             "settle": 600
           }
         }
       ]
     },
     {
-      "id": "memory-detail",
-      "transition": "cut",
+      "id": "the-record",
       "kind": "screen",
-      "chapter": "memory",
-      "seconds": 6.5,
+      "chapter": "keep",
+      "transition": "cut",
+      "seconds": 7,
       "caption": "Open a row and the whole record is there.",
-      "narration": "Every field is there — what happened, where it happened, and exactly when.",
+      "narration": "Open one, and the whole record is there. What happened, where it happened, and exactly when.",
       "shots": [
         {
           "id": "memory-detail-sheet",
           "url": "ci-memory.local/memory",
           "alt": "The entity details sheet open over the list, showing one event's full record",
           "motion": "push-in",
-          "_focusNote": "Establish, then punch in — the scene before this one is the same list at rest, which is what earns the crop here. The narration promises 'what happened, where it happened, and exactly when', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the three things the line names. (The line used to promise 'sources, people, places, dates'. This record links neither a source nor a person, so two of those four were never in frame; the line now names only what the crop actually shows.)\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden. RE-CHECKED against a focus-preview end frame and the rendered cut: agreed, keep it. The scrim under the sheet is bg-black/70, so the sliced column sits at roughly a third of the sheet's brightness and the eye never goes there; and every tighter rectangle that clears the list costs a field the narration names. The alternative worth knowing about is w=0.526 at x=0.474, which cuts the sliced column from 34% of frame to 9.5% — it was rejected because a 0.526 window is only 0.526 of the plate tall too, so it loses BEDROOMS, NEIGHBORHOOD and the Details block.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
+          "_focusNote": "The best beat the old cut had, kept exactly as it was framed, because a rectangle this hard-won should survive a rewrite. The narration promises 'what happened, where it happened, and exactly when', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the three things the line names.\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden. RE-CHECKED against a focus-preview end frame and the rendered cut: agreed, keep it.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
           "focus": {
             "landscape": { "x": 0.28, "y": 0.14, "w": 0.72, "h": 0.72 },
             "portrait": { "x": 0.0, "y": 0.03, "w": 1.0, "h": 0.9 }
@@ -327,99 +148,60 @@
             "path": "/memory?view=list&includedEntityTypes=Event",
             "waitFor": "div[role=\"button\"]",
             "before": [
-              {
-                "click": "div[role=\"button\"] >> nth=0"
-              },
-              {
-                "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]"
-              }
+              { "click": "div[role=\"button\"] >> nth=0" },
+              { "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]" }
             ],
-            "mask": [
-              "time"
-            ],
+            "mask": ["time"],
             "settle": 700
           }
         }
       ]
     },
     {
-      "id": "memory-search",
-      "transition": "cut",
+      "id": "ask-it",
       "kind": "screen",
-      "chapter": "memory",
-      "seconds": 5,
+      "chapter": "ask",
+      "transition": "cut",
+      "seconds": 6,
       "caption": "Search runs on the box. Nothing is uploaded.",
-      "narration": "Search narrows the whole store in place, and never leaves the appliance.",
+      "narration": "Search it, and the whole store narrows in place. Nothing is uploaded, and nothing leaves the box.",
       "shots": [
         {
           "id": "memory-search-results",
           "url": "ci-memory.local/memory?search=coffee",
           "alt": "The memory explorer filtered down to results matching coffee",
-          "motion": "push-in",
+          "motion": "pull-back",
+          "_focusNote": "The only pull-back in the film, and the reason it is here rather than anywhere else: this is the one beat whose sentence has a direction. The shot OPENS tight enough that the query 'coffee' in the search field and the first six matched rows are legible, then reveals the rest of the store around them — the answer first, the haystack second, which is the order the line asks a question in.\n\nThe rectangle starts at x 0.17 so the left nav rail and the year-heatmap column stay out of the opening frame; they are furniture, and at 1.5x they would be the first thing read. max(w,h) is 0.83, which puts the opening scale at about 1.55x — comfortably inside MAX_SCALE, so the rectangle is honoured rather than clamped, and a pull-back that starts at a clamped scale is a pull-back from somewhere the author did not choose.\n\nLANDSCAPE ONLY: the phone capture has no separate search column to open on.",
+          "focus": {
+            "landscape": { "x": 0.17, "y": 0.0, "w": 0.83, "h": 0.55 }
+          },
           "capture": {
             "path": "/memory?view=list&search=coffee",
             "waitFor": "div[role=\"button\"]",
-            "mask": [
-              "time"
-            ],
+            "mask": ["time"],
             "settle": 600
           }
         }
       ]
     },
     {
-      "id": "memory-map",
-      "transition": "cut",
+      "id": "it-connects",
       "kind": "screen",
-      "chapter": "memory",
-      "seconds": 4.5,
-      "caption": "Anything with a place gets one. The basemap is Esri's.",
-      "narration": "Anything that happened somewhere also lands on the map.",
-      "shots": [
-        {
-          "id": "memory-map-view",
-          "url": "ci-memory.local/memory?view=map",
-          "alt": "The memory explorer map view, located events clustered across a continent",
-          "motion": "hold",
-          "focus": {
-            "landscape": {
-              "x": 0.284,
-              "y": 0.18,
-              "w": 0.716,
-              "h": 0.7
-            }
-          },
-          "capture": {
-            "path": "/memory?view=map",
-            "waitFor": ".leaflet-marker-pane .custom-map-marker, .leaflet-marker-pane .memory-map-cluster",
-            "before": [
-              {
-                "eval": "async () => { for (let i = 0; i < 4; i += 1) { const b = [...document.querySelectorAll('button')].find((x) => /Load more pins/.test(x.textContent || '')); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 2500)); } }"
-              }
-            ],
-            "mask": [
-              "time",
-              "[class*=\"w-[300px]\"]"
-            ],
-            "settle": 7000
-          }
-        }
-      ]
-    },
-    {
-      "id": "memory-graph",
+      "chapter": "ask",
       "transition": "cut",
-      "kind": "screen",
-      "chapter": "memory",
-      "seconds": 6.5,
-      "caption": "The fourth view: how it all connects.",
-      "narration": "The graph shows how your people, places and ideas actually connect, computed locally.",
+      "seconds": 7,
+      "caption": "People, places and ideas — connected on your hardware.",
+      "narration": "It works out how your people, places and ideas connect — on your box, not somebody else's cluster.",
       "shots": [
         {
           "id": "memory-graph-view",
           "url": "ci-memory.local/memory?view=graph",
           "alt": "The memory explorer graph view, hop-depth and neighbour controls above the force graph",
           "motion": "push-in",
+          "_focusNote": "At rest this is another window on a dark field and the node labels are unreadable. The rectangle ends on the core of the constellation — John Smith and the first ring of people and topics around him — at about 2.2x, which is where the labels become words instead of texture. Centred on (0.55, 0.49) because that is where the force layout settles this seed, not on the geometric middle of the plate.\n\nTHIS SHOT DRIFTS BETWEEN RE-SEEDS. The force graph has no fixed layout, so the node positions move on any re-capture and this rectangle points at a slightly different part of the cloud each time — video/README.md lists it as one of the two documented drift shots. It is framed loosely enough (0.58 of the plate) to survive that; a tighter crop on one named node would be a rectangle that silently rots.\n\nLANDSCAPE ONLY. The mobile graph is already near-full-width.",
+          "focus": {
+            "landscape": { "x": 0.26, "y": 0.2, "w": 0.58, "h": 0.58 }
+          },
           "capture": {
             "path": "/memory?view=graph",
             "waitFor": "[aria-label=\"Hop depth\"]",
@@ -428,156 +210,100 @@
                 "eval": "() => { const HEADER = 64; const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); const d = Math.max(0, r.top - HEADER); if (d < 1) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += d; }"
               }
             ],
-            "mask": [
-              "time"
-            ],
+            "mask": ["time"],
             "settle": 2500
           }
         }
       ]
     },
     {
-      "id": "memory-stats",
-      "transition": "cut",
+      "id": "it-notices",
       "kind": "screen",
-      "chapter": "memory",
-      "seconds": 5.5,
-      "caption": "It keeps count of everything it holds.",
-      "narration": "It tracks the shape of your memory: how much it holds, how far back it goes, and what it is mostly about.",
-      "shots": [
-        {
-          "id": "memory-stats",
-          "url": "ci-memory.local/stats",
-          "alt": "The memory stats page: totals for events, entities and relationships, the date range, and the breakdowns by tag and by data source",
-          "motion": "drift-down",
-          "_focusNote": "The numbers ARE the claim here — 238 events, 181 entities, 269 relationships, and the date range that answers 'how far back it goes' — so the framing is set by the widest thing the line names, not by how tight the camera could go. The four tiles span 0.90 of the plate; the window is 0.92, which pins the scale at 1.373x. Every rectangle I tried that asked for more sliced EVENTS off the left and DATE RANGE off the right, because past the request the clamp anchors the window to an edge and stops honouring what you pointed at.\n\ndrift-down keeps its travel at this scale (136px of headroom), so the shot reads the tiles and then moves down into the tag breakdown — the only scene in the film where the camera goes somewhere rather than closer.\n\nLANDSCAPE ONLY. On mobile the tiles are a full-width 2x2, so a portrait rectangle can only ask for full-bleed, and at full-bleed drift-down has no headroom and silently degrades to a push. Leaving 9:16 out keeps the legacy move and keeps the storyboard honest about what the film does.",
-          "focus": {
-            "landscape": { "x": 0.05, "y": 0.05, "w": 0.92, "h": 0.6 }
-          },
-          "capture": {
-            "path": "/stats",
-            "waitFor": "text=Entities by data source",
-            "mask": [
-              "time"
-            ],
-            "settle": 700
-          }
-        }
-      ]
-    },
-    {
-      "id": "insights",
+      "chapter": "ask",
       "transition": "cut",
-      "kind": "screen",
-      "chapter": "insights",
       "seconds": 7,
-      "caption": "It reads the week and writes it up.",
-      "narration": "Your appliance reads the week and writes the summary itself, without sending anything out.",
+      "caption": "It reads what happened and writes it up.",
+      "narration": "Hourly, daily, weekly — it reads what happened and writes the summary itself, on a model you host.",
       "shots": [
         {
           "id": "insights-list",
           "url": "ci-memory.local/insights",
           "alt": "The insights and summaries page, listing the daily and weekly summaries it generated",
-          "motion": "push-in",
+          "motion": "drift-down",
+          "_focusNote": "The claim is that the appliance NOTICED something, so the frame has to show a thing it noticed rather than a page of cards. The rectangle lands on the first two summaries, which puts 'Oil change due soon for your Honda Accord (last service ~4,900 miles ago)' at a size a viewer can actually read — and that sentence is the whole argument for this beat.\n\ndrift-down rather than push-in because two stacked cards is a column, and a camera that travels down a column is reading it. max(w,h) is 0.86, so the scale lands near 1.5x and the second card is still arriving as the move ends.\n\nTHE LINE NAMES THE CADENCE THE FRAME SHOWS, and it took a correction to get there. It read 'Overnight it reads your week' — but the two cards this rectangle frames are both badged HOURLY, so the frame was showing one thing while the voice named another. `backend/apps/summary/src/system_schedules.py` registers three: hourly at `5 * * * *`, daily at `10 0 * * *`, weekly at `15 0 * * MON`. The line now names all three, which is true of the product AND of the two badges in shot.\n\nWho writes these: `summary-service` is a container in this appliance's own compose stack (docker-compose.yml), pointed at the LLM endpoint configured in Settings -> Model, which defaults to Ollama on the host gateway. Hence 'a model you host' rather than 'a model on this machine' — the default is the same box, but the setting can name another one you run, and the narration should be true of both.",
+          "focus": {
+            "landscape": { "x": 0.05, "y": 0.14, "w": 0.86, "h": 0.52 }
+          },
           "capture": {
             "path": "/insights",
             "waitFor": "h2:has-text(\"Insights & Summaries\")",
-            "mask": [
-              "time"
-            ],
+            "mask": ["time"],
             "settle": 600
           }
         }
       ]
     },
     {
-      "id": "insight-detail",
-      "transition": "cut",
+      "id": "your-call",
       "kind": "screen",
-      "chapter": "insights",
-      "seconds": 6.5,
-      "caption": "Each summary opens into the patterns behind it.",
-      "narration": "Every summary opens up: the day's rhythm, the patterns it found, the tags it assigned.",
+      "chapter": "control",
+      "transition": "cut",
+      "seconds": 7,
+      "caption": "Cautious, balanced, or hands off. You choose.",
+      "narration": "How much it does on its own is a dial you set. Cautious, balanced, or hands off.",
       "shots": [
         {
-          "id": "insight-detail-view",
-          "url": "ci-memory.local/insights",
-          "alt": "One daily summary opened in full, with its period, tags and activity breakdown",
-          "motion": "drift-down",
+          "id": "onboarding-trust",
+          "url": "ci-memory.local/onboarding",
+          "alt": "The onboarding trust dial, offering cautious, balanced and hands-off",
+          "motion": "push-in",
+          "_focusNote": "The rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in the film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.",
+          "focus": {
+            "landscape": { "x": 0.17, "y": 0.26, "w": 0.66, "h": 0.66 },
+            "portrait": { "x": 0.03, "y": 0.06, "w": 0.94, "h": 0.8 }
+          },
           "capture": {
-            "path": "/insights/01936cb0-0000-7000-8000-000000000003",
-            "waitFor": "h1:has-text(\"Daily Summary\")",
-            "mask": [
-              "time"
-            ],
-            "settle": 500
-          }
-        }
-      ]
-    },
-    {
-      "id": "sources",
-      "transition": "cut",
-      "kind": "screen",
-      "chapter": "sources",
-      "seconds": 5,
-      "caption": "Connect Google or Microsoft once. It keeps arriving.",
-      "narration": "After that, every new item lands on your own hardware.",
-      "shots": [
-        {
-          "id": "connect-providers",
-          "url": "ci-memory.local/connect",
-          "alt": "The connect page scrolled to Service Integrations, listing Microsoft, Google and the other providers",
-          "motion": "drift-down",
-          "capture": {
-            "path": "/connect",
-            "waitFor": "text=Browser Extensions",
+            "path": "/onboarding",
+            "waitFor": "button:has-text(\"Next\")",
             "before": [
-              {
-                "waitFor": "h2:has-text(\"Service Integrations\")"
-              },
-              {
-                "eval": "Array.from(document.querySelectorAll('h2')).find((h) => h.textContent.trim() === 'Service Integrations').scrollIntoView({ block: 'start' })"
-              }
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Time and place\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"Connect a source\")" },
+              { "click": "button:has-text(\"Next\")" },
+              { "waitFor": "h1:has-text(\"How much trust?\")" }
             ],
-            "settle": 600
+            "settle": 400
           }
         }
       ]
     },
     {
       "id": "recap",
-      "transition": "cut",
       "kind": "feature",
-      "seconds": 4.5,
-      "title": "What it actually is",
-      "caption": "One appliance. One memory. No cloud account.",
-      "narration": "Local database, local models, no cloud account.",
+      "transition": "cut",
+      "reveal": "paced",
+      "seconds": 6,
+      "title": "What stays yours",
+      "caption": "One appliance. One memory. No account to cancel.",
+      "narration": "Local database. Local models. No account, and nothing to cancel.",
       "items": [
-        {
-          "label": "Store",
-          "value": "Postgres + pgvector"
-        },
-        {
-          "label": "Models",
-          "value": "Ollama, on device"
-        },
-        {
-          "label": "Your records",
-          "value": "stay on your hardware"
-        },
-        {
-          "label": "Monthly fee",
-          "value": "$0"
-        }
-      ],
-      "reveal": "paced"
+        { "label": "Store", "value": "Postgres + pgvector" },
+        { "label": "Models", "value": "Ollama, on hardware you run" },
+        { "label": "Your records", "value": "stay on your hardware" },
+        { "label": "Monthly fee", "value": "$0" }
+      ]
     },
     {
       "id": "close",
-      "transition": "cut",
       "kind": "outro",
-      "seconds": 4,
+      "transition": "cut",
+      "seconds": 4.5,
+      "minSeconds": 4,
       "cta": "UnCloud your life.",
       "url": "ci.computer",
       "narration": "Companion Memory, from Companion Intelligence. UnCloud your life.",

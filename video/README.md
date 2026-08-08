@@ -10,10 +10,20 @@ job, no schedule, no uploaded artifact, and no committed `.mp4`. A cut is a buil
 one when you need it, use it, then delete it. What lives in git is the *input* — the storyboard,
 the narration audio, and the screenshots under `assets/shots/`.
 
-> **All 30 shots are committed** (15 shots × 2 viewports), and `npm run check` passes without
-> `--allow-slates`. Twenty-eight of them were captured against the seeded stack below. The last
-> two — `memory-map-view` and `memory-map-view.mobile` — could not be, and were captured against
-> **the real-corpus stage** instead; see [The real-corpus stage](#the-real-corpus-stage).
+> **The storyboard references 7 shots — 14 files — and all of them are committed**, so
+> `npm run check` passes without `--allow-slates`. All seven come from the seeded stack below.
+>
+> **Sixteen more PNGs are committed and referenced by nothing.** The narrative re-cut cut the film
+> from 18 scenes to 12, and `splash-screen`, `login-form`, `onboarding-focus`, `feed-overview`,
+> `memory-map-view`, `memory-stats`, `insight-detail-view` and `connect-providers` — both viewports
+> each — left the storyboard with it. They are kept on purpose (see
+> [What is committed](#what-is-committed)), but be clear about what that means: `ci-video capture`
+> can only shoot ids the storyboard declares, so **nothing can re-shoot them while they are
+> unreferenced**, and they are frozen at 2026-08-07's product. Bringing one back into a scene means
+> re-shooting it in the same commit. `memory-map-view` is already out of date that way: CI-Server
+> [#1891](https://github.com/companionintelligence/CI-Server/pull/1891) restored the Esri
+> attribution control to `Map.tsx` after that shot was taken, so the committed frame shows a
+> basemap with no credit on it and the product no longer does.
 >
 > The old note here said the map was empty because `ci.entities.location_point` is NULL on a fresh
 > seed. That is true and it is not the reason. `/memory?view=map` is events-only and plots
@@ -61,10 +71,8 @@ npm install
 npx playwright install --with-deps chromium
 npm run doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
 
-# with the stage up (see below) — five passes, each explicitly scoped:
-npm run capture -- --only feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,memory-stats,insights-list,insight-detail-view,connect-providers
-VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
-VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-focus
+# with the stage up (see below) — three passes, each explicitly scoped:
+npm run capture -- --only memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-connect
 VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-trust
 
@@ -119,20 +127,28 @@ One feature flag is part of the stage, not the app defaults. Export it before ca
 | `ENABLE_REQUIRE_SIGNUP_CODES=false` | The fresh-account passes sign up through `/api/signup`, which 400s while signup codes are required. |
 | ~~`ENABLE_ACTIONS=true`~~ | No longer required. `features.actions` now ships `true` (`config/default.json:162`), so the feed's actions carousel and its "Actions" heading are on by default. Harmless if you still set it. |
 
-Capture runs five times on purpose, and **every pass names its shots explicitly** — including the
+Capture runs three times on purpose, and **every pass names its shots explicitly** — including the
 first. `ci-video capture` exits 1 if any single shot fails, so an unscoped first pass (which would
-attempt all fifteen shots as `jsmith`, five of them unreachable for that identity) dies before the
-other four passes run and leaves `assets/shots/` empty. The five passes in the Quick start block
+attempt all seven shots as `jsmith`, two of them unreachable for that identity) dies before the
+other two passes run and leaves `assets/shots/` empty. The three passes in the Quick start block
 above are the authoritative list.
 
-1. **authenticated** — the seeded `jsmith`; the nine filmable shots behind `ProtectedRoute`. Not
-   `/`, `/login` or `/onboarding`, which redirect this identity to `/feed`; and not
-   `memory-map-view`, which the seed cannot populate (hazard 13) and whose content-gated `waitFor`
-   would therefore take the other nine shots down with it;
-2. **`VIDEO_LOGGED_OUT=1`** — `/` and `/login`, which redirect a signed-in user to `/feed`;
-3. **`VIDEO_FRESH_USER=1`** ×3 — the seeded user is already onboarded, so the wizard is only
+1. **authenticated** — the seeded `jsmith`; the five shots behind `ProtectedRoute`. Not
+   `/onboarding`, which redirects this identity to `/feed`;
+2. **`VIDEO_FRESH_USER=1`** ×2 — the seeded user is already onboarded, so the wizard is only
    reachable from a throwaway account. One capture invocation per onboarding shot, because
    onboarding progress is persisted per user and a shared account would resume mid-wizard.
+
+It was five passes until the narrative re-cut. The signed-out pass (`VIDEO_LOGGED_OUT=1`, for `/`
+and `/login`) has nothing left to shoot now that the splash and login scenes are gone, and would be
+needed again the moment either comes back — those two routes are wrapped in `RedirectKnownUser` and
+send an onboarded user to `/feed`.
+
+**`make.sh` now refuses to shoot when its pass lists and the storyboard disagree**, in both
+directions: an id named in a pass that the storyboard does not declare (silently skipped by
+`--only`, which is a filter and not a lookup) and a declared shot that no pass names (never
+requested, and only visible as a missing-shot failure in `check`, one stage and several minutes
+later). That second case is what #1871 shipped.
 
 Determinism hazards are catalogued at the top of [`capture.config.mjs`](capture.config.mjs).
 
@@ -248,7 +264,7 @@ against this list:
 
 | Shot | The flat rectangle | What it is |
 |---|---|---|
-| `memory-map-view` | the 300px column down the left of the map | **A deliberate redaction.** At ≥768px the map renders `TimelineView` there, and against the real archive every card in it is a street address. Masked at the shutter, and meant to be cropped out of the cut as well — the scene is `motion: "hold"` with `focus.landscape` starting at `x = 0.284`, just right of the panel. See hazard 13 in `capture.config.mjs`. ⚠️ **`focus` needs video-kit ≥ 0.4.0** (`src/camera.mjs`); an older kit ignores the key silently and the flat panel stays in frame for the whole 4.5s scene. The redaction still holds — the rectangle is opaque — but check the kit before you believe the framing. |
+| `memory-map-view` *(no longer in the film)* | the 300px column down the left of the map | **A deliberate redaction.** At ≥768px the map renders `TimelineView` there, and against the real archive every card in it is a street address. Masked at the shutter, and it used to be cropped out of the cut as well — the scene was `motion: "hold"` with `focus.landscape` starting at `x = 0.284`, just right of the panel. See hazard 13 in `capture.config.mjs`. ⚠️ **`focus` needs video-kit ≥ 0.4.0** (`src/camera.mjs`); an older kit ignores the key silently and the flat panel stays in frame for the whole scene. The redaction still holds — the rectangle is opaque — but check the kit before you believe the framing. **The scene was cut in the narrative re-cut**, and not for pace: every map render fetches tiles from `server.arcgisonline.com`, which `docs/architecture/third-party-egress.md` records as the one egress a fresh appliance performs with no key and no connector — so in a film about records that stay home, that frame argues with its own narration whatever the caption says. |
 | every shot with a list | individual `<time>` elements | Relative timestamps ("3:42 PM" / "Jun 14") that move with the clock. |
 
 `feed-overview` used to belong on that list — its 24-hour forecast strip was masked, leaving a dead
@@ -272,9 +288,26 @@ captions, narration, and which screens appear. The **capture spec for each shot 
 file**, so the script and the screenshots cannot drift apart.
 
 Adding a beat is: add a scene, add its shot's `capture` block, add the shot id to the right pass in
-the Quick start block above, `npm run capture -- --only <id>`, then `npm run build && npm run
-render`. Forgetting to add it to a pass is caught by `npm run check`, which fails on a shot with
-no PNG. Commit the new PNG.
+`video/make.sh` (and the Quick start block above), `./video/make.sh`, then commit the new PNG.
+Forgetting to add it to a pass now fails `make.sh` **before the stage starts**, naming the shot;
+before that guard existed the only signal was `npm run check` failing on a slate, one stage and
+several minutes later.
+
+**Editing a narration line is not free, and it used to look free.** `narrate` leaves an existing
+mp3 alone — deliberately; they are committed and slow to make — so a rewritten line went on
+shipping the old read through `build`, `check` and a full render with nothing to hear it. That is
+what `assets/audio/narration.json` is for: it records the line each mp3 is a read of, so
+`ci-video status` names the drifted scene and prints the old line beside the new one, and
+`ci-video narrate --stale` re-records exactly those. **This needs a kit that has it** — the
+manifest landed in video-kit 0.11.0 and this repo's `video/package.json` pins 0.7.2 from the
+registry, so run those two commands from a CI-Common checkout of the kit the render host actually
+uses (`node <CI-Common>/packages/video-kit/bin/ci-video.mjs status`). See
+[Why video-kit is pinned exactly](#why-video-kit-is-pinned-exactly-and-which-kit-answered).
+
+And verify the result by listening to it, not by reading the exit status: **edge-tts exits 0 while
+writing a silent or truncated file.** Transcribing each mp3 back to text and diffing it against the
+storyboard line is the check that actually catches both failure modes at once —
+`whisper-cli -m ggml-large-v3-turbo.bin -f <scene>.wav -nt`.
 
 **`before` runs after `waitFor`, not before it.** video-kit's engine order is
 `goto` → `waitForSelector(capture.waitFor)` → the `before` actions → shutter, so `before` means
@@ -296,12 +329,28 @@ of what the product looked like, and captures are byte-stable, so a diff in them
 genuinely changed. They are also what lets anyone render a cut without standing up the whole
 appliance.
 
-Both are there now: the audio, and **all 30 PNGs** — 28 from the seeded stage, and
-`memory-map-view{,.mobile}` from [the real-corpus stage](#the-real-corpus-stage). Those two are
-the only frames in the repo taken against real personal data, and they are aggregate-only by
-construction: clusters and counts, no labels, no panel. `video/.gitignore` does *not* exclude `assets/shots/`, which is
-deliberate and load-bearing: only a few of the twelve CI products have a working capture stage, so
-gitignoring the shots would mean nobody but the stage's author could ever render the cut.
+Both are there now: the audio — one mp3 per scene and `narration.json`, which records **which line
+each mp3 is a read of**, so an edited line reports itself by name instead of silently shipping the
+old recording — and **all 30 PNGs**, of which the storyboard currently references 14.
+
+`memory-map-view{,.mobile}` came from [the real-corpus stage](#the-real-corpus-stage) and are the
+only frames in the repo taken against real personal data; they are aggregate-only by construction
+— clusters and counts, no labels, no panel. They are also, with the other seven unreferenced
+shots, no longer in the film.
+
+**Unreferenced PNGs are kept, and that is a deliberate trade rather than an oversight.** Deleting
+them would throw away a 45-minute, 826,478-item corpus load for the map pair, and the shot library
+is an input anyone can render from — `video/.gitignore` does *not* exclude `assets/shots/`, which
+is deliberate and load-bearing: only a few of the twelve CI products have a working capture stage,
+so gitignoring the shots would mean nobody but the stage's author could ever render the cut. The
+cost is that an unreferenced shot cannot be re-captured (capture only knows ids the storyboard
+declares) and therefore silently ages. Treat every one of them as **dated 2026-08-07 until
+re-shot**, and re-shoot in the same commit that brings one back.
+
+Unreferenced *audio* is handled the other way: `ci-video status` reports an mp3 belonging to no
+scene as an orphan, and the fifteen the re-cut left behind were deleted rather than kept, because a
+narration track is cheap to regenerate from the storyboard and an orphan one is only ever
+confusing.
 
 `out/` is **not** committed, and the MP4s are not stored anywhere else either — no artifacts, no
 release assets. Re-render when you need one.
@@ -320,7 +369,7 @@ retired "every `location_point` is NULL" diagnosis. Replace that entry with:
   "repo": "CI-Server",
   "capture": "video/make.sh",
   "captureRealCorpus": "video/stage.real-corpus.sh",
-  "comment": "All 30 shots are committed and both cuts render; `check` passes with no --allow-slates. TWO STAGES. video/make.sh stands up Postgres+PostGIS+pgvector, 188 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures FIVE passes under three identities (authenticated, VIDEO_LOGGED_OUT, VIDEO_FRESH_USER x3) with ENABLE_REQUIRE_SIGNUP_CODES=false — it produces 28 of the 30 shots. It deliberately does NOT capture memory-map-view: the seed writes no ci.events.location_coordinates, so that shot's content-gated waitFor times out and takes the other nine shots in its pass with it. video/stage.real-corpus.sh produces those two, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo). AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
+  "comment": "The storyboard references 7 shots (14 files), all committed, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 188 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. SIXTEEN further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product; memory-map-view is already stale against CI-Server #1891. A SECOND STAGE, video/stage.real-corpus.sh, is what produced the map pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); it is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
 }
 ```
 

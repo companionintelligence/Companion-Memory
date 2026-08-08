@@ -1,0 +1,131 @@
+{
+  "_": "Written by `ci-video narrate`. Records which line each mp3 is a read of, so a later edit to scene.narration can be detected instead of silently keeping the old recording. Commit this with the mp3s.",
+  "voice": "en-GB-SoniaNeural",
+  "scenes": {
+    "open": {
+      "text": "Other agents are double agents. Companion Memory works only for you.",
+      "seconds": 5.304,
+      "adopted": true
+    },
+    "front-door": {
+      "text": "It opens on hardware you own, and your records are stored and searched there.",
+      "seconds": 4.728,
+      "adopted": true
+    },
+    "sign-in": {
+      "text": "Sign in through Companion Portal, or with email if you prefer.",
+      "seconds": 4.344,
+      "adopted": true
+    },
+    "first-run-focus": {
+      "text": "First run asks what matters to you, then builds around that.",
+      "seconds": 4.152,
+      "adopted": true
+    },
+    "first-run-import": {
+      "text": "Import the exports you already own, then connect what keeps producing.",
+      "seconds": 4.656,
+      "adopted": true
+    },
+    "trust-dial": {
+      "text": "Cautious, balanced, or hands off — first run asks where you want it to sit.",
+      "seconds": 5.304,
+      "adopted": true
+    },
+    "feed": {
+      "text": "The feed opens on the day's suggested actions, with the summaries underneath.",
+      "seconds": 5.016,
+      "adopted": true
+    },
+    "memory-list": {
+      "text": "Everything you keep, in one list, newest first.",
+      "seconds": 3.792,
+      "adopted": true
+    },
+    "memory-detail": {
+      "text": "Every field is there — what happened, where it happened, and exactly when.",
+      "seconds": 4.776,
+      "adopted": true
+    },
+    "memory-search": {
+      "text": "Search narrows the whole store in place, and never leaves the appliance.",
+      "seconds": 4.488,
+      "adopted": true
+    },
+    "memory-map": {
+      "text": "Anything that happened somewhere also lands on the map.",
+      "seconds": 3.6,
+      "adopted": true
+    },
+    "memory-graph": {
+      "text": "The graph shows how your people, places and ideas actually connect, computed locally.",
+      "seconds": 6.24,
+      "adopted": true
+    },
+    "memory-stats": {
+      "text": "It tracks the shape of your memory: how much it holds, how far back it goes, and what it is mostly about.",
+      "seconds": 6.504,
+      "adopted": true
+    },
+    "insights": {
+      "text": "Your appliance reads the week and writes the summary itself, without sending anything out.",
+      "seconds": 5.568,
+      "adopted": true
+    },
+    "insight-detail": {
+      "text": "Every summary opens up: the day's rhythm, the patterns it found, the tags it assigned.",
+      "seconds": 5.904,
+      "adopted": true
+    },
+    "sources": {
+      "text": "After that, every new item lands on your own hardware.",
+      "seconds": 3.84,
+      "adopted": true
+    },
+    "recap": {
+      "text": "Local database. Local models. No account, and nothing to cancel.",
+      "seconds": 6.048
+    },
+    "close": {
+      "text": "Companion Memory, from Companion Intelligence. UnCloud your life.",
+      "seconds": 5.544,
+      "adopted": true
+    },
+    "the-deal": {
+      "text": "An assistant is only useful if it remembers you. Where you live. Who your doctor is. When the house is empty.",
+      "seconds": 8.064
+    },
+    "the-catch": {
+      "text": "And all of that gets remembered on a machine you will never see. So most people quietly stop telling it the truth.",
+      "seconds": 7.2
+    },
+    "bring-it-home": {
+      "text": "Point it at the accounts you already have, and it pulls your mail, your calendar and your photos into your own house.",
+      "seconds": 6.912
+    },
+    "one-memory": {
+      "text": "Everything you keep lands in one list, on one machine, newest first.",
+      "seconds": 4.896
+    },
+    "the-record": {
+      "text": "Open one, and the whole record is there. What happened, where it happened, and exactly when.",
+      "seconds": 6.48
+    },
+    "ask-it": {
+      "text": "Search it, and the whole store narrows in place. Nothing is uploaded, and nothing leaves the box.",
+      "seconds": 6.84
+    },
+    "it-connects": {
+      "text": "It works out how your people, places and ideas connect — on your box, not somebody else's cluster.",
+      "seconds": 6.792
+    },
+    "it-notices": {
+      "text": "Hourly, daily, weekly — it reads what happened and writes the summary itself, on a model you host.",
+      "seconds": 6.72
+    },
+    "your-call": {
+      "text": "How much it does on its own is a dial you set. Cautious, balanced, or hands off.",
+      "seconds": 6.36
+    }
+  }
+}

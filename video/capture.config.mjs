@@ -30,50 +30,48 @@
  * means capture does not depend on a prior `yarn e2e` run having left a fresh
  * state file behind.
  *
- * FIVE-PASS CAPTURE. `ci-video capture` creates ONE browser context per viewport
- * and shares it across every shot, so a single run is either logged in or logged
- * out — it cannot be both. This storyboard needs three different identities, in
- * five invocations:
+ * THREE-PASS CAPTURE. `ci-video capture` creates ONE browser context per
+ * viewport and shares it across every shot, so a single run is either logged in
+ * or logged out — it cannot be both. This storyboard needs two identities, in
+ * three invocations:
  *
- *   npm run capture -- --only <the nine ids below>     # seeded jsmith
- *   VIDEO_LOGGED_OUT=1     npm run capture -- --only splash-screen,login-form
- *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-focus
+ *   npm run capture -- --only <the five ids below>     # seeded jsmith
  *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-connect
  *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-trust
  *
  * EVERY pass is explicitly scoped, including the first. `ci-video capture` exits
  * 1 if any single shot fails (bin/ci-video.mjs cmdCapture), so a bare
- * `npm run capture` — which would try all fifteen shots as jsmith, five of them
- * structurally impossible for that identity — aborts the job before passes 2-5
+ * `npm run capture` — which would try all seven shots as jsmith, two of them
+ * structurally impossible for that identity — aborts the job before passes 2-3
  * run and leaves assets/shots/ empty. The authoritative list lives in
- * video/README.md's Quick start block; keep the two in step. (There is no
- * .github/workflows/video.yml any more — #1853 deleted it and moved the build
- * local; anything this file used to delegate to that job is spelled out here.)
+ * video/make.sh, which now REFUSES TO SHOOT if it and storyboard.json disagree
+ * in either direction; video/README.md's Quick start block repeats it. (There
+ * is no .github/workflows/video.yml any more — #1853 deleted it and moved the
+ * build local; anything this file used to delegate to that job is spelled out
+ * here.)
  *
- * 1. AUTHENTICATED. The nine currently-filmable shots behind ProtectedRoute:
- *    feed-overview, memory-{list-view,detail-sheet,search-results,graph-view},
- *    memory-stats, insights-list, insight-detail-view, connect-providers.
- *    (memory-stats replaced people-directory in #1871 — a 64-row directory of
- *    named individuals, cut on the aggregate-only rule. The pass lists were not
- *    updated with the storyboard at the time, and because --only is a silent
- *    filter that left memory-stats uncapturable through make.sh; see the note
+ * 1. AUTHENTICATED. The five shots behind ProtectedRoute the film uses:
+ *    memory-{list-view,detail-sheet,search-results,graph-view}, insights-list.
+ *    NOT `/onboarding` — see below. NOT memory-map-view either: the SEED cannot
+ *    populate it and a content-gated waitFor therefore fails the whole pass. It
+ *    is captured from the real-corpus stage instead — see hazard 13 and
+ *    video/README.md — and no scene references it today.
+ *    (It was nine shots and five passes until the narrative re-cut. The
+ *    signed-out pass shot `/` and `/login`, both wrapped in RedirectKnownUser
+ *    (App.tsx:117-121, :147-152) which sends an authenticated, onboarded user
+ *    straight to /feed; it is needed again the moment either scene returns.
+ *    feed-overview, memory-stats, insight-detail-view and connect-providers
+ *    left the storyboard with it and are now un-shootable — see the ⚠️ block
  *    above AUTHED_SHOTS in video/make.sh.)
- *    NOT `/`, `/login` or `/onboarding` — see below. NOT memory-map-view
- *    either: it is a tenth ProtectedRoute shot, but the SEED cannot populate it
- *    and a content-gated waitFor therefore fails the whole pass. It is captured
- *    from the real-corpus stage instead — see hazard 13 and video/README.md.
- * 2. LOGGED OUT. `/` and `/login` are both wrapped in RedirectKnownUser
- *    (App.tsx:117-121, :147-152), which sends an authenticated, onboarded user
- *    straight to /feed, so these two ids are excluded from pass 1 rather than
- *    captured and overwritten.
- * 3+4. FRESH USER, once per onboarding shot. The seeded user cannot film
+ * 2+3. FRESH USER, once per onboarding shot. The seeded user cannot film
  *    onboarding at all: scripts/seed-database/seed-users.ts:41 calls
  *    `userService.onboard(user.id)`, and OnboardingPage.tsx:231-233 returns
  *    `<Navigate to="/feed" replace />` for an onboarded user — the wizard is
  *    unreachable, exactly as tests/e2e/onboarding.spec.ts:3-9 says. So this
  *    pass signs up a throwaway account per run (see VIDEO_FRESH_USER below).
  *
- *    It is THREE passes, not one, on purpose. OnboardingPage persists progress
+ *    It is ONE PASS PER ONBOARDING SHOT, not one for both, on purpose.
+ *    OnboardingPage persists progress
  *    server-side on every Next (persistProgress -> saveProgress) and rehydrates
  *    from it on mount (OnboardingPage.tsx:108-135), so a second onboarding shot
  *    sharing the account would resume mid-wizard AND render the "Welcome back.

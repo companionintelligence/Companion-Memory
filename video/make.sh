@@ -18,7 +18,7 @@
 # is identical across repos and all repo-specific logic lives in video/stage.sh.
 # Companion Memory needs TWO real departures, and they are the only two:
 #
-#   1  capture runs FIVE times, under three different identities, because
+#   1  capture runs THREE times, under two different identities, because
 #      `ci-video capture` shares one browser context per viewport and cannot be
 #      signed in and signed out at once. See the capture section below.
 #   2  video-kit is installed from the private GitHub Packages registry, not
@@ -284,46 +284,71 @@ say "installing Chromium for Playwright"
 PW_DIR="$(node -p "require('path').dirname(require.resolve('playwright/package.json'))")"
 node "$PW_DIR/cli.js" install chromium
 
-# ── capture: FIVE passes, not one ────────────────────────────────────────────
+# ── capture: THREE passes, not one ───────────────────────────────────────────
 # This is the one place Companion Memory departs from the generic make.sh, and
 # it is forced by the product, not by taste. `ci-video capture` builds ONE
 # browser context per viewport and shares it across every shot, so a single run
 # is either signed in or signed out — it cannot be both. This storyboard needs
-# three identities:
+# two identities:
 #
-#   1  the seeded, already-onboarded jsmith          (everything behind ProtectedRoute)
-#   2  signed out                                    (/ and /login redirect an onboarded user to /feed)
-#   3-5 a throwaway account, ONE PER SHOT            (onboarding persists progress server-side, so a
-#                                                     shared account resumes mid-wizard and renders a
-#                                                     "Welcome back" banner over the shot)
+#   1   the seeded, already-onboarded jsmith        (everything behind ProtectedRoute)
+#   2-3 a throwaway account, ONE PER SHOT           (onboarding persists progress server-side, so a
+#                                                    shared account resumes mid-wizard and renders a
+#                                                    "Welcome back" banner over the shot)
+#
+# It was FIVE passes until the narrative re-cut. That cut dropped the splash and
+# login scenes, so the signed-out pass has nothing left to shoot and is gone;
+# `/` and `/login` redirect an onboarded user to `/feed`, so were it kept it
+# would need `VIDEO_LOGGED_OUT=1` again. It also dropped `onboarding-focus`,
+# leaving two fresh-account shots rather than three.
 #
 # Every pass is explicitly scoped, including the first: `ci-video capture` exits
-# 1 on any single failure, so an unscoped run would attempt all fifteen shots as
-# jsmith, five of them structurally unreachable, and abort before passes 2-5.
+# 1 on any single failure, so an unscoped run would attempt every shot in the
+# storyboard as jsmith, including the two onboarding ones this identity cannot
+# reach, and abort before the passes that could have shot them.
 #
-# memory-map-view is absent from pass 1 on purpose, and STILL IS. Its committed
-# shots were taken against the real-corpus stage (video/README.md, "The
-# real-corpus stage"); the stock seed writes no ci.events.location_coordinates,
-# so the shot's content-gated waitFor would time out and take the other nine
-# shots in this pass down with it. Re-shoot it from the real-corpus stage, or
-# fix seed-events.ts first — hazard 13 in capture.config.mjs has the diff.
+# ⚠️ THE STORYBOARD NO LONGER REFERENCES EIGHT OF THE COMMITTED SHOTS —
+# splash-screen, login-form, onboarding-focus, feed-overview, memory-map-view,
+# memory-stats, insight-detail-view and connect-providers. Their PNGs are kept
+# (video/README.md § "What is committed": the shot library is an input anyone
+# can render from, and `memory-map-view` cost a 826,478-item real-corpus load),
+# but NOTHING BELOW SHOOTS THEM ANY MORE, because `ci-video capture` can only
+# shoot ids the storyboard declares. They are frozen at whatever the product
+# looked like when they were taken. `memory-map-view` is already stale against
+# CI-Server #1891, which restored the Esri attribution control to `Map.tsx`
+# after that shot was captured — re-shoot it from `video/stage.real-corpus.sh`
+# in the same commit as any scene that brings the map back.
 #
-# ⚠️ THIS LIST IS NOT VALIDATED AGAINST THE STORYBOARD, so keeping it in step is
-# manual and a drift here is SILENT IN BOTH DIRECTIONS. `ci-video capture`
+# The list below used to carry a warning that it was NOT validated against the
+# storyboard and that drift was silent in both directions — which is exactly how
+# #1871 left `people-directory` (deleted from the storyboard) in it while never
+# adding `memory-stats` (added to it), so a "successful" run captured eight
+# shots instead of nine. That warning is now a check: `ci-video capture`
 # implements --only as `shots.filter((s) => only.includes(s.id))`
-# (video-kit src/capture.mjs:176) — a plain filter, not a lookup. An id named
-# here that no longer exists in storyboard.json matches nothing and is skipped
-# without a word; a shot added to storyboard.json but not named here is simply
-# never requested, and the only thing that catches it is `ci-video check`
-# failing on the slate several steps later.
-#
-# That is exactly what happened between #1871 and this commit: #1871 replaced
-# the /people scene with /stats, and this list kept `people-directory` (gone
-# from the storyboard) while never gaining `memory-stats` (added to it). So
-# pass 1 silently captured eight shots instead of nine and memory-stats was
-# unreachable through make.sh at all — which is why both of its viewports were
-# still missing after a "successful" capture run.
-AUTHED_SHOTS=feed-overview,memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,memory-stats,insights-list,insight-detail-view,connect-providers
+# (video-kit src/capture.mjs) — a plain filter, not a lookup — so an id named
+# here that the storyboard does not declare matches nothing and is skipped
+# without a word. Naming every id up front lets us compare the two sets before
+# the stage has cost anybody four minutes.
+AUTHED_SHOTS=memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
+FRESH_SHOTS="onboarding-connect onboarding-trust"
+
+# Both directions, and both are fatal. An id named here that the storyboard
+# dropped would be silently skipped; a shot the storyboard declares that no pass
+# names is never requested at all and only surfaces as a missing-shot failure in
+# `check`, several minutes and one stage later.
+requested="$( { echo "$AUTHED_SHOTS" | tr ',' '\n'; echo "$FRESH_SHOTS" | tr ' ' '\n'; } | sed '/^$/d' | sort -u)"
+declared="$(node -p "
+  const sb = require('./storyboard.json');
+  [...new Set(sb.scenes.flatMap((s) => (s.shots ?? []).map((h) => h.id)))].sort().join('\n');
+")"
+orphaned="$(comm -23 <(echo "$requested") <(echo "$declared"))"
+unshot="$(comm -13 <(echo "$requested") <(echo "$declared"))"
+[ -z "$orphaned" ] || die "these ids are named in make.sh but not declared in storyboard.json —
+     capture would skip them silently:
+$(echo "$orphaned" | sed 's/^/       /')"
+[ -z "$unshot" ] || die "these shots are declared in storyboard.json but named in no capture pass —
+     they would never be requested, and \`check\` would fail on the slate:
+$(echo "$unshot" | sed 's/^/       /')"
 
 if [ ${#ONLY[@]} -gt 0 ]; then
   # --only is for re-shooting one shot; the caller owns the identity, so pass
@@ -331,14 +356,13 @@ if [ ${#ONLY[@]} -gt 0 ]; then
   say "capturing (scoped)"
   npm run capture -- "${ONLY[@]}"
 else
-  say "capturing 1/5 — authenticated (seeded jsmith)"
+  say "capturing 1/3 — authenticated (seeded jsmith)"
   npm run capture -- --only "$AUTHED_SHOTS"
 
-  say "capturing 2/5 — signed out"
-  VIDEO_LOGGED_OUT=1 npm run capture -- --only splash-screen,login-form
-
-  for shot in onboarding-focus onboarding-connect onboarding-trust; do
-    say "capturing — fresh account for $shot"
+  n=1
+  for shot in $FRESH_SHOTS; do
+    n=$((n + 1))
+    say "capturing $n/3 — fresh account for $shot"
     VIDEO_FRESH_USER=1 npm run capture -- --only "$shot"
   done
 fi
@@ -347,8 +371,9 @@ say "building the compositions"
 npm run build
 
 say "checking them"
-# No --allow-slates any more: all 30 shots exist, so the missing-shot gate is
-# live again. That gate is the only thing standing between this repo and a
+# No --allow-slates any more: all 14 shot files the storyboard needs exist (7
+# shots x 2 viewports), so the missing-shot gate is live. That gate is the only
+# thing standing between this repo and a
 # narrated slideshow of placeholders shipping as a product video — if it starts
 # failing, capture the shot or cut the scene. Do not re-add the flag.
 npm run check
