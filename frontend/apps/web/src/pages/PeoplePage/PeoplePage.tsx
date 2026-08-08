@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
 import { EmptyState, GlobalUID, LoadingPage, Portal, usePageTitle } from '@ci/common';
@@ -10,11 +10,21 @@ import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 import type { GetPeopleQuery, GetPersonDuplicatesQuery } from '@/graphql/graphql';
 
+// Matches MemoryPage's PAGE_SIZE. Keeping it small also keeps the batch handed
+// to PersonInteractionStatsLoader small — that resolver aggregates over the
+// `ci.communications` hypertable, and its cost scales with the id-array length.
+export const PAGE_SIZE = 30;
+
 const GET_PEOPLE = gql(`
-  query GetPeople($query: String) {
-    people(query: $query, first: 500) {
+  query GetPeople($query: String, $first: Int, $after: String) {
+    people(query: $query, first: $first, after: $after) {
       totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       edges {
+        cursor
         node {
           id
           name
@@ -303,8 +313,9 @@ export function PeoplePage() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
 
-  const { data, previousData, loading, error, refetch } = useQuery(GET_PEOPLE, {
-    variables: { query: searchQuery.trim() === '' ? null : searchQuery.trim() },
+  const { data, previousData, loading, error, refetch, fetchMore } = useQuery(GET_PEOPLE, {
+    variables: { query: searchQuery.trim() === '' ? null : searchQuery.trim(), first: PAGE_SIZE },
+    notifyOnNetworkStatusChange: true,
   });
   const {
     data: duplicatesData,
@@ -319,6 +330,65 @@ export function PeoplePage() {
   const people = useMemo(() => (view?.people.edges ?? []).map((edge) => edge.node), [view]);
   const duplicateGroups = duplicatesData?.personDuplicates ?? [];
 
+  const [loadingMore, setLoadingMore] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const pageInfo = view?.people.pageInfo;
+  const hasNextPage = pageInfo?.hasNextPage ?? false;
+  const totalCount = view?.people.totalCount ?? 0;
+
+  // Append the next server page (cursor-based) onto the accumulated results.
+  const loadMore = useCallback(() => {
+    if (!hasNextPage || loadingMore || !pageInfo?.endCursor) {
+      return;
+    }
+
+    setLoadingMore(true);
+
+    fetchMore({
+      variables: { after: pageInfo.endCursor },
+      updateQuery: (prev, { fetchMoreResult }) => {
+        if (!fetchMoreResult?.people) {
+          return prev;
+        }
+
+        const prevEdges = prev.people?.edges ?? [];
+        const seen = new Set(prevEdges.map((edge) => edge.cursor));
+        const nextEdges = fetchMoreResult.people.edges.filter((edge) => !seen.has(edge.cursor));
+
+        return {
+          people: {
+            ...fetchMoreResult.people,
+            edges: [...prevEdges, ...nextEdges],
+          },
+        };
+      },
+    }).finally(() => setLoadingMore(false));
+  }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);
+
+  // Fetch the next server page when the sentinel scrolls into view.
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+
+    if (!sentinel || !hasNextPage) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          loadMore();
+        }
+      },
+      { root: scrollRef.current, rootMargin: '400px' },
+    );
+
+    observer.observe(sentinel);
+
+    return () => observer.disconnect();
+  }, [hasNextPage, loadMore]);
+
   const onMerged = async () => Promise.all([refetch(), refetchDuplicates()]);
 
   let content: ReactNode | null = null;
@@ -329,7 +399,7 @@ export function PeoplePage() {
     content = <EmptyState message={`Couldn't load people: ${error.message}`} />;
   } else {
     content = (
-      <PageContent>
+      <PageContent ref={scrollRef}>
         <div className="flex items-center gap-2">
           <Input
             placeholder="Search people by name..."
@@ -337,7 +407,7 @@ export function PeoplePage() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="max-w-md"
           />
-          <div className="text-sm text-muted-foreground">{view?.people.totalCount ?? 0} people</div>
+          <div className="text-sm text-muted-foreground">{totalCount} people</div>
         </div>
 
         {duplicatesError && (
@@ -373,11 +443,20 @@ export function PeoplePage() {
         {people.length === 0 ? (
           <EmptyState message="No people found" />
         ) : (
-          <div className="flex flex-col gap-2">
-            {people.map((person) => (
-              <PersonRow key={person.id} person={person} onOpen={() => navigate(`/people/${GlobalUID.parse('person', person.id)}`)} />
-            ))}
-          </div>
+          <>
+            <div className="flex flex-col gap-2">
+              {people.map((person) => (
+                <PersonRow key={person.id} person={person} onOpen={() => navigate(`/people/${GlobalUID.parse('person', person.id)}`)} />
+              ))}
+            </div>
+
+            {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+
+            <div className="py-3 text-center text-xs text-muted-foreground">
+              {people.length} of {totalCount} loaded
+              {loadingMore ? ' · loading…' : hasNextPage ? '' : ' · end'}
+            </div>
+          </>
         )}
       </PageContent>
     );

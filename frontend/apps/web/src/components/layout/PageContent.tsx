@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 import { useDeviceLayout } from '@ci/common';
 import { cn } from '@ci/shadcn';
@@ -7,9 +7,11 @@ interface Props {
   children?: ReactNode;
   className?: string;
   relativeBoundary?: boolean;
+  /** This element is the page's scroll container — take a ref to observe it. */
+  ref?: Ref<HTMLDivElement>;
 }
 
-export function PageContent({ children, className, relativeBoundary = true }: Props) {
+export function PageContent({ children, className, relativeBoundary = true, ref }: Props) {
   const { isMobile } = useDeviceLayout();
 
   const spacing = isMobile
@@ -18,6 +20,7 @@ export function PageContent({ children, className, relativeBoundary = true }: Pr
 
   return (
     <div
+      ref={ref}
       className={cn(
         spacing,
         'flex flex-col texture-surface',
