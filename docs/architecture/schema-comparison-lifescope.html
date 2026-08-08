@@ -493,6 +493,29 @@
     max-width: 78ch;
   }
 
+  .pr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 16px;
+    border: 2px solid var(--rule);
+    border-left: 6px solid var(--then);
+    background: var(--sheet);
+    padding: 14px 18px;
+    margin: 26px 0 0;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  .pr a { color: var(--then); font-weight: 700; text-decoration: none; border-bottom: 1px solid currentColor; }
+  .pr a:focus-visible { outline: 2px solid var(--then); outline-offset: 3px; }
+  .pr .pr-k {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .pr .pr-m { color: var(--ink-2); }
+
   @media (max-width: 640px) {
     body { font-size: 15.5px; }
     .wrap { padding: 0 14px 80px; }
@@ -521,6 +544,12 @@
       <span>Branch qa-fixes @ 26cb13db</span>
     </div>
   </header>
+
+  <div class="pr">
+    <span class="pr-k">Pull request</span>
+    <a href="https://github.com/companionintelligence/CI-Server/pull/1894">#1894 — docs(architecture): LifeScope/CI-Server schema comparison and cleanup plan</a>
+    <span class="pr-m">branch docs/schema-audit → main · 2 files, +3,996 · docs only, nothing executes</span>
+  </div>
 
   <section>
     <h2><span class="num">01</span>The verdict</h2>
@@ -1783,7 +1812,7 @@ flowchart TB
       change, 1 sequencing the survivors. Every <code>DROP</code> was executed against a throwaway
       replica and every <code>migrate:down</code> replayed and diffed back to the original. Full
       paste-ready SQL lives in
-      <a href="./schema-cleanup-plan.md"><code>schema-cleanup-plan.md</code></a>.</p>
+      <a href="./schema-cleanup-plan.md"><code>schema-cleanup-plan.md</code></a> — also reviewable in <a href="https://github.com/companionintelligence/CI-Server/pull/1894/files">PR #1894</a>.</p>
 
     <div class="scale">
       <div class="stat now"><span class="k">Tables</span><span class="v">−1</span><span class="sub">63 → 62</span></div>
