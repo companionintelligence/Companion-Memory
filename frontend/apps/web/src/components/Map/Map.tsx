@@ -28,11 +28,19 @@ export function Map({ center, children, zoom = 13, zoomEnabled = true, draggingE
         style={{ height: '100%', width: '100%' }} // map must have size
         scrollWheelZoom={zoomEnabled}
         dragging={draggingEnabled}
-        attributionControl={false}
         zoomControl={false}
       >
         <MapProvider args={[]}>
-          <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
+          {/* The basemap belongs to a third party, and rendering it contacts them on every
+              tile — the one egress a fresh appliance performs with no key and no connector.
+              Esri's World Imagery terms require the credit, and the attribution control is
+              the only place the UI would name them, so it stays on. The product video's
+              memory-map shot masked this selector for a while; it was masking an element
+              that had been switched off here. See docs/architecture/third-party-egress.md. */}
+          <TileLayer
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+          />
 
           {children}
         </MapProvider>
