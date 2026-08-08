@@ -137,8 +137,23 @@
  *    drift PR after any re-seed.
  * 6. LEAFLET / ARCGIS TILES — components/Map/Map.tsx:35 loads raster tiles from
  *    server.arcgisonline.com. That is live external network: an offline runner
- *    renders an empty pane, and tile revisions change the bytes. The attribution
- *    control is masked; the tiles themselves cannot be.
+ *    renders an empty pane, and tile revisions change the bytes. The tiles
+ *    cannot be masked.
+ *
+ *    THE ATTRIBUTION CONTROL USED TO BE MASKED HERE. That was wrong twice over.
+ *    Wrong in principle: the honesty rule is that video/ never masks a defect
+ *    that belongs in the product, and the one control that would name Esri on
+ *    screen is exactly a disclosure, not a nuisance. And wrong in fact: Map.tsx
+ *    passes `attributionControl={false}` and gives <TileLayer> no `attribution`
+ *    prop, so Leaflet never builds `.leaflet-control-attribution` at all. The
+ *    selector matched nothing and the mask painted nothing — check the bottom-
+ *    right corner of the committed shot, it is bare tiles.
+ *
+ *    So the shot was always honest and the PRODUCT is what suppresses the
+ *    disclosure. Restoring attribution is a product fix (and a licensing one —
+ *    Esri's World Imagery terms require it) that will change this shot and
+ *    force a re-shoot against the real-corpus stage. Until then the storyboard
+ *    caption names Esri. See docs/architecture/third-party-egress.md.
  * 7. THE GALLERY HAS NO PHOTOS, AND MinIO IS NOT THE REASON — so the gallery
  *    scene is CUT, not captured. Kept here because the next person to reach for
  *    `?view=gallery` needs to know why it is not in the storyboard.

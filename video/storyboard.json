@@ -39,8 +39,8 @@
       "kind": "screen",
       "chapter": "first-run",
       "seconds": 4.5,
-      "caption": "It runs on your appliance, not a rented server.",
-      "narration": "It opens on hardware you own, and your records never leave it.",
+      "caption": "Store, search and database: all on your appliance.",
+      "narration": "It opens on hardware you own, and your records are stored and searched there.",
       "shots": [
         {
           "id": "splash-screen",
@@ -373,7 +373,7 @@
       "kind": "screen",
       "chapter": "memory",
       "seconds": 4.5,
-      "caption": "Anything with a place gets one.",
+      "caption": "Anything with a place gets one. The basemap is Esri's.",
       "narration": "Anything that happened somewhere also lands on the map.",
       "shots": [
         {
@@ -399,7 +399,6 @@
             ],
             "mask": [
               "time",
-              ".leaflet-control-attribution",
               "[class*=\"w-[300px]\"]"
             ],
             "settle": 7000

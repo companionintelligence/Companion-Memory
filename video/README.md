@@ -255,6 +255,14 @@ against this list:
 grey bar under a live "Tomorrow's Forecast" heading and a full colour legend. That read as a broken
 product, so the whole section is now hidden at the shutter instead of masked (hazard 4).
 
+`memory-map-view` also used to mask `.leaflet-control-attribution`, and that mask is now **removed**.
+A basemap attribution is a disclosure, not a nuisance — it is the one control that would name Esri
+on screen — and masking it is exactly the thing the honesty rule forbids. It also never did
+anything: `Map.tsx` sets `attributionControl={false}`, so the element is never in the DOM and the
+selector matched nothing. The corner of the committed shot is bare tiles. **The shot was honest;
+the product is what shows no attribution.** See hazard 6 in `capture.config.mjs` and
+[`docs/architecture/third-party-egress.md`](../docs/architecture/third-party-egress.md).
+
 Nothing else in `assets/shots/` is masked. A flat rectangle anywhere else IS a bug.
 
 ## Editing the video
