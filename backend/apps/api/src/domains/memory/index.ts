@@ -33,7 +33,7 @@ import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
 import { EntityMergeBlockEntity } from './entities/EntityMergeBlockEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
-import { GraphFileNodeEntity } from './entities/GraphFileNodeEntity';
+import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
 import {
   type Item,
@@ -94,7 +94,7 @@ import { UserContextService } from './services/UserContextService';
       ReceiptLineItemEntity,
       ObjectObservationEntity,
       RelationshipEntity,
-      GraphFileNodeEntity,
+      FileEntity,
       BrowserActivityEntity,
       UserEntity,
       RelationshipEntity,
@@ -150,11 +150,14 @@ import { UserContextService } from './services/UserContextService';
 })
 export class MemoryModule {}
 
+// FileEntity is deliberately absent: the graph's file row is an internal
+// concern maintained by the FileUploadedEvent listener, and re-exporting it
+// under that name would collide with the files domain's FileEntity — the
+// record it references — at every call site that imports both.
 export {
   CommunicationEntity,
   ContentEntity,
   EventEntity,
-  GraphFileNodeEntity,
   ItemEntity,
   ObjectObservationEntity,
   PersonEntity,

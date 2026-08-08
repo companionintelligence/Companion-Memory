@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { type RequestContext } from '@ci/common/context';
+import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import {
@@ -13,48 +13,40 @@ import {
 } from '@ci/domains/files';
 import { CreateFileDto } from '@ci/domains/memory/types';
 
-import { GraphFileNodeEntity } from '../entities/GraphFileNodeEntity';
+import { type File, FileEntity } from '../entities/FileEntity';
+
+import { EntityService } from './EntityService';
 
 @Injectable()
-export class FileService {
+export class FileService extends EntityService<FileEntity, File> {
   constructor(
-    private readonly fileService: FileStorageService,
-    @InjectRepository(GraphFileNodeEntity)
-    private readonly fileRepository: Repository<GraphFileNodeEntity>,
+    private readonly fileStorageService: FileStorageService,
+    @InjectRepository(FileEntity)
+    fileRepository: Repository<FileEntity>,
     private readonly logger: LoggerService,
-  ) {}
+  ) {
+    super(fileRepository, FileEntity);
+    this.logger.setContext(FileService.name);
+  }
 
-  async create(context: RequestContext, data: CreateFileDto): Promise<{ entity: GraphFileNodeEntity }> {
+  async create(context: UserServiceContext, data: CreateFileDto): Promise<{ entity: FileEntity }> {
     const { name, linkedId } = data;
 
-    const existingEntity = await this.fileRepository
-      .createQueryBuilder('entity')
-      .andWhere("entity.linked_table = 'files'")
-      .andWhere('entity.linked_id = :linkedId', { linkedId })
-      .getOne();
+    // A file graph row IS the link to its ci.files record; without the id there
+    // is nothing to represent (and the DB's linked_table_consistency CHECK
+    // would reject the row anyway).
+    if (linkedId == null) {
+      throw new Error('CreateFileDto.linkedId is required to create a file entity');
+    }
 
-    let entity = !existingEntity
-      ? await this.fileRepository.create({
-          id: uuidv7(),
-          name,
-          entity_type: 'File',
-          description: 'File',
-          linked_table: 'files',
-          linked_id: linkedId,
-          user: {
-            id: context.userId,
-          },
-        })
-      : existingEntity;
-
-    entity = await this.fileRepository.save(entity);
+    const entity = await this.findOrCreateForFile(context, linkedId, name ?? null);
 
     return { entity };
   }
 
   @OnEvent(FileUploadedEvent)
   async handleFileUploaded(payload: FileUploadedPayload) {
-    const file = await this.fileService.findById({ userId: payload.userId }, payload.fileId);
+    const file = await this.fileStorageService.findById({ userId: payload.userId }, payload.fileId);
 
     if (file == null) {
       this.logger.warn('File not found, skipping entity creation', {
@@ -64,26 +56,42 @@ export class FileService {
       return;
     }
 
-    const existingEntity = await this.fileRepository
-      .createQueryBuilder('entity')
-      .andWhere("entity.linked_table = 'files'")
-      .andWhere('entity.linked_id = :fileId', { fileId: file.id })
-      .getOne();
+    await this.findOrCreateForFile({ userId: payload.userId }, file.id, file.filename);
+  }
 
-    const entity = !existingEntity
-      ? await this.fileRepository.create({
-          id: uuidv7(),
-          name: file.filename,
-          entity_type: 'File',
-          description: 'File',
-          linked_table: 'files',
-          linked_id: file.id,
-          user: {
-            id: payload.userId,
-          },
-        })
-      : existingEntity;
+  /**
+   * Idempotent graph-presence upsert for a `ci.files` row. The lookup runs on
+   * the STI child repository, which scopes it to `entity_type = 'File'` — the
+   * pre-STI code matched rows of ANY type holding the linked key. An existing
+   * row is returned as-is (the old path re-saved it, which only bumped
+   * `updated_at`); a new row is persisted via
+   * {@link EntityService.persistCreate}.
+   */
+  private async findOrCreateForFile(
+    context: UserServiceContext,
+    fileId: string,
+    name: string | null,
+  ): Promise<FileEntity> {
+    const existing = await this.repository.findOne({
+      where: { linkedTable: 'files', linkedId: fileId },
+    });
 
-    await this.fileRepository.save(entity);
+    if (existing) {
+      return existing;
+    }
+
+    return this.repository.manager.transaction((manager) => {
+      const instance = this.repository.create({
+        id: uuidv7(),
+        name,
+        description: 'File',
+        linkedTable: 'files',
+        linkedId: fileId,
+        userId: context.userId,
+        properties: {},
+      });
+
+      return this.persistCreate(manager, instance);
+    });
   }
 }
