@@ -89,7 +89,7 @@ export class PersonType implements Node, Taggable {
       region: person.region,
       country: person.country,
       postalCode: person.postalCode,
-      avatarUrl: person.avatarUrl,
+      avatarUrl: (person.properties?.avatar_url as string) ?? null,
       tags: [], // Resolved by PersonResolver
     };
   }

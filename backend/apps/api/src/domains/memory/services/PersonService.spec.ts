@@ -10,10 +10,11 @@ const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
 
 /**
  * PersonEntity's persisted-column count as reported by
- * repository.metadata.columns.length (12 scalar columns + the owner_user_id
- * relation-join column). Drives computeChunkSize in the bulk insert.
+ * repository.metadata.columns.length: the 7 columns inherited from BaseEntity,
+ * the `entity_type` STI discriminator, and PersonEntity's own 4. Drives
+ * computeChunkSize in the bulk insert.
  */
-const PERSON_COLUMN_COUNT = 13;
+const PERSON_COLUMN_COUNT = 12;
 
 interface InsertRecord {
   values?: unknown[];
@@ -81,9 +82,10 @@ function makeService(existing: PersonEntity[] = []): Harness {
   // create() echoes the built instance so hydration can find it by id.
   const created: PersonEntity[] = [];
 
+  // No `entityType` is seeded: under STI the discriminator is TypeORM's to
+  // manage, and PersonEntity no longer carries it as a property.
   const create = jest.fn((partial: Partial<PersonEntity>) => {
     const entity = Object.assign(new PersonEntity(), {
-      entityType: 'Person',
       properties: {},
       ...partial,
       userId: USER,
@@ -105,7 +107,19 @@ function makeService(existing: PersonEntity[] = []): Harness {
     create,
     save,
     findOne,
-    metadata: { target: PersonEntity, columns: { length: PERSON_COLUMN_COUNT } },
+    target: PersonEntity,
+    metadata: {
+      target: PersonEntity,
+      columns: { length: PERSON_COLUMN_COUNT },
+      primaryColumns: [{ propertyName: 'id' }],
+    },
+    // create() persists inside a transaction (EntityService.persistCreate); the
+    // transactional manager hands back this same mock repository.
+    manager: {
+      transaction: jest.fn(async (cb: (m: { getRepository: () => unknown }) => unknown) =>
+        cb({ getRepository: (): unknown => repository }),
+      ),
+    },
     createQueryBuilder: jest.fn((alias?: string) => {
       // Insert builder has no alias; select (hydration) is aliased.
       if (alias === undefined) {

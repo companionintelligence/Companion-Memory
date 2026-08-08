@@ -23,8 +23,15 @@ export type NormalizedFieldMap = ReadonlyArray<NormalizedFieldEntry>;
  */
 export type PropertiesBag<K extends string = never> = Record<string, unknown> & Partial<Record<K, never>>;
 
-/** A raw jsonb record split into its normalized named fields and the leftover bag. */
-export interface SplitProperties<K extends string = string> {
+/**
+ * A raw jsonb record split into its normalized named fields and the leftover
+ * bag. `K` is the union of normalized storage keys to forbid on `.properties`;
+ * callers name it explicitly (e.g. `NormalizedPersonPropertyKey`). It defaults
+ * to `never` — matching {@link PropertiesBag} — so an un-parameterized split
+ * still yields a usable bag rather than one whose every key collapses to
+ * `never`.
+ */
+export interface SplitProperties<K extends string = never> {
   /** The normalized attributes, keyed by their camelCase named field. */
   fields: Record<string, unknown>;
   /** Everything else — the source-specific data, normalized keys removed. */
@@ -57,8 +64,12 @@ export function toNormalizedProperties(
  * Splits a raw jsonb record into its normalized named fields and the leftover
  * source-specific bag. Read it for whichever half you need: `.properties` for
  * the clean bag (egress), or spread `.fields` to rebuild a domain input.
+ *
+ * Pass `K` (the union of normalized storage keys) to forbid those keys on the
+ * returned `.properties` at compile time; it defaults to `never`, leaving the
+ * bag an unrestricted `Record<string, unknown>`.
  */
-export function splitProperties<K extends string = string>(
+export function splitProperties<K extends string = never>(
   raw: Record<string, unknown>,
   fields: NormalizedFieldMap,
 ): SplitProperties<K> {

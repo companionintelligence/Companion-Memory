@@ -13,11 +13,22 @@ import { PersonService } from '../PersonService';
 const ctx = { userId: 'user-1' } as UserServiceContext;
 
 function repoMock() {
-  return {
+  const repo = {
     findOne: jest.fn(),
     create: jest.fn((x: unknown) => x),
     save: jest.fn(async (x: { id?: string }) => ({ ...x, id: x.id ?? 'inserted' })),
+    update: jest.fn(async () => ({ affected: 1 })),
+    remove: jest.fn(async (x: unknown) => x),
+    // PersonService writes inside a transaction; the transactional manager
+    // hands back this same mock repository.
+    manager: {
+      transaction: jest.fn(async (cb: (m: { getRepository: () => unknown }) => unknown) =>
+        cb({ getRepository: (): unknown => repo }),
+      ),
+    },
   };
+
+  return repo;
 }
 
 const logger = { setContext: () => undefined, log: () => undefined, warn: () => undefined };
@@ -58,21 +69,26 @@ describe('PersonService.create — linked idempotency', () => {
     expect(signal.send).not.toHaveBeenCalled();
   });
 
-  it('matches on (entityType, linkedTable, linkedId, user)', async () => {
+  // entity_type is enforced by the STI child repository, not the where clause;
+  // ownership is scoped directly by userId rather than the user relation.
+  it('matches on (linkedTable, linkedId, userId)', async () => {
     repo.findOne.mockResolvedValue(null);
     await service.create(ctx, linked);
     expect(repo.findOne.mock.calls[0][0].where).toMatchObject({
-      entityType: 'Person',
       linkedTable: 'ci-import-tools:contact',
       linkedId: 'dana@x.com',
-      user: { id: 'user-1' },
+      userId: 'user-1',
     });
   });
 
-  it('without a linked key, always inserts (no lookup)', async () => {
+  it('without a linked key, always inserts (no idempotency lookup)', async () => {
     await service.create(ctx, { name: 'Anon' });
-    expect(repo.findOne).not.toHaveBeenCalled();
     expect(repo.save).toHaveBeenCalledTimes(1);
+    // The only read is the post-insert reload by id; no idempotency lookup on a
+    // linked key fires.
+    for (const [arg] of repo.findOne.mock.calls) {
+      expect(arg.where).not.toHaveProperty('linkedId');
+    }
   });
 
   it('recovers from a 23505 race by returning the winner', async () => {

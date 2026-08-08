@@ -1,4 +1,4 @@
-import { In, type FindOptionsWhere, type ObjectLiteral, type Repository } from 'typeorm';
+import { In, type EntityManager, type FindOptionsWhere, type ObjectLiteral, type Repository } from 'typeorm';
 
 import { type ServiceContext, SYSTEM_USER } from '@ci/common/context';
 
@@ -22,14 +22,15 @@ export interface EgressMapper<E, T> {
  * - `T` is the egress/domain model produced by the entity's static
  *   `toEgressType`.
  *
- * The memory domain persists every entity type in the single `ci.entities`
- * table via TypeORM single-table inheritance (discriminated by the `entity_type`
- * column). Because `repository` is a concrete child repository, TypeORM
- * automatically scopes every query to this entity's discriminator value — so
- * `findAll` does not need to filter by type itself. The primary-key property
- * name is resolved dynamically from TypeORM metadata rather than hardcoded. All
- * reads and the delete are additionally scoped to the caller's user, except for
- * {@link SYSTEM_USER} which is unscoped.
+ * Reads are user-scoped (the {@link SYSTEM_USER} is unscoped) and the primary
+ * key is resolved from TypeORM metadata rather than hardcoded.
+ *
+ * The write helpers ({@link delete}, {@link applyUpdate}, {@link persistCreate})
+ * run inside a transaction and load real before/after states. They are also the
+ * seam where service-boundary mutation recording will plug in — see
+ * AUDIT-SERVICE-RECOMMENDATION.md; each helper is one `record()` call away from
+ * an audited write path. Entity-specific concerns (idempotency, domain events)
+ * stay in the subclass, which composes these helpers.
  */
 export abstract class EntityService<E extends ObjectLiteral, T> {
   protected constructor(
@@ -98,9 +99,51 @@ export abstract class EntityService<E extends ObjectLiteral, T> {
   }
 
   /**
-   * Deletes an entity after first loading it (user-scoped) so that TypeORM
-   * lifecycle subscribers fire. `repository.remove(entity)` runs subscribers,
-   * whereas `repository.delete(criteria)` bypasses them.
+   * Saves a new entity on the supplied transactional manager. The caller owns
+   * the surrounding transaction so it can compose this with idempotency checks
+   * or other writes.
+   */
+  protected async persistCreate(manager: EntityManager, instance: E): Promise<E> {
+    const repository = manager.getRepository<E>(this.repository.target);
+
+    return repository.save(instance);
+  }
+
+  /**
+   * Loads the user-scoped entity, applies a partial update, and reloads it —
+   * all in one transaction, so the caller gets the real persisted after-state
+   * (DB defaults applied, @AfterLoad fired).
+   *
+   * @returns the updated entity, or `null` if no matching entity exists.
+   */
+  protected async applyUpdate(
+    context: ServiceContext,
+    id: string,
+    patch: Parameters<Repository<E>['update']>[1],
+  ): Promise<E | null> {
+    const where: Record<string, unknown> = {
+      [this.primaryKey]: id,
+      ...this.scopeToUser(context),
+    };
+
+    return this.repository.manager.transaction(async (manager) => {
+      const repository = manager.getRepository<E>(this.repository.target);
+
+      const before = await repository.findOne({ where: where as FindOptionsWhere<E> });
+      if (!before) {
+        return null;
+      }
+
+      await repository.update(where as FindOptionsWhere<E>, patch);
+
+      return repository.findOne({ where: where as FindOptionsWhere<E> });
+    });
+  }
+
+  /**
+   * Deletes a user-scoped entity. Loads first so `remove` (not `delete`) runs —
+   * keeping TypeORM lifecycle subscribers firing and giving the caller a place
+   * to observe the prior state.
    *
    * @returns `true` if a matching entity was found and removed, `false` otherwise.
    */
@@ -110,14 +153,17 @@ export abstract class EntityService<E extends ObjectLiteral, T> {
       ...this.scopeToUser(context),
     };
 
-    const entity = await this.repository.findOne({ where: where as FindOptionsWhere<E> });
+    return this.repository.manager.transaction(async (manager) => {
+      const repository = manager.getRepository<E>(this.repository.target);
 
-    if (!entity) {
-      return false;
-    }
+      const before = await repository.findOne({ where: where as FindOptionsWhere<E> });
+      if (!before) {
+        return false;
+      }
 
-    await this.repository.remove(entity);
+      await repository.remove(before);
 
-    return true;
+      return true;
+    });
   }
 }

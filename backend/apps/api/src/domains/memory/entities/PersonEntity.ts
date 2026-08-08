@@ -1,44 +1,32 @@
-import {
-  Entity,
-  PrimaryColumn,
-  Column,
-  CreateDateColumn,
-  UpdateDateColumn,
-  ManyToOne,
-  JoinColumn,
-  AfterLoad,
-} from 'typeorm';
+import { AfterLoad, ChildEntity, Column } from 'typeorm';
 
-import { UserEntity } from '@ci/domains/user';
+import { splitProperties } from '../normalizedProperties';
+import { type NormalizedPersonPropertyKey, type PersonProperties, NORMALIZED_PERSON_FIELDS } from '../types';
 
-@Entity({ schema: 'ci', name: 'entities' })
-export class PersonEntity {
-  @PrimaryColumn('uuid', { name: 'entity_id' })
-  id!: string;
+import { BaseEntity } from './BaseEntity';
 
-  @Column({ type: 'text', name: 'entity_type', default: 'Person' })
-  entityType!: string;
-
-  @Column({ type: 'text', nullable: true })
-  name!: string | null;
-
-  @Column({ type: 'text', nullable: true })
-  description!: string | null;
-
-  @Column({ type: 'jsonb', default: '{}' })
-  properties!: Record<string, unknown>;
-
+/**
+ * A person in the knowledge graph, stored as a `Person`-discriminated row in the
+ * shared `ci.entities` table. Common columns are inherited from
+ * {@link BaseEntity}; this class adds the name fields promoted out of the jsonb
+ * `properties` bag plus a few legacy columns still read by `PersonService`.
+ */
+@ChildEntity('Person')
+export class PersonEntity extends BaseEntity {
+  // Legacy/deprecated columns kept on PersonEntity (deliberately NOT promoted to
+  // BaseEntity). `PersonService` still reads/writes these; remove once its
+  // create-idempotency and search paths no longer depend on them.
   @Column({ type: 'text', name: 'search_content', nullable: true })
   searchContent!: string | null;
 
-  @Column({ type: 'text', name: 'linked_id', nullable: false })
-  linkedId!: string;
+  @Column({ type: 'text', name: 'linked_table', nullable: true })
+  linkedTable!: string | null;
 
-  @Column({ type: 'text', name: 'linked_table', nullable: false })
-  linkedTable!: string;
+  @Column({ type: 'text', name: 'linked_id', nullable: true })
+  linkedId!: string | null;
 
-  @Column({ type: 'uuid', name: 'owner_user_id', nullable: true })
-  userId?: string | null;
+  @Column({ type: 'timestamptz', name: 'last_accessed', default: () => 'NOW()' })
+  lastAccessed!: Date;
 
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive!: boolean;
@@ -68,12 +56,10 @@ export class PersonEntity {
   @Column({ type: 'boolean', name: 'is_self', nullable: true })
   isSelf!: boolean;
 
-  @ManyToOne(() => UserEntity, { nullable: true })
-  @JoinColumn({ name: 'owner_user_id' })
-  user?: UserEntity;
-
-  // Backward compatibility fields - populated from properties JSONB after load
-  type!: string | null;
+  // Normalized attributes projected from `properties` on load (see
+  // NORMALIZED_PERSON_FIELDS). Persisted only inside the jsonb bag — these
+  // fields are read-through and never mapped to their own columns.
+  email!: string | null;
 
   gender!: string | null;
 
@@ -91,58 +77,45 @@ export class PersonEntity {
 
   postalCode!: string | null;
 
-  avatarUrl!: string | null;
-
-  externalId!: string | null;
-
-  sourceUrl!: string | null;
-
-  sourceData!: Record<string, unknown> | null;
-
   @AfterLoad()
   loadPropertiesFromJsonb() {
-    this.type = (this.properties?.type as string) || null;
+    const props = this.properties ?? {};
+    this.email = (props.email as string) || null;
     // Prefer typed columns; fall back to properties for pre-migration rows.
-    this.firstName = this.firstName ?? ((this.properties?.first_name as string) || null);
-    this.middleName = this.middleName ?? ((this.properties?.middle_name as string) || null);
-    this.lastName = this.lastName ?? ((this.properties?.last_name as string) || null);
-    this.birthDate = this.birthDate ?? ((this.properties?.birth_date as string) || null);
+    this.firstName = this.firstName ?? ((props.first_name as string) || null);
+    this.middleName = this.middleName ?? ((props.middle_name as string) || null);
+    this.lastName = this.lastName ?? ((props.last_name as string) || null);
+    this.birthDate = this.birthDate ?? ((props.birth_date as string) || null);
     if (this.isSelf == null) {
-      this.isSelf = this.properties?.is_self === true || this.properties?.is_self === 'true';
+      this.isSelf = props.is_self === true || props.is_self === 'true';
     } else {
       this.isSelf = this.isSelf === true;
     }
 
-    this.gender = (this.properties?.gender as string) || null;
-    this.address = (this.properties?.address as string) || null;
-    this.streetAddress = (this.properties?.street_address as string) || null;
-    this.streetAddress2 = (this.properties?.street_address_2 as string) || null;
-    this.city = (this.properties?.city as string) || null;
-    this.region = (this.properties?.region as string) || null;
-    this.country = (this.properties?.country as string) || null;
-    this.postalCode = (this.properties?.postal_code as string) || null;
-    this.avatarUrl = (this.properties?.avatar_url as string) || null;
-    this.externalId = (this.properties?.external_id as string) || null;
-    this.sourceUrl = (this.properties?.source_url as string) || null;
-    this.sourceData = (this.properties?.source_data as Record<string, unknown>) || null;
+    this.gender = (props.gender as string) || null;
+    this.address = (props.address as string) || null;
+    this.streetAddress = (props.street_address as string) || null;
+    this.streetAddress2 = (props.street_address_2 as string) || null;
+    this.city = (props.city as string) || null;
+    this.region = (props.region as string) || null;
+    this.country = (props.country as string) || null;
+    this.postalCode = (props.postal_code as string) || null;
   }
 
-  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
-  updatedAt!: Date;
-
-  @Column({ type: 'timestamptz', name: 'last_accessed', default: () => 'NOW()' })
-  lastAccessed!: Date;
-
   static toEgressType(entity: PersonEntity): Person {
+    // Normalized attributes are exposed only as named fields; the egress bag
+    // carries source-specific data alone, with the normalized keys stripped.
+    const { properties } = splitProperties<NormalizedPersonPropertyKey>(
+      entity.properties ?? {},
+      NORMALIZED_PERSON_FIELDS,
+    );
+
     return {
       id: entity.id,
-      entityType: entity.entityType,
       name: entity.name,
       description: entity.description,
-      properties: entity.properties,
+      properties,
+      email: entity.email,
       firstName: entity.firstName,
       middleName: entity.middleName,
       lastName: entity.lastName,
@@ -150,7 +123,6 @@ export class PersonEntity {
       isSelf: entity.isSelf,
       isActive: entity.isActive,
       mergedIntoEntityId: entity.mergedIntoEntityId,
-      type: entity.type,
       gender: entity.gender,
       address: entity.address,
       streetAddress: entity.streetAddress,
@@ -159,19 +131,19 @@ export class PersonEntity {
       region: entity.region,
       country: entity.country,
       postalCode: entity.postalCode,
-      avatarUrl: entity.avatarUrl,
-      externalId: entity.externalId,
-      sourceUrl: entity.sourceUrl,
-      sourceData: entity.sourceData,
       searchContent: entity.searchContent,
-      linkedId: entity.linkedId,
       linkedTable: entity.linkedTable,
-      userId: entity.userId || null,
+      linkedId: entity.linkedId,
+      lastAccessed: entity.lastAccessed,
+      userId: entity.userId ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
-      lastAccessed: entity.lastAccessed,
     };
   }
 }
 
-export type Person = Readonly<Omit<PersonEntity, 'user' | 'tags' | 'loadPropertiesFromJsonb'>>;
+export type Person = Readonly<Omit<PersonEntity, 'loadPropertiesFromJsonb' | 'properties'>> & {
+  // Normalized keys are stripped on egress; only source-specific data remains,
+  // and accessing a normalized key here is a compile-time error.
+  readonly properties: PersonProperties;
+};

@@ -300,7 +300,6 @@ export class GoogleContactsTransformService {
           last_synced_at: new Date().toISOString(),
         };
 
-        existingEntity.properties = updatedProperties;
         await this.personService.update({ userId }, existingEntity.id, {
           properties: updatedProperties,
         });

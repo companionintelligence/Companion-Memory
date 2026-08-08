@@ -226,7 +226,7 @@ export class PersonMergeService {
     await this.eventService.send(PersonUpdatedEvent, { personId: targetId });
 
     const entity = await this.personRepository.findOne({
-      where: { id: targetId, user: { id: ownerUserId } },
+      where: { id: targetId, userId: ownerUserId },
     });
 
     if (!entity) {

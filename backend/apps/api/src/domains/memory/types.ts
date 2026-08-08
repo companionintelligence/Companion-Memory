@@ -2,6 +2,7 @@ import type { Point } from 'typeorm';
 import { z } from 'zod';
 
 import type { PlaceKind } from './entities/PlaceEntity';
+import { type NormalizedFieldMap, type PropertiesBag } from './normalizedProperties';
 
 export const createContentSchema = z.object({
   type: z.string().optional(),
@@ -327,6 +328,39 @@ export interface UpdatePersonDto {
     [key: string]: unknown;
   };
 }
+
+/**
+ * The `properties` keys that `PersonEntity` promotes to named domain fields,
+ * paired as `[jsonb storage key, camelCase field name]`. The single source of
+ * truth for splitting a person's jsonb bag on egress and mapping a domain input
+ * back onto it.
+ */
+export const NORMALIZED_PERSON_FIELDS = [
+  ['email', 'email'],
+  ['first_name', 'firstName'],
+  ['middle_name', 'middleName'],
+  ['last_name', 'lastName'],
+  ['birth_date', 'birthDate'],
+  ['is_self', 'isSelf'],
+  ['gender', 'gender'],
+  ['address', 'address'],
+  ['street_address', 'streetAddress'],
+  ['street_address_2', 'streetAddress2'],
+  ['city', 'city'],
+  ['region', 'region'],
+  ['country', 'country'],
+  ['postal_code', 'postalCode'],
+] as const satisfies NormalizedFieldMap;
+
+/** Union of the jsonb storage keys promoted to named fields on a person. */
+export type NormalizedPersonPropertyKey = (typeof NORMALIZED_PERSON_FIELDS)[number][0];
+
+/**
+ * A person's egress `properties` bag: source-specific data only, with the
+ * normalized keys forbidden at compile time so they are reached solely through
+ * their named fields.
+ */
+export type PersonProperties = PropertiesBag<NormalizedPersonPropertyKey>;
 
 export interface CreateConceptDto {
   id?: string;

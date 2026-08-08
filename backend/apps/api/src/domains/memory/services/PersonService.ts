@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
-import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -12,6 +12,8 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 import { CreatePersonDto, UpdatePersonDto } from '../types';
+
+import { EntityService } from './EntityService';
 
 /** Map properties JSONB identity keys onto the typed Person columns. */
 function typedColumnsFromProperties(properties: Record<string, unknown> = {}): {
@@ -55,13 +57,14 @@ function typedColumnsFromProperties(properties: Record<string, unknown> = {}): {
 }
 
 @Injectable()
-export class PersonService {
+export class PersonService extends EntityService<PersonEntity, Person> {
   constructor(
     @InjectRepository(PersonEntity)
-    private readonly personRepository: Repository<PersonEntity>,
+    personRepository: Repository<PersonEntity>,
     private readonly logger: LoggerService,
     private readonly eventService: EventService,
   ) {
+    super(personRepository, PersonEntity);
     this.logger.setContext(PersonService.name);
   }
 
@@ -80,51 +83,58 @@ export class PersonService {
 
     // Idempotency: (owner_user_id, entity_type, linked_table, linked_id) is the
     // stable external key a capture source carries. Resolving-or-creating the
-    // same linked person (a re-sync, a retry) must NOT duplicate it.
+    // same linked person (a re-sync, a retry) must NOT duplicate it. The
+    // `entity_type = 'Person'` half is enforced automatically by the STI child
+    // repository, so it is not restated here.
     const linkedWhere =
       data.linkedTable && data.linkedId
         ? {
-            entityType: 'Person',
             linkedTable: data.linkedTable,
             linkedId: data.linkedId,
-            user: { id: context.userId },
+            userId: context.userId,
           }
         : null;
 
     if (linkedWhere) {
-      const existing = await this.personRepository.findOne({ where: linkedWhere });
+      const existing = await this.repository.findOne({ where: linkedWhere });
       if (existing) {
         return this.resolveTombstone(existing);
       }
     }
 
     const properties = data.properties || {};
-    const instance = this.personRepository.create({
-      id: data.id || uuid7(),
-      name: data.name,
-      description: data.description,
-      linkedTable: data.linkedTable,
-      linkedId: data.linkedId,
-      entityType: 'Person',
-      searchContent: data.searchContent,
-      lastAccessed: data.lastAccessed,
-      user: {
-        id: context.userId,
-      },
-      properties,
-      ...typedColumnsFromProperties(properties),
-    });
 
+    // Insert in a transaction (persistCreate is the seam where mutation
+    // recording will land). Reaching past the catch means a genuine insert
+    // happened (an idempotent race winner returns early), so the created event
+    // always fires here.
     let entity: PersonEntity;
     try {
-      entity = await this.personRepository.save(instance);
+      entity = await this.repository.manager.transaction((manager) => {
+        const instance = this.repository.create({
+          id: data.id || uuid7(),
+          name: data.name,
+          description: data.description,
+          linkedTable: data.linkedTable,
+          linkedId: data.linkedId,
+          searchContent: data.searchContent,
+          lastAccessed: data.lastAccessed,
+          userId: context.userId,
+          properties,
+          ...typedColumnsFromProperties(properties),
+        });
+
+        return this.persistCreate(manager, instance);
+      });
     } catch (err) {
       // Lost a race to a concurrent insert of the same linked key (23505) —
-      // return the winner.
+      // return the winner. The recovery query must run outside the failed
+      // transaction: the unique violation aborts it, so any further query on
+      // that manager would fail with 25P02 instead.
       if (linkedWhere && (err as { code?: string })?.code === '23505') {
-        const existing = await this.personRepository.findOne({ where: linkedWhere });
-        if (existing) {
-          return this.resolveTombstone(existing);
+        const winner = await this.repository.findOne({ where: linkedWhere });
+        if (winner) {
+          return this.resolveTombstone(winner);
         }
       }
 
@@ -137,7 +147,13 @@ export class PersonService {
       });
     }
 
-    return PersonEntity.toEgressType(entity);
+    // Reload so @AfterLoad projects the normalized fields and DB-side defaults
+    // (e.g. last_accessed) are present. `save` runs neither, and egress strips
+    // the normalized keys out of `properties`, so the saved instance alone
+    // would expose them in neither place.
+    const created = await this.repository.findOne({ where: { id: entity.id } });
+
+    return PersonEntity.toEgressType(created ?? entity);
   }
 
   /**
@@ -161,21 +177,20 @@ export class PersonService {
       return [];
     }
 
+    // `entity_type` is not set here: the STI child metadata carries the
+    // discriminator and TypeORM's insert builder emits it for every row.
     const entities = data.map((item) => {
       const properties = item.properties || {};
 
-      return this.personRepository.create({
+      return this.repository.create({
         id: item.id || uuid7(),
         name: item.name,
         description: item.description,
         linkedTable: item.linkedTable,
         linkedId: item.linkedId,
-        entityType: 'Person',
         searchContent: item.searchContent,
         lastAccessed: item.lastAccessed,
-        user: {
-          id: context.userId,
-        },
+        userId: context.userId,
         properties,
         ...typedColumnsFromProperties(properties),
       });
@@ -189,15 +204,15 @@ export class PersonService {
     // a no-op and a lost insert race is absorbed without throwing. Unlinked rows
     // (no linked_table/linked_id) fall outside the partial index and always
     // insert, matching create()'s behaviour.
-    const chunkSize = computeChunkSize(this.personRepository.metadata.columns.length);
+    const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
     for (let offset = 0; offset < entities.length; offset += chunkSize) {
-      await this.personRepository
+      await this.repository
         .createQueryBuilder()
         .insert()
         // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
         // of `.values()`; passing the entity class narrows to
         // `_QueryDeepPartialEntity`, which rejects the jsonb `properties` column.
-        .into(this.personRepository.metadata.target)
+        .into(this.repository.metadata.target)
         .values(entities.slice(offset, offset + chunkSize))
         .onConflict(
           '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
@@ -221,7 +236,7 @@ export class PersonService {
       return PersonEntity.toEgressType(entity);
     }
 
-    const canonical = await this.personRepository.findOne({
+    const canonical = await this.repository.findOne({
       where: { id: entity.mergedIntoEntityId },
     });
 
@@ -239,10 +254,10 @@ export class PersonService {
   ): Promise<Person[]> {
     const ids = entities.map((entity) => entity.id);
 
-    const qb = this.personRepository
+    const qb = this.repository
       .createQueryBuilder('person')
-      .where('person.entity_type = :entityType', { entityType: 'Person' })
-      .andWhere('person.owner_user_id = :userId', { userId: context.userId })
+      // The STI child repository scopes the query to `entity_type = 'Person'`.
+      .where('person.owner_user_id = :userId', { userId: context.userId })
       .andWhere(
         new Brackets((outer) => {
           outer.where('person.entity_id IN (:...ids)', { ids });
@@ -283,7 +298,7 @@ export class PersonService {
 
     const canonicalById = new Map<string, PersonEntity>();
     if (canonicalIds.length > 0) {
-      const canonicalRows = await this.personRepository.find({ where: { id: In(canonicalIds) } });
+      const canonicalRows = await this.repository.find({ where: { id: In(canonicalIds) } });
       for (const row of canonicalRows) {
         canonicalById.set(row.id, row);
       }
@@ -300,12 +315,15 @@ export class PersonService {
    * List people, excluding merge tombstones and deactivated rows. `query`
    * filters by display name or structured first/last name (ILIKE substring) —
    * the people index page's search box.
+   *
+   * Overrides {@link EntityService.findAll}, which knows neither of those
+   * person-specific concerns.
    */
   async findAll(context: ServiceContext, options: { query?: string } = {}): Promise<Person[]> {
-    let qb = this.personRepository
+    // The STI child repository scopes the query to `entity_type = 'Person'`.
+    let qb = this.repository
       .createQueryBuilder('person')
-      .where('person.entity_type = :entityType', { entityType: 'Person' })
-      .andWhere('person.is_active IS DISTINCT FROM FALSE')
+      .where('person.is_active IS DISTINCT FROM FALSE')
       .andWhere('person.merged_into_entity_id IS NULL');
 
     if (context.userId !== SYSTEM_USER) {
@@ -332,23 +350,6 @@ export class PersonService {
     return entities.map((entity) => PersonEntity.toEgressType(entity));
   }
 
-  async findByIds(context: ServiceContext, ids: string[]): Promise<(Person | null)[]> {
-    const entities = await this.personRepository.find({
-      where: {
-        id: In(ids),
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-    });
-
-    const map = new Map(entities.map((entity) => [entity.id, PersonEntity.toEgressType(entity)]));
-
-    return ids.map((id) => map.get(id) ?? null);
-  }
-
   /**
    * Lightweight identifiers for the most-recent people, for the unified
    * search/explorer feed. Full entities are batch-resolved downstream.
@@ -357,11 +358,11 @@ export class PersonService {
     context: ServiceContext,
     options: { limit?: number; startTime?: Date; endTime?: Date; order?: 'ASC' | 'DESC' } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
-    let query = this.personRepository
+    let query = this.repository
       .createQueryBuilder('person')
       .select('person.id', 'id')
-      .where('person.entity_type = :entityType', { entityType: 'Person' })
-      .andWhere('person.owner_user_id = :userId', { userId: context.userId })
+      // The STI child repository scopes the query to `entity_type = 'Person'`.
+      .where('person.owner_user_id = :userId', { userId: context.userId })
       .andWhere('person.is_active IS DISTINCT FROM FALSE')
       .andWhere('person.merged_into_entity_id IS NULL');
 
@@ -384,43 +385,18 @@ export class PersonService {
     return rows.map((row) => ({ id: row.id, type: 'person' as IndexableEntity }));
   }
 
-  async findById(context: ServiceContext, id: string): Promise<Person | null> {
-    const entity = await this.personRepository.findOne({
-      where: {
-        id,
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-    });
-
-    return entity ? PersonEntity.toEgressType(entity) : null;
-  }
-
   async update(context: ServiceContext, id: string, data: UpdatePersonDto): Promise<Person | null> {
     const { properties, ...rest } = data;
     const typed = properties ? typedColumnsFromProperties(properties) : {};
 
-    const result = await this.personRepository.update(
-      {
-        id,
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
-      {
-        ...rest,
-        ...typed,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        properties: properties as any, // TypeORM will handle JSON serialization
-      },
-    );
+    const after = await this.applyUpdate(context, id, {
+      ...rest,
+      ...typed,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      properties: properties as any, // TypeORM will handle JSON serialization
+    });
 
-    if (result.affected === 0) {
+    if (!after) {
       return null;
     }
 
@@ -428,7 +404,7 @@ export class PersonService {
       personId: id,
     });
 
-    return this.findById(context, id);
+    return PersonEntity.toEgressType(after);
   }
 
   /**
@@ -482,7 +458,7 @@ export class PersonService {
       return this.findById(context, id);
     }
 
-    let qb = this.personRepository
+    let qb = this.repository
       .createQueryBuilder()
       .update()
       .set(set)
@@ -511,16 +487,9 @@ export class PersonService {
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const result = await this.personRepository.delete({
-      id,
-      ...(context.userId !== SYSTEM_USER && {
-        user: {
-          id: context.userId,
-        },
-      }),
-    });
+    const removed = await this.delete(context, id);
 
-    if (result.affected === 0) {
+    if (!removed) {
       return false;
     }
 
@@ -531,8 +500,8 @@ export class PersonService {
     return true;
   }
 
-  async search(context: ServiceContext, query: UpdatePersonDto): Promise<PersonEntity[]> {
-    let executable = this.personRepository
+  async search(context: ServiceContext, query: UpdatePersonDto): Promise<Person[]> {
+    let executable = this.repository
       .createQueryBuilder('entity')
       .where('owner_user_id = :userId', { userId: context.userId });
 
@@ -558,6 +527,8 @@ export class PersonService {
       }
     }
 
-    return executable.getMany();
+    const entities = await executable.getMany();
+
+    return entities.map((entity) => PersonEntity.toEgressType(entity));
   }
 }

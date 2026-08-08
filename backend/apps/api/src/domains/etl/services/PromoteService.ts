@@ -169,7 +169,7 @@ export class PromoteService {
               properties: {
                 source,
                 connection_id: connectionId,
-                participant_type: entity.type,
+                participant_type: (entity.properties?.type as string) ?? null,
                 last_interaction: new Date().toISOString(),
               },
             });
