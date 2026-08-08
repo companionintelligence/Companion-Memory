@@ -83,9 +83,10 @@ export class CvDetectionsListener {
           break;
         }
 
-        // Thing → ThingEntity and Concept → ConceptEntity follow the same
-        // resolve-or-create shape; deferred to a follow-up PR to keep this slice
-        // focused and reviewable (see PR body).
+        // Thing ('Object' rows, currently written only via
+        // GraphUtilityService.createOrUpdateNode) and Concept → ConceptEntity
+        // follow the same resolve-or-create shape; deferred to a follow-up PR to
+        // keep this slice focused and reviewable (see PR body).
         case 'Thing':
         case 'Concept': {
           this.logger.log('CV detection kind not yet materialized, deferring', {
