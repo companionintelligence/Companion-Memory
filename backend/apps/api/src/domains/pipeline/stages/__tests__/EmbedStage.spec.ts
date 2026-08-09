@@ -213,7 +213,7 @@ function makeLedgerHarness(rows: SourceRow[]) {
   const query = jest.fn(async (raw: string, params?: unknown[]) => {
     const sql = raw.replace(/\s+/g, ' ').trim();
 
-    if (/left\s+join\s+ci\.pipeline_state/i.test(sql)) {
+    if (/not\s+exists[\s\S]*ci\.pipeline_state/i.test(sql)) {
       sweeps.push({ sql, params: params ?? [] });
 
       return evaluateOneRule(rows, ledger, params ?? []);

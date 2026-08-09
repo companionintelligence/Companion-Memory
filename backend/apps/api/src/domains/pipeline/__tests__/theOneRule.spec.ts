@@ -261,7 +261,7 @@ function makeHarness(rows: SourceRow[]) {
     const sql = raw.replace(/\s+/g, ' ').trim();
 
     // The sweep is the only statement that LEFT JOINs the ledger onto a source.
-    if (/left\s+join\s+ci\.pipeline_state/i.test(sql)) {
+    if (/not\s+exists[\s\S]*ci\.pipeline_state/i.test(sql)) {
       sweeps.push({ sql, params: params ?? [] });
 
       return evaluateOneRule(rows, ledger, params ?? []);
@@ -612,7 +612,23 @@ describe('THE ONE RULE', () => {
       const sql = h.sweeps[0].sql.toLowerCase();
       expect(sql).toContain('p.entity_type = $1');
       expect(sql).toContain('p.stage = $2');
-      expect(sql).toMatch(/p\.stage_version\s*<\s*\$4/);
+
+      // The version test is INVERTED because the sweep is an anti-join: the
+      // subquery describes the rows that disqualify a candidate, so "stale" is
+      // `NOT EXISTS (... stage_version >= $4 ...)` rather than a positive
+      // `stage_version < $4`. Same rule, complemented.
+      //
+      // The shape is not cosmetic. `LEFT JOIN ... WHERE (p.entity_id IS NULL OR
+      // p.stage_version < $4 OR ...)` reads the ledger columns off the
+      // NULL-extended side, so the planner cannot push the predicate down and
+      // the LIMIT never reaches the scan. Measured on 324,044 real events with
+      // 50,000 ledger rows: seq scan, 4,401 blocks, 54 ms — versus a merge anti
+      // join at 241 blocks. Assert the anti-join form so a well-meaning revert
+      // to the "more readable" LEFT JOIN fails here rather than in production.
+      expect(sql).toMatch(/not\s+exists/);
+      expect(sql).toMatch(/p\.stage_version\s*>=\s*\$4/);
+      expect(sql).not.toMatch(/left\s+join\s+ci\.pipeline_state/);
+
       expect(sql).toContain(makeStage(V1).source.predicate.toLowerCase());
     });
   });

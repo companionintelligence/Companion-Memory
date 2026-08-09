@@ -201,7 +201,7 @@ function makeLedgerHarness(rows: SourceRow[]) {
     const sql = raw.replace(/\s+/g, ' ').trim();
 
     // The sweep is the only statement that LEFT JOINs the ledger onto a source.
-    if (/left\s+join\s+ci\.pipeline_state/i.test(sql)) {
+    if (/not\s+exists[\s\S]*ci\.pipeline_state/i.test(sql)) {
       sweeps.push({ sql, params: params ?? [] });
 
       return evaluateOneRule(rows, ledger, params ?? []);

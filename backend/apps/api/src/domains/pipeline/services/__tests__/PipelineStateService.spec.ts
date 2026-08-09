@@ -67,7 +67,7 @@ function makeHarness(options: HarnessOptions = {}) {
     const sql = raw.replace(/\s+/g, ' ').trim();
     const bound = params ?? [];
 
-    if (/left\s+join\s+ci\.pipeline_state/i.test(sql)) {
+    if (/not\s+exists[\s\S]*ci\.pipeline_state/i.test(sql)) {
       sweeps.push({ sql, params: bound });
 
       return pages.shift() ?? [];

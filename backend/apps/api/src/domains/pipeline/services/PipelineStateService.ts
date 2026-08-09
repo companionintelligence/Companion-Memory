@@ -200,16 +200,44 @@ export class PipelineStateService {
     // greppable in a query log either way.
     const applicability = predicate != null && predicate.trim().length > 0 ? predicate : 'TRUE';
 
+    // NOT EXISTS, not LEFT JOIN ... WHERE. The two are logically identical here
+    // and the anti-join form is the ONLY one that scales — measured on 324,044
+    // real events:
+    //
+    //   ledger empty       LEFT JOIN  Index Only Scan          0.20 ms      37 blocks
+    //   50,000 rows done   LEFT JOIN  Parallel Seq Scan       69-81 ms  35,488 blocks
+    //   50,000 rows done   NOT EXISTS Merge Anti Join + Index    ~7 ms   7,803 blocks
+    //
+    // The LEFT JOIN reads `p.stage_version` / `p.status` / `p.next_attempt_at`
+    // from the NULL-extended side, so the planner cannot push the predicate down
+    // and the LIMIT cannot reach the scan: the whole join is materialised and
+    // sorted before six rows come back. Worse than the constant factor, the
+    // keyset bound degrades from an `Index Cond` to a `Filter`, so resuming stops
+    // costing O(remaining) and a full sweep becomes O(corpus^2 / slice) — about
+    // 57.5M block reads for one pass over ci.events.
+    //
+    // The failure mode is also inverted, which is what makes it easy to miss: it
+    // is fast when there is lots of work (every row qualifies, the LIMIT is
+    // satisfied immediately) and slowest when the corpus has CONVERGED — the
+    // state every idempotent re-sweep runs in permanently. An empty-ledger
+    // benchmark reports the best case and hides all of this.
+    //
+    // The negated inner condition is the exact complement of the LEFT JOIN's OR
+    // chain: a row is a candidate unless a ledger row exists that is BOTH at or
+    // beyond the current version AND not a due retry.
     const rows = await this.dataSource.query<Array<{ id: string }>>(
       `SELECT s."${idColumn}" AS id
          FROM "${schema}"."${table}" s
-         LEFT JOIN ci.pipeline_state p
-           ON p.entity_type = $1 AND p.entity_id = s."${idColumn}" AND p.stage = $2
         WHERE s."${userColumn}" = $3
           AND (${applicability})
-          AND ( p.entity_id IS NULL
-             OR p.stage_version < $4
-             OR (p.status = 'failed' AND p.next_attempt_at <= now()) )
+          AND NOT EXISTS (
+                SELECT 1
+                  FROM ci.pipeline_state p
+                 WHERE p.entity_type = $1
+                   AND p.entity_id = s."${idColumn}"
+                   AND p.stage = $2
+                   AND p.stage_version >= $4
+                   AND NOT (p.status = 'failed' AND p.next_attempt_at <= now()))
           AND ($5::uuid IS NULL OR s."${idColumn}" > $5::uuid)
         ORDER BY s."${idColumn}"
         LIMIT $6`,

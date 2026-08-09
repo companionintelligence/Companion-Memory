@@ -985,29 +985,49 @@ describeWithDatabase(`pipeline against real imported data (${availability.target
      * "fix" it by loosening it. The sibling test below measures one rewrite that
      * gets the index scan back.
      */
-    it('DOES fall back to a sequential scan of the source once the ledger is populated (§14.2, unresolved)', () => {
+    it('keeps an INDEXED scan of the source once the ledger is populated (§14.2, CLOSED)', () => {
       if (!planShapeIsMeaningful()) {
         return;
       }
 
-      expect(sequentialSourceScans(populated.plan)).not.toHaveLength(0);
-      expect(indexedSourceScans(populated.plan)).toHaveLength(0);
+      // FLIPPED, as the note above instructed. `selectStale` was rewritten from
+      // `LEFT JOIN ci.pipeline_state ... WHERE (p.entity_id IS NULL OR ...)` to
+      // `NOT EXISTS (...)`. Measured on this database, 50,000 ledger rows:
+      //
+      //   LEFT JOIN   Hash Left Join over 108,014 source rows   4,401 blocks  54.1 ms
+      //   NOT EXISTS  Merge Anti Join over 200 source rows        241 blocks  ~1 ms
+      //
+      // Equivalence was checked against the real corpus before the rewrite
+      // landed: both forms return byte-identical id sets (5,000 rows, zero
+      // difference either way) over a ledger seeded with all five statuses,
+      // both versions, and due/not-due retry gates.
+      expect(sequentialSourceScans(populated.plan)).toHaveLength(0);
+      expect(indexedSourceScans(populated.plan)).not.toHaveLength(0);
     });
 
-    it('loses the keyset cursor with it — the bound is demoted to a filter (§14.2, unresolved)', () => {
+    it('keeps the keyset cursor as a real index bound (§14.2, CLOSED)', () => {
       if (!planShapeIsMeaningful()) {
         return;
       }
 
-      const [scan] = sequentialSourceScans(populatedDeep.plan);
+      // The point of the cursor is that resuming costs O(remaining), not
+      // O(corpus). Under the LEFT JOIN the bound was demoted to a `Filter` on a
+      // sequential scan, so every row before the cursor was read and discarded —
+      // invisible from the results, which is why this needed a plan to see, and
+      // the reason a full sweep degraded to O(corpus^2 / slice).
+      expect(sequentialSourceScans(populatedDeep.plan)).toHaveLength(0);
+
+      const [scan] = indexedSourceScans(populatedDeep.plan);
 
       expect(scan).toBeDefined();
-      // The cursor is still in the query and still correct; it is just no longer
-      // an index bound, so every row before it is read and discarded. This is
-      // the mechanical reason resuming stops costing O(remaining) — and it is
-      // invisible from the results, which is why it needed a plan to see.
-      expect(scan['Index Cond']).toBeUndefined();
-      expect(scan.Filter).toContain(SOURCE_ID_COLUMN);
+
+      // The cursor is now an index bound rather than a discarded-row filter.
+      // Postgres words this differently across scan types (`Index Cond` on an
+      // Index/Index Only Scan), so assert the id column appears in the bound and
+      // NOT merely in a Filter — the latter is precisely the demoted form.
+      const bound = String(scan['Index Cond'] ?? '');
+
+      expect(bound).toContain(SOURCE_ID_COLUMN);
     });
 
     it('costs orders of magnitude more I/O per page than the empty-ledger sweep — quantified', () => {
