@@ -219,7 +219,6 @@ describe('STAGE_REGISTRY declaration', () => {
       expect(resolved).toBeGreaterThanOrEqual(1);
     }
   });
-
 });
 
 describe('STAGE_REGISTRY boot-time completeness guard', () => {

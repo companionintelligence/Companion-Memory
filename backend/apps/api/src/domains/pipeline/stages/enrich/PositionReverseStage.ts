@@ -105,9 +105,7 @@ export const POSITION_REVERSE_VERSION =
  * declaration cannot disagree with itself. `versions.ts` explains why this entry
  * is a literal rather than a thunk in the first place.
  */
-export function positionReverseStageVersion(
-  versions: Record<string, StageVersion> = STAGE_VERSIONS,
-): number {
+export function positionReverseStageVersion(versions: Record<string, StageVersion> = STAGE_VERSIONS): number {
   const declared = versions[ENRICH_POSITION_REVERSE_STAGE_ID];
 
   if (typeof declared === 'number' && declared !== POSITION_REVERSE_VERSION) {

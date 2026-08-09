@@ -33,6 +33,8 @@ export const STAGE_REGISTRY: Record<StageId, string> = {
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 'PipelineStage:enrich.media_dimensions',
   [STAGE_IDS.INDEX_EMBED]: 'PipelineStage:index.embed',
   [STAGE_IDS.ENRICH_POSITION_REVERSE]: 'PipelineStage:enrich.position_reverse',
+  [STAGE_IDS.ENRICH_GEOCODE]: 'PipelineStage:enrich.geocode',
+  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 'PipelineStage:enrich.estimate_location',
 };
 
 /**
@@ -57,9 +59,7 @@ export const STAGE_REGISTRY: Record<StageId, string> = {
  * "registry and versions disagree" is useless at 3am and "`clean.orphan_reap`
  * is declared in STAGE_VERSIONS but has no registry entry" is a one-line fix.
  */
-export function assertStageRegistryComplete(
-  versions: Record<string, StageVersion> = STAGE_VERSIONS,
-): void {
+export function assertStageRegistryComplete(versions: Record<string, StageVersion> = STAGE_VERSIONS): void {
   const registryIds = new Set<string>(Object.keys(STAGE_REGISTRY));
   const versionIds = new Set<string>(Object.keys(versions));
 

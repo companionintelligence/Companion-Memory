@@ -132,6 +132,30 @@ export const STAGE_IDS = {
    * carries the cost argument and the two generations its version derives from.
    */
   ENRICH_POSITION_REVERSE: 'enrich.position_reverse',
+
+  /**
+   * Forward-geocode `ci.events.location_name` into `location_coordinates`,
+   * replacing `GeocodeBatchListener`'s sweep. That listener's candidate predicate
+   * is `location_coordinates IS NULL`, and its own comment states the
+   * consequence — "a resolved coordinate is never re-billed" — so every coarse
+   * city-centroid hit it ever wrote is frozen for the life of the appliance.
+   *
+   * The second stage whose sweep is a BILL, not just CPU: it egresses through
+   * Portal to a paid provider. Bump deliberately.
+   */
+  ENRICH_GEOCODE: 'enrich.geocode',
+
+  /**
+   * Fill a physical-presence event's coordinates from the nearest-in-time REAL
+   * location, replacing `LocationEstimateService`'s temporal fill — and its
+   * `forced` flag, a request-scoped re-run lever that recorded nothing anywhere.
+   *
+   * Its version tracks the geocode provider generation as well as its own rule,
+   * because its donors are overwhelmingly rows `enrich.geocode` resolved: an
+   * estimate is a COPY of a donor's coordinate, so a better geocoder makes every
+   * estimate stale too.
+   */
+  ENRICH_ESTIMATE_LOCATION: 'enrich.estimate_location',
 } as const;
 
 export type StageId = (typeof STAGE_IDS)[keyof typeof STAGE_IDS];

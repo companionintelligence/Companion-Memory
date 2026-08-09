@@ -53,6 +53,8 @@ import { PipelineSliceListener } from './listeners/PipelineSliceListener';
 import { PipelineDispatchService } from './services/PipelineDispatchService';
 import { PipelineStateService } from './services/PipelineStateService';
 import { STAGE_REGISTRY, StageRegistry } from './services/StageRegistry';
+import { EstimateLocationStage } from './stages/enrich/EstimateLocationStage';
+import { GeocodeStage } from './stages/enrich/GeocodeStage';
 import { MediaDimensionsStage } from './stages/enrich/MediaDimensionsStage';
 import { PositionReverseStage } from './stages/enrich/PositionReverseStage';
 import { EmbedStage } from './stages/index/EmbedStage';
@@ -86,6 +88,8 @@ const stageProviders: Provider[] = [
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_MEDIA_DIMENSIONS], useClass: MediaDimensionsStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.INDEX_EMBED], useClass: EmbedStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_POSITION_REVERSE], useClass: PositionReverseStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_GEOCODE], useClass: GeocodeStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_ESTIMATE_LOCATION], useClass: EstimateLocationStage },
 ];
 
 /**

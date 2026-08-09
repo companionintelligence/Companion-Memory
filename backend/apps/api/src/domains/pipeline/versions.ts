@@ -150,6 +150,29 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * costs one line of duplication, guarded by a throw.
    */
   [STAGE_IDS.ENRICH_POSITION_REVERSE]: 1,
+
+  /**
+   * v1 — initial conversion of `GeocodeBatchListener`'s forward sweep.
+   *
+   * A LITERAL mirroring a derivation, the same shape as
+   * `enrich.position_reverse`: `GeocodeStage` computes its version from the
+   * forward-provider generation plus its own result-rule generation, and throws
+   * at module load if this line disagrees. Not a thunk, for the reason given
+   * above — that derivation lives in a file importing `@ci/domains/geocode`, and
+   * a thunk would drag that whole graph behind every importer of this module.
+   */
+  [STAGE_IDS.ENRICH_GEOCODE]: 1,
+
+  /**
+   * v1 — initial conversion of `LocationEstimateService.estimateBatch`.
+   *
+   * Also a literal mirroring a derivation, and the derivation's second term is
+   * the forward-geocode provider generation: an estimate is a COPY of a donor's
+   * coordinate, so improving the geocoder makes every estimate stale. Bumping
+   * the provider generation therefore bumps BOTH stages — which is the point,
+   * and means this line moves whenever `enrich.geocode`'s does.
+   */
+  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 1,
 };
 
 /**
