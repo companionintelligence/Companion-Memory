@@ -29,6 +29,7 @@ import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { GraphController } from './controllers/GraphController';
 import { BaseEntity } from './entities/BaseEntity';
+import { CommunicationBaseEntity } from './entities/CommunicationBaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
@@ -85,6 +86,7 @@ import { UserContextService } from './services/UserContextService';
     TypeOrmModule.forFeature([
       EntityMergeBlockEntity,
       CommunicationEntity,
+      CommunicationBaseEntity,
       ContentEntity,
       EventEntity,
       EventBaseEntity,
@@ -162,6 +164,7 @@ export class MemoryModule {}
 export {
   BaseEntity,
   CommunicationEntity,
+  CommunicationBaseEntity,
   ContentEntity,
   EventEntity,
   EventBaseEntity,

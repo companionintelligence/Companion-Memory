@@ -11,7 +11,7 @@ const PREVIEW_MAX_CHARS = 140;
  * the rows where content itself IS the preview. Same one-line + ellipsis shape
  * as the importer's clip, so stored and derived previews are indistinguishable.
  */
-function previewFromContent(content: string | null | undefined): string | null {
+export function previewFromContent(content: string | null | undefined): string | null {
   if (!content) {
     return null;
   }
