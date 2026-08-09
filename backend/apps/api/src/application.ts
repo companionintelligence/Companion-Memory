@@ -51,6 +51,7 @@ import { PairingModule } from '@ci/domains/pairing';
 import { ParsingModule } from '@ci/domains/parsing';
 import { PersonaModule } from '@ci/domains/persona';
 import { PersonalizationModule } from '@ci/domains/personalization';
+import { PipelineModule } from '@ci/domains/pipeline';
 import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 import { PowerSyncModule } from '@ci/domains/powersync';
@@ -99,6 +100,10 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     ParsingModule,
     EtlModule,
     EventsModule,
+    // Registers the generic pipeline worker, the stage registry and the
+    // dead-letter reaper. Ordered after EventsModule because every stage runs on
+    // a pg-boss queue that EventsModule discovers from listener registration.
+    PipelineModule,
     FilesModule,
     GraphModule,
     GraphQLModule,
