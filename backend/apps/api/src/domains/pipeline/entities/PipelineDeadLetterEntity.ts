@@ -37,6 +37,20 @@ export class PipelineDeadLetterEntity {
   @Column({ type: 'uuid', name: 'entity_id', nullable: true })
   entityId!: string | null;
 
+  /**
+   * Owning user, read off the failed job's payload.
+   *
+   * Present so `domains/portability` discovers this table: it finds user-scoped
+   * tables by column name (`DISCOVER_USER_TABLES_SQL`), so without `user_id` an
+   * erasure request would sweep every other control-plane table and leave the
+   * verbatim failed payloads here behind.
+   *
+   * Nullable because not every job is user-scoped. NULL means "not
+   * attributable", not "not yet populated".
+   */
+  @Column({ type: 'uuid', name: 'user_id', nullable: true })
+  userId!: string | null;
+
   /** The job payload verbatim. The whole reason this table exists — never trim it. */
   @Column({ type: 'jsonb' })
   payload!: Record<string, unknown>;

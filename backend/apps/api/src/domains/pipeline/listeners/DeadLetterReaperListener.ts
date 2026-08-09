@@ -75,7 +75,20 @@ export class DeadLetterReaperListener {
    */
   @Cron(DEAD_LETTER_REAP_CRON)
   async reapOnSchedule(): Promise<void> {
-    await this.reap();
+    // Nothing awaits a @Cron method, so a rejection here is an unhandled promise
+    // rejection — which this process treats as fatal. On a timer that means a
+    // crash loop rather than a single failure, and the reaper is the one
+    // component whose whole job is to be running when something else is broken.
+    // Swallow-and-log is right here: the next tick retries in two minutes, and
+    // an un-harvested dead letter is still sitting safely in pgboss.job.
+    try {
+      await this.reap();
+    } catch (err: unknown) {
+      this.logger.error(
+        'Scheduled dead-letter reap failed; will retry on the next tick',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+    }
   }
 
   /**
@@ -97,16 +110,23 @@ export class DeadLetterReaperListener {
    * so the steady-state cost is one anti-join that returns nothing.
    */
   async reap(limit: number = DEAD_LETTER_REAP_BATCH): Promise<number> {
-    // `pgboss` is created by pg-boss itself at boot, not by a migration, so it
-    // is absent in any process that uses LocalEventService (tests, some dev
-    // setups). Checking is cheaper than letting a cron throw every two minutes
-    // and drown the log in an error that means "this deployment has no queue".
+    // BOTH tables have to exist, and each is absent for a different reason.
+    // `pgboss.job` is created by pg-boss at boot rather than by a migration, so
+    // it is missing in any process using LocalEventService (tests, some dev
+    // setups). `ci.pipeline_dead_letters` IS created by a migration, so it is
+    // missing on a node that started before `migrate-database` finished — which
+    // is every existing appliance until this branch's migration lands.
+    //
+    // Guarding only the source was the bug: the check passed, the INSERT raised
+    // `relation "ci.pipeline_dead_letters" does not exist`, and on a two-minute
+    // cron that is a crash loop rather than a single logged failure.
     const [{ exists }] = await this.dataSource.query<Array<{ exists: boolean }>>(
-      `SELECT to_regclass('pgboss.job') IS NOT NULL AS exists`,
+      `SELECT to_regclass('pgboss.job') IS NOT NULL
+          AND to_regclass('ci.pipeline_dead_letters') IS NOT NULL AS exists`,
     );
 
     if (!exists) {
-      this.logger.debug('pgboss.job does not exist; skipping dead-letter reap');
+      this.logger.debug('pgboss.job or ci.pipeline_dead_letters does not exist; skipping dead-letter reap');
 
       return 0;
     }
@@ -136,7 +156,7 @@ export class DeadLetterReaperListener {
     //    falling back to the raw output.
     const rows = await this.dataSource.query<Array<{ id: string }>>(
       `INSERT INTO ci.pipeline_dead_letters
-              (id, queue, event_name, stage, entity_type, entity_id, payload, error, failed_at)
+              (id, queue, event_name, stage, entity_type, entity_id, user_id, payload, error, failed_at)
        SELECT j.id,
               j.name,
               COALESCE(NULLIF(j.data->>'name', ''), 'unknown'),
@@ -145,6 +165,15 @@ export class DeadLetterReaperListener {
               CASE
                 WHEN j.data->>'entityId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                 THEN (j.data->>'entityId')::uuid
+              END,
+              -- Same defensive cast as entityId, same reason: an erasure sweep
+              -- that finds this row matters more than a strict parse, and one
+              -- malformed payload must not abort the batch. NULL here means
+              -- "not attributable to a user", which is legitimate for
+              -- maintenance and telemetry jobs.
+              CASE
+                WHEN j.data->>'userId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                THEN (j.data->>'userId')::uuid
               END,
               COALESCE(j.data, '{}'::jsonb),
               COALESCE(
