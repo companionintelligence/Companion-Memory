@@ -68,11 +68,10 @@ export class LocalEventService extends EventService implements BeforeApplication
     const userId = (event as { userId?: string }).userId;
 
     const executionPromise = ContextService.run({ traceId, userId }, async () => {
-      const allQueues = this.getRegisteredQueues();
       let targetQueues: Set<string>;
 
       if (options?.queue) {
-        if (!allQueues.has(options.queue)) {
+        if (!this.getRegisteredQueues().has(options.queue)) {
           this.logger.warn(
             `Requested queue ${options.queue} does not exist. Event ${name} will not be sent.`,
           );
@@ -82,7 +81,20 @@ export class LocalEventService extends EventService implements BeforeApplication
 
         targetQueues = new Set([options.queue]);
       } else {
-        targetQueues = allQueues;
+        // Route by listener, exactly as the pg-boss implementation does. This
+        // path used to iterate EVERY registered queue and rely on executeJob's
+        // hasListeners() check to no-op on the ones that don't care — cheap here
+        // (no jobs are persisted), which is precisely why the equivalent waste in
+        // production went unnoticed by the test suite for so long. Keeping the
+        // two routing rules identical is the point: local behaviour is the
+        // behaviour tests assert.
+        targetQueues = this.getQueuesForEvent(name);
+
+        if (targetQueues.size === 0) {
+          this.logger.warn(`Event ${name} has no registered listeners on any queue; nothing was executed.`);
+
+          return [];
+        }
       }
 
       const job: JobWithMetadata<EventData> = {

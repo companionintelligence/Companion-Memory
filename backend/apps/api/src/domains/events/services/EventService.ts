@@ -56,6 +56,14 @@ export abstract class EventService {
    */
   abstract failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void>;
 
+  /**
+   * Every queue that exists — the union of all listener queues plus the default.
+   * This is the set of queues to CREATE and to run workers for, and the set an
+   * explicitly requested `options.queue` is validated against.
+   *
+   * It is deliberately NOT the routing set for an individual event: see
+   * {@link getQueuesForEvent}.
+   */
   protected getRegisteredQueues(): Set<string> {
     const listeners = EventListenerRegistry.getListeners();
     const queues = new Set<string>();
@@ -69,5 +77,21 @@ export abstract class EventService {
     });
 
     return queues;
+  }
+
+  /**
+   * The queues a specific event should actually be delivered to.
+   *
+   * Shared by both implementations on purpose. Routing used to be decided
+   * independently in each (`getRegisteredQueues()` fan-out in pg-boss, the same
+   * again inline in local), which let the two drift: the local path executes
+   * listeners synchronously and no-ops on a queue with no listener, so a test
+   * suite running on LocalEventService saw correct behaviour while production
+   * quietly enqueued — and then discarded — a job per queue per event. One
+   * implementation of the routing rule means a test that pins the routing pins
+   * it for both.
+   */
+  protected getQueuesForEvent(eventName: string): Set<string> {
+    return EventListenerRegistry.getQueuesFor(eventName);
   }
 }

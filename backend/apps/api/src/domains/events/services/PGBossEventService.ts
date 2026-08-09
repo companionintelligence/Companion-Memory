@@ -8,7 +8,7 @@ import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
 import { DEFAULT_JOB_PRIORITY } from '../constants';
-import { EventListenerRegistry } from '../event-registration';
+import { EventDefinitionRegistry, EventListenerRegistry } from '../event-registration';
 import { type EventPayloads } from '../event-registry';
 import { EventRegistry } from '../registry';
 import type { EventSendOptions } from '../types';
@@ -47,12 +47,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // works this queue, so entries accumulate; it carries a long retention.
   private static readonly DEAD_LETTER_QUEUE = 'dead-letter';
 
-  // Bulk-import escape hatch: send() fans an event out to EVERY registered queue
-  // (each worker then filters by event name), so a large import enqueues ~Nqueues
-  // jobs per row. During a bulk load, set CI_QUEUE_SUPPRESS to a comma-separated
-  // list of queues to skip enqueuing entirely (e.g. file-preview-generation,
-  // image-description,geocode,feed-queue,etl) — keep search-index for searchable
-  // results. Enrichment can be backfilled later.
+  // Bulk-import escape hatch: even with per-event routing, one imported row can
+  // legitimately fan out to several enrichment queues. During a bulk load, set
+  // CI_QUEUE_SUPPRESS to a comma-separated list of queues to skip enqueuing
+  // entirely (e.g. file-preview-generation,image-description,geocode,feed-queue,
+  // etl) — keep search-index for searchable results. Enrichment can be backfilled
+  // later.
   private readonly suppressedQueues = new Set(
     (process.env.CI_QUEUE_SUPPRESS ?? '')
       .split(',')
@@ -126,6 +126,8 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
     this.logger.debug(`Discovered queues: ${Array.from(discoveredQueues).join(', ')}`);
 
+    this.warnOnOrphanEvents();
+
     // Create the shared dead-letter queue FIRST so the work queues can reference
     // it. Long retention so exhausted-retry jobs stay inspectable; no worker
     // consumes it (it is not a registered listener queue), so entries accumulate.
@@ -194,6 +196,34 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   }
 
   /**
+   * Cross-check the declared event surface against the listener registry, once,
+   * at boot.
+   *
+   * Every `defineEvent` name that resolves to zero queues is an orphan: emitting
+   * it enqueues nothing. Under the old fan-out this was invisible — the event got
+   * a job on every queue and every worker silently dropped it, so a missing
+   * listener looked exactly like a working one. Now that routing is by listener,
+   * an orphan is a silent no-op, which is worse to debug in the field than a loud
+   * line at startup. Warn rather than throw: dormant events (a domain module not
+   * enabled in this deployment) are legitimate, and refusing to boot over one
+   * would be a self-inflicted outage.
+   */
+  private warnOnOrphanEvents(): void {
+    const orphans = EventDefinitionRegistry.getNames().filter(
+      (eventName) => EventListenerRegistry.getQueuesFor(eventName).size === 0,
+    );
+
+    if (orphans.length === 0) {
+      return;
+    }
+
+    this.logger.warn(
+      `${orphans.length} defined event(s) have no listener on any queue and will enqueue nothing when sent: ` +
+        orphans.join(', '),
+    );
+  }
+
+  /**
    * @deprecated Use the new distributed EventPayloads type instead.
    */
   async send<E extends keyof EventPayloads>(
@@ -218,15 +248,21 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       name,
     } satisfies EventData;
 
+    // pg-boss fetches ORDER BY priority DESC, so a higher number is worked
+    // sooner. Every job carries an explicit priority rather than leaning on the
+    // column default, so the ordering is legible from the enqueue side.
     const sendOptions: PgBoss.SendOptions = {
       priority: options?.priority ?? DEFAULT_JOB_PRIORITY,
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
     };
-    const allQueues = this.getRegisteredQueues();
 
     // If a specific queue is provided and that queue exists, send only to that queue.
+    // Validated against every EXISTING queue rather than this event's listener
+    // set: naming a queue explicitly is how a backfill re-drives an event onto
+    // one worker, and that is legitimate even for a queue that would not be part
+    // of the event's normal fan-out.
     if (options?.queue) {
-      if (!allQueues.has(options.queue)) {
+      if (!this.getRegisteredQueues().has(options.queue)) {
         this.logger.warn(`Requested queue ${options.queue} does not exist. Event ${name} will not be sent.`);
 
         return [];
@@ -237,10 +273,25 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       return jobId ? [jobId] : [];
     }
 
-    // Otherwise, send to all registered queues (minus any suppressed for a bulk load).
+    // Otherwise, send only to the queues that actually have a listener for THIS
+    // event (minus any suppressed for a bulk load). This used to be every
+    // registered queue, with each worker fetching the job and discarding it after
+    // finding no listener — one real job plus N-1 pure-waste jobs per send.
+    const targetQueues = this.getQueuesForEvent(name);
+
+    if (targetQueues.size === 0) {
+      // Not fatal: an event with no consumer is a no-op, and throwing here would
+      // turn a dormant integration into a request failure. But it is always a
+      // mistake worth surfacing — either the listener module never loaded, or the
+      // emitter outlived its consumer.
+      this.logger.warn(`Event ${name} has no registered listeners on any queue; nothing was enqueued.`);
+
+      return [];
+    }
+
     const jobIds: string[] = [];
 
-    for (const queue of allQueues) {
+    for (const queue of targetQueues) {
       if (this.suppressedQueues.has(queue)) {
         continue;
       }

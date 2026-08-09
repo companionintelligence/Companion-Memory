@@ -56,5 +56,9 @@ export { OnEvent } from './decorators/OnEvent';
 export { Events, type EventPayloads } from './event-registry';
 export type { EventRegistry } from './registry';
 export type { Acknowledgement, EventSendOptions, QueueOptions } from './types';
-export { DEFAULT_JOB_PRIORITY } from './constants';
+// The priority tiers are part of the events domain's public surface: any domain
+// that enqueues work has to be able to say whether it is interactive or a
+// backfill. Exporting them here keeps callers off `events/constants` directly,
+// which the no-cross-domain-internals dependency rule forbids.
+export { DEFAULT_JOB_PRIORITY, INTERACTIVE_JOB_PRIORITY, BACKFILL_JOB_PRIORITY } from './constants';
 export { defineEvent } from './event-registration';
