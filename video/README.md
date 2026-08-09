@@ -377,6 +377,55 @@ state after `goto`; every state a `before` click navigates to is guarded by a `w
 inside `before`. Putting a post-navigation selector in `capture.waitFor` deadlocks for 25s, drops
 the shot, and renders a "capture pending" slate.
 
+## Where each claim in the film is checked
+
+The narration makes claims about the product. Each one is checkable, and this is
+where — so the next person editing a line knows what they are editing against
+and does not have to re-derive it.
+
+| Line | Checked against |
+|---|---|
+| *"the whole store narrows in place. Nothing is uploaded"* | `backend/apps/api/src/domains/search-next` and `…/memory` contain no outbound HTTP; the query is GraphQL to the local API against Postgres |
+| *"one MCP server that answers only to you"* | `domains/mcp/services/McpServerService.ts` registers a server named **`companion-memory`** — the chip's value verbatim — with `GraphQLToolAdapter` turning the GraphQL surface into its tools |
+| *"Hourly, daily, weekly"* | `backend/apps/summary/src/system_schedules.py`: `5 * * * *`, `10 0 * * *`, `15 0 * * MON` |
+| *"on a model you host"* | `summary-service` is a container in this repo's own `docker-compose.yml`, pointed at the endpoint from Settings → Model, which defaults to Ollama on the host gateway |
+| *"Postgres + pgvector"* | `infrastructure/database/Dockerfile` installs `postgresql-18-pgvector` |
+| *"your mail, your calendar and your photos"* | **on screen** — the framing keeps the provider cards' own caption lines, and Google's reads "Gmail, Calendar, Drive, Photos, and YouTube" |
+| `Monthly fee $0` | **not checkable in this repo** — there is no billing code here, which is weak evidence rather than proof. It is checkable in the catalogue entry this storyboard's `app.marketplaceId` points at: `CI-Marketplace/apps/ci-memory/config.json` carries `"pricing": { "type": "free" }` |
+
+Two lines were corrected during the rewrite because the **frame did not support
+them**, which is the check that no amount of code-reading performs:
+
+- `the-record` said *"…and exactly when"*. At this framing the `STARTS`/`ENDS`
+  dates sit under the caption scrim, so the line named something the frame does
+  not show. It now names what it does.
+- `it-notices` said *"Overnight it reads your week"*. Both cards this shot frames
+  are badged **HOURLY**. Hence the three cadences above.
+
+**Read the rendered frame, not the preview, before believing a line.**
+
+## Narration prosody
+
+Since video-kit 0.14.0 the kit gives each scene kind a default rate and pitch,
+and `assets/audio/narration.json` records the prosody each mp3 was read at
+alongside its text — so changing a scene's register is detectably stale in the
+same way changing its words is. **This film has adopted the house register**
+(`ci-video narrate --restyle`): intro `-6%`, feature `-5%`, screen `-3%`,
+outro `-8%`.
+
+**It is not free, and the cost is runtime.** Under `meta.pacing: "fit"` a slower
+read does not create dead air — the scene is sized from the read — so what a
+slowdown spends is length. Adopting the register added **4.2s** to this film,
+which is most of the way to the 105s ceiling on its own. Two narration lines were
+tightened to pay for it, both of which were narrating a list the frame already
+prints: `your-traces` no longer recites "mail, calendar, photos, purchases" over
+a graphic of two dozen service marks, and `how-it-works` no longer reads out the
+box labels of the diagram behind it.
+
+The kit's own note on those defaults is worth heeding: they were chosen from the
+measured rate/duration curve, **not from listening tests**. `meta.prosodyByKind`
+and per-scene `prosody` are the levers if the register is wrong.
+
 ## Media
 
 Drop prepared media into `assets/media/` and point `media.music` at it. Per-scene voiceover is

@@ -71,7 +71,7 @@
       "transition": "cut",
       "seconds": 8,
       "caption": "Your life creates context every day.",
-      "narration": "Your life already leaves a trail. Mail, calendar, photos, purchases — across two dozen services that each keep a piece.",
+      "narration": "Your life already leaves a trail, across two dozen services that each keep a piece of it.",
       "shots": [
         {
           "id": "graphic-traces",
@@ -270,7 +270,7 @@
       "transition": "cut",
       "seconds": 9,
       "caption": "Input surfaces. Digital memory. Your agents.",
-      "narration": "Underneath, raw data becomes people, places, things, events and space — searchable, related, graphed, vectorised. On your box.",
+      "narration": "Underneath it is one shape. Raw data in; people, places, things and events out.",
       "shots": [
         {
           "id": "graphic-architecture",
