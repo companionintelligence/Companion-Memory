@@ -180,6 +180,8 @@
   "geocoding": {
     "apiKey": "",
     "batchSize": 200,
-    "rateLimitPerSecond": 10
+    "rateLimitPerSecond": 10,
+    "provider": "portal",
+    "portalBaseUrl": ""
   }
 }

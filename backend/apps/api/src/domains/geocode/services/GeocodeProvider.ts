@@ -1,8 +1,10 @@
 /**
- * Provider abstraction for forward geocoding. Today the only implementation is
- * {@link GoogleGeocodeProvider}, but keeping the interface lets the cache /
- * batch orchestration in GeocodeService stay provider-agnostic and lets tests
- * stub the network.
+ * Provider abstraction for geocoding, in both directions. Two implementations
+ * exist: {@link PortalGeocodeProvider} (the default — egress goes through
+ * CI-Portal, which holds the provider key and fronts a cache shared by every
+ * appliance) and {@link GoogleGeocodeProvider} (a direct-key fallback). Keeping
+ * the interface lets the cache orchestration in GeocodeService stay
+ * provider-agnostic and lets tests stub the network.
  */
 
 /** Injection token for the active geocode provider. */
@@ -36,6 +38,12 @@ export interface GeocodeProviderResult {
   errorMessage?: string;
 }
 
+/** A WGS84 coordinate pair, the unit of a reverse-geocode request. */
+export interface GeocodePoint {
+  lat: number;
+  lng: number;
+}
+
 export interface GeocodeProvider {
   /**
    * Forward-geocode a single address string. MUST NOT throw on a provider-level
@@ -53,4 +61,25 @@ export interface GeocodeProvider {
    * failures (treated as transient/retryable by the caller).
    */
   reverseGeocode(lat: number, lng: number): Promise<GeocodeProviderResult>;
+
+  /**
+   * OPTIONAL capability: resolve a whole page in one call.
+   *
+   * The single-item methods above are the contract every provider must honor,
+   * because GeocodeService's cache is keyed per query and therefore asks per
+   * query. A provider that fronts a *batch* endpoint (Portal) can additionally
+   * expose these so a caller holding a page of work — a backfill, an importer —
+   * pays one round trip instead of N. Callers must feature-detect
+   * (`provider.geocodeBatch?.(…)`) and fall back to the single-item path.
+   *
+   * Contract, and the only thing a caller may rely on: the returned array is
+   * INDEX-ALIGNED with the input array and has exactly the same length. A
+   * per-item failure is a `status` on that item's result, never a short array
+   * and never a rejection — one bad address must not discard the other 99
+   * answers, which is the whole reason the batch call is worth making.
+   */
+  geocodeBatch?(addresses: string[]): Promise<GeocodeProviderResult[]>;
+
+  /** Batch counterpart of {@link reverseGeocode}. Same index-alignment contract. */
+  reverseGeocodeBatch?(points: GeocodePoint[]): Promise<GeocodeProviderResult[]>;
 }

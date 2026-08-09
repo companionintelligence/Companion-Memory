@@ -337,13 +337,31 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
-  // Forward-geocoding (geodata-plan Phase 1). The key is read from
-  // GEOCODING_API_KEY, falling back to the legacy GOOGLE_MAPS_KEY (see
-  // custom-environment-variables.json + the fallback transform below).
+  // Geocoding, both directions (address <-> coordinates). Egress normally goes
+  // through CI-Portal, which holds the provider key and fronts a cache shared by
+  // every appliance; `google` is the direct-key fallback and is the only mode
+  // that reads `apiKey` (GEOCODING_API_KEY, falling back to the legacy
+  // GOOGLE_MAPS_KEY — see custom-environment-variables.json + the transform below).
   geocoding: z.object({
     apiKey: z.string().optional(),
     batchSize: z.coerce.number().int().positive().default(200),
     rateLimitPerSecond: z.coerce.number().int().positive().default(10),
+    /**
+     * Which implementation backs the GEOCODE_PROVIDER token.
+     *   portal (default) — proxy through CI-Portal; no provider key on the box.
+     *   google           — call Google directly with `apiKey`; kept as a fallback
+     *                      for deployments with no Portal reachability.
+     */
+    provider: z.enum(['portal', 'google']).default('portal'),
+    /**
+     * Base origin of the geocoding proxy — CI-Portal itself, or the hub host
+     * that fronts it. WHICH of the two a deployment uses is still undecided, so
+     * this is the single knob that answers it and the only place a Portal URL is
+     * configured for geocoding. Defaults to ciPortal.url (CI_CLOUD_URL) below,
+     * so a box that already talks to Portal needs no extra env var; set
+     * GEOCODING_PORTAL_BASE_URL to route via the hub instead.
+     */
+    portalBaseUrl: z.string().default(''),
   }),
 });
 
@@ -376,12 +394,30 @@ if (!parsed.geocoding.apiKey && process.env.GOOGLE_MAPS_KEY) {
   parsed.geocoding.apiKey = process.env.GOOGLE_MAPS_KEY;
 }
 
-if (!parsed.geocoding.apiKey) {
-  // Warn (don't throw): the server must still boot without a geocoding key; the
-  // backfill simply no-ops / returns REQUEST_DENIED until one is configured.
+// The geocoding proxy follows the Portal URL the box already uses unless an
+// explicit base URL is configured (GEOCODING_PORTAL_BASE_URL), so routing
+// geocoding via the hub host instead of Portal directly is a one-variable
+// change. Same shape as the embedding-host fallback above: the OR lives here so
+// the provider reads exactly one config value.
+if (!parsed.geocoding.portalBaseUrl) {
+  parsed.geocoding.portalBaseUrl = parsed.ciPortal.url ?? '';
+}
+
+// Warn (don't throw) on a geocoding misconfiguration: the server must still
+// boot, and the backfill simply reports a transient/denied status until it is
+// fixed. Each provider has its own requirement, so only warn about the one in use.
+if (parsed.geocoding.provider === 'google' && !parsed.geocoding.apiKey) {
   console.warn(
-    '[configuration] No geocoding API key configured (GEOCODING_API_KEY / GOOGLE_MAPS_KEY). ' +
-      'Forward-geocode backfills will be skipped until one is set.',
+    '[configuration] geocoding.provider is "google" but no API key is configured ' +
+      '(GEOCODING_API_KEY / GOOGLE_MAPS_KEY). Geocode backfills will be skipped until one is set.',
+  );
+}
+
+if (parsed.geocoding.provider === 'portal' && !parsed.geocoding.portalBaseUrl) {
+  console.warn(
+    '[configuration] geocoding.provider is "portal" but no base URL is configured ' +
+      '(GEOCODING_PORTAL_BASE_URL / CI_CLOUD_URL). Geocode backfills will report a transient ' +
+      'failure until one is set.',
   );
 }
 

@@ -166,6 +166,8 @@
     "rateLimitPerSecond": {
       "__name": "GEOCODING_RATE_LIMIT_PER_SECOND",
       "__format": "json"
-    }
+    },
+    "provider": "GEOCODING_PROVIDER",
+    "portalBaseUrl": "GEOCODING_PORTAL_BASE_URL"
   }
 }
