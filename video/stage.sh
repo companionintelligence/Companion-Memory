@@ -10,9 +10,15 @@
 # THIS FILE IS THE ONLY PLACE COMPANION MEMORY DEPARTS FROM THE FLEET.
 # video/make.sh is byte-identical to @companionintelligence/video-kit's
 # template/make.sh, as it is in every other product repo; everything specific to
-# this product lives here. That was not true until 2026-08-08 — make.sh was a
-# 421-line fork carrying a three-pass capture and a registry-shaped kit install —
-# and the two halves of the departure were settled separately:
+# this product lives here. Since video-kit 0.17.0 that template is a 61-line
+# SHIM: it finds the kit, exports CI_VIDEO_REPO_ROOT and hands over to the kit's
+# own bin/make.sh, so the runner is now a thing to RUN rather than a thing to
+# copy. The hooks below are unchanged by that — the shared runner sources this
+# file and calls capture_all exactly as the copied runner did.
+#
+# That was not true until 2026-08-08 — make.sh was a 421-line fork carrying a
+# three-pass capture and a registry-shaped kit install — and the two halves of
+# the departure were settled separately:
 #
 #   * the three passes were REAL per-repo variation, so they moved here as
 #     capture_all, the hook the template already provides for exactly this;
