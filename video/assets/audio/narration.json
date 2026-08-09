@@ -5,7 +5,7 @@
   "scenes": {
     "open": {
       "text": "Other agents are double agents. Companion Memory works only for you.",
-      "seconds": 5.64,
+      "seconds": 5.291,
       "prosody": {
         "rate": "-6%",
         "pitch": "-2Hz",
@@ -89,7 +89,7 @@
     },
     "recap": {
       "text": "Local database. Local models. No account, and nothing to cancel.",
-      "seconds": 6.36,
+      "seconds": 5.823,
       "prosody": {
         "rate": "-5%",
         "pitch": "-1Hz",
@@ -98,7 +98,7 @@
     },
     "close": {
       "text": "Companion Memory, from Companion Intelligence. UnCloud your life, at ci dot computer slash memory.",
-      "seconds": 8.544,
+      "seconds": 8.217,
       "prosody": {
         "rate": "-8%",
         "pitch": "-2Hz",
@@ -107,7 +107,7 @@
     },
     "the-deal": {
       "text": "An assistant is only useful if it remembers you. Where you live. Who your doctor is. When the house is empty.",
-      "seconds": 8.496,
+      "seconds": 7.736,
       "prosody": {
         "rate": "-5%",
         "pitch": "-1Hz",
@@ -116,7 +116,7 @@
     },
     "the-catch": {
       "text": "And all of that gets remembered on a machine you will never see. So most people quietly stop telling it the truth.",
-      "seconds": 7.584,
+      "seconds": 7.267,
       "prosody": {
         "rate": "-5%",
         "pitch": "-1Hz",
@@ -125,7 +125,7 @@
     },
     "bring-it-home": {
       "text": "Point it at the accounts you already have, and it pulls your mail, your calendar and your photos into your own house.",
-      "seconds": 7.128,
+      "seconds": 7.013,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -134,7 +134,7 @@
     },
     "one-memory": {
       "text": "Everything you keep lands in one list, on one machine, newest first.",
-      "seconds": 5.04,
+      "seconds": 4.918,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -143,7 +143,7 @@
     },
     "the-record": {
       "text": "Open one, and the whole record is there. The place, the address, the exact coordinates.",
-      "seconds": 6.792,
+      "seconds": 6.459,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -152,7 +152,7 @@
     },
     "ask-it": {
       "text": "Search it, and the whole store narrows in place. Nothing is uploaded, and nothing leaves the box.",
-      "seconds": 7.056,
+      "seconds": 6.755,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -161,7 +161,7 @@
     },
     "it-connects": {
       "text": "It works out how your people, places and ideas connect — on your box, not somebody else's cluster.",
-      "seconds": 7.008,
+      "seconds": 6.888,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -170,7 +170,7 @@
     },
     "it-notices": {
       "text": "Hourly, daily, weekly — it reads what happened and writes the summary itself, on a model you host.",
-      "seconds": 6.912,
+      "seconds": 6.799,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -179,7 +179,7 @@
     },
     "your-call": {
       "text": "How much it does on its own is a dial you set. Cautious, balanced, or hands off.",
-      "seconds": 6.552,
+      "seconds": 6.18,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -188,7 +188,7 @@
     },
     "your-traces": {
       "text": "Your life already leaves a trail, across two dozen services that each keep a piece of it.",
-      "seconds": 5.808,
+      "seconds": 5.694,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -197,7 +197,7 @@
     },
     "how-it-works": {
       "text": "Underneath it is one shape. Raw data in; people, places, things and events out.",
-      "seconds": 7.368,
+      "seconds": 6.966,
       "prosody": {
         "rate": "-3%",
         "pitch": "+0Hz",
@@ -206,7 +206,7 @@
     },
     "your-agents": {
       "text": "Which is why the agents you already use plug straight into it, over one MCP server that answers only to you.",
-      "seconds": 7.176,
+      "seconds": 7.037,
       "prosody": {
         "rate": "-5%",
         "pitch": "-1Hz",
