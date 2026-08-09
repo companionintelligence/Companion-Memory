@@ -5,7 +5,7 @@ import { LoggerService } from '@ci/common/logging';
 
 import { PIPELINE_QUEUE_NAMES, STAGE_IDS, type StageId } from '../constants';
 import type { Stage } from '../types';
-import { STAGE_VERSIONS } from '../versions';
+import { STAGE_VERSIONS, stageVersion, type StageVersion } from '../versions';
 
 /**
  * Stage id → the Nest injection token its implementation is bound to.
@@ -31,6 +31,8 @@ import { STAGE_VERSIONS } from '../versions';
  */
 export const STAGE_REGISTRY: Record<StageId, string> = {
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 'PipelineStage:enrich.media_dimensions',
+  [STAGE_IDS.INDEX_EMBED]: 'PipelineStage:index.embed',
+  [STAGE_IDS.ENRICH_POSITION_REVERSE]: 'PipelineStage:enrich.position_reverse',
 };
 
 /**
@@ -55,7 +57,9 @@ export const STAGE_REGISTRY: Record<StageId, string> = {
  * "registry and versions disagree" is useless at 3am and "`clean.orphan_reap`
  * is declared in STAGE_VERSIONS but has no registry entry" is a one-line fix.
  */
-export function assertStageRegistryComplete(versions: Record<string, number> = STAGE_VERSIONS): void {
+export function assertStageRegistryComplete(
+  versions: Record<string, StageVersion> = STAGE_VERSIONS,
+): void {
   const registryIds = new Set<string>(Object.keys(STAGE_REGISTRY));
   const versionIds = new Set<string>(Object.keys(versions));
 
@@ -181,7 +185,13 @@ export class StageRegistry {
    *    worker was started for, where they sit until retention deletes them.
    */
   private assertConsistent(stageId: string, stage: Stage): void {
-    const expectedVersion = STAGE_VERSIONS[stageId as StageId];
+    // Through `stageVersion()`, never by indexing STAGE_VERSIONS directly: an
+    // entry there may be a THUNK (see `versions.ts`), and comparing a stage's
+    // integer against an unresolved function would make every derived-version
+    // stage fail this check with a message about hardcoding that is not what
+    // happened. `stageVersion()` also re-applies the integer >= 1 guard, so a
+    // derivation that started returning 0 is caught here as well as at boot.
+    const expectedVersion = stageVersion(stageId);
 
     if (stage.id !== stageId) {
       throw new Error(

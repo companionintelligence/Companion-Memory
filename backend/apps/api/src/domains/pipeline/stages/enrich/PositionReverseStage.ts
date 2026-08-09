@@ -14,23 +14,25 @@ import config from '@ci/configuration';
 // adds none of that and must never re-implement any of it.
 import { GeocodeService } from '@ci/domains/geocode';
 
-import { PIPELINE_QUEUES } from '../../constants';
+import { PIPELINE_QUEUES, STAGE_IDS } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
-import { STAGE_VERSIONS } from '../../versions';
+import { STAGE_VERSIONS, stageVersion, type StageVersion } from '../../versions';
 
 /**
- * Stage id. Declared here rather than imported from `STAGE_IDS` only because this
- * stage is landing ahead of its `constants.ts` entry; once that file carries
- * `ENRICH_POSITION_REVERSE: 'enrich.position_reverse'` this becomes
- * `STAGE_IDS.ENRICH_POSITION_REVERSE` and this constant goes away. Same shape as
- * {@link INDEX_EMBED_STAGE_ID} in `stages/index/EmbedStage.ts`.
+ * Alias for {@link STAGE_IDS.ENRICH_POSITION_REVERSE}, which is now the sole
+ * declaration.
+ *
+ * This used to be a local string literal, landed ahead of the `constants.ts`
+ * entry. It survives only as an alias because `__tests__/PositionReverseStage.spec.ts`
+ * imports the name; new code reads `STAGE_IDS.ENRICH_POSITION_REVERSE`, and the
+ * alias goes away with the change that owns that spec.
  *
  * IDS ARE PERMANENT — the id is the third component of `ci.pipeline_state`'s
  * primary key, so renaming it abandons every ledger row written under the old
  * name: the sweep stops finding them, coverage silently drops to zero, and the
  * whole corpus is re-processed under the new id.
  */
-export const ENRICH_POSITION_REVERSE_STAGE_ID = 'enrich.position_reverse';
+export const ENRICH_POSITION_REVERSE_STAGE_ID = STAGE_IDS.ENRICH_POSITION_REVERSE;
 
 /** The ledger `entity_type` this stage records under. */
 const ENTITY_TYPE = 'position';
@@ -95,11 +97,20 @@ export const POSITION_REVERSE_VERSION =
  *
  * `versions` is a parameter only so a test can prove the cross-check without
  * mutating the production declaration.
+ *
+ * A `STAGE_VERSIONS` entry may also be a THUNK (see `versions.ts`), and this
+ * checks only the literal form — deliberately. The thunk for this stage could
+ * only be this very function, so invoking one here would recurse forever; and a
+ * thunk needs no cross-check anyway, because a derivation that IS the
+ * declaration cannot disagree with itself. `versions.ts` explains why this entry
+ * is a literal rather than a thunk in the first place.
  */
-export function positionReverseStageVersion(versions: Record<string, number> = STAGE_VERSIONS): number {
+export function positionReverseStageVersion(
+  versions: Record<string, StageVersion> = STAGE_VERSIONS,
+): number {
   const declared = versions[ENRICH_POSITION_REVERSE_STAGE_ID];
 
-  if (declared != null && declared !== POSITION_REVERSE_VERSION) {
+  if (typeof declared === 'number' && declared !== POSITION_REVERSE_VERSION) {
     throw new Error(
       `STAGE_VERSIONS["${ENRICH_POSITION_REVERSE_STAGE_ID}"] declares ${declared} but the stage derives ` +
         `${POSITION_REVERSE_VERSION} from REVERSE_GEOCODE_PROVIDER_GENERATION ` +
@@ -111,6 +122,14 @@ export function positionReverseStageVersion(versions: Record<string, number> = S
 
   return POSITION_REVERSE_VERSION;
 }
+
+// Run at module load, not at first sweep — the same argument `StageRegistry`'s
+// completeness guard makes, and the same shape as `assertEmbedModelGenerations()`
+// in `stages/index/EmbedStage.ts`. A generation bumped without the matching
+// one-line diff to `versions.ts` is a programming error, and the earliest
+// possible failure is the cheapest one: at boot, on the operator's terminal,
+// rather than inside a worker on whichever appliance reaches this stage first.
+positionReverseStageVersion();
 
 // ---------------------------------------------------------------------------
 // Candidate selection
@@ -337,14 +356,25 @@ interface CandidateRow {
  */
 @Injectable()
 export class PositionReverseStage implements Stage {
-  readonly id = ENRICH_POSITION_REVERSE_STAGE_ID;
+  readonly id = STAGE_IDS.ENRICH_POSITION_REVERSE;
 
   /**
+   * Read from `STAGE_VERSIONS`, like every literal-versioned stage — and
+   * cross-checked against the derivation at module load (see the
+   * `positionReverseStageVersion()` call below the class).
+   *
+   * Both halves are needed and neither substitutes for the other.
+   * `stageVersion()` is what makes `STAGE_VERSIONS` the number the ledger and
+   * this stage agree on; the module-load cross-check is what stops a bumped
+   * generation from silently disagreeing with it. Reading the derivation here
+   * instead would satisfy `StageRegistry` (it compares the two) but would leave
+   * the constant able to drift until the first sweep resolved a stage.
+   *
    * Resolved ONCE, at construction. A getter would let the version change under
    * a slice that is mid-flight: ids claimed at version 1 completed at version 2
    * are never re-processed by the improvement that bump was for.
    */
-  readonly version = positionReverseStageVersion();
+  readonly version = stageVersion(STAGE_IDS.ENRICH_POSITION_REVERSE);
 
   /**
    * `pipeline-enrich`: an external, metered, latency-bound provider. Isolated

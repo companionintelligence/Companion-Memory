@@ -1,4 +1,40 @@
 import { STAGE_IDS, type StageId } from './constants';
+// The derivation, imported rather than re-implemented. This is the ONLY edge
+// from `versions.ts` into `stages/`, and it is deliberately one-way: `EmbedStage`
+// must not import this file back, or `no-circular` in `.dependency-cruiser.mjs`
+// fails the build. See {@link STAGE_VERSIONS}' entry for `index.embed`.
+import { embedStageVersion } from './stages/index/EmbedStage';
+
+/**
+ * A declared stage version: a literal integer, or a zero-arg thunk returning one.
+ *
+ * MOST stages have a version a human bumps by hand, and for those the literal is
+ * strictly better — it is one integer in one diff, and reviewing the bump means
+ * reading the same line the enricher's change touched.
+ *
+ * Some stages do not, and `index.embed` is the reason this union exists. Its
+ * version is a function of `(config.embedding.model, pgvector width)`, because
+ * changing the embedding model MUST make every existing row stale — cosine
+ * distance between two models' vectors is meaningless, so a mixed index is
+ * silently wrong. No human-maintained integer expresses that: it works only if
+ * whoever changes `CI_EMBED_MODEL` also remembers to bump a number in this file,
+ * and the whole subsystem exists because "someone will remember" is not a
+ * mechanism.
+ *
+ * A thunk keeps the derivation next to the thing it derives from — in
+ * `EmbedStage.ts`, beside the model-generation table it reads — while leaving
+ * this map COMPLETE and diff-reviewable. That completeness is not cosmetic:
+ * `StageRegistry`'s boot guard compares this map's keys against
+ * `STAGE_REGISTRY`'s, so a stage whose version lived only in its own file would
+ * have to be omitted here, and the guard would then have to be weakened for
+ * every stage.
+ *
+ * The thunk is resolved — never trusted — by {@link stageVersion}, which applies
+ * the same integer >= 1 check a literal gets. A derivation that returns 0 or a
+ * fraction is exactly the latent bug the guard below already documents; being
+ * computed rather than typed makes it more likely, not less.
+ */
+export type StageVersion = number | (() => number);
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -54,10 +90,14 @@ import { STAGE_IDS, type StageId } from './constants';
  *
  * ── Adding a stage ─────────────────────────────────────────────────────────
  *
- * Two lines: an id + version here, and an id + provider token in
- * `STAGE_REGISTRY`. The boot guard names anything you miss.
+ * Four lines in four files: the id in `constants.ts`, the version here, the
+ * token in `STAGE_REGISTRY`, and the provider binding in `stageProviders`
+ * (`index.ts`). The boot guard names the first three; it structurally cannot see
+ * the fourth, because it compares two maps and a stage missing from both looks
+ * consistent — so `__tests__/stageWiring.spec.ts` finds stage classes on disk
+ * and fails on any that is not wired all the way through.
  */
-export const STAGE_VERSIONS: Record<StageId, number> = {
+export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   /**
    * v1 — initial conversion of `MediaDimensionsBackfillListener` onto the
    * ledger. Probes `ci.files` originals via sharp (images) / ffprobe (video).
@@ -69,26 +109,96 @@ export const STAGE_VERSIONS: Record<StageId, number> = {
    * cannot distinguish "not probed yet" from "probed and unreadable".
    */
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 1,
+
+  /**
+   * DERIVED, not chosen — the one entry in this map nobody bumps by hand.
+   *
+   * `embedStageVersion()` reads `config.embedding.model` and the pgvector column
+   * width and looks the pair up in `EMBED_MODEL_GENERATIONS`, so switching
+   * `CI_EMBED_MODEL` to a declared model IS the re-embed: every row recorded at
+   * the old model's generation fails `stage_version < $current` on the next
+   * sweep. Nothing here to bump; the line to add lives beside the derivation, and
+   * `embedStageVersion()` throws at boot naming it if the configured model has no
+   * generation.
+   *
+   * A thunk rather than `embedStageVersion()` evaluated here, for one reason
+   * that matters and one that does not:
+   *
+   *  - **Load order.** A call at this line would run while the module graph is
+   *    still being built. It happens to be safe today (the import is one-way), but
+   *    it makes an ordinary-looking import edge load-bearing, and the failure if
+   *    it ever stops being safe is a `ReferenceError` in a constants file at boot.
+   *  - It also lets a test resolve the map without a live embedding config —
+   *    convenient, not the point.
+   */
+  [STAGE_IDS.INDEX_EMBED]: () => embedStageVersion(),
+
+  /**
+   * v1 — initial writer for `ci.position`'s seven address columns.
+   *
+   * A LITERAL that mirrors a derivation, which is the third shape and needs its
+   * own note. `PositionReverseStage` computes `POSITION_REVERSE_VERSION` from two
+   * generations (the reverse-geocode provider, and this stage's
+   * component-to-column rule) and cross-checks it against the number here,
+   * throwing if they disagree. So the derivation is the authority and this entry
+   * is its reviewable mirror — bump a generation there and this line in the same
+   * commit.
+   *
+   * Not a thunk, deliberately: the derivation lives in a file that imports
+   * `@ci/domains/geocode`, and a thunk would make every importer of this
+   * constants module pull the geocode domain's graph in behind it. The literal
+   * costs one line of duplication, guarded by a throw.
+   */
+  [STAGE_IDS.ENRICH_POSITION_REVERSE]: 1,
 };
 
 /**
- * Boot-time guard: every declared version is a positive integer.
+ * Collapse a declared version — literal or thunk — to the integer the ledger
+ * stores, and refuse anything that is not one.
  *
- * Catches the two mistakes that are invisible until a sweep silently returns
- * nothing: a version of 0 (which makes crash-stranded `running` rows
+ * The check catches the two mistakes that are invisible until a sweep silently
+ * returns nothing: a version of 0 (which makes crash-stranded `running` rows
  * unreclaimable, see above) and a non-integer (`stage_version` is `INTEGER` in
  * Postgres, so `1.5` would silently truncate to 1 and a "bump" would be a
- * no-op). Throwing at module load fails the boot loudly rather than degrading
- * the ledger quietly.
+ * no-op).
+ *
+ * It applies to a THUNK'S RESULT exactly as it applies to a literal, which is
+ * the whole reason resolution lives in one function. A literal is wrong only if
+ * someone typed it wrong, and a reviewer sees the digit; a derived version is
+ * wrong whenever the arithmetic behind it is, and nobody sees anything. Trusting
+ * the computed one and checking the typed one would have it backwards.
  */
-for (const [stageId, version] of Object.entries(STAGE_VERSIONS)) {
+function resolveDeclaredVersion(stageId: string, declared: StageVersion): number {
+  const version = typeof declared === 'function' ? declared() : declared;
+
   if (!Number.isInteger(version) || version < 1) {
     throw new Error(
-      `STAGE_VERSIONS["${stageId}"] must be an integer >= 1, got ${String(version)}. ` +
-        `Version 0 makes rows stranded in status='running' unreclaimable by the staleness sweep, ` +
-        `and a fractional version truncates to an integer in Postgres so the bump would be a no-op.`,
+      `STAGE_VERSIONS["${stageId}"] must ${typeof declared === 'function' ? 'derive' : 'be'} an ` +
+        `integer >= 1, got ${String(version)}. Version 0 makes rows stranded in status='running' ` +
+        `unreclaimable by the staleness sweep, and a fractional version truncates to an integer in ` +
+        `Postgres so the bump would be a no-op.`,
     );
   }
+
+  return version;
+}
+
+/**
+ * Boot-time guard: every declared version resolves to a positive integer.
+ *
+ * Throwing at module load fails the boot loudly rather than degrading the ledger
+ * quietly. Thunks are INVOKED here rather than left for the first sweep: a
+ * derivation that cannot produce a version is a stage that cannot run, and the
+ * appliance should say so at startup — on the operator's terminal — instead of
+ * inside a worker on whichever machine reaches that stage first.
+ *
+ * That does mean an undeclared `CI_EMBED_MODEL` fails the whole boot, not just
+ * `index.embed`. Deliberate: `EmbedStage` would have thrown from its constructor
+ * during module construction anyway, and a mis-set embedding model is not a
+ * condition to run an appliance in.
+ */
+for (const [stageId, declared] of Object.entries(STAGE_VERSIONS)) {
+  resolveDeclaredVersion(stageId, declared);
 }
 
 /**
@@ -97,16 +207,23 @@ for (const [stageId, version] of Object.entries(STAGE_VERSIONS)) {
  * Throws rather than defaulting, because a missing version is not a version of
  * 0 — it is a stage nothing can ever mark stale, and defaulting would bury that
  * as normal operation.
+ *
+ * Resolved on every call, not memoised. A thunk is cheap (a map lookup), and
+ * caching would quietly re-introduce the drift the union exists to remove: a
+ * stage whose derivation changed mid-process would keep reporting the version it
+ * happened to be asked for first. Callers that must not see a version move
+ * mid-flight — every `Stage` implementation — capture it once at construction,
+ * which is a decision about that stage's lifecycle rather than about this map.
  */
 export function stageVersion(stageId: string): number {
-  const version = STAGE_VERSIONS[stageId as StageId];
+  const declared = STAGE_VERSIONS[stageId as StageId];
 
-  if (version == null) {
+  if (declared == null) {
     throw new Error(
       `No STAGE_VERSIONS entry for stage "${stageId}". Every stage must declare a version; ` +
         `see domains/pipeline/versions.ts.`,
     );
   }
 
-  return version;
+  return resolveDeclaredVersion(stageId, declared);
 }

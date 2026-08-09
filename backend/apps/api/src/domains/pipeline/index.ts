@@ -37,8 +37,12 @@
 import { Module, type Provider } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { EmbeddingModule } from '@ci/common/embeddings';
 import { EventsModule } from '@ci/domains/events';
+import { FileEntity, FilesModule } from '@ci/domains/files';
+import { GeocodeModule } from '@ci/domains/geocode';
 
+import { STAGE_IDS } from './constants';
 import { PipelineDeadLetterEntity } from './entities/PipelineDeadLetterEntity';
 import { PipelineRunEntity } from './entities/PipelineRunEntity';
 import { PipelineShardEntity } from './entities/PipelineShardEntity';
@@ -48,26 +52,41 @@ import { DeadLetterReaperListener } from './listeners/DeadLetterReaperListener';
 import { PipelineSliceListener } from './listeners/PipelineSliceListener';
 import { PipelineDispatchService } from './services/PipelineDispatchService';
 import { PipelineStateService } from './services/PipelineStateService';
-import { StageRegistry } from './services/StageRegistry';
+import { STAGE_REGISTRY, StageRegistry } from './services/StageRegistry';
+import { MediaDimensionsStage } from './stages/enrich/MediaDimensionsStage';
+import { PositionReverseStage } from './stages/enrich/PositionReverseStage';
+import { EmbedStage } from './stages/index/EmbedStage';
 
 /**
  * Stage implementations, bound to the tokens declared in `STAGE_REGISTRY`.
  *
  * ADD A STAGE HERE — one entry, alongside its id in `STAGE_IDS`, its version in
  * `STAGE_VERSIONS`, and its token in `STAGE_REGISTRY`. The boot guard in
- * `StageRegistry` names anything you miss in the first three; this array is the
- * fourth, and a stage missing from it fails at its first slice with a message
- * pointing straight back here.
- *
- * ```ts
- * { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_MEDIA_DIMENSIONS], useClass: MediaDimensionsStage },
- * ```
+ * `StageRegistry` names anything you miss in the first three; THIS ARRAY IS THE
+ * FOURTH, and it is the one the boot guard structurally cannot see — it compares
+ * two declaration maps to each other, and a stage absent from both looks
+ * consistent. That gap is not hypothetical: `EmbedStage` and
+ * `PositionReverseStage` shipped, tested, with local ids and derived versions,
+ * and were unreachable at runtime for exactly this reason.
+ * `__tests__/stageWiring.spec.ts` closes it by discovering stage classes from
+ * disk and failing on any that this array does not bind.
  *
  * A stage may equally be bound from its own domain module — `StageRegistry`
  * resolves non-strictly — which is the right home for one that needs services
- * that module already wires.
+ * that module already wires. All three live here today because the dependencies
+ * they need (below) are exported by modules this one can simply import, and
+ * keeping the bindings in one place keeps the wiring reviewable in one diff.
+ *
+ * Nest instantiates every provider in this array when the module initialises, so
+ * a stage whose constructor cannot be satisfied fails the BOOT with the missing
+ * token named — not the first slice that stage is dispatched, on whichever
+ * appliance reaches it first, hours after the deploy.
  */
-const stageProviders: Provider[] = [];
+const stageProviders: Provider[] = [
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_MEDIA_DIMENSIONS], useClass: MediaDimensionsStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.INDEX_EMBED], useClass: EmbedStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_POSITION_REVERSE], useClass: PositionReverseStage },
+];
 
 /**
  * @internal
@@ -80,8 +99,31 @@ const stageProviders: Provider[] = [];
       PipelineShardEntity,
       PipelineDeadLetterEntity,
       RecordRejectionEntity,
+      // `MediaDimensionsStage` injects the `ci.files` repository directly. The
+      // files domain registers the same entity for its own module, but
+      // `forFeature` registrations are per-module, so this line is what makes
+      // `@InjectRepository(FileEntity)` resolvable HERE. Registering an entity
+      // twice is normal and costs nothing — TypeORM's metadata is global; only
+      // the repository provider is module-scoped.
+      FileEntity,
     ]),
     EventsModule,
+    // One import per stage dependency, and each is the other module's PUBLIC
+    // barrel — `no-cross-domain-internals` allows nothing else, and the stages
+    // themselves already import through it.
+    //
+    //  - `FilesModule`     → FileService (object storage) + MediaDimensionsService
+    //                        (sharp / ffprobe) for `enrich.media_dimensions`.
+    //  - `EmbeddingModule` → EmbeddingGenerationService (Ollama) for `index.embed`.
+    //  - `GeocodeModule`   → GeocodeService (cache-aware reverse geocode) for
+    //                        `enrich.position_reverse`.
+    //
+    // None of the three imports PipelineModule, so no `forwardRef` is needed;
+    // `MediaDimensionsBackfillListener` reaches the pipeline through
+    // `@ci/domains/pipeline/events`, which is a leaf.
+    FilesModule,
+    EmbeddingModule,
+    GeocodeModule,
   ],
   providers: [
     PipelineStateService,
@@ -120,6 +162,7 @@ export {
 } from './constants';
 export type { PipelineQueue, StageId } from './constants';
 export { STAGE_VERSIONS, stageVersion } from './versions';
+export type { StageVersion } from './versions';
 export { PipelineDeadLetterReapEvent, PipelineSliceEvent, PipelineSweepEvent } from './events';
 export {
   pipelineDeadLetterReapPayloadSchema,

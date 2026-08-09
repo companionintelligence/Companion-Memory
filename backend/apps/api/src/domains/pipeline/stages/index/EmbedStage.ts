@@ -8,18 +8,22 @@ import { embedSkipReason, EmbeddingGenerationService } from '@ci/common/embeddin
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
-import { PIPELINE_QUEUES } from '../../constants';
+import { PIPELINE_QUEUES, STAGE_IDS } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
 
 /**
- * Stage id. Declared here rather than imported from `STAGE_IDS` only because
- * this stage is landing ahead of its registry entry; once `constants.ts`
- * carries `INDEX_EMBED: 'index.embed'` this becomes
- * `STAGE_IDS.INDEX_EMBED` and this constant goes away. IDS ARE PERMANENT — the
- * id is the third component of `ci.pipeline_state`'s primary key, so renaming it
- * abandons every ledger row written under the old name.
+ * Alias for {@link STAGE_IDS.INDEX_EMBED}, which is now the sole declaration.
+ *
+ * This used to be a local string literal, landed ahead of the `constants.ts`
+ * entry. It survives only as an alias because `__tests__/EmbedStage.spec.ts`
+ * imports the name; new code reads `STAGE_IDS.INDEX_EMBED`, and the alias goes
+ * away with the change that owns that spec.
+ *
+ * IDS ARE PERMANENT — the id is the third component of `ci.pipeline_state`'s
+ * primary key, so renaming it abandons every ledger row written under the old
+ * name.
  */
-export const INDEX_EMBED_STAGE_ID = 'index.embed';
+export const INDEX_EMBED_STAGE_ID = STAGE_IDS.INDEX_EMBED;
 
 /**
  * Dimensionality of `ci_search.embeddings.embedding`, which is `vector(768)`.
@@ -303,7 +307,7 @@ function isUnreachable(message: string): boolean {
  */
 @Injectable()
 export class EmbedStage implements Stage {
-  readonly id = INDEX_EMBED_STAGE_ID;
+  readonly id = STAGE_IDS.INDEX_EMBED;
 
   /**
    * Resolved ONCE, at construction, not per call.
@@ -314,6 +318,21 @@ export class EmbedStage implements Stage {
    * bump was for. Capturing at construction means a model change takes effect on
    * restart — the same lifecycle `EmbeddingGenerationService` already has, since
    * it captures the model into its own field.
+   *
+   * ── Why this calls the derivation and not `stageVersion(id)` ───────────────
+   *
+   * Every other stage reads its version out of `STAGE_VERSIONS` via
+   * `stageVersion()`, because a hardcoded integer would make bumping the constant
+   * a no-op. This one cannot, and the reason is structural rather than a
+   * preference: `STAGE_VERSIONS['index.embed']` IS `() => embedStageVersion()`,
+   * so `versions.ts` imports this file. Importing it back would close a cycle,
+   * which `no-circular` in `.dependency-cruiser.mjs` rejects outright.
+   *
+   * Nothing is lost, because there is no second number to drift from. The stage
+   * and the map call the same function, so agreement is by construction rather
+   * than by convention — and `__tests__/stageWiring.spec.ts` asserts
+   * `stage.version === stageVersion(stage.id)` for every stage anyway, so this
+   * one is held to the identical check as the literal-versioned ones.
    */
   readonly version = embedStageVersion();
 

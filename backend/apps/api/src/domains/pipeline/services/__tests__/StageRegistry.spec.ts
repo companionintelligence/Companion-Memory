@@ -1,5 +1,5 @@
 import { PIPELINE_QUEUE_NAMES } from '../../constants';
-import { STAGE_VERSIONS } from '../../versions';
+import { STAGE_VERSIONS, stageVersion, type StageVersion } from '../../versions';
 import { STAGE_REGISTRY, StageRegistry } from '../StageRegistry';
 
 /**
@@ -39,7 +39,17 @@ const STAGE_NAMESPACES = ['get', 'index', 'enrich', 'clean', 'promote'];
 const STAGE_ID_PATTERN = new RegExp(`^(${STAGE_NAMESPACES.join('|')})\\.[a-z][a-z0-9_]*$`);
 
 const REGISTRY = STAGE_REGISTRY as unknown as Record<string, string>;
-const VERSIONS = STAGE_VERSIONS as unknown as Record<string, number>;
+
+/**
+ * The DECLARED versions — each either a literal integer or a thunk.
+ *
+ * Read through `stageVersion()` wherever an integer is wanted. Indexing this
+ * map and comparing the result to a number is the mistake the union invites,
+ * and it is the same one `StageRegistry.assertConsistent` had to stop making:
+ * a derived-version stage would fail every check against an unresolved
+ * function.
+ */
+const VERSIONS = STAGE_VERSIONS as unknown as Record<string, StageVersion>;
 
 /** A stage id that is actually declared, to resolve in the guard tests. */
 const SAMPLE_STAGE_ID = Object.keys(REGISTRY)[0];
@@ -63,7 +73,7 @@ interface StageLike {
 function validStage(overrides: Partial<StageLike> = {}): StageLike {
   return {
     id: SAMPLE_STAGE_ID,
-    version: VERSIONS[SAMPLE_STAGE_ID],
+    version: stageVersion(SAMPLE_STAGE_ID),
     queue: PIPELINE_QUEUE_NAMES[0],
     entityTypes: ['file'],
     source: {
@@ -116,12 +126,23 @@ function makeRegistry(stage: StageLike | Error = validStage()) {
  * enough for the caller to accept either.
  */
 async function importRegistryWith(
-  versions: Record<string, number>,
+  versions: Record<string, StageVersion>,
 ): Promise<{ threwOnImport: boolean; module?: Record<string, unknown> }> {
   let outcome: { threwOnImport: boolean; module?: Record<string, unknown> } = { threwOnImport: false };
 
   await jest.isolateModulesAsync(async () => {
-    jest.doMock('../../versions', () => ({ STAGE_VERSIONS: versions }));
+    // `stageVersion` is mocked alongside the map because `StageRegistry` reads
+    // versions through it, never by indexing — a declared version may be a
+    // thunk. The stand-in resolves the union the same way the real one does,
+    // minus the integer guard, which `versions.ts` owns and tests.
+    jest.doMock('../../versions', () => ({
+      STAGE_VERSIONS: versions,
+      stageVersion: (stageId: string) => {
+        const declared = versions[stageId];
+
+        return typeof declared === 'function' ? declared() : declared;
+      },
+    }));
     try {
       outcome = { threwOnImport: false, module: (await import('../StageRegistry')) as never };
     } catch {
@@ -183,14 +204,22 @@ describe('STAGE_REGISTRY declaration', () => {
     expect(new Set(bindings).size).toBe(bindings.length);
   });
 
-  it('declares a positive integer version for every stage', () => {
+  it('resolves a positive integer version for every stage, literal or derived', () => {
     // Versions are monotonic and never rolled back: a rollback would leave
     // already-processed rows looking stale-forward and re-run the corpus.
+    //
+    // Through `stageVersion()`, so a DERIVED version is held to the identical
+    // standard as a typed one. `index.embed`'s version is a function of the
+    // configured embedding model, and arithmetic is exactly as capable of
+    // producing 0 or a fraction as a typo is — more so, because nobody reads it.
     for (const stageId of Object.keys(REGISTRY)) {
-      expect(Number.isInteger(VERSIONS[stageId])).toBe(true);
-      expect(VERSIONS[stageId]).toBeGreaterThanOrEqual(1);
+      const resolved = stageVersion(stageId);
+
+      expect(Number.isInteger(resolved)).toBe(true);
+      expect(resolved).toBeGreaterThanOrEqual(1);
     }
   });
+
 });
 
 describe('STAGE_REGISTRY boot-time completeness guard', () => {
@@ -198,6 +227,25 @@ describe('STAGE_REGISTRY boot-time completeness guard', () => {
     const outcome = await importRegistryWith(VERSIONS);
 
     expect(outcome.threwOnImport).toBe(false);
+    const guard = guardOf(outcome.module as Record<string, unknown>);
+    if (guard !== undefined) {
+      expect(guard).not.toThrow();
+    }
+  });
+
+  it('is indifferent to whether a version is declared as a literal or a thunk', async () => {
+    // Completeness is about KEYS. A value may be an integer a human bumps or a
+    // thunk deriving one (`index.embed`, from the embedding model), and the
+    // guard must not acquire an opinion about which — or the union would buy a
+    // complete declaration at the price of an unenforced one.
+    const asThunks: Record<string, StageVersion> = Object.fromEntries(
+      Object.keys(VERSIONS).map((stageId) => [stageId, () => stageVersion(stageId)]),
+    );
+
+    const outcome = await importRegistryWith(asThunks);
+
+    expect(outcome.threwOnImport).toBe(false);
+
     const guard = guardOf(outcome.module as Record<string, unknown>);
     if (guard !== undefined) {
       expect(guard).not.toThrow();
@@ -242,6 +290,22 @@ describe('StageRegistry.get', () => {
     expect(registry.get(SAMPLE_STAGE_ID)).toBe(stage);
   });
 
+  it.each(Object.keys(REGISTRY))(
+    'resolves %s against the version STAGE_VERSIONS actually declares',
+    (stageId) => {
+      // Every real stage id, not just the sample, because the version check is
+      // the one that has to cope with both halves of the union. A registry that
+      // compared `stage.version` to the RAW map entry would pass for every
+      // literal-versioned stage and fail for every derived one — which is
+      // exactly the shape of bug that hides until the first sweep of the one
+      // stage nobody tested this way.
+      const stage = validStage({ id: stageId, version: stageVersion(stageId) });
+      const { registry } = makeRegistry(stage);
+
+      expect(registry.get(stageId)).toBe(stage);
+    },
+  );
+
   it('resolves each stage once and caches it', () => {
     const { registry, moduleRef } = makeRegistry();
 
@@ -277,7 +341,7 @@ describe('StageRegistry.get', () => {
   it('rejects a stage whose version disagrees with STAGE_VERSIONS', () => {
     // If the stage can hardcode its own version, bumping the constant stops
     // re-processing anything — the one operation this subsystem exists for.
-    const { registry } = makeRegistry(validStage({ version: VERSIONS[SAMPLE_STAGE_ID] + 41 }));
+    const { registry } = makeRegistry(validStage({ version: stageVersion(SAMPLE_STAGE_ID) + 41 }));
 
     expect(() => registry.get(SAMPLE_STAGE_ID)).toThrow();
   });
