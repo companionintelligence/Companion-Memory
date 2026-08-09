@@ -33,9 +33,18 @@
       "caption": "The deal every assistant asks you to make.",
       "narration": "An assistant is only useful if it remembers you. Where you live. Who your doctor is. When the house is empty.",
       "items": [
-        { "label": "Home", "value": "where you live" },
-        { "label": "Health", "value": "who your doctor is" },
-        { "label": "Calendar", "value": "when the house is empty" }
+        {
+          "label": "Home",
+          "value": "where you live"
+        },
+        {
+          "label": "Health",
+          "value": "who your doctor is"
+        },
+        {
+          "label": "Calendar",
+          "value": "when the house is empty"
+        }
       ]
     },
     {
@@ -48,9 +57,18 @@
       "caption": "Most people quietly stop telling it the truth.",
       "narration": "And all of that gets remembered on a machine you will never see. So most people quietly stop telling it the truth.",
       "items": [
-        { "label": "The hardware", "value": "someone else's" },
-        { "label": "The terms", "value": "someone else's" },
-        { "label": "The off switch", "value": "someone else's" }
+        {
+          "label": "The hardware",
+          "value": "someone else's"
+        },
+        {
+          "label": "The terms",
+          "value": "someone else's"
+        },
+        {
+          "label": "The off switch",
+          "value": "someone else's"
+        }
       ]
     },
     {
@@ -79,8 +97,18 @@
           "motion": "drift-down",
           "_focusNote": "NOT A CAPTURE. This plate is Companion Intelligence's own artwork from ci.computer/memory (`CI-graphic-CollectDigitalTraces`), composited onto the kit's ground colour #041620 at each viewport's native plate size — 3840x2160 and 1080x1920 — so it is never stretched out of its 1:1 aspect. It lives under assets/shots/ because `shotPath` is the only full-frame image slot the grammar has; see video/README.md § 'The two graphic plates' and the GRAPHIC_SHOTS list in video/make.sh, which excludes it from the capture-pass guard for that reason.\n\nfocus is the full plate (w 1, h 1) ON PURPOSE: that asks for coverScale exactly, which drops the browser card and its chrome and makes the artwork the frame from the first frame to the last. A graphic wearing browser chrome would read as a screenshot of a web page, which it is not. drift-down rather than push-in for the same reason — with `focus` a push-in STARTS at rest, i.e. on the card, and this shot must never show one. At coverScale there is no headroom to drift, so the kit degrades it to an 8% push and says so in the build log; that is the intended move, not a fallback.\n\nThe subject is composed into the upper 74% of both plates because the caption scrim owns roughly the bottom quarter of a full-bleed frame.",
           "focus": {
-            "landscape": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 },
-            "portrait": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }
+            "landscape": {
+              "x": 0,
+              "y": 0,
+              "w": 0.8,
+              "h": 0.8
+            },
+            "portrait": {
+              "x": 0,
+              "y": 0,
+              "w": 0.8,
+              "h": 0.8
+            }
           }
         }
       ]
@@ -101,20 +129,41 @@
           "motion": "push-in",
           "_focusNote": "The first product frame in the film, and the first thing that has to stop looking like the two title cards before it. At rest this shot is the fleet's default composition — a browser window floating on a dark field — and the craft audit counted 21 of 30 sampled frames in the old cut as exactly that. So the move ends full-bleed on the provider grid: the Microsoft, Google and Meta cards are the only saturated colour anywhere in this product, and at 1.5x they fill the frame with four blocks of blue, violet and green. It is the largest single change of register in the cut and it is bought with a rectangle, not a re-shoot.\n\nThe rectangle keeps the 'Pull your email and calendar in automatically' sub-heading and the whole top row INCLUDING each card's caption line, because those captions are what verifies the narration: Google's reads 'Gmail, Calendar, Drive, Photos, and YouTube', which is the sentence's 'mail, calendar and photos' printed on screen. Framing tighter on the logos alone would have made the line unsupported by its own frame.\n\nLANDSCAPE ONLY. On a phone the six cards stack full-width, so a portrait rectangle could only ask for full-bleed and would buy nothing over the legacy move.",
           "focus": {
-            "landscape": { "x": 0.07, "y": 0.12, "w": 0.86, "h": 0.56 }
+            "landscape": {
+              "x": 0.056,
+              "y": 0.051,
+              "w": 0.688,
+              "h": 0.538
+            }
           },
           "capture": {
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Time and place\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Connect a source\")" }
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Time and place\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"What should we focus on?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Who are you usually around?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Connect a source\")"
+              }
             ],
             "settle": 400
           }
@@ -139,7 +188,9 @@
           "capture": {
             "path": "/memory?view=list",
             "waitFor": "div[role=\"button\"]",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -161,17 +212,33 @@
           "motion": "push-in",
           "_focusNote": "The best beat the old cut had, kept exactly as it was framed, because a rectangle this hard-won should survive a rewrite. The narration promises 'what happened, where it happened, and exactly when', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the three things the line names.\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden. RE-CHECKED against a focus-preview end frame and the rendered cut: agreed, keep it.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
           "focus": {
-            "landscape": { "x": 0.28, "y": 0.14, "w": 0.72, "h": 0.72 },
-            "portrait": { "x": 0.0, "y": 0.03, "w": 1.0, "h": 0.9 }
+            "landscape": {
+              "x": 0.224,
+              "y": 0.112,
+              "w": 0.576,
+              "h": 0.576
+            },
+            "portrait": {
+              "x": 0,
+              "y": 0.015,
+              "w": 0.8,
+              "h": 0.738
+            }
           },
           "capture": {
             "path": "/memory?view=list&includedEntityTypes=Event",
             "waitFor": "div[role=\"button\"]",
             "before": [
-              { "click": "div[role=\"button\"] >> nth=0" },
-              { "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]" }
+              {
+                "click": "div[role=\"button\"] >> nth=0"
+              },
+              {
+                "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]"
+              }
             ],
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 700
           }
         }
@@ -193,12 +260,19 @@
           "motion": "pull-back",
           "_focusNote": "The only pull-back in the film, and the reason it is here rather than anywhere else: this is the one beat whose sentence has a direction. The shot OPENS tight enough that the query 'coffee' in the search field and the first six matched rows are legible, then reveals the rest of the store around them — the answer first, the haystack second, which is the order the line asks a question in.\n\nThe rectangle starts at x 0.17 so the left nav rail and the year-heatmap column stay out of the opening frame; they are furniture, and at 1.5x they would be the first thing read. max(w,h) is 0.83, which puts the opening scale at about 1.55x — comfortably inside MAX_SCALE, so the rectangle is honoured rather than clamped, and a pull-back that starts at a clamped scale is a pull-back from somewhere the author did not choose.\n\nLANDSCAPE ONLY: the phone capture has no separate search column to open on.",
           "focus": {
-            "landscape": { "x": 0.17, "y": 0.0, "w": 0.83, "h": 0.55 }
+            "landscape": {
+              "x": 0.136,
+              "y": 0,
+              "w": 0.664,
+              "h": 0.538
+            }
           },
           "capture": {
             "path": "/memory?view=list&search=coffee",
             "waitFor": "div[role=\"button\"]",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -220,7 +294,12 @@
           "motion": "push-in",
           "_focusNote": "At rest this is another window on a dark field and the node labels are unreadable. The rectangle ends on the core of the constellation — John Smith and the first ring of people and topics around him — at about 2.2x, which is where the labels become words instead of texture. Centred on (0.55, 0.49) because that is where the force layout settles this seed, not on the geometric middle of the plate.\n\nTHIS SHOT DRIFTS BETWEEN RE-SEEDS. The force graph has no fixed layout, so the node positions move on any re-capture and this rectangle points at a slightly different part of the cloud each time — video/README.md lists it as one of the two documented drift shots. It is framed loosely enough (0.58 of the plate) to survive that; a tighter crop on one named node would be a rectangle that silently rots.\n\nLANDSCAPE ONLY. The mobile graph is already near-full-width.",
           "focus": {
-            "landscape": { "x": 0.26, "y": 0.2, "w": 0.58, "h": 0.58 }
+            "landscape": {
+              "x": 0.171,
+              "y": 0.123,
+              "w": 0.538,
+              "h": 0.538
+            }
           },
           "capture": {
             "path": "/memory?view=graph",
@@ -230,7 +309,9 @@
                 "eval": "() => { const HEADER = 64; const s = [...document.querySelectorAll('svg')].sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0]; if (!s) return; const r = s.getBoundingClientRect(); const d = Math.max(0, r.top - HEADER); if (d < 1) return; let el = s.parentElement; while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)) el = el.parentElement; if (el) el.scrollTop += d; }"
               }
             ],
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 2500
           }
         }
@@ -252,12 +333,19 @@
           "motion": "drift-down",
           "_focusNote": "The claim is that the appliance NOTICED something, so the frame has to show a thing it noticed rather than a page of cards. The rectangle lands on the first two summaries, which puts 'Oil change due soon for your Honda Accord (last service ~4,900 miles ago)' at a size a viewer can actually read — and that sentence is the whole argument for this beat.\n\ndrift-down rather than push-in because two stacked cards is a column, and a camera that travels down a column is reading it. max(w,h) is 0.86, so the scale lands near 1.5x and the second card is still arriving as the move ends.\n\nTHE LINE NAMES THE CADENCE THE FRAME SHOWS, and it took a correction to get there. It read 'Overnight it reads your week' — but the two cards this rectangle frames are both badged HOURLY, so the frame was showing one thing while the voice named another. `backend/apps/summary/src/system_schedules.py` registers three: hourly at `5 * * * *`, daily at `10 0 * * *`, weekly at `15 0 * * MON`. The line now names all three, which is true of the product AND of the two badges in shot.\n\nWho writes these: `summary-service` is a container in this appliance's own compose stack (docker-compose.yml), pointed at the LLM endpoint configured in Settings -> Model, which defaults to Ollama on the host gateway. Hence 'a model you host' rather than 'a model on this machine' — the default is the same box, but the setting can name another one you run, and the narration should be true of both.",
           "focus": {
-            "landscape": { "x": 0.05, "y": 0.14, "w": 0.86, "h": 0.52 }
+            "landscape": {
+              "x": 0.04,
+              "y": 0.051,
+              "w": 0.688,
+              "h": 0.538
+            }
           },
           "capture": {
             "path": "/insights",
             "waitFor": "h2:has-text(\"Insights & Summaries\")",
-            "mask": ["time"],
+            "mask": [
+              "time"
+            ],
             "settle": 600
           }
         }
@@ -278,8 +366,18 @@
           "motion": "drift-down",
           "_focusNote": "NOT A CAPTURE — the same arrangement as `graphic-traces`, and the same reasons. This is the explainer from the 2026 Q3 Companion Intelligence short deck, the one ci.computer/memory publishes under 'How does Companion Memory work?'. It is composited on #041620 at 3840x2160 and 1080x1920 rather than scaled into the 16:9 shot slot, because the source is 2500x1236 (2.02:1) and the slot would have stretched it.\n\nWHAT EACH VIEWPORT CAN ACTUALLY READ, because the line has to be true of both: in landscape the whole diagram is legible down to the box labels — PERSON, PLACE, THING, CONTENT, EVENT, SPACE and FT SEARCH / RELATIONS / GRAPH / VECTOR, which is exactly what the narration names. In portrait the plate is 1060px wide and the three panel headings (INPUT SURFACES, DIGITAL MEMORY, AGENTS) plus the box labels still read, but the smallest type is texture. The caption names the three panels for that reason: it is the claim both cuts can carry.",
           "focus": {
-            "landscape": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 },
-            "portrait": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }
+            "landscape": {
+              "x": 0,
+              "y": 0,
+              "w": 0.8,
+              "h": 0.8
+            },
+            "portrait": {
+              "x": 0,
+              "y": 0,
+              "w": 0.8,
+              "h": 0.8
+            }
           }
         }
       ]
@@ -295,9 +393,18 @@
       "caption": "The agents you already use, on a memory that is yours.",
       "narration": "Which is why the agents you already use plug straight into it, over one MCP server that answers only to you.",
       "items": [
-        { "label": "MCP server", "value": "companion-memory" },
-        { "label": "Speaks to", "value": "Claude, Codex, OpenCode" },
-        { "label": "And to", "value": "Hermes, OpenClaw, NanoClaw" }
+        {
+          "label": "MCP server",
+          "value": "companion-memory"
+        },
+        {
+          "label": "Speaks to",
+          "value": "Claude, Codex, OpenCode"
+        },
+        {
+          "label": "And to",
+          "value": "Hermes, OpenClaw, NanoClaw"
+        }
       ]
     },
     {
@@ -316,23 +423,53 @@
           "motion": "push-in",
           "_focusNote": "The rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in the film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.",
           "focus": {
-            "landscape": { "x": 0.17, "y": 0.26, "w": 0.66, "h": 0.66 },
-            "portrait": { "x": 0.03, "y": 0.06, "w": 0.94, "h": 0.8 }
+            "landscape": {
+              "x": 0.131,
+              "y": 0.203,
+              "w": 0.538,
+              "h": 0.538
+            },
+            "portrait": {
+              "x": 0.024,
+              "y": 0,
+              "w": 0.752,
+              "h": 0.738
+            }
           },
           "capture": {
             "path": "/onboarding",
             "waitFor": "button:has-text(\"Next\")",
             "before": [
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Time and place\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"What should we focus on?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Who are you usually around?\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"Connect a source\")" },
-              { "click": "button:has-text(\"Next\")" },
-              { "waitFor": "h1:has-text(\"How much trust?\")" }
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Time and place\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"What should we focus on?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Who are you usually around?\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"Connect a source\")"
+              },
+              {
+                "click": "button:has-text(\"Next\")"
+              },
+              {
+                "waitFor": "h1:has-text(\"How much trust?\")"
+              }
             ],
             "settle": 400
           }
@@ -349,10 +486,22 @@
       "caption": "We don't collect your context.",
       "narration": "Local database. Local models. No account, and nothing to cancel.",
       "items": [
-        { "label": "Store", "value": "Postgres + pgvector" },
-        { "label": "Models", "value": "Ollama, on hardware you run" },
-        { "label": "Your records", "value": "stay on your hardware" },
-        { "label": "Monthly fee", "value": "$0" }
+        {
+          "label": "Store",
+          "value": "Postgres + pgvector"
+        },
+        {
+          "label": "Models",
+          "value": "Ollama, on hardware you run"
+        },
+        {
+          "label": "Your records",
+          "value": "stay on your hardware"
+        },
+        {
+          "label": "Monthly fee",
+          "value": "$0"
+        }
       ]
     },
     {
