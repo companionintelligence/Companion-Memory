@@ -39,7 +39,9 @@ export function expandActiveJobDistribution(
   activeDistribution: ReadonlyArray<{ readonly jobName: string; readonly count: number }>,
   smartRotationDistribution: ReadonlyArray<{ readonly workType: string; readonly count: number }>,
 ): Array<{ jobName: string; count: number }> {
-  const alreadySplit = activeDistribution.some((segment) => segment.jobName.startsWith('smart.rotation.work · '));
+  const alreadySplit = activeDistribution.some((segment) =>
+    segment.jobName.startsWith('smart.rotation.work · '),
+  );
 
   if (alreadySplit) {
     return activeDistribution.map((segment) => ({
@@ -48,7 +50,9 @@ export function expandActiveJobDistribution(
     }));
   }
 
-  const withoutLumpedRotation = activeDistribution.filter((segment) => segment.jobName !== 'smart.rotation.work');
+  const withoutLumpedRotation = activeDistribution.filter(
+    (segment) => segment.jobName !== 'smart.rotation.work',
+  );
   const rotationSlices =
     smartRotationDistribution.length > 0
       ? smartRotationDistribution.map((item) => ({

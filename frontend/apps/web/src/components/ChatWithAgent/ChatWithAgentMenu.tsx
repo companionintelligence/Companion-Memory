@@ -80,12 +80,7 @@ export function ChatWithAgentMenu({ context, size = 'icon', className }: Props) 
   return (
     <DropdownMenu modal={false}>
       <DropdownMenu.Trigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={className}
-          aria-label={`Chat about ${context.title}`}
-        >
+        <Button variant="ghost" size="icon" className={className} aria-label={`Chat about ${context.title}`}>
           <MessagesSquare className="h-3.5 w-3.5" strokeWidth={1.5} />
         </Button>
       </DropdownMenu.Trigger>

@@ -149,70 +149,70 @@ function CandidateCard({
           'pointer-coarse:pointer-events-auto pointer-coarse:opacity-100',
         )}
       >
-          {onPersonalize && (
-            <Tooltip>
-              <Tooltip.Trigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  aria-label={`Personalize ${candidate.title}`}
-                  disabled={personalizing}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPersonalize(candidate);
-                  }}
-                >
-                  {personalizing ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
-                  )}
-                </Button>
-              </Tooltip.Trigger>
-              <Tooltip.Content side="top">How you’d do it</Tooltip.Content>
-            </Tooltip>
-          )}
-
-          <ChatWithAgentMenu
-            context={{
-              title: candidate.title,
-              body: rationale,
-              sourceKind: 'schedule-candidate',
-              sourceId: candidate.id,
-            }}
-            className="h-6 w-6"
-          />
-
+        {onPersonalize && (
           <Tooltip>
             <Tooltip.Trigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
-                aria-label={`Snooze ${candidate.title}`}
-                onClick={() => onSnooze(candidate.id, new Date(Date.now() + SNOOZE_MS))}
+                aria-label={`Personalize ${candidate.title}`}
+                disabled={personalizing}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPersonalize(candidate);
+                }}
               >
-                <Clock className="h-3.5 w-3.5" strokeWidth={1.5} />
+                {personalizing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
+                )}
               </Button>
             </Tooltip.Trigger>
-            <Tooltip.Content side="top">Not today</Tooltip.Content>
+            <Tooltip.Content side="top">How you’d do it</Tooltip.Content>
           </Tooltip>
+        )}
 
-          <Tooltip>
-            <Tooltip.Trigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                aria-label={`Dismiss ${candidate.title}`}
-                onClick={() => onDecline(candidate.id, 'never')}
-              >
-                <X className="h-3.5 w-3.5" strokeWidth={1.5} />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content side="top">Never suggest this</Tooltip.Content>
-          </Tooltip>
+        <ChatWithAgentMenu
+          context={{
+            title: candidate.title,
+            body: rationale,
+            sourceKind: 'schedule-candidate',
+            sourceId: candidate.id,
+          }}
+          className="h-6 w-6"
+        />
+
+        <Tooltip>
+          <Tooltip.Trigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label={`Snooze ${candidate.title}`}
+              onClick={() => onSnooze(candidate.id, new Date(Date.now() + SNOOZE_MS))}
+            >
+              <Clock className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content side="top">Not today</Tooltip.Content>
+        </Tooltip>
+
+        <Tooltip>
+          <Tooltip.Trigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label={`Dismiss ${candidate.title}`}
+              onClick={() => onDecline(candidate.id, 'never')}
+            >
+              <X className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content side="top">Never suggest this</Tooltip.Content>
+        </Tooltip>
       </div>
 
       {/* The because. Nothing on this list appears without one. */}
