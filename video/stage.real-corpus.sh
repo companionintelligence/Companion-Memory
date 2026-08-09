@@ -297,7 +297,14 @@ stage_shots() {
   cd "$REPO_ROOT/video"
   [ -d node_modules/playwright ] || die "playwright not installed here — see video/README.md"
   say "capturing: $AGGREGATE_SHOTS"
-  APP_URL="http://localhost:$WEB_PORT" npm run capture -- --only "$AGGREGATE_SHOTS"
+  # Through video/kit.sh, which runs the kit off the CI-Common checkout on disk.
+  # This was `npm run capture` until 2026-08-08, back when video/package.json
+  # installed the kit from GitHub Packages; that path is gone, so the npm script
+  # is gone with it and there is nothing named `ci-video` on PATH to fall back
+  # to. kit.sh announces which kit answered but does not refuse a stale one —
+  # the shots this produces are reviewed by hand against the aggregate-only rule
+  # before they are committed, which is the check that matters here.
+  APP_URL="http://localhost:$WEB_PORT" "$REPO_ROOT/video/kit.sh" capture --only "$AGGREGATE_SHOTS"
   warn "now OPEN every changed PNG and check it against the aggregate-only rule before committing"
   git -C "$REPO_ROOT" status --porcelain video/assets/shots/ || true
 }

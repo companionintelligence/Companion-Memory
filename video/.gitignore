@@ -11,9 +11,11 @@ build/
 
 node_modules/
 
-# `make.sh` runs `npm install` here on every capture, which regenerates this.
-# The versions that matter are pinned in package.json; a lockfile committed from
-# whichever machine last filmed is churn, not a record.
+# There is no `npm install` in here any more — make.sh installs the one pinned
+# dependency (playwright) through a scratch project and copies it in, and the
+# kit is run off the CI-Common checkout on disk rather than installed. Nothing
+# should write a lockfile here, and one committed from whichever machine last
+# filmed would be churn, not a record.
 package-lock.json
 
 # NOT ignored, on purpose: assets/shots/*.png and assets/audio/*.mp3.

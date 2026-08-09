@@ -7,28 +7,26 @@
 #   ./video/make.sh --only <id>     re-shoot a single shot by id
 #   ./video/make.sh --keep-up       leave the stage running when it finishes
 #
-# video/out/ is gitignored — an MP4 is a build artifact, re-rendered on demand.
-# video/assets/shots/ is NOT: the screenshots are committed inputs, so anyone can
-# render a cut without standing up the whole appliance. Re-running capture
-# therefore EDITS TRACKED FILES; check `git diff --stat video/assets/shots/`
-# afterwards, and expect the two documented drift shots (the activity-timeline
-# rail and the force-graph layout) to move on any re-seed.
+# The rendered cut lands in video/out/, which is gitignored — a video is a build
+# artifact, rendered on demand. The screenshots land in video/assets/shots/ and
+# ARE committed: without them a checkout cannot render at all. Re-capture and
+# commit them whenever you change a screen the video covers.
 #
-# ⚠️ THIS COPY IS NOT THE GENERIC make.sh. Everywhere else in the fleet this file
-# is identical across repos and all repo-specific logic lives in video/stage.sh.
-# Companion Memory needs TWO real departures, and they are the only two:
+# THIS FILE IS GENERIC — it is the same in every product repo. Everything
+# repo-specific lives in video/stage.sh, which defines stage_up and stage_down.
 #
-#   1  capture runs THREE times, under two different identities, because
-#      `ci-video capture` shares one browser context per viewport and cannot be
-#      signed in and signed out at once. See the capture section below.
-#   2  video-kit is installed from the private GitHub Packages registry, not
-#      resolved from a CI-Common checkout on disk. So the generic file's
-#      `── which kit answered ──` staleness guard does not apply here — there is
-#      no working tree to be stale — and this file carries the registry-shaped
-#      equivalent instead: an exact pin, a resolution check, and the same
-#      announcement. Do NOT reconcile that block against the generic one.
+# THE CANONICAL COPY is @companionintelligence/video-kit's template/make.sh, and
+# every repo's video/make.sh is a byte-identical copy of it. Fix bugs in the kit
+# and roll the change out; editing a repo copy is how the copies drift — which is
+# how six repos ended up running five different runners, four of them with a
+# Playwright guard that checked the wrong thing, and how the stale-kit guard
+# below came to live in seven repo copies for a day before it existed in the kit
+# at all. To see what a repo has diverged by, from the repo root:
 #
-# Port any other change to this file from the generic one.
+#   diff video/make.sh <CI-Common>/packages/video-kit/template/make.sh
+#
+# A healthy repo prints nothing. This paragraph is worded to be true read from
+# either place, because it is the same bytes in both.
 #
 set -euo pipefail
 
@@ -85,16 +83,126 @@ if [ "$RENDER" = 1 ]; then
   command -v ffprobe >/dev/null || die "ffprobe not found — 'brew install ffmpeg', or use --no-render"
 fi
 
-# @companionintelligence/video-kit is a private GitHub Packages package, so the
-# install needs a token. Locally that comes from the gh CLI rather than a CI
-# secret; video/.npmrc reads it out of NODE_AUTH_TOKEN and nothing is written to
-# disk.
-if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-  command -v gh >/dev/null || die "gh not found — needed for the video-kit token, or export NODE_AUTH_TOKEN yourself"
-  gh auth status >/dev/null 2>&1 || die "gh is not logged in — run: gh auth login"
-  NODE_AUTH_TOKEN="$(gh auth token)"
-  export NODE_AUTH_TOKEN
+# video-kit comes off the CI-Common checkout on disk, NOT the package registry.
+# The package is private, so a registry install needs a token; running the kit's
+# bin directly removes authentication from the local path entirely. Same
+# resolution CI-Engineering's tools/make-videos.mjs uses, so both runners agree
+# on which kit is in play.
+KIT_REL="CI-Common/packages/video-kit/bin/ci-video.mjs"
+KIT=""
+if [ -n "${CI_WORKSPACE:-}" ]; then
+  KIT="$CI_WORKSPACE/$KIT_REL"
+else
+  # Walk UP looking for the workspace, rather than assuming it is the parent
+  # directory. This checkout may be a git worktree (../ is .worktrees/) or a
+  # nested clone, and in both cases the sibling-directory guess is wrong.
+  d="$REPO_ROOT"
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/$KIT_REL" ]; then KIT="$d/$KIT_REL"; break; fi
+    d="$(dirname "$d")"
+  done
 fi
+[ -n "$KIT" ] && [ -f "$KIT" ] || die "video-kit not found (looked for */$KIT_REL above $REPO_ROOT)
+     Clone CI-Common into the workspace, or set CI_WORKSPACE to the directory holding it."
+
+# ── which kit answered ───────────────────────────────────────────────────────
+# That resolution above lands on a WORKING TREE, and a working tree is whatever
+# branch someone left it on. CI-Engineering's tools pinned their half of this
+# (they export the kit from origin/<default> and print which one answered); this
+# half was never pinned, so `bash video/make.sh` silently captured and built with
+# whatever the shared CI-Common clone happened to be checked out at.
+#
+# Not hypothetical. On 2026-08-05 that clone sat at video-kit 0.1.2 while
+# origin/main carried 0.2.0 with a repainted brand: six products were re-rendered
+# specifically to pick the repaint up and came out byte-identical. It was still
+# open on 2026-08-06, by then 0.1.2 against 0.7.0. A stale kit is invisible by
+# nature — the run reports success either way — so the only thing that makes it
+# visible is printing it, and the only thing that stops it is refusing.
+#
+# Announce always; refuse when the tree is behind origin or dirty. Same shape and
+# vocabulary as `kitLabel` in CI-Engineering tools/lib/workspace.mjs, so the two
+# halves of the pipeline report identically.
+KIT_ROOT="${KIT%/bin/ci-video.mjs}"
+KIT_REPO_DIR="${KIT%/packages/video-kit/bin/ci-video.mjs}"
+KIT_VERSION="$(node -p "require('$KIT_ROOT/package.json').version" 2>/dev/null || echo unknown)"
+
+kit_git() { git -C "$KIT_REPO_DIR" "$@" 2>/dev/null; }
+
+KIT_NOTES=()
+KIT_STALE=0
+
+if kit_git rev-parse --git-dir >/dev/null; then
+  # Always fetch before asserting branch state: a stale origin ref reports a
+  # current tree as behind, or worse, a behind tree as current.
+  kit_git fetch --quiet origin || warn "could not fetch CI-Common — the comparison below may itself be stale"
+
+  KIT_DEFAULT="$(kit_git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')"
+  [ -n "$KIT_DEFAULT" ] || KIT_DEFAULT=main
+  KIT_BRANCH="$(kit_git symbolic-ref --short HEAD || echo "")"
+  if [ -n "$KIT_BRANCH" ]; then
+    KIT_WHERE="on $KIT_BRANCH"
+  else
+    KIT_BRANCH="$(kit_git rev-parse --short HEAD || echo unknown)"
+    KIT_WHERE="detached at $KIT_BRANCH"
+  fi
+
+  [ "$KIT_BRANCH" = "$KIT_DEFAULT" ] || KIT_WHERE="$KIT_WHERE, not $KIT_DEFAULT"
+  KIT_NOTES+=("$KIT_WHERE")
+
+  # Behind-ness is measured over packages/video-kit only. CI-Common carries far
+  # more than the kit, and blocking a capture because an unrelated package moved
+  # would train everyone to set the override permanently.
+  KIT_BEHIND="$(kit_git rev-list --count "HEAD..origin/$KIT_DEFAULT" -- packages/video-kit || echo 0)"
+  if [ "${KIT_BEHIND:-0}" -gt 0 ]; then
+    KIT_NOTES+=("$KIT_BEHIND commit(s) behind origin/$KIT_DEFAULT under packages/video-kit")
+    KIT_STALE=1
+  fi
+
+  if [ -n "$(kit_git status --porcelain -- packages/video-kit)" ]; then
+    KIT_NOTES+=("uncommitted changes under packages/video-kit")
+    KIT_STALE=1
+  fi
+else
+  KIT_NOTES+=("not a git checkout — provenance unknown")
+  KIT_STALE=1
+fi
+
+# Joined by hand: "${arr[*]}" separates on the FIRST character of IFS only, so
+# IFS=', ' silently yields "a,b" rather than "a, b".
+KIT_JOINED=""
+for note in "${KIT_NOTES[@]}"; do
+  [ -z "$KIT_JOINED" ] && KIT_JOINED="$note" || KIT_JOINED="$KIT_JOINED, $note"
+done
+KIT_LABEL="video-kit $KIT_VERSION — CI-Common working tree: $KIT_JOINED"
+
+if [ "$KIT_STALE" = 0 ]; then
+  printf '\033[0;2mkit:\033[0m \033[0;32m%s\033[0m\n' "$KIT_LABEL"
+elif [ "${CI_VIDEO_ALLOW_STALE_KIT:-0}" = 1 ]; then
+  # The deliberate opt-out, for testing a kit branch. Allowed, never silent.
+  warn "kit: $KIT_LABEL"
+  warn "proceeding anyway (CI_VIDEO_ALLOW_STALE_KIT=1) — do not commit shots or publish a cut from this run"
+else
+  die "kit: $KIT_LABEL
+
+     This run would capture and build with a kit that is not what origin ships,
+     and would report success either way. Shots are byte-stable only within one
+     kit, so committing them from here rewrites the fleet's record for everyone.
+
+     Fix it in a worktree — do NOT switch branches in a shared CI-Common clone,
+     other agents are working there:
+
+       git -C $KIT_REPO_DIR worktree add /tmp/video-kit origin/$KIT_DEFAULT
+       CI_WORKSPACE=... ./video/make.sh
+
+     Or, if you are deliberately testing a kit branch:
+
+       CI_VIDEO_ALLOW_STALE_KIT=1 ./video/make.sh"
+fi
+
+# The one way to invoke the kit. stage.sh uses this too, so a multi-pass
+# capture_all cannot accidentally fall back to the npm script — which would go
+# looking for the private package in the registry and ask for a token.
+kit() { node "$KIT" "$@"; }
 
 # ── the stage ────────────────────────────────────────────────────────────────
 # stage.sh is this repo's own staging, ported from the workflow. It must define:
@@ -131,130 +239,78 @@ stage_up
 # ── capture and render ───────────────────────────────────────────────────────
 cd "$VIDEO_DIR"
 
-say "installing the video toolchain"
-npm install --silent
-
-# ── which kit answered ───────────────────────────────────────────────────────
-# The install above pulls @companionintelligence/video-kit from the private
-# GitHub Packages registry, so this repo has no CI-Common working tree that
-# could be stale. That is why the fleet's stale-kit guard — CI-Common #56, the
-# `── which kit answered ──` block in the generic template/make.sh — was
-# deliberately not ported here: it has nothing to check.
+# Playwright is a PEER dependency on purpose: the kit resolves it from THIS
+# project (capture.mjs loadPlaywright uses createRequire against video/), so each
+# repo pins the version its own e2e suite uses. It is public, so installing it
+# needs no auth.
 #
-# The registry-shaped hazard is the same one wearing different clothes. A
-# floating range means `npm install` resolves whatever the registry's newest
-# matching version is AT THE TIME OF THE RUN, and nothing here ever said which
-# one it got. The kit decides pacing, camera and composition, so a version
-# picked up on its own re-renders the cut and moves the shots — and this repo
-# COMMITS its shots and already carries two documented drift shots (the
-# activity-timeline rail and the force-graph layout). A silent kit change
-# arrives in review looking exactly like a real UI diff, which is the most
-# expensive way there is to discover it.
+# What matters here is the VERSION, not whether the package is importable. Node
+# resolution walks UP from video/, and stage_up has just run `npm ci` at the repo
+# root — whose e2e suite pins a DIFFERENT playwright. So `require.resolve` finds
+# the ROOT copy and succeeds, and a presence-only check skips the pinned install
+# entirely: capture then runs on whatever the root happened to carry.
 #
-# Not hypothetical, and narrower than it first looks — the specifics matter
-# because they say what this guard can and cannot save you from:
-#
-#   * The old spec was `^0.7.0`. On a 0.x version npm's caret pins the MINOR,
-#     so that range is `>=0.7.0 <0.8.0` — it floats across patches only. It
-#     silently moved 0.7.0 -> 0.7.2 when those published on 2026-08-07, one of
-#     which was a PACING change (CI-Common #44). It could never have reached
-#     0.9.1 or 0.10.0, and no range starting `^0.7` ever will.
-#   * The registry carries 0.1.1, 0.1.2 and 0.7.2 — nothing else. Publishing is
-#     driven by a `video-kit-v*` tag, and 0.8.0 through 0.10.0 were released in
-#     CI-Common's package.json but never tagged, so they do not exist to install.
-#
-# So this half of the pipeline is on the 0.7.x line while the eight repos that
-# resolve the kit off disk are on 0.10.0. Announcing the version is what makes
-# that visible; closing it means publishing a tag and re-shooting deliberately,
-# which is its own commit and not this one's business.
-#
-# Pin exactly, verify what resolved, announce it every run. The label uses the
-# same shape and vocabulary as `kitLabel` in CI-Engineering tools/lib/workspace.mjs
-# and the generic make.sh, so both halves of the pipeline report identically and
-# one grep for `^kit:` finds either.
-KIT_NAME="@companionintelligence/video-kit"
-KIT_SPEC="$(node -p "require('./package.json').devDependencies['$KIT_NAME']" 2>/dev/null || echo '')"
-[ -n "$KIT_SPEC" ] && [ "$KIT_SPEC" != "undefined" ] \
-  || die "video/package.json declares no $KIT_NAME devDependency — the kit cannot be pinned"
-
-# The resolved version and the path it came from. The path is what makes a
-# mismatch diagnosable: node resolution walks UP from video/, so a hoisted copy
-# at the repo root can win over video/node_modules. ("./package.json" is in the
-# kit's exports map, so this resolves rather than throwing ERR_PACKAGE_PATH_NOT_EXPORTED.)
-KIT_HAVE="$(node -p "require('$KIT_NAME/package.json').version" 2>/dev/null || true)"
-KIT_FROM="$(node -p "require.resolve('$KIT_NAME/package.json')" 2>/dev/null || true)"
-[ -n "$KIT_HAVE" ] \
-  || die "$KIT_NAME does not resolve from $VIDEO_DIR after 'npm install' — capture cannot run"
-
-# An exact pin is the only spec a string comparison can actually verify. A range
-# is handled deliberately rather than silently: it cannot promise the next run
-# resolves the same build.
-case "$KIT_SPEC" in
-  [0-9]*) KIT_PIN="$KIT_SPEC" ;;
-  *)      KIT_PIN="" ;;
-esac
-
-if [ -n "$KIT_PIN" ] && [ "$KIT_HAVE" != "$KIT_PIN" ]; then
-  die "video-kit version mismatch — refusing to capture.
-     video/package.json pins : $KIT_PIN
-     actually resolved       : $KIT_HAVE
-     resolved from           : $KIT_FROM
-     A shot set is byte-stable only within one kit; building from $KIT_HAVE
-     would re-render the cut and rewrite committed shots that reviewers read as
-     a real UI change. Clear video/node_modules and re-run, or reconcile the pin."
-fi
-
-if [ -n "$KIT_PIN" ]; then
-  printf '\033[0;2mkit:\033[0m \033[0;32m%s\033[0m\n' \
-    "video-kit $KIT_HAVE — GitHub Packages registry: pinned $KIT_PIN"
-else
-  warn "kit: video-kit $KIT_HAVE — GitHub Packages registry: spec '$KIT_SPEC' is a range, not an exact pin.
-     Resolved $KIT_HAVE for this run, but a later run may resolve a different
-     build and re-render every scene. Pin an exact version, then re-shoot
-     deliberately in the same commit."
-fi
-
-# Unlike the generic make.sh, this repo installs Playwright as part of the
-# toolchain above: video/package.json pins it exactly and `npm install` here
-# honours that pin, so there is no separate pinned-install step to run.
-#
-# What is still missing is the CHECK. Node resolution walks UP from video/, and
-# this repo's root devDependencies carry @playwright/test ^1.57.0 — a range that
-# resolves to whatever the root happens to hoist. video/node_modules normally
-# wins, but nothing here has ever verified that it did. A half-finished install,
-# a stale tree, or a future workspace/hoisting change would silently hand
-# capture the root's Playwright instead.
-#
-# That is not cosmetic. Capture is byte-stable only within one resolved
-# Playwright build; shooting on the wrong one rewrites every committed shot by a
-# fraction of a percent of pixels — pure text antialiasing — and arrives in
-# review looking like a real UI change. This repo commits its shots and already
-# has two documented drift shots, so a silent version change is most expensive
-# here of anywhere in the fleet. Verify, and refuse to shoot on a mismatch.
+# That is not a cosmetic difference. Capture is only byte-stable within one
+# resolved Playwright build. Running a shoot on the wrong one rewrites every
+# committed screenshot by a fraction of a percent of pixels — pure text
+# antialiasing — which arrives in review looking like a real UI change. Compare
+# the versions, and refuse to shoot on a mismatch.
 PW_SPEC="$(node -p "require('./package.json').devDependencies.playwright" 2>/dev/null || echo '')"
 [ -n "$PW_SPEC" ] && [ "$PW_SPEC" != "undefined" ] \
   || die "video/package.json declares no playwright devDependency — capture cannot be pinned"
 
-# The resolved version, and the path it came from. The path is what makes a
-# mismatch diagnosable: "1.60.0, from the repo root" rather than a bare "1.60.0".
-PW_HAVE="$(node -p "require('playwright/package.json').version" 2>/dev/null || true)"
-PW_FROM="$(node -p "require.resolve('playwright/package.json')" 2>/dev/null || true)"
-[ -n "$PW_HAVE" ] \
-  || die "playwright does not resolve from $VIDEO_DIR after 'npm install' — capture cannot run"
+# Resolved version, and the path it came from. The path is what makes a mismatch
+# diagnosable: "1.60.0, from the repo root" rather than a bare "1.60.0".
+pw_version() { node -p "require('playwright/package.json').version" 2>/dev/null || true; }
+pw_origin()  { node -p "require.resolve('playwright/package.json')" 2>/dev/null || true; }
 
 # An exact pin is the only spec a string comparison can actually verify, and it
-# is what this repo uses. A range is handled deliberately rather than silently:
-# it cannot promise the next shoot resolves the same build.
+# is what every repo here uses. A range is handled deliberately rather than
+# silently: it is not treated as a match, because it cannot promise the next
+# shoot resolves the same build. See the warning after the install.
 case "$PW_SPEC" in
   [0-9]*) PW_PIN="$PW_SPEC" ;;
   *)      PW_PIN="" ;;
 esac
 
+PW_HAVE="$(pw_version)"
+if [ -n "$PW_PIN" ] && [ "$PW_HAVE" = "$PW_PIN" ]; then
+  say "Playwright $PW_HAVE (matches the pin)"
+else
+  say "installing Playwright $PW_SPEC (resolved here: ${PW_HAVE:-none})"
+  # Installed through a scratch project, NOT `npm install playwright` in here.
+  # Even when told to add one package, npm builds the ideal tree from the whole
+  # of video/package.json — which lists the private video-kit — so it demands a
+  # registry token for a dependency this script deliberately does not use, and
+  # exits 1. Under --silent it does that without printing anything at all.
+  # A throwaway manifest contains only playwright, and playwright is public.
+  _pw_tmp="$(mktemp -d)"
+  ( cd "$_pw_tmp" \
+      && npm init -y >/dev/null 2>&1 \
+      && npm install --silent --no-audit --no-fund "playwright@$PW_SPEC" ) \
+    || { rm -rf "$_pw_tmp"; die "could not install playwright@$PW_SPEC"; }
+
+  # Land it in video/node_modules so video/ wins resolution over the repo root —
+  # that placement is the whole point, not an implementation detail. Only
+  # playwright's own trees are cleared first, so a video/node_modules that
+  # legitimately holds anything else survives intact.
+  mkdir -p node_modules
+  rm -rf node_modules/playwright node_modules/playwright-core
+  cp -R "$_pw_tmp/node_modules/." node_modules/
+  rm -rf "$_pw_tmp"
+
+  PW_HAVE="$(pw_version)"
+  [ -n "$PW_HAVE" ] \
+    || die "playwright still does not resolve from $VIDEO_DIR after installing $PW_SPEC"
+fi
+
+# Loud, not silent: a wrong-version capture is far more expensive to discover in
+# review than a failed run is here.
 if [ -n "$PW_PIN" ] && [ "$PW_HAVE" != "$PW_PIN" ]; then
   die "Playwright version mismatch — refusing to capture.
      video/package.json pins : $PW_PIN
      actually resolved       : $PW_HAVE
-     resolved from           : $PW_FROM
+     resolved from           : $(pw_origin)
      Capture is only byte-stable within one build; shooting on $PW_HAVE would
      rewrite every committed shot with antialiasing noise that reads as a real
      UI diff. Remove that copy or reconcile the pin, then re-run."
@@ -264,152 +320,49 @@ if [ -z "$PW_PIN" ]; then
      Resolved $PW_HAVE for this run, but a later shoot may resolve a different
      build and rewrite every shot. Pin an exact version for byte-stable capture."
 fi
-if [ -n "$PW_PIN" ]; then
-  say "Playwright $PW_HAVE (matches the pin), from $PW_FROM"
-else
-  say "Playwright $PW_HAVE (spec '$PW_SPEC', unpinned), from $PW_FROM"
-fi
 
 say "installing Chromium for Playwright"
-# Idempotent and cached under ~/Library/Caches/ms-playwright, so a no-op after
-# the first run. No --with-deps: that is an apt path and does nothing on macOS.
+# Through the kit, which resolves Playwright the way capture does. NOT
+# `npx --yes playwright install chromium`, which this file used to run.
 #
-# Driven through the Playwright resolved just above, NOT `npx playwright`. npx
-# walks up the same way node does and resolves a BINARY, which is a different
-# lookup from the `require('playwright')` the kit's capture.mjs performs — so it
-# can install the browser build for the root's Playwright rather than the pinned
-# one. The browser must match the Playwright that will actually drive it.
-# `playwright/cli.js` is not in the package's exports map, so the path is derived
-# from the package.json that resolution above already located.
-PW_DIR="$(node -p "require('path').dirname(require.resolve('playwright/package.json'))")"
-node "$PW_DIR/cli.js" install chromium
+# The old line was defended here on the grounds that npx "walks up the same way
+# node does". It does not. npx resolves a BINARY: it looks for a command called
+# `playwright` in node_modules/.bin, walking up — and @playwright/test provides
+# that command too, at whatever version the repo root pins for its e2e suite. If
+# it finds none it downloads the LATEST Playwright from the registry and runs
+# that. The version guard above proves which MODULE resolves; it says nothing
+# about which binary answers, so it could not have covered the difference.
+#
+# Any of those three installs a browser revision belonging to a Playwright that
+# is not the one about to shoot, and capture is byte-stable only within one
+# build: the wrong one rewrites every committed shot with different text
+# antialiasing, which reads in review as a real UI change. `ci-video
+# install-browser` derives the CLI from `require.resolve('playwright')` out of
+# video/ — the same lookup capture.mjs performs — so the browser and the driver
+# are the same installation by construction. It prints both, and says so when a
+# differing binary is on the path.
+kit install-browser
 
-# ── capture: THREE passes, not one ───────────────────────────────────────────
-# This is the one place Companion Memory departs from the generic make.sh, and
-# it is forced by the product, not by taste. `ci-video capture` builds ONE
-# browser context per viewport and shares it across every shot, so a single run
-# is either signed in or signed out — it cannot be both. This storyboard needs
-# two identities:
-#
-#   1   the seeded, already-onboarded jsmith        (everything behind ProtectedRoute)
-#   2-3 a throwaway account, ONE PER SHOT           (onboarding persists progress server-side, so a
-#                                                    shared account resumes mid-wizard and renders a
-#                                                    "Welcome back" banner over the shot)
-#
-# It was FIVE passes until the narrative re-cut. That cut dropped the splash and
-# login scenes, so the signed-out pass has nothing left to shoot and is gone;
-# `/` and `/login` redirect an onboarded user to `/feed`, so were it kept it
-# would need `VIDEO_LOGGED_OUT=1` again. It also dropped `onboarding-focus`,
-# leaving two fresh-account shots rather than three.
-#
-# Every pass is explicitly scoped, including the first: `ci-video capture` exits
-# 1 on any single failure, so an unscoped run would attempt every shot in the
-# storyboard as jsmith, including the two onboarding ones this identity cannot
-# reach, and abort before the passes that could have shot them.
-#
-# ⚠️ THE STORYBOARD NO LONGER REFERENCES EIGHT OF THE COMMITTED SHOTS —
-# splash-screen, login-form, onboarding-focus, feed-overview, memory-map-view,
-# memory-stats, insight-detail-view and connect-providers. Their PNGs are kept
-# (video/README.md § "What is committed": the shot library is an input anyone
-# can render from, and `memory-map-view` cost a 826,478-item real-corpus load),
-# but NOTHING BELOW SHOOTS THEM ANY MORE, because `ci-video capture` can only
-# shoot ids the storyboard declares. They are frozen at whatever the product
-# looked like when they were taken. `memory-map-view` is already stale against
-# CI-Server #1891, which restored the Esri attribution control to `Map.tsx`
-# after that shot was captured — re-shoot it from `video/stage.real-corpus.sh`
-# in the same commit as any scene that brings the map back.
-#
-# The list below used to carry a warning that it was NOT validated against the
-# storyboard and that drift was silent in both directions — which is exactly how
-# #1871 left `people-directory` (deleted from the storyboard) in it while never
-# adding `memory-stats` (added to it), so a "successful" run captured eight
-# shots instead of nine. That warning is now a check: `ci-video capture`
-# implements --only as `shots.filter((s) => only.includes(s.id))`
-# (video-kit src/capture.mjs) — a plain filter, not a lookup — so an id named
-# here that the storyboard does not declare matches nothing and is skipped
-# without a word. Naming every id up front lets us compare the two sets before
-# the stage has cost anybody four minutes.
-AUTHED_SHOTS=memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
-FRESH_SHOTS="onboarding-connect onboarding-trust"
-
-# ── shots that are not captures ──────────────────────────────────────────────
-# Two scenes in this film are Companion Intelligence's OWN ARTWORK from
-# ci.computer/memory rather than pictures of the product: the collect-digital-
-# traces graphic and the architecture explainer out of the 2026 Q3 short deck.
-# `shotPath` — assets/shots/<id>.png — is the only full-frame image slot the
-# scene grammar has, so they live there, and the storyboard declares them as
-# shots. They are NOT capturable: there is no URL to point Playwright at and no
-# product state to reach, and asking capture for them would fail the pass.
-#
-# So they are subtracted from the check below rather than being an exception to
-# it. Naming them here is the point: without this list they would look exactly
-# like a shot somebody forgot to add to a pass, which is the failure the check
-# exists to catch. Re-generate them from video/README.md § "The two graphic
-# plates" if the artwork on the site changes; they are composited at each
-# viewport's native plate size, so they must never be produced by hand-scaling.
-GRAPHIC_SHOTS="graphic-traces graphic-architecture"
-
-# Both directions, and both are fatal. An id named here that the storyboard
-# dropped would be silently skipped; a shot the storyboard declares that no pass
-# names is never requested at all and only surfaces as a missing-shot failure in
-# `check`, several minutes and one stage later.
-requested="$( { echo "$AUTHED_SHOTS" | tr ',' '\n'; echo "$FRESH_SHOTS" | tr ' ' '\n'; } | sed '/^$/d' | sort -u)"
-declared="$(node -p "
-  const sb = require('./storyboard.json');
-  const graphics = new Set('$GRAPHIC_SHOTS'.split(/\s+/).filter(Boolean));
-  [...new Set(sb.scenes.flatMap((s) => (s.shots ?? []).map((h) => h.id)))]
-    .filter((id) => !graphics.has(id))
-    .sort()
-    .join('\n');
-")"
-# A graphic named above that the storyboard no longer uses is its own kind of
-# rot — the plate stays committed and nothing points at it — so say so too.
-for g in $GRAPHIC_SHOTS; do
-  node -p "require('./storyboard.json').scenes.some((s) => (s.shots ?? []).some((h) => h.id === '$g'))" \
-    | grep -q true || die "GRAPHIC_SHOTS names '$g', but no scene in storyboard.json uses it.
-     Either drop it from that list or drop assets/shots/$g{,.mobile}.png with it."
-done
-orphaned="$(comm -23 <(echo "$requested") <(echo "$declared"))"
-unshot="$(comm -13 <(echo "$requested") <(echo "$declared"))"
-[ -z "$orphaned" ] || die "these ids are named in make.sh but not declared in storyboard.json —
-     capture would skip them silently:
-$(echo "$orphaned" | sed 's/^/       /')"
-[ -z "$unshot" ] || die "these shots are declared in storyboard.json but named in no capture pass —
-     they would never be requested, and \`check\` would fail on the slate:
-$(echo "$unshot" | sed 's/^/       /')"
-
-if [ ${#ONLY[@]} -gt 0 ]; then
-  # --only is for re-shooting one shot; the caller owns the identity, so pass
-  # VIDEO_LOGGED_OUT=1 / VIDEO_FRESH_USER=1 in the environment if it needs one.
-  say "capturing (scoped)"
-  npm run capture -- "${ONLY[@]}"
+say "capturing the UI"
+# Some repos cannot capture in one pass — a shot may need a different identity,
+# a different seeded state, or a stage step in between. Those define capture_all
+# in stage.sh and own the whole sequence; everyone else gets the single pass.
+# --only always wins, so re-shooting one shot never re-runs a multi-pass script.
+if declare -f capture_all >/dev/null && [ ${#ONLY[@]} -eq 0 ]; then
+  capture_all
 else
-  say "capturing 1/3 — authenticated (seeded jsmith)"
-  npm run capture -- --only "$AUTHED_SHOTS"
-
-  n=1
-  for shot in $FRESH_SHOTS; do
-    n=$((n + 1))
-    say "capturing $n/3 — fresh account for $shot"
-    VIDEO_FRESH_USER=1 npm run capture -- --only "$shot"
-  done
+  kit capture "${ONLY[@]+"${ONLY[@]}"}"
 fi
 
 say "building the compositions"
-npm run build
+kit build
 
 say "checking them"
-# No --allow-slates any more: all 18 shot files the storyboard needs exist (9
-# shots x 2 viewports — seven captured here, two committed graphic plates), so
-# the missing-shot gate is live. That gate is the only
-# thing standing between this repo and a
-# narrated slideshow of placeholders shipping as a product video — if it starts
-# failing, capture the shot or cut the scene. Do not re-add the flag.
-npm run check
+kit check
 
 if [ "$RENDER" = 1 ]; then
   say "rendering"
-  npm run render
+  kit render
   say "done"
   ls -lh out/*.mp4 2>/dev/null || warn "no mp4 found in video/out/"
 else

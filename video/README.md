@@ -11,7 +11,7 @@ one when you need it, use it, then delete it. What lives in git is the *input* �
 the narration audio, and the screenshots under `assets/shots/`.
 
 > **The storyboard references 9 shots — 18 files — and all of them are committed**, so
-> `npm run check` passes without `--allow-slates`. Seven come from the seeded stack below. **Two are
+> `check` passes without `--allow-slates`. Seven come from the seeded stack below. **Two are
 > not captures at all**: `graphic-traces` and `graphic-architecture` are Companion Intelligence's
 > own artwork from [ci.computer/memory](https://ci.computer/memory) — see
 > [The two graphic plates](#the-two-graphic-plates).
@@ -69,26 +69,34 @@ and no `403` — which is the reason CI never managed to produce a video in the 
 Everything below is what the runner does, spelled out — reach for it when you are debugging a
 single shot rather than building a whole cut.
 
+Every command goes through [`kit.sh`](kit.sh), which runs video-kit out of the CI-Common checkout
+on disk. There is nothing to `npm install` first and no registry token — see
+[Which kit answers, and why it is not installed](#which-kit-answers-and-why-it-is-not-installed).
+
 ```bash
-npm install
-npx playwright install --with-deps chromium
-npm run doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
+./video/kit.sh doctor        # verify node / ffmpeg / playwright / hyperframes / fonts
+./video/kit.sh install-browser
 
 # with the stage up (see below) — three passes, each explicitly scoped:
-npm run capture -- --only memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
-VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-connect
-VIDEO_FRESH_USER=1 npm run capture -- --only onboarding-trust
+./video/kit.sh capture --only memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
+VIDEO_FRESH_USER=1 ./video/kit.sh capture --only onboarding-connect
+VIDEO_FRESH_USER=1 ./video/kit.sh capture --only onboarding-trust
 
-npm run build         # storyboard.json -> build/{landscape,portrait}/index.html
-npm run check         # HyperFrames gate: lint, runtime, layout, motion, contrast
-npm run render        # -> out/ci-memory-landscape.mp4 and out/ci-memory-portrait.mp4
+./video/kit.sh build         # storyboard.json -> build/{landscape,portrait}/index.html
+./video/kit.sh check         # HyperFrames gate: lint, runtime, layout, motion, contrast
+./video/kit.sh render        # -> out/ci-memory-landscape.mp4 and out/ci-memory-portrait.mp4
 ```
+
+> `kit.sh` is the UNGUARDED path — it announces which kit answered but will not refuse a stale
+> CI-Common checkout. `./video/make.sh` does refuse, and is what you should use when the shots are
+> going to be committed. The three capture lines above are exactly what `capture_all` in
+> [`stage.sh`](stage.sh) runs for you.
 
 > **A missing PNG does not fail `build`, but it does fail `check`.** video-kit substitutes a
 > branded "capture pending" slate for any shot whose file is absent (`scenes.mjs` `slateUri`), so
-> `npm run build` still renders green. Since video-kit 0.1.2, `npm run check` fails on missing
+> `build` still renders green. Since video-kit 0.1.2, `check` fails on missing
 > shot files (`--allow-slates` opts out while drafting) — that is the gate that stops a narrated
-> slideshow of placeholders shipping as a product video. `npm run status` lists what is missing.
+> slideshow of placeholders shipping as a product video. `kit.sh status` lists what is missing.
 
 ## The stage
 
@@ -246,7 +254,7 @@ curl -X POST http://127.0.0.1:12009/api/wizard/pipeline/run -H 'Content-Type: ap
 yarn workspace @ci/be-api exec scripts/bulk-load-indexes.ts recreate
 
 # 7. capture, aggregate shots only
-cd video && APP_URL=http://localhost:3201 npm run capture -- --only memory-map-view
+APP_URL=http://localhost:3201 ./video/kit.sh capture --only memory-map-view
 ```
 
 Verified end state: `ci.events` 200,287 · `ci.communications` 293,291 · `ci.content` 190,722 ·
@@ -349,21 +357,20 @@ captions, narration, and which screens appear. The **capture spec for each shot 
 file**, so the script and the screenshots cannot drift apart.
 
 Adding a beat is: add a scene, add its shot's `capture` block, add the shot id to the right pass in
-`video/make.sh` (and the Quick start block above), `./video/make.sh`, then commit the new PNG.
-Forgetting to add it to a pass now fails `make.sh` **before the stage starts**, naming the shot;
-before that guard existed the only signal was `npm run check` failing on a slate, one stage and
-several minutes later.
+`video/stage.sh` (and the Quick start block above), `./video/make.sh`, then commit the new PNG.
+Forgetting to add it to a pass fails **before the stage starts**, naming the shot — `stage_up`
+calls `_verify_shot_lists` first for exactly that reason. Before that guard existed the only signal
+was `check` failing on a slate, one stage and several minutes later.
 
 **Editing a narration line is not free, and it used to look free.** `narrate` leaves an existing
 mp3 alone — deliberately; they are committed and slow to make — so a rewritten line went on
 shipping the old read through `build`, `check` and a full render with nothing to hear it. That is
 what `assets/audio/narration.json` is for: it records the line each mp3 is a read of, so
 `ci-video status` names the drifted scene and prints the old line beside the new one, and
-`ci-video narrate --stale` re-records exactly those. **This needs a kit that has it** — the
-manifest landed in video-kit 0.11.0 and this repo's `video/package.json` pins 0.7.2 from the
-registry, so run those two commands from a CI-Common checkout of the kit the render host actually
-uses (`node <CI-Common>/packages/video-kit/bin/ci-video.mjs status`). See
-[Why video-kit is pinned exactly](#why-video-kit-is-pinned-exactly-and-which-kit-answered).
+`ci-video narrate --stale` re-records exactly those. The manifest landed in video-kit 0.11.0, which
+this repo could not reach while it installed 0.7.2 from the registry; since that path was retired
+`./video/kit.sh status` and `./video/kit.sh narrate --stale` run the kit the render host actually
+uses. See [Which kit answers, and why it is not installed](#which-kit-answers-and-why-it-is-not-installed).
 
 And verify the result by listening to it, not by reading the exit status: **edge-tts exits 0 while
 writing a silent or truncated file.** Transcribing each mp3 back to text and diffing it against the
@@ -430,7 +437,7 @@ and per-scene `prosody` are the levers if the register is wrong.
 
 Drop prepared media into `assets/media/` and point `media.music` at it. Per-scene voiceover is
 picked up automatically from `assets/audio/<sceneId>.mp3`; regenerate it from the storyboard's
-`narration` fields with `npm run narrate`.
+`narration` fields with `./video/kit.sh narrate`.
 
 ## What is committed
 
@@ -451,7 +458,7 @@ shots, no longer in the film.
 **Unreferenced PNGs are kept, and that is a deliberate trade rather than an oversight.** Deleting
 them would throw away a 45-minute, 826,478-item corpus load for the map pair, and the shot library
 is an input anyone can render from — `video/.gitignore` does *not* exclude `assets/shots/`, which
-is deliberate and load-bearing: only a few of the twelve CI products have a working capture stage,
+is deliberate and load-bearing: only a few of the thirteen CI products have a working capture stage,
 so gitignoring the shots would mean nobody but the stage's author could ever render the cut. The
 cost is that an unreferenced shot cannot be re-captured (capture only knows ids the storyboard
 declares) and therefore silently ages. Treat every one of them as **dated 2026-08-07 until
@@ -500,43 +507,52 @@ indistinguishable from a real UI change in review.
 So the range is gone. Re-pin deliberately when you want the newer browser, and re-capture the whole
 shot set in the same commit.
 
-## Why video-kit is pinned exactly, and which kit answered
+## Which kit answers, and why it is not installed
 
-Same argument, one layer up. `video/package.json` pins `@companionintelligence/video-kit` to an
-exact version too, and `make.sh` prints which one actually resolved on every run:
+video-kit is **not** a dependency of this project. It is run out of the CI-Common checkout on disk,
+by [`make.sh`](make.sh) and [`kit.sh`](kit.sh), which is how all thirteen product repos resolve it.
+Both print which one answered, on every run:
 
 ```
-kit: video-kit 0.7.2 — GitHub Packages registry: pinned 0.7.2
+kit: video-kit 0.15.0 — CI-Common working tree: on main
 ```
 
 That line is deliberately the same shape as the one CI-Engineering's `tools/` prints (`kitLabel` in
-[`tools/lib/workspace.mjs`](https://github.com/companionintelligence/CI-Engineering/blob/main/tools/lib/workspace.mjs))
-and the one the generic `make.sh` prints, so both halves of the pipeline report identically and a
-single grep for `^kit:` finds either.
+[`tools/lib/workspace.mjs`](https://github.com/companionintelligence/CI-Engineering/blob/main/tools/lib/workspace.mjs)),
+so both halves of the pipeline report identically and a single grep for `^kit:` finds either.
 
-**This repo is the one that installs the kit from the registry.** The other eight video repos
-resolve it from the CI-Common checkout on disk, so their hazard is a working tree parked on a stale
-branch — that is what the `── which kit answered ──` guard in the generic runner refuses on
-(CI-Common [#56](https://github.com/companionintelligence/CI-Common/pull/56)), and it has nothing to
-check here. The registry hazard is a floating range instead: `npm install` takes the newest matching
-version at the time of the run, the kit decides pacing, camera and composition, and this repo
-commits its shots. A kit that changed on its own re-renders the cut and lands in review looking like
-a real UI diff — next to the two documented drift shots, which is a bad place to have to tell them
-apart.
+**Until 2026-08-08 this repo was the exception**, and it is worth knowing what that cost, because
+the failure was silent for six days. `video/package.json` carried
+`"@companionintelligence/video-kit": "0.7.2"` from GitHub Packages and `make.sh` *enforced* that
+pin. The kit is published by pushing a `video-kit-v*` tag, and between 0.7.2 and 0.15.0 eleven
+versions were released into CI-Common's `package.json` and never tagged — so the registry held
+0.1.1, 0.1.2 and 0.7.2 and **nothing else**. There was no version of this repo's pin that could
+have caught up.
 
-Two details worth knowing before you change the pin, because they are not what you would guess:
+The consequence was not that Companion Memory's film was old. It was that **the film was made by
+two different kits at once**: CI-Engineering's fleet runner composed the cut with whatever
+CI-Common's `origin/main` carried, while `video/make.sh` captured the shots with 0.7.2 — and
+anyone who ran the whole of `make.sh` got a cut composed by 0.7.2, which is a different film from
+every other product's and from the one the gallery scores. Both halves printed a version. Nothing
+compared them.
 
-- **`^0.7.0` floated patches, not minors.** npm's caret pins the minor on `0.x`, so that spec meant
-  `>=0.7.0 <0.8.0`. It did silently move 0.7.0 → 0.7.2 (one of which was a pacing change), but it
-  could never have reached 0.9.1 or 0.10.0.
-- **The registry only carries 0.1.1, 0.1.2 and 0.7.2.** Publishing is driven by a `video-kit-v*`
-  tag; 0.8.0 through 0.10.0 were released in CI-Common's `package.json` but never tagged, so there
-  is nothing to install.
+So the registry path is gone rather than repaired:
 
-So this repo sits on the 0.7.x line while the disk-resolved repos are on 0.10.0. Getting current is
-a deliberate, separate change: tag and publish the kit, bump the pin here, then re-shoot and commit
-the shots in the same commit as the bump — never the bump alone.
+- **What the pin bought, the disk path already provides, and better.** The pin bought an enforced
+  exact kit version. `make.sh` pins to CI-Common `origin/<default>` and refuses outright when the
+  checkout is behind it or dirty under `packages/video-kit` (`CI_VIDEO_ALLOW_STALE_KIT=1` is the
+  deliberate, loud opt-out). That is a stronger guarantee, and it is the same one the other twelve
+  products get.
+- **It cost auth in a path that otherwise needs none.** `video/.npmrc` plus a `gh auth token`
+  fetch, for a private scope, on a machine that has a CI-Common checkout sitting right there.
+  Both are deleted.
 
-There is no lockfile under `video/` and there should not be; `.gitignore` explains why. That
-rationale depends on the pins in `package.json` being exact, which — as of this section — they now
-both are.
+0.15.0 was tagged and published on 2026-08-08 — the registry now holds it, and `ci-video doctor`'s
+`release` check reads green. That publish is provenance: it makes CI-Common's release ledger
+honest. It is **not** how this repo gets its kit, and re-pointing this project at the registry
+would reintroduce exactly the split described above.
+
+`playwright` stays a real, exactly-pinned devDependency — see
+[Why Playwright is pinned exactly](#why-playwright-is-pinned-exactly) above. `make.sh` installs it
+through a scratch project rather than running `npm install` in here, so there is no lockfile under
+`video/` and there should not be; `.gitignore` explains why.

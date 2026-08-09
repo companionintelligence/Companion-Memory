@@ -35,17 +35,20 @@
  * or logged out — it cannot be both. This storyboard needs two identities, in
  * three invocations:
  *
- *   npm run capture -- --only <the five ids below>     # seeded jsmith
- *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-connect
- *   VIDEO_FRESH_USER=1     npm run capture -- --only onboarding-trust
+ *   ./kit.sh capture --only <the five ids below>       # seeded jsmith
+ *   VIDEO_FRESH_USER=1 ./kit.sh capture --only onboarding-connect
+ *   VIDEO_FRESH_USER=1 ./kit.sh capture --only onboarding-trust
  *
  * EVERY pass is explicitly scoped, including the first. `ci-video capture` exits
- * 1 if any single shot fails (bin/ci-video.mjs cmdCapture), so a bare
- * `npm run capture` — which would try all seven shots as jsmith, two of them
+ * 1 if any single shot fails (bin/ci-video.mjs cmdCapture), so an unscoped
+ * capture — which would try all seven shots as jsmith, two of them
  * structurally impossible for that identity — aborts the job before passes 2-3
  * run and leaves assets/shots/ empty. The authoritative list lives in
- * video/make.sh, which now REFUSES TO SHOOT if it and storyboard.json disagree
- * in either direction; video/README.md's Quick start block repeats it. (There
+ * video/stage.sh as `capture_all`, which REFUSES TO SHOOT if it and
+ * storyboard.json disagree in either direction; video/README.md's Quick start
+ * block repeats it. (Those three lines were `npm run capture` until 2026-08-08,
+ * when the kit stopped being installed from the registry here — see
+ * video/README.md § "Which kit answers, and why it is not installed". There
  * is no .github/workflows/video.yml any more — #1853 deleted it and moved the
  * build local; anything this file used to delegate to that job is spelled out
  * here.)
@@ -62,7 +65,7 @@
  *    straight to /feed; it is needed again the moment either scene returns.
  *    feed-overview, memory-stats, insight-detail-view and connect-providers
  *    left the storyboard with it and are now un-shootable — see the ⚠️ block
- *    above AUTHED_SHOTS in video/make.sh.)
+ *    above AUTHED_SHOTS in video/stage.sh.)
  * 2+3. FRESH USER, once per onboarding shot. The seeded user cannot film
  *    onboarding at all: scripts/seed-database/seed-users.ts:41 calls
  *    `userService.onboard(user.id)`, and OnboardingPage.tsx:231-233 returns

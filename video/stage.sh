@@ -2,10 +2,26 @@
 #
 # Companion Memory's capture stage: the whole appliance, not a static front end.
 #
-# Defines stage_up / stage_down for video/make.sh. Ported from
+# Defines stage_up / stage_down / capture_all for video/make.sh. Ported from
 # .github/workflows/e2e.yml, which is the authoritative recipe, plus the parts
 # that only bite on a developer's machine (colima, an exact Node, and three
 # sibling agents holding ports).
+#
+# THIS FILE IS THE ONLY PLACE COMPANION MEMORY DEPARTS FROM THE FLEET.
+# video/make.sh is byte-identical to @companionintelligence/video-kit's
+# template/make.sh, as it is in every other product repo; everything specific to
+# this product lives here. That was not true until 2026-08-08 — make.sh was a
+# 421-line fork carrying a three-pass capture and a registry-shaped kit install —
+# and the two halves of the departure were settled separately:
+#
+#   * the three passes were REAL per-repo variation, so they moved here as
+#     capture_all, the hook the template already provides for exactly this;
+#   * the registry install was NOT variation, it was a second mechanism. It is
+#     gone. The kit now resolves off the CI-Common checkout on disk, the way the
+#     other twelve products resolve it, so `video/` needs no token and no
+#     .npmrc, and Companion Memory is composed by the same kit that composes
+#     every other film. See video/README.md § "Which kit answers, and why it is
+#     not installed".
 #
 # WHAT IT STANDS UP
 #   Postgres 18 + TimescaleDB + PostGIS + pgvector   (container, host port $DB_HOST_PORT)
@@ -43,6 +59,13 @@ _compose() {
 }
 
 stage_up() {
+  # First, and deliberately before docker: this costs about a second and catches
+  # a capture plan that cannot shoot the film. It lives here rather than inside
+  # capture_all because make.sh calls capture_all only on a full run, and a
+  # `--only` run deserves the same check — and because failing after the stage
+  # has cost four minutes is the expensive way to learn it.
+  _verify_shot_lists
+
   command -v docker >/dev/null || die "docker not found — colima is the daemon here: 'colima start --cpu 8 --memory 24'"
   docker info >/dev/null 2>&1 || die "docker daemon unreachable — 'colima start --cpu 8 --memory 24'"
   command -v yarn >/dev/null || die "yarn not found — 'corepack enable'"
@@ -156,4 +179,127 @@ stage_down() {
   # -v: the seed rebases every date onto the wall clock at seed time, so a
   # retained volume would silently mix corpora across runs.
   ( cd "$REPO_ROOT" && _compose down -v --remove-orphans ) >/dev/null 2>&1 || true
+}
+
+# ── capture: THREE passes, not one ───────────────────────────────────────────
+# The template runs `kit capture` once and that is right for the other twelve.
+# It is not right here, and the reason is the product rather than taste:
+# `ci-video capture` builds ONE browser context per viewport and shares it
+# across every shot, so a single run is either signed in or signed out — it
+# cannot be both. This storyboard needs two identities:
+#
+#   1   the seeded, already-onboarded jsmith        (everything behind ProtectedRoute)
+#   2-3 a throwaway account, ONE PER SHOT           (onboarding persists progress server-side, so a
+#                                                    shared account resumes mid-wizard and renders a
+#                                                    "Welcome back" banner over the shot)
+#
+# It was FIVE passes until the narrative re-cut. That cut dropped the splash and
+# login scenes, so the signed-out pass has nothing left to shoot and is gone;
+# `/` and `/login` redirect an onboarded user to `/feed`, so were it kept it
+# would need `VIDEO_LOGGED_OUT=1` again. It also dropped `onboarding-focus`,
+# leaving two fresh-account shots rather than three.
+#
+# Every pass is explicitly scoped, including the first: `ci-video capture` exits
+# 1 on any single failure, so an unscoped run would attempt every shot in the
+# storyboard as jsmith, including the two onboarding ones this identity cannot
+# reach, and abort before the passes that could have shot them.
+#
+# ⚠️ THE STORYBOARD NO LONGER REFERENCES EIGHT OF THE COMMITTED SHOTS —
+# splash-screen, login-form, onboarding-focus, feed-overview, memory-map-view,
+# memory-stats, insight-detail-view and connect-providers. Their PNGs are kept
+# (video/README.md § "What is committed": the shot library is an input anyone
+# can render from, and `memory-map-view` cost a 826,478-item real-corpus load),
+# but NOTHING BELOW SHOOTS THEM ANY MORE, because `ci-video capture` can only
+# shoot ids the storyboard declares. They are frozen at whatever the product
+# looked like when they were taken. `memory-map-view` is already stale against
+# CI-Server #1891, which restored the Esri attribution control to `Map.tsx`
+# after that shot was captured — re-shoot it from `video/stage.real-corpus.sh`
+# in the same commit as any scene that brings the map back.
+AUTHED_SHOTS=memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
+FRESH_SHOTS="onboarding-connect onboarding-trust"
+
+# ── shots that are not captures ──────────────────────────────────────────────
+# Two scenes in this film are Companion Intelligence's OWN ARTWORK from
+# ci.computer/memory rather than pictures of the product: the collect-digital-
+# traces graphic and the architecture explainer out of the 2026 Q3 short deck.
+# `shotPath` — assets/shots/<id>.png — is the only full-frame image slot the
+# scene grammar has, so they live there, and the storyboard declares them as
+# shots. They are NOT capturable: there is no URL to point Playwright at and no
+# product state to reach, and asking capture for them would fail the pass.
+#
+# So they are subtracted from the check below rather than being an exception to
+# it. Naming them here is the point: without this list they would look exactly
+# like a shot somebody forgot to add to a pass, which is the failure the check
+# exists to catch. Re-generate them from video/README.md § "The two graphic
+# plates" if the artwork on the site changes; they are composited at each
+# viewport's native plate size, so they must never be produced by hand-scaling.
+GRAPHIC_SHOTS="graphic-traces graphic-architecture"
+
+# Does the capture plan above still match the film?
+#
+# Both directions, and both are fatal. An id named above that the storyboard
+# dropped would be silently skipped; a shot the storyboard declares that no pass
+# names is never requested at all and only surfaces as a missing-shot failure in
+# `check`, several minutes and one stage later.
+#
+# The lists used to carry a warning that they were NOT validated against the
+# storyboard and that drift was silent in both directions — which is exactly how
+# #1871 left `people-directory` (deleted from the storyboard) in them while never
+# adding `memory-stats` (added to it), so a "successful" run captured eight
+# shots instead of nine. That warning is this function. `ci-video capture`
+# implements --only as `shots.filter((s) => only.includes(s.id))` (video-kit
+# src/capture.mjs) — a plain filter, not a lookup — so an id named here that the
+# storyboard does not declare matches nothing and is skipped without a word.
+#
+# Paths are absolute: stage_up runs from REPO_ROOT, capture_all from $VIDEO_DIR.
+_verify_shot_lists() {
+  local requested declared orphaned unshot g
+  requested="$( { echo "$AUTHED_SHOTS" | tr ',' '\n'; echo "$FRESH_SHOTS" | tr ' ' '\n'; } | sed '/^$/d' | sort -u)"
+  declared="$(node -p "
+    const sb = require('$VIDEO_DIR/storyboard.json');
+    const graphics = new Set('$GRAPHIC_SHOTS'.split(/\s+/).filter(Boolean));
+    [...new Set(sb.scenes.flatMap((s) => (s.shots ?? []).map((h) => h.id)))]
+      .filter((id) => !graphics.has(id))
+      .sort()
+      .join('\n');
+  ")"
+
+  # A graphic named above that the storyboard no longer uses is its own kind of
+  # rot — the plate stays committed and nothing points at it — so say so too.
+  for g in $GRAPHIC_SHOTS; do
+    node -p "require('$VIDEO_DIR/storyboard.json').scenes.some((s) => (s.shots ?? []).some((h) => h.id === '$g'))" \
+      | grep -q true || die "GRAPHIC_SHOTS names '$g', but no scene in storyboard.json uses it.
+     Either drop it from that list or drop assets/shots/$g{,.mobile}.png with it."
+  done
+
+  orphaned="$(comm -23 <(echo "$requested") <(echo "$declared"))"
+  unshot="$(comm -13 <(echo "$requested") <(echo "$declared"))"
+  [ -z "$orphaned" ] || die "these ids are named in video/stage.sh but not declared in storyboard.json —
+     capture would skip them silently:
+$(echo "$orphaned" | sed 's/^/       /')"
+  [ -z "$unshot" ] || die "these shots are declared in storyboard.json but named in no capture pass —
+     they would never be requested, and \`check\` would fail on the slate:
+$(echo "$unshot" | sed 's/^/       /')"
+}
+
+# make.sh calls this instead of its single `kit capture` when no --only is given;
+# --only always wins, so re-shooting one shot never re-runs the whole sequence.
+# The caller owns the identity there — pass VIDEO_FRESH_USER=1 in the
+# environment when re-shooting an onboarding shot.
+#
+# `kit` is make.sh's one way to invoke the kit (`node "$KIT" "$@"`), and using it
+# is what keeps this file honest: the npm scripts in video/package.json would
+# look for `ci-video` on PATH, which under the disk-resolution path is not there.
+capture_all() {
+  local shot n
+
+  say "capturing 1/3 — authenticated (seeded jsmith)"
+  kit capture --only "$AUTHED_SHOTS"
+
+  n=1
+  for shot in $FRESH_SHOTS; do
+    n=$((n + 1))
+    say "capturing $n/3 — fresh account for $shot"
+    VIDEO_FRESH_USER=1 kit capture --only "$shot"
+  done
 }

@@ -3,17 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "doctor": "ci-video doctor",
-    "capture": "ci-video capture",
-    "build": "ci-video build",
-    "check": "ci-video check",
-    "render": "ci-video render",
-    "narrate": "ci-video narrate",
-    "status": "ci-video status",
-    "all": "ci-video all"
+    "make": "./make.sh",
+    "kit": "./kit.sh"
   },
   "devDependencies": {
-    "@companionintelligence/video-kit": "0.7.2",
     "playwright": "1.62.1"
   }
 }
