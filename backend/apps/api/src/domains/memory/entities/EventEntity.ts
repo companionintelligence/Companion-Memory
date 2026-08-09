@@ -24,11 +24,9 @@ export class EventEntity {
   @PrimaryColumn('uuid', { name: 'event_id' })
   id!: string;
 
-  @Column({ type: 'text' })
-  title!: string;
-
-  @Column({ type: 'text', nullable: true })
-  description!: string | null;
+  // title/description live ONLY on the CTI base row (ci.entities.name/
+  // description, see EventBaseEntity); the egress type composes them back on
+  // via toEgressType.
 
   @Column({ type: 'text', nullable: true, name: 'event_type' })
   eventType!: string | null;
@@ -47,9 +45,6 @@ export class EventEntity {
 
   @Column({ type: 'text', nullable: true, name: 'location_name' })
   locationName!: string | null;
-
-  @Column({ type: 'uuid', nullable: true, name: 'event_entity_id' })
-  eventEntityId!: string | null;
 
   @Column({
     type: 'geography',
@@ -155,18 +150,24 @@ export class EventEntity {
   @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updatedAt!: Date;
 
-  static toEgressType(entity: EventEntity) {
+  /**
+   * Composes the egress event from the CTI pair: the ci.events detail row plus
+   * its ci.entities base row, the sole owner of title (name) and description.
+   */
+  static toEgressType(
+    entity: EventEntity,
+    base?: { name: string | null; description: string | null } | null,
+  ) {
     return {
       id: entity.id,
-      title: entity.title,
-      description: entity.description,
+      title: base?.name ?? null,
+      description: base?.description ?? null,
       eventType: entity.eventType,
       category: entity.category,
       startTime: entity.startTime,
       endTime: entity.endTime,
       durationMinutes: entity.durationMinutes,
       locationName: entity.locationName,
-      eventEntityId: entity.eventEntityId,
       locationCoordinates: entity.locationCoordinates,
       locationEntityId: entity.locationEntityId,
       participantEntityIds: entity.participantEntityIds,
@@ -202,5 +203,8 @@ export class EventEntity {
 }
 
 export type Event = Readonly<Omit<EventEntity, 'user'>> & {
+  // Owned by the CTI base row (ci.entities); composed on egress.
+  readonly title: string | null;
+  readonly description: string | null;
   user?: User;
 };

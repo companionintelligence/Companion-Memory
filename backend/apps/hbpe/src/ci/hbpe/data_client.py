@@ -92,9 +92,12 @@ def get_unlabeled_events(user_id: str, limit: int = 1000) -> list[dict]:
     cursor-slicing, making paginated GraphQL requests O(n·pages) expensive.
     The search endpoint hard-caps at 25 results.  A single SQL JOIN is O(n).
     """
+    # title/description live on the event's CTI base row (ci.entities),
+    # joined and aliased back so callers keep their dict keys.
     sql = """
-        SELECT e.event_id::text, e.title, e.description
+        SELECT e.event_id::text, b.name AS title, b.description AS description
         FROM ci.events e
+        JOIN ci.entities b ON b.entity_id = e.event_id
         LEFT JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
         WHERE e.user_id    = %s::uuid
           AND e.is_deleted = FALSE

@@ -797,13 +797,15 @@ export class GraphEnrichmentService {
     }
 
     if (maxEvents > 0) {
+      // title/description live on the event's CTI base row (ci.entities).
       const events: Array<{ title: string | null; description: string | null }> = await this.dataSource.query(
-        `SELECT title, description
-             FROM ci.events
-            WHERE user_id = $1
-              AND is_deleted = false
-              AND (title IS NOT NULL OR description IS NOT NULL)
-            ORDER BY start_time DESC
+        `SELECT b.name AS title, b.description
+             FROM ci.events e
+             JOIN ci.entities b ON b.entity_id = e.event_id
+            WHERE e.user_id = $1
+              AND e.is_deleted = false
+              AND (b.name IS NOT NULL OR b.description IS NOT NULL)
+            ORDER BY e.start_time DESC
             LIMIT $2`,
         [userId, maxEvents],
       );

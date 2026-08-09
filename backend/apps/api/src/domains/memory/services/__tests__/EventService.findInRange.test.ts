@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
 import { EventService as SignallingEventService } from '@ci/domains/events';
 
+import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { EventService } from '../EventService';
 
@@ -42,16 +43,21 @@ describe('EventService.findInRange — the calendar read path', () => {
   const from = new Date('2026-08-03T00:00:00Z');
   const to = new Date('2026-08-10T00:00:00Z');
 
-  function setup(many: unknown[] = []) {
+  function setup(many: unknown[] = [], bases: unknown[] = []) {
     qb = makeQueryBuilder(many);
     const dataSource = {
       getRepository: jest.fn(() => ({ createQueryBuilder: jest.fn(() => qb) })),
     };
 
+    // Title/description live on the ci.entities base row, which the service
+    // fetches in one batch to compose the egress events.
+    const baseRepository = { find: jest.fn(async () => bases) };
+
     return Test.createTestingModule({
       providers: [
         EventService,
         { provide: getRepositoryToken(EventEntity), useValue: {} },
+        { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepository },
         { provide: SignallingEventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: dataSource },
       ],
@@ -182,7 +188,10 @@ describe('EventService.findInRange — the calendar read path', () => {
   });
 
   it('maps rows through the egress type', async () => {
-    await setup([{ id: 'e1', title: 'Standup', startTime: from, endTime: null }]);
+    await setup(
+      [{ id: 'e1', startTime: from, endTime: null }],
+      [{ id: 'e1', name: 'Standup', description: null }],
+    );
 
     const result = await service.findInRange(ctx, from, to);
 

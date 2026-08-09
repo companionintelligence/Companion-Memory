@@ -157,22 +157,25 @@ class ActionAggregator:
         now = datetime.utcnow()
         future = now + timedelta(days=days)
 
+        # title/description live on the event's CTI base row (ci.entities);
+        # aliased back so downstream consumers keep their dict keys.
         query = """
         SELECT
-            event_id as id,
-            title,
-            description,
-            start_time,
-            end_time,
-            location_name as location,
-            event_type,
-            is_all_day
-        FROM ci.events
-        WHERE user_id = :user_id
-          AND start_time >= :now
-          AND start_time < :future
-          AND (status IS NULL OR status != 'cancelled')
-        ORDER BY start_time ASC
+            ev.event_id as id,
+            b.name as title,
+            b.description as description,
+            ev.start_time,
+            ev.end_time,
+            ev.location_name as location,
+            ev.event_type,
+            ev.is_all_day
+        FROM ci.events ev
+        JOIN ci.entities b ON b.entity_id = ev.event_id
+        WHERE ev.user_id = :user_id
+          AND ev.start_time >= :now
+          AND ev.start_time < :future
+          AND (ev.status IS NULL OR ev.status != 'cancelled')
+        ORDER BY ev.start_time ASC
         LIMIT 10
         """
         return db.execute_query(

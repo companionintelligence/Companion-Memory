@@ -90,7 +90,10 @@ export class SpotifySavedAudiobooksTransformService {
             await Promise.all(
               events.map(async (event) => {
                 await this.eventService.update(context, event.id, {
-                  title: event.title.replace('show', 'audiobook'),
+                  // title is nullable on egress (owned by the CTI base row);
+                  // these rows matched the title filter above, so fall back
+                  // defensively rather than crash.
+                  title: (event.title ?? `Saved show ${audiobook.name}`).replace('show', 'audiobook'),
                 });
               }),
             );

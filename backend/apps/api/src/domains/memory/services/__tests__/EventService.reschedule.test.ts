@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import type { ServiceContext, UserServiceContext } from '@ci/common/context';
 import { EventService as SignallingEventService } from '@ci/domains/events';
 
+import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { EventService } from '../EventService';
 
@@ -13,7 +14,6 @@ const ctx = { userId: 'user-1' } as ServiceContext;
 function existing(overrides: Partial<EventEntity> = {}): EventEntity {
   return {
     id: 'e1',
-    title: 'Design review',
     startTime: new Date('2026-08-03T14:00:00Z'),
     endTime: new Date('2026-08-03T15:30:00Z'),
     sourceSystem: null,
@@ -45,6 +45,8 @@ describe('EventService.reschedule — moving an event on the calendar', () => {
       providers: [
         EventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
+        // The base row owns title/description; the read-back composes it in.
+        { provide: getRepositoryToken(EventBaseEntity), useValue: { find: jest.fn(async () => []) } },
         { provide: SignallingEventService, useValue: signalling },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
       ],
@@ -134,11 +136,22 @@ function createLikeTypeorm<T extends object>(plain: T): T {
 describe('EventService.create — provenance survives the DTO mapping', () => {
   let service: EventService;
   let saved: EventEntity | undefined;
+  let savedBase: EventBaseEntity | undefined;
 
   const userCtx = { userId: 'user-1' } as UserServiceContext;
 
   async function setup() {
     saved = undefined;
+    savedBase = undefined;
+    const baseRepo = {
+      create: jest.fn((plain: EventBaseEntity) => plain),
+      save: jest.fn(async (entity: EventBaseEntity) => {
+        savedBase = entity;
+
+        return entity;
+      }),
+      find: jest.fn(async () => []),
+    };
     const repo = {
       findOne: jest.fn(async () => null),
       create: jest.fn((plain: EventEntity) => createLikeTypeorm(plain)),
@@ -147,12 +160,23 @@ describe('EventService.create — provenance survives the DTO mapping', () => {
 
         return entity;
       }),
+      // create() writes both halves of the CTI aggregate in one transaction, so
+      // the mock hands back the same repositories through a manager.
+      manager: {
+        transaction: (run: (manager: unknown) => unknown) =>
+          Promise.resolve(
+            run({
+              getRepository: (target: unknown) => (target === EventBaseEntity ? baseRepo : repo),
+            }),
+          ),
+      },
     };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         EventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
+        { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: SignallingEventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
       ],
@@ -245,8 +269,11 @@ describe('EventService.create — provenance survives the DTO mapping', () => {
       sharing_level: 'household',
     });
 
+    // The title is base-row data now (entities.name), so it is asserted there
+    // rather than on the ci.events detail row.
+    expect(savedBase).toMatchObject({ name: 'Standup' });
+
     expect(saved).toMatchObject({
-      title: 'Standup',
       startTime: start,
       eventType: 'meeting',
       sourceType: 'calendar',

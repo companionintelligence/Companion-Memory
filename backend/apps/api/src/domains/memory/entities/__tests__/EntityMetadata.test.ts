@@ -5,6 +5,8 @@ import { UserEntity } from '@ci/domains/user';
 import { NodeEntity } from '../../../graph/entities/NodeEntity';
 import { BaseEntity } from '../BaseEntity';
 import { ConceptEntity } from '../ConceptEntity';
+import { EventBaseEntity } from '../EventBaseEntity';
+import { EventEntity } from '../EventEntity';
 import { FileEntity } from '../FileEntity';
 import { GraphNodeEntity } from '../GraphNodeEntity';
 import { ItemBaseEntity } from '../ItemBaseEntity';
@@ -30,6 +32,8 @@ describe('memory entity metadata', () => {
         FileEntity,
         ItemBaseEntity,
         ItemEntity,
+        EventBaseEntity,
+        EventEntity,
         PlaceEntity,
         GraphNodeEntity,
         NodeEntity,
@@ -48,6 +52,7 @@ describe('memory entity metadata', () => {
     expect(discriminatorOf(ConceptEntity)).toBe('Concept');
     expect(discriminatorOf(FileEntity)).toBe('File');
     expect(discriminatorOf(ItemBaseEntity)).toBe('Item');
+    expect(discriminatorOf(EventBaseEntity)).toBe('Event');
 
     // The detail half of the Item aggregate is NOT part of the STI tree —
     // TypeORM defaults a non-STI entity's discriminatorValue to its class name,

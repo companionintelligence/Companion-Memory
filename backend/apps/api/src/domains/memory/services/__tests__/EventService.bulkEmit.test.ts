@@ -6,6 +6,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { bulkInsertIdempotent } from '@ci/common/persistence';
 import { EventService as SignallingEventService } from '@ci/domains/events';
 
+import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateEventDto } from '../../types';
 import { EventService } from '../EventService';
@@ -36,13 +37,39 @@ describe('EventService.createMany — no per-row event emission', () => {
       entities.map((entity) => ({ entity, inserted: true })),
     );
 
-    const repo = { create: jest.fn((x: Partial<EventEntity>) => x as EventEntity) };
+    const baseInsertQb: Record<string, unknown> = {};
+    baseInsertQb.insert = jest.fn(() => baseInsertQb);
+    baseInsertQb.into = jest.fn(() => baseInsertQb);
+    baseInsertQb.values = jest.fn(() => baseInsertQb);
+    baseInsertQb.onConflict = jest.fn(() => baseInsertQb);
+    baseInsertQb.execute = jest.fn(async () => ({ raw: [] }));
+
+    const baseRepo = {
+      create: jest.fn((x: Partial<EventBaseEntity>) => x),
+      find: jest.fn(async () => []),
+      metadata: { target: EventBaseEntity, columns: { length: 10 } },
+      createQueryBuilder: jest.fn(() => baseInsertQb),
+    };
+    const repo: Record<string, unknown> = {
+      create: jest.fn((x: Partial<EventEntity>) => x as EventEntity),
+    };
+    // The bulk path runs inside a spanning transaction whose manager dispatches
+    // by entity class.
+    repo.manager = {
+      transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
+        cb({
+          getRepository: (cls: unknown): unknown => (cls === EventBaseEntity ? baseRepo : repo),
+          withRepository: (): unknown => repo,
+        }),
+      ),
+    };
     signalling = { send: jest.fn(), sendMany: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         EventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
+        { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: SignallingEventService, useValue: signalling },
         { provide: DataSource, useValue: {} },
       ],

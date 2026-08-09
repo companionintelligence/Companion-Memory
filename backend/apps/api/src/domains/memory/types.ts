@@ -37,7 +37,6 @@ export interface CreateEventDto {
   start_time: Date;
   end_time?: Date;
   location_name?: string;
-  event_entity_id?: string;
   location_entity_id?: string;
   location_coordinates?: Point;
   participant_entity_ids?: string[];
@@ -81,7 +80,6 @@ export interface UpdateEventDto {
   start_time?: Date;
   end_time?: Date;
   location_name?: string;
-  event_entity_id?: string;
   location_entity_id?: string;
   location_coordinates?: Point;
   participant_entity_ids?: string[];
@@ -122,7 +120,6 @@ export interface SearchEventDto {
   startTime?: Date;
   endTime?: Date;
   locationName?: string;
-  eventEntityId?: string;
   locationEntityId?: string;
   locationCoordinates?: Point;
   organizerEntityId?: string;
@@ -517,7 +514,6 @@ const createEventSchemaRoot = z.object({
       coordinates: z.array(z.number()),
     })
     .optional(),
-  event_entity_id: z.string().optional(),
   location_entity_id: z.string().optional(),
   participant_entity_ids: z.array(z.string()).optional(),
   organizer_entity_id: z.string().optional(),
@@ -555,7 +551,6 @@ export const updateEventSchema = z.object({
   start_time: z.string().datetime().optional(),
   end_time: z.string().datetime().optional(),
   location_name: z.string().optional(),
-  event_entity_id: z.string().optional(),
   location_entity_id: z.string().optional(),
   location_coordinates: z
     .object({

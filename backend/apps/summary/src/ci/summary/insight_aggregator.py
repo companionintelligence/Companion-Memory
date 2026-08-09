@@ -158,23 +158,26 @@ class InsightAggregator:
         now = datetime.utcnow()
         future = now + timedelta(days=days)
 
+        # title/description live on the event's CTI base row (ci.entities);
+        # aliased back so downstream consumers keep their dict keys.
         query = """
         SELECT
-            event_id as id,
-            title,
-            description,
-            start_time,
-            end_time,
-            location_name as location,
-            participant_entity_ids as participants,
-            event_type,
-            is_all_day
-        FROM ci.events
-        WHERE user_id = :user_id
-          AND start_time >= :now
-          AND start_time < :future
-          AND (status IS NULL OR status != 'cancelled')
-        ORDER BY start_time ASC
+            ev.event_id as id,
+            b.name as title,
+            b.description as description,
+            ev.start_time,
+            ev.end_time,
+            ev.location_name as location,
+            ev.participant_entity_ids as participants,
+            ev.event_type,
+            ev.is_all_day
+        FROM ci.events ev
+        JOIN ci.entities b ON b.entity_id = ev.event_id
+        WHERE ev.user_id = :user_id
+          AND ev.start_time >= :now
+          AND ev.start_time < :future
+          AND (ev.status IS NULL OR ev.status != 'cancelled')
+        ORDER BY ev.start_time ASC
         LIMIT 20
         """
         return db.execute_query(
@@ -266,16 +269,19 @@ class InsightAggregator:
         future = now + timedelta(days=days)
 
         # This query finds people who are participants in upcoming events
+        # The event's title lives on its CTI base row (ci.entities), joined as
+        # ev_base alongside the participant join.
         query = """
         SELECT DISTINCT ON (e.entity_id)
             e.entity_id,
             e.name,
             e.entity_type,
-            ev.title as event_title,
+            ev_base.name as event_title,
             ev.start_time as event_start,
             r.relationship_type,
             r.strength
         FROM ci.events ev
+        JOIN ci.entities ev_base ON ev_base.entity_id = ev.event_id
         CROSS JOIN LATERAL unnest(ev.participant_entity_ids) as participant_id
         JOIN ci.entities e ON e.entity_id = participant_id::uuid
         LEFT JOIN ci.relationships r ON r.to_entity_id = e.entity_id

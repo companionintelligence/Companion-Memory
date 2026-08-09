@@ -28,10 +28,12 @@ import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { GraphController } from './controllers/GraphController';
+import { BaseEntity } from './entities/BaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentEntity } from './entities/ContentEntity';
 import { EntityMergeBlockEntity } from './entities/EntityMergeBlockEntity';
+import { EventBaseEntity } from './entities/EventBaseEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
@@ -85,6 +87,7 @@ import { UserContextService } from './services/UserContextService';
       CommunicationEntity,
       ContentEntity,
       EventEntity,
+      EventBaseEntity,
       PersonEntity,
       ConceptEntity,
       PlaceEntity,
@@ -157,9 +160,11 @@ export class MemoryModule {}
 // under that name would collide with the files domain's FileEntity — the
 // record it references — at every call site that imports both.
 export {
+  BaseEntity,
   CommunicationEntity,
   ContentEntity,
   EventEntity,
+  EventBaseEntity,
   ItemEntity,
   ObjectObservationEntity,
   PersonEntity,

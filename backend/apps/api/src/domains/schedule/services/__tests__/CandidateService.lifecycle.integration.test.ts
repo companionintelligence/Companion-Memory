@@ -3,7 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import { EventEntity, EventService } from '@ci/domains/memory';
+import { BaseEntity, EventBaseEntity, EventEntity, EventService } from '@ci/domains/memory';
 
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
 import { CandidateService } from '../CandidateService';
@@ -41,7 +41,9 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
     dataSource = new DataSource({
       type: 'postgres',
       url: DATABASE_URL,
-      entities: [EventCandidateEntity, EventEntity],
+      // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
+      // root has to be mapped alongside it for metadata to build.
+      entities: [EventCandidateEntity, EventEntity, BaseEntity, EventBaseEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -57,6 +59,7 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
 
     eventService = new EventService(
       dataSource.getRepository(EventEntity),
+      dataSource.getRepository(EventBaseEntity),
       noopSignalling as never,
       dataSource,
     );

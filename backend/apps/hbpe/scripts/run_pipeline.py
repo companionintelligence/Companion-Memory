@@ -245,8 +245,9 @@ def step2_label_events(user_id: str) -> None:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT e.event_id::text, e.title, e.description
+                    SELECT e.event_id::text, b.name AS title, b.description AS description
                     FROM ci.events e
+                    JOIN ci.entities b ON b.entity_id = e.event_id
                     LEFT JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
                     WHERE e.user_id = %s::uuid AND e.is_deleted = FALSE AND ec.event_id IS NULL
                     ORDER BY e.start_time
