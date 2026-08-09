@@ -24,11 +24,8 @@ export class ItemEntity {
   @PrimaryColumn('uuid', { name: 'object_id' })
   id!: string;
 
-  @Column('text', { name: 'name' })
-  name!: string;
-
-  @Column('text', { name: 'description', nullable: true })
-  description!: string | null;
+  // name/description live ONLY on the CTI base row (ci.entities, see
+  // ItemBaseEntity); the egress type composes them back on via toEgressType.
 
   @Column('text', { name: 'category', nullable: true })
   category!: string | null;
@@ -142,14 +139,6 @@ export class ItemEntity {
   // a merge tombstone — the four things it could not express before.
   // ---------------------------------------------------------------------------
 
-  /**
-   * Graph mirror (ci.entities, entity_type 'Object'). NOTE this column has
-   * existed since the original 20250925154200 create and is indexed; it was
-   * simply never mapped here, so nothing could read or write it.
-   */
-  @Column('uuid', { name: 'object_entity_id', nullable: true })
-  objectEntityId!: string | null;
-
   /** The catalog model this unit is an instance of. NULL = unit is real, product not yet known. */
   @Column('uuid', { name: 'product_id', nullable: true })
   productId!: string | null;
@@ -206,11 +195,20 @@ export class ItemEntity {
     this.sourceFileId = (this.metadata?.source_file_id as string) || null;
   }
 
-  static toEgressType(entity: ItemEntity): Item {
+  /**
+   * Composes the egress item from the CTI pair: the ci.inventory detail row
+   * plus its ci.entities base row, which is the sole owner of
+   * name/description. Callers that only have the detail (e.g. straight after
+   * an insert they themselves composed) may pass the base values inline.
+   */
+  static toEgressType(
+    entity: ItemEntity,
+    base?: { name: string | null; description: string | null } | null,
+  ): Item {
     return {
       id: entity.id,
-      name: entity.name,
-      description: entity.description,
+      name: base?.name ?? null,
+      description: base?.description ?? null,
       category: entity.category,
       subcategory: entity.subcategory,
       brand: entity.brand,
@@ -246,7 +244,6 @@ export class ItemEntity {
       sourceId: entity.sourceId,
       sourceFileId: entity.sourceFileId,
 
-      objectEntityId: entity.objectEntityId,
       productId: entity.productId,
       acquisitionReceiptId: entity.acquisitionReceiptId,
       acquisitionLineItemId: entity.acquisitionLineItemId,
@@ -264,4 +261,8 @@ export class ItemEntity {
   }
 }
 
-export type Item = Readonly<Omit<ItemEntity, 'loadMetadataProperties'>>;
+export type Item = Readonly<Omit<ItemEntity, 'loadMetadataProperties'>> & {
+  // Owned by the CTI base row (ci.entities); composed on egress.
+  readonly name: string | null;
+  readonly description: string | null;
+};

@@ -72,6 +72,12 @@ export class IngestResetService {
       const ingestRefs = INGEST_TABLES.map(({ schema, table }) => `"${schema}"."${table}"`);
       await manager.query(`TRUNCATE TABLE ${ingestRefs.join(', ')} RESTART IDENTITY CASCADE`);
 
+      // Inventory rows are CTI aggregates: each ci.inventory row has an 'Item'
+      // base row in ci.entities sharing its uuid. TRUNCATE only follows FKs
+      // POINTING AT the truncated tables, so the base rows survive it — delete
+      // them explicitly or the reset strands orphan 'Item' entities.
+      await manager.query(`DELETE FROM ci.entities WHERE entity_type = 'Item'`);
+
       // The ci_search index tables carry no FK edges — plain truncates, same as
       // OrphanCleanupService.truncateSearchIndex but inside THIS transaction.
       for (const { schema, table } of SEARCH_TABLES) {

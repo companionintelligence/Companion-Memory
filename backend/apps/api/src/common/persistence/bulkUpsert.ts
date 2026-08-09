@@ -1,4 +1,10 @@
-import type { ObjectLiteral, Repository, SelectQueryBuilder, WhereExpressionBuilder } from 'typeorm';
+import type {
+  EntityManager,
+  ObjectLiteral,
+  Repository,
+  SelectQueryBuilder,
+  WhereExpressionBuilder,
+} from 'typeorm';
 import { Brackets } from 'typeorm';
 
 /**
@@ -85,6 +91,14 @@ interface BulkInsertOptions<Entity extends ObjectLiteral> {
    * DEFAULT_CHUNK_ROWS when omitted. Must be >= 1.
    */
   maxRowsPerChunk?: number;
+  /**
+   * Optional transactional EntityManager to run inside. When supplied, the whole
+   * statement sequence joins the CALLER's transaction instead of opening its own,
+   * so a caller can compose this with writes to other tables (e.g. a CTI base
+   * row) atomically. When omitted, the call opens and owns its transaction as
+   * before.
+   */
+  manager?: EntityManager;
 }
 
 /**
@@ -160,6 +174,13 @@ export async function bulkInsertIdempotent<Entity extends ObjectLiteral>(
 ): Promise<BulkInsertResult<Entity>[]> {
   if (options.entities.length === 0) {
     return [];
+  }
+
+  if (options.manager) {
+    return executeBulkInsert({
+      ...options,
+      repository: options.manager.withRepository(options.repository),
+    });
   }
 
   return options.repository.manager.transaction(async (tx) =>

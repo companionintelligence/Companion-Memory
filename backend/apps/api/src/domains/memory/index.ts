@@ -35,6 +35,7 @@ import { EntityMergeBlockEntity } from './entities/EntityMergeBlockEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
 import { GraphNodeEntity } from './entities/GraphNodeEntity';
+import { ItemBaseEntity } from './entities/ItemBaseEntity';
 import {
   type Item,
   type InventoryCondition,
@@ -89,6 +90,7 @@ import { UserContextService } from './services/UserContextService';
       PlaceEntity,
       GraphNodeEntity,
       ItemEntity,
+      ItemBaseEntity,
       ProductModelEntity,
       ReceiptEntity,
       ReceiptLineItemEntity,
@@ -167,6 +169,7 @@ export {
   ReceiptEntity,
   ReceiptLineItemEntity,
   GraphNodeEntity,
+  ItemBaseEntity,
   RelationshipEntity,
 };
 
