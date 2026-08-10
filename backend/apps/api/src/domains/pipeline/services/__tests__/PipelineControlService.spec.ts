@@ -6,8 +6,9 @@ import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
 import { SHARD_LEASE_SECONDS, STAGE_IDS, STAGE_ID_LIST, type StageId } from '../../constants';
-import { stageSchedule } from '../../schedule';
+import { automaticStageIds, stageDueness, stageSchedule } from '../../schedule';
 import type { Stage } from '../../types';
+import type { EnrichmentWindowService } from '../EnrichmentWindowService';
 import {
   CONTINUOUS_RUN_KIND,
   MAX_SWEEPS_PER_TICK,
@@ -108,6 +109,24 @@ interface ControlOptions {
   /** Stage legs with stale rows, as `stageId` or `stageId|entityType`. */
   stale?: string[];
 
+  /**
+   * `ci.pipeline_schedule` rows, as `stageId` or `stageId|entityType` → when
+   * that leg last had a sweep started.
+   *
+   * A leg absent from this map has no row, which is `never_run` — infinite
+   * staleness, and therefore due. That default is what keeps every test written
+   * before the dueness gate meaning what it meant: on a fresh appliance every
+   * leg is overdue, so the tick behaves exactly as it did when there was no
+   * clock at all.
+   */
+  lastStartedAt?: Record<string, Date>;
+
+  /** `WindowStatus.open`. Defaults to open, so a test opts in to the night. */
+  windowOpen?: boolean;
+
+  /** Make the window unreadable, the way an unmigrated `ci.pipeline_turns` is. */
+  windowThrows?: boolean;
+
   /** Entity types per stage. Defaults to one type named `event`. */
   entityTypes?: Partial<Record<StageId, string[]>>;
 
@@ -194,6 +213,20 @@ function makeControl(options: ControlOptions = {}) {
 
     if (/from ci\.users/.test(sql)) {
       return options.users ?? [];
+    }
+
+    // The per-leg clock, read once per user per tick.
+    if (/from ci\.pipeline_schedule/.test(sql)) {
+      return Object.entries(options.lastStartedAt ?? {}).map(([leg, startedAt]) => {
+        const [stage, entityType = 'event'] = leg.split('|');
+
+        return { stage, entity_type: entityType, last_started_at: startedAt };
+      });
+    }
+
+    // The stamp. Written on a successful claim, BEFORE the sweep is started.
+    if (sql.startsWith('insert into ci.pipeline_schedule')) {
+      return [];
     }
 
     // The claim and the drain are both upserts on the same table; only the claim
@@ -319,12 +352,33 @@ function makeControl(options: ControlOptions = {}) {
     verbose: jest.fn(),
   };
 
+  // Only `status()` is ever called, and only for `.open` — the tick reads the
+  // window, it never takes a turn or charges the budget. The rest of
+  // `WindowStatus` is filled in because `tickConditions` logs `state` and
+  // `nextOpensAt` when the window is shut.
+  const windowService = {
+    status: jest.fn(async () => {
+      if (options.windowThrows === true) {
+        throw new Error('ci.pipeline_turns is not migrated on this database');
+      }
+
+      const open = options.windowOpen ?? true;
+
+      return {
+        open,
+        state: open ? 'open' : 'closed',
+        nextOpensAt: new Date('2026-08-10T01:00:00.000Z'),
+      };
+    }),
+  };
+
   const service = new PipelineControlService(
     dataSource as unknown as DataSource,
     stateService as unknown as PipelineStateService,
     runService as unknown as PipelineRunService,
     dispatchService as unknown as PipelineDispatchService,
     stageRegistry as unknown as StageRegistry,
+    windowService as unknown as EnrichmentWindowService,
     logger as unknown as LoggerService,
   );
 
@@ -338,6 +392,7 @@ function makeControl(options: ControlOptions = {}) {
     runService,
     dispatchService,
     stageRegistry,
+    windowService,
     /** Stage ids the tick actually dispatched a sweep for, in order. */
     swept: (): string[] =>
       dispatchService.startSweep.mock.calls.map((call) => (call[0] as { stage: string }).stage),
@@ -406,19 +461,19 @@ describe('PipelineControlService', () => {
       expect(subset).toEqual([STAGE_IDS.ENRICH_MEDIA_DIMENSIONS, STAGE_IDS.PROMOTE_PLACE]);
     });
 
-    it('keeps every metered stage out of the default set UNTIL the dueness gate lands', () => {
-      // The decided policy is weekly, not never — `schedule.ts` declares a 7-day
-      // minInterval, the enrichment window and a perRunCap for both metered
-      // stages, and this asserts that declaration is intact.
+    it('admits every metered stage to the default set, bounded by three declared numbers', () => {
+      // THE FLIP. The decided policy is weekly, not never, and until the dueness
+      // gate landed the default set excluded these two — which made "costs
+      // money" and "unreachable by a timer" the same statement.
       //
-      // But the tick does not yet CONSULT it (no per-leg lastStartedAt, no
-      // perRunCap enforcement), so the default set still excludes them. Admitting
-      // them before the gate exists would make a weekly stage reachable every
-      // five minutes. When the gate lands, `defaultStageSet` returns
-      // `automaticStageIds()` and the first assertion below flips to `toContain`.
+      // Being IN the set is only safe because of what is asserted beneath it, so
+      // the two halves are one test: reachability plus the three numbers that
+      // bound it. A metered stage that lost its `perRunCap`, or slipped to a
+      // one-day interval, or escaped the window, would still be in the default
+      // set and would fail here rather than on an invoice.
       for (const stageId of METERED_STAGES) {
         expect(STAGE_ID_LIST).toContain(stageId);
-        expect(defaultStageSet()).not.toContain(stageId);
+        expect(defaultStageSet()).toContain(stageId);
 
         const policy = stageSchedule(stageId);
 
@@ -438,10 +493,11 @@ describe('PipelineControlService', () => {
 
     it('leaves every automatic stage IN the default set, so the tick is not quietly inert', () => {
       // The opposite failure to the one above, and the one this whole file
-      // exists to fix: a pipeline nothing starts.
-      const expected = STAGE_ID_LIST.filter((stageId) => !isMeteredStage(stageId));
-
-      expect(defaultStageSet()).toEqual(expected);
+      // exists to fix: a pipeline nothing starts. Now stated against
+      // `automaticStageIds()` — the schedule's own answer to "what may a timer
+      // start?" — rather than against a filter written a second time here.
+      expect(defaultStageSet()).toEqual(automaticStageIds());
+      expect(defaultStageSet()).toEqual([...STAGE_ID_LIST]);
       expect(defaultStageSet().length).toBeGreaterThan(0);
     });
   });
@@ -771,19 +827,47 @@ describe('PipelineControlService', () => {
     });
 
     it('does not let a producer that is not in the run block anything', async () => {
-      // THE deadlock this rule avoids: `enrich.geocode` is metered, so it is
-      // never in the default set and therefore always has stale rows. If an
-      // absent producer counted, `enrich.estimate_location` and `promote.place`
-      // would be blocked on it for the life of the appliance — cost discipline
-      // silently disabling a third of the pipeline.
+      // A producer the run does not include is not being waited for. Asserted
+      // with a run that names only the consumer, so the edge to `enrich.geocode`
+      // is dropped even though that stage has stale rows.
       const h = makeControl({
-        users: [runningRun()],
+        users: [runningRun({ detail: { stages: [STAGE_IDS.ENRICH_ESTIMATE_LOCATION] } })],
         stale: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION],
       });
 
       await h.service.tick();
 
       expect(h.swept()).toEqual([STAGE_IDS.ENRICH_ESTIMATE_LOCATION]);
+    });
+
+    it('does not let a producer that is not DUE block anything', async () => {
+      // THE BUG the dueness filter fixes, and it is a real one rather than a
+      // hypothetical: `enrich.estimate_location` and `promote.place` are NIGHTLY
+      // and both consume the WEEKLY `enrich.geocode`. Geocode has stale rows on
+      // all seven nights and may run on one of them, so a consumer blocked
+      // whenever its producer merely HAS candidates would be held back six
+      // nights in seven — by a producer that was never going to run on any of
+      // them.
+      const h = makeControl({
+        // Producer and consumer alone, so the only edge in play is the one under
+        // test — `promote.place` consumes the estimator too and would be legitimately
+        // blocked by it, which is a different fact.
+        users: [
+          runningRun({
+            detail: { stages: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION] },
+          }),
+        ],
+        stale: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION],
+        // Geocode ran an hour ago, so it is six days off being due. The consumer
+        // has never run, so it is overdue and wants to go tonight.
+        lastStartedAt: { [STAGE_IDS.ENRICH_GEOCODE]: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.ENRICH_ESTIMATE_LOCATION]);
+      expect(report.legsBlocked).toBe(0);
+      expect(report.legsNotDue).toBe(1);
     });
 
     it('dispatches producers before consumers within one tick', async () => {
@@ -810,32 +894,131 @@ describe('PipelineControlService', () => {
   // -------------------------------------------------------------------------
 
   describe('metered stages', () => {
-    it('never auto-sweeps a metered stage, however stale it is', async () => {
+    it('auto-sweeps a metered stage that has never run, and bounds it with its perRunCap', async () => {
+      // The first pass. A never-run leg is infinitely stale and therefore
+      // overdue, which is what makes a freshly imported appliance geocode
+      // tonight instead of in a week — and the ONLY thing bounding that first
+      // pass is `perRunCap`, which is the argument for the cap mattering more
+      // than the interval.
       const h = makeControl({ users: [runningRun()], stale: [...STAGE_ID_LIST] });
 
       await h.service.tick();
 
       for (const stageId of METERED_STAGES) {
-        expect(h.swept()).not.toContain(stageId);
+        expect(h.swept()).toContain(stageId);
+
+        const started = h.dispatchService.startSweep.mock.calls
+          .map((candidate) => candidate[0] as { stage: string; maxIds?: number })
+          .find((input) => input.stage === stageId);
+
+        // Not merely "a cap": the DECLARED one. A sweep started with the wrong
+        // number is a bill of the wrong size, and nothing downstream would say
+        // so.
+        expect(started?.maxIds).toBe(stageSchedule(stageId).perRunCap);
       }
     });
 
-    it('never auto-sweeps a metered stage for a run the tick started itself', async () => {
+    it('passes no cap for a stage that declares none', async () => {
+      // `undefined`, not `0` and not `Infinity`. `StartSweepInput.maxIds` is
+      // optional and the dispatcher reads absent as uncapped; a 0 would read as
+      // "dispatch nothing" and silently stop every free stage on the appliance.
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS],
+      });
+
+      await h.service.tick();
+
+      expect(stageSchedule(STAGE_IDS.ENRICH_MEDIA_DIMENSIONS).perRunCap).toBeUndefined();
+      expect(h.dispatchService.startSweep.mock.calls[0][0]).toMatchObject({
+        stage: STAGE_IDS.ENRICH_MEDIA_DIMENSIONS,
+        maxIds: undefined,
+      });
+    });
+
+    it('does NOT re-sweep a metered stage inside its weekly interval', async () => {
+      // The whole point of the gate. Same stale rows, same open window, same
+      // tick — and the only difference is a row in `ci.pipeline_schedule` from
+      // yesterday.
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [...METERED_STAGES],
+        lastStartedAt: Object.fromEntries([...METERED_STAGES].map((stageId) => [stageId, yesterday])),
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(METERED_STAGES.size);
+    });
+
+    it('sweeps a metered stage again once its minInterval has elapsed', async () => {
+      // The other half of the same fact, and the one that proves the gate is a
+      // CADENCE rather than the old exclusion wearing a new name: eight days is
+      // past a seven-day interval, so it runs.
+      const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_GEOCODE],
+        lastStartedAt: { [STAGE_IDS.ENRICH_GEOCODE]: eightDaysAgo },
+      });
+
+      await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.ENRICH_GEOCODE]);
+    });
+
+    it('stamps the schedule BEFORE it starts the sweep', async () => {
+      // The ordering that decides what a crash costs. Stamping after dispatch
+      // means a process killed in between leaves no record that the sweep ever
+      // started — so the next tick finds the leg due and bills for it again, on
+      // a two-minute cadence, for as long as the crash repeats.
+      const h = makeControl({ users: [runningRun()], stale: [STAGE_IDS.ENRICH_GEOCODE] });
+
+      await h.service.tick();
+
+      const stamped = h.indexOf(/^insert into ci\.pipeline_schedule/);
+      const claimed = h.indexOf(/^insert into ci\.pipeline_shards.*make_interval/);
+
+      expect(stamped).toBeGreaterThan(claimed);
+      expect(h.statements[stamped].params.slice(0, 3)).toEqual([USER_A, STAGE_IDS.ENRICH_GEOCODE, 'event']);
+      // `startSweep` is called after the statement log already holds the stamp.
+      expect(h.dispatchService.startSweep).toHaveBeenCalled();
+    });
+
+    it('reaches a metered stage from a run the tick started itself', async () => {
       const h = makeControl({ users: [noRun()], stale: [...STAGE_ID_LIST] });
 
       await h.service.tick();
 
       const input = h.runService.startRun.mock.calls[0]?.[1];
 
-      // The run the tick creates names no stages at all, so it can only ever get
-      // the default set — which is where the exclusion lives.
+      // The run the tick creates still names no stages — the cadence lives in
+      // the schedule now, not in what a run happens to be called.
       expect(input?.detail).not.toHaveProperty('stages');
-      expect(h.swept()).not.toContain(STAGE_IDS.ENRICH_GEOCODE);
+      expect(h.swept()).toContain(STAGE_IDS.ENRICH_GEOCODE);
     });
 
-    it('sweeps a metered stage when — and only when — a run NAMES it', async () => {
-      // The deliberate act. A human wrote this stage id into the run's detail,
-      // which is the whole difference between an authorised bill and a loop.
+    it('holds a named run to the same interval as an unnamed one', async () => {
+      // Naming a stage decides WHICH stages a run considers; it is not a bypass.
+      // Before the gate it had to be one, because naming was the only way to
+      // reach a metered stage at all — that is the behaviour this pins as gone.
+      const h = makeControl({
+        users: [runningRun({ kind: 'reprocess', detail: { stages: [STAGE_IDS.ENRICH_GEOCODE] } })],
+        stale: [STAGE_IDS.ENRICH_GEOCODE],
+        lastStartedAt: { [STAGE_IDS.ENRICH_GEOCODE]: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(1);
+    });
+
+    it('sweeps a named metered stage that IS due', async () => {
       const h = makeControl({
         users: [runningRun({ kind: 'reprocess', detail: { stages: [STAGE_IDS.ENRICH_GEOCODE] } })],
         stale: [STAGE_IDS.ENRICH_GEOCODE],
@@ -857,7 +1040,6 @@ describe('PipelineControlService', () => {
       await h.service.tick();
 
       expect(h.swept().length).toBeGreaterThan(0);
-      expect(h.swept()).not.toContain(STAGE_IDS.ENRICH_GEOCODE);
       expect(h.logger.warn).toHaveBeenCalled();
     });
 
@@ -873,7 +1055,176 @@ describe('PipelineControlService', () => {
 
       await h.service.tick();
 
+      // Declaration order: `enrich.media_dimensions` precedes `enrich.geocode`,
+      // and neither depends on the other.
+      expect(h.swept()).toEqual([STAGE_IDS.ENRICH_MEDIA_DIMENSIONS, STAGE_IDS.ENRICH_GEOCODE]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The clock and the window
+  // -------------------------------------------------------------------------
+
+  describe('dueness', () => {
+    it('reads the schedule once per user, not once per leg', async () => {
+      // The tick already issues a staleness probe per leg. A second per-leg round
+      // trip to answer a question one `WHERE user_id = $1` covers would double
+      // its statement count for nothing.
+      const h = makeControl({ users: [runningRun(), noRun({ user_id: USER_B })] });
+
+      await h.service.tick();
+
+      const reads = h.statements.filter((statement) => /from ci\.pipeline_schedule/.test(statement.sql));
+
+      expect(reads).toHaveLength(2);
+      expect(reads.map((statement) => statement.params[0])).toEqual([USER_A, USER_B]);
+    });
+
+    it('holds a nightly stage back while the window is shut', async () => {
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS],
+        lastStartedAt: { [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: new Date(Date.now() - 36 * 60 * 60 * 1000) },
+        windowOpen: false,
+      });
+
+      const report = await h.service.tick();
+
+      // Past its 1-day interval, inside its 3-day maxStaleness: due by the clock
+      // and waiting on the window.
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(1);
+    });
+
+    it('runs an OVERDUE stage even while the window is shut', async () => {
+      // `maxStaleness` is the window's override, and it is what keeps a nightly
+      // window from being a way to never run: an appliance that is powered off
+      // every night at 03:00 would otherwise never enrich anything, forever.
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS],
+        lastStartedAt: {
+          [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+        },
+        windowOpen: false,
+      });
+
+      await h.service.tick();
+
       expect(h.swept()).toEqual([STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]);
+    });
+
+    it('runs a NEVER-RUN stage while the window is shut, so a fresh import is not held for a night', async () => {
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS],
+        windowOpen: false,
+      });
+
+      await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]);
+    });
+
+    it('treats an unreadable window as SHUT, and still runs what is overdue', async () => {
+      // Fails closed, for BackpressureService's reason: a wrong "no" costs one
+      // tick, a wrong "yes" is a metered call nobody authorised. Closed is not
+      // stopped — `maxStaleness` still gets everything moving eventually.
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS, STAGE_IDS.CLEAN_TEMPORAL_REPAIR],
+        lastStartedAt: {
+          [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: new Date(Date.now() - 36 * 60 * 60 * 1000),
+          [STAGE_IDS.CLEAN_TEMPORAL_REPAIR]: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+        },
+        windowThrows: true,
+      });
+
+      await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.CLEAN_TEMPORAL_REPAIR]);
+      expect(h.logger.error).toHaveBeenCalled();
+    });
+
+    it('reads the window ONCE per tick, not once per user', async () => {
+      const h = makeControl({ users: [runningRun(), noRun({ user_id: USER_B })] });
+
+      await h.service.tick();
+
+      expect(h.windowService.status).toHaveBeenCalledTimes(1);
+    });
+
+    it('finalises a run whose only remaining work is not due, and says so', async () => {
+      // `pipeline_runs_active_uniq` allows one unfinished run per user, so
+      // holding this one open for the six days until geocode comes round would
+      // lock the user out of ever starting another. The reason distinguishes it
+      // from a genuine drain: `not_due` means there IS work left.
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.ENRICH_GEOCODE],
+        lastStartedAt: { [STAGE_IDS.ENRICH_GEOCODE]: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(report.runsFinalized).toBe(1);
+      expect(h.runService.finishRun).toHaveBeenCalledWith(
+        RUN_A,
+        'completed',
+        expect.objectContaining({ finalizedReason: 'not_due', legsNotDue: 1 }),
+      );
+    });
+
+    it('does not mark a not-due leg drained', async () => {
+      // A leg with work is not a leg that is finished, and the run's progress
+      // view is where somebody answers "is my import done?".
+      const h = makeControl({
+        users: [runningRun({ detail: { stages: [STAGE_IDS.ENRICH_GEOCODE] } })],
+        stale: [STAGE_IDS.ENRICH_GEOCODE],
+        lastStartedAt: { [STAGE_IDS.ENRICH_GEOCODE]: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(report.legsDrained).toBe(0);
+      expect(report.legsNotDue).toBe(1);
+
+      const drains = h.statements.filter(
+        (statement) =>
+          statement.sql.startsWith('insert into ci.pipeline_shards') && !/make_interval/.test(statement.sql),
+      );
+
+      expect(drains).toHaveLength(0);
+    });
+
+    it('starts no run at all for a user whose only work is not due', async () => {
+      const h = makeControl({
+        users: [noRun()],
+        stale: [STAGE_IDS.ENRICH_GEOCODE],
+        lastStartedAt: { [STAGE_IDS.ENRICH_GEOCODE]: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.runService.startRun).not.toHaveBeenCalled();
+      expect(report.runsStarted).toBe(0);
+      expect(h.swept()).toEqual([]);
+    });
+
+    it('refuses to tick at all when ci.pipeline_schedule is missing', async () => {
+      // Fail CLOSED. Without the table nothing can answer "when did this leg last
+      // run?", every leg reads as never-run, and a weekly metered stage would be
+      // swept on EVERY tick of a node that started before the migration landed.
+      const h = makeControl({ controlPlane: false, users: [runningRun()], stale: [...STAGE_ID_LIST] });
+
+      const report = await h.service.tick();
+
+      expect(report.skipped).toBe(true);
+      expect(h.dispatchService.startSweep).not.toHaveBeenCalled();
+
+      const probe = h.statements.find((statement) => /to_regclass/.test(statement.sql));
+
+      expect(probe?.sql).toContain('ci.pipeline_schedule');
     });
   });
 
@@ -1262,6 +1613,9 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
       null as unknown as PipelineRunService,
       null as unknown as PipelineDispatchService,
       null as unknown as StageRegistry,
+      // Never reached: these tests drive the SQL primitives directly, and none of
+      // them reads the window.
+      null as unknown as EnrichmentWindowService,
       silent,
     );
 
@@ -1485,6 +1839,125 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
       await seedShard({ stage: STAGE_IDS.PROMOTE_PLACE, status: SHARD_STATUS.RUNNING, leaseSeconds: 600 });
 
       await expect(service.reapExpiredShardLeases()).resolves.toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The per-leg clock
+  //
+  // The whole gate rests on these two statements, and neither is observable
+  // from a mock. `stageDueness` is pure and specced against fixed dates in
+  // `schedule.spec`; what is NOT specced anywhere else is whether the instant it
+  // is handed survives a round trip through Postgres's `timestamptz` — an
+  // interval read back an hour wrong by a timezone is a weekly stage running
+  // daily, and every mock in this file would agree with it.
+  // -------------------------------------------------------------------------
+
+  describe('the schedule clock', () => {
+    let scheduleUser: string;
+
+    beforeEach(() => {
+      // A random user, never a real one: this suite rolls back, but a synthetic
+      // row keyed to the appliance's own user would be visible to the live tick
+      // for as long as the transaction is open.
+      scheduleUser = randomUUID();
+    });
+
+    it('reports no row at all as never-run, which is what makes a fresh appliance enrich now', async () => {
+      await expect(service.legScheduleFor(scheduleUser)).resolves.toEqual(new Map());
+    });
+
+    it('stamps a leg and reads the same instant back', async () => {
+      const before = new Date();
+
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
+
+      const schedule = await service.legScheduleFor(scheduleUser);
+      const startedAt = schedule.get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`);
+
+      expect(startedAt).toBeInstanceOf(Date);
+      // Within a second of now in BOTH directions. A timestamp that came back as
+      // a local-time reading of a UTC value would be hours out and would still
+      // be a perfectly valid Date — so the assertion is on the value, not the
+      // type.
+      expect(startedAt!.getTime()).toBeGreaterThanOrEqual(before.getTime() - 1_000);
+      expect(startedAt!.getTime()).toBeLessThanOrEqual(Date.now() + 1_000);
+    });
+
+    it('keys a multi-type stage’s legs separately, so two sweeps keep two clocks', async () => {
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.INDEX_EMBED, 'event'));
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.INDEX_EMBED, 'communication'));
+
+      const schedule = await service.legScheduleFor(scheduleUser);
+
+      expect([...schedule.keys()].sort()).toEqual([
+        `${STAGE_IDS.INDEX_EMBED}\0communication`,
+        `${STAGE_IDS.INDEX_EMBED}\0event`,
+      ]);
+    });
+
+    it('MOVES the stamp on a second claim rather than inserting a second row', async () => {
+      // The `ON CONFLICT` arm, and the reason the interval is a real interval: a
+      // second row per claim would make `legScheduleFor` return whichever one
+      // Postgres felt like, including the oldest — a leg permanently overdue.
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
+
+      const first = (await service.legScheduleFor(scheduleUser)).get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`);
+
+      // `now()` is transaction time and this suite runs inside ONE transaction,
+      // so the two stamps are equal by design. What is under test is the row
+      // count and the counter, which is what the upsert is for.
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
+
+      const rows = (await runner.query(
+        `SELECT stage, entity_type, starts, last_started_at
+           FROM ci.pipeline_schedule
+          WHERE user_id = $1::uuid`,
+        [scheduleUser],
+      )) as Array<{ starts: string | number; last_started_at: Date }>;
+
+      expect(rows).toHaveLength(1);
+      expect(Number(rows[0].starts)).toBe(2);
+      expect(rows[0].last_started_at.getTime()).toBe(first?.getTime());
+    });
+
+    it('keeps one user’s clock out of another’s', async () => {
+      // The property the whole per-leg design exists for: a second user's first
+      // import must be due immediately regardless of how recently the first
+      // user's pass ran.
+      const other = randomUUID();
+
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
+
+      await expect(service.legScheduleFor(other)).resolves.toEqual(new Map());
+      expect((await service.legScheduleFor(scheduleUser)).size).toBe(1);
+    });
+
+    it('survives the round trip well enough for stageDueness to answer too_soon', async () => {
+      // End to end, against the real column: stamp now, ask the real policy
+      // function, and get the answer the schedule declares. This is the
+      // assertion that would fail if `last_started_at` came back as a string or
+      // in the wrong zone.
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
+
+      const lastStartedAt =
+        (await service.legScheduleFor(scheduleUser)).get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`) ?? null;
+
+      expect(
+        stageDueness({ stageId: STAGE_IDS.ENRICH_GEOCODE, lastStartedAt, windowOpen: true }),
+      ).toMatchObject({ due: false, reason: 'too_soon' });
+
+      // And the other side of the same interval, from the same stored instant.
+      const eightDaysOn = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000);
+
+      expect(
+        stageDueness({
+          stageId: STAGE_IDS.ENRICH_GEOCODE,
+          lastStartedAt,
+          windowOpen: true,
+          now: eightDaysOn,
+        }),
+      ).toMatchObject({ due: true, reason: 'interval_elapsed' });
     });
   });
 });

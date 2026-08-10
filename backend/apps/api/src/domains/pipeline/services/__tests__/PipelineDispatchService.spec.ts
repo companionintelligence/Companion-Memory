@@ -772,6 +772,156 @@ describe('PipelineDispatchService empty and bounded dispatch', () => {
   });
 });
 
+describe('PipelineDispatchService per-run cap', () => {
+  /**
+   * `StageSchedule.perRunCap`, arriving as `maxIds`.
+   *
+   * The interval decides how OFTEN a metered stage bills; this decides how BIG
+   * one bill can be, and it is the half that matters more. `ci.position` is
+   * empty today only because a debug push used the legacy GraphQL lane — a real
+   * `/v1` import fills it from 66,579 Google Fit records, and weekly-with-no-cap
+   * is not a slow bill, it is one night on which 66,000 fixes hit a paid
+   * provider at once.
+   *
+   * The contract is SLICE granularity, deliberately: trimming a page to hit an
+   * exact number would emit odd-sized slices and, worse, advance the cursor to
+   * an id the sweep had not finished with — so a resumed chain would re-dispatch
+   * rows it had already handed out. Overshoot below one slice is the price, and
+   * it is asserted as a bound rather than assumed.
+   */
+  it('carries the cap from startSweep into the first hop, and null when there is none', async () => {
+    const capped = makeHarness();
+    await capped.service.startSweep({ stage: STAGE_ID, userId: USER, maxIds: 2_000 });
+    expect(capped.enqueued[0].jobs[0].data.maxIds).toBe(2_000);
+
+    const uncapped = makeHarness();
+    await uncapped.service.startSweep({ stage: STAGE_ID, userId: USER });
+    // `null`, not absent and not 0: a 0 reads as "no cap" to a careless `??` and
+    // as "dispatch nothing" to a careful one.
+    expect(uncapped.enqueued[0].jobs[0].data.maxIds).toBeNull();
+  });
+
+  it('stops the chain at the cap and dispatches exactly it when it divides evenly', async () => {
+    // `schedule.ts`'s own arithmetic for `enrich.position_reverse`, run for real:
+    // 2,000 ids = 10 slices at DEFAULT_SLICE_SIZE = 2 sweep hops.
+    const h = makeHarness({ corpus: corpusOf(5_000) });
+
+    const hops = await h.drain({ sliceSize: DEFAULT_SLICE_SIZE, maxIds: 2_000 });
+
+    expect(h.dispatchedIds()).toHaveLength(2_000);
+    expect(h.sliceJobs()).toHaveLength(10);
+    expect(hops).toHaveLength(2);
+
+    // The chain ENDS. A capped hop that still requeued itself would spend a
+    // worker slot per tick doing nothing, forever.
+    expect(hops[hops.length - 1].result).toEqual(expect.objectContaining({ capped: true, exhausted: false }));
+    expect(
+      hops
+        .flatMap((hop) => hop.log)
+        .flatMap((e) => e.jobs)
+        .filter((job) => job.name === PipelineSweepEvent),
+    ).toHaveLength(1);
+  });
+
+  it('overshoots by strictly less than one slice when the cap does not divide evenly', async () => {
+    const h = makeHarness({ corpus: corpusOf(5_000) });
+
+    await h.drain({ sliceSize: DEFAULT_SLICE_SIZE, maxIds: 1_500 });
+
+    const dispatched = h.dispatchedIds().length;
+
+    expect(dispatched).toBeGreaterThanOrEqual(1_500);
+    expect(dispatched).toBeLessThan(1_500 + DEFAULT_SLICE_SIZE);
+  });
+
+  it('bounds the WHOLE chain, not each hop', async () => {
+    // The bug this pins: a cap read per hop would let every hop dispatch the
+    // full cap, so a 2,000 cap over a 5,000-row corpus would bill for all 5,000
+    // and the chain would look perfectly well-behaved doing it. `dispatched` is
+    // the running total carried across hops, and it is what the check reads.
+    const h = makeHarness({ corpus: corpusOf(5_000) });
+
+    const hops = await h.drain({ sliceSize: 100, maxIds: 900 });
+
+    // 5 slices of 100 per hop, so the cap lands mid-chain rather than on a hop
+    // boundary — two hops in, not two hops each.
+    expect(hops.length).toBeGreaterThan(1);
+    expect(h.dispatchedIds().length).toBeLessThan(1_000);
+  });
+
+  it('spends no query at all once the budget is gone', async () => {
+    // The check sits BEFORE the select, so a spent budget costs neither a
+    // staleness query nor the slice it would have produced.
+    const h = makeHarness({ corpus: corpusOf(5_000) });
+
+    await h.drain({ sliceSize: DEFAULT_SLICE_SIZE, maxIds: 400 });
+
+    expect(h.dispatchedIds()).toHaveLength(400);
+    // Two selects, two slices, and then the hop stops — it does not page on to
+    // discover that it should not have.
+    expect(h.selects).toHaveLength(2);
+  });
+
+  it('reports drained rather than capped when the last slice both empties the source and spends the budget', async () => {
+    // The tie. 350 rows against a cap of exactly 350: the second slice comes
+    // back short — so the source IS dry — and the running total reaches the cap
+    // on the same slice. Both facts are true and only one is worth reporting,
+    // because `drained` is the one that says a later sweep will find nothing.
+    const h = makeHarness({ corpus: corpusOf(350) });
+
+    const hops = await h.drain({ sliceSize: DEFAULT_SLICE_SIZE, maxIds: 350 });
+
+    expect(h.dispatchedIds()).toHaveLength(350);
+    expect(hops[hops.length - 1].result).toEqual(expect.objectContaining({ exhausted: true, capped: false }));
+  });
+
+  it('reports capped when the budget runs out before the source is known to be dry', async () => {
+    // A corpus that is an exact multiple of the slice size: every page is full,
+    // so nothing has PROVEN the source empty when the budget goes. Reported as
+    // capped, and the cheaper answer — the check sits before the select
+    // precisely so the sweep does not spend a query to discover it could have
+    // said `drained` instead. Nothing downstream depends on the difference: the
+    // tick's own probe decides whether the leg is drained.
+    const h = makeHarness({ corpus: corpusOf(400) });
+
+    const hops = await h.drain({ sliceSize: DEFAULT_SLICE_SIZE, maxIds: 400 });
+
+    expect(h.dispatchedIds()).toHaveLength(400);
+    expect(hops[hops.length - 1].result).toEqual(expect.objectContaining({ exhausted: false, capped: true }));
+  });
+
+  it('leaves an uncapped sweep completely unbounded, which is what every free stage gets', async () => {
+    const h = makeHarness({ corpus: corpusOf(5_000) });
+
+    await h.drain({ sliceSize: DEFAULT_SLICE_SIZE });
+
+    expect(h.dispatchedIds()).toHaveLength(5_000);
+  });
+
+  it('carries the cap through a payload round trip, so a resumed hop still honours it', async () => {
+    // The chain outlives the process that started it: every hop is re-parsed
+    // from `pgboss.job.data`. A cap that did not survive JSON would silently
+    // become uncapped on the second hop — the exact hop where it starts to
+    // matter.
+    const h = makeHarness({ corpus: corpusOf(5_000) });
+
+    await h.service.startSweep({ stage: STAGE_ID, userId: USER, maxIds: 2_000 });
+
+    const first = pipelineSweepPayloadSchema.parse(JSON.parse(JSON.stringify(h.enqueued[0].jobs[0].data)));
+
+    expect(first.maxIds).toBe(2_000);
+
+    const hop = await h.service.runSweepHop(first);
+    const requeued = h.enqueued
+      .flatMap((e) => e.jobs)
+      .filter((job) => job.name === PipelineSweepEvent)
+      .at(-1);
+
+    expect(hop.capped).toBe(false);
+    expect(pipelineSweepPayloadSchema.parse(JSON.parse(JSON.stringify(requeued?.data))).maxIds).toBe(2_000);
+  });
+});
+
 describe('PipelineDispatchService entity types', () => {
   it('stamps the stage single entity type on every slice and every query', async () => {
     const h = makeHarness({ corpus: corpusOf(6) });

@@ -8,9 +8,16 @@ import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
 
 import { SHARD_LEASE_SECONDS, STAGE_ID_LIST, STAGE_IDS, type StageId } from '../constants';
-import { isMeteredStage as scheduleIsMeteredStage, meteredStageIds } from '../schedule';
+import {
+  automaticStageIds,
+  isMeteredStage as scheduleIsMeteredStage,
+  meteredStageIds,
+  stageDueness,
+  type StageDueness,
+} from '../schedule';
 import type { Stage } from '../types';
 
+import { EnrichmentWindowService } from './EnrichmentWindowService';
 import { PipelineDispatchService } from './PipelineDispatchService';
 import { PipelineRunService } from './PipelineRunService';
 import { PipelineStateService } from './PipelineStateService';
@@ -73,11 +80,31 @@ import { StageRegistry } from './StageRegistry';
  * ── Cost discipline is structural, not advisory ────────────────────────────
  *
  * `enrich.geocode` and `enrich.position_reverse` egress through Portal to a paid
- * provider: a runaway loop there is a bill, not just load. They are named in
- * {@link METERED_STAGES} and are excluded from {@link defaultStageSet}, so a
- * timer can never start them. Reaching one requires a run that NAMES it in
- * `detail.stages` — i.e. a human, once, deliberately. A module-load guard
- * asserts the exclusion rather than trusting the comment.
+ * provider: a runaway loop there is a bill, not just load. They used to be
+ * excluded from {@link defaultStageSet} outright, which made "costs money" and
+ * "unreachable by a timer" the same statement — so the only cadence available to
+ * a metered stage was never, and the user's actual request (geocode SLOWER) had
+ * no expressible answer.
+ *
+ * They are now timer-reachable, and three declared numbers bound them instead of
+ * one exclusion — all three read from `STAGE_SCHEDULES` and none of them
+ * restated here:
+ *
+ *  - **`minInterval`** (7 days), enforced by {@link stageDueness} against the
+ *    per-leg `ci.pipeline_schedule.last_started_at` this tick stamps and reads;
+ *  - **`window: 'enrichment'`**, enforced by passing `EnrichmentWindowService`'s
+ *    answer into the same call — one implementation of "is it 03:00 for this
+ *    owner?", consulted here rather than re-derived;
+ *  - **`perRunCap`**, carried into `startSweep` as `maxIds` and enforced by the
+ *    dispatcher at slice granularity, so the size of a bill is bounded and not
+ *    merely its frequency.
+ *
+ * The clock is the part with a trap in it, and the trap is why this needed a
+ * table. `ci.pipeline_shards` is RUN-scoped: it CASCADEs with the run, and this
+ * tick finalizes a run as soon as nothing is stale. A weekly interval measured
+ * off a shard would therefore reset to never-run every few hours and a weekly
+ * stage would be due on every tick — the invoice, arrived at by reusing a table.
+ * `ci.pipeline_schedule` outlives runs, which is its entire job.
  *
  * ── What the tick deliberately does NOT do ─────────────────────────────────
  *
@@ -321,15 +348,12 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
  *
  * Both egress through Portal to a paid, metered provider. `enrich.geocode`
  * forward-geocodes `ci.events.location_name`; `enrich.position_reverse` reverse-
- * geocodes `ci.position`, the largest table on the appliance. Their own headers
- * say a sweep of either is a BILL, and until now that was a sentence in a comment
- * with nothing enforcing it.
+ * geocodes `ci.position`, the largest table on the appliance.
  *
- * A stage named here is excluded from {@link defaultStageSet} and therefore
- * unreachable by the timer. It is reached only by a run whose
- * `detail.stages` names it — which is a person, once, on purpose. The exclusion
- * is asserted at module load, so adding a metered stage to the default set fails
- * the boot rather than the invoice.
+ * Membership no longer decides REACHABILITY — see the cost note in this file's
+ * header. It is kept because "which stages spend money?" is a question an
+ * operator route, a log line and a spec all ask, and deriving it once here beats
+ * three copies of `cost === 'metered'`.
  */
 // DERIVED from STAGE_SCHEDULES, never restated. Which stages cost money is a
 // property of the stage's schedule policy (schedule.ts), and holding the same
@@ -341,29 +365,27 @@ export const METERED_STAGES: ReadonlySet<StageId> = new Set<StageId>(meteredStag
 export const isMeteredStage = scheduleIsMeteredStage;
 
 /**
- * The stages a run sweeps when it names none: every declared stage that is not
- * metered.
+ * The stages a run sweeps when it names none: every stage a timer may ever
+ * start, which is everything not `trigger: 'manual'`.
+ *
+ * Metered stages ARE in it. That is the whole of the cadence change, and it is
+ * only safe because the three things that used to be missing are now present:
+ * {@link serviceUser} consults {@link stageDueness} with a durable per-leg
+ * `lastStartedAt` and the enrichment window, and every sweep it starts carries
+ * the stage's `perRunCap`. Admitting them before that existed would have made a
+ * weekly stage reachable every two minutes — which is why the exclusion was
+ * right until this commit and wrong after it.
+ *
+ * Delegates to `automaticStageIds()` rather than filtering here: which stages a
+ * timer may start is a property of the schedule, and `schedule.ts` is where it
+ * is declared and boot-guarded.
  *
  * Declaration order is phase order (`STAGE_ID_LIST` is ordered `index` →
  * `enrich` → `clean` → `promote`), which is also a valid topological order, so
  * the tick's sort is stable and reads in pipeline order.
  */
 export function defaultStageSet(): StageId[] {
-  // Metered stages stay OUT until the dueness gate lands.
-  //
-  // The decided policy is that geocoding runs weekly, not never — `schedule.ts`
-  // declares exactly that (7-day minInterval, enrichment window, perRunCap). But
-  // the tick does not yet CONSULT it: there is no per-leg `lastStartedAt`, so
-  // nothing can tell whether a weekly stage is due, and no perRunCap enforcement
-  // in the sweep. Admitting metered stages here before that exists would make
-  // them reachable every five minutes with nothing to stop them — the invoice,
-  // not the intent.
-  //
-  // Landing the gate is a small, well-specified change (see schedule.ts's
-  // `stageDueness` and the `ci.pipeline_schedule` note); this line becomes
-  // `return automaticStageIds();` in the same commit that adds it, and
-  // PipelineControlService.spec's "metered stages" block flips with it.
-  return STAGE_ID_LIST.filter((stageId) => !isMeteredStage(stageId));
+  return automaticStageIds();
 }
 
 /**
@@ -532,6 +554,40 @@ export interface ControlTickReport {
 
   /** Stage legs whose source is drained; their shard is now `done`. */
   legsDrained: number;
+
+  /**
+   * Stage legs with stale rows that are not DUE — swept inside their
+   * `minInterval`, or waiting for the enrichment window to open.
+   *
+   * The number that makes "why did geocode not run last night?" answerable
+   * without a debugger. On a converged appliance this is the largest count in
+   * the report and that is the system working: it is the difference between a
+   * nightly pipeline and a permanent background tenant.
+   */
+  legsNotDue: number;
+}
+
+/**
+ * What one tick measured about the appliance before it looked at any user.
+ *
+ * Measured once and passed down so every dueness decision in a pass is made
+ * against the same instant and the same window reading. A tick that re-read
+ * either per user could serve the first user under an open window and the second
+ * under a shut one, from the same tick, with nothing in the log to explain it.
+ */
+interface TickConditions {
+  /** `WindowStatus.open` — may the appliance spend on enrichment right now? */
+  windowOpen: boolean;
+
+  /** The instant this tick judges every leg against. */
+  now: Date;
+}
+
+/** One `ci.pipeline_schedule` row, as the tick reads it. */
+interface LegScheduleRow {
+  stage: string;
+  entity_type: string;
+  last_started_at: Date | string;
 }
 
 /** One active run, as the tick reads it. */
@@ -555,6 +611,7 @@ function emptyReport(): ControlTickReport {
     sweepsStarted: 0,
     legsBlocked: 0,
     legsDrained: 0,
+    legsNotDue: 0,
   };
 }
 
@@ -580,6 +637,20 @@ export class PipelineControlService {
     private readonly runService: PipelineRunService,
     private readonly dispatchService: PipelineDispatchService,
     private readonly stageRegistry: StageRegistry,
+    /**
+     * The one implementation of "may the appliance spend right now?".
+     *
+     * Injected rather than re-derived, because a second copy of "is it 03:00 in
+     * the owner's zone?" is exactly the drift `schedule.ts` splits its
+     * responsibilities to avoid. The tick asks it once and hands the answer to
+     * {@link stageDueness}, which owns no clock of its own.
+     *
+     * Only {@link EnrichmentWindowService.status} is called — the READ-ONLY
+     * form. `takeTurn()` also charges the nightly budget and moves the rotation
+     * pointer, which is a second scheduling decision (WHO is served) on top of
+     * this one (WHICH stages are due) and belongs to its own change.
+     */
+    private readonly windowService: EnrichmentWindowService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PipelineControlService.name);
@@ -688,13 +759,15 @@ export class PipelineControlService {
     // waiting another two minutes.
     report.leasesReaped = await this.reapExpiredShardLeases();
 
+    const conditions = await this.tickConditions();
+
     const rows = await this.activeRunRows();
 
     for (const row of rows) {
       report.usersServiced += 1;
 
       try {
-        await this.serviceUser(row, report);
+        await this.serviceUser(row, report, conditions);
       } catch (err: unknown) {
         // One user's failure must not cost every other user their tick. The
         // failure is durable in the sense that matters — nothing was consumed, so
@@ -711,8 +784,17 @@ export class PipelineControlService {
     }
   }
 
-  /** Reconcile one user's run, creating one if there is work and none exists. */
-  private async serviceUser(row: ActiveRunRow, report: ControlTickReport): Promise<void> {
+  /**
+   * Reconcile one user's run, creating one if there is DUE work and none exists.
+   *
+   * `conditions` is measured once for the whole tick and passed down, so every
+   * leg of every user is judged against one instant and one window reading.
+   */
+  private async serviceUser(
+    row: ActiveRunRow,
+    report: ControlTickReport,
+    conditions: TickConditions,
+  ): Promise<void> {
     const userId = row.user_id;
 
     // ── 1. desired_state comes first, before a single candidate is counted ──
@@ -742,17 +824,51 @@ export class PipelineControlService {
       candidates.set(this.legKey(leg), await this.hasCandidates(leg, userId));
     }
 
-    const stagesWithCandidates = new Set<StageId>(
-      legs.filter((leg) => candidates.get(this.legKey(leg)) === true).map((leg) => leg.stageId),
+    // ── 3. WHICH of those may run right now ────────────────────────────────
+    //
+    // ONE read per user per tick, not one per leg: a user has at most a dozen
+    // rows here and the tick already issues a staleness probe per leg, so a
+    // second per-leg round trip would double the tick's statement count to
+    // answer a question one `WHERE user_id = $1` covers.
+    const lastStartedAt = await this.legScheduleFor(userId);
+
+    const dueness = new Map<string, StageDueness>(
+      legs.map((leg) => [
+        this.legKey(leg),
+        stageDueness({
+          stageId: leg.stageId,
+          lastStartedAt: lastStartedAt.get(this.legKey(leg)) ?? null,
+          windowOpen: conditions.windowOpen,
+          now: conditions.now,
+        }),
+      ]),
     );
 
-    // ── 3. Ordering, from the declared graph ───────────────────────────────
-    const blocked = this.blockedStages(stageIds, stagesWithCandidates);
+    // THE SET THE REST OF THIS METHOD IS ABOUT: stale AND allowed to run now.
+    //
+    // Filtering here rather than at the dispatch loop is what fixes a real
+    // ordering bug, and it is the reason this is one set and not two.
+    // `enrich.estimate_location` and `promote.place` are NIGHTLY consumers of a
+    // WEEKLY producer, so on the six nights `enrich.geocode` is not due it still
+    // has candidates — and a consumer blocked whenever its producer merely HAS
+    // work would be held back six nights in seven, by a producer that was never
+    // going to run on any of them. A producer that is not due is not a producer
+    // anybody is waiting for.
+    const dueWithCandidates = new Set<StageId>(
+      legs
+        .filter(
+          (leg) => candidates.get(this.legKey(leg)) === true && dueness.get(this.legKey(leg))?.due === true,
+        )
+        .map((leg) => leg.stageId),
+    );
 
-    // ── 4. Nothing stale anywhere: finalise, or do nothing at all ──────────
-    if (stagesWithCandidates.size === 0) {
+    // ── 4. Ordering, from the declared graph ───────────────────────────────
+    const blocked = this.blockedStages(stageIds, dueWithCandidates);
+
+    // ── 5. Nothing DUE anywhere: finalise, or do nothing at all ────────────
+    if (dueWithCandidates.size === 0) {
       if (row.run_id == null) {
-        // No run, no work. The overwhelmingly common tick on a converged
+        // No run, no due work. The overwhelmingly common tick on a converged
         // appliance, and it must cost nothing beyond the probes.
         return;
       }
@@ -764,7 +880,28 @@ export class PipelineControlService {
       // period for no reason. Marking drained is safe here precisely because
       // nothing is stale: a slice genuinely in flight leaves its rows `running`
       // at `stage_version = 0`, which the probe still counts as a candidate.
+      //
+      // THE RUN IS FINALISED EVEN IF SOME LEGS ARE MERELY NOT DUE, and that is
+      // deliberate. `pipeline_runs_active_uniq` allows one unfinished run per
+      // user, so holding this one open for the six days until a weekly stage
+      // comes round would lock the user out of ever pressing "reprocess" — a
+      // cadence change silently disabling the manual escape hatch. A run
+      // represents work in flight, not a subscription to future work; the next
+      // tick that finds something due starts a fresh one.
+      let waiting = 0;
+
       for (const leg of legs) {
+        if (candidates.get(this.legKey(leg)) === true) {
+          // Stale but not due. Deliberately NOT marked drained: the leg has work
+          // and saying `done` about it would put a falsehood in the run's
+          // progress view, which is the one place an operator looks to answer
+          // "is my import finished?".
+          report.legsNotDue += 1;
+          waiting += 1;
+
+          continue;
+        }
+
         await this.markShardDrained(row.run_id, leg);
         report.legsDrained += 1;
       }
@@ -779,9 +916,17 @@ export class PipelineControlService {
       // `finishRun` ALWAYS stamps `finished_at`, which is what releases
       // `pipeline_runs_active_uniq` and lets the next tick start a fresh run when
       // new rows land or a version is bumped.
+      //
+      // The reason distinguishes the two ways a run ends with nothing to do,
+      // because they mean opposite things to whoever reads it later: `drained`
+      // is "there is no work left", `not_due` is "there is work left and it is
+      // not time" — the second is the expected end of a run on an appliance with
+      // a weekly stage, and reporting it as `drained` would make the geocoder
+      // look converged while 95 events still wait for it.
       await this.runService.finishRun(row.run_id, 'completed', {
         finalizedBy: 'control-tick',
-        finalizedReason: 'drained',
+        finalizedReason: waiting > 0 ? 'not_due' : 'drained',
+        legsNotDue: waiting,
       });
 
       report.runsFinalized += 1;
@@ -789,7 +934,7 @@ export class PipelineControlService {
       return;
     }
 
-    // ── 5. There IS work. Make sure there is a run to attribute it to ──────
+    // ── 6. There IS due work. Make sure there is a run to attribute it to ──
     let runId = row.run_id;
 
     if (runId == null) {
@@ -813,7 +958,7 @@ export class PipelineControlService {
       runId = started.run.id;
     }
 
-    // ── 6. Dispatch, producers first, bounded ──────────────────────────────
+    // ── 7. Dispatch, producers first, bounded ──────────────────────────────
     for (const leg of orderStages(stageIds).flatMap((stageId) =>
       legs.filter((candidate) => candidate.stageId === stageId),
     )) {
@@ -839,6 +984,23 @@ export class PipelineControlService {
         continue;
       }
 
+      const due = dueness.get(this.legKey(leg));
+
+      if (due?.due !== true) {
+        // Stale, unblocked, and NOT ITS TURN. Checked after the drained branch
+        // because "nothing to do" is a fact worth recording whatever the clock
+        // says, and before the claim because a claim would take a ten-minute
+        // lease on a leg that is not going to be swept.
+        //
+        // Nothing is written down, exactly as for a block: dueness is re-derived
+        // every tick from `ci.pipeline_schedule`, so a leg becomes due the moment
+        // its interval elapses rather than the next time something remembers to
+        // clear a flag.
+        report.legsNotDue += 1;
+
+        continue;
+      }
+
       if (report.sweepsStarted >= MAX_SWEEPS_PER_TICK) {
         continue;
       }
@@ -851,6 +1013,19 @@ export class PipelineControlService {
         continue;
       }
 
+      // THE CLOCK IS STAMPED BEFORE THE SWEEP IS STARTED, not after it.
+      //
+      // The two failure modes are not symmetric. Stamping first and then failing
+      // to dispatch costs a metered leg one interval — it is skipped until next
+      // week, loudly, in the log line below, having spent nothing. Stamping after
+      // a successful dispatch and then losing the process (a deploy, an OOM kill,
+      // a connection reset in the millisecond between the two) leaves no record
+      // that the sweep ever started, so the next tick finds the leg due again and
+      // re-dispatches it — against a paid provider, on a two-minute cadence, for
+      // as long as the crash keeps happening. A week of delay is recoverable; a
+      // loop against a metered API is what this whole gate exists to prevent.
+      await this.recordStageStart(userId, leg);
+
       try {
         await this.dispatchService.startSweep({
           stage: leg.stageId,
@@ -859,6 +1034,11 @@ export class PipelineControlService {
           // it, and letting the dispatcher default would mean the shard and the
           // ledger could disagree about which type was swept.
           entityType: leg.entityType,
+          // The declared `perRunCap`, carried from the schedule this leg was
+          // just judged against rather than looked up again — so the number that
+          // authorised the sweep is the number that bounds it. `null` (uncapped)
+          // becomes `undefined`, which is what `StartSweepInput` spells it.
+          maxIds: due.perRunCap ?? undefined,
         });
 
         report.sweepsStarted += 1;
@@ -867,9 +1047,15 @@ export class PipelineControlService {
         // wiring fault (an unbound stage), which a retry every two minutes cannot
         // fix but a deploy can; the held lease is a free backoff that expires in
         // SHARD_LEASE_SECONDS and lets the leg be retried once, not hammered.
+        //
+        // The schedule stamp is left in place too, and it is the louder of the
+        // two: this leg now waits a full `minInterval` before it is due again. On
+        // a weekly stage that is a week of nothing, which is why this is an error
+        // and names the leg — the cost of the alternative is on the claim above.
         this.logger.error(
           `Pipeline control tick could not start a sweep for ${leg.stageId} (${leg.entityType}); ` +
-            `its shard lease is left to expire`,
+            `its shard lease is left to expire and its schedule stamp stands, so the leg is not due ` +
+            `again until its minInterval elapses`,
           err instanceof Error ? err : new Error(String(err)),
         );
       }
@@ -929,10 +1115,16 @@ export class PipelineControlService {
   /**
    * Which stages this run sweeps.
    *
-   * `detail.stages`, when present and usable, IS the answer — including metered
-   * stages, because naming one is the deliberate act that makes it startable.
-   * Absent, the run gets {@link defaultStageSet}, which a module-load guard
-   * proves excludes everything metered.
+   * `detail.stages`, when present and usable, IS the answer. Absent, the run gets
+   * {@link defaultStageSet}.
+   *
+   * Naming a stage decides only WHICH stages this run considers — it is not a
+   * bypass. Everything in the resulting set is still judged by
+   * {@link stageDueness}, so a run that names `enrich.geocode` a day after the
+   * last one still gets `too_soon`, and the operator's escape hatch from a
+   * cadence is the schedule, not a hand-written run. That is a deliberate change
+   * from when naming a stage was the ONLY way to reach it and therefore had to
+   * mean "do it now".
    *
    * An unusable `detail.stages` (not an array, or naming nothing declared) falls
    * back to the default rather than to the empty set: an empty set would make the
@@ -1002,13 +1194,16 @@ export class PipelineControlService {
   /**
    * Which stages must not start yet, because something they consume is not done.
    *
-   * Blocking is TRANSITIVE and propagates only through stages that are actually
-   * in this run's set. That restriction is not a nicety, it is what stops the
-   * cost discipline from silently disabling half the pipeline: `enrich.geocode`
-   * is metered and therefore absent from the default set, so it always has stale
-   * rows and would permanently block `enrich.estimate_location` and
-   * `promote.place` if an absent producer counted. A producer that is not part of
-   * the run is not being waited for — there is nothing to run ahead of.
+   * `withCandidates` is the DUE set — stale AND allowed to run now — and passing
+   * the unfiltered one would resurrect the same defect this restriction already
+   * guards against in the other direction. Blocking is TRANSITIVE and propagates
+   * only through stages that are actually in this run's set, because a producer
+   * the run does not include is not being waited for; by exactly the same
+   * argument, a producer that is not DUE is not being waited for either.
+   * `enrich.estimate_location` and `promote.place` are nightly consumers of the
+   * weekly `enrich.geocode`, so on the six nights it is not due it still has
+   * candidates — and counting those would block two free stages six nights in
+   * seven behind a producer that was never going to run on any of them.
    *
    * Computed in dependency order so one pass suffices: by the time a stage is
    * examined, every producer of it already has an answer.
@@ -1028,6 +1223,52 @@ export class PipelineControlService {
     }
 
     return blocked;
+  }
+
+  /**
+   * Measure the appliance once, before any user is looked at.
+   *
+   * ── A window that cannot be read is a CLOSED window ────────────────────────
+   *
+   * `EnrichmentWindowService.status()` already fails closed on its own terms (an
+   * unmigrated `ci.pipeline_turns` answers `unavailable`), and a THROW is caught
+   * here and answered the same way, for `BackpressureService`'s reason: a wrong
+   * "no" costs one tick and the next one re-asks, while a wrong "yes" is Ollama
+   * contention against somebody who is awake, or a geocoding call nobody
+   * authorised.
+   *
+   * "Closed" is not "stopped", which is what makes failing closed affordable
+   * here rather than a way to wedge the pipeline. `stageDueness` tests
+   * `maxStaleness` BEFORE the window, so a leg the window has held back long
+   * enough becomes overdue and runs at whatever hour it happens to be — 3 days
+   * for a nightly stage, 30 for a metered one. A window that is permanently
+   * unreadable therefore degrades the appliance to its `maxStaleness` cadence
+   * rather than to silence, and a leg that has never run ignores the window
+   * outright.
+   */
+  private async tickConditions(): Promise<TickConditions> {
+    const now = new Date();
+
+    try {
+      const window = await this.windowService.status(now);
+
+      if (!window.open) {
+        this.logger.debug('Enrichment window is shut; only overdue legs will be swept this tick', {
+          state: window.state,
+          nextOpensAt: window.nextOpensAt,
+        });
+      }
+
+      return { windowOpen: window.open, now };
+    } catch (err: unknown) {
+      this.logger.error(
+        'The enrichment window could not be read; this tick treats it as shut, so only legs past ' +
+          'their maxStaleness will be swept',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+
+      return { windowOpen: false, now };
+    }
   }
 
   /**
@@ -1081,15 +1322,111 @@ export class PipelineControlService {
     return rows[0]?.locked === true;
   }
 
-  /** Both control-plane tables the tick writes, plus the ledger it reads. */
+  /**
+   * Both control-plane tables the tick writes, the ledger it reads, and the
+   * schedule it now judges every leg against.
+   *
+   * `ci.pipeline_schedule` is in this list, and it is the reason to notice the
+   * list at all. Without it nothing can answer "when did this leg last run?",
+   * every leg reads as never-run, and a weekly metered stage would be swept on
+   * EVERY tick of an unmigrated node — the exact failure the gate exists to
+   * prevent, arrived at by a node that started before `migrate-database`
+   * finished. Refusing to tick at all is the fail-closed answer and it is
+   * self-healing: the probe is re-run every tick and nothing is consumed, so the
+   * pass resumes on its own the moment the migration lands.
+   */
   private async controlPlanePresent(): Promise<boolean> {
     const rows = await this.dataSource.query<Array<{ present: boolean }>>(
-      `SELECT to_regclass('ci.pipeline_runs')   IS NOT NULL
-          AND to_regclass('ci.pipeline_shards') IS NOT NULL
-          AND to_regclass('ci.pipeline_state')  IS NOT NULL AS present`,
+      `SELECT to_regclass('ci.pipeline_runs')     IS NOT NULL
+          AND to_regclass('ci.pipeline_shards')   IS NOT NULL
+          AND to_regclass('ci.pipeline_state')    IS NOT NULL
+          AND to_regclass('ci.pipeline_schedule') IS NOT NULL AS present`,
     );
 
     return rows[0]?.present === true;
+  }
+
+  /**
+   * When each of this user's legs last had a sweep STARTED.
+   *
+   * One statement per user per tick, keyed `stage\0entity_type` to match
+   * {@link legKey}. A leg with no row is absent from the map, and the ABSENCE is
+   * the answer: `stageDueness` reads `null` as infinite staleness and therefore
+   * as overdue, which is what makes a freshly imported appliance enrich
+   * immediately instead of waiting a week for its first geocode.
+   *
+   * Public for the same reason as {@link reapExpiredShardLeases} and
+   * {@link claimStageShard}: what it means is in the statement and in the round
+   * trip through Postgres's `timestamptz`, and a mock agrees with whatever it is
+   * asked.
+   */
+  async legScheduleFor(userId: string): Promise<Map<string, Date>> {
+    const rows = await this.dataSource.query<LegScheduleRow[]>(
+      `SELECT stage, entity_type, last_started_at
+         FROM ci.pipeline_schedule
+        WHERE user_id = $1::uuid`,
+      [userId],
+    );
+
+    const schedule = new Map<string, Date>();
+
+    for (const row of rows) {
+      // `Date` on node-postgres, a string on some drivers and after a JSON round
+      // trip. Coerced rather than trusted, because the failure is silent: an
+      // Invalid Date arithmetics to NaN, every comparison against it is false,
+      // and `staleness < minInterval` being false is DUE — a metered stage
+      // becoming due every tick because a driver handed back a string.
+      const startedAt =
+        row.last_started_at instanceof Date ? row.last_started_at : new Date(row.last_started_at);
+
+      if (Number.isNaN(startedAt.getTime())) {
+        // Fail CLOSED, in the direction the cost lives: treated as started right
+        // now, so the leg waits a full interval rather than being swept on every
+        // tick until somebody notices.
+        this.logger.error(
+          `ci.pipeline_schedule holds an unreadable last_started_at for ${row.stage} ` +
+            `(${row.entity_type}); treating the leg as just-started so it is not due again until its ` +
+            `minInterval elapses`,
+        );
+
+        schedule.set(this.key(row.stage, row.entity_type), new Date());
+
+        continue;
+      }
+
+      schedule.set(this.key(row.stage, row.entity_type), startedAt);
+    }
+
+    return schedule;
+  }
+
+  /**
+   * Stamp "a sweep for this leg started now", cross-run and durable.
+   *
+   * The counterpart to {@link claimStageShard} and deliberately NOT part of it:
+   * a shard is run-scoped and CASCADEs away with its run, and a weekly interval
+   * measured off something that is deleted every few hours is a weekly interval
+   * that never elapses. Two writes, two lifetimes, on purpose.
+   *
+   * `now()` rather than `EXCLUDED.last_started_at` on the update arm: they are
+   * the same value here, and naming the function makes it obvious that a
+   * re-claim moves the clock forward instead of preserving whatever the insert
+   * happened to carry.
+   *
+   * Public so the upsert's semantics — that a second claim MOVES the stamp and
+   * increments the counter rather than inserting a second row — can be asserted
+   * against a real Postgres.
+   */
+  async recordStageStart(userId: string, leg: StageLeg): Promise<void> {
+    await this.dataSource.query(
+      `INSERT INTO ci.pipeline_schedule AS s (user_id, stage, entity_type, last_started_at, starts)
+       VALUES ($1::uuid, $2, $3, now(), 1)
+       ON CONFLICT (user_id, stage, entity_type) DO UPDATE
+          SET last_started_at = now(),
+              starts          = s.starts + 1,
+              updated_at      = now()`,
+      [userId, leg.stageId, leg.entityType],
+    );
   }
 
   /**
@@ -1288,6 +1625,18 @@ export class PipelineControlService {
 
   /** Map key for a leg. The pair is the identity; the stage id alone is not. */
   private legKey(leg: StageLeg): string {
-    return `${leg.stageId}\0${leg.entityType}`;
+    return this.key(leg.stageId, leg.entityType);
+  }
+
+  /**
+   * The same key, from the two columns a `ci.pipeline_schedule` row carries.
+   *
+   * Shared with {@link legKey} rather than written twice: the schedule map is
+   * looked up by leg, so the two spellings agreeing is not a style point — a
+   * mismatch would silently make every lookup miss, every leg read as never-run,
+   * and every weekly stage due on every tick.
+   */
+  private key(stageId: string, entityType: string): string {
+    return `${stageId}\0${entityType}`;
   }
 }

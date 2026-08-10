@@ -56,6 +56,7 @@ import { PipelineSliceListener } from './listeners/PipelineSliceListener';
 import { PIPELINE_TICK, PipelineTickCron } from './listeners/PipelineTickCron';
 import { StageArrivalListener } from './listeners/StageArrivalListener';
 import { BackpressureService } from './services/BackpressureService';
+import { EnrichmentWindowService } from './services/EnrichmentWindowService';
 import { PipelineControlService } from './services/PipelineControlService';
 import { PipelineDispatchService } from './services/PipelineDispatchService';
 import { PipelineRunService } from './services/PipelineRunService';
@@ -170,6 +171,10 @@ const stageProviders: Provider[] = [
     PipelineDispatchService,
     PipelineRunService,
     BackpressureService,
+    // WHEN the appliance is willing to spend, which the control tick hands to
+    // `stageDueness` for every leg it judges. Declared and specced before
+    // anything consumed it; the dueness gate is its first caller.
+    EnrichmentWindowService,
     PipelineControlService,
     PipelineSliceListener,
     // Rows are enriched AS THEY ARRIVE; the tick is the backstop, not the
@@ -193,6 +198,7 @@ const stageProviders: Provider[] = [
     PipelineRunService,
     PipelineControlService,
     BackpressureService,
+    EnrichmentWindowService,
     StageRegistry,
   ],
 })

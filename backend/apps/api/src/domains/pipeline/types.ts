@@ -425,8 +425,28 @@ export const pipelineSweepPayloadSchema = z.object({
   /** Hop counter. Fuel gauge against a sweep that fails to advance; see MAX_SWEEP_HOPS. */
   hop: z.number().int().nonnegative().default(0),
 
-  /** Running total of ids dispatched by this sweep, carried across hops for the log line. */
+  /**
+   * Running total of ids dispatched by this sweep, carried across hops for the
+   * log line — and, since {@link maxIds}, for the budget too.
+   */
   dispatched: z.number().int().nonnegative().default(0),
+
+  /**
+   * Ceiling on ids this WHOLE sweep may dispatch, across every hop.
+   * Absent/`null` is uncapped, which is what every stage without a
+   * {@link StageSchedule.perRunCap} gets.
+   *
+   * Carried in the payload rather than re-read from `STAGE_SCHEDULES` at each
+   * hop, and that is the point of it being here: a sweep is a chain of jobs that
+   * outlives the process which started it, so a cap re-derived per hop would
+   * change under a running sweep the moment somebody edits the schedule and
+   * deploys. The number the sweep was authorised with travels with the sweep.
+   *
+   * Nullish rather than optional-with-a-default: `pipelineSweepPayloadSchema` is
+   * non-strict and parses jobs written by earlier releases, and a default here
+   * would have to be a number — there is no integer that means "uncapped".
+   */
+  maxIds: z.number().int().positive().nullish(),
 });
 
 export type PipelineSweepPayload = z.infer<typeof pipelineSweepPayloadSchema>;

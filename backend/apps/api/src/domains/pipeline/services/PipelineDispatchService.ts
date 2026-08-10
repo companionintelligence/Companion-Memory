@@ -18,6 +18,17 @@ export interface StartSweepInput {
   entityType?: string;
   /** Ids per slice. Defaults to {@link DEFAULT_SLICE_SIZE}. */
   sliceSize?: number;
+  /**
+   * Ceiling on ids this whole sweep may dispatch, across every hop. Omitted is
+   * uncapped.
+   *
+   * The caller supplies it rather than this service reading `STAGE_SCHEDULES`,
+   * for the same reason `stageDueness` takes `lastStartedAt`: the dispatcher
+   * does not own policy. `PipelineControlService` passes
+   * `stagePerRunCap(stageId)`; an operator route sweeping one stage by hand may
+   * pass its own number or none at all.
+   */
+  maxIds?: number;
 }
 
 /** Outcome of one sweep hop. Returned for tests and for the caller's log line. */
@@ -31,6 +42,14 @@ export interface SweepHopResult {
   cursor: string | null;
   /** True when the source is drained and no further hop was scheduled. */
   exhausted: boolean;
+  /**
+   * True when the sweep stopped because it reached `maxIds` rather than because
+   * the source ran dry. Distinct from {@link exhausted} on purpose: both end the
+   * chain, but only one of them means there is nothing left to do. A capped
+   * sweep leaves stale rows behind deliberately, so the tick's probe still finds
+   * candidates and the leg is not recorded as drained.
+   */
+  capped: boolean;
 }
 
 /**
@@ -114,6 +133,7 @@ export class PipelineDispatchService {
       sliceSize: input.sliceSize ?? DEFAULT_SLICE_SIZE,
       hop: 0,
       dispatched: 0,
+      maxIds: input.maxIds ?? null,
     };
 
     await this.eventService.send(PipelineSweepEvent, payload, {
@@ -126,6 +146,7 @@ export class PipelineDispatchService {
       userId: input.userId,
       queue: stage.queue,
       sliceSize: payload.sliceSize,
+      maxIds: payload.maxIds,
     });
   }
 
@@ -157,7 +178,25 @@ export class PipelineDispatchService {
   /**
    * One hop: select up to {@link MAX_SLICES_PER_SWEEP} slices of stale ids,
    * enqueue them in a single bulk insert, and re-enqueue this sweep behind them
-   * unless the source is drained.
+   * unless the source is drained or the sweep has spent its budget.
+   *
+   * ── The budget, and why it is checked between slices ───────────────────────
+   *
+   * `payload.maxIds` is a `StageSchedule.perRunCap` that travelled here from the
+   * control tick. It bounds the WHOLE sweep, not one hop: `payload.dispatched`
+   * is the running total carried across the chain, so a cap of 2,000 at
+   * `DEFAULT_SLICE_SIZE` ends the chain two hops in rather than letting every
+   * hop dispatch 2,000 of its own.
+   *
+   * The check sits between slices rather than inside one. Trimming a page to hit
+   * an exact number would make the cap a source of odd-sized slices — and the
+   * last id of a trimmed page is not the cursor the sweep would have advanced
+   * to, so a resumed chain would re-select rows it had already dispatched. The
+   * declared contract is therefore slice granularity: a sweep may overshoot by
+   * strictly less than `sliceSize`, which is the slack `StageSchedule.perRunCap`
+   * documents. For the metered stages that is at most 199 extra ids against a
+   * weekly budget of one or two thousand, and every one of them rides
+   * `GeocodeService`'s cache.
    *
    * Public so a test can drive a sweep hop by hop without a queue.
    */
@@ -195,16 +234,35 @@ export class PipelineDispatchService {
           `predicate and whether its slices are completing.`,
       );
 
-      return { stage: stage.id, dispatched: 0, slices: 0, cursor: payload.cursor ?? null, exhausted: false };
+      return {
+        stage: stage.id,
+        dispatched: 0,
+        slices: 0,
+        cursor: payload.cursor ?? null,
+        exhausted: false,
+        capped: false,
+      };
     }
+
+    const maxIds = payload.maxIds ?? null;
 
     const slices: Array<{ name: string; data: Record<string, unknown> }> = [];
 
     let cursor: string | null = payload.cursor ?? null;
     let dispatched = 0;
     let exhausted = false;
+    let capped = false;
 
     for (let i = 0; i < MAX_SLICES_PER_SWEEP; i += 1) {
+      // BEFORE the select, so a spent budget costs nothing at all — not a
+      // staleness query, and not the slice it would have produced. `>=` rather
+      // than `>`: at exactly the cap the sweep has had everything it was
+      // authorised for.
+      if (maxIds != null && payload.dispatched + dispatched >= maxIds) {
+        capped = true;
+        break;
+      }
+
       const ids: string[] = await this.stateService.selectStale(
         stage,
         payload.userId,
@@ -263,7 +321,20 @@ export class PipelineDispatchService {
 
     const totalDispatched = payload.dispatched + dispatched;
 
-    if (!exhausted) {
+    // The budget can also be reached by the LAST slice of a hop that filled
+    // every page, in which case the loop ended on `MAX_SLICES_PER_SWEEP` rather
+    // than on the check above. Re-tested here so the chain stops now instead of
+    // enqueuing one more hop that would immediately stop itself — a wasted job,
+    // and a log line that reads like the sweep is still running.
+    //
+    // `exhausted` wins a tie. A sweep that drained the source on the same slice
+    // that spent the budget has nothing left to do, and "drained" is the fact
+    // worth reporting: it is the one that says a later sweep will find nothing.
+    if (!exhausted && maxIds != null && totalDispatched >= maxIds) {
+      capped = true;
+    }
+
+    if (!exhausted && !capped) {
       const next: PipelineSweepPayload = {
         stage: stage.id,
         userId: payload.userId,
@@ -272,6 +343,7 @@ export class PipelineDispatchService {
         sliceSize: payload.sliceSize,
         hop: payload.hop + 1,
         dispatched: totalDispatched,
+        maxIds,
       };
 
       // Behind the slices just enqueued, on the same queue, at the same
@@ -282,17 +354,25 @@ export class PipelineDispatchService {
       });
     }
 
-    this.logger.log(exhausted ? 'Pipeline sweep drained' : 'Pipeline sweep hop dispatched', {
-      stage: stage.id,
-      entityType,
-      userId: payload.userId,
-      hop: payload.hop,
-      slices: slices.length,
-      dispatched,
-      totalDispatched,
-      cursor,
-    });
+    this.logger.log(
+      capped
+        ? 'Pipeline sweep reached its per-run cap'
+        : exhausted
+          ? 'Pipeline sweep drained'
+          : 'Pipeline sweep hop dispatched',
+      {
+        stage: stage.id,
+        entityType,
+        userId: payload.userId,
+        hop: payload.hop,
+        slices: slices.length,
+        dispatched,
+        totalDispatched,
+        maxIds,
+        cursor,
+      },
+    );
 
-    return { stage: stage.id, dispatched, slices: slices.length, cursor, exhausted };
+    return { stage: stage.id, dispatched, slices: slices.length, cursor, exhausted, capped };
   }
 }
