@@ -307,6 +307,10 @@ export class EventService {
    * Bounded on both sides and capped: see MAX_EVENT_LOOKBACK_DAYS for why the
    * overlap predicate alone cannot use an index, and MAX_RANGE_EVENTS for the
    * row cap.
+   *
+   * STOPGAP: browser extension page views dual-write into ci.events with
+   * source_type='browser_activity'. Excluded here until we define which event
+   * kinds belong on the schedule calendar and wire pg-boss accordingly.
    */
   async findInRange(context: ServiceContext, from: Date, to: Date): Promise<Event[]> {
     // Sargable floor for events_user_time_idx: the planner can now range-scan
@@ -321,6 +325,7 @@ export class EventService {
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
+      .andWhere("event.source_type IS DISTINCT FROM 'browser_activity'")
       .orderBy('event.start_time', 'ASC')
       .addOrderBy('event.event_id', 'ASC')
       .take(MAX_RANGE_EVENTS);

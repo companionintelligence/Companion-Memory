@@ -187,7 +187,7 @@ export class EventResolver {
    */
   @Query(() => [EventType], {
     description:
-      'Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative.',
+      'Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. STOPGAP: excludes browser_activity source rows until schedule event policy is defined.',
   })
   async eventsInRange(
     @Context() context: RequestContext,

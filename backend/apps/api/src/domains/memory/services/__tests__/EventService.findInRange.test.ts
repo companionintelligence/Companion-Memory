@@ -147,6 +147,14 @@ describe('EventService.findInRange — the calendar read path', () => {
     expect((qb.calls.where ?? [])[0]?.[0]).toBe('event.is_deleted = false');
   });
 
+  it('excludes browser_activity dual-writes (stopgap until schedule event policy)', async () => {
+    await setup();
+
+    await service.findInRange(ctx, from, to);
+
+    expect(clauseWith("event.source_type IS DISTINCT FROM 'browser_activity'")).toBeDefined();
+  });
+
   it('scopes to the viewer', async () => {
     await setup();
 
