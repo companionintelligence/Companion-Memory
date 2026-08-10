@@ -57,7 +57,7 @@ WORK="${STAGE_WORK_DIR:-${TMPDIR:-/tmp}/civideo-real-memory}"
 STAGE_LOG="${STAGE_LOG:-$WORK/stage.log}"
 
 EMAIL="${AUTH_DEFAULT_USER_EMAIL:-jsmith@example.com}"
-PASSWORD="${AUTH_DEFAULT_USER_PASSWORD:-]60.a6{CJ}lB*rHAp;w;}"
+PASSWORD="${AUTH_DEFAULT_USER_PASSWORD:-replace-me-pw-000000}"
 
 # colima, not Docker Desktop — the `desktop-linux` context is usually the
 # default here and usually dead. Point at colima's socket rather than mutating

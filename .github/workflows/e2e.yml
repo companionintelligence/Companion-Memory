@@ -34,7 +34,7 @@ jobs:
       E2E_WEB_PORT: '5173'
       E2E_BASE_URL: http://localhost:5173
       AUTH_DEFAULT_USER_EMAIL: jsmith@example.com
-      AUTH_DEFAULT_USER_PASSWORD: ']60.a6{CJ}lB*rHAp;w;'
+      AUTH_DEFAULT_USER_PASSWORD: 'replace-me-pw-000000'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

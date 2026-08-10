@@ -286,7 +286,7 @@ Then open `https://<project>.localhost` (e.g. **https://ci-server.localhost**) a
 
 ```
 Username: jsmith@example.com
-Password: ]60.a6{CJ}lB*rHAp;w;
+Password: replace-me-pw-000000
 ```
 
 If something is wedged, reset the environment (stops the stack and removes this project's volumes/networks):

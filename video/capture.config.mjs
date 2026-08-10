@@ -385,7 +385,7 @@ const BASE_URL = process.env.APP_URL ?? 'http://localhost:5173';
 // Matches .env.default / .github/workflows/e2e.yml. Throwaway dev credentials
 // for an ephemeral, seeded database — not a secret.
 const EMAIL = process.env.AUTH_DEFAULT_USER_EMAIL ?? 'jsmith@example.com';
-const PASSWORD = process.env.AUTH_DEFAULT_USER_PASSWORD ?? ']60.a6{CJ}lB*rHAp;w;';
+const PASSWORD = process.env.AUTH_DEFAULT_USER_PASSWORD ?? 'replace-me-pw-000000';
 
 const LOGGED_OUT = process.env.VIDEO_LOGGED_OUT === '1';
 
