@@ -9,6 +9,17 @@ Everything else under `domains/pipeline/__tests__` is a unit test against a fake
 from the same understanding as the code they test, so they cannot notice that
 the SQL is wrong. This one can.
 
+## Two harnesses, and which one to reach for
+
+| | Isolation | Use it when |
+| --- | --- | --- |
+| **`pipelineHarness.ts`** | A throwaway **schema** for its source table, plus a throwaway **stage id** for its ledger rows, in whatever database you point it at. | The stage under test is synthetic — you invent the table it sweeps. This is most pipeline tests. |
+| **`scratchDatabase.ts`** | A throwaway **database**, created and dropped per run, with this repo's migrations applied. | The test drives a **real declared stage**, which names real tables (`ci.events`, `ci.inventory`) and cannot be relocated into a scratch schema. |
+
+The second exists because of an incident, and the incident is worth reading
+before choosing: see [Why `enrichmentLoop` needs a whole
+database](#why-enrichmentloop-needs-a-whole-database).
+
 ---
 
 ## Running it
@@ -45,11 +56,13 @@ The whole suite is ~30 assertions and finishes in about two seconds.
 
 ## Connection: read from the environment, never hardcoded
 
-The harness resolves its connection in this order:
+`pipelineHarness.ts` resolves its connection in this order. (`scratchDatabase.ts`
+uses only the **host and port** from it, and creates its own database — see
+[Credentials](#credentials-and-why-there-is-no-fallback).)
 
 | Source | Notes |
 | --- | --- |
-| `PIPELINE_TEST_DATABASE_URL` | Point this suite at a scratch database without moving the whole app off the dev one. |
+| `PIPELINE_TEST_DATABASE_URL` | Point this suite at a database of your choosing without moving the whole app off the dev one. |
 | `DATABASE_URL` | What the dev-stack supervisor exports; the same variable `bin/dbmate.js` and `bin/dburl.js` honour. |
 | `DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_USERNAME` / `DATABASE_PASSWORD` / `DATABASE_NAME` | The discrete variables `config/custom-environment-variables.json` already maps. |
 
@@ -173,6 +186,113 @@ DELETE FROM ci.pipeline_dead_letters WHERE stage LIKE 'test.harness\_%';
 ```
 
 A clean run leaves all three of those empty.
+
+---
+
+## Why `enrichmentLoop` needs a whole database
+
+Both mechanisms above rest on the same trick: the harness owns the names it
+writes. It invents the source table, so the table can live in a scratch schema;
+it invents the stage id, so the ledger rows can be deleted by key.
+
+`enrichmentLoop.integration.spec.ts` owns neither. It drives two **real declared
+stages** — `ObjectPromoteStage` and `TemporalRepairStage` — and a real stage
+names real tables in its SQL: it reads `ci.events` and writes `ci.inventory` and
+`ci.events`. That is correct; they are the appliance's tables. It also means the
+suite has no way to be pointed away from them.
+
+The first version of that spec dealt with this by funnelling every statement
+through one `QueryRunner` inside a transaction it always rolled back, and said
+so at length in its header. **It did not hold.** A run against the dev appliance
+committed roughly 599,000 `ci.pipeline_state` rows, 2,147 `ci.inventory` objects
+and 2,875 `ci.events` rows carrying repaired time provenance into somebody's
+personal archive. Nothing was destroyed — `TemporalRepairStage` writes alongside
+a timestamp, never over it — but none of it was authorised.
+
+The lesson is not "be more careful with transactions":
+
+- A rollback is a claim about **every code path the test reaches**, re-asserted
+  on every future change to any of them. One service that takes its own pooled
+  connection and the fence has a gate in it.
+- It **fails silently**. A rollback that missed something looks exactly like one
+  that did not, until somebody counts rows.
+- It is **unnecessary**. The thing being protected is a database, and a database
+  is a cheap object to make.
+
+### What `scratchDatabase.ts` does instead
+
+1. Connects with an **administrative** credential and runs
+   `CREATE DATABASE ci_pipeline_scratch_<yyyymmddhhmmss>_<8 hex>`.
+2. Enables the extensions `infrastructure/setup-database/entrypoint.sh` enables
+   (`timescaledb`, `postgis`, `vector`, `pg_stat_statements`, `btree_gist`) —
+   no migration issues `CREATE EXTENSION`, so a fresh database inherits none.
+3. Writes a marker row (`pipeline_scratch.marker`) carrying a token unique to
+   this run.
+4. Applies every migration in `db/postgres/migrations`, in dbmate's order, each
+   in its own transaction, recording them in `public.schema_migrations`.
+5. Hands back a pooled `DataSource` on that database. ~1.5 s end to end.
+6. Drops the database in `afterAll`, and reaps any scratch database older than
+   two hours left behind by a killed run.
+
+The migrations are applied in-process rather than by shelling out to
+`bin/dbmate.js`, which cannot be spawned from jest under Yarn PnP. What is
+reproduced is small and guarded: a migration that declares dbmate options on its
+`-- migrate:up` line, or uses `CREATE INDEX CONCURRENTLY`, makes the applier
+throw and name dbmate rather than apply it in a way dbmate would not have.
+
+### The guard
+
+Creating a database is not by itself a safety property — the suite that caused
+the incident also believed it was isolated. So `assertScratchDatabase()` is
+called **before every block of work** and again before the drop, and re-derives
+four facts from the server:
+
+1. `current_database()` is the name this run generated;
+2. that name matches `/^ci_pipeline_scratch_\d{14}_[0-9a-f]{8}$/` — this is what
+   catches a caller that derived its "expected" name from the connection itself,
+   making the first check vacuous;
+3. `pipeline_scratch.marker` exists;
+4. it carries **this run's** token — so a leftover scratch database from an
+   earlier run is refused too.
+
+Anything else throws `REFUSING TO RUN`, naming what it found. All four failure
+modes are exercised by `harness/__tests__/scratchDatabase.spec.ts`, including
+pointing the guard at a real database with real rows in it: a guard nobody has
+watched fail is a guard nobody knows is wired up.
+
+`DROP DATABASE` is additionally guarded by re-checking the name against the
+pattern immediately before it is interpolated, since Postgres has no parameter
+binding for object names.
+
+### Credentials, and why there is no fallback
+
+`CREATE DATABASE` and `CREATE EXTENSION postgis` are superuser operations, and
+`infrastructure/setup-database/entrypoint.sh` deliberately creates the
+application role `companion` with neither `CREATEDB` nor `SUPERUSER`. So this
+harness needs the admin credential the same script reads:
+
+| Source | Notes |
+| --- | --- |
+| `PIPELINE_TEST_ADMIN_DATABASE_URL` | A full URL, including the maintenance database. |
+| `DATABASE_ADMIN_PASSWORD` (+ optional `DATABASE_ADMIN_USERNAME`, default `postgres`) | What `.env.default` ships and `make dev` copies to `.env` on first run. The server coordinates come from whatever `resolveConnection()` resolves, so `PIPELINE_TEST_DATABASE_URL` still chooses **which server** — and no longer chooses the target. |
+
+Absent both, the suite **skips**. There is deliberately no fallback to the
+application connection: that connection is the operator's archive, and running
+without a database of our own is the failure mode, not a degraded mode.
+
+### The corpus
+
+A fresh database has no events, so `loopCorpus.ts` seeds three of them — two
+commerce corpora for the promote sections and one larger timeline corpus for the
+scale section, each under its own user. The mix (7 purchases : 2 order rollups :
+1 excluded row, interleaved) is roughly the appliance's own, so both branches of
+`ObjectPromoteStage`'s extraction rule are reached and the skip vocabulary stays
+observable.
+
+What is lost, and named where the spec reports its numbers: the absolute scale.
+`PIPELINE_TEST_SCALE_EVENTS` (default `30_000`) sizes the scale corpus. A number
+about a 324,044-row appliance has to be measured **on** that appliance with a
+read-only tool — which is the shape `realData.integration.spec.ts` already has.
 
 ---
 
@@ -321,8 +441,8 @@ Named so nobody mistakes the harness for more than it is:
   still covers `sendMany` only; this harness replaces pg-boss rather than
   driving it.
 - `DeadLetterReaperListener` (it reads `pgboss.job`, which needs a real pg-boss).
-- `ci.pipeline_runs` / `ci.pipeline_shards` — the run and shard tables exist in
-  the migration but have no runner yet.
+- `ci.pipeline_runs` / `ci.pipeline_shards` — not by *this* harness.
+  `enrichmentLoop.integration.spec.ts` drives both, over a scratch database.
 - `JobMonitorService`, `IngestResetService`, `SyncOrchestrator`,
   `MaintenanceOrchestratorService` — still without specs.
 - Concurrency. The claim's `ON CONFLICT … WHERE` guard is exercised, but not two

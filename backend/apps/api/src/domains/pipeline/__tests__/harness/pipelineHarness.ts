@@ -214,8 +214,11 @@ const PROBE_TIMEOUT_MS = Number(process.env.PIPELINE_TEST_PROBE_TIMEOUT_MS ?? 2_
  * an absent database and must SKIP, whereas "something is listening but the
  * schema is wrong" is a broken setup and must FAIL, with the message from
  * {@link PipelineHarness.start} naming the command that fixes it.
+ *
+ * Exported for `scratchDatabase.ts`, which needs the same synchronous answer
+ * about a server it reaches with different (administrative) credentials.
  */
-function isPortOpen(host: string, port: number, timeoutMs: number): boolean {
+export function isPortOpen(host: string, port: number, timeoutMs: number): boolean {
   const script =
     "const net = require('node:net');" +
     'const socket = net.connect({ host: process.argv[1], port: Number(process.argv[2]) });' +

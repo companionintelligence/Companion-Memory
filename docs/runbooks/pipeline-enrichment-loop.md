@@ -596,25 +596,38 @@ the control tick's next pass finds the stale rows, opens a run and sweeps. If
 ## 7. Measured behaviour
 
 From `src/domains/pipeline/__tests__/enrichmentLoop.integration.spec.ts`, which
-drives the real dispatcher, worker and ledger over the real archive inside a
-transaction that is always rolled back. Numbers, not adjectives.
+drives the real dispatcher, worker, ledger and two real declared stages — in a
+Postgres database it creates for the run and drops afterwards. Numbers, not
+adjectives.
 
-### Convergence — `promote.object`, 2,777 real commerce events
+> **These are machinery numbers from a seeded corpus, not appliance numbers.**
+> An earlier version of this suite ran over the operator's own 324,044 imported
+> events and kept them safe with a rolled-back transaction. That did not hold —
+> it committed ~599,000 ledger rows, 2,147 `ci.inventory` objects and 2,875
+> time-provenance labels into a personal archive. A test that drives real
+> enrichers writes real tables by name, and the only isolation worth having for
+> that is a database of its own. The ratios below (ticks to converge, attempts
+> per row, warm-versus-cold cost) are the properties being pinned; the
+> milliseconds are a floor measured on whatever machine ran jest. To measure
+> **your** appliance, use a read-only tool — `realData.integration.spec.ts` is
+> the shape that does it.
+
+### Convergence — `promote.object`, 2,790 seeded commerce events
 
 | | |
 |---|---|
-| Ticks to converge | **3** (1,000 + 1,000 + 777 ids) |
-| Wall clock per tick | 92, 114, 98 ms |
-| Outcomes | 2,147 `done`, 630 `skipped: order_rollup_no_line_item`, 0 failed |
-| Real objects written | 2,147 `ci.inventory` rows, from 0 |
+| Ticks to converge | **3** (1,000 + 1,000 + 790 ids) |
+| Wall clock per tick | 137, 133, 104 ms |
+| Outcomes | 2,170 `done`, 620 `skipped: order_rollup_no_line_item`, 0 failed |
+| Objects written | 2,170 `ci.inventory` rows, from 0 — and `done` matches that count exactly |
 | Idle ticks after convergence | 5, **all dispatching 0** |
-| Rows claimed more than once | **0** (`max(attempts) = 1` across all 2,777) |
+| Rows claimed more than once | **0** (`max(attempts) = 1` across all 2,790) |
 
 ### The bump
 
 | | |
 |---|---|
-| Rows re-opened by v1 → v2 | **2,777** — everything, `done` and `skipped` alike |
+| Rows re-opened by v1 → v2 | **2,790** — everything, `done` and `skipped` alike |
 | Ticks before the loop noticed | **1**. No operator action, no run restarted |
 | Ticks to re-converge | 3 |
 | `attempts` after the second pass | 2 — a real re-processing, not a bookkeeping rewrite |
@@ -627,24 +640,26 @@ transaction that is always rolled back. Numbers, not adjectives.
 | Ledger during the pause | byte-identical before and after |
 | On resume | continued past the cursor; **no already-processed id was re-delivered**, and `attempts` stayed 1 on every row finished before the pause |
 
-### Cost of one tick against 324,044 rows — `clean.temporal_repair`
+### Cost of one tick against 30,000 seeded rows — `clean.temporal_repair`
 
 | Ledger state | Wall clock per 1,000 ids |
 |---|---|
-| empty (the easy case, and the one a naive benchmark reports) | 36, 37, 39 ms |
-| **100,000 rows, cursor resumed at row 100,000** | **96, 104, 109 ms** |
+| empty (the easy case, and the one a naive benchmark reports) | 100, 98, 101 ms |
+| **10,000 rows, cursor resumed at row 10,000** | **107, 104, 107 ms** |
 
-- **0.10 ms per row** of pipeline machinery — sweep + claim + stage + ledger
-  write — at realistic ledger depth.
-- **2.8×** cost increase going from an empty ledger to 100,000 rows. A *constant
+- **0.11 ms per row** of pipeline machinery — sweep + claim + stage + ledger
+  write — at a realistic ledger depth.
+- **1.1×** cost increase going from an empty ledger to 10,000 rows. A *constant
   factor*, not a change of complexity class: under the `LEFT JOIN` form of the
   staleness sweep this was 4,401 blocks against the anti-join's 241 and a full
-  sweep degraded to O(corpus²/slice). Watch this ratio — if it climbs into double
-  digits, the anti-join has been lost.
-- **325 ticks** to cover 324,044 rows at 1,000 ids per tick, ≈ **0.6 minutes of
-  worker time** — **machinery only.**
+  sweep degraded to O(corpus²/slice). **This ratio is the thing to watch** — it
+  is the one number here that is a property of the SQL rather than of the
+  machine, and the spec fails if it exceeds 4×. If it climbs into double digits,
+  the anti-join has been lost.
+- **30 ticks** to cover 30,000 rows at 1,000 ids per tick, ≈ **0.1 minutes of
+  worker time** — **machinery only**, and on a seeded corpus.
 
-> **Do not quote 0.6 minutes as the time to enrich the corpus.** It excludes
+> **Do not quote 0.1 minutes as the time to enrich a corpus.** It excludes
 > everything that actually costs: the stage's own work (an Ollama round trip for
 > `index.embed`, a provider call for `enrich.geocode`), the queue's throughput
 > ceiling — **10 in-flight jobs appliance-wide, 6 per queue**
@@ -653,12 +668,14 @@ transaction that is always rolled back. Numbers, not adjectives.
 > number is a floor and a regression tripwire: it says the ledger and the sweep
 > are not the bottleneck.
 
-Also measured: of the first 6,000 events by key order, **all 6,000** were
+Also measured, on the appliance, **before** this suite was moved off it: of the
+first 6,000 `ci.events` by key order, **all 6,000** resolved to
 `skipped: source_time_spec_missing`. That is correct and deliberate —
 `google_voice` (309,689 rows), `twitter`, `whatsapp` and `uber` have no declared
 time spec, and the stage refuses to parse a timestamp out of an opaque
 idempotency key. It shows up as a countable reason instead of a silence, which is
-the entire point.
+the entire point. Re-derive it for your own archive with 4c rather than by
+pointing a test at it — the query is read-only and answers the same question.
 
 ---
 
@@ -697,3 +714,6 @@ SELECT stage, max(attempts) AS max_attempts, count(*) FILTER (WHERE attempts > 1
 - `backend/apps/api/src/domains/pipeline/__tests__/enrichmentLoop.integration.spec.ts`
   — every number in §7, re-measurable with
   `yarn workspace @ci/be-api test src/domains/pipeline/__tests__/enrichmentLoop.integration.spec.ts`.
+  It creates and drops a database of its own, so it needs `DATABASE_ADMIN_PASSWORD`
+  (in `.env.default`) and skips without it. See
+  `backend/apps/api/src/domains/pipeline/__tests__/harness/README.md`.

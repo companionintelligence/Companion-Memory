@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Test, type TestingModule } from '@nestjs/testing';
-import { DataSource, type QueryRunner } from 'typeorm';
+import { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -20,11 +20,13 @@ import { ObjectPromoteStage } from '../stages/promote/ObjectPromoteStage';
 import type { Stage, StageCoverage } from '../types';
 import { STAGE_VERSIONS } from '../versions';
 
-import { HarnessQueue, databaseAvailability, resolveConnection } from './harness/pipelineHarness';
+import { seedLoopCorpus, type SeededCorpus } from './harness/loopCorpus';
+import { HarnessQueue } from './harness/pipelineHarness';
+import { ScratchDatabase, scratchDatabaseAvailability } from './harness/scratchDatabase';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * THE LOOP. Does the pipeline actually run, unattended, on the real archive?
+ * THE LOOP. Does the pipeline actually run, unattended, to convergence?
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Everything under `domains/pipeline` was complete and INERT. Twelve stages are
@@ -32,22 +34,20 @@ import { HarnessQueue, databaseAvailability, resolveConnection } from './harness
  * `PipelineSliceListener` executes slices; `PipelineRunService` manages runs.
  * **Nothing called any of it.** There is no cron, no scheduled caller and no
  * controller route that reaches `startSweep`; the only `@Cron` in the domain is
- * the dead-letter reaper. `ci.pipeline_runs` has never held a row and
- * `ci.pipeline_state` is empty on the appliance this file was written against.
+ * the dead-letter reaper.
  *
  * The other suites in this directory each prove one piece:
  *
  *  - `pipeline.integration.spec.ts` — the ledger transitions and the keyset
  *    chain, over a throwaway table this repo seeded itself.
- *  - `realData.integration.spec.ts` — the PLAN of the staleness sweep against
- *    324,044 real events. One query, measured; no loop.
+ *  - `realData.integration.spec.ts` — the PLAN of the staleness sweep. One
+ *    query, measured; no loop.
  *  - `PipelineSliceListener.spec.ts` — one slice, against fakes.
  *
  * None of them answers the operational question, which is whether a run that is
  * started and then left alone converges, stops, comes back when a version is
- * bumped, and can be paused and resumed without losing its place — on the
- * operator's own data, at the operator's own scale. That is what this file
- * measures, and the numbers it prints are the deliverable.
+ * bumped, and can be paused and resumed without losing its place. That is what
+ * this file measures.
  *
  * ── The tick ───────────────────────────────────────────────────────────────
  *
@@ -83,73 +83,80 @@ import { HarnessQueue, databaseAvailability, resolveConnection } from './harness
  *    cursor null every time. Both are correct, because the LEDGER is what makes
  *    a restart cheap: the anti-join steps over the finished prefix, and §5 here
  *    proves the stronger of the two properties (resume is exact even when the
- *    queued sweep jobs are gone). The weaker one costs a re-scan of the prefix
- *    per resume; on a converged 324k corpus that is one indexed anti-join per
- *    hop, measured in §6.
+ *    queued sweep jobs are gone).
  *  - **Re-arming after convergence.** This tick re-arms a drained shard in place
  *    when the head goes stale (§4). The service instead FINALISES the run, which
  *    releases `pipeline_runs_active_uniq`, and a later tick opens a fresh one.
  *    Same observable behaviour — a version bump is picked up with no operator
  *    action — reached from opposite directions.
  *
+ * ── WHERE THIS RUNS, and why that is the whole point ───────────────────────
+ *
+ * In a Postgres database created for this run and dropped after it. Not the dev
+ * database, not `PIPELINE_TEST_DATABASE_URL`, not anything that existed before
+ * jest started. See `harness/scratchDatabase.ts`, and the guard
+ * {@link ScratchDatabase.assertOwn}, which every block calls before it writes.
+ *
+ * This replaces an earlier arrangement that ran against the appliance itself,
+ * over the operator's own 324,044 imported events, and kept them safe by
+ * funnelling every statement through one `QueryRunner` inside a transaction it
+ * always rolled back. That did not hold. A run against the dev appliance
+ * committed ~599,000 `ci.pipeline_state` rows, 2,147 `ci.inventory` objects and
+ * 2,875 `ci.events` rows carrying repaired time provenance into a personal
+ * archive, with nobody's permission.
+ *
+ * The lesson is not "be more careful with transactions". It is that a rollback
+ * is a claim about every code path the test reaches — including the ones added
+ * later — and it fails SILENTLY, because a rollback that missed something looks
+ * exactly like one that did not. This file drives two real declared stages that
+ * write real tables by name; the only isolation worth having for that is a
+ * database of its own. What it costs is the corpus (see `harness/loopCorpus.ts`)
+ * and the absolute numbers §6 used to print about the appliance. What it buys is
+ * that nothing here can write to anything a human cares about, whatever anyone
+ * changes downstream.
+ *
  * ── What is real ───────────────────────────────────────────────────────────
  *
- * REAL: Postgres, and the operator's 324,044 imported events. `PipelineRunService`
- * (start, desired state, coverage), `PipelineStateService` (every statement),
- * `PipelineDispatchService.runSweepHop` (the keyset chain and its cursor-advance
- * assertion), `StageRegistry` (including its consistency guards),
- * `PipelineSliceListener` (claim → run → reconcile → complete), and TWO REAL
- * DECLARED STAGES doing their real work:
+ * REAL: Postgres, with this repo's full migration set applied.
+ * `PipelineRunService` (start, desired state, coverage), `PipelineStateService`
+ * (every statement), `PipelineDispatchService.runSweepHop` (the keyset chain and
+ * its cursor-advance assertion), `StageRegistry` (including its consistency
+ * guards), `PipelineSliceListener` (claim → run → reconcile → complete), and TWO
+ * REAL DECLARED STAGES doing their real work against real tables:
  *
- *  - `ObjectPromoteStage` — 2,777 real commerce events → real `ci.inventory`
- *    rows. Postgres-only, no provider, no bill. Small enough to drive to
- *    CONVERGENCE, which is what §2-§5 need.
- *  - `TemporalRepairStage` — all 324,044 real events. Used for the scale
- *    measurement in §6.
+ *  - `ObjectPromoteStage` — commerce events → `ci.inventory` rows. Postgres-only,
+ *    no provider, no bill. Small enough to drive to CONVERGENCE, which is what
+ *    §2-§5 need.
+ *  - `TemporalRepairStage` — every event in the corpus. Used for §6.
  *
- * FAKE: pg-boss, replaced by {@link HarnessQueue}; and the stage IDS, which are
- * throwaway (`test.loop_<hex>`). The id is only the third component of the
- * ledger's primary key — the source table, the applicability predicate, the SQL
- * and the `run()` body are the real stage's, unmodified. Two reasons for the
- * throwaway id, both borrowed from `realData.integration.spec.ts`: a leak from
- * this file is then trivially identifiable, and the stage version becomes a
- * plain mutable integer, which is what §4 needs. The real stages derive their
- * versions from a constant that THROWS if `STAGE_VERSIONS` disagrees, so they
- * cannot be bumped from a test — in production a bump is a commit plus a
- * restart, and the getter here is the honest model of that.
+ * FAKE: pg-boss, replaced by {@link HarnessQueue}; the corpus, seeded; and the
+ * stage IDS, which are throwaway (`test.loop_<hex>`). The id is only the third
+ * component of the ledger's primary key — the source table, the applicability
+ * predicate, the SQL and the `run()` body are the real stage's, unmodified. The
+ * throwaway id is also what makes the stage version a plain mutable integer,
+ * which is what §4 needs: the real stages derive their versions from a constant
+ * that THROWS if `STAGE_VERSIONS` disagrees, so they cannot be bumped from a
+ * test. In production a bump is a commit plus a restart, and the getter here is
+ * the honest model of that.
  *
  * NOT EXERCISED, and this is the one thing this file cannot prove: no metered
- * stage runs. `enrich.geocode` (95 real candidates) and
- * `enrich.position_reverse` egress through Portal to a paid provider, and
- * `index.embed` shares the one host Ollama process with interactive chat, HBPE
- * and the summary sidecar. Driving either in a test would be a bill or a
- * user-visible stall. The loop is stage-agnostic — one dispatcher, one worker,
- * one ledger — so what is proven here holds for them; what is NOT proven is
- * their `run()` bodies, which have their own specs.
- *
- * ── Why nothing here can touch the operator's data ─────────────────────────
- *
- * Same discipline as `realData.integration.spec.ts` and
- * `DeadLetterReaperListener.spec.ts`, and it has to be stronger here because
- * this file WRITES USER TABLES: `ci.inventory` (promote) and `ci.events`
- * (temporal repair). Every statement is funnelled through a single
- * {@link QueryRunner} inside a transaction that is **ALWAYS rolled back**.
- * Nothing is committed, no other session can observe any of it, there is nothing
- * to clean up, and a `kill -9` mid-run leaves the database untouched because the
- * aborted transaction takes the lot with it. {@link fingerprint} is taken from a
- * connection OUTSIDE every transaction before the first test and again after the
- * last, over `ci.events`, `ci.inventory`, `ci.pipeline_state`,
- * `ci.pipeline_runs` and `ci.pipeline_shards`, and the suite fails if any of
- * them moved.
+ * stage runs. `enrich.geocode` and `enrich.position_reverse` egress through
+ * Portal to a paid provider, and `index.embed` shares the one host Ollama
+ * process with interactive chat, HBPE and the summary sidecar. The loop is
+ * stage-agnostic — one dispatcher, one worker, one ledger — so what is proven
+ * here holds for them; what is NOT proven is their `run()` bodies, which have
+ * their own specs.
  *
  * ── Skipping ───────────────────────────────────────────────────────────────
  *
- * SKIPPED, not failed, when no Postgres is reachable — decided synchronously at
- * collection time; see `harness/README.md`. A database that is reachable but
- * un-migrated FAILS, naming the fix.
+ * SKIPPED, not failed, when no ADMINISTRATIVE Postgres connection is available
+ * — decided synchronously at collection time; see `harness/README.md`. There is
+ * no fallback to the application connection, deliberately: that connection is
+ * the operator's archive, and running here without a database of our own is the
+ * failure mode, not a degraded mode.
  */
 
-const availability = databaseAvailability();
+const availability = scratchDatabaseAvailability();
 
 const describeWithDatabase = availability.available ? describe : describe.skip;
 
@@ -158,9 +165,9 @@ if (!availability.available) {
   console.warn(`[enrichmentLoop.integration] SKIPPED — ${availability.reason}`);
 }
 
-// A dozen ticks over a real corpus, each doing five slices of real work, plus a
-// scale section against 324,044 rows. Jest's 5 s default is not a budget worth
-// having a flake over.
+// Creating a database, applying 200-odd migrations, seeding three corpora, then
+// a dozen ticks of real work each plus a scale section. Jest's 5 s default is
+// not a budget worth having a flake over.
 jest.setTimeout(900_000);
 
 // ---------------------------------------------------------------------------
@@ -172,8 +179,8 @@ const ENTITY_TYPE = 'event';
 
 /**
  * Stage-id prefix. Greppable, and the key the final "did we leak?" check uses.
- * The suffix is random per run so two developers running this at once cannot
- * collide on `ci.pipeline_state`'s `(entity_type, entity_id, stage)` primary key.
+ * The suffix is random per loop so two blocks in this file cannot collide on
+ * `ci.pipeline_state`'s `(entity_type, entity_id, stage)` primary key.
  */
 const STAGE_PREFIX = 'test.loop_';
 
@@ -181,12 +188,34 @@ const STAGE_PREFIX = 'test.loop_';
 const IDS_PER_TICK = MAX_SLICES_PER_SWEEP * DEFAULT_SLICE_SIZE;
 
 /**
- * Ticks §6 runs against the full 324k corpus.
+ * Events in each commerce corpus (§1-§5).
+ *
+ * Sized so the candidate set is a little under three ticks' worth: the loop has
+ * to chain hops, advance a cursor across them, and still reach a state where it
+ * stops. One tick's worth would demonstrate none of that, and ten would only
+ * demonstrate it more slowly. At the seeder's 7 : 2 : 1 mix this is 2,170
+ * purchases, 620 order rollups and 310 rows the predicate must exclude — close
+ * to the 2,147 / 630 the appliance this file was first written against had.
+ */
+const COMMERCE_CORPUS_EVENTS = 3_100;
+
+/**
+ * Events in the scale corpus (§6). Overridable, because the only reason not to
+ * make it bigger is how long you are prepared to wait for the seed.
+ *
+ * This is a SYNTHETIC corpus and §6 says so where it reports its numbers. It is
+ * big enough to do the job §6 actually has — catch a change of complexity class
+ * in the staleness sweep — because that shows up as a warm tick costing
+ * materially more than a cold one, and the conditions for it are a populated
+ * ledger and a deep cursor, not a particular row count.
+ */
+const SCALE_CORPUS_EVENTS = Number(process.env.PIPELINE_TEST_SCALE_EVENTS ?? 30_000);
+
+/**
+ * Ticks §6 runs against the scale corpus, cold and warm.
  *
  * Three, not one: the first pays for a cold cache and an empty-ledger plan, and
- * a single sample of anything is an anecdote. Deliberately small — §6 measures
- * the cost of a tick and PROJECTS the convergence, it does not drive 324 ticks
- * inside a transaction holding row locks on the operator's timeline.
+ * a single sample of anything is an anecdote.
  */
 const SCALE_TICKS = 3;
 
@@ -196,12 +225,9 @@ const SCALE_TICKS = 3;
  * A third of the corpus, in sweep order, so the ledger looks like a run that was
  * interrupted a third of the way through — which is the state a re-sweep of a
  * converging appliance lives in permanently, and the state an empty-ledger
- * benchmark reports nothing about. Sized against the same trade-off
- * `realData.integration.spec.ts` makes at 50,000: big enough that the planner's
- * statistics change, small enough that the dead tuples the rollback leaves for
- * autovacuum are a nuisance rather than an incident.
+ * benchmark reports nothing about.
  */
-const PRELOADED_LEDGER_ROWS = 100_000;
+const PRELOADED_LEDGER_ROWS = Math.floor(SCALE_CORPUS_EVENTS / 3);
 
 /**
  * Ceiling on one tick, whatever the plan. Deliberately loose: a tripwire for a
@@ -303,21 +329,6 @@ function record(label: string, value: string): void {
   console.info(`[enrichmentLoop.integration] ${label.padEnd(56)} ${value}`);
 }
 
-/**
- * A `DataSource`-shaped double that forwards every statement to ONE query
- * runner.
- *
- * This is what keeps the whole suite inside a single transaction. Everything
- * under test — the ledger, the run service, the dispatcher, the slice listener
- * and both real stages — takes `@InjectDataSource()`, and every one of them
- * calls only `.query()`.
- */
-function transactionalDataSource(runner: QueryRunner): DataSource {
-  return {
-    query: async (sql: string, params?: unknown[]): Promise<unknown> => runner.query(sql, params),
-  } as unknown as DataSource;
-}
-
 // ---------------------------------------------------------------------------
 // The control loop
 // ---------------------------------------------------------------------------
@@ -336,7 +347,7 @@ class ControlLoop {
 
   private readonly module: TestingModule;
 
-  private readonly runner: QueryRunner;
+  private readonly dataSource: DataSource;
 
   private readonly queue: HarnessQueue;
 
@@ -363,14 +374,14 @@ class ControlLoop {
     stageId: string;
     userId: string;
     module: TestingModule;
-    runner: QueryRunner;
+    dataSource: DataSource;
     queue: HarnessQueue;
     stage: Stage;
   }) {
     this.stageId = init.stageId;
     this.ctx = { userId: init.userId };
     this.module = init.module;
-    this.runner = init.runner;
+    this.dataSource = init.dataSource;
     this.queue = init.queue;
     this.stage = init.stage;
 
@@ -381,23 +392,27 @@ class ControlLoop {
   }
 
   /**
-   * Wire a loop around one real stage implementation, inside one transaction.
+   * Wire a loop around one real stage implementation.
    *
-   * `impl` supplies the source, the predicate, the queue and the `run()` body —
-   * i.e. everything except the id and the version, which are made throwaway and
-   * mutable for the reasons in the file header.
+   * `implFactory` supplies the source, the predicate, the queue and the `run()`
+   * body — i.e. everything except the id and the version, which are made
+   * throwaway and mutable for the reasons in the file header.
+   *
+   * The `DataSource` handed in is the scratch database's, POOLED and with no
+   * transaction wrapped round it. That is deliberate: every service below takes
+   * `@InjectDataSource()` and is free to take a connection whenever it likes,
+   * which is exactly what the transactional version of this file could not
+   * survive. Isolation is the database, not the handle.
    */
   static async start(init: {
-    runner: QueryRunner;
+    dataSource: DataSource;
     userId: string;
-    /** Constructs the real stage against the transactional data source. */
     implFactory: (dataSource: DataSource, logger: LoggerService) => Stage;
   }): Promise<ControlLoop> {
     const stageId = `${STAGE_PREFIX}${randomBytes(4).toString('hex')}`;
     const token = `PipelineStage:${stageId}`;
-    const dataSource = transactionalDataSource(init.runner);
     const logger = silentLogger();
-    const impl = init.implFactory(dataSource, logger);
+    const impl = init.implFactory(init.dataSource, logger);
 
     // Registered BEFORE the module compiles: `StageRegistry.get()` reads
     // STAGE_REGISTRY and `stageVersion()` reads STAGE_VERSIONS, so a stage that
@@ -434,14 +449,21 @@ class ControlLoop {
         PipelineRunService,
         // `@InjectDataSource()` resolves to the `DataSource` class token for the
         // default connection, which is why binding the class works here.
-        { provide: DataSource, useValue: dataSource },
+        { provide: DataSource, useValue: init.dataSource },
         { provide: EventService, useValue: queue },
         { provide: LoggerService, useValue: logger },
         { provide: token, useValue: stage },
       ],
     }).compile();
 
-    return new ControlLoop({ stageId, userId: init.userId, module, runner: init.runner, queue, stage });
+    return new ControlLoop({
+      stageId,
+      userId: init.userId,
+      module,
+      dataSource: init.dataSource,
+      queue,
+      stage,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -457,8 +479,9 @@ class ControlLoop {
 
     if (!started.created) {
       throw new Error(
-        `A pipeline run was already active for user ${this.ctx.userId} inside this transaction ` +
-          `(run ${started.run.id}). Every describe opens its own transaction; this means one leaked.`,
+        `A pipeline run was already active for user ${this.ctx.userId} (run ${started.run.id}). Every ` +
+          `block in this file seeds a user of its own precisely so this cannot happen; a collision means ` +
+          `two blocks are sharing a corpus.`,
       );
     }
 
@@ -468,7 +491,7 @@ class ControlLoop {
     return started.run.id;
   }
 
-  /** Finalize the run, so a later `startRun` in the same transaction is legal. */
+  /** Finalize the run, so a later `startRun` for the same user is legal. */
   async finishRun(status = 'succeeded'): Promise<void> {
     if (this.runId == null) {
       return;
@@ -493,7 +516,7 @@ class ControlLoop {
       return null;
     }
 
-    const rows = (await this.runner.query(
+    const rows = (await this.dataSource.query(
       `SELECT id::text AS id, "cursor", status
          FROM ci.pipeline_shards
         WHERE run_id = $1::uuid AND stage = $2 AND shard_key = $3`,
@@ -580,7 +603,7 @@ class ControlLoop {
         };
       }
 
-      await this.runner.query(
+      await this.dataSource.query(
         `UPDATE ci.pipeline_shards SET "cursor" = NULL, status = 'queued' WHERE id = $1::uuid`,
         [shard.id],
       );
@@ -647,11 +670,10 @@ class ControlLoop {
     //    hop and this write re-dispatches the slice rather than skipping it —
     //    at-least-once, which the ledger's claim absorbs, rather than at-most-once,
     //    which loses rows.
-    await this.runner.query(`UPDATE ci.pipeline_shards SET "cursor" = $2, status = $3 WHERE id = $1::uuid`, [
-      shard.id,
-      result.cursor,
-      result.exhausted ? 'done' : 'running',
-    ]);
+    await this.dataSource.query(
+      `UPDATE ci.pipeline_shards SET "cursor" = $2, status = $3 WHERE id = $1::uuid`,
+      [shard.id, result.cursor, result.exhausted ? 'done' : 'running'],
+    );
 
     return {
       tick: this.tickCount,
@@ -703,7 +725,7 @@ class ControlLoop {
     const { schema, table, idColumn, userColumn, predicate } = this.stage.source;
     const applicability = predicate != null && predicate.trim().length > 0 ? predicate : 'TRUE';
 
-    const rows = (await this.runner.query(
+    const rows = (await this.dataSource.query(
       `SELECT count(*)::int AS n
          FROM "${schema}"."${table}" s
         WHERE s."${userColumn}" = $1 AND (${applicability}) AND s."${idColumn}" IS NOT NULL`,
@@ -717,7 +739,7 @@ class ControlLoop {
   async ledgerRows(): Promise<
     Array<{ entity_id: string; status: string; stage_version: number; attempts: number }>
   > {
-    return (await this.runner.query(
+    return (await this.dataSource.query(
       `SELECT entity_id::text AS entity_id, status, stage_version, attempts
          FROM ci.pipeline_state
         WHERE stage = $1
@@ -740,7 +762,7 @@ class ControlLoop {
    * about whether the loop closes at all. The cursor semantics are identical.
    */
   private async planShard(): Promise<{ id: string; cursor: string | null; status: string }> {
-    const rows = (await this.runner.query(
+    const rows = (await this.dataSource.query(
       `INSERT INTO ci.pipeline_shards (run_id, stage, shard_key, "cursor", status)
             VALUES ($1::uuid, $2, $3, NULL, 'queued')
        ON CONFLICT (run_id, stage, shard_key) DO UPDATE SET status = ci.pipeline_shards.status
@@ -756,201 +778,112 @@ class ControlLoop {
 // The suite
 // ---------------------------------------------------------------------------
 
-describeWithDatabase(`the enrichment loop, against real imported data (${availability.target})`, () => {
-  /** Pooled, OUTSIDE every transaction. Corpus facts and the leak check. */
-  let dataSource: DataSource;
+describeWithDatabase(`the enrichment loop, in a database of its own (${availability.target})`, () => {
+  /** The database this run created. Dropped in the outermost afterAll. */
+  let scratch: ScratchDatabase;
 
-  /** The user with the most events. Every sweep is user-scoped. */
-  let corpusUserId = '';
+  /** §1-§4: promote.object driven to convergence, bumped, driven again. */
+  let promoteCorpus: SeededCorpus;
 
-  /** `ci.events` rows for that user. */
-  let corpusEvents = 0;
+  /** §5: a second corpus, so pause/resume starts from an untouched ledger. */
+  let pauseCorpus: SeededCorpus;
 
-  /** Row counts + digests taken before the first test and re-read after the last. */
-  let before: Record<string, string>;
-
-  /**
-   * Everything this suite could possibly have written, from outside every
-   * transaction.
-   *
-   * Two USER tables — which the two real stages under test genuinely write, and
-   * which is why this check is stricter here than in any sibling — plus the
-   * three control-plane tables. Counts AND an order-independent digest for
-   * `ci.events`, because a write that removed one row and added another would
-   * leave a count alone. The digest hashes exactly the columns
-   * `TemporalRepairStage` writes. Not `string_agg`: summing a per-row hash
-   * streams and needs no `ORDER BY`.
-   *
-   * ── Why the ledger is scoped to `entity_type = 'event'` ────────────────────
-   *
-   * Narrower than it looks, and exactly right. This suite writes one entity type
-   * and nothing else on the appliance writes that one: the declared stages have
-   * never run, and `pipeline.integration.spec.ts`'s harness keys its rows under
-   * `harness_source_row`. So this covers 100 % of what a leak from here would
-   * look like and 0 % of what anything else is doing.
-   *
-   * Fingerprinting the whole table FAILED the first time this ran beside that
-   * harness in another jest worker: the harness legitimately COMMITS its rows
-   * and deletes them at teardown, so `ci.pipeline_state` honestly differs
-   * between this suite's first and last statement, and the check reported a
-   * sibling's correct behaviour as this suite's leak. A safety check that fails
-   * for the wrong reason gets muted, and then it is not a safety check. The
-   * lesson is `realData.integration.spec.ts`'s, learned the same way.
-   */
-  async function fingerprint(): Promise<Record<string, string>> {
-    const [row] = (await dataSource.query(
-      `SELECT (SELECT count(*) FROM ci.events)::text                        AS events,
-              (SELECT coalesce(sum(('x' || substr(md5(e.event_id::text || coalesce(e.start_time::text, '') ||
-                                                      coalesce(e.time_source, '')), 1, 8))::bit(32)::bigint), 0)
-                 FROM ci.events e)::text                                    AS events_digest,
-              (SELECT count(*) FROM ci.inventory)::text                     AS inventory,
-              (SELECT count(*) FROM ci.pipeline_state
-                WHERE entity_type = $1)::text                               AS pipeline_state_events,
-              (SELECT coalesce(sum(('x' || substr(md5(ps.*::text), 1, 8))::bit(32)::bigint), 0)
-                 FROM ci.pipeline_state ps
-                WHERE ps.entity_type = $1)::text                            AS pipeline_state_digest,
-              (SELECT count(*) FROM ci.pipeline_runs)::text                 AS pipeline_runs,
-              (SELECT count(*) FROM ci.pipeline_shards)::text               AS pipeline_shards`,
-      [ENTITY_TYPE],
-    )) as Array<Record<string, string>>;
-
-    return row;
-  }
-
-  /** Open a transaction. ALWAYS paired with {@link rollback}. */
-  async function open(): Promise<QueryRunner> {
-    const runner = dataSource.createQueryRunner();
-
-    await runner.connect();
-    await runner.startTransaction();
-
-    return runner;
-  }
-
-  async function rollback(runner: QueryRunner): Promise<void> {
-    await runner.rollbackTransaction();
-    await runner.release();
-  }
+  /** §6: the scale corpus, every row of it applicable to clean.temporal_repair. */
+  let scaleCorpus: SeededCorpus;
 
   beforeAll(async () => {
-    const connection = resolveConnection();
-
-    if (connection == null) {
-      throw new Error('databaseAvailability() said yes but no connection resolved');
-    }
-
-    dataSource = new DataSource({
-      type: 'postgres',
-      // Discrete fields when there is no URL, so a password containing URL
-      // metacharacters (the dev one ends in `!`) never has to survive a round
-      // trip through percent-encoding.
-      ...(connection.url != null
-        ? { url: connection.url }
-        : {
-            host: connection.host,
-            port: connection.port,
-            username: connection.username,
-            password: connection.password,
-            database: connection.database,
-          }),
-      // Nothing is mapped through TypeORM: the pipeline speaks raw SQL and the
-      // entities exist only to document it. `synchronize` pointed at a personal
-      // archive would be actively dangerous.
-      entities: [],
-      synchronize: false,
-      logging: false,
-      extra: { max: 4 },
-    });
-
-    await dataSource.initialize();
-
-    // Three outcomes, deliberately different (harness README): no database →
-    // skipped at collection time; a database missing the tables → FAIL here,
-    // naming the fix, because skipping would turn a migration mistake into a
-    // green run.
-    const [present] = (await dataSource.query(
-      `SELECT to_regclass('ci.pipeline_state')::text  AS ledger,
-              to_regclass('ci.pipeline_runs')::text   AS runs,
-              to_regclass('ci.pipeline_shards')::text AS shards,
-              to_regclass('ci.events')::text          AS events,
-              to_regclass('ci.inventory')::text       AS inventory`,
-    )) as Array<Record<string, string | null>>;
-
-    for (const [name, value] of Object.entries(present)) {
-      if (value == null) {
-        throw new Error(
-          `The table behind "${name}" is missing — run \`yarn workspace @ci/be-api migrate\` and re-run.`,
-        );
-      }
-    }
-
-    const [busiest] = (await dataSource.query(
-      `SELECT user_id::text AS user_id, count(*)::int AS n
-         FROM ci.events
-        GROUP BY user_id
-        ORDER BY n DESC
-        LIMIT 1`,
-    )) as Array<{ user_id: string; n: number }>;
-
-    if (busiest == null) {
-      throw new Error(
-        'ci.events is empty. This suite exists to drive the loop over imported data; there is none here. ' +
-          'Import an archive, or point PIPELINE_TEST_DATABASE_URL at a database that has one.',
-      );
-    }
-
-    corpusUserId = busiest.user_id;
-    corpusEvents = busiest.n;
-
-    before = await fingerprint();
+    scratch = await ScratchDatabase.create({ createdBy: 'enrichmentLoop.integration.spec' });
 
     console.info(
-      `[enrichmentLoop.integration] corpus: ${corpusEvents} ci.events rows for the busiest user; ` +
-        `ci.pipeline_state holds ${before.pipeline_state_events} rows for entity_type=${ENTITY_TYPE}, ` +
-        `ci.pipeline_runs ${before.pipeline_runs}, ci.pipeline_shards ${before.pipeline_shards}, ` +
-        `ci.inventory ${before.inventory}`,
+      `[enrichmentLoop.integration] scratch database ${scratch.name} — ` +
+        `${scratch.stats.migrations} migrations in ${scratch.stats.setupMs} ms` +
+        (scratch.stats.reaped.length > 0
+          ? `; reaped ${scratch.stats.reaped.length} orphan(s) from killed runs`
+          : ''),
+    );
+
+    // Three corpora, three users. The ledger is keyed by stage id and every
+    // block invents its own, so blocks could in principle share a corpus — but
+    // `ci.inventory` is keyed by the EVENT, and `pipeline_runs_active_uniq` is
+    // keyed by the USER, so sharing would make §5's run illegal and let §1's
+    // objects show up in §5's counts. Separate users cost a second to seed and
+    // remove the whole class of question.
+    [promoteCorpus, pauseCorpus, scaleCorpus] = await Promise.all([
+      seedLoopCorpus(scratch.dataSource, {
+        corpus: 1,
+        events: COMMERCE_CORPUS_EVENTS,
+        shape: 'commerce',
+        label: 'promote',
+      }),
+      seedLoopCorpus(scratch.dataSource, {
+        corpus: 2,
+        events: COMMERCE_CORPUS_EVENTS,
+        shape: 'commerce',
+        label: 'pause/resume',
+      }),
+      seedLoopCorpus(scratch.dataSource, {
+        corpus: 3,
+        events: SCALE_CORPUS_EVENTS,
+        shape: 'timeline',
+        label: 'scale',
+      }),
+    ]);
+
+    // Without this the first sweep is planned against a table Postgres believes
+    // is empty, which is a different plan from the one the appliance runs. On a
+    // real appliance autoanalyze reaches the same state within minutes of the
+    // first import; this reproduces the steady state rather than manufacturing
+    // one.
+    await scratch.dataSource.query('ANALYZE ci.events');
+
+    console.info(
+      `[enrichmentLoop.integration] corpora: promote ${promoteCorpus.commerce} commerce rows ` +
+        `(${promoteCorpus.purchases} purchases, ${promoteCorpus.orders} order rollups, ` +
+        `${promoteCorpus.decoys} excluded), pause/resume ${pauseCorpus.commerce}, ` +
+        `scale ${scaleCorpus.events} events`,
     );
   });
 
   afterAll(async () => {
-    if (dataSource?.isInitialized !== true) {
+    if (scratch == null) {
       return;
     }
 
-    // Printed before the leak assertions so the numbers survive even if one of
-    // them fails the run. §6 asks for numbers; a green test is not a number.
+    // Printed before teardown so the numbers survive even if the drop fails.
+    // §6 asks for numbers; a green test is not a number.
     console.info(
       `[enrichmentLoop.integration] measurements\n${measurements
         .map((m) => `    ${m.label.padEnd(56)} ${m.value}`)
         .join('\n')}`,
     );
 
-    const [leaked] = (await dataSource.query(
-      `SELECT (SELECT count(*) FROM ci.pipeline_state  WHERE stage LIKE $1 || '%')::int AS state,
-              (SELECT count(*) FROM ci.pipeline_shards WHERE stage LIKE $1 || '%')::int AS shards,
-              (SELECT count(*) FROM ci.pipeline_dead_letters WHERE stage LIKE $1 || '%')::int AS letters`,
-      [STAGE_PREFIX],
-    )) as Array<{ state: number; shards: number; letters: number }>;
+    // Everything this suite wrote, counted from inside the database that is
+    // about to stop existing. Not a safety check — the safety check is
+    // `assertOwn`, and it has run before every block — but it is the number
+    // that says how much writing was going on, which is the thing the previous
+    // version of this file was wrong about.
+    const [written] = (await scratch.dataSource.query(
+      `SELECT (SELECT count(*) FROM ci.pipeline_state)::int  AS state,
+              (SELECT count(*) FROM ci.pipeline_shards)::int AS shards,
+              (SELECT count(*) FROM ci.pipeline_runs)::int   AS runs,
+              (SELECT count(*) FROM ci.inventory)::int       AS inventory,
+              (SELECT count(*) FROM ci.events
+                WHERE time_source IS NOT NULL)::int          AS events_labelled`,
+    )) as Array<Record<string, number>>;
 
-    const after = await fingerprint();
+    record('rows written (all of them, in the scratch database)', JSON.stringify(written));
 
-    await dataSource.destroy();
+    await scratch.drop();
 
-    // The whole safety claim of this file, checked rather than asserted in a
-    // comment. `leaked` is the direct one — a row under this suite's stage prefix
-    // could only have come from here — and the fingerprint is what would catch a
-    // write that landed somewhere else entirely, including in ci.events and
-    // ci.inventory, which the two real stages under test genuinely write.
-    expect(leaked).toEqual({ state: 0, shards: 0, letters: 0 });
-    expect(after).toEqual(before);
+    // The teardown claim, checked rather than asserted in a comment.
+    expect(await scratch.exists()).toBe(false);
   });
 
   // -------------------------------------------------------------------------
   // §1-§4. The loop over ci.events → ci.inventory, driven to convergence.
   // -------------------------------------------------------------------------
 
-  describe('promote.object over the real commerce events', () => {
-    let runner: QueryRunner;
+  describe('promote.object over the commerce corpus', () => {
     let loop: ControlLoop;
     let candidates = 0;
 
@@ -961,40 +894,50 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
     const firstPass: TickReport[] = [];
 
     beforeAll(async () => {
-      runner = await open();
+      // Before a single write. The guard is cheap and the thing it defends
+      // against is any path by which this connection is not where it should be.
+      await scratch.assertOwn();
 
       loop = await ControlLoop.start({
-        runner,
-        userId: corpusUserId,
+        dataSource: scratch.dataSource,
+        userId: promoteCorpus.userId,
         implFactory: (ds, logger) => new ObjectPromoteStage(ds, logger),
       });
 
       candidates = await loop.candidateCount();
 
-      record('promote.object candidates (real rows)', String(candidates));
+      record('promote.object candidates', String(candidates));
     });
 
     afterAll(async () => {
+      // Guarded: a `beforeAll` that threw leaves `loop` unset, and an afterAll
+      // that then throws replaces the real failure with a TypeError.
+      if (loop == null) {
+        return;
+      }
+
+      await loop.finishRun();
       await loop.close();
-      await rollback(runner);
     });
 
     // -----------------------------------------------------------------------
     // §1. A run, a tick, and real work dispatched.
     // -----------------------------------------------------------------------
 
-    it('§1 has real candidates and an EMPTY ledger — the genuine first-import state', async () => {
-      expect(candidates).toBeGreaterThan(0);
+    it('§1 has candidates and an EMPTY ledger — the genuine first-import state', async () => {
+      // The seeder's mix, arrived at through the STAGE's own predicate rather
+      // than by trusting the fixture's arithmetic.
+      expect(candidates).toBe(promoteCorpus.commerce);
+      expect(candidates).toBeGreaterThan(2 * IDS_PER_TICK);
 
       const coverage = await loop.stateService.coverage(loop.stageId);
 
       // Every row is stale for this stage because nothing has an opinion about
-      // any of them. That is not a fixture, it is the appliance's actual state:
-      // ci.pipeline_state has never held a row.
+      // any of them.
       expect(coverage.total).toBe(0);
 
       // Not a shortcut — this is the sweep the dispatcher is about to run.
-      const head = await loop.stateService.selectStale(loop.stage, corpusUserId, null, 1);
+      const head = await loop.stateService.selectStale(loop.stage, promoteCorpus.userId, null, 1);
 
       expect(head).toHaveLength(1);
     });
@@ -1013,8 +956,8 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       firstPass.push(report);
       dispatched.push(...report.dispatchedIds);
 
-      // THE GAP, closed: a run was started and one tick later real ids from the
-      // operator's own archive are in the ledger. Nothing in the repo did this.
+      // THE GAP, closed: a run was started and one tick later real ids are in
+      // the ledger. Nothing in the repo did this.
       expect(report.errors).toEqual([]);
       expect(report.slices).toBe(MAX_SLICES_PER_SWEEP);
       expect(report.dispatchedIds).toHaveLength(IDS_PER_TICK);
@@ -1026,19 +969,19 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       record('tick 1 wall clock', `${report.wallMs} ms`);
     });
 
-    it('§1 dispatched REAL commerce events, and the ledger says so', async () => {
-      const [check] = (await runner.query(
+    it('§1 dispatched commerce events belonging to THIS user, and the ledger says so', async () => {
+      const [check] = (await scratch.dataSource.query(
         `SELECT count(*)::int AS n
            FROM ci.events e
           WHERE e.event_id = ANY($1::uuid[])
             AND e.user_id = $2::uuid
             AND e.event_type IN ('purchase', 'order')`,
-        [firstPass[0].dispatchedIds, corpusUserId],
+        [firstPass[0].dispatchedIds, promoteCorpus.userId],
       )) as Array<{ n: number }>;
 
-      // Not "some rows" — every id the loop dispatched is a live commerce event
-      // belonging to this user. A sweep that leaked another user's rows, or rows
-      // the predicate excludes, would show up here as a shortfall.
+      // Not "some rows" — every id the loop dispatched is a commerce event
+      // belonging to this user. A sweep that leaked the other seeded user's
+      // rows, or rows the predicate excludes, would show up here as a shortfall.
       expect(check.n).toBe(IDS_PER_TICK);
 
       const coverage = firstPass[0].coverage;
@@ -1049,27 +992,30 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       expect(coverage.running).toBe(0);
       expect(coverage.quarantined).toBe(0);
       expect(coverage.stale).toBe(0);
+
+      // Both commerce classes were reached, which is what makes the skip
+      // vocabulary observable at all: purchases promote, order rollups are
+      // recorded `skipped: order_rollup_no_line_item` rather than vanishing.
+      expect(coverage.done).toBeGreaterThan(0);
+      expect(coverage.skipped).toBeGreaterThan(0);
     });
 
-    it('§1 actually ENRICHED — real ci.inventory objects exist that did not before', async () => {
-      const [inventory] = (await runner.query(
+    it('§1 actually ENRICHED — ci.inventory objects exist that did not before', async () => {
+      const [inventory] = (await scratch.dataSource.query(
         `SELECT count(*)::int AS n
            FROM ci.inventory
           WHERE owner_user_id = $1::uuid AND source_type = 'promote.object'`,
-        [corpusUserId],
+        [promoteCorpus.userId],
       )) as Array<{ n: number }>;
 
       // The end-to-end claim, stated as a row count in a user table rather than
-      // as a ledger status. `ci.inventory` held 0 promoted rows before this
-      // transaction opened, and the whole thing is rolled back — but inside it,
-      // the loop did the work.
+      // as a ledger status.
       expect(inventory.n).toBeGreaterThan(0);
-      // NOT 1:1. One commerce event is an ORDER; it mints one inventory object per
-      // LINE ITEM, so 624 processed events legitimately produced 2,147 objects.
-      // Duplication is ruled out structurally rather than by this count:
-      // ObjectPromoteStage upserts ON CONFLICT (owner_user_id, source_type,
-      // source_system, source_id), so a re-run cannot inflate it — which §3
-      // (converges and stops) then confirms by finding nothing left to do.
+      // NOT 1:1 in general — one commerce event can be an ORDER, which mints no
+      // object at all. Duplication is ruled out structurally rather than by this
+      // count: ObjectPromoteStage upserts ON CONFLICT (owner_user_id,
+      // source_type, source_system, source_id), so a re-run cannot inflate it —
+      // which §3 (converges and stops) then confirms by finding nothing left.
       expect(inventory.n).toBeGreaterThanOrEqual(firstPass[0].coverage.done);
 
       record('objects minted by tick 1', String(inventory.n));
@@ -1142,7 +1088,7 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       expect(final.total).toBe(candidates);
       expect(final.coverage).toBe(1);
 
-      record('ticks to converge (2,777 candidates)', String(working.length));
+      record(`ticks to converge (${candidates} candidates)`, String(working.length));
       record('ids per tick', working.map((r) => r.dispatchedIds.length).join(', '));
       record('wall clock per tick', `${working.map((r) => `${r.wallMs}`).join(', ')} ms`);
       record(
@@ -1150,18 +1096,19 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
         (working.reduce((n, r) => n + r.wallMs, 0) / dispatched.length).toFixed(3),
       );
       // THE END-TO-END CLAIM, at convergence: the ledger's `done` count and the
-      // number of real rows in the TARGET table are the same number. Coverage
-      // that does not match the thing it claims coverage over is the unearned
+      // number of rows in the TARGET table are the same number. Coverage that
+      // does not match the thing it claims coverage over is the unearned
       // confidence this whole subsystem replaces — it is exactly how `ci.content`
       // sat at zero embedded rows while nothing looked wrong.
-      const [inventory] = (await runner.query(
+      const [inventory] = (await scratch.dataSource.query(
         `SELECT count(*)::int AS n
            FROM ci.inventory
           WHERE owner_user_id = $1::uuid AND source_type = 'promote.object'`,
-        [corpusUserId],
+        [promoteCorpus.userId],
       )) as Array<{ n: number }>;
 
       expect(inventory.n).toBe(final.done);
+      expect(inventory.n).toBe(promoteCorpus.purchases);
 
       record(
         'outcomes',
@@ -1197,7 +1144,12 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       // And the sweep itself agrees, from the head of the corpus rather than from
       // the parked cursor: there is genuinely nothing stale, not merely nothing
       // after the cursor.
-      const stale = await loop.stateService.selectStale(loop.stage, corpusUserId, null, DEFAULT_SLICE_SIZE);
+      const stale = await loop.stateService.selectStale(
+        loop.stage,
+        promoteCorpus.userId,
+        null,
+        DEFAULT_SLICE_SIZE,
+      );
 
       expect(stale).toEqual([]);
 
@@ -1248,8 +1200,8 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       expect(report.dispatchedIds).toHaveLength(IDS_PER_TICK);
       expect(report.errors).toEqual([]);
 
-      // The SAME real rows come back, with a terminal ledger row already sitting
-      // on every one of them. Under the `LEFT JOIN ci.inventory ... IS NULL`
+      // The SAME rows come back, with a terminal ledger row already sitting on
+      // every one of them. Under the `LEFT JOIN ci.inventory ... IS NULL`
       // predicate this stage's docblock refuses to write, they were finished
       // forever.
       const firstPassSet = new Set(dispatched);
@@ -1294,6 +1246,18 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
         expect(row.attempts).toBe(2);
       }
 
+      // Re-promotion is an UPSERT, not a second mint. The whole corpus was
+      // re-processed and the target table did not grow by one row — the
+      // idempotency `ci.inventory`'s source triple exists to provide.
+      const [inventory] = (await scratch.dataSource.query(
+        `SELECT count(*)::int AS n
+           FROM ci.inventory
+          WHERE owner_user_id = $1::uuid AND source_type = 'promote.object'`,
+        [promoteCorpus.userId],
+      )) as Array<{ n: number }>;
+
+      expect(inventory.n).toBe(promoteCorpus.purchases);
+
       record('ticks to re-converge after the bump', String(working.length + 1));
     });
   });
@@ -1303,7 +1267,6 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
   // -------------------------------------------------------------------------
 
   describe('pause and resume, mid-corpus', () => {
-    let runner: QueryRunner;
     let loop: ControlLoop;
 
     /** Ids dispatched before the pause. */
@@ -1313,11 +1276,11 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
     let pausedCursor: string | null = null;
 
     beforeAll(async () => {
-      runner = await open();
+      await scratch.assertOwn();
 
       loop = await ControlLoop.start({
-        runner,
-        userId: corpusUserId,
+        dataSource: scratch.dataSource,
+        userId: pauseCorpus.userId,
         implFactory: (ds, logger) => new ObjectPromoteStage(ds, logger),
       });
 
@@ -1334,8 +1297,14 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
     });
 
     afterAll(async () => {
+      // Guarded: a `beforeAll` that threw leaves `loop` unset, and an afterAll
+      // that then throws replaces the real failure with a TypeError.
+      if (loop == null) {
+        return;
+      }
+
+      await loop.finishRun();
       await loop.close();
-      await rollback(runner);
     });
 
     it('§5 pause writes intent only, and the next ticks dispatch NOTHING', async () => {
@@ -1421,6 +1390,7 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       const coverage = await loop.stateService.coverage(loop.stageId);
 
       expect(coverage.coverage).toBe(1);
+      expect(coverage.total).toBe(pauseCorpus.commerce);
 
       const rows = await loop.ledgerRows();
 
@@ -1433,11 +1403,10 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
   });
 
   // -------------------------------------------------------------------------
-  // §6. What a tick costs against 324,044 rows.
+  // §6. What a tick costs, and whether the cost moves as the ledger fills.
   // -------------------------------------------------------------------------
 
-  describe('the cost of one tick against the whole corpus', () => {
-    let runner: QueryRunner;
+  describe('the cost of one tick against the scale corpus', () => {
     let loop: ControlLoop;
     let candidates = 0;
 
@@ -1448,18 +1417,15 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
     const warm: TickReport[] = [];
 
     beforeAll(async () => {
-      runner = await open();
+      await scratch.assertOwn();
 
       // `clean.temporal_repair`: the one declared stage whose applicability
       // predicate covers every live event, so its candidate set IS the corpus.
       // Postgres-only — no provider, no Ollama, no bill — which is what makes it
-      // safe to measure with. It writes `ci.events.start_time` and
-      // `start_time_original`, inside the transaction, and the suite's
-      // fingerprint (which hashes exactly those columns) proves none of it
-      // survived.
+      // safe to measure with.
       loop = await ControlLoop.start({
-        runner,
-        userId: corpusUserId,
+        dataSource: scratch.dataSource,
+        userId: scaleCorpus.userId,
         implFactory: (ds, logger) => new TemporalRepairStage(ds, logger),
       });
 
@@ -1473,20 +1439,19 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
 
       // ── The state the appliance actually lives in ────────────────────────
       //
-      // The three ticks above ran against a ledger holding 3,000 rows, which is
-      // the FIRST three ticks of a 325-tick sweep and nothing else. Quoting them
-      // as "the cost of a tick against 324k rows" would be the empty-ledger
-      // benchmark this subsystem's own comments warn about: the sweep's failure
-      // mode is INVERTED — fast when there is lots of work, slowest once the
-      // corpus has converged, which is the state every idempotent re-sweep runs
-      // in permanently.
+      // The ticks above ran against a ledger holding 3,000 rows, which is the
+      // FIRST three ticks of a long sweep and nothing else. Quoting them as
+      // "the cost of a tick" would be the empty-ledger benchmark this
+      // subsystem's own comments warn about: the sweep's failure mode is
+      // INVERTED — fast when there is lots of work, slowest once the corpus has
+      // converged, which is the state every idempotent re-sweep runs in
+      // permanently.
       //
-      // So: fast-forward the ledger to a third of the corpus, in sweep order —
-      // real event ids, taken the way a real sweep would have taken them, so the
-      // ledger looks exactly like a run that was interrupted a third of the way
+      // So: fast-forward the ledger to a third of the corpus, in sweep order,
+      // so it looks exactly like a run that was interrupted a third of the way
       // through. Random ids would produce a uniformly-sprinkled ledger, a state
       // no sweep can reach and one the planner treats differently.
-      await runner.query(
+      await scratch.dataSource.query(
         `INSERT INTO ci.pipeline_state
                 (entity_type, entity_id, stage, stage_version, status, attempts, user_id, updated_at)
          SELECT $1, t.event_id, $2, $3::int, 'done', 1, t.user_id, now()
@@ -1496,32 +1461,29 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
                   ORDER BY event_id
                   LIMIT $5) AS t
          ON CONFLICT (entity_type, entity_id, stage) DO NOTHING`,
-        [ENTITY_TYPE, loop.stageId, loop.stage.version, corpusUserId, PRELOADED_LEDGER_ROWS],
+        [ENTITY_TYPE, loop.stageId, loop.stage.version, scaleCorpus.userId, PRELOADED_LEDGER_ROWS],
       );
 
-      // WITHOUT THIS THE MEASUREMENT IS A LIE. `ci.pipeline_state` is empty on
-      // this appliance, so its statistics say "0 rows"; a plan chosen against
-      // those statistics is the plan for an empty ledger no matter how many rows
-      // the transaction just inserted. On a real appliance autoanalyze reaches
-      // the same state within minutes of the first sweep, so this reproduces the
-      // steady state rather than manufacturing one. Legal inside a transaction
-      // (unlike VACUUM) and transactional — the catalog rows roll back too.
-      await runner.query(`ANALYZE ci.pipeline_state`);
+      // WITHOUT THIS THE MEASUREMENT IS A LIE. A plan chosen against statistics
+      // that say "0 rows" is the plan for an empty ledger no matter how many
+      // rows were just inserted. On a real appliance autoanalyze reaches the
+      // same state within minutes of the first sweep.
+      await scratch.dataSource.query('ANALYZE ci.pipeline_state');
 
       // Park the shard where that interrupted run left it, then tick. This is a
       // resume from a third of the way in, with a ledger to match.
-      const [boundary] = (await runner.query(
+      const [boundary] = (await scratch.dataSource.query(
         `SELECT event_id::text AS id
            FROM ci.events
           WHERE user_id = $1::uuid
           ORDER BY event_id
          OFFSET $2 LIMIT 1`,
-        [corpusUserId, PRELOADED_LEDGER_ROWS - 1],
+        [scaleCorpus.userId, PRELOADED_LEDGER_ROWS - 1],
       )) as Array<{ id: string }>;
 
       const shard = await loop.shard();
 
-      await runner.query(
+      await scratch.dataSource.query(
         `UPDATE ci.pipeline_shards SET "cursor" = $2, status = 'running' WHERE id = $1::uuid`,
         [shard?.id, boundary.id],
       );
@@ -1532,17 +1494,24 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
     });
 
     afterAll(async () => {
+      // Guarded: a `beforeAll` that threw leaves `loop` unset, and an afterAll
+      // that then throws replaces the real failure with a TypeError.
+      if (loop == null) {
+        return;
+      }
+
+      await loop.finishRun();
       await loop.close();
-      await rollback(runner);
     });
 
     it('§6 the whole corpus is in scope for a declared stage', async () => {
-      // 324,044 candidates for one stage, with an empty ledger, is the genuine
-      // starting condition of a first import — and the reason the loop has to
-      // pace itself rather than enqueue the corpus in one pass.
-      expect(candidates).toBe(corpusEvents);
+      // Every event, with an empty ledger, is the genuine starting condition of
+      // a first import — and the reason the loop has to pace itself rather than
+      // enqueue the corpus in one pass.
+      expect(candidates).toBe(scaleCorpus.events);
+      expect(candidates).toBeGreaterThan(PRELOADED_LEDGER_ROWS + SCALE_TICKS * IDS_PER_TICK);
 
-      const [reasons] = (await runner.query(
+      const [reasons] = (await scratch.dataSource.query(
         `SELECT jsonb_object_agg(r.reason, r.n) AS reasons
            FROM (SELECT coalesce(reason, status) AS reason, count(*)::int AS n
                    FROM ci.pipeline_state
@@ -1558,7 +1527,7 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       record('temporal_repair ledger reasons', JSON.stringify(reasons.reasons ?? {}));
     });
 
-    it('§6 reports what one tick costs, cold and against a real ledger', () => {
+    it('§6 reports what one tick costs, cold and against a populated ledger', () => {
       for (const report of [...cold, ...warm]) {
         expect(report.errors).toEqual([]);
         expect(report.dispatchedIds).toHaveLength(IDS_PER_TICK);
@@ -1577,11 +1546,16 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
         `tick wall clock, ledger ${PRELOADED_LEDGER_ROWS} rows`,
         `${warmWall.join(', ')} ms (resumed at row ${PRELOADED_LEDGER_ROWS})`,
       );
-      record('mean ms per row, real ledger', (meanWarm / IDS_PER_TICK).toFixed(3));
-      record('PROJECTED ticks to converge 324,044', String(ticksToConverge));
+      record('mean ms per row, populated ledger', (meanWarm / IDS_PER_TICK).toFixed(3));
+      record(`PROJECTED ticks to converge ${candidates}`, String(ticksToConverge));
+      // Deliberately NOT projected onto the operator's archive. This is a
+      // seeded corpus on whatever machine jest is running on; a number about a
+      // 324,044-row appliance has to be measured on that appliance, with a
+      // read-only tool, and `realData.integration.spec.ts` is the shape that
+      // does it.
       record(
-        'PROJECTED worker time to converge 324,044',
-        `${((meanWarm * ticksToConverge) / 1000 / 60).toFixed(1)} min — MACHINERY ONLY, see the runbook`,
+        `PROJECTED worker time to converge ${candidates}`,
+        `${((meanWarm * ticksToConverge) / 1000 / 60).toFixed(1)} min — SEEDED CORPUS, MACHINERY ONLY`,
       );
     });
 
@@ -1609,15 +1583,15 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       );
     });
 
-    it('§6 leaves the ledger consistent at 324k scale', async () => {
+    it('§6 leaves the ledger consistent at scale', async () => {
       const coverage = await loop.stateService.coverage(loop.stageId);
 
-      // The three COLD ticks worked the head of the corpus, which is inside the
+      // The COLD ticks worked the head of the corpus, which is inside the
       // preloaded prefix, so the preload's `ON CONFLICT DO NOTHING` absorbed
-      // them rather than adding to them. The three WARM ticks ran past the
-      // prefix and are additive. That arithmetic is asserted rather than
-      // approximated because it is also the proof that the preload did not
-      // silently overwrite work the loop had already recorded.
+      // them rather than adding to them. The WARM ticks ran past the prefix and
+      // are additive. That arithmetic is asserted rather than approximated
+      // because it is also the proof that the preload did not silently overwrite
+      // work the loop had already recorded.
       expect(coverage.total).toBe(PRELOADED_LEDGER_ROWS + SCALE_TICKS * IDS_PER_TICK);
       expect(coverage.running).toBe(0);
       expect(coverage.failed).toBe(0);
@@ -1625,9 +1599,9 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
       expect(coverage.done + coverage.skipped).toBe(coverage.total);
       expect(coverage.stale).toBe(0);
 
-      // Every row the loop itself worked was claimed exactly once, at 324k scale
-      // with a six-figure ledger underneath it.
-      const [attempts] = (await runner.query(
+      // Every row the loop itself worked was claimed exactly once, with a
+      // five-figure ledger underneath it.
+      const [attempts] = (await scratch.dataSource.query(
         `SELECT max(attempts)::int AS max, count(*)::int AS n
            FROM ci.pipeline_state
           WHERE stage = $1`,
@@ -1641,6 +1615,24 @@ describeWithDatabase(`the enrichment loop, against real imported data (${availab
         'ledger at end of §6',
         `${coverage.total} rows — done ${coverage.done}, skipped ${coverage.skipped}, max attempts ${attempts.max}`,
       );
+    });
+
+    // -----------------------------------------------------------------------
+    // The guard, as an assertion rather than as a precondition.
+    // -----------------------------------------------------------------------
+
+    it('§6 was still writing to the database this run created', async () => {
+      // Every block calls `assertOwn` before it writes. This is the same check
+      // stated as a test, so the suite reports the isolation property in its
+      // own output rather than only enforcing it silently.
+      await expect(scratch.assertOwn()).resolves.toBeUndefined();
+
+      const [row] = (await scratch.dataSource.query(`SELECT current_database() AS database`)) as Array<{
+        database: string;
+      }>;
+
+      expect(row.database).toBe(scratch.name);
+      expect(row.database).toMatch(/^ci_pipeline_scratch_\d{14}_[0-9a-f]{8}$/);
     });
   });
 });
