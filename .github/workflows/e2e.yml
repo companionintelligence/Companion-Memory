@@ -5,14 +5,10 @@ name: E2E
 # nightly and on-demand rather than per-PR. It lives in its own workflow and is
 # non-blocking (continue-on-error) — promote to `pull_request` (path-filtered)
 # and required once it is reliably green.
-# >>> ci-local:gated original triggers below, restore with `ci-local restore`
-# on:
-#   workflow_dispatch:
-#   schedule:
-#     - cron: '0 7 * * *' # 07:00 UTC nightly
-# <<< ci-local:gated
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *' # 07:00 UTC nightly
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

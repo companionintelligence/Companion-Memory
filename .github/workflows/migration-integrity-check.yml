@@ -1,20 +1,16 @@
 name: Migrations
 
-# >>> ci-local:gated original triggers below, restore with `ci-local restore`
-# on:
-#   pull_request:
-#     # `edited` re-runs the check when the PR title changes, since the
-#     # [squash-migrations]/[fix-migrations] mode is read from the title.
-#     types: [opened, synchronize, reopened, edited]
-#     paths:
-#       - 'backend/apps/api/db/postgres/migrations/**'
-#       # The checker and its wiring, so a change to either is exercised by the
-#       # job that runs it — not first discovered inside the production image.
-#       - 'backend/apps/api/bin/check-migration-versions.js'
-#       - 'backend/apps/api/package.json'
-# <<< ci-local:gated
 on:
-  workflow_dispatch:
+  pull_request:
+    # `edited` re-runs the check when the PR title changes, since the
+    # [squash-migrations]/[fix-migrations] mode is read from the title.
+    types: [opened, synchronize, reopened, edited]
+    paths:
+      - 'backend/apps/api/db/postgres/migrations/**'
+      # The checker and its wiring, so a change to either is exercised by the
+      # job that runs it — not first discovered inside the production image.
+      - 'backend/apps/api/bin/check-migration-versions.js'
+      - 'backend/apps/api/package.json'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -59,12 +55,21 @@ jobs:
           fetch-depth: 0
 
       - name: Check for modified migrations
+        # The PR title and base ref reach the script as environment variables,
+        # never as ${{ }} interpolation. Interpolation is substituted into the
+        # script *before* bash parses it, so a PR titled `"; curl …|sh; #` would
+        # execute as code — and `types: [edited]` means retitling re-triggers the
+        # job. Harmless while this workflow was dispatch-only (the context was
+        # always empty); restoring the pull_request trigger arms it.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           # Fetch the base branch to ensure we can compare against it
-          git fetch origin ${{ github.base_ref }}
+          git fetch origin "$BASE_REF"
 
           # Check for changes in the migrations directory
-          ALL_CHANGES=$(git diff --name-status origin/${{ github.base_ref }} HEAD -- backend/apps/api/db/postgres/migrations)
+          ALL_CHANGES=$(git diff --name-status "origin/$BASE_REF" HEAD -- backend/apps/api/db/postgres/migrations)
 
           # Committed migrations are immutable: normally only additions (A)
           # are allowed. Two exceptions, declared in the PR title:
@@ -75,10 +80,10 @@ jobs:
           #                        in-place modification stays forbidden
           MODE=normal
 
-          if [[ "${{ github.event.pull_request.title }}" == *"[fix-migrations]"* ]]; then
+          if [[ "$PR_TITLE" == *"[fix-migrations]"* ]]; then
             MODE=fix
             echo "Migration fix mode detected."
-          elif [[ "${{ github.event.pull_request.title }}" == *"[squash-migrations]"* ]]; then
+          elif [[ "$PR_TITLE" == *"[squash-migrations]"* ]]; then
             MODE=squash
             echo "Migration squashing mode detected."
           fi

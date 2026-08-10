@@ -1,10 +1,6 @@
 name: Style canon lint
 
-# >>> ci-local:gated original triggers below, restore with `ci-local restore`
-# on: [pull_request, push]
-# <<< ci-local:gated
-on:
-  workflow_dispatch:
+on: [pull_request, push]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

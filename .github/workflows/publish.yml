@@ -1,15 +1,17 @@
 name: Publish
 
-# >>> ci-local:gated original triggers below, restore with `ci-local restore`
-# on:
-#   push:
-#     tags:
-#       - '*'
-#
-# # Only one publish run at a time per tag.
-# <<< ci-local:gated
 on:
+  push:
+    tags:
+      - '*'
+  # Retained from the gating period: the release-recovery path. v2026.8.8's
+  # tag-triggered publish failed, and the fixed build was re-run by dispatching
+  # this workflow on the existing tag — without it the only retry is to delete
+  # and re-push the tag. Dispatch it on a TAG ref; VERSION is parsed from the
+  # ref, so dispatching on a branch would publish garbage image tags.
   workflow_dispatch:
+
+# Only one publish run at a time per tag.
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false

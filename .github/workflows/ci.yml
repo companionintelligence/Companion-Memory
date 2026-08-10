@@ -1,15 +1,15 @@
 name: CI
 
-# >>> ci-local:gated original triggers below, restore with `ci-local restore`
-# on:
-#   push:
-#     branches:
-#       - main
-#   pull_request:
-#     branches:
-#       - main
-# <<< ci-local:gated
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  # Retained from the gating period. push/pull_request are both main-scoped, so
+  # a branch with no open PR gets no CI otherwise; dispatch is the manual escape
+  # hatch and costs nothing until someone clicks it.
   workflow_dispatch:
 
 concurrency:
