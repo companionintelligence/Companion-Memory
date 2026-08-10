@@ -1,7 +1,9 @@
 import { LoadingPage } from '@ci/common';
 import { Navigate } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
 import { useAuth, useCurrentUser } from '@/hooks';
+import { defaultAppRoute } from '@/lib/defaultAppRoute';
 
 export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   // `initializing`, not `loading`: the latter is also true while a login or
@@ -10,6 +12,7 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   // state needed to attach the server's field errors.
   const [{ expired, authToken, initializing }] = useAuth();
   const { user, loading: userLoading } = useCurrentUser();
+  const { isFeatureEnabled } = useFeatures();
 
   if (initializing || userLoading) {
     return <LoadingPage />;
@@ -27,7 +30,7 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
 
   if (user) {
     if (user.onboarded) {
-      return <Navigate to="/feed" />;
+      return <Navigate to={defaultAppRoute(isFeatureEnabled)} />;
     }
 
     return <Navigate to="/onboarding" />;

@@ -36,6 +36,7 @@ dependencies = [
 
     # ── App GraphQL client ────────────────────────────────────────────────────
     "requests>=2.31",               # HTTP for GraphQL calls to application service
+    "httpx>=0.27",                  # OpenAI-compatible LLM labeling (vLLM)
     "PyJWT>=2.13.0",                 # self-sign service JWTs with shared secret
 
     # ── API & config ──────────────────────────────────────────────────────────
@@ -47,6 +48,7 @@ dependencies = [
     # ── Error reporting ───────────────────────────────────────────────────────
     # Shared with ci-summary; brings sentry-sdk with it.
     "ci-telemetry",
+    "ci-prompt-taxonomy",
 
     # ── Utilities ────────────────────────────────────────────────────────────
     "structlog",
@@ -58,6 +60,7 @@ dependencies = [
 
 [tool.uv.sources]
 ci-telemetry = { workspace = true }
+ci-prompt-taxonomy = { workspace = true }
 # On Linux, torch resolves from the PyTorch CPU index rather than PyPI.
 # PyPI's Linux torch depends on the full NVIDIA/Triton CUDA stack —
 # gigabytes of libraries that every hbpe image installed and the CPU image

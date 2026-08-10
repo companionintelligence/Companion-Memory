@@ -8,6 +8,7 @@ import logo from '@/assets/logo.png';
 import { useFeatures } from '@/common/feature';
 import { ThemeToggle } from '@/components/ThemePicker';
 import { useCurrentUser } from '@/hooks';
+import { defaultAppRoute } from '@/lib/defaultAppRoute';
 
 import { ActivityPreferences } from './ActivityPreferences';
 import { ConnectSourceStep } from './ConnectSourceStep';
@@ -255,7 +256,7 @@ export function OnboardingPage() {
     currentStepKey !== 'connect-source' && currentStepKey !== 'focus-areas' && currentStepKey !== 'people';
 
   if (user?.onboarded) {
-    return <Navigate to="/feed" replace />;
+    return <Navigate to={defaultAppRoute(isFeatureEnabled)} replace />;
   }
 
   if (userLoading || progressLoading || !hydrated) {

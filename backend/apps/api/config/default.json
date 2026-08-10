@@ -167,7 +167,7 @@
     "require.signup.codes": true,
     "files.page": true,
     "insights.page": true,
-    "chat.page": false,
+    "chat.page": true,
     "jobs.page": true,
     "planning.enabled": false,
     "planning.page": false,

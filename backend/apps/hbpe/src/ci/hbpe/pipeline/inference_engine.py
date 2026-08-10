@@ -22,8 +22,11 @@ Per-day output:
 
 Aggregate for histogram
   For each future bucket b:
-    l0_probs[b] = Σ_d  w_d * softmax(l0_logits_d[b] / T)
-  where  w_d = exp(-i/λ) × (2 if same DoW else 1),  λ=7 days
+    l0_potentials[b][c] = Σ_d  w_d * sigmoid(l0_logit_d[b,c] / T)
+  Each L0 class is an independent 0–1 energy potential (if you'd done nothing
+  else in that slot). Potentials do NOT sum to 100%. The occupant (most probable
+  class) wins for bucket display; q10/q50/q90 measure how predictable that time
+  range is from historical consistency.
 
 Implements T4.2 (CI-Server-04d).
 """
@@ -36,7 +39,11 @@ from pathlib import Path
 
 import numpy as np
 
-from ci.hbpe.buckets import BUCKET_MINUTES
+from ci.hbpe.buckets import (
+    BUCKET_MINUTES,
+    detect_legacy_token_stream,
+    legacy_hist_to_forecast_buckets,
+)
 from ci.hbpe.buckets import BUCKETS_PER_DAY as N_BUCKETS
 from ci.hbpe.model.calibration import _build_full_batch
 from ci.hbpe.model.checkpoints import (
@@ -63,6 +70,7 @@ DECAY_LAMBDA = 7.0  # recency half-life in days
 DOW_BOOST = 2.0  # weight multiplier for same-day-of-week as forecast
 
 _SPECIAL_IDX = {PAD_IDX, SOD_IDX, EOD_IDX}
+N_SPECIAL = 4  # PAD, MASK, SOD, EOD precede the 8 behavioral L0 classes
 
 
 # ── PyTorch fallback session ───────────────────────────────────────────────────
@@ -354,7 +362,16 @@ class InferenceEngine:
         """Return (possibly cached) per-bucket logits for *date*."""
         if date not in self._output_cache:
             tokens = self._fetch_day_tokens(date)
-            self._output_cache[date] = self._run_day(tokens) if tokens else None
+            if not tokens:
+                self._output_cache[date] = None
+            else:
+                legacy = detect_legacy_token_stream(tokens)
+                day_out = self._run_day(tokens)
+                if day_out is None:
+                    self._output_cache[date] = None
+                else:
+                    day_out["legacy"] = legacy
+                    self._output_cache[date] = day_out
         return self._output_cache[date]
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -407,8 +424,12 @@ class InferenceEngine:
         Return a 96-bucket histogram for the 24h window starting at *horizon_start*
         (default: midnight tonight).
 
-        Each element: {bucket_index, start_time, l0_probs, l1_probs, l2_probs,
-                       q10, q50, q90}
+        Each element: {bucket_index, start_time, l0_probs, occupant_l0,
+                       l0_predictability, l1_probs, l2_probs, q10, q50, q90}
+
+        l0_probs holds independent 0–1 energy potentials per class (need not sum
+        to 1). occupant_l0 is the highest-potential class for the bucket.
+        q10/q50/q90 measure how predictable this time range is historically.
         """
         if self._session is None:
             self._try_reload_session()
@@ -435,8 +456,12 @@ class InferenceEngine:
         bucket_l0_sum = np.zeros((N_BUCKETS, V_l0), dtype=np.float64)
         bucket_l1_sum = np.zeros((N_BUCKETS, V_l1), dtype=np.float64)
         bucket_weight = np.zeros(N_BUCKETS, dtype=np.float64)
-        # Track per-day max-confidence for quantile computation
-        bucket_conf_samples: list[list[float]] = [[] for _ in range(N_BUCKETS)]
+        # Per-class historical potential samples for range-time predictability.
+        bucket_class_samples: list[list[list[float]]] = [
+            [[] for _ in range(len(L0_CLASSES))] for _ in range(N_BUCKETS)
+        ]
+        # Historical max-potential per bucket (overall slot predictability).
+        bucket_max_potential_samples: list[list[float]] = [[] for _ in range(N_BUCKETS)]
 
         forecast_dow = forecast_date.weekday()
 
@@ -449,49 +474,78 @@ class InferenceEngine:
             w_recency = np.exp(-i / DECAY_LAMBDA)
             w_dow = DOW_BOOST if hist_date.weekday() == forecast_dow else 1.0
             w = w_recency * w_dow
+            legacy = day_out.get("legacy", False)
 
-            for b in range(N_BUCKETS):
-                if b in day_out["l0"]:
-                    probs = _softmax(day_out["l0"][b] / self._temp)
-                    bucket_l0_sum[b] += w * probs
-                    bucket_weight[b] += w
-                    bucket_conf_samples[b].append(float(probs.max()))
-                if b in day_out["l1"]:
-                    bucket_l1_sum[b] += w * _softmax(day_out["l1"][b] / self._temp)
+            for hist_bucket, l0_logits in day_out["l0"].items():
+                forecast_buckets = (
+                    legacy_hist_to_forecast_buckets(hist_bucket)
+                    if legacy
+                    else [hist_bucket]
+                )
+                share = 1.0 / len(forecast_buckets)
+                potentials = _logits_to_potentials(l0_logits, self._temp, V_l0)
+                for b in forecast_buckets:
+                    if b >= N_BUCKETS:
+                        continue
+                    bucket_l0_sum[b] += share * w * potentials
+                    bucket_weight[b] += share * w
+                    for ci, val in enumerate(potentials[N_SPECIAL:]):
+                        bucket_class_samples[b][ci].append(float(val))
+                    bucket_max_potential_samples[b].append(
+                        float(potentials[N_SPECIAL:].max())
+                    )
 
-        # Normalise
+            for hist_bucket, l1_logits in day_out["l1"].items():
+                forecast_buckets = (
+                    legacy_hist_to_forecast_buckets(hist_bucket)
+                    if legacy
+                    else [hist_bucket]
+                )
+                share = 1.0 / len(forecast_buckets)
+                l1_probs = _softmax(l1_logits / self._temp)
+                for b in forecast_buckets:
+                    if b >= N_BUCKETS:
+                        continue
+                    bucket_l1_sum[b] += share * w * l1_probs
+
+        # Normalise weighted sums (per-class averages, not a partition of unity).
         for b in range(N_BUCKETS):
             if bucket_weight[b] > 0:
                 bucket_l0_sum[b] /= bucket_weight[b]
                 bucket_l1_sum[b] /= bucket_weight[b]
             else:
-                bucket_l0_sum[b] = np.ones(V_l0) / V_l0  # uniform prior
+                bucket_l0_sum[b, N_SPECIAL:] = 0.5  # neutral potential when cold
 
         # ── Format response ────────────────────────────────────────────────────
         # L0 vocab layout: [PAD(0), MASK(1), SOD(2), EOD(3), class_0..class_7]
-        # Zero special-token probability mass and renormalise so the 8
-        # behavioral classes always sum to 1.0 in the histogram.
-        N_SPECIAL = 4
         l0_classes = L0_CLASSES  # 8 behavioral class names
 
-        raw_l0 = np.zeros((N_BUCKETS, len(l0_classes)), dtype=np.float64)
+        raw_potentials = np.zeros((N_BUCKETS, len(l0_classes)), dtype=np.float64)
         for b in range(N_BUCKETS):
-            class_arr = bucket_l0_sum[b, N_SPECIAL:].copy()
-            total = class_arr.sum()
-            if total > 0:
-                class_arr /= total
-            else:
-                class_arr = np.ones(len(l0_classes)) / len(l0_classes)
-            raw_l0[b] = class_arr
+            raw_potentials[b] = np.clip(bucket_l0_sum[b, N_SPECIAL:], 0.0, 1.0)
 
-        smoothed_l0 = self._smooth_l0_across_day(raw_l0)
+        smoothed_potentials = self._smooth_l0_potentials_across_day(raw_potentials)
 
         results: list[dict] = []
         for b in range(N_BUCKETS):
             start_time = horizon_start + datetime.timedelta(minutes=BUCKET_MINUTES * b)
             l0_probs = {
-                cls: float(smoothed_l0[b, i]) for i, cls in enumerate(l0_classes)
+                cls: float(smoothed_potentials[b, i])
+                for i, cls in enumerate(l0_classes)
             }
+            occupant_l0 = l0_classes[int(np.argmax(smoothed_potentials[b]))]
+
+            l0_predictability = {
+                cls: float(_quantiles(bucket_class_samples[b][i])[1])
+                if bucket_class_samples[b][i]
+                else 0.0
+                for i, cls in enumerate(l0_classes)
+            }
+            q10, q50, q90 = (
+                _quantiles(bucket_max_potential_samples[b])
+                if bucket_max_potential_samples[b]
+                else (0.0, 0.0, 0.0)
+            )
             # Top-10 L1 clusters by probability (keyed by human-readable label)
             l1_arr = bucket_l1_sum[b]
             top_l1_idx = np.argsort(l1_arr)[::-1][:10]
@@ -502,14 +556,13 @@ class InferenceEngine:
                     name = self._l1_display_names.get(uuid, uuid[:8])
                     l1_probs[name] = float(l1_arr[idx])
 
-            samples = bucket_conf_samples[b]
-            q10, q50, q90 = _quantiles(samples) if samples else (0.0, 0.0, 0.0)
-
             results.append(
                 {
                     "bucket_index": b,
                     "start_time": start_time.isoformat() + "Z",
                     "l0_probs": l0_probs,
+                    "occupant_l0": occupant_l0,
+                    "l0_predictability": l0_predictability,
                     "l1_probs": l1_probs,
                     "l2_probs": {},  # L2 deferred — no ci.content data
                     "q10": q10,
@@ -519,6 +572,24 @@ class InferenceEngine:
             )
 
         return results
+
+    def _smooth_l0_potentials_across_day(
+        self, raw_potentials: np.ndarray
+    ) -> np.ndarray:
+        """
+        Smooth independent per-class potentials across the day.
+
+        Each L0 class is smoothed along time without renormalizing rows, so
+        potentials remain independent energy estimates. Occupant selection
+        (argmax) happens after this step.
+        """
+        try:
+            from ci.hbpe.pipeline.l0_temporal_smooth import smooth_l0_potentials
+
+            return smooth_l0_potentials(raw_potentials)
+        except Exception:
+            log.exception("L0 potential smooth failed — using raw potentials")
+            return raw_potentials
 
     def _smooth_l0_across_day(self, raw_l0: np.ndarray) -> np.ndarray:
         """
@@ -558,6 +629,30 @@ class InferenceEngine:
 def _softmax(x: np.ndarray) -> np.ndarray:
     e = np.exp(x - x.max())
     return e / e.sum()
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def _logits_to_potentials(
+    logits: np.ndarray, temperature: float, vocab_size: int
+) -> np.ndarray:
+    """
+    Map raw L0 logits to independent 0–1 energy potentials (one per vocab slot).
+
+    Behavioral classes use sigmoid(logit / T) so each is an independent
+    "if you'd done nothing else" strength, not a share of a 100% partition.
+    """
+    arr = np.asarray(logits, dtype=np.float64)
+    if arr.shape[0] < vocab_size:
+        padded = np.zeros(vocab_size, dtype=np.float64)
+        padded[: arr.shape[0]] = arr
+        arr = padded
+    scaled = arr[:vocab_size] / max(temperature, 1e-6)
+    out = np.zeros(vocab_size, dtype=np.float64)
+    out[N_SPECIAL:] = _sigmoid(scaled[N_SPECIAL:])
+    return out
 
 
 def _quantiles(values: list[float]) -> tuple[float, float, float]:

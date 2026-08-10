@@ -66,7 +66,9 @@ function normalizeBuckets(raw: ForecastBucket[]): ForecastBucket[] {
       byIndex.get(i) ?? {
         bucketIndex: i,
         startTime: '',
+        occupantL0: null,
         l0Probs: [],
+        l0Predictability: null,
         l1Probs: [],
         l2Probs: null,
         q10: 0,
@@ -132,12 +134,19 @@ function topL1(probs: ProbabilityEntry[]): { name: string; prob: number } | null
 function SlotTooltip({ bucket, localMin }: { bucket: ForecastBucket; localMin: number }) {
   const { isFeatureEnabled } = useFeatures();
   const sorted = [...bucket.l0Probs].sort((a, b) => b.probability - a.probability);
+  const occupant = bucket.occupantL0 ?? dominantL0(bucket.l0Probs);
   const top1 = topL1(bucket.l1Probs);
+  const predictability = Math.round(bucket.q50 * 100);
 
   return (
     <div className="w-52 space-y-2 text-left">
       <p className="text-xs font-semibold">
         {formatClock(localMin)} – {formatClock(localMin + MINUTES_PER_BUCKET)}
+      </p>
+      <p className="text-[10px] opacity-70">
+        Potential: <span className="font-medium">{occupant}</span>
+        {' · '}
+        Range predictability: {predictability}%
       </p>
 
       <div className="space-y-1">
@@ -193,7 +202,7 @@ function ForecastSlot({
   systemStatus: string;
 }) {
   const isReady = systemStatus === 'READY';
-  const dominant = dominantL0(bucket.l0Probs);
+  const dominant = bucket.occupantL0 ?? dominantL0(bucket.l0Probs);
 
   const isEmpty = bucket.l0Probs.length === 0;
   const targetOpacity = isEmpty ? 0.08 : Math.max(0.2, Math.min(1, bucket.q50));

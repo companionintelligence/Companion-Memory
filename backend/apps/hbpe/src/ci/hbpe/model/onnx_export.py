@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 OPSET = 17
 DELTA_LIMIT = 0.01  # 1 percentage-point max L0 top-1 delta
-ONNX_SEQ_LEN = 256  # Static length; runtime inputs are padded to this width
+ONNX_SEQ_LEN = 512  # Static length; runtime inputs are padded/truncated to this width
 _SPECIAL_IDX = {PAD_IDX, SOD_IDX, EOD_IDX}
 
 
@@ -147,10 +147,12 @@ def _make_ort_input(
     """
     seq_len = int(token_ids.shape[1])
     if seq_len > ONNX_SEQ_LEN:
-        raise ValueError(
-            f"Sequence length {seq_len} exceeds ONNX export width {ONNX_SEQ_LEN}. "
-            "Increase ONNX_SEQ_LEN and re-export."
-        )
+        overflow = seq_len - ONNX_SEQ_LEN
+        token_ids = token_ids[:, overflow:]
+        bucket_idxs = bucket_idxs[:, overflow:]
+        level_ids = level_ids[:, overflow:]
+        padding_mask = padding_mask[:, overflow:]
+        seq_len = ONNX_SEQ_LEN
 
     pad = ONNX_SEQ_LEN - seq_len
     tok_np = token_ids.numpy().astype(np.int64)

@@ -60,6 +60,7 @@ async def nightly(user_id: str, **_: Any) -> dict:
         lora_fine_tune,
         needs_bootstrap,
         recurrence_profile,
+        reserialize_token_stream,
     )
 
     results: dict = {"user_id": user_id, "steps": {}, "workflow": "nightly"}
@@ -76,6 +77,11 @@ async def nightly(user_id: str, **_: Any) -> dict:
         step("label_summaries")
         results["steps"]["step1b_summaries"] = await _safe(
             label_summary_tokens(user_id), "step1b_summaries"
+        )
+
+        step("reserialize")
+        results["steps"]["step1c_reserialize"] = await _safe(
+            reserialize_token_stream(user_id), "step1c_reserialize"
         )
 
         step("l1_sweep")

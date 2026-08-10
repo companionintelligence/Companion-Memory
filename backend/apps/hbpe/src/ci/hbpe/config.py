@@ -55,7 +55,20 @@ class Settings(BaseSettings):
         default_factory=lambda: os.getenv("TOKEN_CORPUS_DIR", "/app/data/token_corpus")
     )
 
-    # ── Qwen labeler (GGUF via llama-cpp-python) ─────────────────────────────
+    # ── LLM labeling (vLLM / OpenAI-compatible, or local GGUF fallback) ───────
+    # Production: set LLM_API_BASE to the shared vLLM OpenAI endpoint (same as
+    # API chat and summary). HBPE uses LLM_DEFAULT_CHAT_MODEL unless HBPE_LLM_MODEL
+    # overrides it. Set HBPE_LLM_BACKEND=gguf to force on-device llama.cpp.
+    llm_api_base: str = Field(default_factory=lambda: os.getenv("LLM_API_BASE", ""))
+    llm_api_key: str = Field(
+        default_factory=lambda: os.getenv("LLM_API_KEY", "vllm-local")
+    )
+    hbpe_llm_backend: str = Field(
+        default_factory=lambda: os.getenv("HBPE_LLM_BACKEND", "auto").lower()
+    )
+
+    # ── Local GGUF fallback (llama-cpp-python) ────────────────────────────────
+    # Used only when HBPE_LLM_BACKEND=gguf or auto with no LLM_API_BASE set.
     # Set QWEN_GGUF_PATH to an absolute local path to skip the HF download.
     # Otherwise the file is fetched from qwen_gguf_repo / qwen_gguf_file and
     # cached under models_dir/qwen/ (~500 MB for Q4_K_M).
@@ -102,9 +115,6 @@ class Settings(BaseSettings):
     )
 
     # ── Function runner (pg-boss dispatch from the NestJS API) ───────────────
-    # Worker pool size for /functions/run. Defaults to 1: labeling shares a
-    # single-flight llama.cpp context and training is CPU-saturating, so
-    # concurrent pipeline runs only thrash.
     function_runner_concurrency: int = Field(
         default_factory=lambda: int(os.getenv("FUNCTION_RUNNER_CONCURRENCY", "1"))
     )
@@ -119,3 +129,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def use_vllm_backend() -> bool:
+    """True when HBPE should label via the shared OpenAI-compatible LLM endpoint."""
+    backend = settings.hbpe_llm_backend
+    if backend == "gguf":
+        return False
+    if backend == "vllm":
+        return True
+    return bool(settings.llm_api_base.strip())

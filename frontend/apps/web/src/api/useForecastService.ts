@@ -18,7 +18,9 @@ const GET_FORECAST = gql(`
       buckets {
         bucketIndex
         startTime
+        occupantL0
         l0Probs { label probability }
+        l0Predictability { label probability }
         l1Probs { label probability }
         l2Probs { label probability }
         q10
@@ -37,7 +39,12 @@ export interface ProbabilityEntry {
 export interface ForecastBucket {
   bucketIndex: number;
   startTime: string;
+  /** Highest-potential L0 for this bucket (most probable wins). */
+  occupantL0?: string | null;
+  /** Independent 0–1 energy potentials; need not sum to 100%. */
   l0Probs: ProbabilityEntry[];
+  /** Historical predictability (q50) per class for this time range. */
+  l0Predictability?: ProbabilityEntry[] | null;
   l1Probs: ProbabilityEntry[];
   l2Probs: ProbabilityEntry[] | null;
   q10: number;

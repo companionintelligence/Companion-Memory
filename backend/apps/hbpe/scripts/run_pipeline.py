@@ -883,6 +883,8 @@ def step12_e2e(user_id: str) -> None:
         "bucket_index",
         "start_time",
         "l0_probs",
+        "occupant_l0",
+        "l0_predictability",
         "l1_probs",
         "l2_probs",
         "q10",
@@ -894,8 +896,12 @@ def step12_e2e(user_id: str) -> None:
         assert not missing, f"Bucket {b['bucket_index']} missing keys: {missing}"
         assert 0 <= b["bucket_index"] < BUCKETS_PER_DAY
         assert isinstance(b["l0_probs"], dict) and len(b["l0_probs"]) > 0
-        probs_sum = sum(b["l0_probs"].values())
-        assert abs(probs_sum - 1.0) < 0.02, f"L0 probs don't sum to 1: {probs_sum:.4f}"
+        for val in b["l0_probs"].values():
+            assert 0.0 <= val <= 1.0, f"L0 potential out of range: {val}"
+        assert b["occupant_l0"] in b["l0_probs"]
+        assert b["occupant_l0"] == max(b["l0_probs"], key=b["l0_probs"].get), (
+            "occupant_l0 must be the highest L0 potential"
+        )
 
     print(f"  Full-refresh latency : {t_full:.1f} ms  (target <2000 ms)")
     print(

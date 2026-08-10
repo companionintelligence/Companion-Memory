@@ -15,6 +15,8 @@ from pydantic_ai import Agent, NativeOutput, PromptedOutput, ToolOutput
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from ci.prompt_taxonomy import format_directional_considerations
+
 from .config import resolve_llm_model, settings
 
 logger = structlog.get_logger()
@@ -889,6 +891,9 @@ class Summarizer:
             if key != "total" and count > 0:
                 parts.append(f"- {key}: {count}")
 
+        parts.append("")
+
+        parts.append(format_directional_considerations())
         parts.append("")
 
         # Add sample data from each category

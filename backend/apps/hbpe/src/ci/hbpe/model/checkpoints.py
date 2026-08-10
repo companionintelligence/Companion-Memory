@@ -66,3 +66,39 @@ def model_exists(user_id: str) -> bool:
     """True if any servable HMT artifact exists for the user."""
     d = user_ckpt_dir(user_id)
     return any((d / name).exists() for name in MODEL_ARTIFACTS)
+
+
+def model_bucket_width(user_id: str) -> int | None:
+    """Return the position-embedding width baked into the user's checkpoint, if known."""
+    import torch
+
+    d = user_ckpt_dir(user_id)
+    for name in (HMT_CALIBRATED, HMT_CKPT, L0_MAE_CKPT):
+        path = d / name
+        if not path.exists():
+            continue
+        try:
+            ckpt = torch.load(path, map_location="cpu", weights_only=True)
+        except Exception:
+            continue
+        state = ckpt.get("model_state", ckpt)
+        weight = state.get("pos_emb.weight")
+        if weight is not None:
+            return int(weight.shape[0])
+
+    for onnx_name in (HMT_INT8_ONNX, HMT_FP32_ONNX):
+        path = d / onnx_name
+        if not path.exists():
+            continue
+        try:
+            import onnxruntime as ort
+
+            sess = ort.InferenceSession(str(path))
+            for inp in sess.get_inputs():
+                if inp.name == "bucket_idxs" and inp.shape and len(inp.shape) >= 2:
+                    dim = inp.shape[1]
+                    if isinstance(dim, int):
+                        return dim
+        except Exception:
+            continue
+    return None

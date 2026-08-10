@@ -284,11 +284,19 @@ def train_hmt_joint(
         ]
         # Copy weights that match (token_emb, pos_emb, encoder)
         model_state = model.state_dict()
-        transferred = {
-            k: v
-            for k, v in mae_state.items()
-            if k in model_state and model_state[k].shape == v.shape
-        }
+        transferred = {}
+        for k, v in mae_state.items():
+            if k not in model_state:
+                continue
+            if model_state[k].shape == v.shape:
+                transferred[k] = v
+            elif k == "pos_emb.weight" and v.shape[0] * 2 == model_state[k].shape[0]:
+                # Expand legacy 30-min (48) position table to 15-min (96) by
+                # duplicating each half-hour slot across its two quarter-hour bins.
+                expanded = model_state[k].clone()
+                expanded[0::2] = v
+                expanded[1::2] = v
+                transferred[k] = expanded
         model_state.update(transferred)
         model.load_state_dict(model_state)
         log.info(

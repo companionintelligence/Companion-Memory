@@ -15,6 +15,8 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from ci.prompt_taxonomy import format_directional_considerations
+
 from .config import resolve_llm_model, settings
 from .summarizer import (
     ActionsResponse,
@@ -31,6 +33,12 @@ from .summarizer import (
 )
 
 logger = structlog.get_logger()
+
+_DIRECTIONAL_CONSIDERATIONS = format_directional_considerations()
+
+
+def _with_directional(system_prompt: str) -> str:
+    return f"{system_prompt.rstrip()}\n\n{_DIRECTIONAL_CONSIDERATIONS}"
 
 
 @dataclass(frozen=True)
@@ -225,7 +233,7 @@ def create_llm_config() -> LLMConfig:
             model,
             output_type=wrap_output(response_type),
             retries=settings.output_retries,
-            system_prompt=system_prompt,
+            system_prompt=_with_directional(system_prompt),
         )
         for name, (response_type, system_prompt) in AGENT_SPECS.items()
     }
@@ -239,7 +247,7 @@ def create_llm_config() -> LLMConfig:
                 model,
                 output_type=PromptedOutput(response_type),
                 retries=settings.output_retries,
-                system_prompt=system_prompt,
+                system_prompt=_with_directional(system_prompt),
             )
             for name, (response_type, system_prompt) in AGENT_SPECS.items()
         }

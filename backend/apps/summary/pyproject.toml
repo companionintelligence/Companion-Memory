@@ -37,6 +37,7 @@ dependencies = [
 
     # Error reporting — shared with ci-hbpe; brings sentry-sdk with it.
     "ci-telemetry",
+    "ci-prompt-taxonomy",
 
     # API / HTTP
     "fastapi",
@@ -52,6 +53,7 @@ dependencies = [
 
 [tool.uv.sources]
 ci-telemetry = { workspace = true }
+ci-prompt-taxonomy = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "ci.summary"

@@ -1,20 +1,9 @@
 """
-Qwen labeler — on-device LLM for behavioral label generation.
+Qwen labeler — behavioral label generation for HBPE.
 
-Uses llama-cpp-python (GGUF) rather than HuggingFace transformers so the
-same code path runs efficiently on all three hardware targets:
-
-  - Apple Silicon (M-series): Metal GPU via llama.cpp's Metal backend
-  - ROCm (AMD GPU, prod):     HIPBLAS via llama-cpp-python compiled with
-                              CMAKE_ARGS="-DGGML_HIPBLAS=ON"
-  - CPU fallback:             pure C++ — still faster than transformers
-                              on Qwen3.5's DeltaNet hybrid attention
-
-Model: Qwen3.5-0.8B Q8_0 GGUF  (~800 MB, public — no HF token required)
-  Configurable via QWEN_GGUF_PATH env var (absolute path) or auto-downloaded
-  from QWEN_GGUF_REPO + QWEN_GGUF_FILE via huggingface_hub.
-
-The singleton is lazy-loaded on first get_qwen() call (thread-safe).
+Production uses the shared vLLM OpenAI-compatible endpoint (LLM_API_BASE).
+When no endpoint is configured, falls back to on-device Qwen3.5-0.8B GGUF via
+llama-cpp-python for local development.
 """
 
 from __future__ import annotations
@@ -157,11 +146,18 @@ def _strip_thinking(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def get_qwen() -> QwenModel:
-    """Return the process-level QwenModel singleton (lazy-initialised, thread-safe)."""
+def get_qwen() -> QwenModel | object:
+    """Return the process-level labeler singleton (lazy-initialised, thread-safe)."""
     global _INSTANCE
     if _INSTANCE is None:
         with _LOCK:
             if _INSTANCE is None:
-                _INSTANCE = QwenModel(_resolve_model_path())
+                from ci.hbpe.config import use_vllm_backend
+
+                if use_vllm_backend():
+                    from ci.hbpe.inference.llm_client import OpenAILabelModel
+
+                    _INSTANCE = OpenAILabelModel()
+                else:
+                    _INSTANCE = QwenModel(_resolve_model_path())
     return _INSTANCE

@@ -7,8 +7,12 @@ writes every issued forecast to ci.prediction_log for retrospective accuracy
 measurement and LoRA fine-tuning signal (T5.1).
 
 Full spec: CI-HBPE-SPEC-001 §T4.4.
-Response schema: 96 buckets × {bucket_index, start_time, l0_probs, l1_probs,
-                                l2_probs, q10, q50, q90}
+Response schema: 96 buckets × {bucket_index, start_time, l0_probs, occupant_l0,
+                                l0_predictability, l1_probs, l2_probs, q10, q50, q90}
+
+l0_probs are independent 0–1 energy potentials per class (need not sum to 1).
+occupant_l0 is the highest-potential class. q10/q50/q90 measure range-time
+predictability from historical consistency.
 
 Implements T4.4 (CI-Server-k64).
 """

@@ -750,6 +750,12 @@ type FileType implements Node & Taggable {
 type ForecastBucketType {
   bucketIndex: Int!
   l0Probs: [ProbabilityEntryType!]!
+
+  """Historical q50 potential per class for this time range."""
+  l0Predictability: [ProbabilityEntryType!]
+
+  """Highest-potential L0 class for this bucket (most probable wins)."""
+  occupantL0: String
   l1Probs: [ProbabilityEntryType!]!
   l2Probs: [ProbabilityEntryType!]
   q10: Float!

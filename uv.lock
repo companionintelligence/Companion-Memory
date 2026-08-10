@@ -22,6 +22,7 @@ resolution-markers = [
 [manifest]
 members = [
     "ci-hbpe",
+    "ci-prompt-taxonomy",
     "ci-server",
     "ci-summary",
     "ci-telemetry",
@@ -593,8 +594,10 @@ version = "0.1.0"
 source = { editable = "backend/apps/hbpe" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "ci-prompt-taxonomy" },
     { name = "ci-telemetry" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -617,8 +620,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "ci-prompt-taxonomy", editable = "backend/packages/prompt-taxonomy" },
     { name = "ci-telemetry", editable = "backend/packages/telemetry" },
     { name = "fastapi" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", specifier = ">=0.22" },
     { name = "numpy" },
     { name = "onnx", specifier = ">=1.16" },
@@ -636,6 +641,11 @@ requires-dist = [
     { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.2", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", extras = ["standard"] },
 ]
+
+[[package]]
+name = "ci-prompt-taxonomy"
+version = "0.1.0"
+source = { editable = "backend/packages/prompt-taxonomy" }
 
 [[package]]
 name = "ci-server"
@@ -668,6 +678,7 @@ version = "0.1.0"
 source = { editable = "backend/apps/summary" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "ci-prompt-taxonomy" },
     { name = "ci-telemetry" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -691,6 +702,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg" },
+    { name = "ci-prompt-taxonomy", editable = "backend/packages/prompt-taxonomy" },
     { name = "ci-telemetry", editable = "backend/packages/telemetry" },
     { name = "fastapi" },
     { name = "httpx" },

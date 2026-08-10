@@ -169,6 +169,34 @@ def forward_backward_smooth(
     return smoothed / np.maximum(row_sums, eps)
 
 
+def smooth_l0_potentials(
+    potentials: np.ndarray,
+    window: int = 3,
+) -> np.ndarray:
+    """
+    Temporal smooth for independent per-class energy potentials.
+
+    Each L0 class is averaged over a small time window. Rows are NOT
+    renormalized — potentials stay independent and need not sum to 1.
+    """
+    potentials = np.asarray(potentials, dtype=np.float64)
+    if potentials.ndim != 2 or potentials.shape[1] != NUM_L0:
+        raise ValueError(f"Expected potentials shape (T, {NUM_L0})")
+
+    t_steps = potentials.shape[0]
+    if t_steps <= 1 or window <= 1:
+        return np.clip(potentials.copy(), 0.0, 1.0)
+
+    half = window // 2
+    out = np.zeros_like(potentials)
+    for c in range(NUM_L0):
+        for t in range(t_steps):
+            lo = max(0, t - half)
+            hi = min(t_steps, t + half + 1)
+            out[t, c] = potentials[lo:hi, c].mean()
+    return np.clip(out, 0.0, 1.0)
+
+
 def smooth_l0_emission_matrix(
     user_id: str,
     class_probs: np.ndarray,

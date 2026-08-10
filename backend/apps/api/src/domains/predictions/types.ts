@@ -1,7 +1,12 @@
 export interface ForecastBucket {
   bucket_index: number;
   start_time: string;
+  /** Independent 0–1 energy potentials per L0 class (need not sum to 1). */
   l0_probs: Record<string, number>;
+  /** Highest-potential L0 class for this bucket. */
+  occupant_l0?: string;
+  /** Historical q50 potential per class for this time range. */
+  l0_predictability?: Record<string, number>;
   l1_probs: Record<string, number>;
   l2_probs: Record<string, number> | null;
   q10: number;

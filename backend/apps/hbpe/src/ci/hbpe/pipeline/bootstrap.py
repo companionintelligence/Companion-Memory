@@ -29,28 +29,9 @@ async def serialize_token_stream(user_id: str) -> dict:
     """Serialize all labeled events/content into hbpe.token_stream."""
 
     def _run() -> dict:
-        from ci.hbpe.database import get_conn
-        from ci.hbpe.tokenizer.serializer import TokenSerializer
+        from ci.hbpe.pipeline.token_stream_reserialize import reserialize_full
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT MIN(start_time::date), MAX(start_time::date)
-                    FROM ci.events
-                    WHERE user_id = %s AND is_deleted = FALSE
-                      AND start_time >= '2010-01-01'::timestamptz
-                """,
-                    (user_id,),
-                )
-                row = cur.fetchone()
-
-        if not row or row[0] is None:
-            return {"rows": 0, "reason": "no_events"}
-
-        start_date, end_date = str(row[0]), str(row[1])
-        total_rows = TokenSerializer().serialize_range(user_id, start_date, end_date)
-        return {"rows": total_rows, "start": start_date, "end": end_date}
+        return reserialize_full(user_id)
 
     return await asyncio.get_event_loop().run_in_executor(None, _run)
 

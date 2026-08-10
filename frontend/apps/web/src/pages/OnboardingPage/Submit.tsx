@@ -4,10 +4,14 @@ import { ErrorPage, LoadingPage } from '@ci/common';
 import { Button } from '@ci/shadcn';
 import { Link, Navigate } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
+import { defaultAppRoute } from '@/lib/defaultAppRoute';
+
 import { useOnboardService } from './useOnboardService';
 
 export function Submit() {
   const [{ loading, error }, { onboard }] = useOnboardService();
+  const { isFeatureEnabled } = useFeatures();
 
   const onboardSubmitted = useRef<boolean>(false);
 
@@ -32,7 +36,7 @@ export function Submit() {
       );
     }
 
-    return <Navigate to="/feed" />;
+    return <Navigate to={defaultAppRoute(isFeatureEnabled)} />;
   }
 
   return (

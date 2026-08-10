@@ -6,6 +6,9 @@ NestJS pg-boss scheduler through the function runner):
   1. label_unlabeled      long-running — run QwenLabeler on any events/content
                                          that arrived without labels. CPU-bound;
                                          a large backlog can drain over hours.
+  1b. label_summary_tokens            — label yesterday's hourly summaries.
+  1c. reserialize_token_stream        — rewrite token_stream at 15-min buckets;
+                                         full migration when legacy rows remain.
   2. l1_stale_sweep       < 30 sec    — deactivate L1 clusters unused for 90 days.
   3. l2_stale_sweep       < 30 sec    — deactivate L2 clusters unused for 90 days.
   4. lora_fine_tune       <  5 min    — per-user LoRA adapter update.
@@ -40,12 +43,10 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# On-device inference (Qwen via llama.cpp) runs on a single-worker executor so
+# On-device inference (local GGUF) runs on a single-worker executor so
 # blocking label work never runs concurrently across users' nightly runs.
-# Concurrent use of the shared llama.cpp context corrupts its KV cache and
-# aborts the process (GGML_ASSERT). The executor is created lazily on first use
-# (inside the async helper, on the event-loop thread) so importing this module
-# never spawns threads.
+# vLLM labeling uses the same executor for back-pressure against the shared
+# inference server.
 _INFERENCE_EXECUTOR = None
 
 
@@ -179,6 +180,26 @@ async def label_summary_tokens(user_id: str) -> dict:
     return await _run_inference(_run)
 
 
+# ── Step 1c — Re-serialize token stream (15-min bucket migration) ─────────────
+
+
+async def reserialize_token_stream(user_id: str) -> dict:
+    """
+    Re-serialize hbpe.token_stream at 15-minute bucket resolution.
+
+    Runs a one-time full-span rewrite when legacy EOD-at-47 rows remain; on
+    subsequent nights only the recent window is refreshed.
+    """
+    import asyncio
+
+    def _run() -> dict:
+        from ci.hbpe.pipeline.token_stream_reserialize import reserialize_for_user
+
+        return reserialize_for_user(user_id)
+
+    return await asyncio.get_event_loop().run_in_executor(None, _run)
+
+
 # ── Step 2 — L1 staleness sweep ────────────────────────────────────────────────
 
 
@@ -255,17 +276,33 @@ async def needs_bootstrap(user_id: str) -> dict:
     def _run() -> dict:
         import torch
 
+        from ci.hbpe.buckets import BUCKETS_PER_DAY
         from ci.hbpe.model.checkpoints import (
             HMT_CALIBRATED,
             HMT_CKPT,
             l1_vocab_fingerprint,
+            model_bucket_width,
             model_exists,
             user_ckpt_dir,
         )
         from ci.hbpe.model.vocab import build_l1_vocab
+        from ci.hbpe.pipeline.token_stream_reserialize import has_15min_token_days
 
         if not model_exists(user_id):
             return {"needs": True, "reason": "no_checkpoint"}
+
+        width = model_bucket_width(user_id)
+        if (
+            width is not None
+            and width < BUCKETS_PER_DAY
+            and has_15min_token_days(user_id)
+        ):
+            return {
+                "needs": True,
+                "reason": "bucket_resolution_drift",
+                "model_buckets": width,
+                "expected_buckets": BUCKETS_PER_DAY,
+            }
 
         d = user_ckpt_dir(user_id)
         ckpt_path = (

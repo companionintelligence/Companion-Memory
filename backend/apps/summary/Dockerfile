@@ -39,6 +39,7 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local \
 COPY pyproject.toml uv.lock .python-version ./
 COPY backend/apps/summary/pyproject.toml ./backend/apps/summary/pyproject.toml
 COPY backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pyproject.toml
+COPY backend/packages/prompt-taxonomy/pyproject.toml ./backend/packages/prompt-taxonomy/pyproject.toml
 
 # --frozen installs exactly what uv.lock records without validating the
 # lock against the manifests, which is what allows the partial copy above:
@@ -55,6 +56,7 @@ RUN uv sync --frozen --package ci-summary --no-install-workspace --no-dev
 
 COPY backend/apps/summary/src ./backend/apps/summary/src
 COPY backend/packages/telemetry/src ./backend/packages/telemetry/src
+COPY backend/packages/prompt-taxonomy/src ./backend/packages/prompt-taxonomy/src
 
 RUN uv sync --frozen --package ci-summary --no-dev --no-editable
 

@@ -30,6 +30,7 @@ from ci.hbpe.tokenizer.vocab_registry import (
     write_content_label,
     write_event_label,
 )
+from ci.prompt_taxonomy import format_directional_considerations
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ _L0_BLOCK = "\n".join(
     for cls, desc in _L0_DESCRIPTIONS.items()
     if cls in set(L0_CLASSES)
 )
+
+_DIRECTIONAL_CONSIDERATIONS = format_directional_considerations()
 
 # Maximum existing labels to include in the prompt (keeps prompt short)
 _MAX_VOCAB_IN_PROMPT = 20
@@ -371,6 +374,7 @@ def _build_l0_message(title: str, description: str | None) -> str:
     return (
         f"Classify the activity category of this calendar event.\n\n"
         f"Categories:\n{_L0_BLOCK}\n\n"
+        f"{_DIRECTIONAL_CONSIDERATIONS}\n\n"
         f"Examples:\n{_L0_EXAMPLES}\n\n"
         f'Event: "{title}"{desc_line} → '
     )
@@ -392,6 +396,7 @@ def _build_l1_event_message(
     desc_line = f"\nDescription: {description}" if description else ""
     return (
         f"Assign a sub-category label for this {l0} calendar event.\n\n"
+        f"{_DIRECTIONAL_CONSIDERATIONS}\n\n"
         f"Existing {l0} sub-categories: {vocab_str}\n\n"
         f"Use an existing label if it fits, or propose a concise 1-3 word label.\n\n"
         f'Event: "{title}"{desc_line}\n\n'
@@ -422,6 +427,7 @@ def _build_l1_content_message(
     type_line = f" ({content_type})" if content_type else ""
     return (
         f"Assign sub-category and topic labels for this {l0} content item.\n\n"
+        f"{_DIRECTIONAL_CONSIDERATIONS}\n\n"
         f"Existing {l0} sub-categories (L1): {l1_str}\n"
         f"Existing topic labels (L2): {l2_str}\n\n"
         f"Use existing labels if they fit, or propose concise 1-3 word labels.\n\n"

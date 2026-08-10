@@ -49,6 +49,7 @@ class SummaryTokenizer:
 
         from ci.hbpe.inference.qwen import get_qwen
         from ci.hbpe.tokenizer.qwen_labeler import (
+            _DIRECTIONAL_CONSIDERATIONS,
             _L0_BLOCK,
             _L0_EXAMPLES,
             _SYSTEM,
@@ -81,6 +82,7 @@ class SummaryTokenizer:
                 l0_msg = (
                     "Classify the activity category of this hourly activity summary.\n\n"
                     f"Categories:\n{_L0_BLOCK}\n\n"
+                    f"{_DIRECTIONAL_CONSIDERATIONS}\n\n"
                     f"Examples:\n{_L0_EXAMPLES}\n\n"
                     f'Summary: "{text}" → '
                 )

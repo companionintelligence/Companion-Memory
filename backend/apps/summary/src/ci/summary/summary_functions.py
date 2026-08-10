@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from ci.prompt_taxonomy import format_directional_considerations
+
 from .config import settings
 from .llm_config import LLMConfig, run_agent_sync
 
@@ -504,6 +506,8 @@ def _build_actions_prompt(context: dict[str, Any]) -> str:
     parts.append(
         "For time suggestions: suggest what the user should do next based on their schedule and recent activity."
     )
+    parts.append("")
+    parts.append(format_directional_considerations())
 
     return "\n".join(parts)
 
@@ -614,6 +618,8 @@ def _build_insights_prompt(context: dict[str, Any]) -> str:
     parts.append(
         "Focus on upcoming opportunities, relationship maintenance, and timely suggestions."
     )
+    parts.append("")
+    parts.append(format_directional_considerations())
 
     return "\n".join(parts)
 

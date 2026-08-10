@@ -7,11 +7,13 @@ export class ProbabilityEntryType {
   @Field(() => String)
   label!: string;
 
-  @Field(() => Float)
+  @Field(() => Float, {
+    description: 'Independent 0–1 energy potential for this label (need not sum to 100% across labels)',
+  })
   probability!: number;
 }
 
-@ObjectType({ description: 'One 30-minute forecast bucket from the HBPE histogram' })
+@ObjectType({ description: 'One 15-minute forecast bucket from the HBPE histogram' })
 export class ForecastBucketType {
   @Field(() => Int)
   bucketIndex!: number;
@@ -19,8 +21,19 @@ export class ForecastBucketType {
   @Field(() => String, { description: 'ISO-8601 start time for this bucket' })
   startTime!: string;
 
-  @Field(() => [ProbabilityEntryType!]!)
+  @Field(() => [ProbabilityEntryType!]!, {
+    description: 'Independent L0 energy potentials (0–1 each; need not sum to 1)',
+  })
   l0Probs!: ProbabilityEntryType[];
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Highest-potential L0 class for this bucket (most probable wins)',
+  })
+  occupantL0?: string | null;
+
+  @Field(() => [ProbabilityEntryType!]!, { nullable: true })
+  l0Predictability?: ProbabilityEntryType[] | null;
 
   @Field(() => [ProbabilityEntryType!]!)
   l1Probs!: ProbabilityEntryType[];
@@ -45,6 +58,10 @@ export class ForecastBucketType {
       bucketIndex: source.bucket_index,
       startTime: source.start_time,
       l0Probs: toEntries(source.l0_probs),
+      occupantL0: source.occupant_l0 ?? null,
+      l0Predictability: source.l0_predictability
+        ? toEntries(source.l0_predictability)
+        : null,
       l1Probs: toEntries(source.l1_probs),
       l2Probs: source.l2_probs ? toEntries(source.l2_probs) : null,
       q10: source.q10,

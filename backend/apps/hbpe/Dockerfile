@@ -46,6 +46,7 @@ RUN useradd -m -u 1000 hbpe
 COPY pyproject.toml uv.lock .python-version ./
 COPY backend/apps/hbpe/pyproject.toml ./backend/apps/hbpe/pyproject.toml
 COPY backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pyproject.toml
+COPY backend/packages/prompt-taxonomy/pyproject.toml ./backend/packages/prompt-taxonomy/pyproject.toml
 
 # --frozen installs exactly what uv.lock records without validating the
 # lock against the manifests, which is what allows the partial copy above:
@@ -107,13 +108,14 @@ COPY LICENSE.md /LICENSE.md
 # ── Application code ──────────────────────────────────────────────────────────
 COPY backend/apps/hbpe/src ./backend/apps/hbpe/src
 COPY backend/packages/telemetry/src ./backend/packages/telemetry/src
+COPY backend/packages/prompt-taxonomy/src ./backend/packages/prompt-taxonomy/src
 COPY backend/apps/hbpe/scripts ./scripts
 COPY --chmod=755 backend/apps/hbpe/entrypoint.sh ./entrypoint.sh
 
 # `uv pip install`, not a second `uv sync`, because sync would prune the
 # hardware-specific packages installed above. --no-deps because the
 # dependencies are already installed from the lock.
-RUN uv pip install --no-cache --no-deps ./backend/packages/telemetry ./backend/apps/hbpe
+RUN uv pip install --no-cache --no-deps ./backend/packages/telemetry ./backend/packages/prompt-taxonomy ./backend/apps/hbpe
 
 # Persistent volumes for model artifacts and token corpus
 RUN mkdir -p /app/models/qwen \

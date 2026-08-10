@@ -7,6 +7,7 @@ import numpy as np
 from ci.hbpe.pipeline.l0_temporal_smooth import (
     default_l0_transition,
     forward_backward_smooth,
+    smooth_l0_potentials,
 )
 from ci.hbpe.tokenizer.vocab_registry import L0_CLASSES
 
@@ -52,3 +53,19 @@ def test_transition_rows_stochastic():
     trans = default_l0_transition()
     assert trans.shape == (len(L0_CLASSES), len(L0_CLASSES))
     np.testing.assert_allclose(trans.sum(axis=1), np.ones(len(L0_CLASSES)), rtol=1e-6)
+
+
+def test_smooth_l0_potentials_preserves_independence():
+    """Potentials are smoothed per class and not forced to sum to 1."""
+    raw = np.array(
+        [
+            [0.8, 0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+            [0.2, 0.7, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+            [0.1, 0.1, 0.9, 0.1, 0.1, 0.1, 0.1, 0.1],
+        ],
+        dtype=np.float64,
+    )
+    smoothed = smooth_l0_potentials(raw, window=3)
+    assert smoothed.shape == raw.shape
+    assert smoothed[1].sum() > 1.0
+    assert np.all(smoothed >= 0.0) and np.all(smoothed <= 1.0)
