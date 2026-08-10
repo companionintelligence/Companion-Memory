@@ -71,7 +71,11 @@ export function Task({ task: taskMasked, onToggle, onDelete }: Props) {
         </div>
       </div>
 
-      <IconButton onClick={(e) => onDelete(e, task.id)} variant="ghost" label={t('PLAN_TASK_DELETE', { title: task.title })}>
+      <IconButton
+        onClick={(e) => onDelete(e, task.id)}
+        variant="ghost"
+        label={t('PLAN_TASK_DELETE', { title: task.title })}
+      >
         <Trash className="h-4 w-4" />
       </IconButton>
     </li>

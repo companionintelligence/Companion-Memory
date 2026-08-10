@@ -97,12 +97,7 @@ export function EditAnswerDialog({ open, answer, onClose, onSave }: Props) {
           <Dialog.Description className="hidden">Edit the answer text.</Dialog.Description>
 
           <div className="flex items-center justify-end">
-            <IconButton
-              variant="ghost"
-              onClick={handleClose}
-              disabled={loading}
-              label={t('COMMON_CLOSE')}
-            >
+            <IconButton variant="ghost" onClick={handleClose} disabled={loading} label={t('COMMON_CLOSE')}>
               <X />
             </IconButton>
           </div>

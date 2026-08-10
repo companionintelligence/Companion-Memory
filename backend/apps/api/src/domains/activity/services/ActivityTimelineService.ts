@@ -4,11 +4,7 @@ import { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { EntityResolutionService } from '@ci/domains/entity-resolution';
-import {
-  SearchService,
-  TagService,
-  type IndexableEntity,
-} from '@ci/domains/search-next';
+import { SearchService, TagService, type IndexableEntity } from '@ci/domains/search-next';
 import { UserService } from '@ci/domains/user';
 
 import { ActivityRollupService, type ActivityDailyCount } from './ActivityRollupService';

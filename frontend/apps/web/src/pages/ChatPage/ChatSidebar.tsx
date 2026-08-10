@@ -65,7 +65,10 @@ export const ChatSidebar = memo(function ChatSidebar({
             The Tooltip is gated as a whole: a Tooltip with no Content still
             points aria-describedby at an element that was never rendered. */}
         {isExpanded ? (
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+          <div
+            className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0"
+            aria-hidden="true"
+          >
             <MessageSquare className="h-5 w-5 text-primary" />
           </div>
         ) : (

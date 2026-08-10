@@ -1,13 +1,8 @@
-import {
-  isLegacyReviewPrompt,
-  promotionValueText,
-} from '../promotionCandidatePayload';
+import { isLegacyReviewPrompt, promotionValueText } from '../promotionCandidatePayload';
 
 describe('promotionCandidatePayload', () => {
   it('extracts value text from payload and evidence', () => {
-    expect(
-      promotionValueText({ inferredText: '  around 7am  ' }, [{ text: 'ignored' }]),
-    ).toBe('around 7am');
+    expect(promotionValueText({ inferredText: '  around 7am  ' }, [{ text: 'ignored' }])).toBe('around 7am');
     expect(promotionValueText({}, [{ text: 'Hiking' }])).toBe('Hiking');
   });
 

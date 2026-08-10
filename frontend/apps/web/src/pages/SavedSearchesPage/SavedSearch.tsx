@@ -102,7 +102,9 @@ export function SavedSearch({
           )}
           {filterDims.length > 0 && (
             <Tooltip delayDuration={600}>
-              <Tooltip.Content>{t('SAVED_SEARCH_FILTERS_BADGE', { filters: filterDims.join(', ') })}</Tooltip.Content>
+              <Tooltip.Content>
+                {t('SAVED_SEARCH_FILTERS_BADGE', { filters: filterDims.join(', ') })}
+              </Tooltip.Content>
               <Tooltip.Trigger asChild>
                 <span className="inline-flex shrink-0 items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground border border-border">
                   <SlidersHorizontal className="w-3 h-3" />

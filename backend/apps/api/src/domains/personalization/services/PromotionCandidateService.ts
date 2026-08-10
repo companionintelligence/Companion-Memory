@@ -26,7 +26,6 @@ import {
   promotionValueText,
 } from '../utils/promotionCandidatePayload';
 
-
 import { PromotionReviewPromptService } from './PromotionReviewPromptService';
 
 export interface CreatePromotionCandidateDto {

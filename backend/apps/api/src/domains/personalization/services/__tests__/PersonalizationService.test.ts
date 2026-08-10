@@ -1,7 +1,4 @@
-import {
-  ALWAYS_REVIEW_BELOW_CONFIDENCE,
-  PersonalizationService,
-} from '../PersonalizationService';
+import { ALWAYS_REVIEW_BELOW_CONFIDENCE, PersonalizationService } from '../PersonalizationService';
 
 describe('PersonalizationService.decide for inferred_fact', () => {
   it('cautious always asks before saving inferred answers', () => {
@@ -28,7 +25,9 @@ describe('PersonalizationService.decide for inferred_fact', () => {
 
     expect(PersonalizationService.decide(profile, { kind: 'inferred_fact', confidence: 0.95 })).toBe('auto');
     expect(PersonalizationService.decide(profile, { kind: 'inferred_fact', confidence: 0.72 })).toBe('auto');
-    expect(PersonalizationService.decide(profile, { kind: 'inferred_fact', confidence: 0.55 })).toBe('review');
+    expect(PersonalizationService.decide(profile, { kind: 'inferred_fact', confidence: 0.55 })).toBe(
+      'review',
+    );
   });
 });
 
@@ -42,7 +41,11 @@ describe('PersonalizationService.decide for graph connections', () => {
         PersonalizationService.decide(profile, { kind: 'graph_edge', confidence: 0.95, hasUserInput: true }),
       ).toBe('review');
       expect(
-        PersonalizationService.decide(profile, { kind: 'graph_entity', confidence: 0.95, hasUserInput: true }),
+        PersonalizationService.decide(profile, {
+          kind: 'graph_entity',
+          confidence: 0.95,
+          hasUserInput: true,
+        }),
       ).toBe('review');
     }
   });

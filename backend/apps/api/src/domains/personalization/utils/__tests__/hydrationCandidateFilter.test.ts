@@ -8,7 +8,10 @@ describe('shouldSkipHydrationCandidate', () => {
 
   it('skips autonomy setting answers', () => {
     expect(
-      shouldSkipHydrationCandidate('Balanced — high-confidence items auto-promote', 'How much should your companion do on its own?'),
+      shouldSkipHydrationCandidate(
+        'Balanced — high-confidence items auto-promote',
+        'How much should your companion do on its own?',
+      ),
     ).toBe(true);
   });
 

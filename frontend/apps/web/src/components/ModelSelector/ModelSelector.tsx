@@ -47,7 +47,9 @@ export function ModelSelector({
   // an unknown/not-yet-loaded model leaves `tools` undefined, which disables the
   // toggle but is not `=== false`, so the copy would claim the model is fine.
   const toolsTooltip = t(toolsSupported ? 'MODEL_TOGGLE_TOOLS' : 'MODEL_TOGGLE_TOOLS_UNSUPPORTED');
-  const thinkingTooltip = t(thinkingSupported ? 'MODEL_TOGGLE_THINKING' : 'MODEL_TOGGLE_THINKING_UNSUPPORTED');
+  const thinkingTooltip = t(
+    thinkingSupported ? 'MODEL_TOGGLE_THINKING' : 'MODEL_TOGGLE_THINKING_UNSUPPORTED',
+  );
 
   const handleToggleTools = useCallback(
     (pressed: boolean) => {
