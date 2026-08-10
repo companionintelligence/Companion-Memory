@@ -1,7 +1,9 @@
 export default {
   testEnvironment: 'node',
   rootDir: '.',
-  roots: ['<rootDir>/src'],
+  // `scripts` is here for scripts/support/__tests__, which compiles the module
+  // graph `make seed` / `make signup` boot. Coverage stays scoped to src below.
+  roots: ['<rootDir>/src', '<rootDir>/scripts'],
   moduleFileExtensions: ['ts', 'js', 'json'],
 
   transform: {
@@ -10,7 +12,8 @@ export default {
 
   transformIgnorePatterns: [
     // Ignore .yarn/cache packages EXCEPT ESM-only ones that require transformation
-    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration)-npm-)',
+    // (jose arrives via PortalAuthModule, so anything booting the whole App needs it)
+    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose)-npm-)',
     '\\.pnp\\.cjs$',
   ],
 

@@ -100,7 +100,7 @@ db_host_port = $(shell \
 # Point every local-DB target at that port. node-config reads DATABASE_PORT, and
 # dotenv won't override an already-set env var, so this wins over .env's 5432.
 # Evaluated lazily per target, so non-DB targets never pay the Docker lookup.
-seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup userpw: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
+seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup testuser userpw: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
 
 define switch_env
 	@CURRENT="$(running_env)"; \
@@ -723,6 +723,14 @@ signup: ## Generates a set of signup codes for user registration
 	@printf "$(call task_icon,signup,👋) Generating signup codes...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/generate-signup-codes.ts
+
+.PHONY: testuser
+testuser: ## Create a local user and print a fresh API key for it
+	@printf "$(call task_icon,testuser,🧑‍🔬) Creating test user and API key...\n\n"
+
+	@cd backend/apps/api && yarn run exec -- scripts/create-test-user.ts
+
+	@printf "\n"
 
 .PHONY: userpw
 userpw: ## Change a user's password

@@ -1,64 +1,11 @@
 import { input } from '@inquirer/prompts';
-import { Module } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 
-import { LoggerService } from '@ci/common/logging';
-import { AgentModule } from '@ci/domains/agent';
 import { SignupCodeService } from '@ci/domains/auth';
-import { EtlModule } from '@ci/domains/etl';
-import { EventService, LocalEventService } from '@ci/domains/events';
-import { GraphQLModule } from '@ci/domains/graphql';
-import { LLMModule, OllamaService } from '@ci/domains/llm';
-import { McpModule } from '@ci/domains/mcp';
-import { ToolsModule } from '@ci/domains/tools';
 
-import { App } from '../src/application';
-
-// Modules that stay active (e.g. MaintenanceModule) inject OllamaService from
-// LLMModule, so the replacement module must still export that token.
-@Module({
-  providers: [{ provide: OllamaService, useValue: {} }],
-  exports: [OllamaService],
-})
-class StubLLMModule {}
+import { createAdminTestingModule } from './support/admin-testing-module';
 
 (async function () {
-  const createFilteredLogger = () => {
-    const logger = new LoggerService();
-
-    logger.error = () => {};
-
-    logger.warn = () => {};
-
-    logger.log = () => {};
-
-    logger.debug = () => {};
-
-    return logger;
-  };
-
-  const module = await Test.createTestingModule({
-    imports: [App],
-  })
-    .overrideProvider(LoggerService)
-    .useFactory({
-      factory: createFilteredLogger,
-    })
-    .overrideProvider(EventService)
-    .useClass(LocalEventService)
-    .overrideModule(AgentModule)
-    .useModule(class {})
-    .overrideModule(EtlModule)
-    .useModule(class {})
-    .overrideModule(GraphQLModule)
-    .useModule(class {})
-    .overrideModule(LLMModule)
-    .useModule(StubLLMModule)
-    .overrideModule(McpModule)
-    .useModule(class {})
-    .overrideModule(ToolsModule)
-    .useModule(class {})
-    .compile();
+  const module = await createAdminTestingModule().compile();
 
   await module.init();
 
