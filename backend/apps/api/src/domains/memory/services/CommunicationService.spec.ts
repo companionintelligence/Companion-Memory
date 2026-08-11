@@ -5,6 +5,7 @@ import { CommunicationBaseEntity } from '../entities/CommunicationBaseEntity';
 import { CommunicationEntity } from '../entities/CommunicationEntity';
 import { CommunicationType } from '../types';
 
+import { makeInsertBuilder } from './__tests__/harness/insertBuilder';
 import { CommunicationService } from './CommunicationService';
 
 jest.mock('@ci/common/persistence', () => ({
@@ -17,25 +18,6 @@ const bulkInsertMock = bulkInsertIdempotent as jest.Mock;
 const USER = '00000000-0000-0000-0000-0000000000aa';
 
 const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
-
-function makeInsertBuilder(record: { values?: unknown[]; conflict?: string }) {
-  const qb: Record<string, unknown> = {};
-  qb.insert = jest.fn(() => qb);
-  qb.into = jest.fn(() => qb);
-  qb.values = jest.fn((v: unknown[]) => {
-    record.values = v;
-
-    return qb;
-  });
-  qb.onConflict = jest.fn((c: string) => {
-    record.conflict = c;
-
-    return qb;
-  });
-  qb.execute = jest.fn(async () => ({ raw: [] }));
-
-  return qb;
-}
 
 function makeService() {
   const baseInsert = {} as { values?: unknown[]; conflict?: string };

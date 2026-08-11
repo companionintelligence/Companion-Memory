@@ -6,6 +6,8 @@ import { CommunicationEntity } from '../../entities/CommunicationEntity';
 import { CommunicationType } from '../../types';
 import { CommunicationService } from '../CommunicationService';
 
+import { makeInsertBuilder } from './harness/insertBuilder';
+
 jest.mock('@ci/common/persistence', () => ({
   ...jest.requireActual('@ci/common/persistence'),
   bulkInsertIdempotent: jest.fn(),
@@ -16,25 +18,6 @@ const bulkInsertMock = bulkInsertIdempotent as jest.Mock;
 const USER = '00000000-0000-0000-0000-0000000000aa';
 
 const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
-
-function makeInsertBuilder(record: { values?: unknown[]; conflict?: string }) {
-  const qb: Record<string, unknown> = {};
-  qb.insert = jest.fn(() => qb);
-  qb.into = jest.fn(() => qb);
-  qb.values = jest.fn((v: unknown[]) => {
-    record.values = v;
-
-    return qb;
-  });
-  qb.onConflict = jest.fn((c: string) => {
-    record.conflict = c;
-
-    return qb;
-  });
-  qb.execute = jest.fn(async () => ({ raw: [] }));
-
-  return qb;
-}
 
 function makeHarness() {
   const baseInsert = {} as { values?: unknown[]; conflict?: string };
@@ -55,6 +38,7 @@ function makeHarness() {
       Object.assign(new CommunicationEntity(), partial),
     ),
     save: jest.fn(async (entity: CommunicationEntity) => entity),
+    update: jest.fn(async () => ({ affected: 1 })),
     findOne: jest.fn(),
   };
   repository.manager = {
@@ -246,7 +230,8 @@ describe('CommunicationService CTI createMany', () => {
       ]),
     );
     expect(baseInsert.conflict).toBe(
-      '(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description',
+      '(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description ' +
+        'WHERE (entities.name, entities.description) IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.description)',
     );
   });
 });

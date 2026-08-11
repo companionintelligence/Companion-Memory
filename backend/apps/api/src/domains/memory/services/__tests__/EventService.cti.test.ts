@@ -21,6 +21,7 @@ describe('EventService CTI aggregate', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    update: jest.Mock;
     manager: { transaction: jest.Mock };
   };
   let baseRepo: {
@@ -46,6 +47,7 @@ describe('EventService CTI aggregate', () => {
       find: jest.fn(async () => []),
       create: jest.fn((x: Partial<EventEntity>) => x),
       save: jest.fn(async (x: Partial<EventEntity>) => ({ ...x, id: x.id ?? 'e1' })),
+      update: jest.fn(async () => ({ affected: 1 })),
       manager: {
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
@@ -121,8 +123,9 @@ describe('EventService CTI aggregate', () => {
     });
 
     expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { name: 'Renamed' });
-    expect(repo.save).toHaveBeenCalledTimes(1);
-    expect(repo.save.mock.calls[0][0]).toMatchObject({ category: 'social' });
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith({ id: 'e1' }, expect.objectContaining({ category: 'social' }));
+    expect(repo.update.mock.calls[0][1]).not.toHaveProperty('title');
     expect(result?.title).toBe('Renamed');
   });
 

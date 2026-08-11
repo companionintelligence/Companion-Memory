@@ -5,6 +5,8 @@ import { ItemBaseEntity } from '../../entities/ItemBaseEntity';
 import { ItemEntity } from '../../entities/ItemEntity';
 import { ItemService } from '../ItemService';
 
+import { makeInsertBuilder } from './harness/insertBuilder';
+
 // createMany's detail phase is bulkInsertIdempotent's own (separately tested)
 // concern; here it is mocked so the tests can steer which rows count as
 // `inserted` and assert the base-row phase reacts correctly.
@@ -18,25 +20,6 @@ const bulkInsertMock = bulkInsertIdempotent as jest.Mock;
 const USER = '00000000-0000-0000-0000-0000000000aa';
 
 const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
-
-function makeInsertBuilder(record: { values?: unknown[]; conflict?: string }) {
-  const qb: Record<string, unknown> = {};
-  qb.insert = jest.fn(() => qb);
-  qb.into = jest.fn(() => qb);
-  qb.values = jest.fn((v: unknown[]) => {
-    record.values = v;
-
-    return qb;
-  });
-  qb.onConflict = jest.fn((c: string) => {
-    record.conflict = c;
-
-    return qb;
-  });
-  qb.execute = jest.fn(async () => ({ raw: [] }));
-
-  return qb;
-}
 
 function makeHarness() {
   const baseInsert = {} as { values?: unknown[]; conflict?: string };

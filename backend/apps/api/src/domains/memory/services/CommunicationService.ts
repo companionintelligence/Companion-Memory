@@ -8,7 +8,6 @@ import { LoggerService } from '@ci/common/logging';
 import {
   INGEST_REFRESH_COLUMNS,
   bulkInsertIdempotent,
-  computeChunkSize,
   keysetPaginate,
   type KeysetPageArgs,
   type KeysetPage,
@@ -20,6 +19,8 @@ import { CommunicationBaseEntity } from '../entities/CommunicationBaseEntity';
 import { CommunicationEntity, Communication, previewFromContent } from '../entities/CommunicationEntity';
 import { CommunicationCreatedEvent, CommunicationUpdatedEvent, CommunicationRemovedEvent } from '../events';
 import { CreateCommunicationDto, UpdateCommunicationDto } from '../types';
+
+import { CtiAggregate, type RepositoryProvider } from './CtiAggregate';
 
 interface Options {
   limit?: number;
@@ -51,6 +52,8 @@ export interface HourlyCommunicationCount {
  */
 @Injectable()
 export class CommunicationService {
+  private readonly aggregate: CtiAggregate<CommunicationEntity, CommunicationBaseEntity>;
+
   constructor(
     @InjectRepository(CommunicationEntity)
     private readonly communicationRepository: Repository<CommunicationEntity>,
@@ -59,28 +62,43 @@ export class CommunicationService {
     private readonly dataSource: DataSource,
   ) {
     this.logger.setContext(CommunicationService.name);
+    this.aggregate = new CtiAggregate({
+      detailRepository: this.communicationRepository,
+      detailEntity: CommunicationEntity,
+      baseEntity: CommunicationBaseEntity,
+      // No baseRepository: the Communication egress composes from the detail
+      // row alone (nothing was normalized away).
+      linkedTable: 'communications',
+      scopedWhere: (context, id) => ({
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          userId: context.userId,
+        }),
+      }),
+    });
   }
 
   /** The base row's derived display label: subject, else preview, else a content clip. */
   private labelFor(entity: Pick<CommunicationEntity, 'subject' | 'preview' | 'content'>): string | null {
-    return entity.subject ?? entity.preview ?? previewFromContent(entity.content);
+    // Importers commonly store no-subject messages as '' (not null); a blank
+    // subject/preview must fall through to the next branch, matching the
+    // migration backfill's NULLIF(trim(...), '').
+    const blankToNull = (value: string | null | undefined): string | null => {
+      const trimmed = value?.trim();
+
+      return trimmed ? trimmed : null;
+    };
+
+    return blankToNull(entity.subject) ?? blankToNull(entity.preview) ?? previewFromContent(entity.content);
   }
 
   /** Builds the `ci.entities` half of the aggregate from a (hydrated) detail row. */
-  private baseRowFor(
-    manager: {
-      getRepository: (target: typeof CommunicationBaseEntity) => Repository<CommunicationBaseEntity>;
-    },
-    entity: CommunicationEntity,
-  ): CommunicationBaseEntity {
-    return manager.getRepository(CommunicationBaseEntity).create({
+  private baseRowFor(manager: RepositoryProvider, entity: CommunicationEntity): CommunicationBaseEntity {
+    return this.aggregate.createBaseRow(manager, {
       id: entity.id,
+      userId: entity.userId,
       name: this.labelFor(entity),
       description: entity.summary ?? null,
-      properties: {},
-      userId: entity.userId,
-      linkedTable: 'communications',
-      linkedId: entity.id,
     });
   }
 
@@ -225,7 +243,6 @@ export class CommunicationService {
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.communication,
       });
 
-      const baseRepository = manager.getRepository(CommunicationBaseEntity);
       // One base row per distinct id: intra-batch duplicate triples resolve to
       // the same hydrated row, and ON CONFLICT DO UPDATE rejects touching one
       // arbiter row twice in a single statement (SQLSTATE 21000).
@@ -233,16 +250,15 @@ export class CommunicationService {
         ...new Map(detailResults.map(({ entity }) => [entity.id, this.baseRowFor(manager, entity)])).values(),
       ];
 
-      const chunkSize = computeChunkSize(baseRepository.metadata.columns.length);
-      for (let offset = 0; offset < baseRows.length; offset += chunkSize) {
-        await baseRepository
-          .createQueryBuilder()
-          .insert()
-          .into(baseRepository.metadata.target)
-          .values(baseRows.slice(offset, offset + chunkSize))
-          .onConflict('(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description')
-          .execute();
-      }
+      // The WHERE skips identical-value rewrites: an unchanged re-sync of
+      // the largest table in the schema would otherwise churn a dead tuple
+      // and a search-vector/GIN recompute per row for no change.
+      await this.aggregate.insertBaseRows(
+        manager,
+        baseRows,
+        '(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description ' +
+          'WHERE (entities.name, entities.description) IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.description)',
+      );
 
       return detailResults;
     });
@@ -400,36 +416,17 @@ export class CommunicationService {
       data.content !== undefined ||
       data.summary !== undefined;
 
-    const updated = await this.communicationRepository.manager.transaction(async (manager) => {
-      const repository = manager.getRepository(CommunicationEntity);
-
-      const communication = await repository.findOne({
-        where: {
-          id: id,
-          ...(context.userId !== SYSTEM_USER && {
-            userId: context.userId,
-          }),
-        },
-      });
-
-      if (!communication) {
-        return null;
-      }
-
-      Object.assign(communication, updateData);
-      await repository.save(communication);
-
-      if (labelSourcesTouched) {
-        await manager.getRepository(CommunicationBaseEntity).update(
-          { id },
-          {
-            name: this.labelFor(communication),
-            description: communication.summary ?? null,
-          },
-        );
-      }
-
-      return communication;
+    const updated = await this.aggregate.applyUpdate(context, id, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      detail: updateData as any, // TypeORM will handle JSON serialization
+      // The base patch derives from the PATCHED detail values, so the label
+      // reflects what is actually being persisted.
+      base: labelSourcesTouched
+        ? (after) => ({
+            name: this.labelFor(after),
+            description: after.summary ?? null,
+          })
+        : undefined,
     });
 
     if (!updated) {
@@ -440,31 +437,15 @@ export class CommunicationService {
       communicationId: id,
     });
 
-    return this.findById(context, id);
+    // The transaction already reloaded the detail row; the Communication
+    // egress composes from it alone.
+    return CommunicationEntity.toEgressType(updated);
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    // Load the (user-scoped) detail first so the deletion is authorized; then
-    // delete the BASE row — the communications_id_entities_fk ON DELETE
-    // CASCADE removes the detail in the same statement.
-    const removed = await this.communicationRepository.manager.transaction(async (manager) => {
-      const communication = await manager.getRepository(CommunicationEntity).findOne({
-        where: {
-          id: id,
-          ...(context.userId !== SYSTEM_USER && {
-            userId: context.userId,
-          }),
-        },
-      });
-
-      if (!communication) {
-        return false;
-      }
-
-      await manager.getRepository(CommunicationBaseEntity).delete({ id });
-
-      return true;
-    });
+    // Authorized load + base-row delete — the communications_id_entities_fk
+    // ON DELETE CASCADE removes the detail in the same statement.
+    const removed = await this.aggregate.remove(context, id);
 
     if (!removed) {
       return false;

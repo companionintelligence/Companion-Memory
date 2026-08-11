@@ -5,7 +5,7 @@ import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize } from '@ci/common/persistence';
+import { chunkedConflictInsert } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -148,28 +148,18 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
     );
 
     // One set-based INSERT keyed on the linked provenance index, split into
-    // param-budget-bounded chunks so a large batch never exceeds Postgres'
-    // 65535 bind-param limit (computeChunkSize is the same helper
-    // bulkInsertIdempotent uses). onConflict targets entities_linked_uniq
-    // exactly (partial on linked_table IS NOT NULL) so a re-synced linked row is
-    // a no-op and a lost insert race is absorbed without throwing. Unlinked rows
-    // (no linked_table/linked_id) fall outside the partial index and always
-    // insert, matching create()'s behaviour.
-    const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
-    for (let offset = 0; offset < entities.length; offset += chunkSize) {
-      await this.repository
-        .createQueryBuilder()
-        .insert()
-        // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
-        // of `.values()`; passing the entity class narrows to
-        // `_QueryDeepPartialEntity`, which rejects the jsonb `properties` column.
-        .into(this.repository.metadata.target)
-        .values(entities.slice(offset, offset + chunkSize))
-        .onConflict(
-          '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
-        )
-        .execute();
-    }
+    // param-budget-bounded chunks by chunkedConflictInsert so a large batch
+    // never exceeds Postgres' 65535 bind-param limit. The conflict clause
+    // targets entities_linked_uniq exactly (partial on linked_table IS NOT
+    // NULL) so a re-synced linked row is a no-op and a lost insert race is
+    // absorbed without throwing. Unlinked rows (no linked_table/linked_id)
+    // fall outside the partial index and always insert, matching create()'s
+    // behaviour.
+    await chunkedConflictInsert(
+      this.repository,
+      entities,
+      '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
+    );
 
     return this.hydrateInInputOrder(context, entities);
   }

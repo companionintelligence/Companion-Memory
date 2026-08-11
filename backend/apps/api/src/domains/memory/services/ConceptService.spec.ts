@@ -2,6 +2,7 @@ import type { UserServiceContext } from '@ci/common/context';
 
 import { ConceptEntity } from '../entities/ConceptEntity';
 
+import { makeInsertBuilder } from './__tests__/harness/insertBuilder';
 import { ConceptService } from './ConceptService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
@@ -16,29 +17,6 @@ const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
  * computeChunkSize in the bulk insert.
  */
 const CONCEPT_COLUMN_COUNT = 12;
-
-function makeInsertBuilder(record: { values?: unknown[]; conflict?: string; inserted: boolean }) {
-  const qb: Record<string, unknown> = {};
-  qb.insert = jest.fn(() => qb);
-  qb.into = jest.fn(() => qb);
-  qb.values = jest.fn((v: unknown[]) => {
-    record.values = v;
-
-    return qb;
-  });
-  qb.onConflict = jest.fn((c: string) => {
-    record.conflict = c;
-
-    return qb;
-  });
-  qb.execute = jest.fn(async () => {
-    record.inserted = true;
-
-    return { raw: [] };
-  });
-
-  return qb;
-}
 
 function makeSelectBuilder(rows: ConceptEntity[]) {
   const qb: Record<string, unknown> = {};

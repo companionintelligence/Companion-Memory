@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { type EntityManager, In, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { bulkInsertIdempotent, computeChunkSize, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
+import { bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ItemCreatedEvent, ItemUpdatedEvent, ItemRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -14,21 +14,23 @@ import { ItemBaseEntity } from '../entities/ItemBaseEntity';
 import { type Item, ItemEntity } from '../entities/ItemEntity';
 import type { CreateItemDto, UpdateItemDto } from '../types';
 
+import { CtiAggregate } from './CtiAggregate';
+
 /**
  * Spanning-aggregate service for the inventory CTI split: an item is ONE
  * logical entity persisted as a `ci.entities` base row (discriminated 'Item',
  * see {@link ItemBaseEntity}) plus a `ci.inventory` detail row sharing the same
  * uuid. The base row is the SOLE owner of `name`/`description`; the detail row
- * carries only item-specific data. This service hides the split — writes touch
- * both rows in one transaction (also where AUDIT-SERVICE-RECOMMENDATION.md's
- * mutation tracking will plug in), and reads compose the egress {@link Item}
- * from the pair with one batched base-row fetch.
- *
- * Deliberately NOT an {@link EntityService} subclass: that base is
- * single-repository, and this service owns two.
+ * carries only item-specific data. This service hides the split — the shared
+ * {@link CtiAggregate} machinery writes both rows in one transaction (also
+ * where AUDIT-SERVICE-RECOMMENDATION.md's mutation tracking will plug in), and
+ * reads compose the egress {@link Item} from the pair with one batched
+ * base-row fetch.
  */
 @Injectable()
 export class ItemService {
+  private readonly aggregate: CtiAggregate<ItemEntity, ItemBaseEntity>;
+
   constructor(
     @InjectRepository(ItemEntity)
     private readonly itemRepository: Repository<ItemEntity>,
@@ -38,21 +40,18 @@ export class ItemService {
     private readonly eventService: EventService,
   ) {
     this.logger.setContext(ItemService.name);
-  }
-
-  /** Builds the `ci.entities` half of the aggregate from the ingress values. */
-  private baseRowFor(
-    manager: EntityManager,
-    values: { id: string; userId: string; name: string | null; description: string | null },
-  ): ItemBaseEntity {
-    return manager.getRepository(ItemBaseEntity).create({
-      id: values.id,
-      name: values.name,
-      description: values.description,
-      properties: {},
-      userId: values.userId,
+    this.aggregate = new CtiAggregate({
+      detailRepository: this.itemRepository,
+      detailEntity: ItemEntity,
+      baseEntity: ItemBaseEntity,
+      baseRepository: this.itemBaseRepository,
       linkedTable: 'inventory',
-      linkedId: values.id,
+      scopedWhere: (context, id) => ({
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          userId: context.userId,
+        }),
+      }),
     });
   }
 
@@ -60,17 +59,8 @@ export class ItemService {
    * Composes egress items from detail rows plus one batched fetch of their
    * base rows (the owners of name/description), preserving input order.
    */
-  private async composeMany(entities: ItemEntity[]): Promise<Item[]> {
-    if (entities.length === 0) {
-      return [];
-    }
-
-    const bases = await this.itemBaseRepository.find({
-      where: { id: In(entities.map((entity) => entity.id)) },
-    });
-    const baseById = new Map(bases.map((base) => [base.id, base]));
-
-    return entities.map((entity) => ItemEntity.toEgressType(entity, baseById.get(entity.id)));
+  private composeMany(entities: ItemEntity[]): Promise<Item[]> {
+    return this.aggregate.composeMany(entities, (entity, base) => ItemEntity.toEgressType(entity, base));
   }
 
   async create(context: UserServiceContext, data: CreateItemDto): Promise<Item> {
@@ -100,7 +90,7 @@ export class ItemService {
       // Base row first (natural FK order, though the constraint is deferred),
       // then the detail — one logical create, one transaction.
       await manager.getRepository(ItemBaseEntity).save(
-        this.baseRowFor(manager, {
+        this.aggregate.createBaseRow(manager, {
           id,
           userId: context.userId,
           name: data.name,
@@ -187,51 +177,44 @@ export class ItemService {
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.item,
       });
 
-      const baseRepository = manager.getRepository(ItemBaseEntity);
-
       const baseRows = results
         .filter(({ inserted }) => inserted)
-        .map(({ entity }) =>
-          this.baseRowFor(manager, {
+        .map(({ entity }) => {
+          const ingress = ingressById.get(entity.id);
+          if (!ingress) {
+            // Every inserted id came from withIds — the exact array ingressById
+            // was built from — so a miss means the id mapping broke. Fail
+            // loudly rather than writing a null-labeled base row.
+            throw new Error(`No ingress row for inserted item ${entity.id}`);
+          }
+
+          return this.aggregate.createBaseRow(manager, {
             id: entity.id,
             userId: context.userId,
-            ...(ingressById.get(entity.id) ?? { name: null, description: null }),
-          }),
-        );
+            ...ingress,
+          });
+        });
 
-      // Chunked set-based insert; the STI child metadata emits the 'Item'
-      // discriminator for every row. ON CONFLICT (entity_id) DO NOTHING guards
-      // the theoretical case of a base row already present for this uuid.
-      const chunkSize = computeChunkSize(baseRepository.metadata.columns.length);
-      for (let offset = 0; offset < baseRows.length; offset += chunkSize) {
-        await baseRepository
-          .createQueryBuilder()
-          .insert()
-          // Route through `metadata.target` so TS picks the `ObjectLiteral`
-          // overload of `.values()` (see PersonService.createMany).
-          .into(baseRepository.metadata.target)
-          .values(baseRows.slice(offset, offset + chunkSize))
-          .onConflict('(entity_id) DO NOTHING')
-          .execute();
-      }
+      // ON CONFLICT (entity_id) DO NOTHING guards the theoretical case of a
+      // base row already present for this uuid.
+      await this.aggregate.insertBaseRows(manager, baseRows, '(entity_id) DO NOTHING');
 
       // One read covers egress composition for inserted AND pre-existing rows
       // (a deduped triple resolves to a row whose base values this batch never
       // carried).
-      const baseEntities = await baseRepository.find({
-        where: { id: In(results.map(({ entity }) => entity.id)) },
-      });
+      const baseEntities = await this.aggregate.fetchBaseMap(
+        results.map(({ entity }) => entity.id),
+        manager,
+      );
 
       return { detailResults: results, bases: baseEntities };
     });
-
-    const baseById = new Map(bases.map((base) => [base.id, base]));
 
     // Bulk ingest does NOT emit a per-row ItemCreatedEvent: the per-row pgboss
     // fan-out was the dominant cost at import volume. Search indexing for
     // bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill).
-    return detailResults.map(({ entity }) => ItemEntity.toEgressType(entity, baseById.get(entity.id)));
+    return detailResults.map(({ entity }) => ItemEntity.toEgressType(entity, bases.get(entity.id)));
   }
 
   async findAll(context: ServiceContext): Promise<Item[]> {
@@ -397,33 +380,11 @@ export class ItemService {
       basePatch.description = data.description;
     }
 
-    const where = {
-      id,
-      ...(context.userId !== SYSTEM_USER && {
-        userId: context.userId,
-      }),
-    };
-
-    // One transaction across both halves of the aggregate: the user-scoped
-    // detail load authorizes the write, then each row takes its own fields.
-    const after = await this.itemRepository.manager.transaction(async (manager) => {
-      const repository = manager.getRepository(ItemEntity);
-
-      const before = await repository.findOne({ where });
-      if (!before) {
-        return null;
-      }
-
-      if (Object.keys(updateData).length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await repository.update(where, updateData as any); // TypeORM will handle JSON serialization
-      }
-
-      if (Object.keys(basePatch).length > 0) {
-        await manager.getRepository(ItemBaseEntity).update({ id }, basePatch);
-      }
-
-      return repository.findOne({ where });
+    // One transaction across both halves of the aggregate (see CtiAggregate).
+    const after = await this.aggregate.applyUpdate(context, id, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      detail: updateData as any, // TypeORM will handle JSON serialization
+      base: basePatch,
     });
 
     if (!after) {
@@ -434,31 +395,17 @@ export class ItemService {
       itemId: id,
     });
 
-    return this.findById(context, id);
+    // The transaction already reloaded the detail row; one base fetch
+    // completes the egress composition.
+    const [item] = await this.composeMany([after]);
+
+    return item;
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const where = {
-      id,
-      ...(context.userId !== SYSTEM_USER && {
-        userId: context.userId,
-      }),
-    };
-
-    // Load the (user-scoped) detail first so the deletion is authorized; then
-    // delete the BASE row — the inventory_object_id_entities_fk ON DELETE
-    // CASCADE removes the detail in the same statement, so the aggregate goes
-    // as one unit.
-    const removed = await this.itemRepository.manager.transaction(async (manager) => {
-      const before = await manager.getRepository(ItemEntity).findOne({ where });
-      if (!before) {
-        return false;
-      }
-
-      await manager.getRepository(ItemBaseEntity).delete({ id });
-
-      return true;
-    });
+    // Authorized load + base-row delete (the FK cascade removes the detail);
+    // see CtiAggregate.remove.
+    const removed = await this.aggregate.remove(context, id);
 
     if (!removed) {
       return false;
@@ -472,23 +419,24 @@ export class ItemService {
   }
 
   async search(context: ServiceContext, query: UpdateItemDto): Promise<Item[]> {
+    // name/description live on the CTI base row; the FK guarantees every
+    // detail row has one, so the base is joined unconditionally and its
+    // columns are hydrated in the SAME query — no second composition fetch.
     let executable = this.itemRepository
       .createQueryBuilder('item')
+      .innerJoin('ci.entities', 'base', 'base.entity_id = item.object_id')
+      .addSelect('base.name', 'base_name')
+      .addSelect('base.description', 'base_description')
       .where('item.user_id = :userId', { userId: context.userId });
 
-    // name/description live on the CTI base row.
-    if (query.name || query.description) {
-      executable = executable.innerJoin('ci.entities', 'base', 'base.entity_id = item.object_id');
+    if (query.name) {
+      executable = executable.andWhere('base.name = :name', { name: query.name });
+    }
 
-      if (query.name) {
-        executable = executable.andWhere('base.name = :name', { name: query.name });
-      }
-
-      if (query.description) {
-        executable = executable.andWhere('base.description = :description', {
-          description: query.description,
-        });
-      }
+    if (query.description) {
+      executable = executable.andWhere('base.description = :description', {
+        description: query.description,
+      });
     }
 
     if (query.category) {
@@ -519,8 +467,18 @@ export class ItemService {
       }
     }
 
-    const entities = await executable.getMany();
+    // The 1:1 join yields exactly one raw row per entity, in the same order,
+    // so the base columns compose positionally.
+    const { entities, raw } = await executable.getRawAndEntities<{
+      base_name: string | null;
+      base_description: string | null;
+    }>();
 
-    return this.composeMany(entities);
+    return entities.map((entity, index) =>
+      ItemEntity.toEgressType(entity, {
+        name: raw[index]?.base_name ?? null,
+        description: raw[index]?.base_description ?? null,
+      }),
+    );
   }
 }
