@@ -103,6 +103,13 @@ function makeService() {
       return { enqueued: 0, perType: {} as Record<string, number> };
     }),
   };
+  const edgeMaterialize = {
+    backfill: jest.fn(async () => {
+      callOrder.push('materialize_edges');
+
+      return { edgesCreated: 0, rules: [] };
+    }),
+  };
 
   const service = new MaintenanceOrchestratorService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -117,6 +124,8 @@ function makeService() {
     commLink as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     eventPart as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    edgeMaterialize as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     graphEnrich as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -201,7 +210,7 @@ describe('MaintenanceOrchestratorService', () => {
 
     const starts = lines.filter((l) => l.type === 'leg-start');
     expect(starts.map((l) => l.leg)).toEqual([...ORCHESTRATE_STAGES]);
-    expect(starts.map((l) => l.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(starts.map((l) => l.index)).toEqual(ORCHESTRATE_STAGES.map((_, i) => i + 1));
     expect(starts.every((l) => l.of === ORCHESTRATE_STAGES.length)).toBe(true);
     expect(summary.legs).toHaveLength(ORCHESTRATE_STAGES.length);
     expect(summary.ok).toBe(true);

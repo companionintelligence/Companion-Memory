@@ -17,6 +17,10 @@ import {
   CommunicationLinkBackfillService,
 } from './CommunicationLinkBackfillService';
 import {
+  type DeterministicEdgeBackfillOptions,
+  DeterministicEdgeBackfillService,
+} from './DeterministicEdgeBackfillService';
+import {
   type EventParticipantBackfillOptions,
   EventParticipantBackfillService,
 } from './EventParticipantBackfillService';
@@ -33,14 +37,16 @@ import { type SearchIndexBackfillOptions, SearchIndexBackfillService } from './S
  * The canonical execution order of the orchestrated enrichment legs. A request
  * may name any SUBSET of these stages, but they always execute in THIS order —
  * the legs have real data dependencies (extract_people seeds the identifier
- * index link_communications/link_events resolve against; geocoding should land
- * before the estimator so it only fills what nothing else could; search_index
- * runs last so the embeds cover the enriched rows).
+ * index link_communications/link_events resolve against; materialize_edges
+ * projects the columns those two just filled into ci.relationships; geocoding
+ * should land before the estimator so it only fills what nothing else could;
+ * search_index runs last so the embeds cover the enriched rows).
  */
 export const ORCHESTRATE_STAGES = [
   'extract_people',
   'link_communications',
   'link_events',
+  'materialize_edges',
   'extract_graph',
   'geocode',
   'reverse_geocode',
@@ -56,6 +62,7 @@ export interface OrchestrateLegOptions {
   extractPeople?: PersonStubBackfillOptions;
   linkCommunications?: Omit<CommunicationLinkBackfillOptions, 'onProgress'>;
   linkEvents?: Omit<EventParticipantBackfillOptions, 'onProgress'>;
+  materializeEdges?: Omit<DeterministicEdgeBackfillOptions, 'onProgress'>;
   extractGraph?: Omit<GraphEnrichmentOptions, 'onProgress'>;
   geocode?: { limit?: number; retryNull?: boolean };
   reverseGeocode?: { limit?: number; retryNull?: boolean };
@@ -168,6 +175,7 @@ export class MaintenanceOrchestratorService {
     private readonly personStubBackfillService: PersonStubBackfillService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
+    private readonly deterministicEdgeBackfillService: DeterministicEdgeBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly locationEstimateService: LocationEstimateService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
@@ -317,6 +325,12 @@ export class MaintenanceOrchestratorService {
       case 'link_events':
         return this.eventParticipantBackfillService.backfill(userId, {
           ...options.linkEvents,
+          onProgress: (partial) => progress({ ...partial }),
+        });
+
+      case 'materialize_edges':
+        return this.deterministicEdgeBackfillService.backfill(userId, {
+          ...options.materializeEdges,
           onProgress: (partial) => progress({ ...partial }),
         });
 

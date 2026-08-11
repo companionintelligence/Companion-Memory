@@ -768,18 +768,26 @@ export class GraphController {
           : [];
 
     const edgeIds = new Set(relationships.map((rel) => rel.relationship_id));
+    // The materialize-edges job writes these same ties as REAL relationships;
+    // once the traversal returns one, synthesizing it again would draw a
+    // duplicate link — so dedupe on the directed (from, to, type) triple too.
+    const edgeTriples = new Set(
+      relationships.map((rel) => `${rel.from_entity_id}|${rel.to_entity_id}|${rel.relationship_type}`),
+    );
     for (const tie of communicationTies) {
       const other = tie.node;
       const personId = node.entity_type === 'Person' ? node.entity_id : other.entity_id;
       const communicationId = node.entity_type === 'Person' ? other.entity_id : node.entity_id;
       const relationshipType = tie.isSender ? 'SENT' : 'RECEIVED';
       const relationshipId = `comm-${communicationId}-${personId}-${relationshipType}`;
+      const triple = `${personId}|${communicationId}|${relationshipType}`;
 
-      if (edgeIds.has(relationshipId)) {
+      if (edgeIds.has(relationshipId) || edgeTriples.has(triple)) {
         continue;
       }
 
       edgeIds.add(relationshipId);
+      edgeTriples.add(triple);
 
       if (!nodesById.has(other.entity_id)) {
         nodesById.set(other.entity_id, other);

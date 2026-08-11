@@ -38,6 +38,12 @@ import {
   CommunicationLinkBackfillService,
 } from '../services/CommunicationLinkBackfillService';
 import {
+  type DeterministicEdgeBackfillProgress,
+  type DeterministicEdgeBackfillResult,
+  DeterministicEdgeBackfillService,
+} from '../services/DeterministicEdgeBackfillService';
+import { DETERMINISTIC_EDGE_RULE_IDS } from '../services/deterministicEdgeMatrix';
+import {
   type EmbedCoverageReport,
   EmbedCoverageTelemetryService,
 } from '../services/EmbedCoverageTelemetryService';
@@ -282,6 +288,23 @@ const extractPeopleFromCommunicationsSchema = linkCommunicationsSchema;
 
 type ExtractPeopleFromCommunicationsRequest = z.infer<typeof extractPeopleFromCommunicationsSchema>;
 
+// Body for POST /api/maintenance/materialize-edges. All optional: with no time
+// range each matrix rule derives its own bounds from its candidates' MIN/MAX
+// time and walks the whole history in windows. `rules` restricts the run to a
+// subset of the deterministic-edge matrix (unknown ids 400 here).
+const materializeEdgesSchema = z.object({
+  /** Lower bound (inclusive) on the source rows' time column. */
+  startTime: z.coerce.date().optional(),
+  /** Upper bound (exclusive) on the source rows' time column. */
+  endTime: z.coerce.date().optional(),
+  /** Window width in days (default 30). Each window is one bounded insert. */
+  windowDays: z.coerce.number().int().min(1).max(365).optional(),
+  /** Subset of the deterministic-edge matrix to run (default: all rules). */
+  rules: z.array(z.enum(DETERMINISTIC_EDGE_RULE_IDS)).min(1).optional(),
+});
+
+type MaterializeEdgesRequest = z.infer<typeof materializeEdgesSchema>;
+
 // Body for POST /api/maintenance/link-events. All optional. ci.events isn't a
 // hypertable, so there's no time-window knob to expose — just the per-page
 // candidate cap. Defaults sweep every candidate ci.events row for the user.
@@ -317,6 +340,7 @@ const orchestrateSchema = z.object({
       extractPeople: extractPeopleFromCommunicationsSchema.optional(),
       linkCommunications: linkCommunicationsSchema.optional(),
       linkEvents: linkEventsSchema.optional(),
+      materializeEdges: materializeEdgesSchema.optional(),
       extractGraph: extractGraphSchema.optional(),
       geocode: geocodeLocationsSchema.optional(),
       reverseGeocode: geocodeLocationsSchema.optional(),
@@ -381,6 +405,7 @@ export class MaintenanceController {
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly personStubBackfillService: PersonStubBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
+    private readonly deterministicEdgeBackfillService: DeterministicEdgeBackfillService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
     private readonly embedCoverageTelemetryService: EmbedCoverageTelemetryService,
@@ -769,6 +794,63 @@ export class MaintenanceController {
   }
 
   /**
+   * Deterministic edge materialization. Projects the deterministic-edge matrix
+   * (communications' from/to link columns, events' organizer/participants/
+   * location) into `ci.relationships`, resolving both endpoints through their
+   * merge tombstone so edges land on the canonical, deduplicated person/place.
+   * This is what makes the graph traversal (which only walks ci.relationships)
+   * actually see a person's emails, event attendance, and event locations.
+   * Re-runnable and idempotent (directed-uniqueness index + ON CONFLICT DO
+   * NOTHING; only new edges are counted / recorded as graph deltas). Run AFTER
+   * link-communications / link-events, which fill the columns this projects.
+   * Operator-triggered; never auto-run.
+   */
+  @Post('materialize-edges')
+  async materializeEdges(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(materializeEdgesSchema)) body: MaterializeEdgesRequest,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Query('stream') stream?: string,
+    @Headers('accept') accept?: string,
+  ): Promise<DeterministicEdgeBackfillResult | void> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    const empty: DeterministicEdgeBackfillResult = { edgesCreated: 0, rules: [] };
+
+    // Opt-in streaming (NDJSON): one {type:'progress'} line per window then a
+    // final {type:'result'} line. When NOT requested, a single synchronous JSON
+    // result. Same JwtOrApiKeyAuthGuard either way.
+    if (wantsStream(stream, accept)) {
+      return this.streamNdjson<DeterministicEdgeBackfillResult>(req, res, async (emit) => {
+        if (typeof userId !== 'string') {
+          return empty;
+        }
+
+        return this.deterministicEdgeBackfillService.backfill(userId, {
+          startTime: body.startTime,
+          endTime: body.endTime,
+          windowDays: body.windowDays,
+          rules: body.rules,
+          onProgress: (partial: DeterministicEdgeBackfillProgress) => emit({ type: 'progress', ...partial }),
+        });
+      });
+    }
+
+    if (typeof userId !== 'string') {
+      return empty;
+    }
+
+    return this.deterministicEdgeBackfillService.backfill(userId, {
+      startTime: body.startTime,
+      endTime: body.endTime,
+      windowDays: body.windowDays,
+      rules: body.rules,
+    });
+  }
+
+  /**
    * Graph-LLM enrichment. Samples the signed-in user's own communications +
    * events, runs the LOCAL Ollama model over the content to extract personal
    * preferences (liked/disliked concepts) and close/family relationships, then
@@ -839,9 +921,10 @@ export class MaintenanceController {
 
   /**
    * One-shot enrichment orchestrator. Runs the requested maintenance legs (all
-   * nine by default) back-to-back in canonical order — extract_people →
-   * link_communications → link_events → extract_graph → geocode →
-   * reverse_geocode → estimate_locations → media_dimensions → search_index —
+   * ten by default) back-to-back in canonical order — extract_people →
+   * link_communications → link_events → materialize_edges → extract_graph →
+   * geocode → reverse_geocode → estimate_locations → media_dimensions →
+   * search_index —
    * calling the same leg services as the standalone endpoints, with per-leg
    * option passthrough. Fail-soft by default (a leg error is reported and the
    * chain continues); `abortOnError: true` stops the chain and reports the rest

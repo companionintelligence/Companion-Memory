@@ -20,6 +20,7 @@ import { MaintenanceController } from './controllers/MaintenanceController';
 import { CommunicationParticipantLinkListener } from './listeners/CommunicationParticipantLinkListener';
 import { EstimateLocationBatchListener } from './listeners/EstimateLocationBatchListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
+import { DeterministicEdgeBackfillService } from './services/DeterministicEdgeBackfillService';
 import { EmbedCoverageTelemetryService } from './services/EmbedCoverageTelemetryService';
 import { EventParticipantBackfillService } from './services/EventParticipantBackfillService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
@@ -52,6 +53,7 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
     CommunicationLinkBackfillService,
     PersonStubBackfillService,
     EventParticipantBackfillService,
+    DeterministicEdgeBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
     EmbedCoverageTelemetryService,
@@ -65,6 +67,7 @@ import { SearchIndexBackfillService } from './services/SearchIndexBackfillServic
     CommunicationLinkBackfillService,
     PersonStubBackfillService,
     EventParticipantBackfillService,
+    DeterministicEdgeBackfillService,
     GraphEnrichmentService,
     SearchIndexBackfillService,
     EmbedCoverageTelemetryService,
