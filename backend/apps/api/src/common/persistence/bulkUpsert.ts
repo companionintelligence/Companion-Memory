@@ -134,6 +134,35 @@ export function computeChunkSize(columnsPerRow: number, requestedMax?: number): 
 }
 
 /**
+ * Chunked multi-row INSERT with an explicit ON CONFLICT clause: the row list is
+ * split by {@link computeChunkSize} so no statement exceeds the bind-param
+ * budget, and each chunk targets `repository.metadata.target` so STI child
+ * repositories emit their discriminator for every row.
+ *
+ * This is the one canonical copy of the "chunk + insert().onConflict()" loop
+ * the CTI/STI bulk writers previously each hand-rolled; a change to the chunk
+ * math or the (deprecated) `onConflict` API lands here once.
+ */
+export async function chunkedConflictInsert<Entity extends ObjectLiteral>(
+  repository: Repository<Entity>,
+  rows: Entity[],
+  onConflict: string,
+): Promise<void> {
+  const chunkSize = computeChunkSize(repository.metadata.columns.length);
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    await repository
+      .createQueryBuilder()
+      .insert()
+      // Route through `metadata.target` so TS picks the `ObjectLiteral`
+      // overload of `.values()`.
+      .into(repository.metadata.target)
+      .values(rows.slice(offset, offset + chunkSize))
+      .onConflict(onConflict)
+      .execute();
+  }
+}
+
+/**
  * Set-based, idempotent batch insert keyed on the provenance triple. Replaces the
  * old per-row `findOne` + `save()` loop (N findOnes + N inserts) with a constant
  * number of statements per batch:
