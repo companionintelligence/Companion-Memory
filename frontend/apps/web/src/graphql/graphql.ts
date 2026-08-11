@@ -838,6 +838,18 @@ export type ForecastType = {
   systemStatus: Scalars['String']['output'];
 };
 
+/** A directed typed edge (ci.relationships row) */
+export type GraphEdgeType = {
+  __typename?: 'GraphEdgeType';
+  fromEntityId: Scalars['ID']['output'];
+  id: Scalars['ID']['output'];
+  isActive: Scalars['Boolean']['output'];
+  properties?: Maybe<Scalars['JSON']['output']>;
+  strength?: Maybe<Scalars['Float']['output']>;
+  toEntityId: Scalars['ID']['output'];
+  type: Scalars['String']['output'];
+};
+
 export type GraphEntityInput = {
   description?: InputMaybe<Scalars['String']['input']>;
   entityType: Scalars['String']['input'];
@@ -847,11 +859,30 @@ export type GraphEntityInput = {
   sourceSystem: Scalars['String']['input'];
 };
 
+/** A graph node (ci.entities row, including CTI bases) */
+export type GraphNodeType = {
+  __typename?: 'GraphNodeType';
+  description?: Maybe<Scalars['String']['output']>;
+  entityType: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  linkedId?: Maybe<Scalars['String']['output']>;
+  linkedTable?: Maybe<Scalars['String']['output']>;
+  name?: Maybe<Scalars['String']['output']>;
+  properties?: Maybe<Scalars['JSON']['output']>;
+};
+
 export type GraphRelationshipInput = {
   fromKey: Scalars['String']['input'];
   properties?: InputMaybe<Scalars['JSON']['input']>;
   toKey: Scalars['String']['input'];
   type: Scalars['String']['input'];
+};
+
+/** Knowledge graph projection over entities + relationships */
+export type GraphType = {
+  __typename?: 'GraphType';
+  edges: Array<GraphEdgeType>;
+  nodes: Array<GraphNodeType>;
 };
 
 export type IngestUserSnapshotInput = {
@@ -1795,6 +1826,8 @@ export type Query = {
   files: FileConnection;
   /** Fetch the HBPE day-ahead forecast histogram */
   forecast?: Maybe<ForecastType>;
+  /** User knowledge graph (entities + relationships). Preferred over REST /api/graph/*. */
+  graph: GraphType;
   item?: Maybe<ItemType>;
   items: ItemConnection;
   knownPlaceCandidates: Array<KnownPlaceCandidateType>;
@@ -1989,6 +2022,12 @@ export type QueryFilesArgs = {
 
 export type QueryForecastArgs = {
   horizon?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryGraphArgs = {
+  entityType?: InputMaybe<Scalars['String']['input']>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
 };
 
 

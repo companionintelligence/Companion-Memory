@@ -31,15 +31,11 @@ export class GraphResolver {
 
     const nodeIds = nodes.map((node) => node.entity_id);
     const relationships =
-      nodeIds.length === 0
-        ? []
-        : await this.graphQuery.getRelationships(userId, { entityIds: nodeIds });
+      nodeIds.length === 0 ? [] : await this.graphQuery.getRelationships(userId, { entityIds: nodeIds });
 
     // Only edges whose both ends are in the payload (same contract as REST overview).
     const idSet = new Set(nodeIds);
-    const edges = relationships.filter(
-      (rel) => idSet.has(rel.from_entity_id) && idSet.has(rel.to_entity_id),
-    );
+    const edges = relationships.filter((rel) => idSet.has(rel.from_entity_id) && idSet.has(rel.to_entity_id));
 
     return {
       nodes: nodes.map(

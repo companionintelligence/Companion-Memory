@@ -71,11 +71,7 @@ export interface CtiWriteHooks<TDetail> {
    * Runs inside the write transaction after detail/base patches (update) or
    * immediately before the base-row delete (remove), so the trail shares the tx.
    */
-  withinTx?: (args: {
-    manager: EntityManager;
-    before: TDetail;
-    after: TDetail | null;
-  }) => Promise<void>;
+  withinTx?: (args: { manager: EntityManager; before: TDetail; after: TDetail | null }) => Promise<void>;
 }
 
 export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase extends LinkedBase> {
@@ -230,11 +226,7 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
    *
    * @returns `true` if a matching aggregate was found and removed.
    */
-  async remove(
-    context: ServiceContext,
-    id: string,
-    hooks?: CtiWriteHooks<TDetail>,
-  ): Promise<boolean> {
+  async remove(context: ServiceContext, id: string, hooks?: CtiWriteHooks<TDetail>): Promise<boolean> {
     const where = this.options.scopedWhere(context, id);
 
     return this.options.detailRepository.manager.transaction(async (manager) => {

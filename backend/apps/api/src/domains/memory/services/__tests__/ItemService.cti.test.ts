@@ -40,6 +40,10 @@ function makeHarness() {
     update: jest.fn(async () => ({ affected: 1 })),
     delete: jest.fn(async () => ({ affected: 1 })),
     find: jest.fn(async () => [] as ItemBaseEntity[]),
+    // update/remove trail reads the base name inside the aggregate transaction.
+    findOne: jest.fn(async ({ where: { id } }: { where: { id: string } }) =>
+      Object.assign(new ItemBaseEntity(), { id, name: 'Camera' }),
+    ),
     metadata: { target: ItemBaseEntity, columns: { length: 10 } },
     createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
   };

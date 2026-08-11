@@ -776,6 +776,17 @@ type ForecastType {
   systemStatus: String!
 }
 
+"""A directed typed edge (ci.relationships row)"""
+type GraphEdgeType {
+  fromEntityId: ID!
+  id: ID!
+  isActive: Boolean!
+  properties: JSON
+  strength: Float
+  toEntityId: ID!
+  type: String!
+}
+
 input GraphEntityInput {
   description: String
   entityType: String!
@@ -785,11 +796,28 @@ input GraphEntityInput {
   sourceSystem: String!
 }
 
+"""A graph node (ci.entities row, including CTI bases)"""
+type GraphNodeType {
+  description: String
+  entityType: String!
+  id: ID!
+  linkedId: String
+  linkedTable: String
+  name: String
+  properties: JSON
+}
+
 input GraphRelationshipInput {
   fromKey: String!
   properties: JSON
   toKey: String!
   type: String!
+}
+
+"""Knowledge graph projection over entities + relationships"""
+type GraphType {
+  edges: [GraphEdgeType!]!
+  nodes: [GraphNodeType!]!
 }
 
 input IngestUserSnapshotInput {
@@ -1328,6 +1356,11 @@ type Query {
 
   """Fetch the HBPE day-ahead forecast histogram"""
   forecast(horizon: String = "24h"): ForecastType
+
+  """
+  User knowledge graph (entities + relationships). Preferred over REST /api/graph/*.
+  """
+  graph(entityType: String, limit: Int = 200): GraphType!
   item(id: ID!): ItemType
   items(after: String, before: String, first: Int, last: Int): ItemConnection!
   knownPlaceCandidates: [KnownPlaceCandidateType!]!

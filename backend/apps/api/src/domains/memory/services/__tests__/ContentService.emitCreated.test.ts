@@ -6,10 +6,15 @@ import { bulkInsertIdempotent } from '@ci/common/persistence';
 import { EventService as SignallingEventService } from '@ci/domains/events';
 import { ContentCreatedEvent } from '@ci/domains/memory/events';
 
+import { ContentBaseEntity } from '../../entities/ContentBaseEntity';
 import { ContentEntity } from '../../entities/ContentEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateContentDto } from '../../types';
 import { ContentService } from '../ContentService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { makeInsertBuilder } from './harness/insertBuilder';
+import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 jest.mock('@ci/common/persistence', () => ({
   ...jest.requireActual('@ci/common/persistence'),
@@ -34,7 +39,18 @@ const bulkInsertMock = bulkInsertIdempotent as jest.Mock;
  */
 describe('ContentService — ContentCreatedEvent emission contract', () => {
   let service: ContentService;
-  let repo: { create: jest.Mock; save: jest.Mock };
+  let repo: {
+    create: jest.Mock;
+    save: jest.Mock;
+    manager: { transaction: jest.Mock };
+  };
+  let baseRepo: {
+    create: jest.Mock;
+    save: jest.Mock;
+    find: jest.Mock;
+    metadata: { columns: unknown[] };
+    createQueryBuilder: jest.Mock;
+  };
   let eventRepo: { createQueryBuilder: jest.Mock };
   let signalling: { send: jest.Mock };
 
@@ -48,9 +64,24 @@ describe('ContentService — ContentCreatedEvent emission contract', () => {
       entities.map((entity) => ({ entity, inserted: true })),
     );
 
+    const baseInsert = {} as { values?: unknown[]; conflict?: string };
+    baseRepo = {
+      create: jest.fn((x: Partial<ContentBaseEntity>) => x),
+      save: jest.fn(async (x: Partial<ContentBaseEntity>) => x),
+      find: jest.fn(async () => []),
+      metadata: { columns: Array.from({ length: 10 }) },
+      createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
+    };
     repo = {
       create: jest.fn((x: { id?: string }) => x),
       save: jest.fn(async (x: { id?: string }) => ({ ...x, id: x.id ?? 'content-1' })),
+      manager: {
+        transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
+          cb({
+            getRepository: (cls: unknown): unknown => (cls === ContentBaseEntity ? baseRepo : repo),
+          }),
+        ),
+      },
     };
     // No event auto-link in these tests — the query returns nothing.
     eventRepo = {
@@ -67,8 +98,10 @@ describe('ContentService — ContentCreatedEvent emission contract', () => {
       providers: [
         ContentService,
         { provide: getRepositoryToken(ContentEntity), useValue: repo },
+        { provide: getRepositoryToken(ContentBaseEntity), useValue: baseRepo },
         { provide: getRepositoryToken(EventEntity), useValue: eventRepo },
         { provide: SignallingEventService, useValue: signalling },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
     service = mod.get(ContentService);

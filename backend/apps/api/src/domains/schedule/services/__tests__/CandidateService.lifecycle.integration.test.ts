@@ -3,13 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import {
-  BaseEntity,
-  EventBaseEntity,
-  EventEntity,
-  EventService,
-  GraphDeltaWriter,
-} from '@ci/domains/memory';
+import { BaseEntity, EventBaseEntity, EventEntity, EventService, GraphDeltaWriter } from '@ci/domains/memory';
 
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
 import { CandidateService } from '../CandidateService';

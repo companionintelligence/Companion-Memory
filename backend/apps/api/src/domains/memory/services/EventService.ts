@@ -739,9 +739,7 @@ export class EventService {
             name: base?.name ?? null,
             changedFields: {
               ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
-              ...(basePatch.description !== undefined
-                ? { description: { new: basePatch.description } }
-                : {}),
+              ...(basePatch.description !== undefined ? { description: { new: basePatch.description } } : {}),
               ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
             },
             ownerUserId: typeof context.userId === 'string' ? context.userId : null,

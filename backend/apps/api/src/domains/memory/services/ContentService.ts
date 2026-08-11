@@ -727,11 +727,7 @@ export class ContentService {
     // egress composition share one query.
     let executable = this.contentRepository
       .createQueryBuilder('content')
-      .innerJoin(
-        'ci.entities',
-        'base',
-        "base.entity_id = content.id AND base.entity_type = 'Content'",
-      )
+      .innerJoin('ci.entities', 'base', "base.entity_id = content.id AND base.entity_type = 'Content'")
       .addSelect('base.name', 'base_name')
       .addSelect('base.description', 'base_description');
 

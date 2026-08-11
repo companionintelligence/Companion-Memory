@@ -9,6 +9,9 @@ import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateEventDto } from '../../types';
 import { EventService } from '../EventService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 describe('EventService.create — source idempotency', () => {
   let service: EventService;
@@ -59,6 +62,7 @@ describe('EventService.create — source idempotency', () => {
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: SignallingEventService, useValue: signalling },
         { provide: DataSource, useValue: {} },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 

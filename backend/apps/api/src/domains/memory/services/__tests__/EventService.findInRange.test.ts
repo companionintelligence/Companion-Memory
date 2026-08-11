@@ -8,6 +8,9 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { EventService } from '../EventService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 /** Chainable query-builder mock recording every clause, returning `many` from getMany. */
 function makeQueryBuilder(many: unknown[]) {
@@ -60,6 +63,7 @@ describe('EventService.findInRange — the calendar read path', () => {
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepository },
         { provide: SignallingEventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: dataSource },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     })
       .compile()

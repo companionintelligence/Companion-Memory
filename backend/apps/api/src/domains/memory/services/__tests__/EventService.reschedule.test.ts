@@ -8,6 +8,9 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { EventService } from '../EventService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 const ctx = { userId: 'user-1' } as ServiceContext;
 
@@ -49,6 +52,7 @@ describe('EventService.reschedule — moving an event on the calendar', () => {
         { provide: getRepositoryToken(EventBaseEntity), useValue: { find: jest.fn(async () => []) } },
         { provide: SignallingEventService, useValue: signalling },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 
@@ -179,6 +183,7 @@ describe('EventService.create — provenance survives the DTO mapping', () => {
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: SignallingEventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 

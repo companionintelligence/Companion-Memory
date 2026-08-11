@@ -10,6 +10,9 @@ import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateEventDto } from '../../types';
 import { EventService } from '../EventService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 jest.mock('@ci/common/persistence', () => ({
   ...jest.requireActual('@ci/common/persistence'),
@@ -72,6 +75,7 @@ describe('EventService.createMany — no per-row event emission', () => {
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: SignallingEventService, useValue: signalling },
         { provide: DataSource, useValue: {} },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 

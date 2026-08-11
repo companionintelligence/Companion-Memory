@@ -29,6 +29,9 @@ function makeHarness() {
     save: jest.fn(async (entity: CommunicationBaseEntity) => entity),
     update: jest.fn(async () => ({ affected: 1 })),
     delete: jest.fn(async () => ({ affected: 1 })),
+    findOne: jest.fn(async ({ where: { id } }: { where: { id: string } }) =>
+      Object.assign(new CommunicationBaseEntity(), { id, name: 'Re: dinner' }),
+    ),
     metadata: { target: CommunicationBaseEntity, columns: { length: 10 } },
     createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
   };

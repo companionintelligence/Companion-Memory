@@ -8,6 +8,9 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { EventService } from '../EventService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 /**
  * The CTI aggregate contract: the ci.entities base row is the SOLE owner of
@@ -28,6 +31,7 @@ describe('EventService CTI aggregate', () => {
     create: jest.Mock;
     save: jest.Mock;
     find: jest.Mock;
+    findOne: jest.Mock;
     update: jest.Mock;
     delete: jest.Mock;
   };
@@ -39,6 +43,10 @@ describe('EventService CTI aggregate', () => {
       create: jest.fn((x: Partial<EventBaseEntity>) => x),
       save: jest.fn(async (x: Partial<EventBaseEntity>) => x),
       find: jest.fn(async () => []),
+      findOne: jest.fn(async ({ where: { id } }: { where: { id: string } }) => ({
+        id,
+        name: 'Dinner',
+      })),
       update: jest.fn(async () => ({ affected: 1 })),
       delete: jest.fn(async () => ({ affected: 1 })),
     };
@@ -64,6 +72,7 @@ describe('EventService CTI aggregate', () => {
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: SignallingEventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: {} },
+        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
     service = moduleRef.get(EventService);
