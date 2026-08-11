@@ -211,6 +211,18 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
 
   /** v1 — object promotion. A literal: this stage reads nothing another stage produces. Bump when extractPurchase changes. */
   [STAGE_IDS.PROMOTE_OBJECT]: 1,
+
+  /**
+   * v1 — deterministic edge projection, both legs. Literals mirroring
+   * derivations in `EdgePromoteStage.ts`, which throw at module load if either
+   * line disagrees. The communication leg derives from the edge-matrix
+   * generation + PERSON_LINK_VERSION (its edges are a COPY of the linker's
+   * columns, so a linker bump re-projects); the event leg additionally tracks
+   * PROMOTE_PLACE_VERSION (`location_entity_id` is that stage's output). Bump
+   * a producer's generation and the matching line here in the same commit.
+   */
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 1,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 1,
 };
 
 /**

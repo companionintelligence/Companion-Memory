@@ -17,6 +17,9 @@ import { RelationshipType } from '@ci/domains/graph';
  * endpoint through its merge tombstone (`entities.merged_into_entity_id`) so
  * edges always land on the canonical, deduplicated person/place.
  */
+/** Which source table a rule projects from — the pipeline's slice unit. */
+export type DeterministicEdgeSource = 'communications' | 'events';
+
 export interface DeterministicEdgeRule {
   /** Stable rule id, recorded on the edge as `properties.rule`. */
   id: string;
@@ -28,12 +31,16 @@ export interface DeterministicEdgeRule {
   strength: number;
   /** Extra properties stamped on every edge (rule id is added automatically). */
   properties: Record<string, unknown>;
+  /** Which source table the rule reads (selects rules for a pipeline slice). */
+  source: DeterministicEdgeSource;
   /** FROM-clause source with alias, e.g. `ci.communications c`. */
   table: string;
   /** User-scoping column on the source table, e.g. `c.user_id`. */
   userColumn: string;
   /** Time column used for window batching (hypertable chunk exclusion). */
   timeColumn: string;
+  /** Aliased id column, e.g. `c.id` — the bound for id-scoped (slice) runs. */
+  idColumn: string;
   /** SQL expression yielding the edge's from-entity id (may unnest an array). */
   fromIdExpr: string;
   /** SQL expression yielding the edge's to-entity id. */
@@ -64,9 +71,11 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     relationshipType: RelationshipType.SENT,
     strength: 0.6,
     properties: { derived_from: 'communications.from_entity_id' },
+    source: 'communications',
     table: 'ci.communications c',
     userColumn: 'c.user_id',
     timeColumn: 'c.time',
+    idColumn: 'c.id',
     fromIdExpr: 'c.from_entity_id',
     toIdExpr: 'c.id',
     candidateWhere: 'c.from_entity_id IS NOT NULL',
@@ -77,9 +86,11 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     relationshipType: RelationshipType.RECEIVED,
     strength: 0.45,
     properties: { derived_from: 'communications.to_entity_ids' },
+    source: 'communications',
     table: 'ci.communications c',
     userColumn: 'c.user_id',
     timeColumn: 'c.time',
+    idColumn: 'c.id',
     fromIdExpr: 'unnest(c.to_entity_ids)',
     toIdExpr: 'c.id',
     candidateWhere: 'c.to_entity_ids IS NOT NULL AND cardinality(c.to_entity_ids) > 0',
@@ -90,9 +101,11 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     relationshipType: RelationshipType.PARTICIPATED_IN,
     strength: 0.7,
     properties: { derived_from: 'events.organizer_entity_id', role: 'organizer' },
+    source: 'events',
     table: 'ci.events e',
     userColumn: 'e.user_id',
     timeColumn: 'e.start_time',
+    idColumn: 'e.event_id',
     fromIdExpr: 'e.organizer_entity_id',
     toIdExpr: 'e.event_id',
     candidateWhere: 'e.organizer_entity_id IS NOT NULL',
@@ -103,9 +116,11 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     relationshipType: RelationshipType.PARTICIPATED_IN,
     strength: 0.6,
     properties: { derived_from: 'events.participant_entity_ids' },
+    source: 'events',
     table: 'ci.events e',
     userColumn: 'e.user_id',
     timeColumn: 'e.start_time',
+    idColumn: 'e.event_id',
     fromIdExpr: 'unnest(e.participant_entity_ids)',
     toIdExpr: 'e.event_id',
     candidateWhere: 'e.participant_entity_ids IS NOT NULL AND cardinality(e.participant_entity_ids) > 0',
@@ -116,9 +131,11 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     relationshipType: RelationshipType.HAPPENED_AT,
     strength: 0.6,
     properties: { derived_from: 'events.location_entity_id' },
+    source: 'events',
     table: 'ci.events e',
     userColumn: 'e.user_id',
     timeColumn: 'e.start_time',
+    idColumn: 'e.event_id',
     fromIdExpr: 'e.event_id',
     toIdExpr: 'e.location_entity_id',
     candidateWhere: 'e.location_entity_id IS NOT NULL',

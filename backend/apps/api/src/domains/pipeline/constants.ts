@@ -231,6 +231,26 @@ export const STAGE_IDS = {
    * the rich object model has ever had.
    */
   PROMOTE_OBJECT: 'promote.object',
+
+  /**
+   * Project a communication's resolved participant columns (`from_entity_id`,
+   * `to_entity_ids` — `enrich.person_link`'s output) into `ci.relationships`
+   * SENT / RECEIVED edges, resolved through merge tombstones onto canonical
+   * people. The graph traversal walks ONLY `ci.relationships`, so without this
+   * stage a linked communication is invisible to the graph view. The pipeline
+   * face of the deterministic-edge matrix; the operator backfill endpoint
+   * (`POST /api/maintenance/materialize-edges`) sweeps history in time
+   * windows, this keeps up with new data in ledger slices.
+   */
+  PROMOTE_EDGE_COMMUNICATION: 'promote.edge_communication',
+
+  /**
+   * The same projection over `ci.events`: organizer / participants →
+   * PARTICIPATED_IN, resolved location → HAPPENED_AT. A second id rather than
+   * a second entity type, for the reason `enrich.event_person_link` is one —
+   * a `Stage` declares exactly one `source`, and the matrix reads two tables.
+   */
+  PROMOTE_EDGE_EVENT: 'promote.edge_event',
 } as const;
 
 export type StageId = (typeof STAGE_IDS)[keyof typeof STAGE_IDS];

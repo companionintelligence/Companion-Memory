@@ -302,6 +302,33 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * NIGHTLY, both legs. One INSERT…SELECT per matrix rule per slice; Postgres
+   * only, no provider, no bill.
+   *
+   * Same tier as their producers (the person-link legs and `promote.place`),
+   * deliberately: edges are a pure projection of the columns those stages
+   * fill, so a consumer on a slower clock would leave freshly-linked
+   * communications invisible to the graph for days, and a faster clock buys
+   * nothing before the producers run. Ordering within the night is
+   * `STAGE_DEPENDENCIES`' business, not a second cadence.
+   */
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
    * WEEKLY, WINDOWED, CAPPED. Forward-geocodes `ci.events.location_name`
    * through Portal to a paid provider.
    *

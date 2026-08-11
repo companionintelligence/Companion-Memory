@@ -87,6 +87,17 @@ export {
 } from './services/MaintenanceOrchestratorService';
 export { GraphEnrichmentService, type GraphEnrichmentOptions } from './services/GraphEnrichmentService';
 export {
+  DeterministicEdgeBackfillService,
+  type DeterministicEdgeBackfillOptions,
+  type DeterministicEdgeBackfillResult,
+} from './services/DeterministicEdgeBackfillService';
+export {
+  DETERMINISTIC_EDGE_RULES,
+  DETERMINISTIC_EDGE_RULE_IDS,
+  type DeterministicEdgeRule,
+  type DeterministicEdgeSource,
+} from './services/deterministicEdgeMatrix';
+export {
   SearchIndexBackfillService,
   BACKFILLABLE_ENTITIES,
   expandBackfillEntityTypes,

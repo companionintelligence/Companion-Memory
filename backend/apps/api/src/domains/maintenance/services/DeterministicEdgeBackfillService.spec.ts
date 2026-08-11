@@ -29,7 +29,9 @@ function makeDataSource(insertedByType: Record<string, InsertedRow[][]>, bounds?
   const managerQuery = jest.fn(async (sql: string, params: unknown[]) => {
     if (sql.includes('INSERT INTO ci.relationships')) {
       inserts.push({ sql, params });
-      const type = String(params[3]);
+      // The scope params vary (time window = 2, id slice = 1) but the tail is
+      // always [type, strength, properties].
+      const type = String(params[params.length - 3]);
       const passes = insertedByType[type] ?? [];
       const index = served[type] ?? 0;
       served[type] = index + 1;
@@ -183,6 +185,40 @@ describe('DeterministicEdgeBackfillService.backfill', () => {
     expect(progress.map((p) => p.windowsDone)).toEqual([1, 2]);
     expect(progress.every((p) => p.windowsTotal === 2)).toBe(true);
     expect(progress[1].edgesCreated).toBe(1);
+  });
+
+  it('projects an id-scoped slice through every rule of one source table', async () => {
+    const { service, ds, deltaWriter } = makeService({
+      SENT: [[{ relationship_id: EDGE, from_entity_id: PERSON, to_entity_id: COMM }]],
+      RECEIVED: [[]],
+    });
+
+    const edges = await service.materializeForSourceIds(USER, 'communications', [COMM]);
+
+    expect(edges).toBe(1);
+
+    // Both communication rules ran, no event rule did, and the scope is the id
+    // list rather than a time window.
+    const commRules = DETERMINISTIC_EDGE_RULES.filter((r) => r.source === 'communications');
+    expect(ds.inserts).toHaveLength(commRules.length);
+    for (const { sql, params } of ds.inserts) {
+      expect(sql).toContain('= ANY($2::uuid[])');
+      expect(sql).not.toContain('>= $2');
+      expect(params[1]).toEqual([COMM]);
+    }
+
+    // The created edge still records its delta in the same transaction.
+    expect(deltaWriter.recordMany).toHaveBeenCalledTimes(1);
+    expect(deltaWriter.recordMany.mock.calls[0][1]).toBe(ds.manager);
+  });
+
+  it('projects nothing for an empty id slice', async () => {
+    const { service, ds } = makeService({});
+
+    const edges = await service.materializeForSourceIds(USER, 'events', []);
+
+    expect(edges).toBe(0);
+    expect(ds.inserts).toHaveLength(0);
   });
 
   it('derives bounds from the candidates and reports a null range when there are none', async () => {

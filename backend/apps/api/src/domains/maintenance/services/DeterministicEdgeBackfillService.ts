@@ -8,6 +8,7 @@ import { GraphDeltaWriter } from '@ci/domains/memory';
 import {
   DETERMINISTIC_EDGE_RULES,
   type DeterministicEdgeRule,
+  type DeterministicEdgeSource,
 } from './deterministicEdgeMatrix';
 
 /** Default window width. Wider than the link backfill's 7d because each pass is
@@ -143,6 +144,47 @@ export class DeterministicEdgeBackfillService {
     return { edgesCreated, rules: ruleResults };
   }
 
+  /**
+   * Project every matrix rule of ONE source table over an explicit set of
+   * source-row ids — the pipeline-slice entry point (`promote.edge_*` stages).
+   *
+   * Same projection SQL as the windowed backfill, scoped by id instead of by
+   * time: canonical (merge-tombstone) resolution, ON CONFLICT idempotency and
+   * same-transaction graph deltas all included. Returns the number of edges
+   * actually created (re-projection of an already-materialized row is 0).
+   */
+  async materializeForSourceIds(
+    userId: string,
+    source: DeterministicEdgeSource,
+    ids: string[],
+  ): Promise<number> {
+    if (ids.length === 0) {
+      return 0;
+    }
+
+    let edgesCreated = 0;
+
+    for (const rule of DETERMINISTIC_EDGE_RULES) {
+      if (rule.source !== source) {
+        continue;
+      }
+
+      edgesCreated += await this.dataSource.transaction(async (manager) => {
+        const inserted = await this.projectRule(manager, rule, {
+          scopeClause: `AND ${rule.idColumn} = ANY($2::uuid[])`,
+          scopeParams: [ids],
+          userId,
+        });
+
+        await this.recordDeltas(manager, rule, userId, inserted);
+
+        return inserted.length;
+      });
+    }
+
+    return edgesCreated;
+  }
+
   /** The requested subset of the matrix, in matrix order; unknown ids are
    * ignored (the endpoint's schema already 400s them — this is the belt). */
   private resolveRules(ruleIds?: string[]): DeterministicEdgeRule[] {
@@ -239,9 +281,9 @@ export class DeterministicEdgeBackfillService {
   }
 
   /**
-   * One bounded window: project the rule's (from, to) pairs, resolve both
-   * endpoints to their canonical entity, insert the missing edges, and record
-   * a graph delta for each row actually created — all in one transaction.
+   * One bounded window: project the rule's (from, to) pairs, insert the missing
+   * edges, and record a graph delta for each row actually created — all in one
+   * transaction.
    */
   private async materializeWindow(
     userId: string,
@@ -249,83 +291,108 @@ export class DeterministicEdgeBackfillService {
     windowStart: Date,
     windowEnd: Date,
   ): Promise<number> {
-    const properties = JSON.stringify({ ...rule.properties, rule: rule.id });
-
     return this.dataSource.transaction(async (manager) => {
-      // The DISTINCT collapses duplicate pairs inside the window (a person can
-      // receive many messages, but the directed edge is written once); ON
-      // CONFLICT DO NOTHING collapses pairs already materialized by an earlier
-      // window/run against the directed-uniqueness partial index. The tombstone
-      // COALESCE re-points both endpoints at their merge survivor, and the
-      // is_active/merged guard drops edges to deleted (un-merged) entities.
-      // The <> guard mirrors the table's no_self_references CHECK — a merge
-      // can collapse both endpoints onto the same survivor.
-      const inserted: InsertedEdgeRow[] = await manager.query(
-        `WITH pairs AS (
-           SELECT ${rule.fromIdExpr} AS from_id, ${rule.toIdExpr} AS to_id
-             FROM ${rule.table}
-            WHERE ${rule.userColumn} = $1
-              AND ${rule.timeColumn} >= $2
-              AND ${rule.timeColumn} < $3
-              AND ${rule.candidateWhere}
-         ),
-         resolved AS (
-           SELECT DISTINCT
-                  COALESCE(ef.merged_into_entity_id, ef.entity_id) AS from_id,
-                  ef.entity_type AS from_type,
-                  COALESCE(et.merged_into_entity_id, et.entity_id) AS to_id,
-                  et.entity_type AS to_type
-             FROM pairs p
-             JOIN ci.entities ef
-               ON ef.entity_id = p.from_id
-              AND ef.owner_user_id = $1
-              AND (ef.is_active = TRUE OR ef.merged_into_entity_id IS NOT NULL)
-             JOIN ci.entities et
-               ON et.entity_id = p.to_id
-              AND et.owner_user_id = $1
-              AND (et.is_active = TRUE OR et.merged_into_entity_id IS NOT NULL)
-            WHERE COALESCE(ef.merged_into_entity_id, ef.entity_id)
-                  <> COALESCE(et.merged_into_entity_id, et.entity_id)
-         )
-         INSERT INTO ci.relationships
-           (from_entity_id, to_entity_id, relationship_type, strength, properties,
-            owner_user_id, from_entity_type, to_entity_type)
-         SELECT from_id, to_id, $4, $5, $6::jsonb, $1, from_type, to_type
-           FROM resolved
-         ON CONFLICT DO NOTHING
-         RETURNING relationship_id, from_entity_id, to_entity_id`,
-        [
-          userId,
-          windowStart.toISOString(),
-          windowEnd.toISOString(),
-          rule.relationshipType,
-          rule.strength,
-          properties,
-        ],
-      );
+      const inserted = await this.projectRule(manager, rule, {
+        scopeClause: `AND ${rule.timeColumn} >= $2 AND ${rule.timeColumn} < $3`,
+        scopeParams: [windowStart.toISOString(), windowEnd.toISOString()],
+        userId,
+      });
 
-      // App-written change trail (the DB triggers are gone). Same transaction
-      // as the insert so a delta never exists without its edge; chunked to stay
-      // inside the bind-param budget.
-      for (let offset = 0; offset < inserted.length; offset += DELTA_CHUNK_SIZE) {
-        const chunk = inserted.slice(offset, offset + DELTA_CHUNK_SIZE);
-        await this.graphDeltaWriter.recordMany(
-          chunk.map((row) => ({
-            nodeType: 'relationship' as const,
-            changeType: 'created' as const,
-            relationshipId: row.relationship_id,
-            relationshipType: rule.relationshipType,
-            fromEntityId: row.from_entity_id,
-            toEntityId: row.to_entity_id,
-            ownerUserId: userId,
-            changeSource: 'DeterministicEdgeBackfillService',
-            changeReason: rule.id,
-          })),
-          manager,
-        );
-      }
+      await this.recordDeltas(manager, rule, userId, inserted);
 
       return inserted.length;
     });
+  }
+
+  /**
+   * THE PROJECTION — one rule of the matrix, over one scope (a time window or
+   * an explicit id set), inside the caller's transaction.
+   *
+   * The DISTINCT collapses duplicate pairs inside the scope (a person can
+   * receive many messages, but the directed edge is written once); ON CONFLICT
+   * DO NOTHING collapses pairs already materialized by an earlier run against
+   * the directed-uniqueness partial index. The tombstone COALESCE re-points
+   * both endpoints at their merge survivor, and the is_active/merged guard
+   * drops edges to deleted (un-merged) entities. The <> guard mirrors the
+   * table's no_self_references CHECK — a merge can collapse both endpoints
+   * onto the same survivor.
+   *
+   * `scope.scopeClause` references params starting at $2 (its values ride in
+   * `scope.scopeParams`, in order); the rule's type/strength/properties binds
+   * are numbered after them.
+   */
+  private async projectRule(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<InsertedEdgeRow[]> },
+    rule: DeterministicEdgeRule,
+    scope: { scopeClause: string; scopeParams: unknown[]; userId: string },
+  ): Promise<InsertedEdgeRow[]> {
+    const properties = JSON.stringify({ ...rule.properties, rule: rule.id });
+    const typeIdx = 2 + scope.scopeParams.length;
+
+    return manager.query(
+      `WITH pairs AS (
+         SELECT ${rule.fromIdExpr} AS from_id, ${rule.toIdExpr} AS to_id
+           FROM ${rule.table}
+          WHERE ${rule.userColumn} = $1
+            ${scope.scopeClause}
+            AND ${rule.candidateWhere}
+       ),
+       resolved AS (
+         SELECT DISTINCT
+                COALESCE(ef.merged_into_entity_id, ef.entity_id) AS from_id,
+                ef.entity_type AS from_type,
+                COALESCE(et.merged_into_entity_id, et.entity_id) AS to_id,
+                et.entity_type AS to_type
+           FROM pairs p
+           JOIN ci.entities ef
+             ON ef.entity_id = p.from_id
+            AND ef.owner_user_id = $1
+            AND (ef.is_active = TRUE OR ef.merged_into_entity_id IS NOT NULL)
+           JOIN ci.entities et
+             ON et.entity_id = p.to_id
+            AND et.owner_user_id = $1
+            AND (et.is_active = TRUE OR et.merged_into_entity_id IS NOT NULL)
+          WHERE COALESCE(ef.merged_into_entity_id, ef.entity_id)
+                <> COALESCE(et.merged_into_entity_id, et.entity_id)
+       )
+       INSERT INTO ci.relationships
+         (from_entity_id, to_entity_id, relationship_type, strength, properties,
+          owner_user_id, from_entity_type, to_entity_type)
+       SELECT from_id, to_id, $${typeIdx}, $${typeIdx + 1}, $${typeIdx + 2}::jsonb, $1, from_type, to_type
+         FROM resolved
+       ON CONFLICT DO NOTHING
+       RETURNING relationship_id, from_entity_id, to_entity_id`,
+      [scope.userId, ...scope.scopeParams, rule.relationshipType, rule.strength, properties],
+    );
+  }
+
+  /**
+   * App-written change trail (the DB triggers are gone). Same transaction as
+   * the insert so a delta never exists without its edge; chunked to stay
+   * inside the bind-param budget.
+   */
+  private async recordDeltas(
+    manager: Parameters<GraphDeltaWriter['recordMany']>[1],
+    rule: DeterministicEdgeRule,
+    userId: string,
+    inserted: InsertedEdgeRow[],
+  ): Promise<void> {
+    for (let offset = 0; offset < inserted.length; offset += DELTA_CHUNK_SIZE) {
+      const chunk = inserted.slice(offset, offset + DELTA_CHUNK_SIZE);
+      await this.graphDeltaWriter.recordMany(
+        chunk.map((row) => ({
+          nodeType: 'relationship' as const,
+          changeType: 'created' as const,
+          relationshipId: row.relationship_id,
+          relationshipType: rule.relationshipType,
+          fromEntityId: row.from_entity_id,
+          toEntityId: row.to_entity_id,
+          ownerUserId: userId,
+          changeSource: 'DeterministicEdgeBackfillService',
+          changeReason: rule.id,
+        })),
+        manager,
+      );
+    }
   }
 }
