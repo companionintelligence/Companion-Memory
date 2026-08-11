@@ -170,39 +170,49 @@ interface FakeOptions {
 function fakeDataSource(options: FakeOptions = {}) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
 
+  const query = jest.fn(async (sql: string, params: unknown[] = []) => {
+    calls.push({ sql, params });
+
+    if (sql.includes('INSERT INTO ci.inventory')) {
+      if (options.failWrite === true) {
+        throw new Error('inventory write exploded');
+      }
+
+      const eventIds = params[5] as string[];
+
+      return eventIds
+        .filter((id) => !(options.refuse ?? []).includes(id))
+        .map((id) => ({ object_id: `object-for-${id}`, source_id: id }));
+    }
+
+    // The CTI base-row upsert that accompanies every successful detail write.
+    if (sql.includes('INSERT INTO ci.entities')) {
+      return [];
+    }
+
+    if (sql.includes('FROM ci.inventory inv')) {
+      if (options.failClassification === true) {
+        throw new Error('classification failed');
+      }
+
+      return options.classification ?? [];
+    }
+
+    if (sql.includes('FROM ci.events e')) {
+      const ids = params[0] as string[];
+
+      return (options.rows ?? []).filter((row) => ids.includes(row.id));
+    }
+
+    throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
+  });
+
   return {
     calls,
-    query: jest.fn(async (sql: string, params: unknown[] = []) => {
-      calls.push({ sql, params });
-
-      if (sql.includes('INSERT INTO ci.inventory')) {
-        if (options.failWrite === true) {
-          throw new Error('inventory write exploded');
-        }
-
-        const eventIds = params[5] as string[];
-
-        return eventIds
-          .filter((id) => !(options.refuse ?? []).includes(id))
-          .map((id) => ({ object_id: `object-for-${id}`, source_id: id }));
-      }
-
-      if (sql.includes('FROM ci.inventory inv')) {
-        if (options.failClassification === true) {
-          throw new Error('classification failed');
-        }
-
-        return options.classification ?? [];
-      }
-
-      if (sql.includes('FROM ci.events e')) {
-        const ids = params[0] as string[];
-
-        return (options.rows ?? []).filter((row) => ids.includes(row.id));
-      }
-
-      throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
-    }),
+    query,
+    // writeObjects spans detail + base insert in one dataSource.transaction;
+    // the fake hands the same query stub back as the transactional manager.
+    transaction: jest.fn(async (cb: (manager: { query: typeof query }) => unknown) => cb({ query })),
   };
 }
 
@@ -623,7 +633,9 @@ describe('ObjectPromoteStage — it writes only the table that has a reader', ()
     expect(written.length).toBeGreaterThan(0);
 
     for (const sql of written) {
-      expect(sql).toMatch(/ci\.inventory/);
+      // ci.entities is the detail row's CTI base half (Item aggregates span
+      // both), not a new write-only table; everything else stays refused.
+      expect(sql).toMatch(/ci\.inventory|ci\.entities/);
       expect(sql).not.toMatch(/ci\.product_models|ci\.receipts|ci\.receipt_line_items/);
       expect(sql).not.toMatch(/ci\.object_identifiers|ci\.object_observations/);
     }
