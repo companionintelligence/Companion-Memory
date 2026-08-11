@@ -2,9 +2,9 @@
 -- =================================================================
 -- COMMUNICATIONS CTI - every ci.communications row gains a base row
 -- =================================================================
--- Third class-table-inheritance conversion (see ENTITY-INHERITANCE-MATRIX.md,
--- "Class C"), unblocked by the de-hypertabling in 20260807072321 (id is the
--- sole PK now, so a 1:1 FK to ci.entities is finally enforceable). The base
+-- Third class-table-inheritance conversion, unblocked by the de-hypertabling
+-- in 20260807072321 (id is the sole PK now, so a 1:1 FK to ci.entities is
+-- finally enforceable). The base
 -- row is discriminated 'Communication' and shares the SAME uuid as the
 -- ci.communications detail row.
 --

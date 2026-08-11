@@ -2,9 +2,9 @@
 -- =================================================================
 -- EVENTS CTI - every ci.events row gains a ci.entities base row
 -- =================================================================
--- Second class-table-inheritance conversion (see ENTITY-INHERITANCE-MATRIX.md,
--- "Class C"), fully normalized like inventory's (20260811051605): the base row
--- is discriminated 'Event', shares the SAME uuid as the ci.events detail row
+-- Second class-table-inheritance conversion, fully normalized like inventory's
+-- (20260811061402): the base row is discriminated 'Event', shares the SAME
+-- uuid as the ci.events detail row
 -- (events.event_id = entities.entity_id), and is the SOLE owner of the event's
 -- title (stored as entities.name) and description. The events copies are
 -- moved into it and dropped. Base rows carrying real text also means events

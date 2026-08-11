@@ -27,10 +27,10 @@ export interface EgressMapper<E, T> {
  *
  * The write helpers ({@link delete}, {@link applyUpdate}, {@link persistCreate})
  * run inside a transaction and load real before/after states. They are also the
- * seam where service-boundary mutation recording will plug in — see
- * AUDIT-SERVICE-RECOMMENDATION.md; each helper is one `record()` call away from
- * an audited write path. Entity-specific concerns (idempotency, domain events)
- * stay in the subclass, which composes these helpers.
+ * seam where service-boundary mutation recording will plug in; each helper is
+ * one `record()` call away from an audited write path. Entity-specific concerns
+ * (idempotency, domain events) stay in the subclass, which composes these
+ * helpers.
  */
 export abstract class EntityService<E extends ObjectLiteral, T> {
   protected constructor(

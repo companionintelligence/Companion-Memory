@@ -2,10 +2,10 @@
 -- =================================================================
 -- INVENTORY CTI - every ci.inventory row gains a ci.entities base row
 -- =================================================================
--- First class-table-inheritance conversion (see ENTITY-INHERITANCE-MATRIX.md,
--- "Class C"), fully normalized. An item's identity becomes a ci.entities uuid:
--- the base row is discriminated 'Item' and shares the SAME uuid as the
--- ci.inventory detail row (inventory.object_id = entities.entity_id), and the
+-- First class-table-inheritance conversion, fully normalized. An item's
+-- identity becomes a ci.entities uuid: the base row is discriminated 'Item'
+-- and shares the SAME uuid as the ci.inventory detail row
+-- (inventory.object_id = entities.entity_id), and the
 -- base row is the SOLE owner of name/description — the inventory copies are
 -- moved into it and dropped. Nothing in ci_search rekeys — embeddings/
 -- entity_tag rows already key items by object_id, and that uuid is now also

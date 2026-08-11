@@ -55,10 +55,10 @@ interface CtiAggregateOptions<TDetail extends ObjectLiteral & { id: string }, TB
  *
  * The write helpers ({@link applyUpdate}, {@link remove}) run inside a
  * transaction and load the real before-state. Like EntityService's helpers,
- * they are the seam where service-boundary mutation recording will plug in —
- * see AUDIT-SERVICE-RECOMMENDATION.md; each is one `record()` call away from an
- * audited write path. Entity-specific concerns (idempotency, label derivation,
- * domain events) stay in the composing service.
+ * they are the seam where service-boundary mutation recording will plug in;
+ * each is one `record()` call away from an audited write path. Entity-specific
+ * concerns (idempotency, label derivation, domain events) stay in the composing
+ * service.
  */
 export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase extends LinkedBase> {
   constructor(private readonly options: CtiAggregateOptions<TDetail, TBase>) {}

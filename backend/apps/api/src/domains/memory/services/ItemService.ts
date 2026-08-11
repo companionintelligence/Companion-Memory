@@ -23,9 +23,8 @@ import { CtiAggregate } from './CtiAggregate';
  * uuid. The base row is the SOLE owner of `name`/`description`; the detail row
  * carries only item-specific data. This service hides the split — the shared
  * {@link CtiAggregate} machinery writes both rows in one transaction (also
- * where AUDIT-SERVICE-RECOMMENDATION.md's mutation tracking will plug in), and
- * reads compose the egress {@link Item} from the pair with one batched
- * base-row fetch.
+ * where mutation tracking will plug in), and reads compose the egress
+ * {@link Item} from the pair with one batched base-row fetch.
  */
 @Injectable()
 export class ItemService {
