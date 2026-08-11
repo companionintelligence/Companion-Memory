@@ -4,7 +4,7 @@ import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
-import { type Person, PersonService } from '@ci/domains/memory';
+import { NORMALIZED_PERSON_FIELDS, type Person, PersonService } from '@ci/domains/memory';
 import {
   PersonCreatedEvent,
   PersonUpdatedEvent,
@@ -176,6 +176,17 @@ export class PersonSearchIndexListener {
       parts.push({ text: person.description, weight: 5 });
     }
 
+    // Normalized attributes (email, structured name, address, ...) are stripped
+    // from the egress bag and exposed only as named fields, so index them from
+    // the named fields explicitly.
+    const normalized = NORMALIZED_PERSON_FIELDS.map(([, fieldName]) => person[fieldName as keyof Person])
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join(' ');
+
+    if (normalized.length > 0) {
+      parts.push({ text: normalized, weight: 1 });
+    }
+
     if (person.properties) {
       parts.push({ text: JSON.stringify(person.properties), weight: 1 });
     }
@@ -203,20 +214,17 @@ export class PersonSearchIndexListener {
     push(person.name ?? null);
     push(person.description ?? null);
 
-    const properties = (person.properties ?? {}) as Record<string, unknown>;
+    // Normalized identity attributes are stripped from the egress bag and only
+    // reachable through their named fields.
+    push(person.firstName);
+    push(person.lastName);
+    push(person.email);
+
+    const properties = person.properties ?? {};
     // We don't have a schema on properties yet. These values are an accumulated
-    // superset of values we've indexed in various places.
-    const candidateKeys = [
-      'first_name',
-      'last_name',
-      'email',
-      'occupation',
-      'bio',
-      'phone',
-      'organization',
-      'job_title',
-      'occupation',
-    ];
+    // superset of values we've indexed in various places. Normalized keys are
+    // not listed here: the egress bag no longer carries them.
+    const candidateKeys = ['occupation', 'bio', 'phone', 'organization', 'job_title'];
 
     for (const key of candidateKeys) {
       push(properties[key]);

@@ -114,12 +114,18 @@ export abstract class EntityService<E extends ObjectLiteral, T> {
    * all in one transaction, so the caller gets the real persisted after-state
    * (DB defaults applied, @AfterLoad fired).
    *
+   * `patch` may be a function: it receives the loaded before-state and returns
+   * the partial update, letting subclasses derive the patch from what is
+   * actually stored (e.g. merging a properties bag) without a second read. The
+   * before-load is also the seam where mutation recording will observe the
+   * prior state (see the class doc).
+   *
    * @returns the updated entity, or `null` if no matching entity exists.
    */
   protected async applyUpdate(
     context: ServiceContext,
     id: string,
-    patch: Parameters<Repository<E>['update']>[1],
+    patch: Parameters<Repository<E>['update']>[1] | ((before: E) => Parameters<Repository<E>['update']>[1]),
   ): Promise<E | null> {
     const where: Record<string, unknown> = {
       [this.primaryKey]: id,
@@ -134,7 +140,9 @@ export abstract class EntityService<E extends ObjectLiteral, T> {
         return null;
       }
 
-      await repository.update(where as FindOptionsWhere<E>, patch);
+      const resolved = typeof patch === 'function' ? patch(before) : patch;
+
+      await repository.update(where as FindOptionsWhere<E>, resolved);
 
       return repository.findOne({ where: where as FindOptionsWhere<E> });
     });

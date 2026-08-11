@@ -234,5 +234,6 @@ export {
   CommunicationDirection,
   CommunicationType,
   CreateCommunicationDto,
+  NORMALIZED_PERSON_FIELDS,
   UpdateCommunicationDto,
 } from './types';

@@ -5,13 +5,13 @@ import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize } from '@ci/common/persistence';
+import { chunkedConflictInsert } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
-import { CreatePersonDto, UpdatePersonDto } from '../types';
+import { CreatePersonDto, NORMALIZED_PERSON_FIELDS, UpdatePersonDto } from '../types';
 
 import { EntityService } from './EntityService';
 
@@ -197,28 +197,18 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     });
 
     // One set-based INSERT keyed on the linked provenance index, split into
-    // param-budget-bounded chunks so a large batch never exceeds Postgres'
-    // 65535 bind-param limit (computeChunkSize is the same helper
-    // bulkInsertIdempotent uses). onConflict targets entities_linked_uniq
-    // exactly (partial on linked_table IS NOT NULL) so a re-synced linked row is
-    // a no-op and a lost insert race is absorbed without throwing. Unlinked rows
-    // (no linked_table/linked_id) fall outside the partial index and always
-    // insert, matching create()'s behaviour.
-    const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
-    for (let offset = 0; offset < entities.length; offset += chunkSize) {
-      await this.repository
-        .createQueryBuilder()
-        .insert()
-        // Route through `metadata.target` so TS picks the `ObjectLiteral` overload
-        // of `.values()`; passing the entity class narrows to
-        // `_QueryDeepPartialEntity`, which rejects the jsonb `properties` column.
-        .into(this.repository.metadata.target)
-        .values(entities.slice(offset, offset + chunkSize))
-        .onConflict(
-          '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
-        )
-        .execute();
-    }
+    // param-budget-bounded chunks by chunkedConflictInsert so a large batch
+    // never exceeds Postgres' 65535 bind-param limit. The conflict clause
+    // targets entities_linked_uniq exactly (partial on linked_table IS NOT
+    // NULL) so a re-synced linked row is a no-op and a lost insert race is
+    // absorbed without throwing. Unlinked rows (no linked_table/linked_id)
+    // fall outside the partial index and always insert, matching create()'s
+    // behaviour.
+    await chunkedConflictInsert(
+      this.repository,
+      entities,
+      '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL DO NOTHING',
+    );
 
     // Hydrate the created-or-existing rows in input order: by id for the ones we
     // (may have) inserted, plus by linked key for any that a concurrent/prior
@@ -387,13 +377,60 @@ export class PersonService extends EntityService<PersonEntity, Person> {
 
   async update(context: ServiceContext, id: string, data: UpdatePersonDto): Promise<Person | null> {
     const { properties, ...rest } = data;
-    const typed = properties ? typedColumnsFromProperties(properties) : {};
 
-    const after = await this.applyUpdate(context, id, {
-      ...rest,
-      ...typed,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      properties: properties as any, // TypeORM will handle JSON serialization
+    const after = await this.applyUpdate(context, id, (before) => {
+      if (!properties) {
+        return rest;
+      }
+
+      // Callers routinely round-trip an egress bag, and toEgressType strips
+      // the normalized keys from it (they live on the named fields instead).
+      // An absent normalized key therefore means "unchanged", not "cleared":
+      // carry the stored value over, and only sync a typed column when its
+      // storage key is explicitly present in the incoming bag.
+      const stored = (before.properties ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...properties };
+      for (const [storageKey] of NORMALIZED_PERSON_FIELDS) {
+        if (!(storageKey in properties) && storageKey in stored) {
+          merged[storageKey] = stored[storageKey];
+        }
+      }
+
+      const typedAll = typedColumnsFromProperties(properties);
+      const typed: {
+        firstName?: string | null;
+        middleName?: string | null;
+        lastName?: string | null;
+        birthDate?: string | null;
+        isSelf?: boolean;
+      } = {};
+
+      if ('first_name' in properties) {
+        typed.firstName = typedAll.firstName;
+      }
+
+      if ('middle_name' in properties) {
+        typed.middleName = typedAll.middleName;
+      }
+
+      if ('last_name' in properties) {
+        typed.lastName = typedAll.lastName;
+      }
+
+      if ('birth_date' in properties) {
+        typed.birthDate = typedAll.birthDate;
+      }
+
+      if (typedAll.isSelf !== undefined) {
+        typed.isSelf = typedAll.isSelf;
+      }
+
+      return {
+        ...rest,
+        ...typed,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        properties: merged as any, // TypeORM will handle JSON serialization
+      };
     });
 
     if (!after) {

@@ -2,6 +2,7 @@ import type { UserServiceContext } from '@ci/common/context';
 
 import { PersonEntity } from '../entities/PersonEntity';
 
+import { makeInsertBuilder } from './__tests__/harness/insertBuilder';
 import { PersonService } from './PersonService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
@@ -22,37 +23,6 @@ interface InsertRecord {
   inserted: boolean;
   /** Per-chunk row counts, in order, so tests can assert chunking. */
   chunkSizes: number[];
-}
-
-/**
- * A fake InsertQueryBuilder that records the ON CONFLICT clause and the values
- * passed, so tests can assert the bulk path issues a set-based insert. Records
- * one entry per chunk (per execute) so tests can assert large batches are split.
- */
-function makeInsertBuilder(record: InsertRecord) {
-  const qb: Record<string, unknown> = {};
-  let pending: unknown[] = [];
-  qb.insert = jest.fn(() => qb);
-  qb.into = jest.fn(() => qb);
-  qb.values = jest.fn((v: unknown[]) => {
-    record.values = v;
-    pending = v;
-
-    return qb;
-  });
-  qb.onConflict = jest.fn((c: string) => {
-    record.conflict = c;
-
-    return qb;
-  });
-  qb.execute = jest.fn(async () => {
-    record.inserted = true;
-    record.chunkSizes.push(pending.length);
-
-    return { raw: [] };
-  });
-
-  return qb;
 }
 
 /**
