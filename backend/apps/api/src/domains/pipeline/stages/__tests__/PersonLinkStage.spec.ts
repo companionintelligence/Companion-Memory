@@ -1128,6 +1128,14 @@ describeWithDatabase(`enrich.person_link against real Postgres (${availability.t
 
     ownerUserId = users[0].id;
 
+    // A communication is a CTI aggregate too: the base row in ci.entities owns
+    // the display name and the FK makes it mandatory. Seeded base-first.
+    await runner.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       VALUES ($1, 'Communication', 'body', '{}'::jsonb, $2, 'communications', $1)`,
+      [commId, ownerUserId],
+    );
     await runner.query(
       `INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content,
                                       participants_metadata, source_system)
@@ -1265,7 +1273,12 @@ describeWithDatabase(`enrich.person_link against real Postgres (${availability.t
     const orphan = randomUUID();
 
     await runner.query(
-      `INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content,
+      `WITH base AS (
+         INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                  owner_user_id, linked_table, linked_id)
+         VALUES ($1, 'Communication', 'body', '{}'::jsonb, $2, 'communications', $1)
+       )
+       INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content,
                                       participants_metadata, from_entity_id)
        VALUES ($1, now(), $2, 'sms', 'inbound', 'body', $3::jsonb, $4)`,
       [orphan, ownerUserId, JSON.stringify({ from: 'stranger@example.com' }), entityId],
@@ -1294,7 +1307,12 @@ describeWithDatabase(`enrich.person_link against real Postgres (${availability.t
     );
 
     await runner.query(
-      `INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content,
+      `WITH base AS (
+         INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                  owner_user_id, linked_table, linked_id)
+         VALUES ($1, 'Communication', 'body', '{}'::jsonb, $2, 'communications', $1)
+       )
+       INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content,
                                       participants_metadata)
        VALUES ($1, now(), $2, 'sms', 'inbound', 'body', $3::jsonb)`,
       [collide, ownerUserId, JSON.stringify({ from: '+44 20 7946 0958' })],
@@ -1317,9 +1335,17 @@ describeWithDatabase(`enrich.person_link against real Postgres (${availability.t
   it('links an event organizer and its attendees through the same rules', async () => {
     const eventId = randomUUID();
 
+    // An event is a CTI aggregate: the base row in ci.entities owns the title
+    // and the FK makes it mandatory. Seeded base-first.
     await runner.query(
-      `INSERT INTO ci.events (event_id, user_id, start_time, title, metadata)
-       VALUES ($1, $2, now(), 'Standup', $3::jsonb)`,
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       VALUES ($1, 'Event', 'Standup', '{}'::jsonb, $2, 'events', $1)`,
+      [eventId, ownerUserId],
+    );
+    await runner.query(
+      `INSERT INTO ci.events (event_id, user_id, start_time, metadata)
+       VALUES ($1, $2, now(), $3::jsonb)`,
       [
         eventId,
         ownerUserId,

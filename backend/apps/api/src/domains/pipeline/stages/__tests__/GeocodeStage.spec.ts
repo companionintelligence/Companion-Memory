@@ -965,10 +965,18 @@ describeIfDb(`GeocodeStage — against real Postgres (${availability.reason})`, 
     const users = await runner.query(`SELECT id FROM ci.users LIMIT 1`);
     realUserId = users[0].id;
 
+    // An event is a CTI aggregate: the base row in ci.entities owns the title
+    // and the FK makes it mandatory. Seeded base-first.
     await runner.query(
-      `INSERT INTO ci.events (event_id, user_id, start_time, title, source_system,
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       VALUES ($1, 'Event', 'pipeline spec fixture', '{}'::jsonb, $2, 'events', $1)`,
+      [candidateId, realUserId],
+    );
+    await runner.query(
+      `INSERT INTO ci.events (event_id, user_id, start_time, source_system,
                               is_deleted, is_predicted, location_name)
-       VALUES ($1, $2, now(), 'pipeline spec fixture', 'calendar', false, false,
+       VALUES ($1, $2, now(), 'calendar', false, false,
                '1600 Amphitheatre Pkwy, Mountain View, CA')`,
       [candidateId, realUserId],
     );

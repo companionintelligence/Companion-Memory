@@ -653,10 +653,19 @@ describeIfDb(`PlacePromoteStage — against real Postgres (${availability.reason
   ): Promise<string[]> {
     const ids = offsets.map(() => fixtureId());
 
+    // An event is a CTI aggregate: the base row in ci.entities owns the title
+    // and the FK makes it mandatory. Seeded base-first.
     await runner.query(
-      `INSERT INTO ci.events (event_id, user_id, start_time, title, source_system, is_deleted,
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       SELECT u.id, 'Event', 'promote.place fixture', '{}'::jsonb, $1, 'events', u.id
+         FROM unnest($2::uuid[]) AS u(id)`,
+      [realUserId, ids],
+    );
+    await runner.query(
+      `INSERT INTO ci.events (event_id, user_id, start_time, source_system, is_deleted,
                               location_name, location_coordinates)
-       SELECT u.id, $1, now(), 'promote.place fixture', 'spec', false, $2,
+       SELECT u.id, $1, now(), 'spec', false, $2,
               ST_SetSRID(ST_MakePoint(u.lng, u.lat), 4326)::geography
          FROM unnest($3::uuid[], $4::float8[], $5::float8[]) AS u(id, lat, lng)`,
       [

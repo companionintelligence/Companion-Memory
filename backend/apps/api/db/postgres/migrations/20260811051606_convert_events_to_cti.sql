@@ -3,7 +3,7 @@
 -- EVENTS CTI - every ci.events row gains a ci.entities base row
 -- =================================================================
 -- Second class-table-inheritance conversion (see ENTITY-INHERITANCE-MATRIX.md,
--- "Class C"), fully normalized like inventory's (20260808021326): the base row
+-- "Class C"), fully normalized like inventory's (20260811051605): the base row
 -- is discriminated 'Event', shares the SAME uuid as the ci.events detail row
 -- (events.event_id = entities.entity_id), and is the SOLE owner of the event's
 -- title (stored as entities.name) and description — the events copies are
@@ -22,6 +22,15 @@
 --    title/description into the base row (title is NOT NULL, so every base row
 --    gets a name). linked_table/linked_id carry the self-describing provenance
 --    pair ('events', event_id).
+--
+--    Delta triggers (20260809182943) OFF for the rebuild, same reasoning as
+--    inventory's: a schema migration is not a graph change, and every row here
+--    would otherwise reach the user through insight_aggregator.py as a created
+--    event. entities_search_vector_trigger stays on, because events landing in
+--    the graph search vector is one of the things this migration is FOR.
+ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete;
+ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_insert;
+
 DELETE FROM ci.entities WHERE entity_type = 'Event';
 
 INSERT INTO ci.entities
@@ -32,6 +41,9 @@ SELECT
   e.user_id, 'events', e.event_id,
   e.created_at, e.updated_at
 FROM ci.events e;
+
+ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_insert;
+ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete;
 
 -- 2. The CTI invariant: no detail row without its base row.
 --    DEFERRABLE INITIALLY DEFERRED so bulk ingest may insert detail-then-base

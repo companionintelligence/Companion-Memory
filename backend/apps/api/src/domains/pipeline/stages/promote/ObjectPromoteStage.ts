@@ -495,14 +495,18 @@ export class ObjectPromoteStage implements Stage {
    */
   private loadRows(userId: string, ids: string[]): Promise<CandidateRow[]> {
     return this.dataSource.query<CandidateRow[]>(
+      // The title lives on the event's CTI base row in ci.entities, which
+      // shares the event's uuid. Inner join: the FK makes a detail row without
+      // a base row impossible, so this cannot drop a candidate.
       `SELECT e.event_id AS id,
               e.event_type,
-              e.title,
+              b.name AS title,
               e.start_time,
               e.metadata,
               e.source_system,
               e.is_deleted
          FROM ci.events e
+         JOIN ci.entities b ON b.entity_id = e.event_id
         WHERE e.event_id = ANY($1::uuid[])
           AND e.user_id = $2::uuid`,
       [ids, userId],
@@ -546,14 +550,23 @@ export class ObjectPromoteStage implements Stage {
    * how {@link explainUnwritten} knows to go and ask why.
    */
   private async writeObjects(userId: string, objects: PromotedObject[]): Promise<Map<string, string>> {
-    const rows = await this.dataSource.query<Array<{ object_id: string; source_id: string }>>(
-      `INSERT INTO ci.inventory AS inv (
-         user_id, owner_user_id, name, brand, model, identifier_codes,
+    // An item is a CTI aggregate: the `ci.inventory` detail row below plus an
+    // `Item`-discriminated base row in `ci.entities` sharing its uuid, which is
+    // the sole owner of the name. Both halves are written in ONE transaction,
+    // detail first, which is legal only because
+    // `inventory_object_id_entities_fk` is DEFERRABLE INITIALLY DEFERRED: the
+    // object ids come back from RETURNING, so the base rows cannot be written
+    // until the detail rows exist. Splitting these across two transactions
+    // would commit detail rows with no base row and fail the constraint.
+    return this.dataSource.transaction(async (manager) => {
+      const rows = await manager.query<Array<{ object_id: string; source_id: string }>>(
+        `INSERT INTO ci.inventory AS inv (
+         user_id, owner_user_id, brand, model, identifier_codes,
          purchase_price, currency, acquired_at, is_digital, condition,
          quantity, lifecycle_state, identity_confidence, identity_method,
          source_type, source_system, source_id, metadata
        )
-       SELECT $1::uuid, $1::uuid, u.name, u.brand, u.model, u.identifier_codes,
+       SELECT $1::uuid, $1::uuid, u.brand, u.model, u.identifier_codes,
               u.purchase_price, u.currency, u.acquired_at, u.is_digital, u.condition,
               u.quantity, $2::text, u.identity_confidence, $3::text,
               $4::text, u.source_system, u.event_id::text,
@@ -577,7 +590,6 @@ export class ObjectPromoteStage implements Stage {
        ON CONFLICT (owner_user_id, source_type, source_system, source_id)
          WHERE source_id IS NOT NULL
        DO UPDATE SET
-            name                = excluded.name,
             brand               = excluded.brand,
             model               = excluded.model,
             identifier_codes    = excluded.identifier_codes,
@@ -599,30 +611,52 @@ export class ObjectPromoteStage implements Stage {
                   inv.updated_at
                 ) + interval '1 second'
        RETURNING inv.object_id, inv.source_id`,
-      [
-        userId,
-        PROMOTED_LIFECYCLE_STATE,
-        PROMOTED_IDENTITY_METHOD,
-        PROMOTED_SOURCE_TYPE,
-        this.version,
-        objects.map((object) => object.eventId),
-        objects.map((object) => object.name),
-        objects.map((object) => object.brand),
-        objects.map((object) => object.model),
-        objects.map((object) => JSON.stringify(object.identifierCodes)),
-        objects.map((object) => object.purchasePrice),
-        objects.map((object) => object.currency),
-        objects.map((object) => object.acquiredAt),
-        objects.map((object) => object.isDigital),
-        objects.map((object) => object.condition),
-        objects.map((object) => object.quantity),
-        objects.map((object) => object.identityConfidence),
-        objects.map((object) => object.sourceSystem),
-        objects.map((object) => JSON.stringify(object.commerce)),
-      ],
-    );
+        [
+          userId,
+          PROMOTED_LIFECYCLE_STATE,
+          PROMOTED_IDENTITY_METHOD,
+          PROMOTED_SOURCE_TYPE,
+          this.version,
+          objects.map((object) => object.eventId),
+          objects.map((object) => object.name),
+          objects.map((object) => object.brand),
+          objects.map((object) => object.model),
+          objects.map((object) => JSON.stringify(object.identifierCodes)),
+          objects.map((object) => object.purchasePrice),
+          objects.map((object) => object.currency),
+          objects.map((object) => object.acquiredAt),
+          objects.map((object) => object.isDigital),
+          objects.map((object) => object.condition),
+          objects.map((object) => object.quantity),
+          objects.map((object) => object.identityConfidence),
+          objects.map((object) => object.sourceSystem),
+          objects.map((object) => JSON.stringify(object.commerce)),
+        ],
+      );
 
-    return new Map(rows.map((row) => [row.source_id, row.object_id]));
+      if (rows.length > 0) {
+        // `source_id` is the event uuid as text, which is how a returned row
+        // finds the name it was promoted with. A row that came back from the
+        // DO UPDATE branch already has its base row, so the name is refreshed
+        // rather than duplicated.
+        const nameBySourceId = new Map(objects.map((object) => [object.eventId, object.name]));
+
+        await manager.query(
+          `INSERT INTO ci.entities
+             (entity_id, entity_type, name, properties, owner_user_id, linked_table, linked_id)
+           SELECT u.object_id, 'Item', u.name, '{}'::jsonb, $1::uuid, 'inventory', u.object_id
+             FROM unnest($2::uuid[], $3::text[]) AS u(object_id, name)
+           ON CONFLICT (entity_id) DO UPDATE SET name = excluded.name, updated_at = now()`,
+          [
+            userId,
+            rows.map((row) => row.object_id),
+            rows.map((row) => nameBySourceId.get(row.source_id) ?? null),
+          ],
+        );
+      }
+
+      return new Map(rows.map((row) => [row.source_id, row.object_id]));
+    });
   }
 
   /**

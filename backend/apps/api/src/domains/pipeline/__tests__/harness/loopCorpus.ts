@@ -250,53 +250,94 @@ async function seedEvents(
   // a leap second at 3am.
   const startTime = `TIMESTAMPTZ '2024-01-01 00:00:00+00' + make_interval(mins => n)`;
 
+  // Events are CTI aggregates now: the `ci.events` detail row plus an
+  // `Event`-discriminated base row in `ci.entities` sharing its uuid, which is
+  // the sole owner of the title. Each seed is ONE statement so both inserts
+  // share a transaction, which is what the DEFERRABLE INITIALLY DEFERRED
+  // `events_event_id_entities_fk` needs when the detail row goes in first.
+  // `candidates` exists so the generated id and title are written once and read
+  // by both inserts.
+  const baseRows = `INSERT INTO ci.entities
+                      (entity_id, entity_type, name, properties,
+                       owner_user_id, linked_table, linked_id)
+                    SELECT c.event_id, 'Event', c.title, '{}'::jsonb,
+                           $1::uuid, 'events', c.event_id
+                      FROM inserted JOIN candidates c USING (event_id)`;
+
   const purchase =
     shape === 'commerce'
-      ? `INSERT INTO ci.events (event_id, user_id, start_time, title, event_type,
-                                source_type, source_system, source_id, metadata)
-         SELECT ${id}, $1::uuid, ${startTime}, 'Synthetic purchase ' || n, 'purchase',
-                'commerce', 'synthetic_commerce', n::text,
-                jsonb_build_object(
-                  'kind',       'commerce.purchase',
-                  'Product',    'Synthetic Widget ' || n,
-                  'ASIN',       'B0' || upper(substr(md5(n::text), 1, 8)),
-                  'Unit Price', to_char(((n % 500) + 0.99)::numeric, 'FM999990.00'),
-                  'Currency',   'USD',
-                  'Quantity',   (n % 3) + 1,
-                  'Order ID',   'SYN-' || lpad(n::text, 10, '0'),
-                  'Source',     'Synthetic Retailer'
-                )
-           FROM generate_series($2::int, $3::int) AS n
-          WHERE n % 10 < ${PURCHASE_SLOTS}`
+      ? `WITH candidates AS (
+           SELECT ${id} AS event_id, 'Synthetic purchase ' || n AS title,
+                  ${startTime} AS start_time, n
+             FROM generate_series($2::int, $3::int) AS n
+            WHERE n % 10 < ${PURCHASE_SLOTS}
+         ),
+         inserted AS (
+           INSERT INTO ci.events (event_id, user_id, start_time, event_type,
+                                  source_type, source_system, source_id, metadata)
+           SELECT c.event_id, $1::uuid, c.start_time, 'purchase',
+                  'commerce', 'synthetic_commerce', c.n::text,
+                  jsonb_build_object(
+                    'kind',       'commerce.purchase',
+                    'Product',    'Synthetic Widget ' || c.n,
+                    'ASIN',       'B0' || upper(substr(md5(c.n::text), 1, 8)),
+                    'Unit Price', to_char(((c.n % 500) + 0.99)::numeric, 'FM999990.00'),
+                    'Currency',   'USD',
+                    'Quantity',   (c.n % 3) + 1,
+                    'Order ID',   'SYN-' || lpad(c.n::text, 10, '0'),
+                    'Source',     'Synthetic Retailer'
+                  )
+             FROM candidates c
+           RETURNING event_id
+         )
+         ${baseRows}`
       : null;
 
   const order =
     shape === 'commerce'
-      ? `INSERT INTO ci.events (event_id, user_id, start_time, title, event_type,
-                                source_type, source_system, source_id, metadata)
-         SELECT ${id}, $1::uuid, ${startTime}, 'Synthetic order ' || n, 'order',
-                'commerce', 'synthetic_commerce', n::text,
-                jsonb_build_object(
-                  'kind',     'commerce.order',
-                  'Order ID', 'SYN-' || lpad(n::text, 10, '0'),
-                  'Total',    to_char(((n % 900) + 4.99)::numeric, 'FM999990.00'),
-                  'Currency', 'USD',
-                  'Source',   'Synthetic Retailer'
-                )
-           FROM generate_series($2::int, $3::int) AS n
-          WHERE n % 10 >= ${PURCHASE_SLOTS} AND n % 10 < ${PURCHASE_SLOTS + ORDER_SLOTS}`
+      ? `WITH candidates AS (
+           SELECT ${id} AS event_id, 'Synthetic order ' || n AS title,
+                  ${startTime} AS start_time, n
+             FROM generate_series($2::int, $3::int) AS n
+            WHERE n % 10 >= ${PURCHASE_SLOTS} AND n % 10 < ${PURCHASE_SLOTS + ORDER_SLOTS}
+         ),
+         inserted AS (
+           INSERT INTO ci.events (event_id, user_id, start_time, event_type,
+                                  source_type, source_system, source_id, metadata)
+           SELECT c.event_id, $1::uuid, c.start_time, 'order',
+                  'commerce', 'synthetic_commerce', c.n::text,
+                  jsonb_build_object(
+                    'kind',     'commerce.order',
+                    'Order ID', 'SYN-' || lpad(c.n::text, 10, '0'),
+                    'Total',    to_char(((c.n % 900) + 4.99)::numeric, 'FM999990.00'),
+                    'Currency', 'USD',
+                    'Source',   'Synthetic Retailer'
+                  )
+             FROM candidates c
+           RETURNING event_id
+         )
+         ${baseRows}`
       : null;
 
   const decoyFilter = shape === 'commerce' ? `WHERE n % 10 >= ${PURCHASE_SLOTS + ORDER_SLOTS}` : '';
 
-  const decoy = `INSERT INTO ci.events (event_id, user_id, start_time, title, event_type,
-                                        source_type, source_system, metadata)
-                 SELECT ${id}, $1::uuid, ${startTime}, 'Synthetic entry ' || n, 'calendar',
-                        'calendar',
-                        CASE WHEN n % 2 = 0 THEN NULL ELSE 'synthetic_corpus' END,
-                        jsonb_build_object('synthetic', true)
-                   FROM generate_series($2::int, $3::int) AS n
-                   ${decoyFilter}`;
+  const decoy = `WITH candidates AS (
+                   SELECT ${id} AS event_id, 'Synthetic entry ' || n AS title,
+                          ${startTime} AS start_time, n
+                     FROM generate_series($2::int, $3::int) AS n
+                     ${decoyFilter}
+                 ),
+                 inserted AS (
+                   INSERT INTO ci.events (event_id, user_id, start_time, event_type,
+                                          source_type, source_system, metadata)
+                   SELECT c.event_id, $1::uuid, c.start_time, 'calendar',
+                          'calendar',
+                          CASE WHEN c.n % 2 = 0 THEN NULL ELSE 'synthetic_corpus' END,
+                          jsonb_build_object('synthetic', true)
+                     FROM candidates c
+                   RETURNING event_id
+                 )
+                 ${baseRows}`;
 
   for (const statement of [purchase, order, decoy]) {
     if (statement != null) {

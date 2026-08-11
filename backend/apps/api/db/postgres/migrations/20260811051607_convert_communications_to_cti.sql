@@ -22,6 +22,19 @@
 -- trigger, so communications become findable in graph text search.
 
 -- 1. Rebuild the 'Communication' slice of ci.entities from the detail table.
+--
+--    Delta triggers (20260809182943) OFF for the rebuild. This matters most
+--    here: ci.communications is the largest table in the schema, so leaving
+--    them on would write a ci.graph_deltas row per message, each carrying a
+--    jsonb copy of name/description/properties, and
+--    insight_aggregator.py would then narrate the migration to the user as
+--    half a million newly created Communications. It would also materialize
+--    the whole insert as a transition tuplestore before doing any of it.
+--    entities_search_vector_trigger stays on, per the note above about
+--    communications becoming findable in graph text search.
+ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete;
+ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_insert;
+
 DELETE FROM ci.entities WHERE entity_type = 'Communication';
 
 INSERT INTO ci.entities
@@ -45,6 +58,9 @@ SELECT
   c.user_id, 'communications', c.id,
   c.time, c.time
 FROM ci.communications c;
+
+ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_insert;
+ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete;
 
 -- 2. The CTI invariant: no detail row without its base row.
 --    DEFERRABLE INITIALLY DEFERRED so bulk ingest may insert detail-then-base

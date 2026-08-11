@@ -667,15 +667,22 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
   async function seedEvent(row: Omit<EventRow, 'id'>): Promise<string> {
     const id = fixtureId();
 
+    // An event is a CTI aggregate: the base row in ci.entities owns the title
+    // and the FK makes it mandatory. Seeded base-first.
     await runner.query(
-      `INSERT INTO ci.events (event_id, user_id, start_time, title, event_type, category,
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       VALUES ($1, 'Event', $2, '{}'::jsonb, $3, 'events', $1)`,
+      [id, row.title, realUserId],
+    );
+    await runner.query(
+      `INSERT INTO ci.events (event_id, user_id, start_time, event_type, category,
                               source_type, source_system, source_id, is_deleted, metadata)
-       VALUES ($1, $2, $3, $4, $5, 'commerce', 'ci-import-tools', $6, $7, false, $8::jsonb)`,
+       VALUES ($1, $2, $3, $4, 'commerce', 'ci-import-tools', $5, $6, false, $7::jsonb)`,
       [
         id,
         realUserId,
         row.start_time,
-        row.title,
         row.event_type,
         row.source_system,
         `spec:${id}`,
@@ -839,14 +846,17 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
 
     await stage.run({ userId: realUserId }, [eventA]);
 
+    // The name lives on the item's CTI base row now, and `object_entity_id`
+    // was the dead precursor of that link, dropped by the conversion.
     const rows = await runner.query(
-      `SELECT object_id, name, identifier_codes, lifecycle_state, quantity,
-              identity_confidence, identity_method, product_id,
-              acquisition_receipt_id, acquisition_line_item_id, object_entity_id,
-              last_seen_at, last_seen_place_entity_id, merged_into_object_id
-         FROM ci.inventory
-        WHERE user_id = $1 AND source_type = $2
-        ORDER BY created_at DESC`,
+      `SELECT inv.object_id, b.name, inv.identifier_codes, inv.lifecycle_state, inv.quantity,
+              inv.identity_confidence, inv.identity_method, inv.product_id,
+              inv.acquisition_receipt_id, inv.acquisition_line_item_id,
+              inv.last_seen_at, inv.last_seen_place_entity_id, inv.merged_into_object_id
+         FROM ci.inventory inv
+         JOIN ci.entities b ON b.entity_id = inv.object_id
+        WHERE inv.user_id = $1 AND inv.source_type = $2
+        ORDER BY inv.created_at DESC`,
       [realUserId, PROMOTE_OBJECT_STAGE_ID],
     );
 

@@ -213,33 +213,63 @@ export class BrowserActivityService {
           }),
         );
 
+        // Every column is cast explicitly. These tuples now sit in a `VALUES`
+        // CTE rather than directly under `INSERT INTO ci.events`, so there is
+        // no target column to infer a bare parameter's type from.
         return `(
           ci.gen_uuid_v7(),
           $${base + 1}::uuid,
-          $${base + 2},
-          $${base + 3},
-          'view',
-          $${base + 4},
+          $${base + 2}::text,
+          $${base + 3}::text,
+          'view'::text,
+          $${base + 4}::text,
           $${base + 5}::timestamptz,
           CASE WHEN $${base + 6}::int IS NOT NULL AND $${base + 6}::int > 0
             THEN $${base + 5}::timestamptz + make_interval(secs => $${base + 6}::int)
             ELSE NULL END,
-          $${base + 7},
-          $${base + 8},
-          $${base + 9},
+          $${base + 7}::text,
+          $${base + 8}::text,
+          $${base + 9}::text,
           $${base + 10}::jsonb
         )`;
       });
 
+      // An event is a CTI aggregate: the `ci.events` detail row plus an
+      // `Event`-discriminated base row in `ci.entities` sharing its uuid, which
+      // is the sole owner of the title and description. Both inserts live in
+      // ONE statement so they share one transaction, which is what
+      // `events_event_id_entities_fk` (DEFERRABLE INITIALLY DEFERRED) requires
+      // when the detail row is written first. `incoming` exists so the tuple
+      // list is built once and read by both inserts: the base row needs the
+      // title, the detail row no longer has anywhere to put it.
       await this.dataSource.query(
-        `INSERT INTO ci.events (
+        `WITH incoming (
            event_id, user_id, title, description, event_type, category,
            start_time, end_time, source_type, source_system, source_id, metadata
+         ) AS (
+           VALUES ${eventValues.join(', ')}
+         ),
+         inserted AS (
+           INSERT INTO ci.events (
+             event_id, user_id, event_type, category,
+             start_time, end_time, source_type, source_system, source_id, metadata
+           )
+           SELECT event_id, user_id, event_type, category,
+                  start_time, end_time, source_type, source_system, source_id, metadata
+             FROM incoming
+           ON CONFLICT (user_id, source_type, source_system, source_id)
+             WHERE source_id IS NOT NULL
+             DO NOTHING
+           RETURNING event_id
          )
-         VALUES ${eventValues.join(', ')}
-         ON CONFLICT (user_id, source_type, source_system, source_id)
-           WHERE source_id IS NOT NULL
-           DO NOTHING`,
+         INSERT INTO ci.entities
+           (entity_id, entity_type, name, description, properties,
+            owner_user_id, linked_table, linked_id)
+         SELECT i.event_id, 'Event', i.title, i.description, '{}'::jsonb,
+                i.user_id, 'events', i.event_id
+           FROM inserted
+           JOIN incoming i USING (event_id)
+         ON CONFLICT (entity_id) DO NOTHING`,
         eventParams,
       );
 

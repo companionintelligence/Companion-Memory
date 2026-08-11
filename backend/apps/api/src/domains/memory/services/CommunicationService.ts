@@ -68,7 +68,9 @@ export class CommunicationService {
 
   /** Builds the `ci.entities` half of the aggregate from a (hydrated) detail row. */
   private baseRowFor(
-    manager: { getRepository: (target: typeof CommunicationBaseEntity) => Repository<CommunicationBaseEntity> },
+    manager: {
+      getRepository: (target: typeof CommunicationBaseEntity) => Repository<CommunicationBaseEntity>;
+    },
     entity: CommunicationEntity,
   ): CommunicationBaseEntity {
     return manager.getRepository(CommunicationBaseEntity).create({
@@ -124,15 +126,11 @@ export class CommunicationService {
     //
     // One transaction across both halves of the CTI aggregate: the base row
     // (derived display label) first, then the detail.
-    const communicationResult = await this.communicationRepository.manager.transaction(
-      async (manager) => {
-        await manager
-          .getRepository(CommunicationBaseEntity)
-          .save(this.baseRowFor(manager, communication));
+    const communicationResult = await this.communicationRepository.manager.transaction(async (manager) => {
+      await manager.getRepository(CommunicationBaseEntity).save(this.baseRowFor(manager, communication));
 
-        return manager.getRepository(CommunicationEntity).save(communication);
-      },
-    );
+      return manager.getRepository(CommunicationEntity).save(communication);
+    });
 
     await this.eventService.send(CommunicationCreatedEvent, {
       communicationId: communicationResult.id,
@@ -232,9 +230,7 @@ export class CommunicationService {
       // the same hydrated row, and ON CONFLICT DO UPDATE rejects touching one
       // arbiter row twice in a single statement (SQLSTATE 21000).
       const baseRows = [
-        ...new Map(
-          detailResults.map(({ entity }) => [entity.id, this.baseRowFor(manager, entity)]),
-        ).values(),
+        ...new Map(detailResults.map(({ entity }) => [entity.id, this.baseRowFor(manager, entity)])).values(),
       ];
 
       const chunkSize = computeChunkSize(baseRepository.metadata.columns.length);
@@ -244,9 +240,7 @@ export class CommunicationService {
           .insert()
           .into(baseRepository.metadata.target)
           .values(baseRows.slice(offset, offset + chunkSize))
-          .onConflict(
-            '(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description',
-          )
+          .onConflict('(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description')
           .execute();
       }
 

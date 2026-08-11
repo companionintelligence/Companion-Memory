@@ -865,17 +865,33 @@ describeIfDb(`EstimateLocationStage — against real Postgres (${availability.re
 
     // A candidate with no location of its own, and a donor five minutes later
     // carrying a REAL coordinate.
+    // An event is a CTI aggregate: the base row in ci.entities owns the title
+    // and the FK makes it mandatory. Seeded base-first, which needs no help
+    // from the constraint's deferral.
     await runner.query(
-      `INSERT INTO ci.events (event_id, user_id, start_time, title, source_system,
-                              is_deleted, is_predicted)
-       VALUES ($1, $2, now(), 'pipeline spec candidate', 'calendar', false, false),
-              ($3, $2, now() + interval '30 hours', 'pipeline spec far candidate', 'calendar', false, false)`,
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       VALUES ($1, 'Event', 'pipeline spec candidate', '{}'::jsonb, $2, 'events', $1),
+              ($3, 'Event', 'pipeline spec far candidate', '{}'::jsonb, $2, 'events', $3)`,
       [candidateId, realUserId, farCandidateId],
     );
     await runner.query(
-      `INSERT INTO ci.events (event_id, user_id, start_time, title, source_system,
+      `INSERT INTO ci.events (event_id, user_id, start_time, source_system,
+                              is_deleted, is_predicted)
+       VALUES ($1, $2, now(), 'calendar', false, false),
+              ($3, $2, now() + interval '30 hours', 'calendar', false, false)`,
+      [candidateId, realUserId, farCandidateId],
+    );
+    await runner.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties,
+                                owner_user_id, linked_table, linked_id)
+       VALUES ($1, 'Event', 'pipeline spec donor', '{}'::jsonb, $2, 'events', $1)`,
+      [donorId, realUserId],
+    );
+    await runner.query(
+      `INSERT INTO ci.events (event_id, user_id, start_time, source_system,
                               is_deleted, is_predicted, location_coordinates)
-       VALUES ($1, $2, now() + interval '5 minutes', 'pipeline spec donor', 'calendar', false, false,
+       VALUES ($1, $2, now() + interval '5 minutes', 'calendar', false, false,
                ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography)`,
       [donorId, realUserId, DONOR.lng, DONOR.lat],
     );

@@ -18,6 +18,22 @@
 -- 1. Rebuild the 'Item' slice of ci.entities from the detail table, moving
 --    name/description into the base row. linked_table/linked_id carry the
 --    self-describing provenance pair ('inventory', object_id).
+--
+--    The delta triggers (20260809182943) are OFF for the rebuild. They record
+--    every ci.entities statement into ci.graph_deltas, which
+--    backend/apps/summary/src/ci/summary/insight_aggregator.py renders as the
+--    "what changed in your graph" section of every summary. Left on, this
+--    normalization would reach the user as a mass deletion followed by a mass
+--    creation of items they did not touch. A schema migration is not a graph
+--    change, and the delta log should not claim it was one.
+--
+--    Only the two delta triggers are disabled, by name.
+--    entities_search_vector_trigger (BEFORE INSERT ... FOR EACH ROW) stays on:
+--    the whole point of moving the text into the base row is that items become
+--    findable in graph text search, which is that trigger's job.
+ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete;
+ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_insert;
+
 DELETE FROM ci.entities WHERE entity_type = 'Item';
 
 INSERT INTO ci.entities
@@ -28,6 +44,9 @@ SELECT
   COALESCE(i.owner_user_id, i.user_id), 'inventory', i.object_id,
   i.created_at, i.updated_at
 FROM ci.inventory i;
+
+ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_insert;
+ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete;
 
 -- 2. The CTI invariant: no detail row without its base row.
 --    DEFERRABLE INITIALLY DEFERRED so bulk ingest may insert detail-then-base

@@ -1,8 +1,8 @@
 import { DataSource } from 'typeorm';
 
+import { NodeEntity } from '@ci/domains/graph';
 import { UserEntity } from '@ci/domains/user';
 
-import { NodeEntity } from '../../../graph/entities/NodeEntity';
 import { BaseEntity } from '../BaseEntity';
 import { CommunicationBaseEntity } from '../CommunicationBaseEntity';
 import { ConceptEntity } from '../ConceptEntity';
