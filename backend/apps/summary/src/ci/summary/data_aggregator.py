@@ -56,7 +56,13 @@ TABLES = {
         "exclude": ["content", "participants_metadata"],
     },
     "activities": {"time_col": "start_time"},
-    "events": {"time_col": "start_time"},
+    "events": {
+        "time_col": "start_time",
+        # The CTI conversion (20260811061409) moved title/description onto the
+        # ci.entities base row; join it back so summaries keep naming events.
+        "join": "JOIN ci.entities base ON base.entity_id = events.event_id",
+        "select_extra": "base.name AS title, base.description AS description",
+    },
     "messages": {"time_col": "created_at", "exclude": ["tool_calls", "edit_history"]},
     "files": {
         "time_col": "created_at",
@@ -208,27 +214,37 @@ class DataAggregator:
     def _build_raw_query(self, table: str, config: dict, columns: list[str]) -> str:
         """Build simple SELECT query."""
         select_extra = config.get("select_extra", "")
-        select_parts = columns[:]
+        join = config.get("join", "")
+        # A join makes bare column names ambiguous; qualify with the table name.
+        qualifier = table if join else None
+        select_parts = [f"{table}.{c}" for c in columns] if join else columns[:]
         if select_extra:
             select_parts.insert(0, select_extra)
 
         select = ", ".join(select_parts)
-        where = self._build_where(config)
+        where = self._build_where(config, qualifier)
         time_col = config.get("time_col", "created_at")
+        if qualifier:
+            time_col = f"{qualifier}.{time_col}"
         order = config.get("order", f"{time_col} DESC")
 
         return f"""
         SELECT {select}
         FROM {table}
+        {join}
         WHERE {where}
         ORDER BY {order}
         LIMIT :limit
         """
 
-    def _build_where(self, config: dict) -> str:
+    def _build_where(self, config: dict, qualifier: str | None = None) -> str:
         """Build WHERE clause."""
         time_col = config.get("time_col", "created_at")
         user_col = config.get("user_col", "user_id")
+        if qualifier:
+            time_col = f"{qualifier}.{time_col}"
+            user_col = f"{qualifier}.{user_col}"
+
         where_extra = config.get("where_extra", "")
 
         parts = [
