@@ -81,6 +81,42 @@ query ContentsExists {
 
 # ── Events ────────────────────────────────────────────────────────────────────
 
+# Deploy-skew guard for the events CTI migration: once verified ready, the
+# probe is skipped for the remainder of the process.
+_events_cti_ready: bool = False
+
+
+def _ensure_events_cti_schema(conn) -> None:
+    """
+    Refuse to run the CTI-shaped event queries against a pre-migration schema.
+
+    The sidecar deploys separately from the API, so a window exists where this
+    code runs before the events CTI migration (20260811061409) has been
+    applied.  In that state the base-row JOIN in get_unlabeled_events matches
+    nothing (no 'Event' rows exist in ci.entities yet) and labeling would
+    silently stall, returning [] with no error signal.  Detect the stale
+    schema (ci.events still carrying its pre-CTI title column) and fail
+    loudly instead.
+    """
+    global _events_cti_ready
+    if _events_cti_ready:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'ci' AND table_name = 'events' AND column_name = 'title'
+            """
+        )
+        if cur.fetchone() is not None:
+            raise RuntimeError(
+                "ci.events still has a title column: the events CTI migration "
+                "(20260811061409) has not been applied to this database. "
+                "Refusing to query a pre-migration schema. Run the API "
+                "migrations, then restart the HBPE sidecar."
+            )
+    _events_cti_ready = True
+
 
 def get_unlabeled_events(user_id: str, limit: int = 1000) -> list[dict]:
     """
@@ -107,6 +143,7 @@ def get_unlabeled_events(user_id: str, limit: int = 1000) -> list[dict]:
         LIMIT %s
     """
     with get_conn() as conn:
+        _ensure_events_cti_schema(conn)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, (str(user_id), limit))
             return [dict(r) for r in cur.fetchall()]
