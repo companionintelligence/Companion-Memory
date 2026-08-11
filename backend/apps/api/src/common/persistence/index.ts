@@ -1,6 +1,7 @@
 export { bulkInsertIdempotent, chunkedConflictInsert, computeChunkSize } from './bulkUpsert';
 export type { BulkInsertResult, SourceTriple } from './bulkUpsert';
 export { buildEventAggregateFold } from './eventAggregateSql';
+export { buildContentAggregateFold } from './contentAggregateSql';
 export type { EventAggregateFoldRow } from './eventAggregateSql';
 export { INGEST_REFRESH_COLUMNS, INGEST_SCHEMA_VERSION } from './ingestRefreshColumns';
 export type { IngestEntityKind } from './ingestRefreshColumns';

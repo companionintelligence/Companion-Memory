@@ -14,10 +14,11 @@ describe('graphTypesToExclude', () => {
     expect(excluded).not.toContain('Person');
     expect(excluded).not.toContain('Location');
 
-    // Deselected: event/content/file/item map to graph types that must be excluded.
+    // Deselected: event/content/file/item/communication map to graph types that must be excluded.
     expect(excluded).toContain('Event');
     expect(excluded).toContain('Content');
     expect(excluded).toContain('File');
+    expect(excluded).toContain('Communication');
     expect(excluded).toEqual(expect.arrayContaining(['Object', 'Item']));
     expect(excluded).not.toContain('Thing');
   });

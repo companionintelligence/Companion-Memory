@@ -9,6 +9,8 @@ export const ENTITY_TYPES = [
   'Place',
   'Contact',
   'Content',
+  'Communication',
+  'Item',
   'Thing',
   'Tag',
 ] as const;
@@ -34,7 +36,7 @@ export const EXPLORER_TO_GRAPH_ENTITY_TYPES: Record<string, string[]> = {
   content: ['Content'],
   file: ['File'],
   note: [],
-  communication: [],
+  communication: ['Communication'],
   'browser-activity': [],
 };
 

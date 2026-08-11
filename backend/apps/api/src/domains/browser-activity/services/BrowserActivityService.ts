@@ -8,6 +8,7 @@ import { LoggerService } from '@ci/common/logging';
 import {
   bulkInsertIdempotent,
   INGEST_REFRESH_COLUMNS,
+  buildContentAggregateFold,
   buildEventAggregateFold,
   keysetPaginate,
   type KeysetPageArgs,
@@ -218,58 +219,23 @@ export class BrowserActivityService {
 
       await this.dataSource.query(sql, params);
 
-      // Content rows: resolve event_id by the same provenance triple.
-      const contentParams: unknown[] = [];
-      const contentValues = chunk.map((ba, i) => {
-        const base = i * 8;
-        const sourceType = ba.source_type ?? 'browser_activity';
-        const sourceSystem = ba.source_system ?? 'fold';
-        const sourceId = ba.source_id ?? ba.id;
-        contentParams.push(
-          ba.title?.trim() || ba.url || null,
-          ba.page_summary ?? null,
-          ba.url,
-          ba.user_id,
-          sourceType,
-          sourceSystem,
-          sourceId,
-          JSON.stringify({ browser_activity_id: ba.id }),
-        );
-
-        return `(
-          ci.gen_uuid_v7(),
-          'web-page',
-          $${base + 1},
-          $${base + 2},
-          $${base + 3},
-          $${base + 3},
-          $${base + 8}::jsonb,
-          $${base + 4}::uuid,
-          (
-            SELECT e.event_id FROM ci.events e
-             WHERE e.user_id = $${base + 4}::uuid
-               AND e.source_type = $${base + 5}
-               AND e.source_system = $${base + 6}
-               AND e.source_id = $${base + 7}
-             LIMIT 1
-          ),
-          $${base + 5},
-          $${base + 6},
-          $${base + 7}
-        )`;
-      });
-
-      await this.dataSource.query(
-        `INSERT INTO ci.content (
-           id, type, title, text, url, source_url, source_data,
-           user_id, event_id, source_type, source_system, source_id
-         )
-         VALUES ${contentValues.join(', ')}
-         ON CONFLICT (user_id, source_type, source_system, source_id)
-           WHERE source_id IS NOT NULL
-           DO NOTHING`,
-        contentParams,
+      // Content CTI aggregate (detail + base); title lives on ci.entities.name.
+      const { sql: contentSql, params: contentParams } = buildContentAggregateFold(
+        chunk.map((ba) => ({
+          userId: ba.user_id,
+          title: ba.title?.trim() || ba.url || null,
+          type: 'web-page',
+          text: ba.page_summary ?? null,
+          url: ba.url,
+          sourceUrl: ba.url,
+          sourceType: ba.source_type ?? 'browser_activity',
+          sourceSystem: ba.source_system ?? 'fold',
+          sourceId: ba.source_id ?? ba.id,
+          sourceData: { browser_activity_id: ba.id },
+        })),
       );
+
+      await this.dataSource.query(contentSql, contentParams);
     }
   }
 

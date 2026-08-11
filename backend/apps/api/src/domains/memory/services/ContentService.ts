@@ -15,9 +15,13 @@ import { EventService } from '@ci/domains/events';
 import { ContentCreatedEvent, ContentRemovedEvent, ContentUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
+import { ContentBaseEntity } from '../entities/ContentBaseEntity';
 import { Content, ContentEntity } from '../entities/ContentEntity';
 import { EventEntity } from '../entities/EventEntity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
+
+import { CtiAggregate } from './CtiAggregate';
+import { EntityMutationService } from './EntityMutationService';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
 type Triple = { sourceType: string; sourceSystem: string | null; sourceId: string };
@@ -40,15 +44,75 @@ export interface HourlyContentCount {
   count: number;
 }
 
+/**
+ * Spanning-aggregate service for the content CTI split: content is ONE logical
+ * entity persisted as a `ci.entities` base row (discriminated 'Content',
+ * see {@link ContentBaseEntity}) plus a `ci.content` detail row sharing the same
+ * uuid. The base row is the SOLE owner of `title` (stored as `name`); the detail
+ * row carries body/url/mimetype. Writes touch both rows in one transaction;
+ * reads compose the egress {@link Content} from the pair with one batched
+ * base-row fetch.
+ */
 @Injectable()
 export class ContentService {
+  private readonly aggregate: CtiAggregate<ContentEntity, ContentBaseEntity>;
+
   constructor(
     @InjectRepository(ContentEntity)
     private readonly contentRepository: Repository<ContentEntity>,
+    @InjectRepository(ContentBaseEntity)
+    private readonly contentBaseRepository: Repository<ContentBaseEntity>,
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
     private readonly eventService: EventService,
-  ) {}
+    private readonly entityMutationService: EntityMutationService,
+  ) {
+    this.aggregate = new CtiAggregate({
+      detailRepository: this.contentRepository,
+      detailEntity: ContentEntity,
+      baseEntity: ContentBaseEntity,
+      baseRepository: this.contentBaseRepository,
+      linkedTable: 'content',
+      scopedWhere: (context, id) => ({
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user: { id: context.userId },
+        }),
+      }),
+    });
+  }
+
+  /**
+   * Composes egress content from detail rows plus one batched fetch of their
+   * base rows (the owners of title), preserving input order.
+   */
+  private composeMany(entities: ContentEntity[]): Promise<Content[]> {
+    return this.aggregate.composeMany(entities, (entity, base) => ContentEntity.toEgressType(entity, base));
+  }
+
+  /** Map a CreateContentDto onto ContentEntity columns (title stays on the base row). */
+  private toDetailFields(
+    item: CreateContentDto,
+    id: string,
+    context: UserServiceContext,
+    event?: { id: string },
+  ): ContentEntity {
+    return this.contentRepository.create({
+      id,
+      type: item.type,
+      text: item.text ?? undefined,
+      url: item.url ?? undefined,
+      mimetype: item.mimetype ?? undefined,
+      externalId: item.external_id ?? undefined,
+      sourceUrl: item.source_url ?? undefined,
+      sourceData: item.source_data ?? undefined,
+      sourceType: item.source_type ?? undefined,
+      sourceSystem: item.source_system ?? undefined,
+      sourceId: item.source_id ?? undefined,
+      event,
+      userId: context.userId,
+    });
+  }
 
   async create(
     context: UserServiceContext,
@@ -68,23 +132,31 @@ export class ContentService {
       dataArray.map(async (item) => {
         const id = item.id ?? uuidv7();
 
-        const content = await this.contentRepository.create({
-          ...item,
-          id,
-          externalId: item.external_id ?? undefined,
-          sourceUrl: item.source_url ?? undefined,
-          sourceData: item.source_data ?? undefined,
-          sourceType: item.source_type ?? undefined,
-          sourceSystem: item.source_system ?? undefined,
-          sourceId: item.source_id ?? undefined,
-          // Write the owner via the scalar FK column, not the `user` relation:
-          // ci.content.user_id and the relation map to the same DB column, and a
-          // relation-only write was being shadowed to NULL (see ContentEntity.userId).
-          // Mirrors EventService.createManyBatched.
-          userId: context.userId,
-        });
+        const contentResult = await this.contentRepository.manager.transaction(async (manager) => {
+          await manager.getRepository(ContentBaseEntity).save(
+            this.aggregate.createBaseRow(manager, {
+              id,
+              userId: context.userId,
+              name: item.title ?? null,
+              description: null,
+            }),
+          );
 
-        const contentResult = await this.contentRepository.save(content);
+          const detail = this.toDetailFields(item, id, context, item.event);
+          const saved = await manager.getRepository(ContentEntity).save(detail);
+
+          await this.entityMutationService.record({
+            userId: context.userId,
+            aggregateKind: 'entity',
+            aggregateId: id,
+            entityType: 'Content',
+            op: 'insert',
+            manager,
+            causation: { service: 'ContentService', path: 'create' },
+          });
+
+          return saved;
+        });
 
         if (emitCreated) {
           await this.eventService.send(ContentCreatedEvent, {
@@ -92,7 +164,10 @@ export class ContentService {
           });
         }
 
-        return ContentEntity.toEgressType(contentResult);
+        return ContentEntity.toEgressType(contentResult, {
+          name: item.title ?? null,
+          description: null,
+        });
       }),
     );
   }
@@ -146,7 +221,9 @@ export class ContentService {
     // bulk insert (replacing the old per-row resolveEventByTriple findOne).
     const eventIdByTriple = await this.resolveEventIdsByTriple(context, data);
 
-    const entities = data.map((item) => {
+    const withIds = data.map((item) => ({ ...item, id: item.id ?? uuidv7() }));
+
+    const entities = withIds.map((item) => {
       // Explicit event wins; otherwise auto-link by the shared provenance triple.
       let event = item.event;
       if (!event && item.source_type && item.source_id) {
@@ -162,53 +239,85 @@ export class ContentService {
         }
       }
 
-      return this.contentRepository.create({
-        ...item,
-        id: item.id ?? uuidv7(),
-        externalId: item.external_id ?? undefined,
-        sourceUrl: item.source_url ?? undefined,
-        sourceData: item.source_data ?? undefined,
-        sourceType: item.source_type ?? undefined,
-        sourceSystem: item.source_system ?? undefined,
-        sourceId: item.source_id ?? undefined,
-        event,
-        // Owner via the scalar FK column, not the `user` relation (see
-        // ContentEntity.userId — a relation-only write shadowed it to NULL).
-        userId: context.userId,
-      });
+      return this.toDetailFields(item, item.id, context, event);
     });
 
-    const results = await bulkInsertIdempotent({
-      repository: this.contentRepository,
-      entities,
-      primaryKey: 'id',
-      getTriple: (entity) => ({
-        sourceType: entity.sourceType,
-        sourceSystem: entity.sourceSystem,
-        sourceId: entity.sourceId,
-      }),
-      // content_source_triple_uniq is user-scoped (see migration
-      // 20260623120300); scope the existence + hydrate reads to the same user.
-      scope: { userId: context.userId },
-      conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-      tripleColumns: ['source_type', 'source_system', 'source_id'],
-      // Centralized refresh contract — currently empty, so conflicts stay
-      // DO NOTHING find-or-return.
-      conflictUpdateColumns: INGEST_REFRESH_COLUMNS.content,
+    // title is base-row data and never touches the detail table.
+    const ingressById = new Map(withIds.map((item) => [item.id, { title: item.title ?? null }]));
+
+    const { detailResults, bases } = await this.contentRepository.manager.transaction(async (manager) => {
+      const results = await bulkInsertIdempotent({
+        repository: this.contentRepository,
+        manager,
+        entities,
+        primaryKey: 'id',
+        getTriple: (entity) => ({
+          sourceType: entity.sourceType,
+          sourceSystem: entity.sourceSystem,
+          sourceId: entity.sourceId,
+        }),
+        // content_source_triple_uniq is user-scoped (see migration
+        // 20260623120300); scope the existence + hydrate reads to the same user.
+        scope: { userId: context.userId },
+        conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
+        tripleColumns: ['source_type', 'source_system', 'source_id'],
+        // Centralized refresh contract — currently empty, so conflicts stay
+        // DO NOTHING find-or-return.
+        conflictUpdateColumns: INGEST_REFRESH_COLUMNS.content,
+      });
+
+      const baseRows = results
+        .filter(({ inserted }) => inserted)
+        .map(({ entity }) => {
+          const ingress = ingressById.get(entity.id);
+          if (!ingress) {
+            throw new Error(`No ingress row for inserted content ${entity.id}`);
+          }
+
+          return this.aggregate.createBaseRow(manager, {
+            id: entity.id,
+            userId: context.userId,
+            name: ingress.title,
+            description: null,
+          });
+        });
+
+      await this.aggregate.insertBaseRows(manager, baseRows, '(entity_id) DO NOTHING');
+
+      for (const { entity, inserted } of results) {
+        if (inserted) {
+          await this.entityMutationService.record({
+            userId: context.userId,
+            aggregateKind: 'entity',
+            aggregateId: entity.id,
+            entityType: 'Content',
+            op: 'insert',
+            manager,
+            causation: { service: 'ContentService', path: 'createMany' },
+          });
+        }
+      }
+
+      const baseEntities = await this.aggregate.fetchBaseMap(
+        results.map(({ entity }) => entity.id),
+        manager,
+      );
+
+      return { detailResults: results, bases: baseEntities };
     });
 
     // Interactive single creates ask to index live (emitCreated:true); emit only
     // for rows genuinely inserted by THIS call so a re-send is a no-op. The bulk
     // importer leaves this false — its indexing is deferred to the backfill sweep.
     if (emitCreated) {
-      for (const { entity, inserted } of results) {
+      for (const { entity, inserted } of detailResults) {
         if (inserted) {
           await this.eventService.send(ContentCreatedEvent, { contentId: entity.id });
         }
       }
     }
 
-    return results.map(({ entity }) => ContentEntity.toEgressType(entity));
+    return detailResults.map(({ entity }) => ContentEntity.toEgressType(entity, bases.get(entity.id)));
   }
 
   /**
@@ -306,16 +415,15 @@ export class ContentService {
   }
 
   async findAll(context: UserServiceContext): Promise<Content[]> {
-    const result = await this.contentRepository.find({
+    const entities = await this.contentRepository.find({
       where: {
         user: {
           id: context.userId,
         },
       },
-      relations: ['user'],
     });
 
-    return result.map((entity) => ContentEntity.toEgressType(entity));
+    return this.composeMany(entities);
   }
 
   /**
@@ -332,7 +440,7 @@ export class ContentService {
 
     return {
       ...page,
-      entities: page.entities.map((entity) => ContentEntity.toEgressType(entity)),
+      entities: await this.composeMany(page.entities),
     };
   }
 
@@ -346,10 +454,15 @@ export class ContentService {
           },
         }),
       },
-      relations: ['user'],
     });
 
-    return result ? ContentEntity.toEgressType(result) : null;
+    if (result == null) {
+      return null;
+    }
+
+    const [content] = await this.composeMany([result]);
+
+    return content;
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Content | null)[]> {
@@ -362,10 +475,10 @@ export class ContentService {
           },
         }),
       },
-      relations: ['user'],
     });
 
-    const map = new Map(result.map((content) => [content.id, ContentEntity.toEgressType(content)]));
+    const contents = await this.composeMany(result);
+    const map = new Map(contents.map((content) => [content.id, content]));
 
     return ids.map((id) => map.get(id) ?? null);
   }
@@ -421,16 +534,16 @@ export class ContentService {
       .orderBy('content.created_at', 'ASC')
       .getMany();
 
+    const contents = await this.composeMany(entities);
     const contentsMap = new Map<string, Content[]>();
 
-    for (const entity of entities) {
-      const eventId = entity.event?.id;
+    for (const content of contents) {
+      const eventId = content.eventId;
       if (!eventId) {
         continue;
       }
 
       const list = contentsMap.get(eventId);
-      const content = ContentEntity.toEgressType(entity);
 
       if (list) {
         list.push(content);
@@ -487,10 +600,6 @@ export class ContentService {
       updateData.type = data.type;
     }
 
-    if (data.title !== undefined) {
-      updateData.title = data.title;
-    }
-
     if (data.text !== undefined) {
       updateData.text = data.text;
     }
@@ -519,50 +628,53 @@ export class ContentService {
       updateData.sourceData = data.source_data;
     }
 
-    const content = await this.contentRepository.findOne({
-      where: {
-        id: id,
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-      },
+    const basePatch: Partial<Pick<ContentBaseEntity, 'name'>> = {};
+    if (data.title !== undefined) {
+      basePatch.name = data.title;
+    }
+
+    const after = await this.aggregate.applyUpdate(context, id, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      detail: updateData as any,
+      base: basePatch,
     });
 
-    if (content) {
-      Object.assign(content, updateData);
-      await this.contentRepository.save(content);
-    } else {
+    if (!after) {
       return null;
     }
+
+    await this.entityMutationService.record({
+      userId: context.userId !== SYSTEM_USER ? context.userId : null,
+      aggregateKind: 'entity',
+      aggregateId: id,
+      entityType: 'Content',
+      op: 'update',
+      causation: { service: 'ContentService', path: 'update' },
+    });
 
     await this.eventService.send(ContentUpdatedEvent, {
       contentId: id,
     });
 
-    return this.findById(context, id);
+    const [content] = await this.composeMany([after]);
+
+    return content;
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const content = await this.contentRepository.findOne({
-      where: {
-        id: id,
-        ...(context.userId !== SYSTEM_USER && {
-          user: { id: context.userId },
-        }),
-      },
-    });
+    const removed = await this.aggregate.remove(context, id);
 
-    if (!content) {
+    if (!removed) {
       return false;
     }
 
-    await this.contentRepository.delete({
-      id,
-      ...(context.userId !== SYSTEM_USER && {
-        user: { id: context.userId },
-      }),
+    await this.entityMutationService.record({
+      userId: context.userId !== SYSTEM_USER ? context.userId : null,
+      aggregateKind: 'entity',
+      aggregateId: id,
+      entityType: 'Content',
+      op: 'delete',
+      causation: { service: 'ContentService', path: 'remove' },
     });
 
     await this.eventService.send(ContentRemovedEvent, {
@@ -573,48 +685,65 @@ export class ContentService {
   }
 
   async search(context: ServiceContext, filters: SearchContentDto): Promise<Content[]> {
-    const whereClause: Record<string, unknown> = {
-      ...(context.userId !== SYSTEM_USER && {
-        user: {
-          id: context.userId,
-        },
-      }),
-    };
+    // title lives on the CTI base row; join ci.entities so title filters and
+    // egress composition share one query.
+    let executable = this.contentRepository
+      .createQueryBuilder('content')
+      .innerJoin(
+        'ci.entities',
+        'base',
+        "base.entity_id = content.id AND base.entity_type = 'Content'",
+      )
+      .addSelect('base.name', 'base_name')
+      .addSelect('base.description', 'base_description');
+
+    if (context.userId !== SYSTEM_USER) {
+      executable = executable.andWhere('content.user_id = :userId', { userId: context.userId });
+    }
 
     if (filters.type !== undefined) {
-      whereClause.type = filters.type;
+      executable = executable.andWhere('content.type = :type', { type: filters.type });
     }
 
     if (filters.title !== undefined) {
-      whereClause.title = filters.title;
+      executable = executable.andWhere('base.name = :title', { title: filters.title });
     }
 
     if (filters.text !== undefined) {
-      whereClause.text = filters.text;
+      executable = executable.andWhere('content.text = :text', { text: filters.text });
     }
 
     if (filters.url !== undefined) {
-      whereClause.url = filters.url;
+      executable = executable.andWhere('content.url = :url', { url: filters.url });
     }
 
     if (filters.mimetype !== undefined) {
-      whereClause.mimetype = filters.mimetype;
+      executable = executable.andWhere('content.mimetype = :mimetype', { mimetype: filters.mimetype });
     }
 
     if (filters.external_id !== undefined) {
-      whereClause.externalId = filters.external_id;
+      executable = executable.andWhere('content.external_id = :externalId', {
+        externalId: filters.external_id,
+      });
     }
 
     if (filters.source_url !== undefined) {
-      whereClause.sourceUrl = filters.source_url;
+      executable = executable.andWhere('content.source_url = :sourceUrl', {
+        sourceUrl: filters.source_url,
+      });
     }
 
-    const entities = await this.contentRepository.find({
-      where: whereClause,
-      relations: ['user'],
-    });
+    const { entities, raw } = await executable.getRawAndEntities<{
+      base_name: string | null;
+      base_description: string | null;
+    }>();
 
-    return entities.map((entity) => ContentEntity.toEgressType(entity));
+    return entities.map((entity, index) =>
+      ContentEntity.toEgressType(entity, {
+        name: raw[index]?.base_name ?? null,
+        description: raw[index]?.base_description ?? null,
+      }),
+    );
   }
 
   /**

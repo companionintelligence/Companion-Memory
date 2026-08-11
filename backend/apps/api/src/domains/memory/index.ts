@@ -32,8 +32,10 @@ import { BaseEntity } from './entities/BaseEntity';
 import { CommunicationBaseEntity } from './entities/CommunicationBaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
 import { type Concept, ConceptEntity } from './entities/ConceptEntity';
+import { ContentBaseEntity } from './entities/ContentBaseEntity';
 import { ContentEntity } from './entities/ContentEntity';
 import { EntityMergeBlockEntity } from './entities/EntityMergeBlockEntity';
+import { EntityMutationEntity } from './entities/EntityMutationEntity';
 import { EventBaseEntity } from './entities/EventBaseEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
@@ -63,6 +65,7 @@ import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
 import { EntityMergeBlockService } from './services/EntityMergeBlockService';
+import { EntityMutationService } from './services/EntityMutationService';
 import { EventService } from './services/EventService';
 import { FileService } from './services/FileService';
 import { GraphEventService } from './services/GraphEventService';
@@ -88,6 +91,8 @@ import { UserContextService } from './services/UserContextService';
       CommunicationEntity,
       CommunicationBaseEntity,
       ContentEntity,
+      ContentBaseEntity,
+      EntityMutationEntity,
       EventEntity,
       EventBaseEntity,
       PersonEntity,
@@ -113,6 +118,7 @@ import { UserContextService } from './services/UserContextService';
     SearchNextModule,
   ],
   providers: [
+    EntityMutationService,
     CommunicationService,
     ContentService,
     EventService,
@@ -137,6 +143,7 @@ import { UserContextService } from './services/UserContextService';
   exports: [
     CommunicationService,
     ContentService,
+    EntityMutationService,
     EventService,
     GraphEventService,
     ItemService,
@@ -166,6 +173,7 @@ export {
   CommunicationEntity,
   CommunicationBaseEntity,
   ContentEntity,
+  ContentBaseEntity,
   EventEntity,
   EventBaseEntity,
   ItemEntity,
@@ -184,6 +192,7 @@ export {
 // Services
 export {
   ContentService,
+  EntityMutationService,
   EventService,
   CommunicationService,
   GraphEventService,
