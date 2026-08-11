@@ -24,6 +24,16 @@ export class EventEntity {
   @PrimaryColumn('uuid', { name: 'event_id' })
   id!: string;
 
+  /**
+   * CTI discriminator pin (migration 20260811061409): always 'Event' (distinct
+   * from the domain event_type below). Pairs with event_id in the composite FK
+   * to ci.entities(entity_id, entity_type) so a detail row can never point at
+   * a base row of another type. DEFAULTed and CHECKed in the schema; never
+   * written by the application.
+   */
+  @Column({ type: 'text', name: 'entity_type', default: 'Event', insert: false, update: false })
+  entityType!: string;
+
   // title/description live ONLY on the CTI base row (ci.entities.name/
   // description, see EventBaseEntity); the egress type composes them back on
   // via toEgressType.
@@ -202,7 +212,7 @@ export class EventEntity {
   }
 }
 
-export type Event = Readonly<Omit<EventEntity, 'user'>> & {
+export type Event = Readonly<Omit<EventEntity, 'user' | 'entityType'>> & {
   // Owned by the CTI base row (ci.entities); composed on egress.
   readonly title: string | null;
   readonly description: string | null;

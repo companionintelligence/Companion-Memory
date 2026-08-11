@@ -24,6 +24,15 @@ export class ItemEntity {
   @PrimaryColumn('uuid', { name: 'object_id' })
   id!: string;
 
+  /**
+   * CTI discriminator pin (migration 20260811061402): always 'Item'. Pairs
+   * with object_id in the composite FK to ci.entities(entity_id, entity_type)
+   * so a detail row can never point at a base row of another type. DEFAULTed
+   * and CHECKed in the schema; never written by the application.
+   */
+  @Column({ type: 'text', name: 'entity_type', default: 'Item', insert: false, update: false })
+  entityType!: string;
+
   // name/description live ONLY on the CTI base row (ci.entities, see
   // ItemBaseEntity); the egress type composes them back on via toEgressType.
 
@@ -261,7 +270,7 @@ export class ItemEntity {
   }
 }
 
-export type Item = Readonly<Omit<ItemEntity, 'loadMetadataProperties'>> & {
+export type Item = Readonly<Omit<ItemEntity, 'loadMetadataProperties' | 'entityType'>> & {
   // Owned by the CTI base row (ci.entities); composed on egress.
   readonly name: string | null;
   readonly description: string | null;

@@ -34,7 +34,15 @@
 ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete;
 ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_insert;
 
-DELETE FROM ci.entities WHERE entity_type = 'Item';
+-- Scoped by provenance: only detail-table mirrors are rebuilt. 'Item'-typed
+-- rows created by graph ingest (linked_table 'import:<source>') are real graph
+-- entities with their own ids and relationships, not inventory mirrors, and
+-- must survive the rebuild. The entity_id subselect additionally clears any
+-- row that would collide with the re-insert below regardless of provenance.
+DELETE FROM ci.entities
+WHERE entity_type = 'Item'
+  AND (linked_table = 'inventory'
+       OR entity_id IN (SELECT object_id FROM ci.inventory));
 
 INSERT INTO ci.entities
   (entity_id, entity_type, name, description, properties,
@@ -48,14 +56,28 @@ FROM ci.inventory i;
 ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_insert;
 ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete;
 
--- 2. The CTI invariant: no detail row without its base row.
+-- 2. The CTI invariant: no detail row without its base row, AND the base row
+--    must carry the matching discriminator. The FK target is the composite
+--    (entity_id, entity_type), backed by the UNIQUE below, and the detail
+--    side pins its half with a constant CHECKed column, so a detail row can
+--    never point at a base row of another type (the application's ON CONFLICT
+--    DO NOTHING guards would otherwise paper over such a mismatch silently).
+--    The pinned column is DEFAULTed and CHECKed, so no writer names it.
+--
 --    DEFERRABLE INITIALLY DEFERRED so bulk ingest may insert detail-then-base
 --    inside one transaction; ON DELETE CASCADE so deleting the base row deletes
 --    the aggregate as one unit (ItemService.remove deletes the base; the detail
 --    follows).
+ALTER TABLE ci.entities
+  ADD CONSTRAINT entities_entity_id_entity_type_key UNIQUE (entity_id, entity_type);
+
+ALTER TABLE ci.inventory
+  ADD COLUMN entity_type text NOT NULL DEFAULT 'Item'
+    CONSTRAINT inventory_entity_type_check CHECK (entity_type = 'Item');
+
 ALTER TABLE ci.inventory
   ADD CONSTRAINT inventory_object_id_entities_fk
-  FOREIGN KEY (object_id) REFERENCES ci.entities(entity_id)
+  FOREIGN KEY (object_id, entity_type) REFERENCES ci.entities(entity_id, entity_type)
   ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
 
 -- 3. Normalize: the base row owns name/description now; the dead mirror column

@@ -35,16 +35,28 @@
 ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete;
 ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_insert;
 
-DELETE FROM ci.entities WHERE entity_type = 'Communication';
+-- Scoped by provenance: only detail-table mirrors are rebuilt.
+-- 'Communication'-typed rows created by graph ingest (linked_table
+-- 'import:<source>') are real graph entities with their own ids and
+-- relationships, not ci.communications mirrors, and must survive the rebuild.
+-- The entity_id subselect additionally clears any row that would collide with
+-- the re-insert below regardless of provenance.
+DELETE FROM ci.entities
+WHERE entity_type = 'Communication'
+  AND (linked_table = 'communications'
+       OR entity_id IN (SELECT id FROM ci.communications));
 
 INSERT INTO ci.entities
   (entity_id, entity_type, name, description, properties,
    owner_user_id, linked_table, linked_id, created_at, updated_at)
 SELECT
   c.id, 'Communication',
+  -- NULLIF(trim(...)) on every branch: importers commonly store no-subject
+  -- messages as subject = '' (not NULL), which must fall through to the next
+  -- branch instead of producing a blank label.
   COALESCE(
-    c.subject,
-    c.preview,
+    NULLIF(trim(c.subject), ''),
+    NULLIF(trim(c.preview), ''),
     NULLIF(
       CASE
         WHEN length(regexp_replace(c.content, '\s+', ' ', 'g')) > 140
@@ -62,13 +74,22 @@ FROM ci.communications c;
 ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_insert;
 ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete;
 
--- 2. The CTI invariant: no detail row without its base row.
+-- 2. The CTI invariant: no detail row without its base row, AND the base row
+--    must carry the matching discriminator: the FK target is the composite
+--    (entity_id, entity_type), backed by entities_entity_id_entity_type_key
+--    from the inventory conversion (20260811061402), with the detail half
+--    pinned by a constant CHECKed column no writer names.
+--
 --    DEFERRABLE INITIALLY DEFERRED so bulk ingest may insert detail-then-base
 --    inside one transaction; ON DELETE CASCADE so deleting the base row deletes
 --    the aggregate as one unit.
 ALTER TABLE ci.communications
+  ADD COLUMN entity_type text NOT NULL DEFAULT 'Communication'
+    CONSTRAINT communications_entity_type_check CHECK (entity_type = 'Communication');
+
+ALTER TABLE ci.communications
   ADD CONSTRAINT communications_id_entities_fk
-  FOREIGN KEY (id) REFERENCES ci.entities(entity_id)
+  FOREIGN KEY (id, entity_type) REFERENCES ci.entities(entity_id, entity_type)
   ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
 
 -- migrate:down
