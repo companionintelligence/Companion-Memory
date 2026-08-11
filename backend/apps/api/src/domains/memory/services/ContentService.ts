@@ -21,7 +21,7 @@ import { EventEntity } from '../entities/EventEntity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
-import { EntityMutationService } from './EntityMutationService';
+import { GraphDeltaWriter } from './GraphDeltaWriter';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
 type Triple = { sourceType: string; sourceSystem: string | null; sourceId: string };
@@ -65,7 +65,7 @@ export class ContentService {
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
     private readonly eventService: EventService,
-    private readonly entityMutationService: EntityMutationService,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.contentRepository,
@@ -145,14 +145,14 @@ export class ContentService {
           const detail = this.toDetailFields(item, id, context, item.event);
           const saved = await manager.getRepository(ContentEntity).save(detail);
 
-          await this.entityMutationService.record({
-            userId: context.userId,
-            aggregateKind: 'entity',
-            aggregateId: id,
+          await this.graphDeltaWriter.entityCreated({
+            entityId: id,
             entityType: 'Content',
-            op: 'insert',
+            name: item.title ?? null,
+            ownerUserId: context.userId,
+            changeSource: 'ContentService.create',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
             manager,
-            causation: { service: 'ContentService', path: 'create' },
           });
 
           return saved;
@@ -284,19 +284,30 @@ export class ContentService {
 
       await this.aggregate.insertBaseRows(manager, baseRows, '(entity_id) DO NOTHING');
 
-      for (const { entity, inserted } of results) {
-        if (inserted) {
-          await this.entityMutationService.record({
-            userId: context.userId,
-            aggregateKind: 'entity',
-            aggregateId: entity.id,
-            entityType: 'Content',
-            op: 'insert',
-            manager,
-            causation: { service: 'ContentService', path: 'createMany' },
-          });
-        }
-      }
+      await this.graphDeltaWriter.recordMany(
+        results
+          .filter(({ inserted }) => inserted)
+          .map(({ entity }) => {
+            const ingress = ingressById.get(entity.id);
+
+            return {
+              nodeType: 'entity' as const,
+              changeType: 'created' as const,
+              entityId: entity.id,
+              entityType: 'Content',
+              ownerUserId: context.userId,
+              changeSource: 'ContentService.createMany',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              changedFields: {
+                name: { new: ingress?.title ?? null },
+                description: { new: null },
+                entity_type: { new: 'Content' },
+                properties: { new: {} },
+              },
+            };
+          }),
+        manager,
+      );
 
       const baseEntities = await this.aggregate.fetchBaseMap(
         results.map(({ entity }) => entity.id),
@@ -633,24 +644,47 @@ export class ContentService {
       basePatch.name = data.title;
     }
 
-    const after = await this.aggregate.applyUpdate(context, id, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      detail: updateData as any,
-      base: basePatch,
-    });
+    const after = await this.aggregate.applyUpdate(
+      context,
+      id,
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail: updateData as any,
+        base: basePatch,
+      },
+      {
+        withinTx: async ({ manager }) => {
+          const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
+          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {};
+          if (data.title !== undefined) {
+            changedFields.name = { new: data.title };
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            changedFields.detail_updated = { new: true };
+          }
+
+          if (Object.keys(changedFields).length === 0) {
+            return;
+          }
+
+          await this.graphDeltaWriter.entityUpdated({
+            entityId: id,
+            entityType: 'Content',
+            name: base?.name ?? data.title ?? null,
+            changedFields,
+            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+            changeSource: 'ContentService.update',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+            manager,
+          });
+        },
+      },
+    );
 
     if (!after) {
       return null;
     }
-
-    await this.entityMutationService.record({
-      userId: context.userId !== SYSTEM_USER ? context.userId : null,
-      aggregateKind: 'entity',
-      aggregateId: id,
-      entityType: 'Content',
-      op: 'update',
-      causation: { service: 'ContentService', path: 'update' },
-    });
 
     await this.eventService.send(ContentUpdatedEvent, {
       contentId: id,
@@ -662,20 +696,24 @@ export class ContentService {
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const removed = await this.aggregate.remove(context, id);
+    const removed = await this.aggregate.remove(context, id, {
+      withinTx: async ({ manager, before }) => {
+        const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
+        await this.graphDeltaWriter.entityDeleted({
+          entityId: id,
+          entityType: 'Content',
+          name: base?.name ?? null,
+          ownerUserId: context.userId !== SYSTEM_USER ? context.userId : before.user?.id,
+          changeSource: 'ContentService.remove',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+      },
+    });
 
     if (!removed) {
       return false;
     }
-
-    await this.entityMutationService.record({
-      userId: context.userId !== SYSTEM_USER ? context.userId : null,
-      aggregateKind: 'entity',
-      aggregateId: id,
-      entityType: 'Content',
-      op: 'delete',
-      causation: { service: 'ContentService', path: 'remove' },
-    });
 
     await this.eventService.send(ContentRemovedEvent, {
       contentId: id,

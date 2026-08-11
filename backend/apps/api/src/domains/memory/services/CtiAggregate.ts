@@ -1,4 +1,11 @@
-import { In, type DeepPartial, type FindOptionsWhere, type ObjectLiteral, type Repository } from 'typeorm';
+import {
+  In,
+  type DeepPartial,
+  type EntityManager,
+  type FindOptionsWhere,
+  type ObjectLiteral,
+  type Repository,
+} from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 
 import type { ServiceContext } from '@ci/common/context';
@@ -54,12 +61,23 @@ interface CtiAggregateOptions<TDetail extends ObjectLiteral & { id: string }, TB
  * repositories).
  *
  * The write helpers ({@link applyUpdate}, {@link remove}) run inside a
- * transaction and load the real before-state. Like EntityService's helpers,
- * they are the seam where service-boundary mutation recording will plug in;
- * each is one `record()` call away from an audited write path. Entity-specific
- * concerns (idempotency, label derivation, domain events) stay in the composing
- * service.
+ * transaction and load the real before-state. Pass {@link CtiWriteHooks} to
+ * record `ci.graph_deltas` in the same transaction via {@link GraphDeltaWriter}.
+ * Entity-specific concerns (idempotency, label derivation, domain events) stay
+ * in the composing service.
  */
+export interface CtiWriteHooks<TDetail> {
+  /**
+   * Runs inside the write transaction after detail/base patches (update) or
+   * immediately before the base-row delete (remove), so the trail shares the tx.
+   */
+  withinTx?: (args: {
+    manager: EntityManager;
+    before: TDetail;
+    after: TDetail | null;
+  }) => Promise<void>;
+}
+
 export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase extends LinkedBase> {
   constructor(private readonly options: CtiAggregateOptions<TDetail, TBase>) {}
 
@@ -150,6 +168,7 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       detail?: QueryDeepPartialEntity<TDetail>;
       base?: QueryDeepPartialEntity<TBase> | ((after: TDetail) => QueryDeepPartialEntity<TBase> | null);
     },
+    hooks?: CtiWriteHooks<TDetail>,
   ): Promise<TDetail | null> {
     const where = this.options.scopedWhere(context, id);
 
@@ -195,7 +214,12 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
         }
       }
 
-      return repository.findOne({ where });
+      const reloaded = await repository.findOne({ where });
+      if (hooks?.withinTx) {
+        await hooks.withinTx({ manager, before, after: reloaded });
+      }
+
+      return reloaded;
     });
   }
 
@@ -206,13 +230,21 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
    *
    * @returns `true` if a matching aggregate was found and removed.
    */
-  async remove(context: ServiceContext, id: string): Promise<boolean> {
+  async remove(
+    context: ServiceContext,
+    id: string,
+    hooks?: CtiWriteHooks<TDetail>,
+  ): Promise<boolean> {
     const where = this.options.scopedWhere(context, id);
 
     return this.options.detailRepository.manager.transaction(async (manager) => {
       const before = await manager.getRepository(this.options.detailEntity).findOne({ where });
       if (!before) {
         return false;
+      }
+
+      if (hooks?.withinTx) {
+        await hooks.withinTx({ manager, before, after: null });
       }
 
       await manager.getRepository(this.options.baseEntity).delete({ id } as FindOptionsWhere<TBase>);

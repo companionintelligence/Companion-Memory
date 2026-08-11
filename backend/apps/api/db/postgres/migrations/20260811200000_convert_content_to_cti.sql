@@ -7,10 +7,8 @@
 -- (content.id = entities.entity_id), base row is the SOLE owner of title
 -- (entities.name). Detail keeps text/url/mimetype/provenance/event_id.
 --
--- See CI-Server#1941.
-
-ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete;
-ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_insert;
+-- Bulk rebuild is silent for graph_deltas (app writer / no triggers after
+-- 20260811210000). See CI-Server#1941.
 
 -- Rebuild only detail-table mirrors. Graph-ingest 'Content' rows with other
 -- linked_table provenance keep their own ids/relationships.
@@ -34,9 +32,6 @@ SELECT
   c.created_at,
   c.updated_at
 FROM ci.content c;
-
-ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_insert;
-ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete;
 
 ALTER TABLE ci.content
   ADD COLUMN entity_type text NOT NULL DEFAULT 'Content'

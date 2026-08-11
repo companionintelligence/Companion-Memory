@@ -15,6 +15,7 @@ import { type Item, ItemEntity } from '../entities/ItemEntity';
 import type { CreateItemDto, UpdateItemDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
+import { GraphDeltaWriter } from './GraphDeltaWriter';
 
 /**
  * Spanning-aggregate service for the inventory CTI split: an item is ONE
@@ -37,6 +38,7 @@ export class ItemService {
     private readonly itemBaseRepository: Repository<ItemBaseEntity>,
     private readonly logger: LoggerService,
     private readonly eventService: EventService,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {
     this.logger.setContext(ItemService.name);
     this.aggregate = new CtiAggregate({
@@ -97,7 +99,19 @@ export class ItemService {
         }),
       );
 
-      return manager.getRepository(ItemEntity).save(detail);
+      const saved = await manager.getRepository(ItemEntity).save(detail);
+      await this.graphDeltaWriter.entityCreated({
+        entityId: id,
+        entityType: 'Item',
+        name: data.name,
+        description: data.description ?? null,
+        ownerUserId: context.userId,
+        changeSource: 'ItemService.create',
+        changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+        manager,
+      });
+
+      return saved;
     });
 
     await this.eventService.send(ItemCreatedEvent, {
@@ -197,6 +211,31 @@ export class ItemService {
       // ON CONFLICT (entity_id) DO NOTHING guards the theoretical case of a
       // base row already present for this uuid.
       await this.aggregate.insertBaseRows(manager, baseRows, '(entity_id) DO NOTHING');
+
+      await this.graphDeltaWriter.recordMany(
+        results
+          .filter(({ inserted }) => inserted)
+          .map(({ entity }) => {
+            const ingress = ingressById.get(entity.id);
+
+            return {
+              nodeType: 'entity' as const,
+              changeType: 'created' as const,
+              entityId: entity.id,
+              entityType: 'Item',
+              ownerUserId: context.userId,
+              changeSource: 'ItemService.createMany',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              changedFields: {
+                name: { new: ingress?.name ?? null },
+                description: { new: ingress?.description ?? null },
+                entity_type: { new: 'Item' },
+                properties: { new: {} },
+              },
+            };
+          }),
+        manager,
+      );
 
       // One read covers egress composition for inserted AND pre-existing rows
       // (a deduped triple resolves to a row whose base values this batch never
@@ -380,11 +419,36 @@ export class ItemService {
     }
 
     // One transaction across both halves of the aggregate (see CtiAggregate).
-    const after = await this.aggregate.applyUpdate(context, id, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      detail: updateData as any, // TypeORM will handle JSON serialization
-      base: basePatch,
-    });
+    const after = await this.aggregate.applyUpdate(
+      context,
+      id,
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail: updateData as any, // TypeORM will handle JSON serialization
+        base: basePatch,
+      },
+      {
+        withinTx: async ({ manager }) => {
+          const base = await manager.getRepository(ItemBaseEntity).findOne({ where: { id } });
+          await this.graphDeltaWriter.entityUpdated({
+            entityId: id,
+            entityType: 'Item',
+            name: base?.name ?? null,
+            changedFields: {
+              ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
+              ...(basePatch.description !== undefined
+                ? { description: { new: basePatch.description } }
+                : {}),
+              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
+            },
+            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+            changeSource: 'ItemService.update',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+            manager,
+          });
+        },
+      },
+    );
 
     if (!after) {
       return null;
@@ -404,7 +468,20 @@ export class ItemService {
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     // Authorized load + base-row delete (the FK cascade removes the detail);
     // see CtiAggregate.remove.
-    const removed = await this.aggregate.remove(context, id);
+    const removed = await this.aggregate.remove(context, id, {
+      withinTx: async ({ manager }) => {
+        const base = await manager.getRepository(ItemBaseEntity).findOne({ where: { id } });
+        await this.graphDeltaWriter.entityDeleted({
+          entityId: id,
+          entityType: 'Item',
+          name: base?.name ?? null,
+          ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+          changeSource: 'ItemService.remove',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+      },
+    });
 
     if (!removed) {
       return false;

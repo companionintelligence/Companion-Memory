@@ -83,19 +83,13 @@ export class IngestResetService {
       // real graph entities, not mirrors of the truncated tables, and must
       // survive the reset.
       //
-      // The graph-delta delete trigger is disabled around the DELETE, matching
-      // the CTI migrations' bulk rebuilds: a maintenance reset is not a graph
-      // change, and leaving it on would write one ci.graph_deltas row per
-      // deleted entity (communications scale: ~0.5M+) inside this transaction
-      // and then narrate the reset to the user in the next summary. A rollback
-      // restores the trigger state along with everything else.
-      await manager.query(`ALTER TABLE ci.entities DISABLE TRIGGER entities_graph_delta_delete`);
+      // Bulk CTI base delete — no GraphDeltaWriter call (maintenance reset is
+      // not a user-visible graph change; writers only fire on app domain paths).
       await manager.query(
         `DELETE FROM ci.entities
          WHERE entity_type IN ('Item', 'Event', 'Communication')
            AND linked_table IN ('inventory', 'events', 'communications')`,
       );
-      await manager.query(`ALTER TABLE ci.entities ENABLE TRIGGER entities_graph_delta_delete`);
 
       // The ci_search index tables carry no FK edges — plain truncates, same as
       // OrphanCleanupService.truncateSearchIndex but inside THIS transaction.

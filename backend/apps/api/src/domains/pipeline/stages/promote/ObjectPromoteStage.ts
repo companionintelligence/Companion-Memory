@@ -642,11 +642,33 @@ export class ObjectPromoteStage implements Stage {
         const nameBySourceId = new Map(objects.map((object) => [object.eventId, object.name]));
 
         await manager.query(
-          `INSERT INTO ci.entities
-             (entity_id, entity_type, name, properties, owner_user_id, linked_table, linked_id)
-           SELECT u.object_id, 'Item', u.name, '{}'::jsonb, $1::uuid, 'inventory', u.object_id
-             FROM unnest($2::uuid[], $3::text[]) AS u(object_id, name)
-           ON CONFLICT (entity_id) DO UPDATE SET name = excluded.name, updated_at = now()`,
+          `WITH upserted AS (
+             INSERT INTO ci.entities
+               (entity_id, entity_type, name, properties, owner_user_id, linked_table, linked_id)
+             SELECT u.object_id, 'Item', u.name, '{}'::jsonb, $1::uuid, 'inventory', u.object_id
+               FROM unnest($2::uuid[], $3::text[]) AS u(object_id, name)
+             ON CONFLICT (entity_id) DO UPDATE SET name = excluded.name, updated_at = now()
+             RETURNING entity_id, entity_type, name, description, properties, owner_user_id,
+                       (xmax = 0) AS inserted
+           )
+           INSERT INTO ci.graph_deltas (
+             entity_id, node_type, entity_type, change_type, changed_fields,
+             change_source, owner_user_id
+           )
+           SELECT
+             u.entity_id,
+             'entity',
+             u.entity_type,
+             CASE WHEN u.inserted THEN 'created' ELSE 'updated' END,
+             jsonb_build_object(
+               'name', jsonb_build_object('new', u.name),
+               'description', jsonb_build_object('new', u.description),
+               'entity_type', jsonb_build_object('new', u.entity_type),
+               'properties', jsonb_build_object('new', u.properties)
+             ),
+             'ObjectPromoteStage',
+             u.owner_user_id
+           FROM upserted u`,
           [
             userId,
             rows.map((row) => row.object_id),

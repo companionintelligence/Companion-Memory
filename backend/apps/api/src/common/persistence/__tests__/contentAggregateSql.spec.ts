@@ -19,8 +19,10 @@ describe('buildContentAggregateFold', () => {
 
     expect(sql).toContain("INSERT INTO ci.content");
     expect(sql).toContain("INSERT INTO ci.entities");
+    expect(sql).toContain("INSERT INTO ci.graph_deltas");
     expect(sql).toContain("'Content'");
     expect(sql).toContain("linked_table");
+    expect(sql).toContain("contentAggregateFold");
     expect(sql).not.toMatch(/INSERT INTO ci\.content\s*\([^)]*\btitle\b/);
     expect(params).toContain('Docs');
     expect(params).toContain('web-page');

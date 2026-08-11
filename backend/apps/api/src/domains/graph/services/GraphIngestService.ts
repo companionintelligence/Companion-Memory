@@ -6,6 +6,7 @@ import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
+import { GraphDeltaWriter } from '@ci/domains/memory';
 
 import { NodeEntity } from '../entities/NodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
@@ -142,6 +143,7 @@ export class GraphIngestService {
     private readonly relationshipRepository: Repository<RelationshipEntity>,
     private readonly entityIdentifierService: EntityIdentifierService,
     private readonly logger: LoggerService,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {
     this.logger.setContext(GraphIngestService.name);
   }
@@ -397,6 +399,41 @@ export class GraphIngestService {
             );
           }
         }
+
+        await this.graphDeltaWriter.recordMany(
+          toWrite.flatMap((p) => {
+            const ck = coordKey(p.entityType, p.linkedTable, p.linkedId);
+            const entityId = idByCoord.get(ck);
+            if (!entityId) {
+              return [];
+            }
+
+            const current = existingByCoord.get(ck);
+
+            return [
+              {
+                nodeType: 'entity' as const,
+                changeType: (current ? 'updated' : 'created') as 'created' | 'updated',
+                entityId,
+                entityType: p.entityType,
+                ownerUserId: ownerId,
+                changeSource: 'GraphIngestService.upsertEntities',
+                changedFields: {
+                  name: current
+                    ? { old: current.name, new: p.row.name ?? null }
+                    : { new: p.row.name ?? null },
+                  description: current
+                    ? { old: current.description, new: p.row.description ?? null }
+                    : { new: p.row.description ?? null },
+                  entity_type: { new: p.entityType },
+                  properties: current
+                    ? { old: current.properties, new: p.row.properties ?? {} }
+                    : { new: p.row.properties ?? {} },
+                },
+              },
+            ];
+          }),
+        );
       }
 
       // 3. Re-resolve any coordinate still unmapped: a concurrent writer won the
@@ -591,6 +628,25 @@ export class GraphIngestService {
             .onConflict('(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING')
             .execute();
         }
+
+        await this.graphDeltaWriter.recordMany(
+          toInsert.map(({ row }) => ({
+            nodeType: 'relationship' as const,
+            changeType: 'created' as const,
+            relationshipId: row.id,
+            relationshipType: row.type,
+            fromEntityId: row.fromNodeId,
+            toEntityId: row.toNodeId,
+            ownerUserId: ownerId,
+            changeSource: 'GraphIngestService.upsertRelationships',
+            changedFields: {
+              relationship_type: { new: row.type },
+              from_entity_id: { new: row.fromNodeId },
+              to_entity_id: { new: row.toNodeId },
+              properties: { new: row.properties ?? {} },
+            },
+          })),
+        );
       }
     } catch (err) {
       // A batch-level failure can't be pinned to one edge — report it against

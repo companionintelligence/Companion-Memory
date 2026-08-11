@@ -35,7 +35,6 @@ import { type Concept, ConceptEntity } from './entities/ConceptEntity';
 import { ContentBaseEntity } from './entities/ContentBaseEntity';
 import { ContentEntity } from './entities/ContentEntity';
 import { EntityMergeBlockEntity } from './entities/EntityMergeBlockEntity';
-import { EntityMutationEntity } from './entities/EntityMutationEntity';
 import { EventBaseEntity } from './entities/EventBaseEntity';
 import { type Event, EventEntity } from './entities/EventEntity';
 import { FileEntity } from './entities/FileEntity';
@@ -65,9 +64,9 @@ import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
 import { EntityMergeBlockService } from './services/EntityMergeBlockService';
-import { EntityMutationService } from './services/EntityMutationService';
 import { EventService } from './services/EventService';
 import { FileService } from './services/FileService';
+import { GraphDeltaWriter } from './services/GraphDeltaWriter';
 import { GraphEventService } from './services/GraphEventService';
 import { GraphQueryService } from './services/GraphQueryService';
 import { GraphReadService } from './services/GraphReadService';
@@ -92,7 +91,6 @@ import { UserContextService } from './services/UserContextService';
       CommunicationBaseEntity,
       ContentEntity,
       ContentBaseEntity,
-      EntityMutationEntity,
       EventEntity,
       EventBaseEntity,
       PersonEntity,
@@ -118,7 +116,7 @@ import { UserContextService } from './services/UserContextService';
     SearchNextModule,
   ],
   providers: [
-    EntityMutationService,
+    GraphDeltaWriter,
     CommunicationService,
     ContentService,
     EventService,
@@ -143,7 +141,7 @@ import { UserContextService } from './services/UserContextService';
   exports: [
     CommunicationService,
     ContentService,
-    EntityMutationService,
+    GraphDeltaWriter,
     EventService,
     GraphEventService,
     ItemService,
@@ -192,7 +190,7 @@ export {
 // Services
 export {
   ContentService,
-  EntityMutationService,
+  GraphDeltaWriter,
   EventService,
   CommunicationService,
   GraphEventService,

@@ -62,6 +62,12 @@ function makeHarness() {
     logger as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     { transaction: jest.fn(), getRepository: jest.fn() } as any,
+    {
+      entityCreated: jest.fn(async () => undefined),
+      entityUpdated: jest.fn(async () => undefined),
+      entityDeleted: jest.fn(async () => undefined),
+      recordMany: jest.fn(async () => undefined),
+    } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   );
 
   return { service, repository, baseRepo, baseInsert, send };

@@ -4,9 +4,9 @@
  * The READ side of `ci.graph_deltas`: history of what changed in the knowledge
  * graph, served to the API and to the summary app.
  *
- * Preferred trail going forward is `ci.entity_mutations` (app-written via
- * {@link EntityMutationService} in MemoryModule) — see #1941. graph_deltas
- * triggers remain until insight readers cut over.
+ * Writers live in MemoryModule ({@link GraphDeltaWriter}) — app code inserts
+ * into `ci.graph_deltas` in the same transaction as domain writes. DB triggers
+ * were removed (20260811210000). See #1941 / PR #1942.
  */
 
 import { Module } from '@nestjs/common';

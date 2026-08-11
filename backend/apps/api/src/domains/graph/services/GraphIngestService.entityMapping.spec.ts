@@ -42,6 +42,12 @@ function makeService(opts: { existingKeys?: string[]; failEntities?: boolean } =
     entityIdentifierService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
+    {
+      entityCreated: jest.fn(async () => undefined),
+      entityUpdated: jest.fn(async () => undefined),
+      entityDeleted: jest.fn(async () => undefined),
+      recordMany: jest.fn(async () => undefined),
+    } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   );
 
   return { service, node };

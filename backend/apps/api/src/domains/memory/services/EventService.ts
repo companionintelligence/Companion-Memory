@@ -14,6 +14,7 @@ import { EventEntity, Event } from '../entities/EventEntity';
 import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
+import { GraphDeltaWriter } from './GraphDeltaWriter';
 
 interface Options {
   limit?: number;
@@ -103,6 +104,7 @@ export class EventService {
     private readonly eventBaseRepository: Repository<EventBaseEntity>,
     private readonly signallingEventService: SignallingEventService,
     private readonly dataSource: DataSource,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -272,7 +274,19 @@ export class EventService {
           },
         });
 
-        return manager.getRepository(EventEntity).save(event);
+        const saved = await manager.getRepository(EventEntity).save(event);
+        await this.graphDeltaWriter.entityCreated({
+          entityId: id,
+          entityType: 'Event',
+          name: item.title,
+          description: item.description ?? null,
+          ownerUserId: context.userId,
+          changeSource: 'EventService.create',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+
+        return saved;
       });
     } catch (err) {
       // Lost a race to a concurrent insert of the same triple (the partial-
@@ -383,6 +397,31 @@ export class EventService {
       // ON CONFLICT (entity_id) DO NOTHING guards the theoretical case of a
       // base row already present for this uuid.
       await this.aggregate.insertBaseRows(manager, baseRows, '(entity_id) DO NOTHING');
+
+      await this.graphDeltaWriter.recordMany(
+        detailResults
+          .filter(({ inserted }) => inserted)
+          .map(({ entity }) => {
+            const ingress = ingressById.get(entity.id);
+
+            return {
+              nodeType: 'entity' as const,
+              changeType: 'created' as const,
+              entityId: entity.id,
+              entityType: 'Event',
+              ownerUserId: context.userId,
+              changeSource: 'EventService.createMany',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              changedFields: {
+                name: { new: ingress?.title ?? null },
+                description: { new: ingress?.description ?? null },
+                entity_type: { new: 'Event' },
+                properties: { new: {} },
+              },
+            };
+          }),
+        manager,
+      );
 
       // One read covers egress composition for inserted AND pre-existing rows
       // (a deduped triple resolves to a row whose base values this batch never
@@ -683,11 +722,36 @@ export class EventService {
     // One transaction across both halves of the aggregate (see CtiAggregate).
     // A title/description-only patch still bumps ci.events.updated_at so
     // detail-side incremental consumers see the change.
-    const updated = await this.aggregate.applyUpdate(context, id, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      detail: updateData as any, // TypeORM will handle JSON serialization
-      base: basePatch,
-    });
+    const updated = await this.aggregate.applyUpdate(
+      context,
+      id,
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail: updateData as any, // TypeORM will handle JSON serialization
+        base: basePatch,
+      },
+      {
+        withinTx: async ({ manager }) => {
+          const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
+          await this.graphDeltaWriter.entityUpdated({
+            entityId: id,
+            entityType: 'Event',
+            name: base?.name ?? null,
+            changedFields: {
+              ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
+              ...(basePatch.description !== undefined
+                ? { description: { new: basePatch.description } }
+                : {}),
+              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
+            },
+            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+            changeSource: 'EventService.update',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+            manager,
+          });
+        },
+      },
+    );
 
     if (!updated) {
       return null;
@@ -709,7 +773,20 @@ export class EventService {
     // ON DELETE CASCADE removes the detail in the same statement. Downstream
     // FK semantics are unchanged (capture_events/observations/receipts SET
     // NULL; hbpe.l1_event_cluster still RESTRICTs a clustered event).
-    const removed = await this.aggregate.remove(context, id);
+    const removed = await this.aggregate.remove(context, id, {
+      withinTx: async ({ manager }) => {
+        const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
+        await this.graphDeltaWriter.entityDeleted({
+          entityId: id,
+          entityType: 'Event',
+          name: base?.name ?? null,
+          ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+          changeSource: 'EventService.remove',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+      },
+    });
 
     if (!removed) {
       return false;

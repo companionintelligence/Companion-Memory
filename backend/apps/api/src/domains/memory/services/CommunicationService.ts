@@ -21,6 +21,7 @@ import { CommunicationCreatedEvent, CommunicationUpdatedEvent, CommunicationRemo
 import { CreateCommunicationDto, UpdateCommunicationDto } from '../types';
 
 import { CtiAggregate, type RepositoryProvider } from './CtiAggregate';
+import { GraphDeltaWriter } from './GraphDeltaWriter';
 
 interface Options {
   limit?: number;
@@ -60,6 +61,7 @@ export class CommunicationService {
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
     private readonly dataSource: DataSource,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {
     this.logger.setContext(CommunicationService.name);
     this.aggregate = new CtiAggregate({
@@ -147,7 +149,19 @@ export class CommunicationService {
     const communicationResult = await this.communicationRepository.manager.transaction(async (manager) => {
       await manager.getRepository(CommunicationBaseEntity).save(this.baseRowFor(manager, communication));
 
-      return manager.getRepository(CommunicationEntity).save(communication);
+      const saved = await manager.getRepository(CommunicationEntity).save(communication);
+      await this.graphDeltaWriter.entityCreated({
+        entityId: id,
+        entityType: 'Communication',
+        name: this.labelFor(saved),
+        description: saved.summary ?? null,
+        ownerUserId: context.userId,
+        changeSource: 'CommunicationService.create',
+        changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+        manager,
+      });
+
+      return saved;
     });
 
     await this.eventService.send(CommunicationCreatedEvent, {
@@ -258,6 +272,27 @@ export class CommunicationService {
         baseRows,
         '(entity_id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description ' +
           'WHERE (entities.name, entities.description) IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.description)',
+      );
+
+      await this.graphDeltaWriter.recordMany(
+        detailResults
+          .filter(({ inserted }) => inserted)
+          .map(({ entity }) => ({
+            nodeType: 'entity' as const,
+            changeType: 'created' as const,
+            entityId: entity.id,
+            entityType: 'Communication',
+            ownerUserId: context.userId,
+            changeSource: 'CommunicationService.createMany',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+            changedFields: {
+              name: { new: this.labelFor(entity) },
+              description: { new: entity.summary ?? null },
+              entity_type: { new: 'Communication' },
+              properties: { new: {} },
+            },
+          })),
+        manager,
       );
 
       return detailResults;
@@ -416,18 +451,43 @@ export class CommunicationService {
       data.content !== undefined ||
       data.summary !== undefined;
 
-    const updated = await this.aggregate.applyUpdate(context, id, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      detail: updateData as any, // TypeORM will handle JSON serialization
-      // The base patch derives from the PATCHED detail values, so the label
-      // reflects what is actually being persisted.
-      base: labelSourcesTouched
-        ? (after) => ({
+    const updated = await this.aggregate.applyUpdate(
+      context,
+      id,
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail: updateData as any, // TypeORM will handle JSON serialization
+        // The base patch derives from the PATCHED detail values, so the label
+        // reflects what is actually being persisted.
+        base: labelSourcesTouched
+          ? (after) => ({
+              name: this.labelFor(after),
+              description: after.summary ?? null,
+            })
+          : undefined,
+      },
+      {
+        withinTx: async ({ manager, after }) => {
+          if (!after) {
+            return;
+          }
+
+          await this.graphDeltaWriter.entityUpdated({
+            entityId: id,
+            entityType: 'Communication',
             name: this.labelFor(after),
-            description: after.summary ?? null,
-          })
-        : undefined,
-    });
+            changedFields: {
+              name: { new: this.labelFor(after) },
+              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
+            },
+            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+            changeSource: 'CommunicationService.update',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+            manager,
+          });
+        },
+      },
+    );
 
     if (!updated) {
       return null;
@@ -445,7 +505,19 @@ export class CommunicationService {
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     // Authorized load + base-row delete — the communications_id_entities_fk
     // ON DELETE CASCADE removes the detail in the same statement.
-    const removed = await this.aggregate.remove(context, id);
+    const removed = await this.aggregate.remove(context, id, {
+      withinTx: async ({ manager, before }) => {
+        await this.graphDeltaWriter.entityDeleted({
+          entityId: id,
+          entityType: 'Communication',
+          name: this.labelFor(before),
+          ownerUserId: context.userId !== SYSTEM_USER ? context.userId : before.userId,
+          changeSource: 'CommunicationService.remove',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+      },
+    });
 
     if (!removed) {
       return false;

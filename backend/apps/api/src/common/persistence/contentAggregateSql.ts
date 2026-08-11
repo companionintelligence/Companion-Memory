@@ -98,16 +98,37 @@ export function buildContentAggregateFold(rows: ContentAggregateFoldRow[]): {
          DO NOTHING
        RETURNING id
      )
-     INSERT INTO ci.entities
-       (entity_id, entity_type, name, description, properties,
-        owner_user_id, linked_table, linked_id)
-     SELECT i.id, 'Content',
-            COALESCE(NULLIF(TRIM(inc.title), ''), NULLIF(TRIM(inc.url), ''), 'Untitled'),
-            NULL, '{}'::jsonb,
-            inc.user_id, 'content', i.id
-       FROM inserted i
-       JOIN incoming inc ON inc.content_id = i.id
-     ON CONFLICT (entity_id) DO NOTHING`;
+     base_inserted AS (
+       INSERT INTO ci.entities
+         (entity_id, entity_type, name, description, properties,
+          owner_user_id, linked_table, linked_id)
+       SELECT i.id, 'Content',
+              COALESCE(NULLIF(TRIM(inc.title), ''), NULLIF(TRIM(inc.url), ''), 'Untitled'),
+              NULL, '{}'::jsonb,
+              inc.user_id, 'content', i.id
+         FROM inserted i
+         JOIN incoming inc ON inc.content_id = i.id
+       ON CONFLICT (entity_id) DO NOTHING
+       RETURNING entity_id, entity_type, name, description, properties, owner_user_id
+     )
+     INSERT INTO ci.graph_deltas (
+       entity_id, node_type, entity_type, change_type, changed_fields,
+       change_source, owner_user_id
+     )
+     SELECT
+       b.entity_id,
+       'entity',
+       b.entity_type,
+       'created',
+       jsonb_build_object(
+         'name', jsonb_build_object('new', b.name),
+         'description', jsonb_build_object('new', b.description),
+         'entity_type', jsonb_build_object('new', b.entity_type),
+         'properties', jsonb_build_object('new', b.properties)
+       ),
+       'contentAggregateFold',
+       b.owner_user_id
+     FROM base_inserted b`;
 
   return { sql, params };
 }

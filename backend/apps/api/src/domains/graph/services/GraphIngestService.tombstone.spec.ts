@@ -22,6 +22,13 @@ function makeService(seed: SeedRow[]) {
   const entityIdentifierService = { upsertForEntities: jest.fn() };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
+  const graphDeltaWriter = {
+    recordMany: jest.fn(async () => undefined),
+    entityCreated: jest.fn(async () => undefined),
+    entityUpdated: jest.fn(async () => undefined),
+    entityDeleted: jest.fn(async () => undefined),
+  };
+
   const service = new GraphIngestService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     node.repo as any,
@@ -31,6 +38,8 @@ function makeService(seed: SeedRow[]) {
     entityIdentifierService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    graphDeltaWriter as any,
   );
 
   return { service, node, rel, entityIdentifierService };

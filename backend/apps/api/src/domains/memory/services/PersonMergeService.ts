@@ -9,6 +9,8 @@ import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 
+import { GraphDeltaWriter } from './GraphDeltaWriter';
+
 /** Per-table re-point counts recorded in the ci.entity_merges audit row. */
 export interface MergeCounts {
   identifiers: number;
@@ -54,6 +56,7 @@ export class PersonMergeService {
     private readonly personRepository: Repository<PersonEntity>,
     private readonly logger: LoggerService,
     private readonly eventService: EventService,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {
     this.logger.setContext(PersonMergeService.name);
   }
@@ -143,6 +146,39 @@ export class PersonMergeService {
             SET merged_into_entity_id = $3, is_active = FALSE, updated_at = now()
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])`,
         [ownerUserId, sources, targetId],
+      );
+
+      await this.graphDeltaWriter.recordMany(
+        [
+          {
+            nodeType: 'entity' as const,
+            changeType: 'updated' as const,
+            entityId: targetId,
+            entityType: 'Person',
+            ownerUserId,
+            changeSource: 'PersonMergeService.mergePeople',
+            changedByUserId: ownerUserId,
+            changedFields: {
+              name: { new: mergedName },
+              description: { new: mergedDescription },
+              properties: { new: mergedProperties },
+            },
+          },
+          ...sources.map((sourceId) => ({
+            nodeType: 'entity' as const,
+            changeType: 'merged' as const,
+            entityId: sourceId,
+            entityType: 'Person',
+            ownerUserId,
+            changeSource: 'PersonMergeService.mergePeople',
+            changedByUserId: ownerUserId,
+            changedFields: {
+              name: { old: byId.get(sourceId)?.name ?? null },
+              merged_into_entity_id: { new: targetId },
+            },
+          })),
+        ],
+        em,
       );
 
       // Path compression. Merging B into C leaves any tombstone that already

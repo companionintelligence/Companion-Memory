@@ -13,6 +13,8 @@ import { PlaceEntity, type Place, type PlaceKind } from '../entities/PlaceEntity
 import { PlaceCreatedEvent, PlaceUpdatedEvent, PlaceRemovedEvent } from '../events';
 import type { CreatePlaceDto, UpdatePlaceDto } from '../types';
 
+import { GraphDeltaWriter } from './GraphDeltaWriter';
+
 /** One Google-style address component ({long_name, short_name, types[]}). */
 interface AddressComponent {
   long_name?: string;
@@ -44,6 +46,7 @@ export class PlaceService {
     @InjectRepository(PlaceEntity)
     private readonly placeRepository: Repository<PlaceEntity>,
     private readonly eventService: EventService,
+    private readonly graphDeltaWriter: GraphDeltaWriter,
   ) {}
 
   /**
@@ -188,6 +191,14 @@ export class PlaceService {
     await this.ensureHierarchy(context, entity_id, input.components ?? null);
 
     if (was_new) {
+      await this.graphDeltaWriter.entityCreated({
+        entityId: entity_id,
+        entityType: 'Location',
+        name: trimmedName,
+        ownerUserId: context.userId,
+        changeSource: 'PlaceService.findOrCreateForGeocode',
+        changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+      });
       await this.eventService.send(PlaceCreatedEvent, { placeId: entity_id });
     }
 

@@ -8,7 +8,7 @@ import { ContentBaseEntity } from '../../entities/ContentBaseEntity';
 import { ContentEntity } from '../../entities/ContentEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { ContentService } from '../ContentService';
-import { EntityMutationService } from '../EntityMutationService';
+import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 describe('ContentService CTI aggregate', () => {
   let service: ContentService;
@@ -28,12 +28,22 @@ describe('ContentService CTI aggregate', () => {
     delete: jest.Mock;
     metadata: { columns: unknown[] };
   };
-  let mutations: { record: jest.Mock };
+  let deltas: {
+    entityCreated: jest.Mock;
+    entityUpdated: jest.Mock;
+    entityDeleted: jest.Mock;
+    recordMany: jest.Mock;
+  };
 
   const ctx = { userId: 'user-1' } as UserServiceContext;
 
   beforeEach(async () => {
-    mutations = { record: jest.fn(async () => undefined) };
+    deltas = {
+      entityCreated: jest.fn(async () => undefined),
+      entityUpdated: jest.fn(async () => undefined),
+      entityDeleted: jest.fn(async () => undefined),
+      recordMany: jest.fn(async () => undefined),
+    };
     baseRepo = {
       create: jest.fn((x: Partial<ContentBaseEntity>) => x),
       save: jest.fn(async (x: Partial<ContentBaseEntity>) => x),
@@ -64,7 +74,7 @@ describe('ContentService CTI aggregate', () => {
         { provide: getRepositoryToken(ContentBaseEntity), useValue: baseRepo },
         { provide: getRepositoryToken(EventEntity), useValue: { find: jest.fn(async () => []) } },
         { provide: SignallingEventService, useValue: { send: jest.fn() } },
-        { provide: EntityMutationService, useValue: mutations },
+        { provide: GraphDeltaWriter, useValue: deltas },
       ],
     }).compile();
     service = moduleRef.get(ContentService);
@@ -89,8 +99,13 @@ describe('ContentService CTI aggregate', () => {
     expect(repo.save).toHaveBeenCalledTimes(1);
     expect(repo.save.mock.calls[0][0]).not.toHaveProperty('title');
     expect(content.title).toBe('Example page');
-    expect(mutations.record).toHaveBeenCalledWith(
-      expect.objectContaining({ aggregateId: 'c1', entityType: 'Content', op: 'insert' }),
+    expect(deltas.entityCreated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'c1',
+        entityType: 'Content',
+        name: 'Example page',
+        changeSource: 'ContentService.create',
+      }),
     );
   });
 

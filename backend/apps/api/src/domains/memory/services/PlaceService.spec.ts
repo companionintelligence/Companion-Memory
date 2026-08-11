@@ -64,6 +64,12 @@ function makeService() {
     repository as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     { send } as any,
+    {
+      entityCreated: jest.fn(async () => undefined),
+      entityUpdated: jest.fn(async () => undefined),
+      entityDeleted: jest.fn(async () => undefined),
+      recordMany: jest.fn(async () => undefined),
+    } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   );
 
   return { service, send, insert: insertRecord, save };
