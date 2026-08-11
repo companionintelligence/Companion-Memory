@@ -164,6 +164,66 @@ export class GraphUtilityService {
     return rows.map((row) => row.entity_id);
   }
 
+  /**
+   * Communications tied to a person through `ci.communications`'
+   * `from_entity_id`/`to_entity_ids` columns, as graph nodes.
+   *
+   * Participant linking (PersonLinkStage, CommunicationParticipantLinkListener,
+   * the backfill services) writes those columns and never inserts
+   * `ci.relationships` rows, so a relationship traversal alone can never reach
+   * a person's emails or messages. Communication CTI rows share their uuid with
+   * their `ci.entities` node, which is what the join rides on.
+   *
+   * Most recent first, capped by `limit` — a busy correspondent has thousands.
+   */
+  async getCommunicationTiesForPerson(
+    ownerUserId: string,
+    personEntityId: string,
+    limit: number,
+  ): Promise<Array<{ node: GraphNodeEntity; isSender: boolean }>> {
+    const rows: Array<GraphNodeEntity & { is_sender: boolean }> = await this.entityRepo.manager.query(
+      `SELECT e.*, (c.from_entity_id = $2) AS is_sender
+         FROM ci.communications c
+         JOIN ci.entities e
+           ON e.entity_id = c.id
+          AND e.owner_user_id = $1
+          AND e.is_active = true
+        WHERE c.user_id = $1
+          AND (c.from_entity_id = $2 OR c.to_entity_ids @> ARRAY[$2]::uuid[])
+        ORDER BY c.time DESC
+        LIMIT $3`,
+      [ownerUserId, personEntityId, limit],
+    );
+
+    return rows.map((row) => ({ node: row, isSender: row.is_sender === true }));
+  }
+
+  /**
+   * The persons a communication links through its participant columns, as
+   * graph nodes — the inverse of {@link getCommunicationTiesForPerson}, so
+   * focusing a Communication node shows who it connects.
+   */
+  async getPersonTiesForCommunication(
+    ownerUserId: string,
+    communicationId: string,
+  ): Promise<Array<{ node: GraphNodeEntity; isSender: boolean }>> {
+    const rows: Array<GraphNodeEntity & { is_sender: boolean }> = await this.entityRepo.manager.query(
+      `SELECT DISTINCT ON (e.entity_id) e.*, (c.from_entity_id = e.entity_id) AS is_sender
+         FROM ci.communications c
+         JOIN ci.entities e
+           ON e.entity_id = ANY (ARRAY[c.from_entity_id] || COALESCE(c.to_entity_ids, '{}'))
+          AND e.owner_user_id = $1
+          AND e.is_active = true
+        WHERE c.user_id = $1
+          AND c.id = $2
+        ORDER BY e.entity_id, is_sender DESC
+        LIMIT 100`,
+      [ownerUserId, communicationId],
+    );
+
+    return rows.map((row) => ({ node: row, isSender: row.is_sender === true }));
+  }
+
   async queryNodes(
     ownerUserId: string,
     filters: {

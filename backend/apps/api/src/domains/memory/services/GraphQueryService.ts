@@ -71,6 +71,19 @@ export class GraphQueryService {
     return this.graphUtility.getNodeByLinkedRecord(ownerId, linkedTable, linkedId);
   }
 
+  /**
+   * Person↔communication ties carried by `ci.communications`' participant
+   * columns rather than `ci.relationships` rows. See
+   * {@link GraphUtilityService.getCommunicationTiesForPerson}.
+   */
+  getCommunicationTiesForPerson(ownerId: string, personEntityId: string, limit: number) {
+    return this.graphUtility.getCommunicationTiesForPerson(ownerId, personEntityId, limit);
+  }
+
+  getPersonTiesForCommunication(ownerId: string, communicationId: string) {
+    return this.graphUtility.getPersonTiesForCommunication(ownerId, communicationId);
+  }
+
   async getUserEntity(ownerId: string) {
     const context = toServiceContext({ userId: ownerId });
 

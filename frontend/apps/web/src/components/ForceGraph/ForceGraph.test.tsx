@@ -318,10 +318,12 @@ describe('ForceGraph', () => {
 
     const after = labelBoxes().map((box) => `${box.label}@${box.left.toFixed(2)},${box.top.toFixed(2)}`);
 
-    // Only the newly emphasised node may shift, and only because it is drawn a little larger.
+    // Only the nodes whose emphasis changed may shift — the newly emphasised one grows, the
+    // formerly emphasised one gives its extra radius back. Nobody else moves: that would be the
+    // relayout this test exists to forbid.
     const moved = before.filter((entry) => !after.includes(entry));
 
-    expect(moved.length).toBeLessThanOrEqual(1);
+    expect(moved.length).toBeLessThanOrEqual(2);
   });
 
   it('keeps a label gap the renderer and the layout agree on', () => {
@@ -378,7 +380,10 @@ describe('ForceGraph', () => {
       const { nodes, links } = buildGraph(NAMES);
       const onLinkSelect = vi.fn();
 
-      render(<ForceGraph nodes={nodes} links={links} onLinkSelect={onLinkSelect} />);
+      // Links are only clickable while revealed, so the click rides on a live selection.
+      render(
+        <ForceGraph nodes={nodes} links={links} selectedNodeId={CENTER_ID} onLinkSelect={onLinkSelect} />,
+      );
 
       await waitFor(() => {
         expect(screen.getAllByTestId('force-link').length).toBeGreaterThan(0);
@@ -388,6 +393,58 @@ describe('ForceGraph', () => {
 
       expect(onLinkSelect).toHaveBeenCalledTimes(1);
       expect(onLinkSelect).toHaveBeenCalledWith(expect.stringMatching(/^link-/));
+    });
+
+    it('rests every link hidden until a node asks for its threads', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      const { rerender } = render(<ForceGraph nodes={nodes} links={links} />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-link').length).toBeGreaterThan(0);
+      });
+
+      // At rest the picture is dots only: every thread is hidden and unclickable.
+      for (const group of screen.getAllByTestId('force-link')) {
+        expect(group).toHaveAttribute('data-hidden', 'true');
+      }
+
+      // Selecting a node reveals exactly the threads that describe it.
+      rerender(<ForceGraph nodes={nodes} links={links} selectedNodeId="person-0" />);
+
+      const revealed = screen
+        .getAllByTestId('force-link')
+        .filter((group) => group.getAttribute('data-hidden') !== 'true');
+
+      // person-0 has exactly one link (to the centre).
+      expect(revealed).toHaveLength(1);
+    });
+
+    it('names the selected node with its neighbour count', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} selectedNodeId={CENTER_ID} />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
+      });
+
+      // The centre is linked to all 15 leaves.
+      expect(screen.getByTestId('force-node-degree')).toHaveTextContent('15 connections');
+    });
+
+    it('dims the nodes unrelated to the selected one', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} selectedNodeId="person-0" />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
+      });
+
+      // person-0's only neighbour is the centre; a sibling leaf recedes.
+      expect(nodeOpacity('Abdul Ameer')).toBe('1');
+      expect(nodeOpacity('Fiona Sewell')).toBe('0.2');
     });
 
     it('emphasises the selected thread and recedes everything else', async () => {

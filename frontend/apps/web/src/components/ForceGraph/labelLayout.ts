@@ -44,9 +44,11 @@ export const LABEL_HALF_HEIGHT_PX = 8;
  */
 export const MAX_LABEL_CHARS = 22;
 
-const MIN_NODE_RADIUS = 5;
-const MAX_NODE_RADIUS = 14;
-const DEGREE_RADIUS_FACTOR = 1.8;
+// Nodes read as small dots by default — the picture is a constellation, not a bubble chart.
+// Degree still grows a hub, but gently; selection/highlight are what earn real size.
+const MIN_NODE_RADIUS = 3.5;
+const MAX_NODE_RADIUS = 11;
+const DEGREE_RADIUS_FACTOR = 1.3;
 const SELECTED_MIN_RADIUS = 12;
 const HIGHLIGHTED_MIN_RADIUS = 10;
 

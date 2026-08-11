@@ -7,6 +7,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { TagService } from '@ci/domains/search-next';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
+import { RelationshipEntity } from '../entities/RelationshipEntity';
 import { graphTypesToExclude } from '../graph.types';
 import { EventService } from '../services/EventService';
 import { GraphEventService } from '../services/GraphEventService';
@@ -127,6 +128,27 @@ const EVENT_MATCH_EVENT_LIMIT = 2000;
  * matches beyond this cap are recovered by an explicit by-id fetch (see
  * `getGraphData`); a full page signals the overview is truncated. */
 const NODE_LIMIT = 200;
+
+/** How many of a person's most recent communications the focus subgraph pulls
+ * in alongside the relationship traversal. Participant linking writes
+ * `ci.communications.from_entity_id`/`to_entity_ids` — not `ci.relationships`
+ * rows — so without this augmentation focusing a person never shows their
+ * emails or messages, however many they exchanged. Capped because a busy
+ * correspondent links thousands. */
+const FOCUS_COMMUNICATION_LIMIT = 25;
+
+/** The edge shape the focus response is built from: a real traversal edge or a
+ * synthesized person↔communication tie. */
+type FocusEdge = Pick<
+  RelationshipEntity,
+  | 'relationship_id'
+  | 'from_entity_id'
+  | 'to_entity_id'
+  | 'relationship_type'
+  | 'strength'
+  | 'properties'
+  | 'is_bidirectional'
+>;
 
 /** How many hops out from the owner's anchor entity the overview traversal
  * reaches when seeding the node budget. Matches the client's `maxDepth: 3`
@@ -727,8 +749,54 @@ export class GraphController {
       maxEdges,
     });
 
-    const traversalNodes = Array.from(traversal.nodes.values());
-    const relationships = traversal.edges;
+    const nodesById = new Map(Array.from(traversal.nodes.values()).map((n) => [n.entity_id, n]));
+    const relationships: FocusEdge[] = [...traversal.edges];
+
+    // Person↔communication ties live in ci.communications' participant columns,
+    // not in ci.relationships, so the traversal above can never surface a
+    // person's emails/messages (or a communication's people). Synthesize those
+    // edges here so the focus graph shows them.
+    const communicationTies =
+      node.entity_type === 'Person'
+        ? await this.graphQuery.getCommunicationTiesForPerson(
+            ownerId,
+            node.entity_id,
+            FOCUS_COMMUNICATION_LIMIT,
+          )
+        : node.entity_type === 'Communication'
+          ? await this.graphQuery.getPersonTiesForCommunication(ownerId, node.entity_id)
+          : [];
+
+    const edgeIds = new Set(relationships.map((rel) => rel.relationship_id));
+    for (const tie of communicationTies) {
+      const other = tie.node;
+      const personId = node.entity_type === 'Person' ? node.entity_id : other.entity_id;
+      const communicationId = node.entity_type === 'Person' ? other.entity_id : node.entity_id;
+      const relationshipType = tie.isSender ? 'SENT' : 'RECEIVED';
+      const relationshipId = `comm-${communicationId}-${personId}-${relationshipType}`;
+
+      if (edgeIds.has(relationshipId)) {
+        continue;
+      }
+
+      edgeIds.add(relationshipId);
+
+      if (!nodesById.has(other.entity_id)) {
+        nodesById.set(other.entity_id, other);
+      }
+
+      relationships.push({
+        relationship_id: relationshipId,
+        from_entity_id: personId,
+        to_entity_id: communicationId,
+        relationship_type: relationshipType,
+        strength: tie.isSender ? 0.6 : 0.45,
+        properties: { derived_from: 'communication_participants' },
+        is_bidirectional: false,
+      });
+    }
+
+    const traversalNodes = Array.from(nodesById.values());
 
     const neighborIds = new Set<string>();
     for (const rel of relationships) {

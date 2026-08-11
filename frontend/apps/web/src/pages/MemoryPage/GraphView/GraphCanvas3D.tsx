@@ -189,6 +189,7 @@ function GraphScene({
   sceneNodes,
   sceneLinks,
   centerNodeId,
+  focusCenterId,
   selectedNodeId,
   selectedLinkId,
   onNodeSelect,
@@ -197,6 +198,8 @@ function GraphScene({
   sceneNodes: SceneNode[];
   sceneLinks: SceneLink[];
   centerNodeId?: string | null;
+  /** The focused entity in focus mode; its threads stay visible like the 2D canvas'. */
+  focusCenterId?: string | null;
   selectedNodeId?: string | null;
   selectedLinkId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
@@ -319,6 +322,15 @@ function GraphScene({
     };
   }, [threadKey, selectedNodeId, centerNodeId, labelColor, haloColor]);
 
+  // Links rest hidden, matching the 2D canvas: a line earns its ink only while it describes the
+  // selected node, the focused entity, or an explicitly selected thread.
+  const isLinkRevealed = useMemo(() => {
+    return (link: SceneLink) =>
+      link.id === selectedLinkId ||
+      (selectedNodeId != null && (link.sourceId === selectedNodeId || link.targetId === selectedNodeId)) ||
+      (focusCenterId != null && (link.sourceId === focusCenterId || link.targetId === focusCenterId));
+  }, [selectedLinkId, selectedNodeId, focusCenterId]);
+
   // Non-thread links carry their own material so opacity can vary per link; the selected thread
   // returns null to take the library's default cylinder material, colored by linkColor below.
   const linkMaterial = useMemo(() => {
@@ -327,18 +339,22 @@ function GraphScene({
         return null;
       }
 
+      if (!isLinkRevealed(link)) {
+        return new LineBasicMaterial({ color: '#94a3b8', transparent: true, opacity: 0, visible: false });
+      }
+
       const dimmedByThread = Boolean(selectedLinkId);
       const opacity = dimmedByThread
         ? 0.08
         : link.context
-          ? 0.14
+          ? 0.2
           : link.strength < WEAK_TIE_THRESHOLD
-            ? 0.2
-            : 0.42;
+            ? 0.3
+            : 0.55;
 
       return new LineBasicMaterial({ color: '#94a3b8', transparent: true, opacity });
     };
-  }, [selectedLinkId]);
+  }, [selectedLinkId, isLinkRevealed]);
 
   return (
     <R3fForceGraph<SceneNode, SceneLink>
@@ -359,7 +375,8 @@ function GraphScene({
       }}
       onLinkClick={(link) => {
         const typed = link as SceneLink;
-        if (typed.id) {
+        // The raycaster still hits an invisible line; a hidden thread is not a clickable thing.
+        if (typed.id && isLinkRevealed(typed)) {
           onLinkSelect?.(typed.id);
         }
       }}
@@ -479,6 +496,7 @@ export default function GraphCanvas3D({
           sceneNodes={sceneNodes}
           sceneLinks={sceneLinks}
           centerNodeId={centerNodeId}
+          focusCenterId={focusHops !== undefined ? centerNodeId : null}
           selectedNodeId={selectedNodeId}
           selectedLinkId={selectedLinkId}
           onNodeSelect={onNodeSelect}

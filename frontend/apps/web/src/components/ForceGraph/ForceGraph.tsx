@@ -205,16 +205,18 @@ const ALPHA_DECAY = 0.04;
 const ALPHA_MIN = 0.02;
 /** Webbed Feet's drag reheat: `simulation.alpha(0.1).restart()` on every drag move. */
 const REHEAT_ALPHA = 0.1;
-/** Node-to-node repulsion. Webbed Feet uses -30 in a viewport-sized world; ours is larger. */
-const CHARGE_STRENGTH = -80;
+/** Node-to-node repulsion. Stronger than Webbed Feet's -30: with the connecting lines hidden at
+ * rest, the spread of the dots is the only structure on screen, so the constellation earns room. */
+const CHARGE_STRENGTH = -140;
 /** Breathing room around a node the circle-collision force protects. */
 const COLLIDE_PADDING = 6;
 /** Gentle pull toward the world centre — replaces recentring by translation, which visibly shoved
  * the whole picture every tick. */
 const CENTERING_STRENGTH = 0.05;
-/** Link rest lengths: strong ties sit close, loose ties drift long — Webbed Feet's 100–200 range. */
-const MIN_SPRING_LENGTH = 70;
-const MAX_SPRING_LENGTH = 210;
+/** Link rest lengths: strong ties sit close, loose ties drift long. Longer than the original
+ * 70–210 range for the same reason as the charge: dots spread out, threads appear on demand. */
+const MIN_SPRING_LENGTH = 90;
+const MAX_SPRING_LENGTH = 280;
 const STRENGTH_CURVE_EXPONENT = 2.2;
 /**
  * How much of each label overlap to resolve per tick. Under-relaxed on purpose: a node squeezed by
@@ -1002,10 +1004,12 @@ function ForceGraphBase({
   }, []);
 
   /**
-   * Hovering picks out one node's own corner of the graph: it and its direct neighbours stay lit,
-   * everything else fades back. A dense graph is legible in pieces long before it is legible whole.
+   * Hovering or selecting picks out one node's own corner of the graph: it and its direct
+   * neighbours stay lit, everything else fades back. A dense graph is legible in pieces long
+   * before it is legible whole.
    */
   const hoveredNeighbors = hoveredNodeId ? neighborsById.get(hoveredNodeId) : undefined;
+  const selectedNeighbors = selectedNodeId ? neighborsById.get(selectedNodeId) : undefined;
 
   /** The selected connection thread's two endpoints; everything else recedes while it is chosen. */
   const threadEndpointIds = useMemo(() => {
@@ -1021,6 +1025,10 @@ function ForceGraphBase({
   const isDimmed = (nodeId: string) => {
     if (hoveredNodeId != null) {
       return nodeId !== hoveredNodeId && !hoveredNeighbors?.has(nodeId);
+    }
+
+    if (selectedNodeId != null) {
+      return nodeId !== selectedNodeId && !selectedNeighbors?.has(nodeId);
     }
 
     if (threadEndpointIds) {
@@ -1108,23 +1116,42 @@ function ForceGraphBase({
         >
           <g stroke="rgba(148, 163, 184, 0.35)" strokeWidth={1.1} strokeLinecap="round">
             {simLinks.map((link) => {
+              /*
+               * Links rest hidden. The picture at rest is a spread of dots; a relationship line
+               * earns its ink only while it describes the node the viewer is asking about — the
+               * hovered node, the selected node, the focused entity, or an explicitly selected
+               * thread. Everything is still in the simulation, so the tension is unchanged; only
+               * the ink appears on demand.
+               */
               const touchesHovered =
                 hoveredNodeId != null && (link.sourceId === hoveredNodeId || link.targetId === hoveredNodeId);
+              const touchesSelected =
+                selectedNodeId != null &&
+                (link.sourceId === selectedNodeId || link.targetId === selectedNodeId);
+              const touchesHighlighted =
+                highlightedNodeId != null &&
+                (link.sourceId === highlightedNodeId || link.targetId === highlightedNodeId);
+              // In focus mode the focused entity's own threads are the subject of the picture.
+              const touchesFocusCenter =
+                focusHops !== undefined &&
+                centerNodeId != null &&
+                (link.sourceId === centerNodeId || link.targetId === centerNodeId);
+              const isThread = link.id === selectedLinkId;
+              const revealed =
+                isThread || touchesHovered || touchesSelected || touchesHighlighted || touchesFocusCenter;
+
               // A link with either end out in the context ring runs away from the focused node
               // rather than describing it, so it recedes with the node it leads to.
               const contextual = isContext(link.sourceId) || isContext(link.targetId);
-              const isThread = link.id === selectedLinkId;
               // Webbed Feet draws its loosest chain dashed; a weak tie is our equivalent.
               const weak = clampRelationshipStrength(link.strength) < WEAK_TIE_THRESHOLD;
 
-              const opacity = isThread
-                ? 1
-                : hoveredNodeId != null
-                  ? touchesHovered
-                    ? 1
-                    : 0.12
-                  : threadEndpointIds
-                    ? 0.1
+              const opacity = !revealed
+                ? 0
+                : isThread
+                  ? 1
+                  : hoveredNodeId != null && !touchesHovered
+                    ? 0.25
                     : contextual
                       ? CONTEXT_LINK_OPACITY
                       : 1;
@@ -1142,7 +1169,10 @@ function ForceGraphBase({
                   data-force-link
                   data-testid="force-link"
                   data-selected={isThread ? 'true' : undefined}
-                  className={onLinkSelect ? 'cursor-pointer' : undefined}
+                  data-hidden={revealed ? undefined : 'true'}
+                  className={onLinkSelect && revealed ? 'cursor-pointer' : undefined}
+                  // A hidden link must not swallow clicks meant for the canvas behind it.
+                  pointerEvents={revealed ? undefined : 'none'}
                   onClick={
                     onLinkSelect
                       ? (clickEvent) => {
@@ -1154,7 +1184,7 @@ function ForceGraphBase({
                 >
                   <title>{link.relationship_type.split('_').join(' ').toLowerCase()}</title>
                   {/* Invisible, wide hit area: a 1px line is not a clickable thing. */}
-                  {onLinkSelect && (
+                  {onLinkSelect && revealed && (
                     <line
                       x1={link.source.x}
                       y1={link.source.y}
@@ -1172,8 +1202,9 @@ function ForceGraphBase({
                     markerEnd="url(#arrowhead)"
                     stroke={isThread ? 'hsl(var(--primary))' : undefined}
                     opacity={opacity}
-                    strokeWidth={isThread ? 2.5 : touchesHovered ? 2 : undefined}
+                    strokeWidth={isThread ? 2.5 : touchesHovered || touchesSelected ? 2 : undefined}
                     strokeDasharray={weak && !isThread ? '4 4' : undefined}
+                    style={{ transition: 'opacity 150ms ease' }}
                   />
                 </g>
               );
@@ -1265,6 +1296,23 @@ function ForceGraphBase({
                       style={{ paintOrder: 'stroke fill' }}
                     >
                       {emphasised ? node.fullLabel : node.label}
+                    </text>
+                  )}
+                  {/* The neighbour count, for the node the viewer is asking about. Transient like
+                      the hover label: not in the layout's budget, gone when the emphasis is. */}
+                  {emphasised && node.degree > 0 && (
+                    <text
+                      x={radius + LABEL_GAP_PX}
+                      y={17}
+                      data-testid="force-node-degree"
+                      className="text-[10px]"
+                      fill="hsl(var(--muted-foreground))"
+                      stroke="hsl(var(--background))"
+                      strokeWidth={3}
+                      strokeLinejoin="round"
+                      style={{ paintOrder: 'stroke fill' }}
+                    >
+                      {node.degree} connection{node.degree === 1 ? '' : 's'}
                     </text>
                   )}
                 </g>
