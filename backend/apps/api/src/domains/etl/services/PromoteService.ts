@@ -155,10 +155,10 @@ export class PromoteService {
     });
 
     await Promise.all(
-      entities.map((entity) => {
+      entities.map(async (entity) => {
         try {
           if (userNode.entityId !== entity.id) {
-            this.relationshipService.create(context, {
+            await this.relationshipService.create(context, {
               fromNodeId: userNode.entityId,
               fromNodeType: 'person',
               toNodeId: entity.id,
