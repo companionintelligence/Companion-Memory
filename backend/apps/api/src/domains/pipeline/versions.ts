@@ -226,15 +226,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * 3: the matrix now covers every entity-linkage pair in the schema —
    * receipts, object observations, positions and devices gained rules. Bump a
    * producer's generation and the matching line here in the same commit.
+   *
+   * v4 = matrix generation 4: LOCATED_AT/DOCUMENTS canonical storage, Place and
+   * File hierarchy legs.
    */
-  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_POSITION]: 3,
-  [STAGE_IDS.PROMOTE_EDGE_DEVICE]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_POSITION]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_DEVICE]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_FILE]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_PLACE]: 4,
 };
 
 /**

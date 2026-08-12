@@ -6,6 +6,7 @@ import { type Place } from '@ci/domains/memory';
 import { EntityTagType } from './EntityTagType';
 import { GlobalUID } from './GlobalUID';
 import { Node } from './Node';
+import { RelationshipType } from './RelationshipType';
 import { Taggable } from './Taggable';
 
 @ObjectType({ implements: () => [Node, Taggable] })
@@ -67,6 +68,13 @@ export class PlaceType implements Node, Taggable {
 
   @Field(() => [EntityTagType])
   tags!: EntityTagType[];
+
+  /** Life-graph ego edges — resolved from ci.relationships (WS5). */
+  @Field(() => [RelationshipType], { nullable: true })
+  outgoingRelationships?: RelationshipType[];
+
+  @Field(() => [RelationshipType], { nullable: true })
+  incomingRelationships?: RelationshipType[];
 
   static toType(place: Place): PlaceType {
     return {

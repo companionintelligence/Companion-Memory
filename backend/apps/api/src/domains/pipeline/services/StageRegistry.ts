@@ -50,6 +50,8 @@ export const STAGE_REGISTRY: Record<StageId, string> = {
   [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: 'PipelineStage:promote.edge_observation',
   [STAGE_IDS.PROMOTE_EDGE_POSITION]: 'PipelineStage:promote.edge_position',
   [STAGE_IDS.PROMOTE_EDGE_DEVICE]: 'PipelineStage:promote.edge_device',
+  [STAGE_IDS.PROMOTE_EDGE_FILE]: 'PipelineStage:promote.edge_file',
+  [STAGE_IDS.PROMOTE_EDGE_PLACE]: 'PipelineStage:promote.edge_place',
 };
 
 /**

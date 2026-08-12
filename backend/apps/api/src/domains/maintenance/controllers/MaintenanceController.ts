@@ -37,6 +37,7 @@ import {
   type CommunicationLinkBackfillResult,
   CommunicationLinkBackfillService,
 } from '../services/CommunicationLinkBackfillService';
+import { DerivedRelationshipService } from '../services/DerivedRelationshipService';
 import {
   type DeterministicEdgeBackfillProgress,
   type DeterministicEdgeBackfillResult,
@@ -74,10 +75,12 @@ import {
   ORCHESTRATE_STAGES,
   type OrchestrateSummary,
 } from '../services/MaintenanceOrchestratorService';
+import { NoteContentFoldService } from '../services/NoteContentFoldService';
 import {
   type PersonStubBackfillResult,
   PersonStubBackfillService,
 } from '../services/PersonStubBackfillService';
+import { RelationshipNormalizeService } from '../services/RelationshipNormalizeService';
 import {
   BACKFILLABLE_ENTITIES,
   type SearchIndexBackfillResult,
@@ -406,6 +409,9 @@ export class MaintenanceController {
     private readonly personStubBackfillService: PersonStubBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly deterministicEdgeBackfillService: DeterministicEdgeBackfillService,
+    private readonly relationshipNormalizeService: RelationshipNormalizeService,
+    private readonly derivedRelationshipService: DerivedRelationshipService,
+    private readonly noteContentFoldService: NoteContentFoldService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
     private readonly embedCoverageTelemetryService: EmbedCoverageTelemetryService,
@@ -848,6 +854,53 @@ export class MaintenanceController {
       windowDays: body.windowDays,
       rules: body.rules,
     });
+  }
+
+  /**
+   * #1947 stage A — rewrite alias relationship types, deactivate IS, stamp
+   * bidirectional flags. Idempotent.
+   */
+  @Post('normalize-relationships')
+  async normalizeRelationships(@Context() context: RequestContext) {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { renamed: 0, swapped: 0, deletedIs: 0, bidirectionalStamped: 0 };
+    }
+
+    return this.relationshipNormalizeService.normalize(userId);
+  }
+
+  /**
+   * #1947 stages C–D — L2 aggregates (COMMUNICATES_WITH, FREQUENTS) and
+   * household Group reification. Idempotent.
+   */
+  @Post('derive-relationships')
+  async deriveRelationships(@Context() context: RequestContext) {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { communicatesWith: 0, frequents: 0, groupsReified: 0 };
+    }
+
+    return this.derivedRelationshipService.derive(userId);
+  }
+
+  /**
+   * Fold ci.notes into CTI Content nodes (Note→Content, provenance user_created).
+   */
+  @Post('fold-notes')
+  async foldNotes(@Context() context: RequestContext) {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { notesFolded: 0 };
+    }
+
+    return this.noteContentFoldService.fold(userId);
   }
 
   /**

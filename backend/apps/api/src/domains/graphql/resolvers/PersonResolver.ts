@@ -10,6 +10,7 @@ import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
 import {
   EntityMergeBlockService,
+  GraphQueryService,
   PersonDuplicateService,
   PersonMergeService,
   PersonService,
@@ -31,8 +32,10 @@ import { AddPersonIdentifierInput, RemovePersonIdentifierInput } from '../types/
 import { PersonIdentifierType } from '../types/PersonIdentifierType';
 import { PersonInteractionStatsType } from '../types/PersonInteractionStatsType';
 import { PersonType } from '../types/PersonType';
+import { RelationshipType } from '../types/RelationshipType';
 import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
+import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
 
 /** Map the structured input fields onto the established properties JSONB keys. */
@@ -84,6 +87,7 @@ export class PersonResolver {
     private readonly personIdentifiersLoader: PersonIdentifiersLoader,
     private readonly personInteractionStatsLoader: PersonInteractionStatsLoader,
     private readonly tagLoader: TagLoader,
+    private readonly graphQuery: GraphQueryService,
   ) {}
 
   @Mutation(() => CreatePersonPayload)
@@ -430,6 +434,46 @@ export class PersonResolver {
     const stats = await this.personInteractionStatsLoader.load(serviceContext, parent.__source.id);
 
     return PersonInteractionStatsType.toType(stats);
+  }
+
+  /** Outbound life-graph edges from this person (L0/L1/L2 in ci.relationships). */
+  @ResolveField(() => [RelationshipType])
+  async outgoingRelationships(
+    @Context() context: RequestContext,
+    @Parent() parent: PersonType,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ): Promise<RelationshipType[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
+      entityIds: [parent.__source.id],
+      direction: 'outbound',
+    });
+
+    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+  }
+
+  /** Inbound life-graph edges to this person. */
+  @ResolveField(() => [RelationshipType])
+  async incomingRelationships(
+    @Context() context: RequestContext,
+    @Parent() parent: PersonType,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ): Promise<RelationshipType[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
+      entityIds: [parent.__source.id],
+      direction: 'inbound',
+    });
+
+    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
   }
 
   private async entityIdentifiersFor(

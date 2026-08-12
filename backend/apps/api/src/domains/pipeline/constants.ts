@@ -295,6 +295,17 @@ export const STAGE_IDS = {
    * mirror become owner Person −OWNS→ Device.
    */
   PROMOTE_EDGE_DEVICE: 'promote.edge_device',
+
+  /**
+   * File hierarchy: `ci.files.parent_id` → File −DERIVED_FROM→ File via the
+   * linked File graph entity mirror.
+   */
+  PROMOTE_EDGE_FILE: 'promote.edge_file',
+
+  /**
+   * Place hierarchy: `ci.entities.parent_place_id` → Place −PART_OF→ Place.
+   */
+  PROMOTE_EDGE_PLACE: 'promote.edge_place',
 } as const;
 
 export type StageId = (typeof STAGE_IDS)[keyof typeof STAGE_IDS];

@@ -123,6 +123,12 @@ export type {
 } from './services/ItemRelationshipService';
 export { RelationshipMap, RelationshipType } from './types';
 export {
+  SYMMETRIC_RELATIONSHIP_TYPES,
+  isSymmetric,
+  normalizeRelationship,
+  type NormalizedRelationship,
+} from './relationshipNormalize';
+export {
   type IdentifierKind,
   type PersonNameParts,
   classifyParticipant,

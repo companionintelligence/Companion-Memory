@@ -77,8 +77,10 @@ import {
   ContentEdgePromoteStage,
   DeviceEdgePromoteStage,
   EventEdgePromoteStage,
+  FileEdgePromoteStage,
   InventoryEdgePromoteStage,
   ObservationEdgePromoteStage,
+  PlaceEdgePromoteStage,
   PositionEdgePromoteStage,
   ReceiptEdgePromoteStage,
 } from './stages/promote/EdgePromoteStage';
@@ -137,6 +139,8 @@ const stageProviders: Provider[] = [
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_OBSERVATION], useClass: ObservationEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_POSITION], useClass: PositionEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_DEVICE], useClass: DeviceEdgePromoteStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_FILE], useClass: FileEdgePromoteStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_PLACE], useClass: PlaceEdgePromoteStage },
 ];
 
 /**

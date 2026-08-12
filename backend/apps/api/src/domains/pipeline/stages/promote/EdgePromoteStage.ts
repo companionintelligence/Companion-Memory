@@ -37,6 +37,8 @@ export const PROMOTE_EDGE_RECEIPT_STAGE_ID = 'promote.edge_receipt';
 export const PROMOTE_EDGE_OBSERVATION_STAGE_ID = 'promote.edge_observation';
 export const PROMOTE_EDGE_POSITION_STAGE_ID = 'promote.edge_position';
 export const PROMOTE_EDGE_DEVICE_STAGE_ID = 'promote.edge_device';
+export const PROMOTE_EDGE_FILE_STAGE_ID = 'promote.edge_file';
+export const PROMOTE_EDGE_PLACE_STAGE_ID = 'promote.edge_place';
 
 // ---------------------------------------------------------------------------
 // The versions, DERIVED rather than chosen
@@ -53,13 +55,13 @@ export const PROMOTE_EDGE_DEVICE_STAGE_ID = 'promote.edge_device';
  * Event), `content.part_of_event` (Content −PART_OF→ Event) and
  * `inventory.located_at` (Item −LOCATED_AT→ Place).
  *
- * Generation 3: the matrix now covers EVERY entity-linkage pair in the
- * schema — receipts (merchant −LOCATED_AT→ place, document −PART_OF→ purchase
- * event, event −HAPPENED_AT→ place), object observations (content −PART_OF→
- * event, item −LOCATED_AT→ place, item −ASSOCIATED_WITH→ content), positions
- * (owner −VISITED→ place) and devices (owner −OWNS→ device).
+ * Generation 3: receipts, observations, positions, devices.
+ *
+ * Generation 4: life-graph matrix alignment — Event→Place and receipt place
+ * edges store LOCATED_AT (HAPPENED_AT is a write alias); Content→Event stores
+ * DOCUMENTS; Place→Place PART_OF and File→File DERIVED_FROM rules added.
  */
-export const EDGE_PROJECTION_RULE_GENERATION = 3;
+export const EDGE_PROJECTION_RULE_GENERATION = 4;
 
 /**
  * Communication-leg version: this stage's edges are a COPY of what
@@ -127,6 +129,12 @@ export const PROMOTE_EDGE_POSITION_VERSION = EDGE_PROJECTION_RULE_GENERATION;
  */
 export const PROMOTE_EDGE_DEVICE_VERSION = EDGE_PROJECTION_RULE_GENERATION;
 
+/** File-leg: `ci.files.parent_id` + File entity mirrors — projection generation only. */
+export const PROMOTE_EDGE_FILE_VERSION = EDGE_PROJECTION_RULE_GENERATION;
+
+/** Place-leg: `entities.parent_place_id` — projection generation only. */
+export const PROMOTE_EDGE_PLACE_VERSION = EDGE_PROJECTION_RULE_GENERATION;
+
 /**
  * Cross-check a derived version against its `STAGE_VERSIONS` mirror — the same
  * contract every derived-version stage keeps (`promotePlaceStageVersion`,
@@ -165,6 +173,8 @@ promoteEdgeStageVersion(PROMOTE_EDGE_RECEIPT_STAGE_ID, PROMOTE_EDGE_RECEIPT_VERS
 promoteEdgeStageVersion(PROMOTE_EDGE_OBSERVATION_STAGE_ID, PROMOTE_EDGE_OBSERVATION_VERSION);
 promoteEdgeStageVersion(PROMOTE_EDGE_POSITION_STAGE_ID, PROMOTE_EDGE_POSITION_VERSION);
 promoteEdgeStageVersion(PROMOTE_EDGE_DEVICE_STAGE_ID, PROMOTE_EDGE_DEVICE_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_FILE_STAGE_ID, PROMOTE_EDGE_FILE_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_PLACE_STAGE_ID, PROMOTE_EDGE_PLACE_VERSION);
 
 // ---------------------------------------------------------------------------
 // Candidate selection
@@ -272,6 +282,24 @@ export const PROMOTE_EDGE_DEVICE_SOURCE: StageSource = {
   idColumn: 'device_id',
   userColumn: 'user_id',
   predicate: 's.device_entity_id IS NOT NULL',
+};
+
+/** `ci.files` with a parent — File −DERIVED_FROM→ File. */
+export const PROMOTE_EDGE_FILE_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'files',
+  idColumn: 'id',
+  userColumn: 'user_id',
+  predicate: 's.parent_id IS NOT NULL',
+};
+
+/** Place/Location entities with a parent_place_id — Place −PART_OF→ Place. */
+export const PROMOTE_EDGE_PLACE_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'entities',
+  idColumn: 'entity_id',
+  userColumn: 'owner_user_id',
+  predicate: `s.parent_place_id IS NOT NULL AND s.entity_type IN ('Location', 'Place') AND s.is_active = TRUE`,
 };
 
 // ---------------------------------------------------------------------------
@@ -525,6 +553,40 @@ export class DeviceEdgePromoteStage extends EdgePromoteStageBase {
   protected readonly sourceKind: DeterministicEdgeSource = 'devices';
 
   // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class FileEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_FILE_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_FILE_STAGE_ID, PROMOTE_EDGE_FILE_VERSION);
+
+  readonly source = PROMOTE_EDGE_FILE_SOURCE;
+
+  readonly entityTypes = ['file'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'files';
+
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class PlaceEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_PLACE_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_PLACE_STAGE_ID, PROMOTE_EDGE_PLACE_VERSION);
+
+  readonly source = PROMOTE_EDGE_PLACE_SOURCE;
+
+  readonly entityTypes = ['place'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'places';
+
   constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
     super(edgeService, logger);
   }

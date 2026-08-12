@@ -26,7 +26,9 @@ export type DeterministicEdgeSource =
   | 'receipts'
   | 'observations'
   | 'positions'
-  | 'devices';
+  | 'devices'
+  | 'files'
+  | 'places';
 
 export interface DeterministicEdgeRule {
   /** Stable rule id, recorded on the edge as `properties.rule`. */
@@ -66,9 +68,11 @@ export interface DeterministicEdgeRule {
  * | communications.to_entity_ids                  | Person -RECEIVED→ Communication            |
  * | events.organizer_entity_id                    | Person -PARTICIPATED_IN→ Event (organizer) |
  * | events.participant_entity_ids                 | Person -PARTICIPATED_IN→ Event             |
- * | events.location_entity_id                     | Event -HAPPENED_AT→ Place                  |
+ * | events.location_entity_id                     | Event -LOCATED_AT→ Place                   |
  * | events.parent_event_id                        | Event -PART_OF→ Event                      |
- * | content.event_id                              | Content -PART_OF→ Event                    |
+ * | content.event_id                              | Content -DOCUMENTS→ Event                  |
+ * | entities.parent_place_id (Place/Location)     | Place -PART_OF→ Place                      |
+ * | files.parent_id (via File entity mirror)      | File -DERIVED_FROM→ File                   |
  * | inventory.last_seen_place_entity_id           | Item -LOCATED_AT→ Place                    |
  * | receipts.merchant × place_entity_id           | Merchant -LOCATED_AT→ Place                |
  * | receipts.document_content_id × event_id       | Content -PART_OF→ Event (the purchase)     |
@@ -154,10 +158,10 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
   },
   {
     id: 'event.happened_at',
-    description: 'Event → Place it happened at',
-    relationshipType: RelationshipType.HAPPENED_AT,
+    description: 'Event → Place it happened at (canonical LOCATED_AT; HAPPENED_AT is a write alias)',
+    relationshipType: RelationshipType.LOCATED_AT,
     strength: 0.6,
-    properties: { derived_from: 'events.location_entity_id' },
+    properties: { derived_from: 'events.location_entity_id', layer: 'L0' },
     source: 'events',
     table: 'ci.events e',
     userColumn: 'e.user_id',
@@ -183,11 +187,11 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     candidateWhere: 'e.parent_event_id IS NOT NULL',
   },
   {
-    id: 'content.part_of_event',
-    description: 'Content → the Event it belongs to',
-    relationshipType: RelationshipType.PART_OF,
+    id: 'content.documents_event',
+    description: 'Content → the Event it documents (canonical DOCUMENTS; PART_OF rows are normalised)',
+    relationshipType: RelationshipType.DOCUMENTS,
     strength: 0.7,
-    properties: { derived_from: 'content.event_id' },
+    properties: { derived_from: 'content.event_id', layer: 'L0' },
     source: 'content',
     table: 'ci.content ct',
     userColumn: 'ct.user_id',
@@ -230,9 +234,9 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
   {
     id: 'receipt.document_part_of_event',
     description: 'Receipt document Content → the purchase Event',
-    relationshipType: RelationshipType.PART_OF,
+    relationshipType: RelationshipType.DOCUMENTS,
     strength: 0.7,
-    properties: { derived_from: 'receipts.document_content_id x receipts.event_id' },
+    properties: { derived_from: 'receipts.document_content_id x receipts.event_id', layer: 'L0' },
     source: 'receipts',
     table: 'ci.receipts r',
     userColumn: 'r.user_id',
@@ -245,9 +249,9 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
   {
     id: 'receipt.event_at_place',
     description: 'Purchase Event → the Place it happened at',
-    relationshipType: RelationshipType.HAPPENED_AT,
+    relationshipType: RelationshipType.LOCATED_AT,
     strength: 0.6,
-    properties: { derived_from: 'receipts.event_id x receipts.place_entity_id' },
+    properties: { derived_from: 'receipts.event_id x receipts.place_entity_id', layer: 'L0' },
     source: 'receipts',
     table: 'ci.receipts r',
     userColumn: 'r.user_id',
@@ -338,6 +342,44 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     fromIdExpr: 'u.entity_id',
     toIdExpr: 'd.device_entity_id',
     candidateWhere: 'd.device_entity_id IS NOT NULL AND u.entity_id IS NOT NULL',
+  },
+  {
+    // Place hierarchy: child Place/Location → parent via entities.parent_place_id.
+    id: 'place.child_of',
+    description: 'Place → its parent Place',
+    relationshipType: RelationshipType.PART_OF,
+    strength: 0.9,
+    properties: { derived_from: 'entities.parent_place_id', layer: 'L0' },
+    source: 'places',
+    table: `ci.entities e`,
+    userColumn: 'e.owner_user_id',
+    timeColumn: 'e.created_at',
+    idColumn: 'e.entity_id',
+    fromIdExpr: 'e.entity_id',
+    toIdExpr: 'e.parent_place_id',
+    candidateWhere:
+      `e.parent_place_id IS NOT NULL AND e.entity_type IN ('Location', 'Place') AND e.is_active = TRUE`,
+  },
+  {
+    // File variant → parent file, resolved through the linked File graph entity.
+    id: 'file.derived_from',
+    description: 'File entity → parent File entity (ci.files.parent_id)',
+    relationshipType: RelationshipType.DERIVED_FROM,
+    strength: 0.8,
+    properties: { derived_from: 'files.parent_id', layer: 'L0' },
+    source: 'files',
+    table:
+      `ci.files f ` +
+      `JOIN ci.entities ef ON ef.linked_table = 'files' AND ef.linked_id = f.id::text ` +
+      `AND ef.owner_user_id = f.user_id AND ef.entity_type = 'File' AND ef.is_active = TRUE ` +
+      `JOIN ci.entities ep ON ep.linked_table = 'files' AND ep.linked_id = f.parent_id::text ` +
+      `AND ep.owner_user_id = f.user_id AND ep.entity_type = 'File' AND ep.is_active = TRUE`,
+    userColumn: 'f.user_id',
+    timeColumn: 'f.created_at',
+    idColumn: 'f.id',
+    fromIdExpr: 'ef.entity_id',
+    toIdExpr: 'ep.entity_id',
+    candidateWhere: 'f.parent_id IS NOT NULL',
   },
 ];
 

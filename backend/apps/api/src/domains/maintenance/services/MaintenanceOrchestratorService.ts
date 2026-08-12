@@ -16,6 +16,7 @@ import {
   type CommunicationLinkBackfillOptions,
   CommunicationLinkBackfillService,
 } from './CommunicationLinkBackfillService';
+import { DerivedRelationshipService } from './DerivedRelationshipService';
 import {
   type DeterministicEdgeBackfillOptions,
   DeterministicEdgeBackfillService,
@@ -30,7 +31,9 @@ import {
   DEFAULT_MAX_GAP_HOURS,
   LocationEstimateService,
 } from './LocationEstimateService';
+import { NoteContentFoldService } from './NoteContentFoldService';
 import { type PersonStubBackfillOptions, PersonStubBackfillService } from './PersonStubBackfillService';
+import { RelationshipNormalizeService } from './RelationshipNormalizeService';
 import { type SearchIndexBackfillOptions, SearchIndexBackfillService } from './SearchIndexBackfillService';
 
 /**
@@ -47,6 +50,9 @@ export const ORCHESTRATE_STAGES = [
   'link_communications',
   'link_events',
   'materialize_edges',
+  'normalize_relationships',
+  'derive_relationships',
+  'fold_notes',
   'extract_graph',
   'geocode',
   'reverse_geocode',
@@ -176,6 +182,9 @@ export class MaintenanceOrchestratorService {
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
     private readonly deterministicEdgeBackfillService: DeterministicEdgeBackfillService,
+    private readonly relationshipNormalizeService: RelationshipNormalizeService,
+    private readonly derivedRelationshipService: DerivedRelationshipService,
+    private readonly noteContentFoldService: NoteContentFoldService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly locationEstimateService: LocationEstimateService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
@@ -333,6 +342,15 @@ export class MaintenanceOrchestratorService {
           ...options.materializeEdges,
           onProgress: (partial) => progress({ ...partial }),
         });
+
+      case 'normalize_relationships':
+        return this.relationshipNormalizeService.normalize(userId);
+
+      case 'derive_relationships':
+        return this.derivedRelationshipService.derive(userId);
+
+      case 'fold_notes':
+        return this.noteContentFoldService.fold(userId);
 
       case 'extract_graph':
         return this.graphEnrichmentService.enrich(userId, {

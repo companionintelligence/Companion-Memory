@@ -19,6 +19,7 @@ import {
 import { NoteService } from '@ci/domains/notes';
 
 import { type Relationship, RelationshipEntity } from '../entities/RelationshipEntity';
+import { isSymmetric, normalizeRelationship } from '../relationshipNormalize';
 import {
   type CreateRelationshipDto,
   type UpdateRelationshipDto,
@@ -75,63 +76,126 @@ export class RelationshipService {
   }
 
   /**
-   * Maps a free-form relationship-type string onto the RelationshipType enum
-   * and verifies the resulting type is allowed between the given from/to node
-   * types per RelationshipMap. Returns null if the type is unknown or not
-   * permitted for the endpoint pair.
+   * Maps a free-form relationship-type string onto the canonical RelationshipType
+   * (via {@link normalizeRelationship}) and verifies it is allowed between the
+   * given from/to node types per RelationshipMap. Returns null if unknown,
+   * rejected (`IS`), or not permitted for the endpoint pair.
    */
   resolveType(raw: string, fromType: string, toType: string): keyof typeof RelationshipType | null {
-    const key = raw.trim().toUpperCase() as keyof typeof RelationshipType;
+    const normalized = normalizeRelationship(raw);
 
-    if (!(key in RelationshipType)) {
+    if (normalized == null || normalized.reject) {
       return null;
     }
 
-    const fromMap = RelationshipMap[fromType as keyof typeof RelationshipMap];
+    let from = fromType;
+    let to = toType;
 
-    if (!fromMap || !(toType in fromMap)) {
+    if (normalized.swapEndpoints) {
+      from = toType;
+      to = fromType;
+    }
+
+    const fromMap = RelationshipMap[from as keyof typeof RelationshipMap];
+
+    if (!fromMap || !(to in fromMap)) {
       return null;
     }
 
-    const allowed = fromMap[toType as keyof typeof fromMap] as readonly RelationshipType[];
+    const allowed = fromMap[to as keyof typeof fromMap] as readonly RelationshipType[];
 
-    return allowed.includes(RelationshipType[key]) ? key : null;
+    return allowed.includes(normalized.type)
+      ? (normalized.type as keyof typeof RelationshipType)
+      : null;
+  }
+
+  /**
+   * Canonicalise + allowlist a create/upsert DTO. Swaps endpoints for inverse
+   * aliases, stamps symmetric `isBidirectional`, merges alias properties.
+   */
+  private prepareWrite(data: CreateRelationshipDto): CreateRelationshipDto {
+    const normalized = normalizeRelationship(data.type);
+
+    if (normalized == null) {
+      throw new Error(`Unknown relationship type: ${data.type}`);
+    }
+
+    if (normalized.reject) {
+      throw new Error(normalized.reject.reason);
+    }
+
+    let fromNodeId = data.fromNodeId;
+    let fromNodeType = data.fromNodeType;
+    let toNodeId = data.toNodeId;
+    let toNodeType = data.toNodeType;
+
+    if (normalized.swapEndpoints) {
+      fromNodeId = data.toNodeId;
+      fromNodeType = data.toNodeType;
+      toNodeId = data.fromNodeId;
+      toNodeType = data.fromNodeType;
+    }
+
+    if (!(fromNodeType in RelationshipMap)) {
+      throw new Error(`Cannot create relationship from type ${fromNodeType}`);
+    }
+
+    const fromMap = RelationshipMap[fromNodeType as keyof typeof RelationshipMap];
+
+    if (!(toNodeType in fromMap)) {
+      throw new Error(`Cannot create relationship from ${fromNodeType} to ${toNodeType}`);
+    }
+
+    const allowedTypes = fromMap[toNodeType as keyof typeof fromMap] as readonly RelationshipType[];
+
+    if (!allowedTypes.includes(normalized.type)) {
+      throw new Error(
+        `Cannot create relationship of type ${normalized.type} from ${fromNodeType} to ${toNodeType} ` +
+          `(cell not in RelationshipMap; nearest: ${allowedTypes.slice(0, 3).join(', ') || 'none'})`,
+      );
+    }
+
+    if (normalized.type === RelationshipType.ASSOCIATED_WITH) {
+      this.logger.warn('ASSOCIATED_WITH used as fallback — prefer a specific matrix type', {
+        fromNodeType,
+        toNodeType,
+        caller: 'RelationshipService',
+      });
+    }
+
+    return {
+      ...data,
+      fromNodeId,
+      fromNodeType,
+      toNodeId,
+      toNodeType,
+      type: normalized.type as keyof typeof RelationshipType,
+      isBidirectional: isSymmetric(normalized.type) ? true : (data.isBidirectional ?? false),
+      properties: {
+        ...(typeof data.properties === 'object' && data.properties != null ? data.properties : {}),
+        ...(normalized.properties ?? {}),
+      },
+    };
   }
 
   async create(context: UserServiceContext, data: CreateRelationshipDto): Promise<Relationship | null> {
-    const fromNode = await this.findNodeById(context, data.fromNodeId, data.fromNodeType);
+    const prepared = this.prepareWrite(data);
+
+    const fromNode = await this.findNodeById(context, prepared.fromNodeId, prepared.fromNodeType);
 
     if (fromNode == null) {
-      throw new Error(`Node with id ${data.fromNodeId} and type ${data.fromNodeType} not found`);
+      throw new Error(`Node with id ${prepared.fromNodeId} and type ${prepared.fromNodeType} not found`);
     }
 
-    const toNode = await this.findNodeById(context, data.toNodeId, data.toNodeType);
+    const toNode = await this.findNodeById(context, prepared.toNodeId, prepared.toNodeType);
 
     if (toNode == null) {
-      throw new Error(`Node with id ${data.toNodeId} and type ${data.toNodeType} not found`);
-    }
-
-    if (!(data.fromNodeType in RelationshipMap)) {
-      throw new Error(`Cannot create relationship from type ${data.fromNodeType}`);
-    }
-
-    const fromMap = RelationshipMap[data.fromNodeType as keyof typeof RelationshipMap];
-
-    if (!(data.toNodeType in fromMap)) {
-      throw new Error(`Cannot create relationship from ${data.fromNodeType} to ${data.toNodeType}`);
-    }
-
-    const allowedTypes = fromMap[data.toNodeType as keyof typeof fromMap];
-
-    if (!allowedTypes.includes(data.type as RelationshipType)) {
-      throw new Error(
-        `Cannot create relationship of type ${data.type} from ${data.fromNodeType} to ${data.toNodeType}`,
-      );
+      throw new Error(`Node with id ${prepared.toNodeId} and type ${prepared.toNodeType} not found`);
     }
 
     const record = this.relationshipRepository.create({
       id: uuidv7(),
-      ...data,
+      ...prepared,
       userId: context.userId,
     });
 
@@ -147,18 +211,18 @@ export class RelationshipService {
       // we hit a duplicate key error.
       if (err instanceof QueryFailedError && err.driverError?.code === PgErrorCode.UNIQUE_VIOLATION) {
         this.logger.log('Attempted to create duplicate relationship', {
-          fromNodeId: data.fromNodeId,
-          toNodeId: data.toNodeId,
-          type: data.type,
+          fromNodeId: prepared.fromNodeId,
+          toNodeId: prepared.toNodeId,
+          type: prepared.type,
         });
 
         const existing = await this.relationshipRepository.findOne({
           where: {
-            fromNodeId: data.fromNodeId,
-            fromNodeType: data.fromNodeType,
-            toNodeId: data.toNodeId,
-            toNodeType: data.toNodeType,
-            type: data.type,
+            fromNodeId: prepared.fromNodeId,
+            fromNodeType: prepared.fromNodeType,
+            toNodeId: prepared.toNodeId,
+            toNodeType: prepared.toNodeType,
+            type: prepared.type,
             userId: context.userId,
           },
         });
@@ -182,23 +246,25 @@ export class RelationshipService {
   // not implemented here, but could be added in the future if needed. E.g. is
   // discovering friends from different social media sources.
   async upsert(context: UserServiceContext, data: CreateRelationshipDto): Promise<Relationship> {
-    const fromNode = await this.findNodeById(context, data.fromNodeId, data.fromNodeType);
+    const prepared = this.prepareWrite(data);
+
+    const fromNode = await this.findNodeById(context, prepared.fromNodeId, prepared.fromNodeType);
 
     if (fromNode == null) {
-      throw new Error(`Node with id ${data.fromNodeId} and type ${data.fromNodeType} not found`);
+      throw new Error(`Node with id ${prepared.fromNodeId} and type ${prepared.fromNodeType} not found`);
     }
 
-    const toNode = await this.findNodeById(context, data.toNodeId, data.toNodeType);
+    const toNode = await this.findNodeById(context, prepared.toNodeId, prepared.toNodeType);
 
     if (toNode == null) {
-      throw new Error(`Node with id ${data.toNodeId} and type ${data.toNodeType} not found`);
+      throw new Error(`Node with id ${prepared.toNodeId} and type ${prepared.toNodeType} not found`);
     }
 
     let record = await this.relationshipRepository.findOne({
       where: {
-        fromNodeId: data.fromNodeId,
-        toNodeId: data.toNodeId,
-        type: data.type,
+        fromNodeId: prepared.fromNodeId,
+        toNodeId: prepared.toNodeId,
+        type: prepared.type,
         userId: context.userId,
       },
     });
@@ -206,15 +272,15 @@ export class RelationshipService {
     if (record == null) {
       record = this.relationshipRepository.create({
         id: uuidv7(),
-        ...data,
+        ...prepared,
         userId: context.userId,
       });
     } else {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { id, properties, type, toNodeId, fromNodeId, ...updateData } = data;
+      const { id, properties, type, toNodeId, fromNodeId, ...updateData } = prepared;
 
       Object.assign(record, updateData);
-
+      record.isBidirectional = prepared.isBidirectional ?? record.isBidirectional;
       // TODO: Merge properties instead of ignoring them.
     }
 

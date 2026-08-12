@@ -376,6 +376,22 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
     maxStaleness: 3 * DAYS,
   },
 
+  [STAGE_IDS.PROMOTE_EDGE_FILE]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  [STAGE_IDS.PROMOTE_EDGE_PLACE]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
   /**
    * WEEKLY, WINDOWED, CAPPED. Forward-geocodes `ci.events.location_name`
    * through Portal to a paid provider.

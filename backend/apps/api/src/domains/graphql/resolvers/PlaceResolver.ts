@@ -4,7 +4,7 @@ import { Args, Float, ID, Int, Mutation, Parent, Query, Resolver, ResolveField }
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { type PlaceKind, PlaceService } from '@ci/domains/memory';
+import { GraphQueryService, type PlaceKind, PlaceService } from '@ci/domains/memory';
 
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from '../loaders/PlaceVisitStatsLoader';
@@ -18,7 +18,9 @@ import { PlaceEdge } from '../types/PlaceEdge';
 import { PlaceNearType } from '../types/PlaceNearType';
 import { PlaceType } from '../types/PlaceType';
 import { PlaceVisitStatsType } from '../types/PlaceVisitStatsType';
+import { RelationshipType } from '../types/RelationshipType';
 import { UpdatePlaceInput } from '../types/UpdatePlaceInput';
+import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
 
 const PLACE_KINDS: PlaceKind[] = [
@@ -85,6 +87,7 @@ export class PlaceResolver {
     private readonly placeLoader: PlaceLoader,
     private readonly placeVisitStatsLoader: PlaceVisitStatsLoader,
     private readonly tagLoader: TagLoader,
+    private readonly graphQuery: GraphQueryService,
   ) {}
 
   @Mutation(() => PlaceType)
@@ -370,5 +373,45 @@ export class PlaceResolver {
     const place = await this.placeLoader.load(serviceContext, parentPlaceId);
 
     return place ? PlaceType.toType(place) : null;
+  }
+
+  /** Outbound life-graph edges from this place. */
+  @ResolveField(() => [RelationshipType])
+  async outgoingRelationships(
+    @Context() context: RequestContext,
+    @Parent() parent: PlaceType,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ): Promise<RelationshipType[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
+      entityIds: [parent.__source.id],
+      direction: 'outbound',
+    });
+
+    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+  }
+
+  /** Inbound life-graph edges to this place (visits, located_at, …). */
+  @ResolveField(() => [RelationshipType])
+  async incomingRelationships(
+    @Context() context: RequestContext,
+    @Parent() parent: PlaceType,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ): Promise<RelationshipType[]> {
+    const serviceContext = toServiceContext(context);
+    if (typeof serviceContext.userId !== 'string') {
+      return [];
+    }
+
+    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
+      entityIds: [parent.__source.id],
+      direction: 'inbound',
+    });
+
+    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
   }
 }

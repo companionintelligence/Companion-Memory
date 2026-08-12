@@ -230,7 +230,7 @@ describe('DeterministicEdgeBackfillService.backfill', () => {
     expect(result.rules).toEqual([
       {
         rule: 'event.happened_at',
-        relationshipType: 'HAPPENED_AT',
+        relationshipType: 'LOCATED_AT',
         edgesCreated: 0,
         windows: 0,
         range: null,

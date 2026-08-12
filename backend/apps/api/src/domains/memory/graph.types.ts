@@ -1,7 +1,14 @@
+/**
+ * Graph `entity_type` vocabulary. Canonical CTI surface (life-graph matrix):
+ * Person · Pet · Group · Place · Item · Event · Content · Communication · Concept · File.
+ * Legacy aliases (Location, Object, Thing, Contact, Goal, Tag) remain readable during migration.
+ */
 export const ENTITY_TYPES = [
   'Person',
+  'Pet',
+  'Group',
   'Concept',
-  'Location',
+  'Location', // legacy Place discriminator — explorer maps place → both
   'Object',
   'Event',
   'Goal',
@@ -23,21 +30,21 @@ export type EntityType = (typeof ENTITY_TYPES)[number];
  * view can honor the explorer's entity-type filter (view parity).
  *
  * One vocabulary direction: explorer → graph. Canonical mappings are
- * `person` → `Person`, `place` → `Location`, `item` → `Object`/`Item` (no `Thing`/`Place`/
- * `Contact` aliases). Explorer types with no graph representation map to `[]`. Graph types
- * absent from any value here (e.g. `Concept`, `Goal`, `Tag`) have no explorer equivalent and
- * are treated as "connective" nodes — never excluded by the type filter.
+ * `person` → `Person`, `place` → `Location`+`Place` (rename in flight),
+ * `item` → `Object`/`Item`. Notes fold to Content (user_created provenance) and
+ * appear under `content`. Explorer types with no graph representation map to `[]`.
+ * Connective CTI types (Concept, Pet, Group) are never excluded by the type filter.
  */
 export const EXPLORER_TO_GRAPH_ENTITY_TYPES: Record<string, string[]> = {
-  person: ['Person'],
-  place: ['Location'],
-  item: ['Object', 'Item'],
+  person: ['Person', 'Contact'],
+  place: ['Location', 'Place'],
+  item: ['Object', 'Item', 'Thing'],
   event: ['Event'],
   content: ['Content'],
   file: ['File'],
-  note: [],
+  note: ['Content'], // Note → Content fold (#1945)
   communication: ['Communication'],
-  'browser-activity': [],
+  'browser-activity': ['Event', 'Content'],
 };
 
 /**
@@ -74,35 +81,62 @@ export function graphTypesToExclude(selectedExplorerTypes: string[]): string[] {
   return Array.from(excluded);
 }
 
+/** Mirror of graph RelationshipType enum values used by memory-domain filters. */
 export const RELATIONSHIP_TYPES = [
   'PREFERS',
   'DISLIKES',
-  'KNOWS',
-  'WORKS_WITH',
-  'COLLABORATED_WITH',
-  'LIVES_IN',
-  'STUDIES_AT',
-  'WORKS_AT',
-  'LIVES_NEAR',
-  'VISITED',
-  'OWNS',
   'INTERESTED_IN',
-  'CREATED',
-  'MENTORED',
-  'TAUGHT',
-  'LEARNED_FROM',
-  'PARTICIPATED_IN',
+  'PURSUES',
+  'ABOUT',
+  'MENTIONS',
+  'KNOWS',
+  'FRIENDS_WITH',
+  'PARTNER_OF',
   'SPOUSE',
   'PARENT_OF',
   'CHILD_OF',
   'SIBLING_OF',
   'FAMILY_MEMBER',
+  'WORKS_WITH',
+  'COLLABORATED_WITH',
+  'INDUSTRY_CONNECTION',
+  'SHARES_INTERESTS_WITH',
+  'MENTORED',
+  'TAUGHT',
+  'LEARNED_FROM',
+  'CARES_FOR',
+  'CLIENT_OF',
+  'LIVES_WITH',
+  'MET_WITH',
+  'EMAILED',
+  'RECEIVED_EMAIL_FROM',
+  'MESSAGED',
+  'CALLED',
+  'COMMUNICATES_WITH',
+  'ORGANIZED_EVENT_WITH',
+  'EDITED_WITH',
+  'LIVES_IN',
+  'STUDIES_AT',
+  'WORKS_AT',
+  'LIVES_NEAR',
+  'VISITED',
+  'FREQUENTS',
+  'OWNS',
+  'CREATED',
+  'USES',
+  'MEMBER_OF',
+  'PARTICIPATED_IN',
+  'SENT',
+  'RECEIVED',
   'LOCATED_AT',
   'HAPPENED_AT',
   'AT_LOCATION',
-  'SENT',
-  'RECEIVED',
   'PART_OF',
+  'DOCUMENTS',
+  'ATTACHED_TO',
+  'DERIVED_FROM',
+  'REPLIES_TO',
+  'ASSOCIATED_WITH',
 ] as const;
 
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];

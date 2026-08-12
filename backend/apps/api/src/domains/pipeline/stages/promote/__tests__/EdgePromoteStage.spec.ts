@@ -10,8 +10,10 @@ import {
   DeviceEdgePromoteStage,
   EDGE_PROJECTION_RULE_GENERATION,
   EventEdgePromoteStage,
+  FileEdgePromoteStage,
   InventoryEdgePromoteStage,
   ObservationEdgePromoteStage,
+  PlaceEdgePromoteStage,
   PositionEdgePromoteStage,
   PROMOTE_EDGE_COMMUNICATION_STAGE_ID,
   PROMOTE_EDGE_COMMUNICATION_VERSION,
@@ -19,8 +21,12 @@ import {
   PROMOTE_EDGE_DEVICE_VERSION,
   PROMOTE_EDGE_EVENT_STAGE_ID,
   PROMOTE_EDGE_EVENT_VERSION,
+  PROMOTE_EDGE_FILE_STAGE_ID,
+  PROMOTE_EDGE_FILE_VERSION,
   PROMOTE_EDGE_OBSERVATION_STAGE_ID,
   PROMOTE_EDGE_OBSERVATION_VERSION,
+  PROMOTE_EDGE_PLACE_STAGE_ID,
+  PROMOTE_EDGE_PLACE_VERSION,
   PROMOTE_EDGE_POSITION_STAGE_ID,
   PROMOTE_EDGE_POSITION_VERSION,
   PROMOTE_EDGE_RECEIPT_STAGE_ID,
@@ -58,6 +64,8 @@ describe('EdgePromoteStage', () => {
       expect(PROMOTE_EDGE_OBSERVATION_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_OBSERVATION);
       expect(PROMOTE_EDGE_POSITION_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_POSITION);
       expect(PROMOTE_EDGE_DEVICE_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_DEVICE);
+      expect(PROMOTE_EDGE_FILE_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_FILE);
+      expect(PROMOTE_EDGE_PLACE_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_PLACE);
     });
 
     it('derives versions that agree with STAGE_VERSIONS', () => {
@@ -71,6 +79,8 @@ describe('EdgePromoteStage', () => {
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_OBSERVATION]).toBe(PROMOTE_EDGE_OBSERVATION_VERSION);
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_POSITION]).toBe(PROMOTE_EDGE_POSITION_VERSION);
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_DEVICE]).toBe(PROMOTE_EDGE_DEVICE_VERSION);
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_FILE]).toBe(PROMOTE_EDGE_FILE_VERSION);
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_PLACE]).toBe(PROMOTE_EDGE_PLACE_VERSION);
     });
 
     it('sweeps every source table the matrix reads — a rule without a stage never runs', async () => {
@@ -83,6 +93,8 @@ describe('EdgePromoteStage', () => {
         new ObservationEdgePromoteStage(makeService(), makeLogger()),
         new PositionEdgePromoteStage(makeService(), makeLogger()),
         new DeviceEdgePromoteStage(makeService(), makeLogger()),
+        new FileEdgePromoteStage(makeService(), makeLogger()),
+        new PlaceEdgePromoteStage(makeService(), makeLogger()),
       ];
 
       // Recover each stage's sourceKind from the call it makes; compare the

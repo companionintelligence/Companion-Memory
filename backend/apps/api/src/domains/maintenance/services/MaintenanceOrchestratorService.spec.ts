@@ -110,6 +110,27 @@ function makeService() {
       return { edgesCreated: 0, rules: [] };
     }),
   };
+  const relationshipNormalize = {
+    normalize: jest.fn(async () => {
+      callOrder.push('normalize_relationships');
+
+      return { renamed: 0, swapped: 0, deletedIs: 0, bidirectionalStamped: 0 };
+    }),
+  };
+  const derivedRelationships = {
+    derive: jest.fn(async () => {
+      callOrder.push('derive_relationships');
+
+      return { communicatesWith: 0, frequents: 0, groupsReified: 0 };
+    }),
+  };
+  const noteFold = {
+    fold: jest.fn(async () => {
+      callOrder.push('fold_notes');
+
+      return { notesFolded: 0 };
+    }),
+  };
 
   const service = new MaintenanceOrchestratorService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -126,6 +147,12 @@ function makeService() {
     eventPart as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     edgeMaterialize as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    relationshipNormalize as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    derivedRelationships as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    noteFold as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     graphEnrich as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

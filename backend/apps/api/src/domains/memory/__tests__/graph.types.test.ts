@@ -10,23 +10,24 @@ describe('graphTypesToExclude', () => {
   it('excludes graph types mapped from deselected explorer types, keeping the selected ones', () => {
     const excluded = graphTypesToExclude(['person', 'place']);
 
-    // Selected: person -> Person, place -> Location must survive.
+    // Selected: person → Person/Contact, place → Location/Place must survive.
     expect(excluded).not.toContain('Person');
+    expect(excluded).not.toContain('Contact');
     expect(excluded).not.toContain('Location');
+    expect(excluded).not.toContain('Place');
 
     // Deselected: event/content/file/item/communication map to graph types that must be excluded.
     expect(excluded).toContain('Event');
     expect(excluded).toContain('Content');
     expect(excluded).toContain('File');
     expect(excluded).toContain('Communication');
-    expect(excluded).toEqual(expect.arrayContaining(['Object', 'Item']));
-    expect(excluded).not.toContain('Thing');
+    expect(excluded).toEqual(expect.arrayContaining(['Object', 'Item', 'Thing']));
   });
 
-  it('never excludes connective NER types (no explorer equivalent)', () => {
+  it('never excludes connective CTI types (Pet, Group, Concept)', () => {
     const excluded = graphTypesToExclude(['person']);
 
-    for (const connective of ['Concept', 'Goal', 'Tag']) {
+    for (const connective of ['Concept', 'Goal', 'Tag', 'Pet', 'Group']) {
       expect(excluded).not.toContain(connective);
     }
   });

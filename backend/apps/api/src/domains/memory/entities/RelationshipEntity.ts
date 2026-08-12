@@ -8,8 +8,14 @@ export class RelationshipEntity {
   @Column({ type: 'uuid' })
   from_entity_id!: string;
 
+  @Column({ type: 'text', nullable: true })
+  from_entity_type!: string | null;
+
   @Column({ type: 'uuid' })
   to_entity_id!: string;
+
+  @Column({ type: 'text', nullable: true })
+  to_entity_type!: string | null;
 
   @Column({ type: 'text' })
   relationship_type!: string;
