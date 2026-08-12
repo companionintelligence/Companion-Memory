@@ -104,6 +104,25 @@ export class GraphUtilityService {
     });
   }
 
+  /**
+   * Active-node counts per `entity_type`, largest first. Cheap (one GROUP BY
+   * over the user's entities) and the input the overview's per-type budget
+   * split needs: which data types exist in this account, and how many of each.
+   */
+  async getEntityTypeCounts(ownerUserId: string): Promise<Array<{ entityType: string; count: number }>> {
+    const rows: Array<{ entity_type: string; count: string }> = await this.entityRepo
+      .createQueryBuilder('entity')
+      .select('entity.entity_type', 'entity_type')
+      .addSelect('COUNT(*)', 'count')
+      .where('entity.owner_user_id = :ownerUserId', { ownerUserId })
+      .andWhere('entity.is_active = true')
+      .groupBy('entity.entity_type')
+      .orderBy('count', 'DESC')
+      .getRawMany();
+
+    return rows.map((row) => ({ entityType: row.entity_type, count: Number(row.count) }));
+  }
+
   async getNodesByIds(entityIds: string[], ownerUserId: string): Promise<GraphNodeEntity[]> {
     if (entityIds.length === 0) {
       return [];

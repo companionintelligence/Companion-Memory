@@ -46,6 +46,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
       getRelationships?: jest.Mock;
       getEntitiesForEvents?: jest.Mock;
       traverseGraph?: jest.Mock;
+      getEntityTypeCounts?: jest.Mock;
     } = {},
   ) {
     const graphQuery = {
@@ -56,6 +57,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
       getEntityIdsByTagSources: overrides.getEntityIdsByTagSources ?? jest.fn(async () => []),
       getEntityIdsBySourceRecordIds: overrides.getEntityIdsBySourceRecordIds ?? jest.fn(async () => []),
       traverseGraph: overrides.traverseGraph ?? jest.fn(async () => ({ nodes: new Map(), edges: [] })),
+      getEntityTypeCounts: overrides.getEntityTypeCounts ?? jest.fn(async () => []),
     };
 
     const tagService = {
@@ -261,6 +263,117 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
       expect(graphQuery.traverseGraph).not.toHaveBeenCalled();
       expect(res.data.nodes.map((n) => n.id)).toEqual(['recent-1']);
+    });
+  });
+
+  // The anchor neighborhood BFS is first-come-first-served over whatever edges
+  // the anchor has — on a real account one dominant type (Persons) filled all
+  // 200 slots while 183k Communications, 108k Events and 37k Content rows never
+  // appeared. The overview must cap the neighborhood's share and give every
+  // entity type in the account a slice of the remaining budget.
+  describe('per-type representation', () => {
+    const anchor = {
+      entity_id: 'anchor',
+      entity_type: 'Person',
+      name: 'Me',
+      description: null,
+      properties: {},
+    };
+
+    function nodesOf(type: string, count: number) {
+      return Array.from({ length: count }, (_, index) => ({
+        entity_id: `${type.toLowerCase()}-${index}`,
+        entity_type: type,
+        name: `${type} ${index}`,
+        description: null,
+        properties: {},
+      }));
+    }
+
+    it('caps the anchor neighborhood at half the budget and represents every type', async () => {
+      // A neighborhood big enough to consume the whole 200-node budget on its own.
+      const neighborhood = new Map(
+        [anchor, ...nodesOf('Person', 250)].map((node) => [node.entity_id, node]),
+      );
+      const getUserEntity = jest.fn(async () => anchor);
+      const traverseGraph = jest.fn(async () => ({ nodes: neighborhood, edges: [] }));
+      const getEntityTypeCounts = jest.fn(async () => [
+        { entityType: 'Communication', count: 183353 },
+        { entityType: 'Event', count: 108792 },
+        { entityType: 'Content', count: 37237 },
+        { entityType: 'Person', count: 5943 },
+        { entityType: 'Location', count: 102 },
+        { entityType: 'Concept', count: 13 },
+      ]);
+      const getNodes = jest.fn(async (_owner: string, options: { entityType?: string; limit?: number }) =>
+        options.entityType ? nodesOf(options.entityType, options.limit ?? 0) : [],
+      );
+
+      const { controller } = setup({ getUserEntity, traverseGraph, getEntityTypeCounts, getNodes });
+
+      const res = await controller.getGraphData(ctx, dataDto());
+
+      const byType = new Map<string, number>();
+      for (const node of res.data.nodes) {
+        byType.set(node.entity_type, (byType.get(node.entity_type) ?? 0) + 1);
+      }
+
+      // Every account type is present, and the neighborhood's Persons hold at
+      // most half the budget (plus the per-type Person slice).
+      for (const type of ['Communication', 'Event', 'Content', 'Person', 'Location', 'Concept']) {
+        expect(byType.get(type) ?? 0).toBeGreaterThan(0);
+      }
+
+      expect(res.data.nodes.length).toBeLessThanOrEqual(200);
+      expect(byType.get('Communication')).toBeGreaterThanOrEqual(15);
+    });
+
+    it('lets a scarce type donate its unused share to the plentiful ones', async () => {
+      const getEntityTypeCounts = jest.fn(async () => [
+        { entityType: 'Communication', count: 100000 },
+        { entityType: 'Concept', count: 2 },
+      ]);
+      const getNodes = jest.fn(async (_owner: string, options: { entityType?: string; limit?: number }) => {
+        if (options.entityType === 'Concept') {
+          return nodesOf('Concept', 2);
+        }
+
+        if (options.entityType === 'Communication') {
+          return nodesOf('Communication', options.limit ?? 0);
+        }
+
+        return [];
+      });
+
+      const { controller } = setup({ getEntityTypeCounts, getNodes });
+
+      const res = await controller.getGraphData(ctx, dataDto());
+
+      const conceptCount = res.data.nodes.filter((n) => n.entity_type === 'Concept').length;
+      const commCount = res.data.nodes.filter((n) => n.entity_type === 'Communication').length;
+
+      expect(conceptCount).toBe(2);
+      // Concept could not use its ~half share; Communication absorbs the rest
+      // of the 200-node budget.
+      expect(commCount).toBe(198);
+    });
+
+    it('excludes deselected types from the per-type fill', async () => {
+      const getEntityTypeCounts = jest.fn(async () => [
+        { entityType: 'Communication', count: 1000 },
+        { entityType: 'Person', count: 50 },
+      ]);
+      const getNodes = jest.fn(async (_owner: string, options: { entityType?: string; limit?: number }) =>
+        options.entityType ? nodesOf(options.entityType, Math.min(options.limit ?? 0, 50)) : [],
+      );
+
+      const { controller } = setup({ getEntityTypeCounts, getNodes });
+
+      // Selecting only `person` excludes Communication.
+      const res = await controller.getGraphData(ctx, dataDto({ includeTypes: ['person'] }));
+
+      expect(res.data.nodes.some((n) => n.entity_type === 'Communication')).toBe(false);
+      expect(res.data.nodes.some((n) => n.entity_type === 'Person')).toBe(true);
     });
   });
 

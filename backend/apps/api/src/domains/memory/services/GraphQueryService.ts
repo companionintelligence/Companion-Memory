@@ -47,6 +47,11 @@ export class GraphQueryService {
     return this.graphUtility.getNodesByIds(entityIds, ownerId);
   }
 
+  /** Active-node counts per entity type — see {@link GraphUtilityService.getEntityTypeCounts}. */
+  getEntityTypeCounts(ownerId: string): Promise<Array<{ entityType: string; count: number }>> {
+    return this.graphUtility.getEntityTypeCounts(ownerId);
+  }
+
   /**
    * Resolve the graph-node `entity_id`s for a set of source-record ids,
    * matching either the node's own `entity_id` or its `linked_id`. Source

@@ -160,6 +160,20 @@ const ANCHOR_NEIGHBORHOOD_DEPTH = 3;
  * separately — this only bounds how far the traversal can expand. */
 const ANCHOR_NEIGHBORHOOD_EDGE_LIMIT = 500;
 
+/**
+ * How much of {@link NODE_LIMIT} the anchor neighborhood may consume before
+ * the per-type fill takes over.
+ *
+ * The neighborhood BFS is first-come-first-served over whatever edges the
+ * anchor happens to have, and on a real account those are overwhelmingly one
+ * type — measured on the appliance this was built against, the anchor's
+ * person↔person email edges filled all 200 slots and the overview rendered
+ * ZERO of the account's 183k Communications, 108k Events, 37k Content rows or
+ * 102 Locations. Half the budget keeps the anchor's social core; the other
+ * half is reserved for showing every data type the account actually has.
+ */
+const ANCHOR_NEIGHBORHOOD_NODE_BUDGET = Math.floor(NODE_LIMIT / 2);
+
 /** Intersect the active filter matches into a single allowed-id set, mirroring
  * the client's `combineMatches`: each active filter ANDs together, and an
  * inactive filter contributes no constraint. Returns `null` when no filter is
@@ -500,13 +514,26 @@ export class GraphController {
   }
 
   /**
-   * Assemble the capped node payload for the graph overview. The frontend seeds
-   * its subgraph from the owner's anchor entity, so a purely recency-ordered
-   * page is the wrong shape: once the account outgrows NODE_LIMIT the anchor
-   * (usually among the oldest entities) and its neighborhood fall off the page
-   * and the client renders an empty graph. Fill the budget from the anchor's
-   * graph neighborhood first, then top up with the most recently created
-   * entities.
+   * Assemble the capped node payload for the graph overview: the anchor's
+   * neighborhood first, then EVERY entity type the account has.
+   *
+   * The frontend seeds its subgraph from the owner's anchor entity, so a
+   * purely recency-ordered page is the wrong shape: once the account outgrows
+   * NODE_LIMIT the anchor (usually among the oldest entities) and its
+   * neighborhood fall off the page and the client renders an empty graph.
+   *
+   * But the neighborhood alone is the wrong shape too, and measurably so: the
+   * BFS is first-come-first-served over whatever edges the anchor has, which
+   * on a real account is one dominant type — it filled all 200 slots with
+   * Persons while the account's 183k Communications, 108k Events, 37k Content
+   * rows and 102 Locations never appeared at all. So the neighborhood is
+   * capped at {@link ANCHOR_NEIGHBORHOOD_NODE_BUDGET} and the remaining budget
+   * is WATERFILLED across every (non-excluded) entity type the account
+   * actually has: types are visited scarcest-first, each takes at most an even
+   * share of what is left, and a type too small to use its share donates the
+   * remainder to the bigger ones. Every data type is represented; no type can
+   * crowd out the rest; the per-type pages themselves are recency-ordered and
+   * deterministic.
    *
    * The anchor itself is always kept, even when the explorer's entity-type
    * filter would exclude it (e.g. the user is a Person and Person is
@@ -531,7 +558,7 @@ export class GraphController {
       });
 
       for (const node of neighborhood.values()) {
-        if (nodeMap.size >= NODE_LIMIT) {
+        if (nodeMap.size >= ANCHOR_NEIGHBORHOOD_NODE_BUDGET) {
           break;
         }
 
@@ -543,6 +570,41 @@ export class GraphController {
       }
     }
 
+    // Per-type waterfill over the remaining budget. Scarcest type first, so a
+    // type with 13 nodes takes its 13 and donates the rest of its share to the
+    // 183k-row types recomputed at each step, instead of wasting budget on a
+    // share it cannot fill.
+    const typeCounts = (await this.graphQuery.getEntityTypeCounts(ownerId))
+      .filter((entry) => !excludedTypes.has(entry.entityType))
+      .sort((a, b) => a.count - b.count);
+
+    let remainingTypes = typeCounts.length;
+    for (const { entityType } of typeCounts) {
+      const remainingBudget = NODE_LIMIT - nodeMap.size;
+      if (remainingBudget <= 0) {
+        break;
+      }
+
+      const share = Math.max(1, Math.floor(remainingBudget / remainingTypes));
+      remainingTypes -= 1;
+
+      const nodes = await this.graphQuery.getNodes(ownerId, { entityType, limit: share });
+      let taken = 0;
+      for (const node of nodes) {
+        if (taken >= share || nodeMap.size >= NODE_LIMIT) {
+          break;
+        }
+
+        if (!nodeMap.has(node.entity_id)) {
+          nodeMap.set(node.entity_id, node);
+          taken += 1;
+        }
+      }
+    }
+
+    // Recency top-up for whatever budget the waterfill could not place (an
+    // account whose types are all tiny, or heavy dup overlap with the
+    // neighborhood).
     if (nodeMap.size < NODE_LIMIT) {
       const recentNodes = await this.graphQuery.getNodes(ownerId, {
         limit: NODE_LIMIT,
