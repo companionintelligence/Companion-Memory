@@ -4,7 +4,7 @@ import { useQuery } from '@apollo/client';
 import { GlobalUID, Portal } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { Button, Sheet, Tooltip } from '@ci/shadcn';
-import { CalendarDays, ChartNetwork, Images, List, Map as MapIcon, type LucideIcon } from '@ci/shadcn/icons';
+import { ChartNetwork, Images, List, Map as MapIcon, type LucideIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
@@ -24,7 +24,6 @@ import {
   type DatePreset,
 } from './Components/ExplorerToolbar/datePresets';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
-import { EventsView } from './EventsView';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
@@ -65,7 +64,6 @@ const VIEW_TABS: Array<{
   { value: 'map', label: 'Map', titleKey: 'MEMORY_VIEW_MAP', Icon: MapIcon },
   { value: 'list', label: 'List', titleKey: 'MEMORY_VIEW_LIST', Icon: List },
   { value: 'gallery', label: 'Gallery', titleKey: 'MEMORY_VIEW_GALLERY', Icon: Images },
-  { value: 'events', label: 'Events', titleKey: 'MEMORY_VIEW_EVENTS', Icon: CalendarDays },
   { value: 'graph', label: 'Graph', titleKey: 'MEMORY_VIEW_GRAPH', Icon: ChartNetwork },
 ];
 
@@ -95,8 +93,10 @@ export default function DesktopMemoryPage() {
     });
   // Advanced filters render inside the header search panel and stay visible.
   // MemoryPage can derive the map's hasLocation scope from `?view=`.
+  // Events is a What-bar filter, not a top-level view — rewrite legacy ?view=events.
   useEffect(() => {
-    if (!searchParams.get('view')) {
+    const view = searchParams.get('view');
+    if (!view || view === 'events') {
       setSearchParams(
         (params) => {
           const nextParams = new URLSearchParams(params);
@@ -313,7 +313,6 @@ export default function DesktopMemoryPage() {
             )}
             {activeTab === 'map' && <DesktopMapView />}
             {activeTab === 'gallery' && <GalleryView />}
-            {activeTab === 'events' && <EventsView />}
             {activeTab === 'graph' && <GraphView variant="desktop" />}
           </div>
         </MemoryHubShell>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
 import { Tabs, Sheet } from '@ci/shadcn';
-import { CalendarDays, ChartNetwork, Images, List, Map as MapIcon } from '@ci/shadcn/icons';
+import { ChartNetwork, Images, List, Map as MapIcon } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -13,7 +13,6 @@ import { useEntityService } from '../MemoryPage/useEntityService';
 import { EntityDetails } from './Components';
 import { ExplorerToolbar, MemorySearchField } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { countActiveFilters } from './Components/ExplorerToolbar/filterParams';
-import { EventsView } from './EventsView';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
@@ -43,8 +42,10 @@ export default function MobileMemoryPage() {
   const activeFilterCount = countActiveFilters(searchParams);
 
   // Reflect the default view in the URL so the query is shareable/restorable.
+  // Events is a What-bar filter, not a top-level view — rewrite legacy ?view=events.
   useEffect(() => {
-    if (!searchParams.get('view')) {
+    const view = searchParams.get('view');
+    if (!view || view === 'events') {
       setSearchParams(
         (params) => {
           const nextParams = new URLSearchParams(params);
@@ -90,7 +91,7 @@ export default function MobileMemoryPage() {
 
               {/* Tab Navigation */}
               <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>
-                <Tabs.List className="grid grid-cols-5 w-full">
+                <Tabs.List className="grid grid-cols-4 w-full">
                   <Tabs.Trigger value="list" className="text-sm flex items-center gap-1">
                     <List className="h-4 w-4" />
                     List
@@ -102,10 +103,6 @@ export default function MobileMemoryPage() {
                   <Tabs.Trigger value="gallery" className="text-sm flex items-center gap-1">
                     <Images className="h-4 w-4" />
                     Gallery
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="events" className="text-sm flex items-center gap-1">
-                    <CalendarDays className="h-4 w-4" />
-                    Events
                   </Tabs.Trigger>
                   <Tabs.Trigger value="graph" className="text-sm flex items-center gap-1">
                     <ChartNetwork className="h-4 w-4" />
@@ -122,8 +119,6 @@ export default function MobileMemoryPage() {
               {activeTab === 'map' && <MobileMapView />}
 
               {activeTab === 'gallery' && <GalleryView />}
-
-              {activeTab === 'events' && <EventsView />}
 
               {activeTab === 'graph' && <GraphView variant="mobile" />}
             </>

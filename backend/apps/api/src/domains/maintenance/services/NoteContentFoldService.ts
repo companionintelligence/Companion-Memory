@@ -20,6 +20,8 @@ export class NoteContentFoldService {
   }
 
   async fold(userId: string): Promise<{ notesFolded: number }> {
+    // entities.linked_id is uuid — compare/insert as uuid, not text.
+    // Insert the entity row first so ci.content's deferred FK is satisfied.
     const inserted: Array<{ id: string }> = await this.dataSource.query(
       `WITH candidates AS (
          SELECT n.id, n.title, n.content, n.created_at, n.updated_at
@@ -30,30 +32,33 @@ export class NoteContentFoldService {
                WHERE e.owner_user_id = $1
                  AND e.entity_type = 'Content'
                  AND e.linked_table = 'notes'
-                 AND e.linked_id = n.id::text
+                 AND e.linked_id = n.id
             )
-       ),
-       detail AS (
-         INSERT INTO ci.content (id, type, text, user_id, created_at, updated_at, entity_type)
-         SELECT c.id, 'note', COALESCE(c.content, c.title, ''), $1, c.created_at, c.updated_at, 'Content'
-           FROM candidates c
-         ON CONFLICT (id) DO NOTHING
-         RETURNING id
        ),
        base AS (
          INSERT INTO ci.entities
            (entity_id, entity_type, name, description, owner_user_id, is_active,
             linked_table, linked_id, properties, created_at, updated_at)
-         SELECT d.id, 'Content',
-                COALESCE((SELECT title FROM ci.notes WHERE id = d.id), 'Note'),
-                NULL, $1, TRUE, 'notes', d.id::text,
+         SELECT c.id, 'Content',
+                COALESCE(c.title, 'Note'),
+                NULL, $1, TRUE, 'notes', c.id,
                 jsonb_build_object('provenance', 'user_created', 'folded_from', 'notes'),
                 NOW(), NOW()
-           FROM detail d
+           FROM candidates c
          ON CONFLICT DO NOTHING
          RETURNING entity_id AS id
+       ),
+       detail AS (
+         INSERT INTO ci.content (id, type, text, user_id, created_at, updated_at, entity_type)
+         SELECT b.id, 'note',
+                COALESCE(n.content, n.title, ''),
+                $1, n.created_at, n.updated_at, 'Content'
+           FROM base b
+           JOIN ci.notes n ON n.id = b.id
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id
        )
-       SELECT id FROM base`,
+       SELECT id FROM detail`,
       [userId],
     );
 

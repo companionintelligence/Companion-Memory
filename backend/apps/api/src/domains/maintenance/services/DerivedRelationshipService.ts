@@ -48,6 +48,8 @@ export class DerivedRelationshipService {
    */
   private async upsertCommunicatesWith(userId: string): Promise<number> {
     return this.dataSource.transaction(async (manager) => {
+      // Historical rows sometimes store entity types in lowercase ('person');
+      // match case-insensitively and always write canonical 'Person'.
       const inserted: Array<{
         relationship_id: string;
         from_entity_id: string;
@@ -57,15 +59,13 @@ export class DerivedRelationshipService {
            SELECT
              LEAST(from_entity_id, to_entity_id) AS a,
              GREATEST(from_entity_id, to_entity_id) AS b,
-             COUNT(*)::int AS n,
-             MAX(from_entity_type) FILTER (WHERE from_entity_id = LEAST(from_entity_id, to_entity_id)) AS a_type,
-             MAX(to_entity_type) FILTER (WHERE to_entity_id = GREATEST(from_entity_id, to_entity_id)) AS b_type
+             COUNT(*)::int AS n
            FROM ci.relationships
           WHERE owner_user_id = $1
             AND is_active = TRUE
             AND relationship_type = ANY($2::text[])
-            AND from_entity_type = 'Person'
-            AND to_entity_type = 'Person'
+            AND lower(from_entity_type) = 'person'
+            AND lower(to_entity_type) = 'person'
             AND from_entity_id <> to_entity_id
           GROUP BY 1, 2
          )
@@ -177,14 +177,13 @@ export class DerivedRelationshipService {
       let created = 0;
 
       for (const cluster of clusters) {
-        // Stable linked_id so re-runs find the same Group.
-        const linkedId = `household:${cluster.place_id}`;
+        // Stable linked_id = place uuid (entities.linked_id is uuid, not text).
         const existing: Array<{ entity_id: string }> = await manager.query(
           `SELECT entity_id FROM ci.entities
             WHERE owner_user_id = $1 AND entity_type = 'Group'
-              AND linked_table = 'derived_group' AND linked_id = $2
+              AND linked_table = 'derived_household' AND linked_id = $2::uuid
             LIMIT 1`,
-          [userId, linkedId],
+          [userId, cluster.place_id],
         );
 
         let groupId = existing[0]?.entity_id;
@@ -193,15 +192,15 @@ export class DerivedRelationshipService {
           const inserted: Array<{ entity_id: string }> = await manager.query(
             `INSERT INTO ci.entities
                (entity_id, entity_type, name, owner_user_id, is_active, linked_table, linked_id, properties)
-             VALUES (gen_random_uuid(), 'Group', $3, $1, TRUE, 'derived_group', $2,
+             VALUES (gen_random_uuid(), 'Group', $3, $1, TRUE, 'derived_household', $2::uuid,
                      jsonb_build_object(
                        'group_kind', 'household',
                        'layer', 'L2',
                        'strength', 0.6,
-                       'provenance', jsonb_build_object('source', 'DerivedRelationshipService', 'place_id', $4)
+                       'provenance', jsonb_build_object('source', 'DerivedRelationshipService', 'place_id', $2)
                      ))
              RETURNING entity_id`,
-            [userId, linkedId, 'Household', cluster.place_id],
+            [userId, cluster.place_id, 'Household'],
           );
           groupId = inserted[0].entity_id;
           created += 1;

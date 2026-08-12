@@ -190,14 +190,41 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
 
   const {
     loading: dotsLoading,
+    hydrating: dotsHydrating,
     error: dotsError,
     nodes: dotNodes,
     userEntityId: dotsUserEntityId,
+    counts: dotsCounts,
+    truncated: dotsTruncated,
+    connectivity: dotsConnectivity,
   } = useGraphDots(authToken, {
     includeTypes: explorerIncludeTypes,
     eventTypes: explorerEventTypes,
     skip: !dotsEligible,
   });
+
+  const dotsUniverseTotal = useMemo(
+    () => Object.values(dotsCounts).reduce((sum, count) => sum + count, 0),
+    [dotsCounts],
+  );
+
+  const sampleHubs = useMemo(() => {
+    if (!dotsEligible) {
+      return { linked: 0, alone: 0 };
+    }
+
+    let linked = 0;
+    let alone = 0;
+    for (const node of dotNodes) {
+      if ((node.degree ?? 0) > 0) {
+        linked += 1;
+      } else {
+        alone += 1;
+      }
+    }
+
+    return { linked, alone };
+  }, [dotsEligible, dotNodes]);
 
   const isFilterActive = filterScope.tags || filterScope.events;
   const [, { setActiveEntity }] = useEntityService();
@@ -782,8 +809,15 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             flyToNodeId={selectedNodeId}
             focusHops={mode === 'focus' ? FOCUS_OWN_HOPS : undefined}
             onViewportChange={handleViewportChange}
+            forceLod={dotsEligible && mode === 'overview'}
+            ambientBreath={dotsEligible && mode === 'overview'}
           />
         ))}
+
+      {/* Soft fog while the second dots wave densifies — canvas stays interactive underneath. */}
+      {dotsEligible && mode === 'overview' && dotsHydrating && displayGraph.nodes.length > 0 && (
+        <div className="constellation-mist absolute inset-0 z-[5]" aria-hidden />
+      )}
 
       {stateOverlay}
 
@@ -828,20 +862,78 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       </div>
 
       {displayGraph.nodes.length > 0 && (
-        <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex max-w-[70%] flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-background/90 px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm">
-          <span className="font-medium text-foreground">
-            {displayGraph.nodes.length} entities · {displayGraph.links.length} connections
-          </span>
-          {legendTypes.map(([type]) => (
-            <span key={type} className="flex items-center gap-1">
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: colorForRawType(type) }}
-                aria-hidden
-              />
-              {formatEnumLabel(type)}
+        <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex max-w-[min(36rem,85%)] flex-col gap-1.5 rounded-md border bg-background/90 px-2.5 py-2 text-xs text-muted-foreground shadow-sm">
+          {dotsEligible && mode === 'overview' && dotsConnectivity && dotsConnectivity.total > 0 && (
+            <div className="flex flex-col gap-1" data-testid="graph-relatedness">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Relatedness
+                </span>
+                <span className="font-semibold tabular-nums text-foreground">
+                  {Math.round(dotsConnectivity.relatedRatio * 100)}% linked
+                </span>
+              </div>
+              <div
+                className="h-1.5 overflow-hidden rounded-full bg-muted"
+                role="meter"
+                aria-label="Share of entities with at least one relationship"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(dotsConnectivity.relatedRatio * 100)}
+              >
+                <div
+                  className="h-full rounded-full bg-primary/80 transition-[width] duration-500 ease-out"
+                  style={{ width: `${Math.max(2, Math.round(dotsConnectivity.relatedRatio * 100))}%` }}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 tabular-nums">
+                <span>
+                  <span className="font-medium text-foreground">
+                    {dotsConnectivity.related.toLocaleString()}
+                  </span>{' '}
+                  related
+                </span>
+                <span className="text-muted-foreground/50">·</span>
+                <span>
+                  <span className="font-medium text-foreground">
+                    {dotsConnectivity.isolated.toLocaleString()}
+                  </span>{' '}
+                  alone
+                </span>
+                <span className="text-muted-foreground/50">·</span>
+                <span>{dotsConnectivity.total.toLocaleString()} total</span>
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium text-foreground">
+              {displayGraph.nodes.length.toLocaleString()}
+              {dotsEligible && dotsUniverseTotal > displayGraph.nodes.length
+                ? ` of ~${dotsUniverseTotal.toLocaleString()}`
+                : ''}{' '}
+              shown
+              {dotsEligible && mode === 'overview'
+                ? ` · ${sampleHubs.linked.toLocaleString()} hubs`
+                : ''}
+              {displayGraph.links.length > 0 ? ` · ${displayGraph.links.length} connections` : ''}
+              {dotsTruncated && dotsEligible ? ' · top by links' : ''}
             </span>
-          ))}
+            {dotsEligible && mode === 'overview' && dotsHydrating && (
+              <span className="constellation-hydrating-chip text-[10px] uppercase tracking-wide text-primary/80">
+                materializing
+              </span>
+            )}
+            {legendTypes.map(([type]) => (
+              <span key={type} className="flex items-center gap-1">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: colorForRawType(type) }}
+                  aria-hidden
+                />
+                {formatEnumLabel(type)}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

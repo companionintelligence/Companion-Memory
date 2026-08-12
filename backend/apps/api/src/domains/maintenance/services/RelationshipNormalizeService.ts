@@ -28,23 +28,61 @@ export class RelationshipNormalizeService {
     bidirectionalStamped: number;
   }> {
     return this.dataSource.transaction(async (manager) => {
-      // Rename aliases in place (same endpoints).
+      // Rename aliases in place (same endpoints). When a canonical twin already
+      // exists, deactivate the alias instead of colliding on the directed uniq.
       const renamed = await manager.query(
-        `UPDATE ci.relationships
-            SET relationship_type = CASE relationship_type
-                  WHEN 'HAPPENED_AT' THEN 'LOCATED_AT'
-                  WHEN 'AT_LOCATION' THEN 'LOCATED_AT'
-                  WHEN 'RELATED_TO' THEN 'ASSOCIATED_WITH'
-                  WHEN 'FRIEND' THEN 'FRIENDS_WITH'
-                  WHEN 'COLLEAGUE' THEN 'WORKS_WITH'
-                  WHEN 'PARTNER' THEN 'PARTNER_OF'
-                  WHEN 'ROMANTIC_PARTNER' THEN 'PARTNER_OF'
-                  ELSE relationship_type
-                END,
-                updated_at = NOW()
-          WHERE owner_user_id = $1
-            AND relationship_type = ANY($2::text[])
-          RETURNING relationship_id`,
+        `WITH aliases AS (
+           SELECT relationship_id, from_entity_id, to_entity_id, relationship_type,
+                  CASE relationship_type
+                    WHEN 'HAPPENED_AT' THEN 'LOCATED_AT'
+                    WHEN 'AT_LOCATION' THEN 'LOCATED_AT'
+                    WHEN 'RELATED_TO' THEN 'ASSOCIATED_WITH'
+                    WHEN 'FRIEND' THEN 'FRIENDS_WITH'
+                    WHEN 'COLLEAGUE' THEN 'WORKS_WITH'
+                    WHEN 'PARTNER' THEN 'PARTNER_OF'
+                    WHEN 'ROMANTIC_PARTNER' THEN 'PARTNER_OF'
+                    ELSE relationship_type
+                  END AS new_type
+             FROM ci.relationships
+            WHERE owner_user_id = $1
+              AND relationship_type = ANY($2::text[])
+         ),
+         colliding AS (
+           SELECT a.relationship_id
+             FROM aliases a
+            WHERE EXISTS (
+              SELECT 1 FROM ci.relationships r
+               WHERE r.from_entity_id = a.from_entity_id
+                 AND r.to_entity_id = a.to_entity_id
+                 AND r.relationship_type = a.new_type
+                 AND r.relationship_id <> a.relationship_id
+            )
+         ),
+         deactivated AS (
+           UPDATE ci.relationships r
+              SET is_active = FALSE,
+                  updated_at = NOW(),
+                  properties = COALESCE(r.properties, '{}'::jsonb)
+                    || jsonb_build_object('normalized_duplicate_of', a.new_type)
+             FROM aliases a
+             JOIN colliding c ON c.relationship_id = a.relationship_id
+            WHERE r.relationship_id = a.relationship_id
+           RETURNING r.relationship_id
+         ),
+         rewritten AS (
+           UPDATE ci.relationships r
+              SET relationship_type = a.new_type,
+                  updated_at = NOW()
+             FROM aliases a
+            WHERE r.relationship_id = a.relationship_id
+              AND NOT EXISTS (
+                SELECT 1 FROM colliding c WHERE c.relationship_id = a.relationship_id
+              )
+           RETURNING r.relationship_id
+         )
+         SELECT relationship_id FROM rewritten
+         UNION ALL
+         SELECT relationship_id FROM deactivated`,
         [
           userId,
           [
@@ -61,14 +99,49 @@ export class RelationshipNormalizeService {
 
       // Content −PART_OF→ Event → DOCUMENTS (same endpoints; matrix gen 4).
       const documents = await manager.query(
-        `UPDATE ci.relationships r
-            SET relationship_type = 'DOCUMENTS',
-                updated_at = NOW()
-          WHERE r.owner_user_id = $1
-            AND r.relationship_type = 'PART_OF'
-            AND r.from_entity_type = 'Content'
-            AND r.to_entity_type = 'Event'
-          RETURNING relationship_id`,
+        `WITH victims AS (
+           SELECT relationship_id, from_entity_id, to_entity_id
+             FROM ci.relationships
+            WHERE owner_user_id = $1
+              AND relationship_type = 'PART_OF'
+              AND from_entity_type = 'Content'
+              AND to_entity_type = 'Event'
+         ),
+         colliding AS (
+           SELECT v.relationship_id
+             FROM victims v
+            WHERE EXISTS (
+              SELECT 1 FROM ci.relationships r
+               WHERE r.from_entity_id = v.from_entity_id
+                 AND r.to_entity_id = v.to_entity_id
+                 AND r.relationship_type = 'DOCUMENTS'
+                 AND r.relationship_id <> v.relationship_id
+            )
+         ),
+         deactivated AS (
+           UPDATE ci.relationships r
+              SET is_active = FALSE,
+                  updated_at = NOW(),
+                  properties = COALESCE(r.properties, '{}'::jsonb)
+                    || jsonb_build_object('normalized_duplicate_of', 'DOCUMENTS')
+             FROM colliding c
+            WHERE r.relationship_id = c.relationship_id
+           RETURNING r.relationship_id
+         ),
+         rewritten AS (
+           UPDATE ci.relationships r
+              SET relationship_type = 'DOCUMENTS',
+                  updated_at = NOW()
+             FROM victims v
+            WHERE r.relationship_id = v.relationship_id
+              AND NOT EXISTS (
+                SELECT 1 FROM colliding c WHERE c.relationship_id = v.relationship_id
+              )
+           RETURNING r.relationship_id
+         )
+         SELECT relationship_id FROM rewritten
+         UNION ALL
+         SELECT relationship_id FROM deactivated`,
         [userId],
       );
 

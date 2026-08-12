@@ -56,13 +56,38 @@ export class GraphQueryService {
   getDotNodes(
     ownerId: string,
     options: { entityType: string; limit: number; offset?: number; eventTypes?: string[] },
-  ): Promise<Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null }>> {
+  ): Promise<
+    Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null; degree: number }>
+  > {
     return this.graphUtility.getDotNodes(ownerId, options);
+  }
+
+  /** Ranked hubs per type (one degrees CTE) — see {@link GraphUtilityService.getRankedDotNodes}. */
+  getRankedDotNodes(
+    ownerId: string,
+    options: {
+      entityTypes: string[];
+      perTypeLimit: number;
+      offset?: number;
+      eventTypes?: string[];
+    },
+  ): Promise<
+    Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null; degree: number }>
+  > {
+    return this.graphUtility.getRankedDotNodes(ownerId, options);
   }
 
   /** Edge counts for a set of entities — see {@link GraphUtilityService.getDegreeCounts}. */
   getDegreeCounts(ownerId: string, entityIds: string[]): Promise<Map<string, number>> {
     return this.graphUtility.getDegreeCounts(ownerId, entityIds);
+  }
+
+  /** Related vs isolated entity counts — see {@link GraphUtilityService.getConnectivitySummary}. */
+  getConnectivitySummary(
+    ownerId: string,
+    excludedEntityTypes: string[] = [],
+  ): Promise<{ total: number; related: number; isolated: number; relatedRatio: number }> {
+    return this.graphUtility.getConnectivitySummary(ownerId, excludedEntityTypes);
   }
 
   /** Capped edges with BOTH endpoints inside the id set — see

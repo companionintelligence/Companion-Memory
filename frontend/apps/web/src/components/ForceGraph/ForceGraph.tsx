@@ -105,6 +105,17 @@ interface ForceGraphProps {
    * Omit to weight every node equally, which is what a general graph browser wants.
    */
   focusHops?: number;
+  /**
+   * Force the dots/LOD rendering path even when the node count is under the auto threshold.
+   * Used by the progressive overview so the first page (~320) already looks like a constellation
+   * and doesn't flip from labelled → dots when the full page lands.
+   */
+  forceLod?: boolean;
+  /**
+   * Soft continuous atmosphere after the force settle: a slow idle breath on the camera and a
+   * rare cool reheat so the constellation never feels frozen. Cheap — sleeps between breaths.
+   */
+  ambientBreath?: boolean;
 }
 
 /**
@@ -313,30 +324,52 @@ const LOD_ZOOM_THRESHOLD = 1.5;
 /** Most labels drawn at once when zoomed in — the busiest nodes in frame win. */
 const LOD_MAX_LABELS = 80;
 /** Dot size at rest; degree still grows a hub, gently. */
-const LOD_DOT_RADIUS = 2.5;
-const LOD_MAX_DOT_RADIUS = 5;
-const LOD_DOT_DEGREE_FACTOR = 0.25;
-/** Faster settle: at 2000 nodes the long organic drift reads as churn, not life. */
-const LOD_ALPHA_DECAY = 0.09;
-/** Milder repulsion (Webbed Feet uses -30 at a fraction of the count). */
-const LOD_CHARGE_STRENGTH = -12;
-const LOD_COLLIDE_PADDING = 1.5;
-/** When every node position is reused from the previous layout, restart cool: the picture is
- * already settled and only genuinely new information should stir it. */
-const LOD_REUSED_LAYOUT_ALPHA = 0.12;
-/** How far out the per-type seed clusters sit, as a fraction of the world's half-extent. */
-const LOD_CLUSTER_RADIUS_FRACTION = 0.62;
+const LOD_DOT_RADIUS = 3;
+const LOD_MAX_DOT_RADIUS = 6;
+const LOD_DOT_DEGREE_FACTOR = 0.28;
+/**
+ * LOD overview is a static constellation: type-cluster seeds, then every node is pinned.
+ * No charge/centering/link forces — relationships are ink on demand, not springs that
+ * tie the field into one moving blob.
+ */
 /** Camera-settle debounce before the viewport is re-evaluated (labels, section fetch). */
 const LOD_VIEWPORT_DEBOUNCE_MS = 180;
 /** World-space margin around the frame so labels don't pop at the very edge. */
 const LOD_VIEWPORT_MARGIN_PX = 40;
 /** Reveal opacity for section edges while zoomed in (nobody asked about a specific node yet). */
 const LOD_SECTION_LINK_OPACITY = 0.3;
+/** Solid dots — overview should read as ink, not glass. */
+const LOD_DOT_FILL_OPACITY = 0.96;
+/** Soft camera presence only (no force reheat) — the dots themselves stay put. */
+const LOD_BREATH_SCALE_AMP = 0.002;
+/** How far out the per-type seed clusters sit, as a fraction of the world's half-extent. */
+const LOD_CLUSTER_RADIUS_FRACTION = 0.7;
+/** Cluster disc radius as a fraction of the smaller world axis. */
+const LOD_CLUSTER_SPREAD_FRACTION = 0.2;
+/** Cap fit-zoom in overview so type groups stay separate islands, not one magnified clump. */
+const LOD_MAX_FIT_ZOOM = 1.05;
+/**
+ * Stable ring order for type islands. Must NOT follow payload order (degree-sorted
+ * persons-first) or the ring jumps every progressive page and leaves a trail of
+ * stale positions — the horizontal "startup row" artifact.
+ */
+const LOD_TYPE_RING_ORDER = [
+  'Person',
+  'Event',
+  'Communication',
+  'Content',
+  'Location',
+  'Place',
+  'Concept',
+  'File',
+  'Item',
+  'Group',
+  'Pet',
+] as const;
 
 /**
- * Deterministic per-type seed positions: nodes of one type start life together in a radial
- * cluster, so the first frame already reads as "these are the kinds of things I have" and the
- * short LOD settle refines rather than untangles.
+ * Deterministic per-type seed positions: nodes of one type start together in a radial
+ * cluster, so the first frame already reads as "these are the kinds of things I have".
  */
 function clusterSeedPosition(
   typeIndex: number,
@@ -352,11 +385,28 @@ function clusterSeedPosition(
   const centerY = boundsHeight / 2 + Math.sin(angle) * clusterRadius;
 
   // Sunflower (phyllotaxis) packing: evenly filled disc, no RNG, no two members stacked.
-  const spread = Math.min(boundsWidth, boundsHeight) * 0.18;
+  const spread = Math.min(boundsWidth, boundsHeight) * LOD_CLUSTER_SPREAD_FRACTION;
   const r = spread * Math.sqrt((memberIndex + 0.5) / Math.max(1, memberCount));
   const theta = memberIndex * 2.399963229728653;
 
   return { x: centerX + Math.cos(theta) * r, y: centerY + Math.sin(theta) * r };
+}
+
+/** Ring index for a type: preferred order first, then any leftovers alphabetically. */
+function lodTypeRingIndex(entityType: string, presentTypes: readonly string[]): number {
+  const preferred = LOD_TYPE_RING_ORDER.filter((type) => presentTypes.includes(type));
+  const extras = presentTypes.filter((type) => !preferred.includes(type as (typeof LOD_TYPE_RING_ORDER)[number])).sort();
+  const ring = [...preferred, ...extras];
+  const index = ring.indexOf(entityType);
+
+  return index >= 0 ? index : 0;
+}
+
+function lodTypeRingCount(presentTypes: readonly string[]): number {
+  const preferred = LOD_TYPE_RING_ORDER.filter((type) => presentTypes.includes(type));
+  const extras = presentTypes.filter((type) => !preferred.includes(type as (typeof LOD_TYPE_RING_ORDER)[number]));
+
+  return preferred.length + extras.length;
 }
 
 function ForceGraphBase({
@@ -374,15 +424,20 @@ function ForceGraphBase({
   focusHops,
   height,
   onViewportChange,
+  forceLod = false,
+  ambientBreath = false,
 }: ForceGraphProps) {
   const { ref, width } = useContainerWidth(720);
-  /** Dots/LOD rendering — a property of the node count, not a caller switch. */
-  const lodMode = nodes.length > LOD_NODE_THRESHOLD;
+  /** Dots/LOD rendering — auto past the threshold, or forced by the progressive overview. */
+  const lodMode = forceLod || nodes.length > LOD_NODE_THRESHOLD;
+  /** Ids seen across progressive merges — first sighting earns a soft arrive fade. */
+  const seenNodeIdsRef = useRef<Set<string>>(new Set());
   // The live simulation arrays. Set once per layout; the simulation then MUTATES the members in
   // place and the tick handler writes their positions straight to the DOM. React re-renders only
   // for data or interaction-state changes, and reads whatever positions are current when it does.
   const [simNodes, setSimNodes] = useState<ForceNode[]>([]);
   const [simLinks, setSimLinks] = useState<SimulationLink[]>([]);
+  const [arrivingIds, setArrivingIds] = useState<Set<string>>(() => new Set());
   const [isPanning, setIsPanning] = useState(false);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
@@ -707,11 +762,11 @@ function ForceGraphBase({
     const canvasWidth = width || 720;
     // The simulation lays out in a world sized for the labels that have to fit, which is larger than
     // the canvas once the graph is dense; the camera scales the result back down to the canvas.
-    const { width: boundsWidth, height: boundsHeight } = simulationBounds(
-      standingLabels.size,
-      canvasWidth,
-      canvasHeight,
-    );
+    // LOD overview uses the canvas as the world so type islands sit in a readable ring.
+    // Classic / focus still grows the world with labelled density.
+    const { width: boundsWidth, height: boundsHeight } = lodMode
+      ? { width: canvasWidth, height: canvasHeight }
+      : simulationBounds(standingLabels.size, canvasWidth, canvasHeight);
     const previousPositions = previousPositionsRef.current;
 
     const anchoredSet = new Set(anchoredNodeIds);
@@ -751,16 +806,26 @@ function ForceGraphBase({
       };
     };
 
-    // LOD seeding: nodes of one entity type start together in a radial cluster (see
-    // clusterSeedPosition), so the constellation reads by type from the first frame.
-    const typeOrder = [...new Set(nodes.map((node) => node.entity_type))];
-    const typeIndexById = new Map(typeOrder.map((type, index) => [type, index]));
-    const typeMemberCounts = new Map<string, number>();
+    // LOD seeding: one coherent sunflower per type. Always re-seed in lodMode (ignore
+    // previousPositions) so progressive first-page → full-page densify cannot leave a
+    // trail of stale slots — that was the horizontal "startup row" of Persons.
+    // Member index is stable by id sort within type, not payload order.
+    const presentTypes = [...new Set(nodes.map((node) => node.entity_type))];
+    const typeRingCount = lodTypeRingCount(presentTypes);
+    const membersByType = new Map<string, string[]>();
     for (const node of nodes) {
-      typeMemberCounts.set(node.entity_type, (typeMemberCounts.get(node.entity_type) ?? 0) + 1);
+      const list = membersByType.get(node.entity_type) ?? [];
+      list.push(node.id);
+      membersByType.set(node.entity_type, list);
     }
 
-    const typeMemberCursor = new Map<string, number>();
+    const memberIndexById = new Map<string, number>();
+    const memberCountByType = new Map<string, number>();
+    for (const [type, ids] of membersByType) {
+      ids.sort();
+      memberCountByType.set(type, ids.length);
+      ids.forEach((id, index) => memberIndexById.set(id, index));
+    }
 
     const nodeCopies: ForceNode[] = nodes.map((node) => {
       const previous = previousPositions.get(node.id);
@@ -776,6 +841,7 @@ function ForceGraphBase({
       const label = labelled ? truncateLabel(fullLabel) : '';
       const degree = degreeById.get(node.id) ?? 0;
       const context = isContext(node.id);
+      const pinned = anchored || node.id === centerNodeId;
 
       const shape = {
         degree,
@@ -791,26 +857,19 @@ function ForceGraphBase({
         fullLabel,
         labelWidth: label ? labelWidthPx(fullLabel, MAX_LABEL_CHARS, measure) : 0,
         labelHalfHeight,
-        // The pinned centre node is the one thing on screen guaranteed to stay put; letting a
-        // label overlap shove it would undo that.
-        pinned: anchored || node.id === centerNodeId,
+        pinned,
       };
 
-      const memberIndex = typeMemberCursor.get(node.entity_type) ?? 0;
-      typeMemberCursor.set(node.entity_type, memberIndex + 1);
-
-      const position =
-        previous ??
-        (lodMode
-          ? clusterSeedPosition(
-              typeIndexById.get(node.entity_type) ?? 0,
-              typeOrder.length,
-              memberIndex,
-              typeMemberCounts.get(node.entity_type) ?? 1,
-              boundsWidth,
-              boundsHeight,
-            )
-          : withOffset(findNeighborPosition(node.id)));
+      const position = lodMode
+        ? clusterSeedPosition(
+            lodTypeRingIndex(node.entity_type, presentTypes),
+            typeRingCount,
+            memberIndexById.get(node.id) ?? 0,
+            memberCountByType.get(node.entity_type) ?? 1,
+            boundsWidth,
+            boundsHeight,
+          )
+        : (previous ?? withOffset(findNeighborPosition(node.id)));
 
       return {
         ...node,
@@ -825,10 +884,21 @@ function ForceGraphBase({
 
     const nodeById = new Map(nodeCopies.map((node) => [node.id, node]));
 
-    // The centre node and explicit anchors are d3 pins: the simulation holds them in place while
-    // everything else finds its tension around them.
+    // Classic/focus: centre + anchors are pins; the rest settle under forces.
+    // LOD overview: pin EVERY node at its cluster seed so dots sit independently —
+    // relationships never spring the field into a tied-together blob.
     for (const node of nodeCopies) {
-      if (centerNodeId && node.id === centerNodeId) {
+      if (lodMode) {
+        if (centerNodeId && node.id === centerNodeId) {
+          node.x = boundsWidth / 2;
+          node.y = boundsHeight / 2;
+        }
+
+        node.fx = node.x;
+        node.fy = node.y;
+        node.vx = 0;
+        node.vy = 0;
+      } else if (centerNodeId && node.id === centerNodeId) {
         node.x = boundsWidth / 2;
         node.y = boundsHeight / 2;
         node.fx = node.x;
@@ -867,36 +937,49 @@ function ForceGraphBase({
       ];
     });
 
-    // Force stack ported from Webbed Feet: repulsion + collision + typed link distances + a gentle
-    // positional pull, decaying slowly. Link strength is left at d3's degree-based default, which
-    // is what keeps a hub from snapping all of its leaves into itself.
+    // Classic mode is Webbed Feet (links + settle). LOD overview skips link/charge/center
+    // forces entirely — pins hold the type islands still; edges are draw-only.
     const simulation = forceSimulation<ForceNode>(nodeCopies)
-      .force('charge', forceManyBody<ForceNode>().strength(lodMode ? LOD_CHARGE_STRENGTH : CHARGE_STRENGTH))
+      .force(
+        'charge',
+        lodMode
+          ? null
+          : forceManyBody<ForceNode>().strength(CHARGE_STRENGTH),
+      )
       .force(
         'collide',
-        forceCollide<ForceNode>().radius(
-          (node) => node.radius + (lodMode ? LOD_COLLIDE_PADDING : COLLIDE_PADDING),
-        ),
+        lodMode
+          ? null
+          : forceCollide<ForceNode>().radius((node) => node.radius + COLLIDE_PADDING),
       )
       .force(
         'link',
-        forceLink<ForceNode, SimulationLink>(linkCopies).distance((link) =>
-          getSpringLengthFromStrength(link.strength),
-        ),
+        lodMode
+          ? null
+          : forceLink<ForceNode, SimulationLink>(linkCopies).distance((link) =>
+              getSpringLengthFromStrength(link.strength),
+            ),
       )
-      .force('x', forceX<ForceNode>(boundsWidth / 2).strength(CENTERING_STRENGTH))
-      .force('y', forceY<ForceNode>(boundsHeight / 2).strength(CENTERING_STRENGTH))
-      .alphaDecay(lodMode ? LOD_ALPHA_DECAY : ALPHA_DECAY)
+      .force('x', lodMode ? null : forceX<ForceNode>(boundsWidth / 2).strength(CENTERING_STRENGTH))
+      .force('y', lodMode ? null : forceY<ForceNode>(boundsHeight / 2).strength(CENTERING_STRENGTH))
+      .alphaDecay(ALPHA_DECAY)
       .alphaMin(ALPHA_MIN)
       // The animation loop is ours (see below), not d3-timer's: the tick work includes label
       // relaxation and camera tracking, and one rAF driving all of it keeps them in lockstep.
       .stop();
 
-    // A settled picture that only gained data (section edges arriving as the viewer zooms in, say)
-    // restarts cool instead of at full boil — the dots barely stir. Only a genuinely new node set
-    // earns the full settle.
-    if (lodMode && nodeCopies.every((node) => previousPositions.has(node.id))) {
-      simulation.alpha(LOD_REUSED_LAYOUT_ALPHA);
+    if (lodMode) {
+      // Nothing to settle — pins are final. Alpha stays cold so nothing can stir the field.
+      simulation.alpha(0);
+    }
+
+    // Soft arrive: only ids the viewer has never seen in this mount get the birth fade.
+    const arriving = new Set<string>();
+    for (const node of nodeCopies) {
+      if (!seenNodeIdsRef.current.has(node.id)) {
+        arriving.add(node.id);
+        seenNodeIdsRef.current.add(node.id);
+      }
     }
 
     const applyPositions = () => {
@@ -924,6 +1007,7 @@ function ForceGraphBase({
     /**
      * While the picture is settling and the viewer has not taken the camera, drift the frame toward
      * the fit a little each tick — the camera breathes with the web instead of snapping after it.
+     * LOD caps fit-zoom so type islands stay grouped, not one magnified clump.
      */
     const trackCamera = (fraction: number) => {
       if (viewerMovedCameraRef.current || cameraFrameRef.current != null) {
@@ -936,7 +1020,8 @@ function ForceGraphBase({
         return;
       }
 
-      scaleRef.current += (fitted.scale - scaleRef.current) * fraction;
+      const targetScale = lodMode ? Math.min(fitted.scale, LOD_MAX_FIT_ZOOM) : fitted.scale;
+      scaleRef.current += (targetScale - scaleRef.current) * fraction;
       translateRef.current = {
         x: translateRef.current.x + (fitted.translate.x - translateRef.current.x) * fraction,
         y: translateRef.current.y + (fitted.translate.y - translateRef.current.y) * fraction,
@@ -965,6 +1050,35 @@ function ForceGraphBase({
       trackCamera(1);
     };
 
+    let breathPhase = 0;
+    let idleBreathing = false;
+
+    const applyBreathCamera = () => {
+      if (!ambientBreath || !lodMode || viewerMovedCameraRef.current || cameraFrameRef.current != null) {
+        return;
+      }
+
+      // Slow sine on scale around the current fit — continuous presence without simulation cost.
+      breathPhase += 0.04;
+      const pulse = 1 + Math.sin(breathPhase) * LOD_BREATH_SCALE_AMP;
+      const group = cameraGroupRef.current;
+      if (!group) {
+        return;
+      }
+
+      group.setAttribute(
+        'transform',
+        `translate(${translateRef.current.x}, ${translateRef.current.y}) scale(${scaleRef.current * pulse})`,
+      );
+    };
+
+    const idle = () => {
+      applyBreathCamera();
+      if (idleBreathing) {
+        frame = requestAnimationFrame(idle);
+      }
+    };
+
     const step = () => {
       lifetimeTicks += 1;
       simulation.tick();
@@ -977,47 +1091,74 @@ function ForceGraphBase({
       }
 
       applyPositions();
-      trackCamera(CAMERA_TRACK);
+      // LOD snaps the frame onto the scattered field quickly; classic still breathes in.
+      trackCamera(lodMode ? Math.min(1, CAMERA_TRACK * 3) : CAMERA_TRACK);
+      applyBreathCamera();
 
       if (simulation.alpha() >= ALPHA_MIN && lifetimeTicks < MAX_LIFETIME_TICKS) {
         frame = requestAnimationFrame(step);
       } else {
         running = false;
         settle();
+        // Keep the camera breath alive after the force settle (single idle loop).
+        if (ambientBreath && lodMode) {
+          idleBreathing = true;
+          frame = requestAnimationFrame(idle);
+        }
       }
     };
 
     const start = () => {
+      idleBreathing = false;
+      cancelAnimationFrame(frame);
       if (!running) {
         running = true;
         frame = requestAnimationFrame(step);
       }
     };
 
-    // Webbed Feet's drag re-tension: nudge alpha back up and let the web re-settle around the
-    // pinned node. Bound to a ref so the pointer handlers, which outlive this effect's scope,
-    // always reheat the CURRENT simulation.
+    // Webbed Feet's drag re-tension (classic/focus only). LOD overview stays pinned —
+    // drag still moves a single node via fx/fy, but never reheats the whole field.
     reheatRef.current = (alpha: number) => {
+      if (lodMode) {
+        applyPositions();
+
+        return;
+      }
+
       simulation.alpha(Math.max(simulation.alpha(), alpha));
       start();
     };
 
     setSimNodes(nodeCopies);
     setSimLinks(linkCopies);
+    setArrivingIds(arriving);
+    const arriveClear = window.setTimeout(() => setArrivingIds(new Set()), 480);
 
-    // First frame of a new picture: rough-fit the seeded layout immediately so the settle plays
-    // out in frame, then let per-tick tracking refine it.
+    // First frame: pin/fit immediately. LOD skips the force loop — dots sit still.
     trackCamera(1);
     applyPositions();
-    start();
+    if (lodMode) {
+      settle();
+      if (ambientBreath) {
+        idleBreathing = true;
+        frame = requestAnimationFrame(idle);
+      }
+    } else {
+      start();
+    }
 
     return () => {
+      idleBreathing = false;
       cancelAnimationFrame(frame);
+      window.clearTimeout(arriveClear);
+
       simulation.stop();
       reheatRef.current = null;
       previousPositionsRef.current = new Map(nodeCopies.map((node) => [node.id, { ...node }]));
     };
   }, [
+    ambientBreath,
     anchoredKey,
     applyCamera,
     canvasHeight,
@@ -1218,8 +1359,8 @@ function ForceGraphBase({
 
   /**
    * Hovering or selecting picks out one node's own corner of the graph: it and its direct
-   * neighbours stay lit, everything else fades back. A dense graph is legible in pieces long
-   * before it is legible whole.
+   * neighbours stay lit, everything else fades back — but only when a neighbourhood is known.
+   * In the dots overview (no edges yet) hover must NOT blank the constellation.
    */
   const hoveredNeighbors = hoveredNodeId ? neighborsById.get(hoveredNodeId) : undefined;
   const selectedNeighbors = selectedNodeId ? neighborsById.get(selectedNodeId) : undefined;
@@ -1237,12 +1378,17 @@ function ForceGraphBase({
 
   const isDimmed = (nodeId: string) => {
     if (hoveredNodeId != null) {
+      // Overview with no edges: soft-dim peers so the hovered dot lifts without blanking the sky.
+      if (lodMode && (!hoveredNeighbors || hoveredNeighbors.size === 0)) {
+        return nodeId !== hoveredNodeId;
+      }
+
       return nodeId !== hoveredNodeId && !hoveredNeighbors?.has(nodeId);
     }
 
     // Only dim around a selection whose neighbourhood is actually known. In the dots overview the
-    // links haven't been fetched yet when a dot is first clicked; fading all 2000 siblings to 0.2
-    // for the beat before focus mode takes over reads as the graph breaking, not as emphasis.
+    // links haven't been fetched yet when a dot is first clicked; fading the whole field for the
+    // beat before focus mode takes over reads as the graph breaking, not as emphasis.
     if (selectedNodeId != null && selectedNeighbors && selectedNeighbors.size > 0) {
       return nodeId !== selectedNodeId && !selectedNeighbors.has(nodeId);
     }
@@ -1456,7 +1602,14 @@ function ForceGraphBase({
               const lodLabelled = lodMode && lodView.zoomedIn && lodView.labelIds.has(node.id);
               const baseColor = getTypeColor(node.entity_type);
               const fillColor = isSelected ? 'hsl(var(--primary))' : baseColor;
-              const opacity = isSelected ? 1 : isHighlighted ? 0.95 : 0.85;
+              const opacity = isSelected
+                ? 1
+                : isHighlighted
+                  ? 1
+                  : lodMode
+                    ? LOD_DOT_FILL_OPACITY
+                    : 0.9;
+              const arriving = arrivingIds.has(node.id);
 
               return (
                 <g
@@ -1473,7 +1626,18 @@ function ForceGraphBase({
                   data-force-node
                   data-testid="force-node"
                   data-context={node.context ? 'true' : undefined}
-                  opacity={dimmed ? 0.2 : contextual ? CONTEXT_NODE_OPACITY : 1}
+                  data-arriving={arriving ? 'true' : undefined}
+                  opacity={
+                    dimmed
+                      ? lodMode
+                        ? hoveredNeighbors && hoveredNeighbors.size > 0
+                          ? 0.55
+                          : 0.78
+                        : 0.35
+                      : contextual
+                        ? CONTEXT_NODE_OPACITY
+                        : 1
+                  }
                   onPointerEnter={() => setHoveredNodeId(node.id)}
                   onPointerLeave={() => setHoveredNodeId((current) => (current === node.id ? null : current))}
                   onPointerDown={handleNodePointerDown(node)}
@@ -1495,11 +1659,12 @@ function ForceGraphBase({
                     {node.degree > 0 ? ` — ${node.degree} connection${node.degree === 1 ? '' : 's'}` : ''}
                   </title>
                   <circle
+                    className={arriving ? 'force-dot-arrive' : undefined}
                     r={radius}
                     fill={fillColor}
                     fillOpacity={opacity}
-                    stroke={isSelected ? 'hsl(var(--primary-foreground))' : 'rgba(15, 23, 42, 0.2)'}
-                    strokeWidth={isSelected ? 2 : 1}
+                    stroke={isSelected ? 'hsl(var(--primary-foreground))' : 'rgba(15, 23, 42, 0.35)'}
+                    strokeWidth={isSelected ? 2 : lodMode ? 0.9 : 1}
                   />
                   {/*
                     The layout keeps these boxes from overlapping (see labelLayout.ts), so the halo

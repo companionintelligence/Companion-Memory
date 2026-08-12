@@ -370,9 +370,9 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     source: 'files',
     table:
       `ci.files f ` +
-      `JOIN ci.entities ef ON ef.linked_table = 'files' AND ef.linked_id = f.id::text ` +
+      `JOIN ci.entities ef ON ef.linked_table = 'files' AND ef.linked_id = f.id ` +
       `AND ef.owner_user_id = f.user_id AND ef.entity_type = 'File' AND ef.is_active = TRUE ` +
-      `JOIN ci.entities ep ON ep.linked_table = 'files' AND ep.linked_id = f.parent_id::text ` +
+      `JOIN ci.entities ep ON ep.linked_table = 'files' AND ep.linked_id = f.parent_id ` +
       `AND ep.owner_user_id = f.user_id AND ep.entity_type = 'File' AND ep.is_active = TRUE`,
     userColumn: 'f.user_id',
     timeColumn: 'f.created_at',

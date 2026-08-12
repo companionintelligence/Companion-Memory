@@ -660,10 +660,12 @@ export class GraphController {
    * among the visible ids (`POST /graph/edges`).
    *
    * Same scarcest-first waterfill as the classic overview so every entity
-   * type the account has is represented, but with a 10x budget and a payload
-   * of four fields per node ({ id, type, name, degree } + `event_type` for
-   * events) instead of full entities — 2000 dots ship in roughly the bytes 200
-   * full nodes did.
+   * type the account has is represented, but each type's share is the
+   * highest-degree hubs first (not newest orphans). Payload is four fields
+   * per node ({ id, type, name, degree } + `event_type` for events) — 2000
+   * dots ship in roughly the bytes 200 full nodes did. Also returns
+   * `connectivity` (related / isolated / relatedRatio) as the account-wide
+   * relatedness metric.
    */
   @Get('dots')
   async getGraphDots(
@@ -683,26 +685,56 @@ export class GraphController {
       name: string | null;
       event_type: string | null;
     };
-    const dots = new Map<string, DotNode>();
+    type DotNodeWithDegree = DotNode & { degree: number };
+    const dots = new Map<string, DotNodeWithDegree>();
+
+    const typeCountsRaw = await this.graphQuery.getEntityTypeCounts(ownerId);
+    // Scarcest-first waterfill (see assembleOverviewNodes): a type too small
+    // to use its share donates the remainder to the plentiful ones. Within each
+    // type the pool is already highest-degree first (one degrees CTE).
+    const typeCounts = typeCountsRaw
+      .filter((entry) => !excludedTypes.has(entry.entityType))
+      .sort((a, b) => a.count - b.count);
+
+    const entityTypes = typeCounts.map((entry) => entry.entityType);
+
+    const [connectivity, rankedPool, userEntity] = await Promise.all([
+      this.graphQuery.getConnectivitySummary(ownerId, [...excludedTypes]),
+      this.graphQuery.getRankedDotNodes(ownerId, {
+        entityTypes,
+        // Enough headroom for waterfill to pull a full budget from one plentiful type.
+        perTypeLimit: budget,
+        offset: query.offset,
+        eventTypes: query.eventTypes,
+      }),
+      this.graphQuery.getUserEntity(ownerId),
+    ]);
 
     // The anchor always ships (the client centers and seeds on it), even when
     // its type is deselected — same contract as the classic overview.
-    const userEntity = await this.graphQuery.getUserEntity(ownerId);
     if (userEntity) {
+      const fromPool = rankedPool.find((node) => node.entity_id === userEntity.entity_id);
+      const anchorDegrees =
+        fromPool != null
+          ? new Map([[userEntity.entity_id, fromPool.degree]])
+          : await this.graphQuery.getDegreeCounts(ownerId, [userEntity.entity_id]);
       dots.set(userEntity.entity_id, {
         entity_id: userEntity.entity_id,
         entity_type: userEntity.entity_type,
         name: userEntity.name,
         event_type: null,
+        degree: anchorDegrees.get(userEntity.entity_id) ?? 0,
       });
     }
 
-    // Scarcest-first waterfill (see assembleOverviewNodes): a type too small
-    // to use its share donates the remainder to the plentiful ones.
-    const typeCounts = (await this.graphQuery.getEntityTypeCounts(ownerId))
-      .filter((entry) => !excludedTypes.has(entry.entityType))
-      .sort((a, b) => a.count - b.count);
+    const poolByType = new Map<string, DotNodeWithDegree[]>();
+    for (const node of rankedPool) {
+      const list = poolByType.get(node.entity_type) ?? [];
+      list.push(node);
+      poolByType.set(node.entity_type, list);
+    }
 
+    const cursors = new Map<string, number>(entityTypes.map((type) => [type, 0]));
     let remainingTypes = typeCounts.length;
     for (const { entityType } of typeCounts) {
       const remainingBudget = budget - dots.size;
@@ -713,35 +745,54 @@ export class GraphController {
       const share = Math.max(1, Math.floor(remainingBudget / remainingTypes));
       remainingTypes -= 1;
 
-      const page = await this.graphQuery.getDotNodes(ownerId, {
-        entityType,
-        limit: share,
-        offset: query.offset,
-        eventTypes: entityType === 'Event' ? query.eventTypes : undefined,
-      });
-
-      for (const node of page) {
-        if (dots.size >= budget) {
-          break;
-        }
-
+      const pool = poolByType.get(entityType) ?? [];
+      let taken = 0;
+      let cursor = cursors.get(entityType) ?? 0;
+      while (taken < share && cursor < pool.length && dots.size < budget) {
+        const node = pool[cursor];
+        cursor += 1;
         if (!dots.has(node.entity_id)) {
           dots.set(node.entity_id, node);
+          taken += 1;
+        }
+      }
+
+      cursors.set(entityType, cursor);
+    }
+
+    // Donate leftover budget to still-plentiful types (degree order preserved).
+    if (dots.size < budget) {
+      for (const entityType of [...entityTypes].reverse()) {
+        const pool = poolByType.get(entityType) ?? [];
+        let cursor = cursors.get(entityType) ?? 0;
+        while (cursor < pool.length && dots.size < budget) {
+          const node = pool[cursor];
+          cursor += 1;
+          if (!dots.has(node.entity_id)) {
+            dots.set(node.entity_id, node);
+          }
+        }
+
+        cursors.set(entityType, cursor);
+        if (dots.size >= budget) {
+          break;
         }
       }
     }
 
-    const degrees = await this.graphQuery.getDegreeCounts(ownerId, Array.from(dots.keys()));
+    // Highest-degree first in the payload so progressive first-paint and the
+    // client legend both see hubs before sparse orphans.
+    const ranked = Array.from(dots.values()).sort((a, b) => b.degree - a.degree);
 
     return {
       success: true,
       data: {
-        nodes: Array.from(dots.values()).map((node) => ({
+        nodes: ranked.map((node) => ({
           id: node.entity_id,
           entity_id: node.entity_id,
           entity_type: node.entity_type,
           name: node.name,
-          degree: degrees.get(node.entity_id) ?? 0,
+          degree: node.degree,
           ...(node.event_type != null ? { event_type: node.event_type } : {}),
         })),
       },
@@ -749,6 +800,13 @@ export class GraphController {
       // and page later via (offset, limit).
       counts: Object.fromEntries(typeCounts.map((entry) => [entry.entityType, entry.count])),
       truncated: dots.size >= budget,
+      // Key graph health metric: share of entities that touch ≥1 relationship.
+      connectivity: {
+        total: connectivity.total,
+        related: connectivity.related,
+        isolated: connectivity.isolated,
+        relatedRatio: connectivity.relatedRatio,
+      },
     };
   }
 

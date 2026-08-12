@@ -259,36 +259,161 @@ export class GraphUtilityService {
   async getDotNodes(
     ownerUserId: string,
     options: { entityType: string; limit: number; offset?: number; eventTypes?: string[] },
-  ): Promise<Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null }>> {
-    const isEvent = options.entityType === 'Event';
-    const eventTypeFilter = isEvent && options.eventTypes && options.eventTypes.length > 0;
+  ): Promise<
+    Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null; degree: number }>
+  > {
+    // Single-type path delegates to the ranked multi-type helper (one degrees CTE).
+    return this.getRankedDotNodes(ownerUserId, {
+      entityTypes: [options.entityType],
+      perTypeLimit: options.limit,
+      offset: options.offset,
+      eventTypes: options.eventTypes,
+    });
+  }
 
-    const params: unknown[] = [ownerUserId, options.entityType];
-    let eventJoin = '';
-    let eventTypeSelect = 'NULL::text AS event_type';
-
-    if (isEvent) {
-      eventTypeSelect = 'ev.event_type AS event_type';
-      eventJoin = 'LEFT JOIN ci.events ev ON ev.event_id = e.entity_id';
-      if (eventTypeFilter) {
-        params.push(options.eventTypes);
-        eventJoin = `JOIN ci.events ev ON ev.event_id = e.entity_id AND ev.event_type = ANY($${params.length}::text[])`;
-      }
+  /**
+   * Top hubs per entity type for the dots overview — one degrees CTE, then
+   * `ROW_NUMBER() PARTITION BY entity_type` so the waterfill can take
+   * highest-degree nodes of each kind without re-scanning relationships.
+   */
+  async getRankedDotNodes(
+    ownerUserId: string,
+    options: {
+      entityTypes: string[];
+      perTypeLimit: number;
+      offset?: number;
+      eventTypes?: string[];
+    },
+  ): Promise<
+    Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null; degree: number }>
+  > {
+    if (options.entityTypes.length === 0 || options.perTypeLimit <= 0) {
+      return [];
     }
 
-    params.push(options.limit, options.offset ?? 0);
+    const params: unknown[] = [ownerUserId, options.entityTypes];
+    const eventTypeFilter = options.eventTypes && options.eventTypes.length > 0;
+    const eventTypeSelect = `CASE WHEN e.entity_type = 'Event' THEN ev.event_type ELSE NULL END AS event_type`;
+    let eventJoin = `LEFT JOIN ci.events ev ON ev.event_id = e.entity_id`;
 
-    return this.entityRepo.manager.query(
-      `SELECT e.entity_id, e.entity_type, e.name, ${eventTypeSelect}
-         FROM ci.entities e
-         ${eventJoin}
-        WHERE e.owner_user_id = $1
-          AND e.is_active = true
-          AND e.entity_type = $2
-        ORDER BY e.created_at DESC
-        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    if (eventTypeFilter) {
+      params.push(options.eventTypes);
+      // Events not in the How filter are dropped; other types keep the left join.
+      eventJoin = `LEFT JOIN ci.events ev ON ev.event_id = e.entity_id`;
+    }
+
+    params.push(options.perTypeLimit, options.offset ?? 0);
+    const limitParam = params.length - 1;
+    const offsetParam = params.length;
+
+    const eventWhere = eventTypeFilter
+      ? `AND (e.entity_type <> 'Event' OR ev.event_type = ANY($3::text[]))`
+      : '';
+
+    const rows: Array<{
+      entity_id: string;
+      entity_type: string;
+      name: string;
+      event_type: string | null;
+      degree: string;
+    }> = await this.entityRepo.manager.query(
+      `WITH degrees AS (
+         SELECT entity_id, COUNT(*)::int AS degree
+           FROM (
+             SELECT from_entity_id AS entity_id
+               FROM ci.relationships
+              WHERE owner_user_id = $1 AND is_active = TRUE
+             UNION ALL
+             SELECT to_entity_id
+               FROM ci.relationships
+              WHERE owner_user_id = $1 AND is_active = TRUE
+           ) touching
+          GROUP BY entity_id
+       ),
+       ranked AS (
+         SELECT e.entity_id, e.entity_type, e.name, ${eventTypeSelect},
+                COALESCE(d.degree, 0) AS degree,
+                ROW_NUMBER() OVER (
+                  PARTITION BY e.entity_type
+                  ORDER BY COALESCE(d.degree, 0) DESC, e.created_at DESC
+                ) AS rn
+           FROM ci.entities e
+           ${eventJoin}
+           LEFT JOIN degrees d ON d.entity_id = e.entity_id
+          WHERE e.owner_user_id = $1
+            AND e.is_active = TRUE
+            AND e.entity_type = ANY($2::text[])
+            ${eventWhere}
+       )
+       SELECT entity_id, entity_type, name, event_type, degree
+         FROM ranked
+        WHERE rn > $${offsetParam}
+          AND rn <= $${offsetParam} + $${limitParam}
+        ORDER BY entity_type, degree DESC`,
       params,
     );
+
+    return rows.map((row) => ({
+      entity_id: row.entity_id,
+      entity_type: row.entity_type,
+      name: row.name,
+      event_type: row.event_type,
+      degree: Number(row.degree),
+    }));
+  }
+
+  /**
+   * Account-wide relatedness: how many active entities touch at least one
+   * relationship vs how many sit alone. The key overview metric —
+   * `relatedRatio = related / total` (0 when the graph is empty).
+   */
+  async getConnectivitySummary(
+    ownerUserId: string,
+    excludedEntityTypes: string[] = [],
+  ): Promise<{ total: number; related: number; isolated: number; relatedRatio: number }> {
+    const params: unknown[] = [ownerUserId];
+    let typeFilter = '';
+    if (excludedEntityTypes.length > 0) {
+      params.push(excludedEntityTypes);
+      typeFilter = `AND NOT (entity_type = ANY($${params.length}::text[]))`;
+    }
+
+    const rows: Array<{ total: string; related: string }> = await this.entityRepo.manager.query(
+      `WITH active AS (
+         SELECT entity_id
+           FROM ci.entities
+          WHERE owner_user_id = $1
+            AND is_active = TRUE
+            ${typeFilter}
+       ),
+       touched AS (
+         SELECT DISTINCT entity_id
+           FROM (
+             SELECT from_entity_id AS entity_id
+               FROM ci.relationships
+              WHERE owner_user_id = $1 AND is_active = TRUE
+             UNION
+             SELECT to_entity_id
+               FROM ci.relationships
+              WHERE owner_user_id = $1 AND is_active = TRUE
+           ) endpoints
+          WHERE entity_id IN (SELECT entity_id FROM active)
+       )
+       SELECT (SELECT COUNT(*)::int FROM active) AS total,
+              (SELECT COUNT(*)::int FROM touched) AS related`,
+      params,
+    );
+
+    const total = Number(rows[0]?.total ?? 0);
+    const related = Number(rows[0]?.related ?? 0);
+    const isolated = Math.max(0, total - related);
+
+    return {
+      total,
+      related,
+      isolated,
+      relatedRatio: total > 0 ? related / total : 0,
+    };
   }
 
   /**
