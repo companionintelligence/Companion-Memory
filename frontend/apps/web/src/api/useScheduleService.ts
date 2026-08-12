@@ -33,6 +33,7 @@ const GET_SCHEDULE = gql(`
       locationName
       sourceSystem
       externalSyncStatus
+      metadata
     }
     weekForecast(includeToday: true) {
       generatedAt
@@ -72,6 +73,11 @@ export interface ScheduleEvent {
   sourceSystem?: string | null;
   /** 'pending' once a local move has drifted ahead of that source. */
   externalSyncStatus?: string | null;
+  /**
+   * Capture metadata. Browser visits stash the page URL at `metadata.url`;
+   * the schedule surface reads that to open the original page from a chip.
+   */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface RhythmCluster {

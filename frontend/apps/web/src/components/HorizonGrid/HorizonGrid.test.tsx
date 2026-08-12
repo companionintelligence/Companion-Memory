@@ -9,6 +9,7 @@ import {
   packLanes,
   daypartWeights,
   describes,
+  eventUrl,
   rhythmCells,
   dropInstant,
   movedStart,
@@ -218,6 +219,21 @@ describe('describes — whether the event text adds anything to the title', () =
     // twice in one tooltip reads as a bug, not as detail.
     expect(describes(event({ title: 'Standup', description: 'Standup' }))).toBe(false);
     expect(describes(event({ title: 'Standup', description: '  standup ' }))).toBe(false);
+  });
+});
+
+describe('eventUrl — page link for a captured visit', () => {
+  it('reads a http(s) URL from metadata', () => {
+    expect(
+      eventUrl(event({ metadata: { url: 'https://github.com/companionintelligence/CI-Server' } })),
+    ).toBe('https://github.com/companionintelligence/CI-Server');
+  });
+
+  it('ignores missing or non-http values', () => {
+    expect(eventUrl(event())).toBeNull();
+    expect(eventUrl(event({ metadata: null }))).toBeNull();
+    expect(eventUrl(event({ metadata: { url: 'javascript:alert(1)' } }))).toBeNull();
+    expect(eventUrl(event({ metadata: { url: '  ' } }))).toBeNull();
   });
 });
 
@@ -647,9 +663,8 @@ describe('HorizonGrid — reachable without a pointer', () => {
   });
 
   it('titles a chip too narrow to show any text of its own', () => {
-    // 30 minutes is 2% of a 24-hour row, and the 10:00 block leaves no room to
-    // spill the label into — so without this the chip is a bare colour swatch,
-    // which is the one thing the palette's contrast budget forbids.
+    // Narrow ticks keep the day quiet — title lives on the native attribute and
+    // expands on hover, so a bare colour swatch is never nameless.
     const triage = event({
       id: 'e2',
       title: 'Triage',
@@ -660,6 +675,22 @@ describe('HorizonGrid — reachable without a pointer', () => {
     render(<HorizonGrid start={MONDAY} days={7} events={[event(), triage]} rhythm={[]} />);
 
     expect(screen.getByTitle('Standup')).toBeInTheDocument();
+  });
+
+  it('opens a captured visit URL from the expanded narrow title', () => {
+    const visit = event({
+      title: 'Pull requests',
+      metadata: { url: 'https://github.com/companionintelligence/CI-Engineering/pulls' },
+    });
+
+    render(<HorizonGrid start={MONDAY} days={7} events={[visit]} rhythm={[]} />);
+
+    const link = screen.getByRole('link', { name: 'Pull requests' });
+    expect(link).toHaveAttribute(
+      'href',
+      'https://github.com/companionintelligence/CI-Engineering/pulls',
+    );
+    expect(link).toHaveAttribute('target', '_blank');
   });
 
   it('gives the rhythm lane a text equivalent instead of colour alone', () => {

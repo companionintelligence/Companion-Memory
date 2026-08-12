@@ -165,6 +165,22 @@ function describes(event: ScheduleEvent): boolean {
   return description.toLowerCase() !== (event.title ?? '').trim().toLowerCase();
 }
 
+/**
+ * Page URL for a captured visit (or null when the event has nowhere to open).
+ * Browser-extension rows store it at `metadata.url`.
+ */
+function eventUrl(event: ScheduleEvent): string | null {
+  const raw = event.metadata?.url;
+
+  if (typeof raw !== 'string') {
+    return null;
+  }
+
+  const url = raw.trim();
+
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function localMinutes(date: Date): number {
@@ -479,22 +495,6 @@ const DayRow = memo(function DayRow({
 
   const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
-  /**
-   * Room to the right of a narrow block before the next one starts. A tick with
-   * its label spilling into empty space is readable; one spilling under the next
-   * event is not, so the label is dropped and the tooltip carries it instead.
-   *
-   * Only spans sharing the lane can be spilled onto — a chip a lane below sits
-   * at a different height and never collides with the text.
-   */
-  const labelRoom = (index: number): number => {
-    const current = spans[index];
-    const next = spans.slice(index + 1).find((_, i) => lanes[index + 1 + i] === lanes[index]);
-    const until = next ? next.leftPct : 100;
-
-    return until - (current.leftPct + current.widthPct);
-  };
-
   const isDropTarget = dropPct !== null;
   const acceptsDrops = Boolean(onDropCandidate ?? onMoveEvent);
 
@@ -639,10 +639,12 @@ const DayRow = memo(function DayRow({
         >
           {spans.map(({ event, leftPct, widthPct, continuesFrom, continuesTo }, index) => {
             const isNarrow = widthPct < NARROW_SPAN_PCT;
-            const showSpilledLabel = isNarrow && labelRoom(index) > NARROW_SPAN_PCT;
-
             const movable = Boolean(onMoveEvent);
             const color = eventColor(event, colorMode);
+            const url = eventUrl(event);
+            // Near the right edge, open the hover title to the left so it stays
+            // on the day row instead of clipping into tomorrow.
+            const expandLeft = leftPct + widthPct > 72;
 
             return (
               <Tooltip key={`${event.id}-${dayStart.toDateString()}`}>
@@ -654,16 +656,21 @@ const DayRow = memo(function DayRow({
                     // without a pointer.
                     tabIndex={0}
                     aria-label={chipLabel(event, colorMode)}
-                    // A chip with no room for text of its own is otherwise a
-                    // bare colour swatch, and hue alone is not allowed to carry
-                    // identity here. Wide chips already show their title, so
-                    // they skip it rather than stack a native tooltip on the
-                    // Radix one.
-                    title={isNarrow && !showSpilledLabel ? event.title : undefined}
+                    // Narrow ticks hide their title until hover; the native
+                    // title keeps a bare swatch from being nameless to a
+                    // pointer that never pauses long enough for the expand.
+                    title={isNarrow ? event.title : undefined}
                     draggable={movable}
                     onDragStart={
                       movable
                         ? (e) => {
+                            // Selecting / opening the title must not start a move.
+                            if ((e.target as Element | null)?.closest?.('a, [data-event-label]')) {
+                              e.preventDefault();
+
+                              return;
+                            }
+
                             // Measure against the chip's own box rather than
                             // walking up to the lane: currentTarget is
                             // unambiguous, whereas the ancestor chain depends on
@@ -705,8 +712,10 @@ const DayRow = memo(function DayRow({
                         : undefined
                     }
                     className={cn(
-                      'absolute z-[5] whitespace-nowrap border text-[11px] leading-[26px]',
+                      'group/chip absolute z-[5] whitespace-nowrap border text-[11px] leading-[26px]',
                       'text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      'transition-[filter,box-shadow,z-index] duration-150',
+                      'hover:z-30 focus-within:z-30',
                       movable && 'cursor-grab active:cursor-grabbing hover:brightness-110',
                       isNarrow ? 'overflow-visible' : 'overflow-hidden px-2',
                       event.status === 'tentative' && 'border-dashed text-muted-foreground',
@@ -728,14 +737,55 @@ const DayRow = memo(function DayRow({
                       ...(continuesFrom ? {} : { borderLeftWidth: '3px', borderLeftColor: color }),
                     }}
                   >
-                    {isNarrow ? (
-                      showSpilledLabel && (
-                        <span className="pointer-events-none absolute left-[calc(100%+6px)] top-0 text-foreground/80">
+                    {!isNarrow &&
+                      (url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          draggable={false}
+                          className="block truncate select-text font-medium text-foreground underline-offset-2 hover:underline"
+                          onClick={(clickEvent) => clickEvent.stopPropagation()}
+                          onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+                        >
                           {event.title}
-                        </span>
-                      )
-                    ) : (
-                      <span>{event.title}</span>
+                        </a>
+                      ) : (
+                        <span className="block truncate select-text">{event.title}</span>
+                      ))}
+
+                    {/* Narrow ticks stay quiet until hover/focus — a dense capture
+                        day is a constellation of pills, not a wall of titles. */}
+                    {isNarrow && (
+                      <div
+                        data-event-label
+                        className={cn(
+                          'absolute top-1/2 z-40 max-w-[min(18rem,46vw)] -translate-y-1/2',
+                          expandLeft ? 'right-[calc(100%+8px)] origin-right' : 'left-[calc(100%+8px)] origin-left',
+                          'rounded-md border border-border/70 bg-popover/95 px-2.5 py-1.5',
+                          'text-[11px] leading-snug text-popover-foreground shadow-lg backdrop-blur-md',
+                          'pointer-events-none opacity-0 scale-[0.98]',
+                          'transition-[opacity,transform] duration-150 ease-out',
+                          'group-hover/chip:pointer-events-auto group-hover/chip:scale-100 group-hover/chip:opacity-100',
+                          'group-focus-within/chip:pointer-events-auto group-focus-within/chip:scale-100 group-focus-within/chip:opacity-100',
+                        )}
+                        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+                      >
+                        {url ? (
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            draggable={false}
+                            className="select-text font-medium text-foreground underline-offset-2 hover:underline"
+                            onClick={(clickEvent) => clickEvent.stopPropagation()}
+                          >
+                            {event.title}
+                          </a>
+                        ) : (
+                          <span className="select-text font-medium">{event.title}</span>
+                        )}
+                      </div>
                     )}
                   </div>
                 </Tooltip.Trigger>
@@ -771,6 +821,8 @@ const DayRow = memo(function DayRow({
                       />
                       {colorMode === 'source' ? sourceOf(event) : CLASS_LABEL[classifyEvent(event)]}
                     </p>
+
+                    {url && <p className="truncate text-[10px] opacity-60">{url}</p>}
 
                     {/* Say plainly where a move does and does not reach. */}
                     {movable && isExternallyOwned(event) && (
@@ -1128,6 +1180,7 @@ export {
   packLanes,
   daypartWeights,
   describes,
+  eventUrl,
   rhythmCells,
   dropInstant,
   movedStart,
