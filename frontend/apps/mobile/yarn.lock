@@ -105,6 +105,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ci/capacitor-local-llm@file:../../packages/capacitor-local-llm::locator=%40ci%2Ffe-mobile%40workspace%3A.":
+  version: 0.0.0
+  resolution: "@ci/capacitor-local-llm@file:../../packages/capacitor-local-llm#../../packages/capacitor-local-llm::hash=564df3&locator=%40ci%2Ffe-mobile%40workspace%3A."
+  peerDependencies:
+    "@capacitor/core": ^7.0.0
+  checksum: 10c0/fddedee4e1080941e7d81d5be5794a630e02cef47f8c1e0f358dc7ede384ba7149a988e951df6a8f0c93a0f005f30ad236ccf7f885bf201637bb390dda7f8bfd
+  languageName: node
+  linkType: hard
+
 "@ci/fe-mobile@workspace:.":
   version: 0.0.0-use.local
   resolution: "@ci/fe-mobile@workspace:."
@@ -118,6 +127,7 @@ __metadata:
     "@capacitor/local-notifications": "npm:^7.0.0"
     "@capacitor/splash-screen": "npm:^7.0.0"
     "@capacitor/status-bar": "npm:^7.0.0"
+    "@ci/capacitor-local-llm": "file:../../packages/capacitor-local-llm"
     capacitor-secure-storage-plugin: "npm:^0.11.0"
     typescript: "npm:^5.8.3"
   languageName: unknown

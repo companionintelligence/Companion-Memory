@@ -87,6 +87,14 @@ vi.mock('@/api/ApolloProvider', async () => {
   };
 });
 
+// PowerSyncProvider eagerly opens a real on-device SQLite connection (a Web
+// Worker under `@powersync/web`), which jsdom doesn't support — none of these
+// route-shell assertions depend on it, so swap it for a passthrough, same as
+// ApolloProvider above.
+vi.mock('@/api/powersync/PowerSyncProvider', () => ({
+  PowerSyncProvider: ({ children }: { children: ReactNode }) => children,
+}));
+
 function ok(body: unknown): Response {
   return { ok: true, status: 200, text: async () => JSON.stringify(body) } as Response;
 }

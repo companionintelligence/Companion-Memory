@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The model download runs as a foreground WorkManager service (large, resumable
+         transfer) so it survives backgrounding; Android 14+ (API 34) requires declaring
+         the specific foreground service type permission alongside FOREGROUND_SERVICE. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+</manifest>

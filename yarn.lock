@@ -2921,6 +2921,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@capacitor/core@npm:^7.0.0":
+  version: 7.6.8
+  resolution: "@capacitor/core@npm:7.6.8"
+  dependencies:
+    tslib: "npm:^2.1.0"
+  checksum: 10c0/d3567623eff2288415473d4204b193f6774cfd56d19e75db967c71044b6574ca8e40d61d6605be393cf4e7619bae44a7ae19f83c42f0ee7bdd86bfb62fe54118
+  languageName: node
+  linkType: hard
+
 "@ci/be-api@workspace:backend/apps/api":
   version: 0.0.0-use.local
   resolution: "@ci/be-api@workspace:backend/apps/api"
@@ -3025,6 +3034,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@ci/capacitor-local-llm@workspace:frontend/packages/capacitor-local-llm":
+  version: 0.0.0-use.local
+  resolution: "@ci/capacitor-local-llm@workspace:frontend/packages/capacitor-local-llm"
+  dependencies:
+    "@capacitor/core": "npm:^7.0.0"
+    typescript: "npm:^5.8.3"
+  peerDependencies:
+    "@capacitor/core": ^7.0.0
+  languageName: unknown
+  linkType: soft
+
 "@ci/capture@workspace:*, @ci/capture@workspace:frontend/packages/capture":
   version: 0.0.0-use.local
   resolution: "@ci/capture@workspace:frontend/packages/capture"
@@ -3112,7 +3132,11 @@ __metadata:
     "@graphql-codegen/client-preset": "npm:^5.2.1"
     "@graphql-codegen/fragment-matcher": "npm:^6.0.0"
     "@graphql-typed-document-node/core": "npm:^3.2.0"
+    "@journeyapps/wa-sqlite": "npm:^1.5.0"
     "@knight-lab/timelinejs": "npm:^3.9.13"
+    "@powersync/common": "npm:^1.57.3"
+    "@powersync/react": "npm:^1.5.3"
+    "@powersync/web": "npm:^1.16.1"
     "@react-three/fiber": "npm:^9.7.0"
     "@sentry/react": "npm:^10.69.0"
     "@storybook/addon-a11y": "npm:^9.1.19"
@@ -6328,6 +6352,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@journeyapps/wa-sqlite@npm:^1.5.0":
+  version: 1.7.2
+  resolution: "@journeyapps/wa-sqlite@npm:1.7.2"
+  dependenciesMeta:
+    monaco-editor@0.34.1:
+      unplugged: true
+    web-test-runner-jasmine@0.0.6:
+      unplugged: true
+  checksum: 10c0/1e6d0e03f984b311ec4aeb92349847c46471f6ca1f43679fa96cea44729b567f6cd47ef655a83b4b7c634816ac6db4fe2b236360ba4e9aa3bf7b08a7e3c00ba5
+  languageName: node
+  linkType: hard
+
 "@jridgewell/gen-mapping@npm:^0.3.12":
   version: 0.3.12
   resolution: "@jridgewell/gen-mapping@npm:0.3.12"
@@ -7328,6 +7364,41 @@ __metadata:
   version: 1.0.0-next.29
   resolution: "@polka/url@npm:1.0.0-next.29"
   checksum: 10c0/0d58e081844095cb029d3c19a659bfefd09d5d51a2f791bc61eba7ea826f13d6ee204a8a448c2f5a855c17df07b37517373ff916dd05801063c0568ae9937684
+  languageName: node
+  linkType: hard
+
+"@powersync/common@npm:1.57.3, @powersync/common@npm:^1.57.3":
+  version: 1.57.3
+  resolution: "@powersync/common@npm:1.57.3"
+  dependencies:
+    js-logger: "npm:^1.6.1"
+  checksum: 10c0/c3b32afb74ce28d4a19818ff1ab52fe58e21b0b830fa9a821bb61adf26ace150718a840d84cd6f4cb9b0ee816ebb1b04b25387fba9b7be328a018a0b2e58f860
+  languageName: node
+  linkType: hard
+
+"@powersync/react@npm:^1.5.3":
+  version: 1.10.0
+  resolution: "@powersync/react@npm:1.10.0"
+  peerDependencies:
+    "@powersync/common": ^1.51.0
+    react: "*"
+  checksum: 10c0/c2e24cdc9e010be51b92e2e7c6f2fff7f6db55675577693b3f98d22e787c061b31b8f99755c6e4152685d8c8861589323aa34ce8e6f7895de6cf7afb869b0c96
+  languageName: node
+  linkType: hard
+
+"@powersync/web@npm:^1.16.1":
+  version: 1.39.1
+  resolution: "@powersync/web@npm:1.39.1"
+  dependencies:
+    "@powersync/common": "npm:1.57.3"
+    comlink: "npm:^4.4.2"
+    commander: "npm:^12.1.0"
+  peerDependencies:
+    "@journeyapps/wa-sqlite": ^1.5.0
+    "@powersync/common": ^1.57.3
+  bin:
+    powersync-web: bin/powersync.cjs
+  checksum: 10c0/b91b3a87e4728b9cb681fccd5ae9b208444dd84869c616d76806e6d76caac82271bbcc9eb15c86c6d2dc8cdbd0f10ab8aa6708b401fc02d35e04f9db631af7b6
   languageName: node
   linkType: hard
 
@@ -14520,6 +14591,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"comlink@npm:^4.4.2":
+  version: 4.4.2
+  resolution: "comlink@npm:4.4.2"
+  checksum: 10c0/38aa1f455cf08e94aaa8fc494fd203cc0ef02ece6c21404b7931ce17567e8a72deacddab98aa5650cfd78332ff24c34610586f6fb27fd19dc77e753ed1980deb
+  languageName: node
+  linkType: hard
+
 "comma-separated-tokens@npm:^2.0.0":
   version: 2.0.3
   resolution: "comma-separated-tokens@npm:2.0.3"
@@ -14531,6 +14609,13 @@ __metadata:
   version: 4.1.1
   resolution: "commander@npm:4.1.1"
   checksum: 10c0/84a76c08fe6cc08c9c93f62ac573d2907d8e79138999312c92d4155bc2325d487d64d13f669b2000c9f8caf70493c1be2dac74fec3c51d5a04f8bc3ae1830bab
+  languageName: node
+  linkType: hard
+
+"commander@npm:^12.1.0":
+  version: 12.1.0
+  resolution: "commander@npm:12.1.0"
+  checksum: 10c0/6e1996680c083b3b897bfc1cfe1c58dfbcd9842fd43e1aaf8a795fbc237f65efcc860a3ef457b318e73f29a4f4a28f6403c3d653d021d960e4632dd45bde54a9
   languageName: node
   linkType: hard
 
@@ -19525,6 +19610,13 @@ __metadata:
   version: 3.1.1
   resolution: "joycon@npm:3.1.1"
   checksum: 10c0/131fb1e98c9065d067fd49b6e685487ac4ad4d254191d7aa2c9e3b90f4e9ca70430c43cad001602bdbdabcf58717d3b5c5b7461c1bd8e39478c8de706b3fe6ae
+  languageName: node
+  linkType: hard
+
+"js-logger@npm:^1.6.1":
+  version: 1.6.1
+  resolution: "js-logger@npm:1.6.1"
+  checksum: 10c0/e443e997790cac7de039382ab8f46e284db855090e244cc7b95e7755bc2b0eb793f9f9bd901b80c1677cecaad155dd3a376a534674e7b2f57982581b703e9534
   languageName: node
   linkType: hard
 

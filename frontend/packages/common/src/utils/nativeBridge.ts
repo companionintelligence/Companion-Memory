@@ -10,7 +10,8 @@
  * falls back to `localStorage`, and external links fall back to a normal navigation.
  */
 
-import { isNativePlatform } from './apiBase';
+import { apiKeyHeaders } from './apiAuth';
+import { buildApiUrl, isNativePlatform } from './apiBase';
 
 interface SecureStoragePlugin {
   get(options: { key: string }): Promise<{ value: string }>;
@@ -59,6 +60,21 @@ interface LocalNotificationsPlugin {
   schedule(options: { notifications: LocalNotification[] }): Promise<unknown>;
 }
 
+/**
+ * On-device LLM plugin (Android only; see `frontend/packages/capacitor-local-llm`).
+ * Declared locally rather than imported from that package — same reason every other
+ * plugin interface here is: it keeps the web bundle free of `@capacitor/*` deps.
+ */
+interface LocalLlmPlugin {
+  isAvailable(): Promise<{ available: boolean; reason?: string }>;
+  generate(options: { prompt: string }): Promise<{ text: string }>;
+  generateStream(options: { prompt: string }): Promise<void>;
+  addListener(
+    eventName: 'llmToken',
+    listener: (event: { partial: string; done: boolean }) => void,
+  ): Promise<PluginListenerHandle>;
+}
+
 interface CapacitorPlugins {
   SecureStoragePlugin?: SecureStoragePlugin;
   Browser?: BrowserPlugin;
@@ -66,6 +82,7 @@ interface CapacitorPlugins {
   SplashScreen?: SplashScreenPlugin;
   StatusBar?: StatusBarPlugin;
   LocalNotifications?: LocalNotificationsPlugin;
+  LocalLLM?: LocalLlmPlugin;
 }
 
 export interface LocalNotification {
@@ -391,4 +408,164 @@ export async function syncNativeIntentConfig(): Promise<void> {
   } catch {
     // Best-effort — App Intents simply won't be configured until this succeeds.
   }
+}
+
+export interface GenerateOfflineOptions {
+  /** Forwarded to the remote endpoint; the on-device engine always uses its loaded model. */
+  model?: string;
+  threadId?: string | null;
+  enableTools?: boolean;
+  enableThinking?: boolean;
+  fileIds?: string[];
+  /** Bearer token for the remote fallback (web session auth). Native auth uses `apiKeyHeaders()` instead. */
+  authToken?: string;
+  signal?: AbortSignal;
+  /** Called with each incremental chunk of text, from either the local model or the remote stream. */
+  onToken?: (token: string) => void;
+}
+
+export interface GenerateOfflineResult {
+  text: string;
+  /** Which path answered: the on-device model, or the CI-Server `/api/llm/generate` endpoint. */
+  source: 'local' | 'remote';
+}
+
+/**
+ * Answer `prompt` using the on-device LLM when it's present, loaded, and reports itself
+ * available (native only) — falling through to the CI-Server `/api/llm/generate` endpoint
+ * (same request/response shape as `useChatRequester`) on web, when the plugin is absent,
+ * when `isAvailable()` says no, or on any error from the local path. Callers that already
+ * called `loadModel()` (e.g. after the user opted into downloading the on-device model)
+ * get a local answer; everyone else transparently gets the remote one.
+ */
+export async function generateOffline(prompt: string, options: GenerateOfflineOptions = {}): Promise<GenerateOfflineResult> {
+  const llm = plugins()?.LocalLLM;
+
+  if (isNativePlatform() && llm) {
+    try {
+      const { available } = await llm.isAvailable();
+
+      if (available) {
+        const text = options.onToken
+          ? await generateLocalStreaming(llm, prompt, options.onToken)
+          : (await llm.generate({ prompt })).text;
+
+        return { text, source: 'local' };
+      }
+    } catch {
+      // Local engine errored (not loaded, OOM, cancelled, ...) — fall through to remote.
+    }
+  }
+
+  const text = await generateRemote(prompt, options);
+
+  return { text, source: 'remote' };
+}
+
+/** Drives `generateStream` + the `llmToken` event into a single buffered result, forwarding partials. */
+async function generateLocalStreaming(llm: LocalLlmPlugin, prompt: string, onToken: (token: string) => void): Promise<string> {
+  let full = '';
+
+  const handle = await llm.addListener('llmToken', (event) => {
+    if (event.partial) {
+      full += event.partial;
+      onToken(event.partial);
+    }
+  });
+
+  try {
+    await llm.generateStream({ prompt });
+
+    return full;
+  } finally {
+    void handle.remove();
+  }
+}
+
+/**
+ * POSTs to `/api/llm/generate` with the same request shape `useChatRequester` uses, and
+ * decodes the streamed response — a sequence of length-prefixed binary frames
+ * (`[channel<<6|flags][UInt32 BE length][payload]`; see
+ * `frontend/apps/web/src/components/Chat/utils/FrameDecoder.ts` and its Swift port,
+ * `CompanionAPI.swift`) — keeping only channel 0 (TEXT). Kept self-contained here rather
+ * than importing the web app's decoder: `@ci/common` must not depend on `@ci/fe-web`.
+ */
+async function generateRemote(prompt: string, options: GenerateOfflineOptions): Promise<string> {
+  const res = await fetch(buildApiUrl('/api/llm/generate'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...apiKeyHeaders(),
+      ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
+    },
+    body: JSON.stringify({
+      prompt,
+      model: options.model,
+      threadId: options.threadId ?? null,
+      enableTools: options.enableTools ?? false,
+      enableThinking: options.enableThinking ?? false,
+      fileIds: options.fileIds,
+    }),
+    signal: options.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`LLM request failed (${res.status})`);
+  }
+
+  return decodeTextFrames(res.body, options.onToken);
+}
+
+const TEXT_CHANNEL = 0;
+const FRAME_HEADER_BYTES = 5;
+
+/** Reads a frame-encoded response body, returning the concatenated TEXT-channel payload. */
+async function decodeTextFrames(body: ReadableStream<Uint8Array>, onToken?: (token: string) => void): Promise<string> {
+  const reader = body.getReader();
+  const textDecoder = new TextDecoder();
+  let buffer = new Uint8Array(0);
+  let full = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+
+      if (value && value.length > 0) {
+        const merged = new Uint8Array(buffer.length + value.length);
+
+        merged.set(buffer, 0);
+        merged.set(value, buffer.length);
+        buffer = merged;
+
+        while (buffer.length >= FRAME_HEADER_BYTES) {
+          const header = buffer[0];
+          const channel = (header >> 6) & 0b11;
+          const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+          const payloadLength = view.getUint32(1, false);
+          const frameSize = FRAME_HEADER_BYTES + payloadLength;
+
+          if (buffer.length < frameSize) {
+            break; // Wait for more bytes — the frame isn't fully buffered yet.
+          }
+
+          if (channel === TEXT_CHANNEL) {
+            const chunk = textDecoder.decode(buffer.slice(FRAME_HEADER_BYTES, frameSize), { stream: true });
+
+            full += chunk;
+            onToken?.(chunk);
+          }
+
+          buffer = buffer.slice(frameSize);
+        }
+      }
+
+      if (done) {
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return full;
 }

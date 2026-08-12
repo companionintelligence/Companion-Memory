@@ -1,0 +1,33 @@
+{
+  "name": "@ci/capacitor-local-llm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Capacitor plugin (Android-only) for on-device LLM inference via Google's LiteRT-LM. Lets the mobile shell answer prompts fully offline once a model is downloaded and the device clears the RAM/storage floor; @ci/common's nativeBridge.ts (generateOffline) falls back to the CI-Server /api/llm/generate endpoint otherwise. No ios/ folder — this is a supported partial-platform Capacitor plugin.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "packageManager": "yarn@4.9.1",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "src/"
+  ],
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "android",
+    "llm",
+    "litert-lm"
+  ],
+  "peerDependencies": {
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^7.0.0",
+    "typescript": "^5.8.3"
+  },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  }
+}

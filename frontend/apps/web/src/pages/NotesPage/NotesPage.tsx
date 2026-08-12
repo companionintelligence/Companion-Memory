@@ -1,36 +1,28 @@
 import { type ReactNode, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
-import { EmptyState, LoadingPage, Portal, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, LoadingPage, Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button } from '@ci/shadcn';
+import { useQuery } from '@powersync/react';
 import { Link } from 'react-router-dom';
 
 import { NoteIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
-import { gql } from '@/graphql';
 
 import { DeleteNoteModal } from './DeleteNoteModal';
-import { Note } from './Note';
-
-const GET_NOTES = gql(`
-  query GetNotes($first: Int, $after: String) {
-    notes(first: $first, after: $after) {
-      edges {
-        node {
-          id
-          ...NoteGridItemFragment
-        }
-      }
-    }
-  }
-`);
+import { Note, type NoteRow } from './Note';
 
 export function NotesPage() {
   usePageTitle('Notes - Companion Intelligence');
 
-  const { data, loading } = useQuery(GET_NOTES, {
-    variables: { first: 50 },
-  });
+  // First proof-of-concept read migrated from Apollo to a PowerSync watched query
+  // (infrastructure/powersync/README.md's stated "Next" step) — this re-runs
+  // automatically whenever the local `notes` table changes, whether from this
+  // device's own edits or a row synced down from the server. See
+  // `@/api/powersync/schema.ts`/`connector.ts` for the table definition and write
+  // path; `id` here is the raw note uuid, not the GraphQL global id.
+  const { data: notes, isLoading } = useQuery<NoteRow>(
+    'SELECT id, title, content FROM notes ORDER BY created_at DESC LIMIT 50',
+  );
 
   const [focusedNote, setFocusedNote] = useState<string | null>(null);
 
@@ -38,14 +30,15 @@ export function NotesPage() {
     e.preventDefault();
     e.stopPropagation();
 
-    setFocusedNote(noteId);
+    // DeleteNoteModal still deletes via the GraphQL `deleteNote` mutation, which
+    // (like every other note mutation) expects the base64 global id, not the raw
+    // uuid PowerSync's local row carries.
+    setFocusedNote(GlobalUID.encode('note', noteId));
   };
-
-  const notes = data?.notes.edges.map((edge) => edge.node) || [];
 
   let content: ReactNode;
 
-  if (loading) {
+  if (isLoading) {
     content = <LoadingPage />;
   } else if (notes.length === 0) {
     content = (

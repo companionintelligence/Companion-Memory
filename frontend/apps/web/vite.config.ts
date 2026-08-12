@@ -187,4 +187,11 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@ci/shadcn', 'react', 'react-dom', 'react-router-dom'],
   },
+  worker: {
+    // @powersync/web ships its SQLite worker as an ES module; the default
+    // 'iife' format can't be code-split and fails the production build with
+    // "UMD and IIFE output formats are not supported for code-splitting
+    // builds." This is PowerSync's own documented Vite integration step.
+    format: 'es',
+  },
 });

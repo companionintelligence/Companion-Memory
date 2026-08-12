@@ -1,0 +1,93 @@
+// Unlike the other plugins wired into this app (all plain Java), this module is Kotlin
+// (LiteRT-LM's API and WorkManager's CoroutineWorker are both Kotlin-first), so — unlike
+// its siblings — it has to bootstrap the Kotlin Gradle plugin itself. This mirrors the
+// per-subproject `ext { ... }` / `buildscript { ... }` pattern already used by
+// `@capacitor/android`'s own build.gradle (each subproject's buildscript is independent
+// under this project's classic, non-version-catalog multi-project setup), so it does not
+// affect any other module's Kotlin version.
+ext {
+    junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
+    androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.0'
+    androidxJunitVersion = project.hasProperty('androidxJunitVersion') ? rootProject.ext.androidxJunitVersion : '1.2.1'
+    androidxEspressoCoreVersion = project.hasProperty('androidxEspressoCoreVersion') ? rootProject.ext.androidxEspressoCoreVersion : '3.6.1'
+}
+
+buildscript {
+    // litertlm-android 0.11.0's own Kotlin metadata requires a newer compiler than the
+    // 2.0.x line (verified by compiling this module: 2.0.21 fails with "Module was
+    // compiled with an incompatible version of Kotlin. The binary version of its
+    // metadata is 2.3.0, expected version is 2.0.0"). Uses a plain local `def` — not
+    // `ext.kotlin_version` — because unqualified `ext` writes inside a nested
+    // `buildscript {}` block resolve against the shared project-ext scope in this
+    // Gradle/Groovy setup, so an `ext.` write here was observed leaking across
+    // sibling subprojects (verified: it silently pinned this module to whatever
+    // `kotlin_version` another plugin's buildscript block last set, ignoring this
+    // literal). A local `def` is scoped strictly to this closure.
+    def localLlmKotlinVersion = '2.2.21'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$localLlmKotlinVersion"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    namespace "com.companionintelligence.localllm"
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
+    defaultConfig {
+        // Must not exceed the app's own minSdk (23) — the manifest merger rejects a
+        // library requiring a higher floor than its consumer. isAvailable() gates the
+        // real API-26+ requirement (Build.VERSION_CODES.O) at runtime instead; every
+        // API genuinely introduced in 26 (NotificationChannel) is itself guarded by an
+        // explicit SDK_INT check at the call site (see ModelDownloadWorker).
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    lintOptions {
+        abortOnError false
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = "21"
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation project(':capacitor-android')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+
+    // On-device inference (LiteRT-LM). Group com.google.ai.edge.* resolves via google().
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.11.0'
+
+    // Resumable foreground download of the (~530 MiB) model file.
+    implementation 'androidx.work:work-runtime-ktx:2.10.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+}

@@ -13,6 +13,7 @@ import {
 } from 'react-router-dom';
 
 import { ApolloProvider } from '@/api/ApolloProvider';
+import { PowerSyncProvider } from '@/api/powersync/PowerSyncProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -85,7 +86,9 @@ function Providers({ children }: { children: ReactNode }) {
               <FeaturesProvider args={[]}>
                 <ModelProvider args={[]}>
                   <CaptureModalProvider args={[]}>
-                    <ApolloProvider>{children}</ApolloProvider>
+                    <ApolloProvider>
+                      <PowerSyncProvider>{children}</PowerSyncProvider>
+                    </ApolloProvider>
                   </CaptureModalProvider>
                 </ModelProvider>
               </FeaturesProvider>
