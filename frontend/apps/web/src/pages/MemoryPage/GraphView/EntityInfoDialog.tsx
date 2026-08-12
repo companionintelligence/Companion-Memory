@@ -63,9 +63,13 @@ export function EntityInfoDialog({
         />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{node.name ?? 'Untitled Entity'}</p>
-          <Badge variant="outline" className="mt-1" style={{ borderColor: typeColor }}>
-            {formatEnumLabel(node.entity_type)}
-          </Badge>
+          <div className="mt-1 flex flex-wrap gap-1">
+            <Badge variant="outline" style={{ borderColor: typeColor }}>
+              {formatEnumLabel(node.entity_type)}
+            </Badge>
+            {/* Event kind (visited / messaged / traveled / …) — the What dimension. */}
+            {node.event_type && <Badge variant="secondary">{formatEnumLabel(node.event_type)}</Badge>}
+          </div>
         </div>
         <Button
           type="button"

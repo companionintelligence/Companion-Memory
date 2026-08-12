@@ -52,6 +52,25 @@ export class GraphQueryService {
     return this.graphUtility.getEntityTypeCounts(ownerId);
   }
 
+  /** One lean per-type page for the dots overview — see {@link GraphUtilityService.getDotNodes}. */
+  getDotNodes(
+    ownerId: string,
+    options: { entityType: string; limit: number; offset?: number; eventTypes?: string[] },
+  ): Promise<Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null }>> {
+    return this.graphUtility.getDotNodes(ownerId, options);
+  }
+
+  /** Edge counts for a set of entities — see {@link GraphUtilityService.getDegreeCounts}. */
+  getDegreeCounts(ownerId: string, entityIds: string[]): Promise<Map<string, number>> {
+    return this.graphUtility.getDegreeCounts(ownerId, entityIds);
+  }
+
+  /** Capped edges with BOTH endpoints inside the id set — see
+   * {@link GraphUtilityService.getRelationshipsAmong}. */
+  getRelationshipsAmong(ownerId: string, entityIds: string[], limit: number): Promise<RelationshipEntity[]> {
+    return this.graphUtility.getRelationshipsAmong(ownerId, entityIds, limit);
+  }
+
   /**
    * Resolve the graph-node `entity_id`s for a set of source-record ids,
    * matching either the node's own `entity_id` or its `linked_id`. Source

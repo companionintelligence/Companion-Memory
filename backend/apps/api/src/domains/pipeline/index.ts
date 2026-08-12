@@ -72,7 +72,12 @@ import { MediaDimensionsStage } from './stages/enrich/MediaDimensionsStage';
 import { EventPersonLinkStage, PersonLinkStage } from './stages/enrich/PersonLinkStage';
 import { PositionReverseStage } from './stages/enrich/PositionReverseStage';
 import { EmbedStage } from './stages/index/EmbedStage';
-import { CommunicationEdgePromoteStage, EventEdgePromoteStage } from './stages/promote/EdgePromoteStage';
+import {
+  CommunicationEdgePromoteStage,
+  ContentEdgePromoteStage,
+  EventEdgePromoteStage,
+  InventoryEdgePromoteStage,
+} from './stages/promote/EdgePromoteStage';
 import { ObjectPromoteStage } from './stages/promote/ObjectPromoteStage';
 import { PlacePromoteStage } from './stages/promote/PlacePromoteStage';
 
@@ -122,6 +127,8 @@ const stageProviders: Provider[] = [
   // MaintenanceModule (imported below).
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_COMMUNICATION], useClass: CommunicationEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_EVENT], useClass: EventEdgePromoteStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_CONTENT], useClass: ContentEdgePromoteStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_INVENTORY], useClass: InventoryEdgePromoteStage },
 ];
 
 /**

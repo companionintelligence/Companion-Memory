@@ -6,6 +6,7 @@ import {
   BrowserActivityIcon,
   CommunicationIcon,
   ContentIcon,
+  EventIcon,
   FileIcon,
   ItemIcon,
   NoteIcon,
@@ -35,6 +36,18 @@ export type WhatCategory =
       label: string;
       icon: EntityTypeIcon;
       items: WhatEntityTypeItem[];
+    }
+  | {
+      /**
+       * Events are one entity type with many KINDS (`event_type`: visited,
+       * messaged, traveled, …), so their dropdown lists the account's distinct
+       * event types (the How dimension) instead of a fixed entity-type list.
+       */
+      kind: 'events';
+      id: 'events';
+      label: 'Events';
+      entityType: 'Event';
+      icon: EntityTypeIcon;
     }
   | {
       kind: 'tag';
@@ -67,6 +80,13 @@ export const WHAT_CATEGORIES: WhatCategory[] = [
     icon: CommunicationIcon,
   },
   {
+    kind: 'events',
+    id: 'events',
+    label: 'Events',
+    entityType: 'Event',
+    icon: EventIcon,
+  },
+  {
     kind: 'group',
     id: 'content',
     label: 'Content',
@@ -94,7 +114,7 @@ export const WHAT_CATEGORIES: WhatCategory[] = [
 ];
 
 export function entityTypesForCategory(category: WhatCategory): string[] {
-  if (category.kind === 'standalone') {
+  if (category.kind === 'standalone' || category.kind === 'events') {
     return [category.entityType];
   }
 
@@ -110,6 +130,7 @@ export const WHAT_BAR_ICON_CLASS: Record<string, string> = {
   people: 'text-indigo-600 dark:text-indigo-400',
   places: 'text-red-600 dark:text-red-400',
   messages: 'text-green-600 dark:text-green-400',
+  events: 'text-purple-600 dark:text-purple-400',
   content: 'text-pink-600 dark:text-pink-400',
   thing: 'text-yellow-600 dark:text-yellow-400',
   tag: 'text-orange-600 dark:text-orange-400',

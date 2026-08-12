@@ -6,6 +6,7 @@ import { Button, cn } from '@ci/shadcn';
 import { AlertCircle, ArrowLeft, Loader2, Sparkles } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
+import { useGraphDots } from '@/api/useGraphDots';
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { useNodeGraphService } from '@/api/useNodeGraphService';
 import { colorForRawType } from '@/components/entities/entityVisuals';
@@ -39,6 +40,8 @@ const GraphCanvas3D = lazy(() => import('./GraphCanvas3D'));
 
 /** Overview cap: past this the O(n²) simulation and the label budget both stop earning their keep. */
 const MAX_OVERVIEW_NODES = 150;
+/** How many viewport node ids the zoomed-in section-edge fetch sends (the endpoint's own cap). */
+const SECTION_EDGE_ID_LIMIT = 300;
 const SEARCH_RESULT_LIMIT = 20;
 /** Focus-mode expansion bounds forwarded to /api/graph/node (client-side caps applied on top). */
 const FOCUS_NODE_LIMIT = 60;
@@ -152,6 +155,22 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const [searchLinks, setSearchLinks] = useState<GraphLink[]>([]);
 
   const [{ authToken }] = useAuth();
+
+  /**
+   * DOTS overview: the default zoomed-out picture — every data type as thousands of tiny dots from
+   * GET /graph/dots. Only the filters that endpoint can honor cheaply (entity types, event types)
+   * keep it eligible; the restrictive dimensions (tags, connectors, who/where, dates) resolve
+   * through the classic /graph/data path with its server-computed match sets.
+   */
+  const dotsEligible =
+    tagsParam === undefined &&
+    explorerConnectors.length === 0 &&
+    explorerPeople.length === 0 &&
+    explorerPlaces.length === 0 &&
+    !hasLocationParam &&
+    !dateFromParam &&
+    !dateToParam;
+
   const { loading, error, subgraph, userEntityId, filterMatchedEntityIds, filterScope } = useGraphOverview(
     authToken,
     {
@@ -165,8 +184,21 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       hasLocation: hasLocationParam,
       dateFrom: dateFromParam,
       dateTo: dateToParam,
+      skip: dotsEligible,
     },
   );
+
+  const {
+    loading: dotsLoading,
+    error: dotsError,
+    nodes: dotNodes,
+    userEntityId: dotsUserEntityId,
+  } = useGraphDots(authToken, {
+    includeTypes: explorerIncludeTypes,
+    eventTypes: explorerEventTypes,
+    skip: !dotsEligible,
+  });
+
   const isFilterActive = filterScope.tags || filterScope.events;
   const [, { setActiveEntity }] = useEntityService();
 
@@ -182,6 +214,82 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     maxDepth: FOCUS_HOP_DEPTH,
     skip: !focusEntityId,
   });
+
+  /**
+   * Section edges for the dots overview: once the viewer zooms past the LOD threshold, fetch the
+   * relationships among the nodes actually in frame (POST /graph/edges) and hand them to the
+   * canvas, which reveals them faintly. Keyed on the visible-id set so panning within the same
+   * neighbourhood doesn't refetch; a new section aborts the previous fetch.
+   */
+  const [sectionLinks, setSectionLinks] = useState<GraphLink[]>([]);
+  const sectionAbortRef = useRef<AbortController | null>(null);
+  const sectionKeyRef = useRef('');
+  const dotDegreeById = useMemo(
+    () => new Map(dotNodes.map((node) => [node.id, node.degree ?? 0])),
+    [dotNodes],
+  );
+
+  // The fetched section resets with the picture it belongs to.
+  useEffect(() => {
+    setSectionLinks([]);
+    sectionKeyRef.current = '';
+  }, [dotNodes]);
+
+  const handleViewportChange = useCallback(
+    (visibleNodeIds: string[], zoomedIn: boolean) => {
+      if (!dotsEligible || focusEntityId || isSearchMode || !zoomedIn || visibleNodeIds.length === 0) {
+        return;
+      }
+
+      // The endpoint caps the id list; send the busiest nodes in frame, whose edges are the ones
+      // most worth drawing.
+      const ids = [...visibleNodeIds]
+        .sort((a, b) => (dotDegreeById.get(b) ?? 0) - (dotDegreeById.get(a) ?? 0))
+        .slice(0, SECTION_EDGE_ID_LIMIT);
+
+      const key = [...ids].sort().join(',');
+      if (key === sectionKeyRef.current) {
+        return;
+      }
+
+      sectionKeyRef.current = key;
+      sectionAbortRef.current?.abort();
+      const controller = new AbortController();
+      sectionAbortRef.current = controller;
+
+      (async () => {
+        try {
+          const response = await fetch(buildApiUrl('/api/graph/edges'), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...apiKeyHeaders(),
+              ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+            },
+            credentials: 'include',
+            body: JSON.stringify({ ids }),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            return;
+          }
+
+          const payload = await response.json();
+          const links = Array.isArray(payload?.data?.links) ? (payload.data.links as GraphLink[]) : [];
+
+          if (!controller.signal.aborted) {
+            setSectionLinks(links);
+          }
+        } catch {
+          // A failed/aborted section fetch just leaves the current edges standing.
+        }
+      })();
+    },
+    [authToken, dotDegreeById, dotsEligible, focusEntityId, isSearchMode],
+  );
+
+  useEffect(() => () => sectionAbortRef.current?.abort(), []);
 
   // Graph search, scoped by the same explorer filters as /data. Unchanged contract from the
   // previous view, minus the spawn-limit coupling (a fixed result cap instead).
@@ -365,6 +473,21 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
    * node is always kept — it is the anchor the overview is framed around.
    */
   const overviewGraph = useMemo<DisplayGraph>(() => {
+    // Dots overview: the type-balanced /graph/dots payload, plus whatever section edges the
+    // current zoom has fetched. No cap here — LOD rendering is what makes the count affordable.
+    if (dotsEligible) {
+      if (dotNodes.length === 0) {
+        return EMPTY_GRAPH;
+      }
+
+      const dotIds = new Set(dotNodes.map((node) => node.id));
+
+      return {
+        nodes: dotNodes,
+        links: sectionLinks.filter((link) => dotIds.has(link.source) && dotIds.has(link.target)),
+      };
+    }
+
     const nodes = subgraph?.nodes ?? [];
     const links = subgraph?.links ?? [];
 
@@ -404,7 +527,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       nodes: scopedNodes.filter((node) => keep.has(node.id)),
       links: scopedLinks.filter((link) => keep.has(link.source) && keep.has(link.target)),
     };
-  }, [subgraph, filterMatchedEntityIds, userEntityId]);
+  }, [dotsEligible, dotNodes, sectionLinks, subgraph, filterMatchedEntityIds, userEntityId]);
 
   const searchGraph = useMemo<DisplayGraph>(() => {
     const scopedNodes = filterMatchedEntityIds
@@ -486,10 +609,19 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_LEGEND_TYPES);
   }, [displayGraph.nodes]);
 
-  const handleNodeSelect = useCallback((nodeId: string) => {
-    setSelectedLinkId(null);
-    setSelectedNodeId(nodeId);
-  }, []);
+  const handleNodeSelect = useCallback(
+    (nodeId: string) => {
+      setSelectedLinkId(null);
+      setSelectedNodeId(nodeId);
+
+      // In the dots overview a click IS the focus gesture: fly to the dot and expand its subgraph
+      // (the webbed-feet zoomToNode + focus pattern). Focus and search keep click = select only.
+      if (dotsEligible && !focusEntityId && !isSearchMode) {
+        setFocusEntityId(nodeId);
+      }
+    },
+    [dotsEligible, focusEntityId, isSearchMode],
+  );
 
   const handleLinkSelect = useCallback((linkId: string) => {
     setSelectedNodeId(null);
@@ -551,11 +683,15 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     return () => observer.disconnect();
   }, []);
 
-  const dataLoading = mode === 'search' ? searchLoading : mode === 'focus' ? focusLoading : loading;
-  const dataError =
-    mode === 'search' ? searchError : mode === 'focus' ? (focusError?.message ?? null) : error;
+  const overviewLoading = dotsEligible ? dotsLoading : loading;
+  const overviewError = dotsEligible ? dotsError : error;
+  const overviewUserEntityId = dotsEligible ? dotsUserEntityId : userEntityId;
 
-  const centerNodeId = mode === 'focus' ? focusEntityId : (userEntityId ?? undefined);
+  const dataLoading = mode === 'search' ? searchLoading : mode === 'focus' ? focusLoading : overviewLoading;
+  const dataError =
+    mode === 'search' ? searchError : mode === 'focus' ? (focusError?.message ?? null) : overviewError;
+
+  const centerNodeId = mode === 'focus' ? focusEntityId : (overviewUserEntityId ?? undefined);
 
   let stateOverlay: ReactNode = null;
 
@@ -645,6 +781,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             onBackgroundClick={handleBackgroundClick}
             flyToNodeId={selectedNodeId}
             focusHops={mode === 'focus' ? FOCUS_OWN_HOPS : undefined}
+            onViewportChange={handleViewportChange}
           />
         ))}
 

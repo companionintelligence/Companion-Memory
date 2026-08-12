@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { cn } from '@ci/shadcn';
 import { useSearchParams } from 'react-router-dom';
 
+import { formatEnumLabel } from '@/lib/utils';
+
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
 import {
   DateGroupHeader,
@@ -29,6 +31,13 @@ interface TimelineViewProps {
   onEntityHover?: (entity: EntityItem | null) => void;
   onEntitySelect?: (entity: EntityItem) => void;
   registerTimelineRow?: (entityId: string, element: HTMLDivElement | null) => void;
+  /** Restrict the timeline to these `__typename`s (defaults to every card type). */
+  typeFilter?: ReadonlySet<string>;
+  /**
+   * Group by the event's KIND (`event_type`: visited, messaged, traveled, …)
+   * instead of by date bucket — the Events tab's view of the same data.
+   */
+  groupByEventType?: boolean;
 }
 
 export function TimelineView({
@@ -36,27 +45,46 @@ export function TimelineView({
   onEntityHover,
   onEntitySelect,
   registerTimelineRow,
+  typeFilter,
+  groupByEventType = false,
 }: TimelineViewProps = {}) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new globalThis.Map<string, HTMLDivElement>());
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }] = useEntityService();
 
-  const timelineData = useMemo(() => data.filter((entity) => TIMELINE_TYPES.has(entity.__typename)), [data]);
+  const allowedTypes = typeFilter ?? TIMELINE_TYPES;
+  const timelineData = useMemo(
+    () => data.filter((entity) => allowedTypes.has(entity.__typename)),
+    [data, allowedTypes],
+  );
 
   // Shared bucketing keeps the Today / Yesterday / This Week / … headers
   // identical to the List view — but only while results stay in chronological
   // order. Relevance/name sorts interleave dates, so we render one continuous,
   // header-less timeline there instead of repeated, out-of-order headers.
   const [searchParams] = useSearchParams();
-  const grouped = isChronologicalSort(
-    searchParams.get('sortBy'),
-    Boolean(searchParams.get('search')?.trim()),
-  );
-  const groups = useMemo(
-    () => (grouped ? groupEntitiesByBucket(timelineData) : null),
-    [grouped, timelineData],
-  );
+  const grouped =
+    !groupByEventType &&
+    isChronologicalSort(searchParams.get('sortBy'), Boolean(searchParams.get('search')?.trim()));
+  const groups = useMemo(() => {
+    // Events tab: sections per activity kind, busiest first; within a section
+    // the entities keep the server's (chronological) order.
+    if (groupByEventType) {
+      const byKind = new Map<string, EntityItem[]>();
+      for (const entity of timelineData) {
+        const kind =
+          entity.__typename === 'EventType' && entity.eventType ? entity.eventType : 'other';
+        byKind.set(kind, [...(byKind.get(kind) ?? []), entity]);
+      }
+
+      return [...byKind.entries()]
+        .sort((a, b) => b[1].length - a[1].length)
+        .map(([key, entities]) => ({ key, label: formatEnumLabel(key), entities }));
+    }
+
+    return grouped ? groupEntitiesByBucket(timelineData) : null;
+  }, [groupByEventType, grouped, timelineData]);
 
   // Load the next server page when the sentinel nears the viewport. Using the
   // viewport as root keeps this working regardless of which ancestor scrolls.

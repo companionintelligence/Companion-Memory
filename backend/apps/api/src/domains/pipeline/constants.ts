@@ -251,6 +251,21 @@ export const STAGE_IDS = {
    * a `Stage` declares exactly one `source`, and the matrix reads two tables.
    */
   PROMOTE_EDGE_EVENT: 'promote.edge_event',
+
+  /**
+   * The same projection over `ci.content`: rows attached to an event
+   * (`content.event_id`, written at ingest) become Content −PART_OF→ Event
+   * edges — what makes a photo or document reachable from its event in the
+   * graph view.
+   */
+  PROMOTE_EDGE_CONTENT: 'promote.edge_content',
+
+  /**
+   * The same projection over `ci.inventory`: `last_seen_place_entity_id`
+   * (written by `promote.object` and importers) becomes Item −LOCATED_AT→
+   * Place.
+   */
+  PROMOTE_EDGE_INVENTORY: 'promote.edge_inventory',
 } as const;
 
 export type StageId = (typeof STAGE_IDS)[keyof typeof STAGE_IDS];

@@ -102,6 +102,7 @@ export const RELATIONSHIP_TYPES = [
   'AT_LOCATION',
   'SENT',
   'RECEIVED',
+  'PART_OF',
 ] as const;
 
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];

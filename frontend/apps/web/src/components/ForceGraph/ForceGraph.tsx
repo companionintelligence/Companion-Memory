@@ -77,6 +77,12 @@ interface ForceGraphProps {
   selectedNodeId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
   /**
+   * Fires (debounced) when the camera settles over a new viewport in dots/LOD mode: the node ids
+   * currently inside the frame, and whether the zoom is past the label threshold. The graph
+   * explorer uses it to fetch the relationships among the visible section once the viewer zooms in.
+   */
+  onViewportChange?: (visibleNodeIds: string[], zoomedIn: boolean) => void;
+  /**
    * Connection-thread selection: the emphasised relationship. Everything that is not the thread —
    * its line and its two endpoints — recedes, the way hover already isolates a node's corner.
    */
@@ -293,6 +299,66 @@ const CAMERA_FLIGHT_MS = 700;
 /** Minimum magnification a flight lands at, so "focus this node" always reads as a close-up. */
 const FLIGHT_MIN_SCALE = 1.25;
 
+/*
+ * LOD ("dots") mode — the Webbed Feet explore-page pattern at CI scale. Past a node count no label
+ * budget survives, every node renders as a tiny type-colored dot; zooming past a threshold swaps
+ * dots for labels, but only for the nodes inside the viewport. The O(n²) label relaxation is
+ * skipped entirely (there are no standing labels to keep apart), which is what makes a 2000-node
+ * simulation tick at frame rate.
+ */
+/** Past this many nodes the graph renders as dots with zoom-revealed labels. */
+const LOD_NODE_THRESHOLD = 300;
+/** Webbed Feet's ZOOM_THRESHOLD: at/above it, viewport nodes earn labels (and section edges). */
+const LOD_ZOOM_THRESHOLD = 1.5;
+/** Most labels drawn at once when zoomed in — the busiest nodes in frame win. */
+const LOD_MAX_LABELS = 80;
+/** Dot size at rest; degree still grows a hub, gently. */
+const LOD_DOT_RADIUS = 2.5;
+const LOD_MAX_DOT_RADIUS = 5;
+const LOD_DOT_DEGREE_FACTOR = 0.25;
+/** Faster settle: at 2000 nodes the long organic drift reads as churn, not life. */
+const LOD_ALPHA_DECAY = 0.09;
+/** Milder repulsion (Webbed Feet uses -30 at a fraction of the count). */
+const LOD_CHARGE_STRENGTH = -12;
+const LOD_COLLIDE_PADDING = 1.5;
+/** When every node position is reused from the previous layout, restart cool: the picture is
+ * already settled and only genuinely new information should stir it. */
+const LOD_REUSED_LAYOUT_ALPHA = 0.12;
+/** How far out the per-type seed clusters sit, as a fraction of the world's half-extent. */
+const LOD_CLUSTER_RADIUS_FRACTION = 0.62;
+/** Camera-settle debounce before the viewport is re-evaluated (labels, section fetch). */
+const LOD_VIEWPORT_DEBOUNCE_MS = 180;
+/** World-space margin around the frame so labels don't pop at the very edge. */
+const LOD_VIEWPORT_MARGIN_PX = 40;
+/** Reveal opacity for section edges while zoomed in (nobody asked about a specific node yet). */
+const LOD_SECTION_LINK_OPACITY = 0.3;
+
+/**
+ * Deterministic per-type seed positions: nodes of one type start life together in a radial
+ * cluster, so the first frame already reads as "these are the kinds of things I have" and the
+ * short LOD settle refines rather than untangles.
+ */
+function clusterSeedPosition(
+  typeIndex: number,
+  typeCount: number,
+  memberIndex: number,
+  memberCount: number,
+  boundsWidth: number,
+  boundsHeight: number,
+): { x: number; y: number } {
+  const angle = (typeIndex / Math.max(1, typeCount)) * Math.PI * 2;
+  const clusterRadius = Math.min(boundsWidth, boundsHeight) * (LOD_CLUSTER_RADIUS_FRACTION / 2);
+  const centerX = boundsWidth / 2 + Math.cos(angle) * clusterRadius;
+  const centerY = boundsHeight / 2 + Math.sin(angle) * clusterRadius;
+
+  // Sunflower (phyllotaxis) packing: evenly filled disc, no RNG, no two members stacked.
+  const spread = Math.min(boundsWidth, boundsHeight) * 0.18;
+  const r = spread * Math.sqrt((memberIndex + 0.5) / Math.max(1, memberCount));
+  const theta = memberIndex * 2.399963229728653;
+
+  return { x: centerX + Math.cos(theta) * r, y: centerY + Math.sin(theta) * r };
+}
+
 function ForceGraphBase({
   nodes,
   links,
@@ -307,8 +373,11 @@ function ForceGraphBase({
   anchoredNodeIds = [],
   focusHops,
   height,
+  onViewportChange,
 }: ForceGraphProps) {
   const { ref, width } = useContainerWidth(720);
+  /** Dots/LOD rendering — a property of the node count, not a caller switch. */
+  const lodMode = nodes.length > LOD_NODE_THRESHOLD;
   // The live simulation arrays. Set once per layout; the simulation then MUTATES the members in
   // place and the tick handler writes their positions straight to the DOM. React re-renders only
   // for data or interaction-state changes, and reads whatever positions are current when it does.
@@ -346,12 +415,100 @@ function ForceGraphBase({
   // Distinguishes a click on the canvas from the end of a pan; only the former clears selections.
   const panMovedRef = useRef(false);
 
+  /**
+   * The zoom-LOD view: whether the camera is past the label threshold, and which nodes get a label.
+   * Only meaningful (and only maintained) in LOD mode; recomputed on a debounce after the camera
+   * settles, because it runs over every node and gates React re-renders.
+   */
+  const [lodView, setLodView] = useState<{ zoomedIn: boolean; labelIds: Set<string> }>({
+    zoomedIn: false,
+    labelIds: new Set(),
+  });
+  const lodViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lodModeRef = useRef(lodMode);
+  lodModeRef.current = lodMode;
+  const canvasSizeRef = useRef({ width: 720, height: 480 });
+  canvasSizeRef.current = { width: width || 720, height: canvasHeight };
+  const onViewportChangeRef = useRef(onViewportChange);
+  onViewportChangeRef.current = onViewportChange;
+
+  const updateLodView = useCallback(() => {
+    if (!lodModeRef.current) {
+      return;
+    }
+
+    const scale = scaleRef.current;
+    const translate = translateRef.current;
+    const { width: canvasWidth, height: viewHeight } = canvasSizeRef.current;
+    const zoomedIn = scale >= LOD_ZOOM_THRESHOLD;
+
+    // The frame in world coordinates, padded so labels don't pop at the edge.
+    const left = (-LOD_VIEWPORT_MARGIN_PX - translate.x) / scale;
+    const right = (canvasWidth + LOD_VIEWPORT_MARGIN_PX - translate.x) / scale;
+    const top = (-LOD_VIEWPORT_MARGIN_PX - translate.y) / scale;
+    const bottom = (viewHeight + LOD_VIEWPORT_MARGIN_PX - translate.y) / scale;
+
+    const visible = simNodesRef.current.filter(
+      (node) => node.x >= left && node.x <= right && node.y >= top && node.y <= bottom,
+    );
+
+    const labelIds = new Set<string>(
+      zoomedIn
+        ? [...visible]
+            .sort((a, b) => b.degree - a.degree)
+            .slice(0, LOD_MAX_LABELS)
+            .map((node) => node.id)
+        : [],
+    );
+
+    setLodView((previous) => {
+      if (
+        previous.zoomedIn === zoomedIn &&
+        previous.labelIds.size === labelIds.size &&
+        [...labelIds].every((id) => previous.labelIds.has(id))
+      ) {
+        return previous;
+      }
+
+      return { zoomedIn, labelIds };
+    });
+
+    onViewportChangeRef.current?.(
+      visible.map((node) => node.id),
+      zoomedIn,
+    );
+  }, []);
+
+  const scheduleLodViewUpdate = useCallback(() => {
+    if (!lodModeRef.current) {
+      return;
+    }
+
+    if (lodViewTimerRef.current != null) {
+      clearTimeout(lodViewTimerRef.current);
+    }
+
+    lodViewTimerRef.current = setTimeout(updateLodView, LOD_VIEWPORT_DEBOUNCE_MS);
+  }, [updateLodView]);
+
+  useEffect(
+    () => () => {
+      if (lodViewTimerRef.current != null) {
+        clearTimeout(lodViewTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const applyCamera = useCallback(() => {
     cameraGroupRef.current?.setAttribute(
       'transform',
       `translate(${translateRef.current.x}, ${translateRef.current.y}) scale(${scaleRef.current})`,
     );
-  }, []);
+    // Every camera write (wheel, pan, flight frame, settle tracking) re-arms the same debounce, so
+    // the LOD view recomputes once, after the camera comes to rest.
+    scheduleLodViewUpdate();
+  }, [scheduleLodViewUpdate]);
 
   /** Eased camera flight to a target frame; a new flight (or manual input) replaces the current one. */
   const animateCamera = useCallback(
@@ -451,8 +608,16 @@ function ForceGraphBase({
       degrees.set(link.target, (degrees.get(link.target) ?? 0) + 1);
     }
 
+    // The dots payload ships each node's true edge count; the links on screen are at most a
+    // fetched section of them, so the server's number wins where it exists.
+    for (const node of nodes) {
+      if (typeof node.degree === 'number') {
+        degrees.set(node.id, node.degree);
+      }
+    }
+
     return degrees;
-  }, [links]);
+  }, [links, nodes]);
 
   /** Who is one hop from whom, so hovering a node can pick out its own corner of the graph. */
   const neighborsById = useMemo(() => {
@@ -508,13 +673,17 @@ function ForceGraphBase({
    */
   const standingLabels = useMemo(
     () =>
-      standingLabelIds(
-        nodes,
-        (id) => degreeById.get(id) ?? 0,
-        [centerNodeId],
-        (id) => !isContext(id),
-      ),
-    [centerNodeId, degreeById, isContext, nodes],
+      // LOD mode has no standing labels at all: names are earned by zooming in (viewport-culled,
+      // see lodView) or by emphasis, never reserved room in the layout.
+      lodMode
+        ? new Set<string>()
+        : standingLabelIds(
+            nodes,
+            (id) => degreeById.get(id) ?? 0,
+            [centerNodeId],
+            (id) => !isContext(id),
+          ),
+    [centerNodeId, degreeById, isContext, lodMode, nodes],
   );
 
   useEffect(() => {
@@ -582,6 +751,17 @@ function ForceGraphBase({
       };
     };
 
+    // LOD seeding: nodes of one entity type start together in a radial cluster (see
+    // clusterSeedPosition), so the constellation reads by type from the first frame.
+    const typeOrder = [...new Set(nodes.map((node) => node.entity_type))];
+    const typeIndexById = new Map(typeOrder.map((type, index) => [type, index]));
+    const typeMemberCounts = new Map<string, number>();
+    for (const node of nodes) {
+      typeMemberCounts.set(node.entity_type, (typeMemberCounts.get(node.entity_type) ?? 0) + 1);
+    }
+
+    const typeMemberCursor = new Map<string, number>();
+
     const nodeCopies: ForceNode[] = nodes.map((node) => {
       const previous = previousPositions.get(node.id);
       const anchored = anchoredSet.has(node.id);
@@ -604,7 +784,9 @@ function ForceGraphBase({
         // in here would rebuild the whole layout on every click for a few pixels on a single node.
         // Distance is different: it is fixed for the life of the picture, and the collision pass has
         // to reserve the radius the renderer will actually draw.
-        radius: nodeRadius(degree) * (context ? CONTEXT_NODE_SCALE : 1),
+        radius: lodMode
+          ? Math.min(LOD_MAX_DOT_RADIUS, LOD_DOT_RADIUS + Math.sqrt(Math.max(0, degree)) * LOD_DOT_DEGREE_FACTOR)
+          : nodeRadius(degree) * (context ? CONTEXT_NODE_SCALE : 1),
         label,
         fullLabel,
         labelWidth: label ? labelWidthPx(fullLabel, MAX_LABEL_CHARS, measure) : 0,
@@ -614,7 +796,21 @@ function ForceGraphBase({
         pinned: anchored || node.id === centerNodeId,
       };
 
-      const position = previous ?? withOffset(findNeighborPosition(node.id));
+      const memberIndex = typeMemberCursor.get(node.entity_type) ?? 0;
+      typeMemberCursor.set(node.entity_type, memberIndex + 1);
+
+      const position =
+        previous ??
+        (lodMode
+          ? clusterSeedPosition(
+              typeIndexById.get(node.entity_type) ?? 0,
+              typeOrder.length,
+              memberIndex,
+              typeMemberCounts.get(node.entity_type) ?? 1,
+              boundsWidth,
+              boundsHeight,
+            )
+          : withOffset(findNeighborPosition(node.id)));
 
       return {
         ...node,
@@ -675,10 +871,12 @@ function ForceGraphBase({
     // positional pull, decaying slowly. Link strength is left at d3's degree-based default, which
     // is what keeps a hub from snapping all of its leaves into itself.
     const simulation = forceSimulation<ForceNode>(nodeCopies)
-      .force('charge', forceManyBody<ForceNode>().strength(CHARGE_STRENGTH))
+      .force('charge', forceManyBody<ForceNode>().strength(lodMode ? LOD_CHARGE_STRENGTH : CHARGE_STRENGTH))
       .force(
         'collide',
-        forceCollide<ForceNode>().radius((node) => node.radius + COLLIDE_PADDING),
+        forceCollide<ForceNode>().radius(
+          (node) => node.radius + (lodMode ? LOD_COLLIDE_PADDING : COLLIDE_PADDING),
+        ),
       )
       .force(
         'link',
@@ -688,11 +886,18 @@ function ForceGraphBase({
       )
       .force('x', forceX<ForceNode>(boundsWidth / 2).strength(CENTERING_STRENGTH))
       .force('y', forceY<ForceNode>(boundsHeight / 2).strength(CENTERING_STRENGTH))
-      .alphaDecay(ALPHA_DECAY)
+      .alphaDecay(lodMode ? LOD_ALPHA_DECAY : ALPHA_DECAY)
       .alphaMin(ALPHA_MIN)
       // The animation loop is ours (see below), not d3-timer's: the tick work includes label
       // relaxation and camera tracking, and one rAF driving all of it keeps them in lockstep.
       .stop();
+
+    // A settled picture that only gained data (section edges arriving as the viewer zooms in, say)
+    // restarts cool instead of at full boil — the dots barely stir. Only a genuinely new node set
+    // earns the full settle.
+    if (lodMode && nodeCopies.every((node) => previousPositions.has(node.id))) {
+      simulation.alpha(LOD_REUSED_LAYOUT_ALPHA);
+    }
 
     const applyPositions = () => {
       for (const node of nodeCopies) {
@@ -745,10 +950,14 @@ function ForceGraphBase({
 
     const settle = () => {
       // The per-tick pass is under-relaxed, so the last tick can still leave a little overlap.
-      // Drive it to zero at full strength before the frame the viewer actually reads.
-      for (let pass = 0; pass < COLLISION_POLISH_PASSES; pass += 1) {
-        if (relaxLabelCollisions(nodeCopies, 1) === 0) {
-          break;
+      // Drive it to zero at full strength before the frame the viewer actually reads. LOD mode
+      // skips it wholesale: no standing labels means no label boxes to separate, and the pass is
+      // O(n²) — at 2000 dots it would cost more than the whole simulation.
+      if (!lodMode) {
+        for (let pass = 0; pass < COLLISION_POLISH_PASSES; pass += 1) {
+          if (relaxLabelCollisions(nodeCopies, 1) === 0) {
+            break;
+          }
         }
       }
 
@@ -762,8 +971,11 @@ function ForceGraphBase({
       // Separate overlapping LABELS, not just node centres. The forces above only know about
       // circles, so without this a well-spaced layout still stacks four names on one spot.
       // Resolved positionally rather than through the velocity integrator, which would let labels
-      // oscillate through each other instead of settling.
-      relaxLabelCollisions(nodeCopies, COLLISION_STRENGTH);
+      // oscillate through each other instead of settling. Skipped in LOD mode (see settle).
+      if (!lodMode) {
+        relaxLabelCollisions(nodeCopies, COLLISION_STRENGTH);
+      }
+
       applyPositions();
       trackCamera(CAMERA_TRACK);
 
@@ -813,6 +1025,7 @@ function ForceGraphBase({
     degreeById,
     isContext,
     links,
+    lodMode,
     nodes,
     nodesKey,
     standingLabels,
@@ -1027,8 +1240,11 @@ function ForceGraphBase({
       return nodeId !== hoveredNodeId && !hoveredNeighbors?.has(nodeId);
     }
 
-    if (selectedNodeId != null) {
-      return nodeId !== selectedNodeId && !selectedNeighbors?.has(nodeId);
+    // Only dim around a selection whose neighbourhood is actually known. In the dots overview the
+    // links haven't been fetched yet when a dot is first clicked; fading all 2000 siblings to 0.2
+    // for the beat before focus mode takes over reads as the graph breaking, not as emphasis.
+    if (selectedNodeId != null && selectedNeighbors && selectedNeighbors.size > 0) {
+      return nodeId !== selectedNodeId && !selectedNeighbors.has(nodeId);
     }
 
     if (threadEndpointIds) {
@@ -1137,8 +1353,12 @@ function ForceGraphBase({
                 centerNodeId != null &&
                 (link.sourceId === centerNodeId || link.targetId === centerNodeId);
               const isThread = link.id === selectedLinkId;
-              const revealed =
+              // Zoomed past the LOD threshold, the fetched section edges show themselves faintly —
+              // the "re-render this section" reveal — without anyone pointing at a node yet.
+              const sectionRevealed = lodMode && lodView.zoomedIn;
+              const askedFor =
                 isThread || touchesHovered || touchesSelected || touchesHighlighted || touchesFocusCenter;
+              const revealed = askedFor || sectionRevealed;
 
               // A link with either end out in the context ring runs away from the focused node
               // rather than describing it, so it recedes with the node it leads to.
@@ -1148,13 +1368,15 @@ function ForceGraphBase({
 
               const opacity = !revealed
                 ? 0
-                : isThread
-                  ? 1
-                  : hoveredNodeId != null && !touchesHovered
-                    ? 0.25
-                    : contextual
-                      ? CONTEXT_LINK_OPACITY
-                      : 1;
+                : !askedFor
+                  ? LOD_SECTION_LINK_OPACITY
+                  : isThread
+                    ? 1
+                    : hoveredNodeId != null && !touchesHovered
+                      ? 0.25
+                      : contextual
+                        ? CONTEXT_LINK_OPACITY
+                        : 1;
 
               return (
                 <g
@@ -1222,9 +1444,16 @@ function ForceGraphBase({
               // back to full weight along with its name, which is what makes the ring explorable
               // rather than merely quiet.
               const contextual = node.context && !emphasised;
+              // LOD dots stay the size the layout gave them; emphasis is what expands one to the
+              // classic (labelled, full-size) rendering.
               const radius =
-                nodeRadius(node.degree, isSelected ? 'selected' : isHighlighted ? 'highlighted' : 'none') *
-                (contextual ? CONTEXT_NODE_SCALE : 1);
+                lodMode && !emphasised
+                  ? node.radius
+                  : nodeRadius(
+                      node.degree,
+                      isSelected ? 'selected' : isHighlighted ? 'highlighted' : 'none',
+                    ) * (contextual ? CONTEXT_NODE_SCALE : 1);
+              const lodLabelled = lodMode && lodView.zoomedIn && lodView.labelIds.has(node.id);
               const baseColor = getTypeColor(node.entity_type);
               const fillColor = isSelected ? 'hsl(var(--primary))' : baseColor;
               const opacity = isSelected ? 1 : isHighlighted ? 0.95 : 0.85;
@@ -1284,7 +1513,7 @@ function ForceGraphBase({
                     the layout's budget — it is transient, and reflowing the graph under the pointer
                     to make room for it would be worse than letting it overlap for the moment.
                   */}
-                  {(node.label !== '' || emphasised) && (
+                  {(node.label !== '' || emphasised || lodLabelled) && (
                     <text
                       x={radius + LABEL_GAP_PX}
                       y={4}
@@ -1295,7 +1524,11 @@ function ForceGraphBase({
                       strokeLinejoin="round"
                       style={{ paintOrder: 'stroke fill' }}
                     >
-                      {emphasised ? node.fullLabel : node.label}
+                      {emphasised
+                        ? node.fullLabel
+                        : // Zoom-earned labels are transient like hover labels: drawn truncated,
+                          // never reserved room in the layout.
+                          node.label || truncateLabel(node.fullLabel)}
                     </text>
                   )}
                   {/* The neighbour count, for the node the viewer is asking about. Transient like

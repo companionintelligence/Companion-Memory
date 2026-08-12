@@ -34,6 +34,14 @@ const GET_TAGS = gql(`
   }
 `);
 
+// The account's distinct event kinds (visited, messaged, traveled, …) — the
+// same dimension the Search box's How filter reads.
+const GET_EVENT_TYPES = gql(`
+  query WhatBarEventTypes {
+    eventTypes
+  }
+`);
+
 const EXPAND_LABEL_CLASS =
   'max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover:ml-1.5 group-hover:max-w-[7rem] group-hover:opacity-100 group-focus-visible:ml-1.5 group-focus-visible:max-w-[7rem] group-focus-visible:opacity-100 group-data-[state=open]:ml-1.5 group-data-[state=open]:max-w-[7rem] group-data-[state=open]:opacity-100';
 
@@ -245,6 +253,130 @@ function GroupWhatDropdown({
   );
 }
 
+/**
+ * The Events category: the LifeScope-style hover-expanding icon button whose
+ * dropdown filters by KIND of event. Checking kinds writes the shared
+ * `eventTypes` URL param (the explorer's How dimension — List, Gallery, Map
+ * and the graph all honor it); "Only Events" narrows the entity-type
+ * selection to Event like any standalone What button.
+ */
+function EventsWhatDropdown({
+  category,
+  selected,
+  active,
+  onSelectOnly,
+}: {
+  category: Extract<WhatCategory, { kind: 'events' }>;
+  selected: boolean;
+  active: boolean;
+  onSelectOnly: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data } = useQuery(GET_EVENT_TYPES, { skip: !open });
+  const availableEventTypes: string[] = data?.eventTypes ?? [];
+  const selectedEventTypes = searchParams.get('eventTypes')?.split(',').filter(Boolean) ?? [];
+  const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
+
+  const filterEngaged = selected || selectedEventTypes.length > 0;
+
+  const setEventTypes = (next: string[]) => {
+    setSearchParams((params) => {
+      if (next.length === 0) {
+        params.delete('eventTypes');
+      } else {
+        params.set('eventTypes', next.join(','));
+      }
+
+      return params;
+    });
+  };
+
+  const toggleEventType = (eventType: string) => {
+    if (selectedEventTypes.includes(eventType)) {
+      setEventTypes(selectedEventTypes.filter((type) => type !== eventType));
+    } else {
+      setEventTypes([...selectedEventTypes, eventType]);
+    }
+  };
+
+  return (
+    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
+      {/* No tooltip: the label already expands inline on hover (EXPAND_LABEL_CLASS). */}
+      <Trigger asChild>
+        <button
+          type="button"
+          aria-pressed={active}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label={category.label}
+          className={categoryButtonClass(filterEngaged, active)}
+        >
+          <CategoryIcon icon={category.icon} toneClass={WHAT_BAR_ICON_CLASS[category.id]} entityIcon />
+          <span className={EXPAND_LABEL_CLASS}>{category.label}</span>
+          <ChevronDown
+            className={cn(
+              'ml-0 h-3.5 w-3.5 shrink-0 opacity-50 transition-transform duration-200 group-hover:ml-1 group-data-[state=open]:ml-1 group-data-[state=open]:rotate-180',
+            )}
+          />
+        </button>
+      </Trigger>
+
+      <Content align="start" sideOffset={4} className="z-[9999] max-h-80 w-56 overflow-y-auto p-2">
+        <div className="flex items-center justify-between px-1 pb-2">
+          <Label className="p-0 text-sm font-medium">Events</Label>
+          {selectedEventTypes.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setEventTypes([])}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <Separator className="mb-1" />
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 w-full justify-start px-2 text-xs font-normal"
+          onClick={() => {
+            onSelectOnly();
+            setOpen(false);
+          }}
+        >
+          Only Events
+        </Button>
+        <Separator className="my-1" />
+        <Label className="px-1 py-1 text-xs font-medium text-muted-foreground">By activity</Label>
+        {availableEventTypes.length === 0 ? (
+          <div className="p-2 text-xs text-muted-foreground">No activity types yet</div>
+        ) : (
+          availableEventTypes.map((eventType) => (
+            <CheckboxItem
+              key={eventType}
+              checked={selectedEventTypes.includes(eventType)}
+              onClick={(event) => {
+                event.stopPropagation();
+                event.preventDefault();
+                toggleEventType(eventType);
+              }}
+              onSelect={(event) => {
+                event.preventDefault();
+              }}
+            >
+              {eventType}
+            </CheckboxItem>
+          ))
+        )}
+      </Content>
+    </DropdownMenu>
+  );
+}
+
 function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange: (next: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const active = tags.length > 0;
@@ -349,6 +481,18 @@ export function MemoryEntityTypeNav() {
                   isGroupActive={isGroupActive}
                   onSelectOnly={selectOnlyEntityType}
                   onToggleType={toggleEntityType}
+                />
+              );
+            }
+
+            if (category.kind === 'events') {
+              return (
+                <EventsWhatDropdown
+                  key={category.id}
+                  category={category}
+                  selected={isEntityTypeSelected(category.entityType)}
+                  active={isGroupActive(entityTypesForCategory(category))}
+                  onSelectOnly={() => selectOnlyEntityType(category.entityType)}
                 />
               );
             }

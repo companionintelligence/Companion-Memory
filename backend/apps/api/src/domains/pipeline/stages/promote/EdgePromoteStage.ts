@@ -17,19 +17,22 @@ import { STAGE_VERSIONS, type StageVersion } from '../../versions';
 // this stage's output is a pure projection of their output.
 import { PERSON_LINK_VERSION } from '../enrich/PersonLinkStage';
 
+import { PROMOTE_OBJECT_VERSION } from './ObjectPromoteStage';
 import { PROMOTE_PLACE_VERSION } from './PlacePromoteStage';
 
 /**
- * The two ids. IDS ARE PERMANENT — each is the third component of
+ * The ids. IDS ARE PERMANENT — each is the third component of
  * `ci.pipeline_state`'s primary key; renaming one abandons its ledger.
  *
- * Two ids rather than one, for the reason `enrich.person_link` /
+ * One id per SOURCE TABLE, for the reason `enrich.person_link` /
  * `enrich.event_person_link` are two: a `Stage` declares exactly one `source`,
- * and the deterministic-edge matrix reads two tables. One implementation,
+ * and the deterministic-edge matrix reads four tables. One implementation,
  * swept independently, never disagreeing.
  */
 export const PROMOTE_EDGE_COMMUNICATION_STAGE_ID = 'promote.edge_communication';
 export const PROMOTE_EDGE_EVENT_STAGE_ID = 'promote.edge_event';
+export const PROMOTE_EDGE_CONTENT_STAGE_ID = 'promote.edge_content';
+export const PROMOTE_EDGE_INVENTORY_STAGE_ID = 'promote.edge_inventory';
 
 // ---------------------------------------------------------------------------
 // The versions, DERIVED rather than chosen
@@ -41,8 +44,12 @@ export const PROMOTE_EDGE_EVENT_STAGE_ID = 'promote.edge_event';
  * the projection SQL around it (canonical resolution, the self-reference
  * guard). Bump in the same commit that changes either — including adding a
  * rule to the matrix, or nothing re-projects rows already marked done.
+ *
+ * Generation 2: the matrix gained `event.child_of` (Event −PART_OF→ parent
+ * Event), `content.part_of_event` (Content −PART_OF→ Event) and
+ * `inventory.located_at` (Item −LOCATED_AT→ Place).
  */
-export const EDGE_PROJECTION_RULE_GENERATION = 1;
+export const EDGE_PROJECTION_RULE_GENERATION = 2;
 
 /**
  * Communication-leg version: this stage's edges are a COPY of what
@@ -66,6 +73,21 @@ export const PROMOTE_EDGE_EVENT_VERSION =
   EDGE_PROJECTION_RULE_GENERATION + PERSON_LINK_VERSION + PROMOTE_PLACE_VERSION - 2;
 
 /**
+ * Content-leg version: `ci.content.event_id` is written by importers at
+ * ingest, not by a versioned producer stage — so the projection generation is
+ * the only moving part.
+ */
+export const PROMOTE_EDGE_CONTENT_VERSION = EDGE_PROJECTION_RULE_GENERATION;
+
+/**
+ * Inventory-leg version: `ci.inventory.last_seen_place_entity_id` is written
+ * by `promote.object` (and importers), so its version rides along — same SUM
+ * offset shape as the other legs.
+ */
+export const PROMOTE_EDGE_INVENTORY_VERSION =
+  EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
+
+/**
  * Cross-check a derived version against its `STAGE_VERSIONS` mirror — the same
  * contract every derived-version stage keeps (`promotePlaceStageVersion`,
  * `personLinkStageVersion`): the derivation is the authority, the entry is its
@@ -85,7 +107,8 @@ export function promoteEdgeStageVersion(
       `STAGE_VERSIONS["${stageId}"] declares ${declared} but the stage derives ${derived} from ` +
         `EDGE_PROJECTION_RULE_GENERATION (${EDGE_PROJECTION_RULE_GENERATION}) + its producers' ` +
         `versions (PERSON_LINK_VERSION ${PERSON_LINK_VERSION}, PROMOTE_PLACE_VERSION ` +
-        `${PROMOTE_PLACE_VERSION}). Bumping a generation is only half the change: update ` +
+        `${PROMOTE_PLACE_VERSION}, PROMOTE_OBJECT_VERSION ${PROMOTE_OBJECT_VERSION}). ` +
+        `Bumping a generation is only half the change: update ` +
         `versions.ts in the same commit, or the two disagree about what has been projected.`,
     );
   }
@@ -96,6 +119,8 @@ export function promoteEdgeStageVersion(
 // Run at module load — the earliest possible failure is the cheapest one.
 promoteEdgeStageVersion(PROMOTE_EDGE_COMMUNICATION_STAGE_ID, PROMOTE_EDGE_COMMUNICATION_VERSION);
 promoteEdgeStageVersion(PROMOTE_EDGE_EVENT_STAGE_ID, PROMOTE_EDGE_EVENT_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_CONTENT_STAGE_ID, PROMOTE_EDGE_CONTENT_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_INVENTORY_STAGE_ID, PROMOTE_EDGE_INVENTORY_VERSION);
 
 // ---------------------------------------------------------------------------
 // Candidate selection
@@ -121,7 +146,8 @@ export const PROMOTE_EDGE_COMMUNICATION_SOURCE: StageSource = {
     `OR (s.to_entity_ids IS NOT NULL AND cardinality(s.to_entity_ids) > 0))`,
 };
 
-/** Same shape over `ci.events`: any of the three linkage columns populated. */
+/** Same shape over `ci.events`: any of the four linkage columns populated
+ * (parent_event_id feeds the `event.child_of` PART_OF rule). */
 export const PROMOTE_EDGE_EVENT_SOURCE: StageSource = {
   schema: 'ci',
   table: 'events',
@@ -130,7 +156,28 @@ export const PROMOTE_EDGE_EVENT_SOURCE: StageSource = {
   predicate:
     `(s.organizer_entity_id IS NOT NULL ` +
     `OR (s.participant_entity_ids IS NOT NULL AND cardinality(s.participant_entity_ids) > 0) ` +
-    `OR s.location_entity_id IS NOT NULL)`,
+    `OR s.location_entity_id IS NOT NULL ` +
+    `OR s.parent_event_id IS NOT NULL)`,
+};
+
+/** `ci.content` rows attached to an event — the `content.part_of_event` rule's
+ * candidates. `event_id` is set at ingest by importers. */
+export const PROMOTE_EDGE_CONTENT_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'content',
+  idColumn: 'id',
+  userColumn: 'user_id',
+  predicate: 's.event_id IS NOT NULL',
+};
+
+/** `ci.inventory` rows with a last-seen place — the `inventory.located_at`
+ * rule's candidates. */
+export const PROMOTE_EDGE_INVENTORY_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'inventory',
+  idColumn: 'object_id',
+  userColumn: 'user_id',
+  predicate: 's.last_seen_place_entity_id IS NOT NULL',
 };
 
 // ---------------------------------------------------------------------------
@@ -265,6 +312,45 @@ export class EventEdgePromoteStage extends EdgePromoteStageBase {
   readonly entityTypes = ['event'] as const;
 
   protected readonly sourceKind: DeterministicEdgeSource = 'events';
+
+  // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class ContentEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_CONTENT_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_CONTENT_STAGE_ID, PROMOTE_EDGE_CONTENT_VERSION);
+
+  readonly source = PROMOTE_EDGE_CONTENT_SOURCE;
+
+  readonly entityTypes = ['content'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'content';
+
+  // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class InventoryEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_INVENTORY_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(
+    PROMOTE_EDGE_INVENTORY_STAGE_ID,
+    PROMOTE_EDGE_INVENTORY_VERSION,
+  );
+
+  readonly source = PROMOTE_EDGE_INVENTORY_SOURCE;
+
+  readonly entityTypes = ['item'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'inventory';
 
   // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
   constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {

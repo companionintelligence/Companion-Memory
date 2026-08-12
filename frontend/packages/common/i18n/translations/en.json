@@ -32,6 +32,7 @@
   "MEMORY_VIEW_MAP": "Map view",
   "MEMORY_VIEW_LIST": "List view",
   "MEMORY_VIEW_GALLERY": "Gallery view",
+  "MEMORY_VIEW_EVENTS": "Events view",
   "MEMORY_VIEW_GRAPH": "Graph view",
   "MEMORY_LIGHTBOX_CLOSE_HINT": "Close (Esc)",
   "MEMORY_LIGHTBOX_PREVIOUS": "Previous",

@@ -95,6 +95,10 @@ const SEARCH_QUERY = gql(`
 
           ... on EventType {
             bucketStartTime: startTime
+            # The event's kind (visited / messaged / traveled / …), unmasked so
+            # the Events tab can group its timeline by activity without
+            # unmasking the card fragment.
+            eventType
             # Coordinates for the map. Events carry a PostGIS Point in
             # locationCoordinates (GeoJSON [lng, lat]) even with no resolved
             # location PlaceType; aliased + unmasked so the map can read it

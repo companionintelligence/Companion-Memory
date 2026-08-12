@@ -243,6 +243,112 @@ export class GraphUtilityService {
     return rows.map((row) => ({ node: row, isSender: row.is_sender === true }));
   }
 
+  /**
+   * One recency-ordered page of a single entity type, in the MINIMAL shape the
+   * dots overview ships: id, type, name — no properties/description blobs,
+   * which at thousands of nodes dominate the payload without being rendered
+   * (a dot has no tooltip until it's focused, and focus does its own fetch).
+   *
+   * Event rows also carry `event_type` (joined off the same-id CTI mirror) so
+   * the client can color/filter events by kind; `eventTypes` narrows the page
+   * to those kinds. Both are meaningless for other entity types and ignored.
+   *
+   * `offset` exists for future tiling — a canvas layer paging one type at a
+   * time uses (offset, limit) per type without a new endpoint shape.
+   */
+  async getDotNodes(
+    ownerUserId: string,
+    options: { entityType: string; limit: number; offset?: number; eventTypes?: string[] },
+  ): Promise<Array<{ entity_id: string; entity_type: string; name: string; event_type: string | null }>> {
+    const isEvent = options.entityType === 'Event';
+    const eventTypeFilter = isEvent && options.eventTypes && options.eventTypes.length > 0;
+
+    const params: unknown[] = [ownerUserId, options.entityType];
+    let eventJoin = '';
+    let eventTypeSelect = 'NULL::text AS event_type';
+
+    if (isEvent) {
+      eventTypeSelect = 'ev.event_type AS event_type';
+      eventJoin = 'LEFT JOIN ci.events ev ON ev.event_id = e.entity_id';
+      if (eventTypeFilter) {
+        params.push(options.eventTypes);
+        eventJoin = `JOIN ci.events ev ON ev.event_id = e.entity_id AND ev.event_type = ANY($${params.length}::text[])`;
+      }
+    }
+
+    params.push(options.limit, options.offset ?? 0);
+
+    return this.entityRepo.manager.query(
+      `SELECT e.entity_id, e.entity_type, e.name, ${eventTypeSelect}
+         FROM ci.entities e
+         ${eventJoin}
+        WHERE e.owner_user_id = $1
+          AND e.is_active = true
+          AND e.entity_type = $2
+        ORDER BY e.created_at DESC
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+  }
+
+  /**
+   * Edge count per entity over the given ids — one UNION ALL + GROUP BY over
+   * `ci.relationships`, both directions. Feeds the dots overview's node sizing
+   * and label priority. Ids absent from the result have degree 0.
+   */
+  async getDegreeCounts(ownerUserId: string, entityIds: string[]): Promise<Map<string, number>> {
+    if (entityIds.length === 0) {
+      return new Map();
+    }
+
+    const rows: Array<{ entity_id: string; degree: string }> = await this.relationshipRepo.manager.query(
+      `SELECT entity_id, COUNT(*) AS degree
+         FROM (
+           SELECT from_entity_id AS entity_id
+             FROM ci.relationships
+            WHERE owner_user_id = $1 AND is_active = true AND from_entity_id = ANY($2::uuid[])
+           UNION ALL
+           SELECT to_entity_id
+             FROM ci.relationships
+            WHERE owner_user_id = $1 AND is_active = true AND to_entity_id = ANY($2::uuid[])
+         ) touching
+        GROUP BY entity_id`,
+      [ownerUserId, entityIds],
+    );
+
+    return new Map(rows.map((row) => [row.entity_id, Number(row.degree)]));
+  }
+
+  /**
+   * Relationships whose BOTH endpoints are inside the given id set, capped —
+   * the zoomed-in "section" edge fetch. Unlike {@link getRelationships} with
+   * `entityIds` (which returns every edge TOUCHING the set, most of them
+   * dangling against nodes the client hasn't loaded), this constrains both
+   * sides in SQL so a hub node in the set can't pull in its thousands of
+   * off-screen edges.
+   */
+  async getRelationshipsAmong(
+    ownerUserId: string,
+    entityIds: string[],
+    limit: number,
+  ): Promise<RelationshipEntity[]> {
+    if (entityIds.length === 0) {
+      return [];
+    }
+
+    return this.relationshipRepo.manager.query(
+      `SELECT *
+         FROM ci.relationships
+        WHERE owner_user_id = $1
+          AND is_active = true
+          AND from_entity_id = ANY($2::uuid[])
+          AND to_entity_id = ANY($2::uuid[])
+        ORDER BY strength DESC NULLS LAST
+        LIMIT $3`,
+      [ownerUserId, entityIds, limit],
+    );
+  }
+
   async queryNodes(
     ownerUserId: string,
     filters: {

@@ -18,7 +18,7 @@ import { RelationshipType } from '@ci/domains/graph';
  * edges always land on the canonical, deduplicated person/place.
  */
 /** Which source table a rule projects from — the pipeline's slice unit. */
-export type DeterministicEdgeSource = 'communications' | 'events';
+export type DeterministicEdgeSource = 'communications' | 'events' | 'content' | 'inventory';
 
 export interface DeterministicEdgeRule {
   /** Stable rule id, recorded on the edge as `properties.rule`. */
@@ -59,6 +59,9 @@ export interface DeterministicEdgeRule {
  * | events.organizer_entity_id          | Person -PARTICIPATED_IN→ Event (organizer) |
  * | events.participant_entity_ids       | Person -PARTICIPATED_IN→ Event          |
  * | events.location_entity_id           | Event -HAPPENED_AT→ Place               |
+ * | events.parent_event_id              | Event -PART_OF→ Event                   |
+ * | content.event_id                    | Content -PART_OF→ Event                 |
+ * | inventory.last_seen_place_entity_id | Item -LOCATED_AT→ Place                 |
  *
  * Every source id column is filled by the deterministic people/place-linking
  * jobs, and every communication/event row has a same-id mirror in
@@ -139,6 +142,51 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     fromIdExpr: 'e.event_id',
     toIdExpr: 'e.location_entity_id',
     candidateWhere: 'e.location_entity_id IS NOT NULL',
+  },
+  {
+    id: 'event.child_of',
+    description: 'Sub-event → its parent Event',
+    relationshipType: RelationshipType.PART_OF,
+    strength: 0.8,
+    properties: { derived_from: 'events.parent_event_id' },
+    source: 'events',
+    table: 'ci.events e',
+    userColumn: 'e.user_id',
+    timeColumn: 'e.start_time',
+    idColumn: 'e.event_id',
+    fromIdExpr: 'e.event_id',
+    toIdExpr: 'e.parent_event_id',
+    candidateWhere: 'e.parent_event_id IS NOT NULL',
+  },
+  {
+    id: 'content.part_of_event',
+    description: 'Content → the Event it belongs to',
+    relationshipType: RelationshipType.PART_OF,
+    strength: 0.7,
+    properties: { derived_from: 'content.event_id' },
+    source: 'content',
+    table: 'ci.content ct',
+    userColumn: 'ct.user_id',
+    timeColumn: 'ct.created_at',
+    idColumn: 'ct.id',
+    fromIdExpr: 'ct.id',
+    toIdExpr: 'ct.event_id',
+    candidateWhere: 'ct.event_id IS NOT NULL',
+  },
+  {
+    id: 'inventory.located_at',
+    description: 'Item → the Place it was last seen at',
+    relationshipType: RelationshipType.LOCATED_AT,
+    strength: 0.6,
+    properties: { derived_from: 'inventory.last_seen_place_entity_id' },
+    source: 'inventory',
+    table: 'ci.inventory i',
+    userColumn: 'i.user_id',
+    timeColumn: 'i.created_at',
+    idColumn: 'i.object_id',
+    fromIdExpr: 'i.object_id',
+    toIdExpr: 'i.last_seen_place_entity_id',
+    candidateWhere: 'i.last_seen_place_entity_id IS NOT NULL',
   },
 ];
 

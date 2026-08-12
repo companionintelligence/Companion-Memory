@@ -302,7 +302,7 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
-   * NIGHTLY, both legs. One INSERT…SELECT per matrix rule per slice; Postgres
+   * NIGHTLY, all legs. One INSERT…SELECT per matrix rule per slice; Postgres
    * only, no provider, no bill.
    *
    * Same tier as their producers (the person-link legs and `promote.place`),
@@ -321,6 +321,22 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   [STAGE_IDS.PROMOTE_EDGE_EVENT]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: {
     trigger: 'scheduled',
     cost: 'local',
     window: 'enrichment',

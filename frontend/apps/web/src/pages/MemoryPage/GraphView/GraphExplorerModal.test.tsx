@@ -48,6 +48,7 @@ const FOCUS_SUBGRAPH = {
 };
 
 const useNodeGraphServiceMock = vi.fn();
+const useGraphDotsMock = vi.fn();
 const setActiveEntityMock = vi.fn();
 
 vi.mock('@/hooks', () => ({
@@ -83,6 +84,10 @@ vi.mock('@/api/useNodeGraphService', () => ({
   useNodeGraphService: (props: { entityId?: string; skip?: boolean }) => useNodeGraphServiceMock(props),
 }));
 
+vi.mock('@/api/useGraphDots', () => ({
+  useGraphDots: (_token: unknown, options: { skip?: boolean }) => useGraphDotsMock(options),
+}));
+
 // The 3D renderer needs WebGL, which jsdom does not have. The stub records the graph it was
 // handed so the toggle tests can assert the same data flows to either renderer.
 vi.mock('./GraphCanvas3D', () => ({
@@ -91,9 +96,15 @@ vi.mock('./GraphCanvas3D', () => ({
   ),
 }));
 
-function renderShell() {
+/**
+ * The classic-overview tests pin a date filter in the URL: any restrictive
+ * filter (dates, tags, who/where, …) makes the explorer resolve through
+ * /graph/data — the contract these tests cover. The unfiltered default now
+ * takes the dots path instead, covered by its own block below.
+ */
+function renderShell(initialEntries: string[] = ['/?from=2024-01-01']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <GraphTabPanel variant="desktop" />
     </MemoryRouter>,
   );
@@ -130,12 +141,22 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
         ? { data: null, loading: false, error: null, refresh: vi.fn() }
         : { data: FOCUS_SUBGRAPH, loading: false, error: null, refresh: vi.fn() },
     );
+
+    useGraphDotsMock.mockReturnValue({
+      loading: false,
+      error: null,
+      nodes: [],
+      userEntityId: null,
+      counts: {},
+      truncated: false,
+    });
   });
 
   afterEach(() => {
     globalThis.requestAnimationFrame = realRequestAnimationFrame;
     globalThis.cancelAnimationFrame = realCancelAnimationFrame;
     useNodeGraphServiceMock.mockReset();
+    useGraphDotsMock.mockReset();
     setActiveEntityMock.mockReset();
     localStorage.removeItem('ci-graph-view-dimension');
   });
@@ -287,6 +308,53 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
 
     await waitFor(() => {
       expect(screen.queryByTestId('entity-info-dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('dots overview (no restrictive filters)', () => {
+    const DOT_NODES = [
+      { ...node('user-1', 'Owner Person'), degree: 5 },
+      { ...node('friend-1', 'Frida Friend'), degree: 2 },
+      { ...node('event-1', 'Coffee Meetup'), entity_type: 'Event', event_type: 'meeting', degree: 1 },
+    ];
+
+    beforeEach(() => {
+      useGraphDotsMock.mockReturnValue({
+        loading: false,
+        error: null,
+        nodes: DOT_NODES,
+        userEntityId: 'user-1',
+        counts: { PersonType: 2, Event: 1 },
+        truncated: false,
+      });
+    });
+
+    it('renders the dots payload and skips the classic overview fetch', async () => {
+      renderShell(['/']);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node')).toHaveLength(DOT_NODES.length);
+      });
+
+      // The dots hook is live (skip false) precisely when no restrictive filter is set.
+      expect(useGraphDotsMock).toHaveBeenCalledWith(expect.objectContaining({ skip: false }));
+      // No edges ship with the dots payload; they arrive via focus/section fetches.
+      expect(screen.queryAllByTestId('force-link')).toHaveLength(0);
+    });
+
+    it('expands a clicked dot straight into focus mode', async () => {
+      renderShell(['/']);
+
+      fireEvent.click(await nodeGroup('Frida Friend'));
+
+      // Clicking a dot IS the focus gesture in the dots overview: no dialog
+      // stopover, the node's neighbourhood loads immediately.
+      await waitFor(() => {
+        expect(useNodeGraphServiceMock).toHaveBeenCalledWith(
+          expect.objectContaining({ entityId: 'friend-1', skip: false }),
+        );
+        expect(screen.getByTestId('graph-back-to-overview')).toBeInTheDocument();
+      });
     });
   });
 });

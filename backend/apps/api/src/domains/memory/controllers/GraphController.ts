@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -101,8 +101,35 @@ const graphSearchSchema = z.object({
   to: z.string().optional(),
 });
 
+/** Upper bound (and default) for the dots overview payload — 10x the classic
+ * overview's {@link NODE_LIMIT}, cheap because each dot is four small fields. */
+const DOTS_LIMIT = 2000;
+
+/** Hard cap on ids accepted / edges returned by the section-edge fetch. */
+const SECTION_EDGE_ID_LIMIT = 300;
+const SECTION_EDGE_LIMIT = 400;
+
+// The dots overview's params: the explorer's type selection, the How
+// dimension's event types (narrows Event dots only — the full event-scoped
+// resolution stays on /data), and (limit, offset) structured per-type so a
+// future canvas layer can tile pages without a new endpoint shape.
+const graphDotsSchema = z.object({
+  includeTypes: explorerTypesParam,
+  eventTypes: csvListParam,
+  limit: z.coerce.number().int().min(1).max(DOTS_LIMIT).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+// The section-edge fetch: edges among an explicit id set (the client's current
+// viewport), both endpoints constrained server-side.
+const graphEdgesSchema = z.object({
+  ids: z.array(z.string().regex(UUID_PATTERN)).min(1).max(SECTION_EDGE_ID_LIMIT),
+});
+
 type GetNodeDetailsDto = z.infer<typeof getNodeDetailsSchema>;
 type GraphDataDto = z.infer<typeof graphDataSchema>;
+type GraphDotsDto = z.infer<typeof graphDotsSchema>;
+type GraphEdgesDto = z.infer<typeof graphEdgesSchema>;
 type GraphSearchDto = z.infer<typeof graphSearchSchema>;
 
 /** Reports whether a restrictive id-filter (tags, or the event-scoped
@@ -623,6 +650,142 @@ export class GraphController {
     }
 
     return nodeMap;
+  }
+
+  /**
+   * The DOTS overview: thousands of minimal nodes, zero edges — the payload
+   * behind the graph view's zoomed-out "every data type as a tiny dot"
+   * rendering. Edges arrive later, on interaction: focusing a dot fetches its
+   * subgraph (`GET /graph/node`), zooming into a region fetches the edges
+   * among the visible ids (`POST /graph/edges`).
+   *
+   * Same scarcest-first waterfill as the classic overview so every entity
+   * type the account has is represented, but with a 10x budget and a payload
+   * of four fields per node ({ id, type, name, degree } + `event_type` for
+   * events) instead of full entities — 2000 dots ship in roughly the bytes 200
+   * full nodes did.
+   */
+  @Get('dots')
+  async getGraphDots(
+    @Context() ctx: RequestContext,
+    @Query(new ValidationPipe(graphDotsSchema)) query: GraphDotsDto,
+  ) {
+    const ownerId = this.ensureUserId(ctx);
+
+    const excludeEntityTypes =
+      query.includeTypes === undefined ? [] : graphTypesToExclude(query.includeTypes);
+    const excludedTypes = new Set(excludeEntityTypes);
+    const budget = query.limit ?? DOTS_LIMIT;
+
+    type DotNode = {
+      entity_id: string;
+      entity_type: string;
+      name: string | null;
+      event_type: string | null;
+    };
+    const dots = new Map<string, DotNode>();
+
+    // The anchor always ships (the client centers and seeds on it), even when
+    // its type is deselected — same contract as the classic overview.
+    const userEntity = await this.graphQuery.getUserEntity(ownerId);
+    if (userEntity) {
+      dots.set(userEntity.entity_id, {
+        entity_id: userEntity.entity_id,
+        entity_type: userEntity.entity_type,
+        name: userEntity.name,
+        event_type: null,
+      });
+    }
+
+    // Scarcest-first waterfill (see assembleOverviewNodes): a type too small
+    // to use its share donates the remainder to the plentiful ones.
+    const typeCounts = (await this.graphQuery.getEntityTypeCounts(ownerId))
+      .filter((entry) => !excludedTypes.has(entry.entityType))
+      .sort((a, b) => a.count - b.count);
+
+    let remainingTypes = typeCounts.length;
+    for (const { entityType } of typeCounts) {
+      const remainingBudget = budget - dots.size;
+      if (remainingBudget <= 0) {
+        break;
+      }
+
+      const share = Math.max(1, Math.floor(remainingBudget / remainingTypes));
+      remainingTypes -= 1;
+
+      const page = await this.graphQuery.getDotNodes(ownerId, {
+        entityType,
+        limit: share,
+        offset: query.offset,
+        eventTypes: entityType === 'Event' ? query.eventTypes : undefined,
+      });
+
+      for (const node of page) {
+        if (dots.size >= budget) {
+          break;
+        }
+
+        if (!dots.has(node.entity_id)) {
+          dots.set(node.entity_id, node);
+        }
+      }
+    }
+
+    const degrees = await this.graphQuery.getDegreeCounts(ownerId, Array.from(dots.keys()));
+
+    return {
+      success: true,
+      data: {
+        nodes: Array.from(dots.values()).map((node) => ({
+          id: node.entity_id,
+          entity_id: node.entity_id,
+          entity_type: node.entity_type,
+          name: node.name,
+          degree: degrees.get(node.entity_id) ?? 0,
+          ...(node.event_type != null ? { event_type: node.event_type } : {}),
+        })),
+      },
+      // Totals per type so the client can show "1,204 of 183k Communications"
+      // and page later via (offset, limit).
+      counts: Object.fromEntries(typeCounts.map((entry) => [entry.entityType, entry.count])),
+      truncated: dots.size >= budget,
+    };
+  }
+
+  /**
+   * Section-edge fetch: the relationships among an explicit node-id set — the
+   * client's current viewport once it zooms past the LOD threshold. Both
+   * endpoints are constrained to the set server-side and the result is capped,
+   * so a hub in view can't drag in its thousands of off-screen edges.
+   */
+  @Post('edges')
+  async getGraphEdges(
+    @Context() ctx: RequestContext,
+    @Body(new ValidationPipe(graphEdgesSchema)) body: GraphEdgesDto,
+  ) {
+    const ownerId = this.ensureUserId(ctx);
+
+    const relationships = await this.graphQuery.getRelationshipsAmong(
+      ownerId,
+      body.ids,
+      SECTION_EDGE_LIMIT,
+    );
+
+    return {
+      success: true,
+      data: {
+        links: relationships.map((rel) => ({
+          id: rel.relationship_id,
+          relationship_id: rel.relationship_id,
+          source: rel.from_entity_id,
+          target: rel.to_entity_id,
+          relationship_type: rel.relationship_type,
+          strength: rel.strength || 0.5,
+          properties: rel.properties || {},
+        })),
+        truncated: relationships.length >= SECTION_EDGE_LIMIT,
+      },
+    };
   }
 
   @Get('search')

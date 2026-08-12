@@ -9,6 +9,11 @@ type GraphNode = {
   name: string | null;
   description: string | null;
   properties: Record<string, unknown>;
+  /** Server-computed edge count (dots payload). Absent on the classic payloads,
+   * where the client derives degree from the shipped links. */
+  degree?: number;
+  /** The event's kind (dots payload, Event nodes only). */
+  event_type?: string;
 };
 
 type GraphLink = {
@@ -191,6 +196,11 @@ export interface GraphOverviewOptions {
   // Date range (`from`/`to` URL params, ISO strings).
   dateFrom?: string;
   dateTo?: string;
+  /**
+   * Don't fetch at all (the caller is showing the dots overview instead).
+   * While skipped the hook reports `loading: false` with no data.
+   */
+  skip?: boolean;
 }
 
 export function useGraphOverview(
@@ -213,9 +223,10 @@ export function useGraphOverview(
   const hasLocation = options.hasLocation ?? false;
   const dateFrom = options.dateFrom;
   const dateTo = options.dateTo;
+  const skip = options.skip ?? false;
 
   const [state, setState] = useState<GraphOverviewState>({
-    loading: true,
+    loading: !skip,
     error: null,
     userEntityId: null,
     subgraph: null,
@@ -227,6 +238,23 @@ export function useGraphOverview(
 
   useEffect(() => {
     let cancelled = false;
+
+    if (skip) {
+      setState({
+        loading: false,
+        error: null,
+        userEntityId: null,
+        subgraph: null,
+        quickStats: null,
+        currentUser: null,
+        filterMatchedEntityIds: null,
+        filterScope: { tags: false, events: false },
+      });
+
+      return () => {
+        cancelled = true;
+      };
+    }
 
     async function load() {
       try {
@@ -373,6 +401,7 @@ export function useGraphOverview(
     hasLocation,
     dateFrom,
     dateTo,
+    skip,
   ]);
 
   return useMemo(() => state, [state]);
