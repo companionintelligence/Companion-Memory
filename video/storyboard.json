@@ -544,7 +544,7 @@
       "seconds": 6,
       "title": "What stays yours",
       "caption": "We don't collect your context.",
-      "narration": "Local database. Local models. No account, and nothing to cancel.",
+      "narration": "Local database. Local models. No subscription, and nothing to cancel.",
       "items": [
         {
           "label": "Store",
@@ -562,7 +562,8 @@
           "label": "Monthly fee",
           "value": "$0"
         }
-      ]
+      ],
+      "_claimNote": "'No account' was in this line until 2026-08-12 and the product contradicts it. CI-Server origin/main ships frontend/apps/web/src/pages/LoginPage — 'Log In', 'Sign in to access your account', an OIDC button reading 'Sign in with Companion account' which LoginPage.tsx:22 calls the primary sign-in path, an email/password form behind 'Sign in with email instead', and a link to /signup — and SignupPage, 'Create an Account', name/email/password/signup_code plus 'Sign up with CI Portal'. The film's own capture creates one: capture.config.mjs:411 generates `video-<id>@example.com` and signs in with it, which is how every authenticated shot in this cut exists. An earlier edit of this film had a beat that said so — assets/audio/narration.json still holds the adopted read of 'Sign in through Companion Portal, or with email if you prefer.' — and the beat went while the recap kept the opposite claim.\n\nWhat survives verification is the rest of the line and the four cards: the store is Postgres+pgvector on the box, the models are Ollama on hardware you run, and there is no payment path in this repo at all — no Stripe, no billing surface, no subscription — so 'nothing to cancel' is exact. 'No subscription' says that and nothing more.\n\nTHE FIX IS THE CLAIM, NEVER THE SCREEN. Nothing about sign-in was hidden, restaged or reframed to make the old line true."
     },
     {
       "id": "close",
