@@ -86,6 +86,22 @@ const DAY_MS = 86_400_000;
 const MAX_RANGE_EVENTS = 2000;
 
 /**
+ * Event types the schedule calendar renders, as an allowlist.
+ *
+ * `ci.events` is the timeline for everything an ETL connector can flatten, not
+ * just calendar entries: Spotify writes `favorite` and `played_music`, Steam
+ * writes `friend_added` and `game_played`, GitHub writes a `github_*` type per
+ * repo action. None of those are occupied time on a calendar, and a denylist
+ * put the burden on whoever adds the next connector to remember the schedule
+ * surface exists. An allowlist fails closed instead: a new event type is
+ * invisible here until someone adds it deliberately.
+ *
+ * This replaces the `source_type <> 'browser_activity'` stopgap from 6078c06f6,
+ * which only covered the browser fold (itself reverted in 20260812144811).
+ */
+const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment'] as const;
+
+/**
  * Spanning-aggregate service for the events CTI split: an event is ONE logical
  * entity persisted as a `ci.entities` base row (discriminated 'Event', the
  * SOLE owner of title/description — see {@link EventBaseEntity}) plus a
@@ -459,9 +475,11 @@ export class EventService {
    * overlap predicate alone cannot use an index, and MAX_RANGE_EVENTS for the
    * row cap.
    *
-   * STOPGAP: browser extension page views dual-write into ci.events with
-   * source_type='browser_activity'. Excluded here until we define which event
-   * kinds belong on the schedule calendar and wire pg-boss accordingly.
+   * Filtered to SCHEDULE_EVENT_TYPES, plus rows with a NULL `event_type`. The
+   * NULL arm is load-bearing, not a fallthrough: events the user creates through
+   * EventResolver and events materialized by CandidateService when a schedule
+   * suggestion is accepted both leave `event_type` unset, and dropping them
+   * would empty the calendar of exactly the entries the user put there.
    */
   async findInRange(context: ServiceContext, from: Date, to: Date): Promise<Event[]> {
     // Sargable floor for events_user_time_idx: the planner can now range-scan
@@ -476,7 +494,9 @@ export class EventService {
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
-      .andWhere("event.source_type IS DISTINCT FROM 'browser_activity'")
+      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+        scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
+      })
       .orderBy('event.start_time', 'ASC')
       .addOrderBy('event.event_id', 'ASC')
       .take(MAX_RANGE_EVENTS);

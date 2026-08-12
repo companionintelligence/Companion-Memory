@@ -129,14 +129,16 @@ async function envelopeResponse(
  * (`{ events: [...] }`, max 1,000), a capture raw log ahead of materialization,
  * and per-record rejection — see {@link ingest}.
  *
- * Timeline preference (Wave D): for kinds that are **not** `position` or
- * `communications`, prefer materializing onto the `ci.events` timeline when the
- * record is an activity-in-time. Today that is already true for `/v1/events`
- * (primary path), and `/v1/browser-activity` dual-writes `view` events +
- * `web-page` content while keeping `ci.browser_activity` for dual-read.
- * `/v1/contents` and `/v1/inventory` remain their own tables (content may link
- * to an event via `event_id` / shared provenance). Positions stay sensor
- * hypertables; communications stay the dedicated plain table.
+ * Destination rule: each kind writes its own table and only its own table.
+ * `/v1/events` is the `ci.events` timeline; `/v1/browser-activity` is
+ * `ci.browser_activity`; `/v1/contents` and `/v1/inventory` are their own
+ * tables (content may link to an event via `event_id` / shared provenance);
+ * positions stay sensor hypertables; communications stay the dedicated plain
+ * table. Wave D's rule — fold anything "activity-in-time" onto `ci.events` —
+ * was reverted in 20260812144811: it put browser page views on the schedule
+ * calendar and into HBPE's training corpus, neither of which reads ci.events
+ * with an event-kind filter. A record belongs on the timeline when a caller
+ * posts it to `/v1/events`, not because another route decided it qualified.
  *
  * Every bulk route accepts TWO request encodings, switched on Content-Type:
  *
@@ -179,8 +181,8 @@ export class BulkIngestController {
     private readonly dataSource: DataSource,
   ) {}
 
-  // G1 unified capture ingest — preferred `/v1` materialization for anything
-  // that is an activity-in-time (Wave D). Instance of the shared
+  // G1 unified capture ingest — the `/v1` route for timeline events, and the
+  // only route that writes ci.events. Instance of the shared
   // capture->materialize->link pipeline (see captureAndMaterialize;
   // event-ingest-spec). Re-POSTing the same (source_type, source_system,
   // source_id) returns `duplicate +1`, not an error.
@@ -620,9 +622,8 @@ export class BulkIngestController {
     serviceContext: UserServiceContext,
     records: BulkBrowserActivityRecord[],
   ): Promise<{ ingested: number; duplicate: number }> {
-    // Capture destination stays browser_activity for raw-log identity, but
-    // BrowserActivityService.createMany dual-writes ci.events (view) +
-    // ci.content (web-page) — the Wave D timeline fold.
+    // ci.browser_activity is the only destination. The Wave D fold into
+    // ci.events + ci.content was reverted (20260812144811).
     return this.captureAndMaterialize({
       serviceContext,
       records,

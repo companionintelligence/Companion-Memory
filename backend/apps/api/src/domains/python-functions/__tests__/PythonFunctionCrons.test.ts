@@ -1,5 +1,6 @@
 import type { DataSource } from 'typeorm';
 
+import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
 
 import { PythonFunctionCrons } from '../cron/PythonFunctionCrons';
@@ -7,15 +8,21 @@ import type { PythonFunctionService } from '../services/PythonFunctionService';
 
 const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown as LoggerService;
 
-function makeCrons(userIds: string[]) {
+function makeCrons(userIds: string[], smartRotation = false) {
   const dataSource = {
     query: jest.fn().mockResolvedValue(userIds.map((id) => ({ id }))),
   } as unknown as DataSource;
   const pythonFunctionService = {
     dispatch: jest.fn().mockResolvedValue(true),
   } as unknown as PythonFunctionService;
+  const featureService = {
+    isFeatureEnabled: jest.fn().mockResolvedValue(smartRotation),
+  } as unknown as FeatureService;
 
-  return { crons: new PythonFunctionCrons(dataSource, pythonFunctionService, logger), pythonFunctionService };
+  return {
+    crons: new PythonFunctionCrons(dataSource, pythonFunctionService, logger, featureService),
+    pythonFunctionService,
+  };
 }
 
 describe('PythonFunctionCrons', () => {
@@ -77,5 +84,32 @@ describe('PythonFunctionCrons', () => {
     await crons.dailySummaries();
 
     expect(pythonFunctionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  describe('under smart.rotation', () => {
+    it.each([['insights'], ['hourlySummaries'], ['dossierRefresh']] as const)(
+      'cedes %s to SmartRotationListener instead of double-enqueuing',
+      async (method) => {
+        const { crons, pythonFunctionService } = makeCrons(['user-1'], true);
+
+        await crons[method]();
+
+        expect(pythonFunctionService.dispatch).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['dailySummaries'],
+      ['weeklySummaries'],
+      ['monthlySummaries'],
+      ['actions'],
+      ['hbpeNightly'],
+    ] as const)('still runs %s, which smart rotation has no equivalent for', async (method) => {
+      const { crons, pythonFunctionService } = makeCrons(['user-1'], true);
+
+      await crons[method]();
+
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
+    });
   });
 });

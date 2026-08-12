@@ -1,10 +1,31 @@
 -- migrate:up
 -- Consolidated from feat/schedules: HBPE recurrence, planning tasks, schedule
 -- candidates/rhythms, and event-candidate personalization.
+--
+-- Every CREATE here is IF NOT EXISTS, deliberately. This file squashes three
+-- migrations that bdb26fde8 deleted:
+--
+--   20260709143129_hbpe_recurrence_profiles.sql
+--   20260802053709_create_tasks.sql
+--   20260803060153_schedule_candidates_and_rhythms.sql
+--
+-- Deleting them orphaned their rows in schema_migrations: dbmate keys on the
+-- timestamp prefix, so a database that applied any of the three still records a
+-- version this repo no longer contains, and sees THIS file as unapplied. It
+-- then re-runs DDL for objects that are already there and dies on the first
+-- CREATE. Because the three landed at different times, a given database can
+-- hold any subset of them — one real case had recurrence_profiles and rhythms
+-- but not tasks — so baselining this version wholesale would silently skip the
+-- tables that are genuinely missing. IF NOT EXISTS lets one file converge every
+-- partial state. Do not "tidy" these away.
+--
+-- Same reason the two hbpe.occurrence_log indexes below are named explicitly:
+-- they were `CREATE INDEX ON`, and Postgres has no IF NOT EXISTS for an
+-- unnamed index. The names given are the ones Postgres already auto-assigned.
 
 -- Recurrence profiles: per-(user, L1 cluster) statistical recurrence model,
 -- rebuilt nightly from hbpe.token_stream.
-CREATE TABLE hbpe.recurrence_profiles (
+CREATE TABLE IF NOT EXISTS hbpe.recurrence_profiles (
     user_id                 UUID NOT NULL REFERENCES ci.users(id),
     l1_cluster_id           UUID NOT NULL REFERENCES hbpe.l1_clusters(cluster_id) ON DELETE CASCADE,
     computed_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -25,7 +46,7 @@ CREATE TABLE hbpe.recurrence_profiles (
     PRIMARY KEY (user_id, l1_cluster_id)
 );
 
-CREATE TABLE hbpe.occurrence_log (
+CREATE TABLE IF NOT EXISTS hbpe.occurrence_log (
     id              UUID NOT NULL DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES ci.users(id),
     predicted_at    TIMESTAMPTZ NOT NULL,
@@ -37,10 +58,10 @@ CREATE TABLE hbpe.occurrence_log (
     PRIMARY KEY (id, predicted_at)
 );
 
-CREATE INDEX ON hbpe.occurrence_log (user_id, target_date) WHERE actual IS NULL;
-CREATE INDEX ON hbpe.occurrence_log (user_id, l1_cluster_id, target_date);
+CREATE INDEX IF NOT EXISTS occurrence_log_user_id_target_date_idx ON hbpe.occurrence_log (user_id, target_date) WHERE actual IS NULL;
+CREATE INDEX IF NOT EXISTS occurrence_log_user_id_l1_cluster_id_target_date_idx ON hbpe.occurrence_log (user_id, l1_cluster_id, target_date);
 
-CREATE TABLE ci.tasks (
+CREATE TABLE IF NOT EXISTS ci.tasks (
     id                UUID        PRIMARY KEY DEFAULT gen_uuid_v7(),
     user_id           UUID        NOT NULL REFERENCES ci.users (id) ON DELETE CASCADE,
     title             TEXT        NOT NULL,
@@ -72,14 +93,14 @@ CREATE TABLE ci.tasks (
         CHECK (parent_id IS NULL OR parent_id <> id)
 );
 
-CREATE INDEX idx_tasks_user_status ON ci.tasks (user_id, status, due_at);
-CREATE INDEX idx_tasks_parent ON ci.tasks (parent_id) WHERE parent_id IS NOT NULL;
-CREATE INDEX idx_tasks_user_scheduled ON ci.tasks (user_id, scheduled_for)
+CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON ci.tasks (user_id, status, due_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON ci.tasks (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_user_scheduled ON ci.tasks (user_id, scheduled_for)
     WHERE scheduled_for IS NOT NULL;
-CREATE UNIQUE INDEX ux_tasks_source ON ci.tasks (user_id, source_kind, source_ref)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tasks_source ON ci.tasks (user_id, source_kind, source_ref)
     WHERE source_ref IS NOT NULL;
 
-CREATE TABLE ci.task_dependencies (
+CREATE TABLE IF NOT EXISTS ci.task_dependencies (
     task_id       UUID        NOT NULL REFERENCES ci.tasks (id) ON DELETE CASCADE,
     depends_on_id UUID        NOT NULL REFERENCES ci.tasks (id) ON DELETE CASCADE,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -87,12 +108,12 @@ CREATE TABLE ci.task_dependencies (
     CONSTRAINT task_dependencies_no_self_edge CHECK (task_id <> depends_on_id)
 );
 
-CREATE INDEX idx_task_dependencies_depends_on ON ci.task_dependencies (depends_on_id);
+CREATE INDEX IF NOT EXISTS idx_task_dependencies_depends_on ON ci.task_dependencies (depends_on_id);
 
 ALTER TABLE ci.actions
     ADD COLUMN IF NOT EXISTS task_id UUID NULL REFERENCES ci.tasks (id) ON DELETE SET NULL;
 
-CREATE TABLE ci.event_candidates (
+CREATE TABLE IF NOT EXISTS ci.event_candidates (
     candidate_id        UUID PRIMARY KEY,
     user_id             UUID NOT NULL REFERENCES ci.users(id) ON DELETE CASCADE,
     title               TEXT NOT NULL,
@@ -128,16 +149,16 @@ CREATE TABLE ci.event_candidates (
     )
 );
 
-CREATE UNIQUE INDEX event_candidates_dedupe_uniq
+CREATE UNIQUE INDEX IF NOT EXISTS event_candidates_dedupe_uniq
     ON ci.event_candidates (user_id, dedupe_key);
-CREATE INDEX event_candidates_window_idx
+CREATE INDEX IF NOT EXISTS event_candidates_window_idx
     ON ci.event_candidates (user_id, window_start, window_end)
     WHERE status IN ('open', 'snoozed');
-CREATE INDEX event_candidates_rank_idx
+CREATE INDEX IF NOT EXISTS event_candidates_rank_idx
     ON ci.event_candidates (user_id, fit_score DESC NULLS LAST)
     WHERE status = 'open';
 
-CREATE TABLE ci.rhythms (
+CREATE TABLE IF NOT EXISTS ci.rhythms (
     rhythm_id       UUID PRIMARY KEY,
     user_id         UUID NOT NULL REFERENCES ci.users(id) ON DELETE CASCADE,
     label           TEXT NOT NULL,
@@ -151,7 +172,7 @@ CREATE TABLE ci.rhythms (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX rhythms_user_active_idx ON ci.rhythms (user_id) WHERE active;
+CREATE INDEX IF NOT EXISTS rhythms_user_active_idx ON ci.rhythms (user_id) WHERE active;
 
 -- migrate:down
 

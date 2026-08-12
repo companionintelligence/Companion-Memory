@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 
 import { PythonFunctionService } from '../services/PythonFunctionService';
@@ -30,6 +31,20 @@ import type { PythonFunctionTarget } from '../types';
  *
  * Per-user window resolution (timezones) and personalization stay inside the
  * Python functions — the cron only sends the user id and a reference instant.
+ *
+ * Three of these crons stand down when `smart.rotation` is on, because
+ * SmartRotationListener dispatches the same Python functions on its own cadence:
+ * `insights` (rotation's `insights` work type) and `hourlySummaries` /
+ * `dossierRefresh` (rotation's `summaries` work type picks one of the two by
+ * staleness). Their singleton keys do NOT collide — this class scopes by
+ * time window (`fn:<name>:<user>:<hourKey>`) and rotation scopes by
+ * `fn:<name>:<user>:rotation` — so without the guard pg-boss treats them as
+ * distinct jobs and both run. These are LLM-bound and take minutes per run.
+ *
+ * The rest stay unconditional: daily/weekly/monthly summaries, actions, and the
+ * HBPE jobs have no smart-rotation equivalent, so gating them would simply stop
+ * the work. This mirrors FeedQueueCron and AnswerInferenceCron, which already
+ * return early under the same flag.
  */
 @Injectable()
 export class PythonFunctionCrons implements OnApplicationBootstrap {
@@ -38,8 +53,20 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     private readonly dataSource: DataSource,
     private readonly pythonFunctionService: PythonFunctionService,
     private readonly logger: LoggerService,
+    private readonly featureService: FeatureService,
   ) {
     this.logger.setContext(PythonFunctionCrons.name);
+  }
+
+  /** True when SmartRotationListener owns this work type's cadence. */
+  private async cededToSmartRotation(functionName: string): Promise<boolean> {
+    if (!(await this.featureService.isFeatureEnabled('smart.rotation'))) {
+      return false;
+    }
+
+    this.logger.log('Skipping fan-out — smart.rotation owns this cadence', { functionName });
+
+    return true;
   }
 
   /** Sweep cold users into bootstrap shortly after the API comes up. */
@@ -55,6 +82,10 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
 
   @Cron('0 5 * * * *')
   async hourlySummaries(): Promise<void> {
+    if (await this.cededToSmartRotation('hourly_summary')) {
+      return;
+    }
+
     await this.fanOut('summary', 'hourly_summary', hourKey());
   }
 
@@ -75,11 +106,19 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
 
   @Cron('0 12 * * * *')
   async dossierRefresh(): Promise<void> {
+    if (await this.cededToSmartRotation('dossier_refresh')) {
+      return;
+    }
+
     await this.fanOut('summary', 'dossier_refresh', hourKey(), { lookback_days: 30 });
   }
 
   @Cron('0 30 */3 * * *')
   async insights(): Promise<void> {
+    if (await this.cededToSmartRotation('insights_generation')) {
+      return;
+    }
+
     await this.fanOut('summary', 'insights_generation', hourKey(), { lookback_hours: 72 });
   }
 

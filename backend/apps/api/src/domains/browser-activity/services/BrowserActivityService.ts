@@ -8,8 +8,6 @@ import { LoggerService } from '@ci/common/logging';
 import {
   bulkInsertIdempotent,
   INGEST_REFRESH_COLUMNS,
-  buildContentAggregateFold,
-  buildEventAggregateFold,
   keysetPaginate,
   type KeysetPageArgs,
   type KeysetPage,
@@ -92,8 +90,6 @@ export class BrowserActivityService {
       }),
     );
 
-    await this.dualWriteTimeline(returned);
-
     return isSingle ? returned[0] : returned;
   }
 
@@ -108,10 +104,10 @@ export class BrowserActivityService {
    * — search indexing is deferred to the post-load batch embed
    * (POST /api/maintenance/search-index/backfill); single-row create() still emits.
    *
-   * Wave D dual-write: also materializes matching `ci.events` (event_type `view`)
-   * + `ci.content` (type `web-page`) rows via raw SQL so MemoryModule stays out of
-   * the import graph (BrowserActivityModule ← MemoryModule would cycle). The
-   * browser_activity table remains the dual-read source until a later drop.
+   * `ci.browser_activity` is the sole home for these rows. Wave D's dual-write
+   * into `ci.events` + `ci.content` was reverted (see the migration paired with
+   * this change): page views are not timeline events, and folding them there
+   * flooded the schedule calendar and the HBPE training corpus.
    */
   async createMany(
     context: UserServiceContext,
@@ -162,81 +158,12 @@ export class BrowserActivityService {
     });
 
     const egress = results.map(({ entity }) => BrowserActivityEntity.toEgressType(entity));
-    await this.dualWriteTimeline(egress);
 
     // Bulk ingest does NOT emit a per-row BrowserActivityCreatedEvent: the per-row
     // pgboss fan-out was the dominant cost at import volume. Search indexing for
     // bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill). Single-row create() still emits.
     return egress;
-  }
-
-  /**
-   * Idempotent fold into ci.events + ci.content (same shape as the Wave D
-   * backfill migration). Synthetic provenance
-   * (`browser_activity` / `fold` / activity id) covers triple-less rows.
-   */
-  private async dualWriteTimeline(rows: BrowserActivity[]): Promise<void> {
-    if (rows.length === 0) {
-      return;
-    }
-
-    const CHUNK = 200;
-    for (let at = 0; at < rows.length; at += CHUNK) {
-      const chunk = rows.slice(at, at + CHUNK);
-
-      // An event is a CTI aggregate: the `ci.events` detail row plus an
-      // `Event`-discriminated base row in `ci.entities` sharing its uuid. The
-      // single-statement dual insert is owned by the memory domain
-      // (buildEventAggregateFold); this service only maps its rows in.
-      const { sql, params } = buildEventAggregateFold(
-        chunk.map((ba) => ({
-          userId: ba.user_id,
-          title: ba.title?.trim() || ba.url || 'Browser activity',
-          description: ba.page_summary ?? null,
-          eventType: 'view',
-          category: ba.category ?? null,
-          time: ba.time,
-          durationSeconds: ba.duration_seconds ?? null,
-          sourceType: ba.source_type ?? 'browser_activity',
-          sourceSystem: ba.source_system ?? 'fold',
-          sourceId: ba.source_id ?? ba.id,
-          metadata: {
-            browser_activity_id: ba.id,
-            url: ba.url,
-            action_type: ba.action_type ?? null,
-            duration_seconds: ba.duration_seconds ?? null,
-            scroll_depth_percent: ba.scroll_depth_percent ?? null,
-            category: ba.category ?? null,
-            productivity_score: ba.productivity_score ?? null,
-            is_incognito: ba.is_incognito,
-            contains_sensitive: ba.contains_sensitive,
-            device_id: ba.device_id ?? null,
-            properties: ba.properties ?? {},
-          },
-        })),
-      );
-
-      await this.dataSource.query(sql, params);
-
-      // Content CTI aggregate (detail + base); title lives on ci.entities.name.
-      const { sql: contentSql, params: contentParams } = buildContentAggregateFold(
-        chunk.map((ba) => ({
-          userId: ba.user_id,
-          title: ba.title?.trim() || ba.url || null,
-          type: 'web-page',
-          text: ba.page_summary ?? null,
-          url: ba.url,
-          sourceUrl: ba.url,
-          sourceType: ba.source_type ?? 'browser_activity',
-          sourceSystem: ba.source_system ?? 'fold',
-          sourceId: ba.source_id ?? ba.id,
-          sourceData: { browser_activity_id: ba.id },
-        })),
-      );
-
-      await this.dataSource.query(contentSql, contentParams);
-    }
   }
 
   async findAll(context: ServiceContext): Promise<BrowserActivity[]> {
