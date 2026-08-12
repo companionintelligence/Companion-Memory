@@ -733,17 +733,19 @@ describe('HorizonGrid — reachable without a pointer', () => {
 });
 
 describe('HorizonGrid — long horizon virtualization', () => {
-  it('keeps week views fully mounted without a scroll pane', () => {
-    const { container } = render(<HorizonGrid start={MONDAY} days={7} events={[]} rhythm={[]} />);
+  it('keeps week views fully mounted without a virtualization scroll pane', () => {
+    render(<HorizonGrid start={MONDAY} days={7} events={[]} rhythm={[]} />);
 
-    expect(container.querySelector('.overflow-y-auto')).not.toBeInTheDocument();
+    // Day lanes scroll internally when dense; the week itself stays fully mounted.
+    expect(screen.queryByTestId('horizon-virtual-scroll')).not.toBeInTheDocument();
+    expect(screen.getByTestId('horizon-week')).toBeInTheDocument();
     expect(screen.getAllByRole('listitem', { name: /August/ })).toHaveLength(7);
   });
 
   it('virtualizes day rows once the horizon exceeds two weeks', () => {
-    const { container } = render(<HorizonGrid start={MONDAY} days={21} events={[]} rhythm={[]} />);
+    render(<HorizonGrid start={MONDAY} days={21} events={[]} rhythm={[]} />);
 
-    expect(container.querySelector('.overflow-y-auto')).toBeInTheDocument();
+    expect(screen.getByTestId('horizon-virtual-scroll')).toBeInTheDocument();
   });
 });
 

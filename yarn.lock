@@ -3112,6 +3112,7 @@ __metadata:
     "@graphql-codegen/client-preset": "npm:^5.2.1"
     "@graphql-codegen/fragment-matcher": "npm:^6.0.0"
     "@graphql-typed-document-node/core": "npm:^3.2.0"
+    "@knight-lab/timelinejs": "npm:^3.9.13"
     "@react-three/fiber": "npm:^9.7.0"
     "@sentry/react": "npm:^10.69.0"
     "@storybook/addon-a11y": "npm:^9.1.19"
@@ -6423,6 +6424,16 @@ __metadata:
     "@jridgewell/resolve-uri": "npm:^3.1.0"
     "@jridgewell/sourcemap-codec": "npm:^1.4.14"
   checksum: 10c0/3d1ce6ebc69df9682a5a8896b414c6537e428a1d68b02fcc8363b04284a8ca0df04d0ee3013132252ab14f2527bc13bea6526a912ecb5658f0e39fd2860b4df4
+  languageName: node
+  linkType: hard
+
+"@knight-lab/timelinejs@npm:^3.9.13":
+  version: 3.9.13
+  resolution: "@knight-lab/timelinejs@npm:3.9.13"
+  dependencies:
+    dompurify: "npm:^3.1.7"
+    wicg-inert: "npm:^3.1.2"
+  checksum: 10c0/07d7df7fd2625164606fbf7c60dfb6bdd855f27db79705ef25e85940983fd36b241ef3d5013f38335eb0a992422e49dc7974ff8b27bcfce65c1f0b2ead8ca3e6
   languageName: node
   linkType: hard
 
@@ -27421,6 +27432,13 @@ __metadata:
   bin:
     why-is-node-running: cli.js
   checksum: 10c0/1cde0b01b827d2cf4cb11db962f3958b9175d5d9e7ac7361d1a7b0e2dc6069a263e69118bd974c4f6d0a890ef4eedfe34cf3d5167ec14203dbc9a18620537054
+  languageName: node
+  linkType: hard
+
+"wicg-inert@npm:^3.1.2":
+  version: 3.1.3
+  resolution: "wicg-inert@npm:3.1.3"
+  checksum: 10c0/160b981584e40d3a568af16a93b70dca847d9fce6d6704b40c60a9a1435f77406cc1abc56aa1bb5a63669c6cb819f09d51d7f27c16f3829cb86052e3fd27f2b0
   languageName: node
   linkType: hard
 

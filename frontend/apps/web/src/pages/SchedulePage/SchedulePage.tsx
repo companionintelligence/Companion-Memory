@@ -9,7 +9,7 @@ import { Link } from 'react-router-dom';
 import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type DeclineReason, useScheduleCandidates } from '@/api/useScheduleCandidates';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
-import { HorizonGrid } from '@/components/HorizonGrid';
+import { HorizonGrid, TodayStoryTimeline } from '@/components/HorizonGrid';
 import { PageContent } from '@/components/layout';
 import { TaskSlate } from '@/components/TaskSlate';
 import {
@@ -327,15 +327,15 @@ export function SchedulePage() {
 
         {showScheduleSurface && (
           <>
-            {/* Possibilities as a rail above the week, both full width. The
-                week is what the page is about, so it gets the whole page; the
-                rail stays one card deep above it and a drag runs downward onto
-                a day, which is the shorter and more obvious gesture than the
-                sideways one a column beside the grid asked for. */}
+            {/* Today (when on this week), then Possibilities, then the week.
+                Possibilities stays a full-width rail so a drag still runs
+                downward onto a day. */}
             <div className="flex flex-col gap-4">
               {weekOffset !== 0 && !hasAnything && !fetching && (
                 <p className="text-sm text-muted-foreground">Nothing on the calendar this week.</p>
               )}
+
+              {weekOffset === 0 && <TodayStoryTimeline events={events} day={start} />}
 
               <TaskSlate
                 candidates={candidates}
