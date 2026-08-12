@@ -307,6 +307,16 @@ Run `make` from the project root to see all available commands with descriptions
 | `make install` | Install project dependencies only |
 | `make health` | Check prerequisites (Node.js version, Yarn version) and report per-stack data volumes |
 
+`frontend/` consumes `@companionintelligence/*` packages from GitHub Packages, which requires a
+`NODE_AUTH_TOKEN` with `read:packages` (see `.yarnrc.yml`). `make init`/`make install` get this
+for free via [`scripts/gh-packages-auth.sh`](scripts/gh-packages-auth.sh), which reuses your `gh`
+CLI login (`gh auth login` first if you haven't). To get the token in your own shell — e.g. to
+run `yarn install` directly — run:
+
+```bash
+source scripts/gh-packages-auth.sh
+```
+
 ### Development
 
 | Command | Description |

@@ -88,8 +88,8 @@
       "adopted": true
     },
     "recap": {
-      "text": "Local database. Local models. No account, and nothing to cancel.",
-      "seconds": 5.823,
+      "text": "Local database. Local models. No subscription, and nothing to cancel.",
+      "seconds": 6.146,
       "prosody": {
         "rate": "-5%",
         "pitch": "-1Hz",

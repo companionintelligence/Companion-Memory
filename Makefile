@@ -542,7 +542,7 @@ init: ## Initialize repository after checkout
 	@hash -r
 
 	@printf "\n"
-	@yarn install
+	@scripts/gh-packages-auth.sh --install
 
 	@printf "\n"
 	@yarn dlx @yarnpkg/sdks vscode
@@ -563,7 +563,7 @@ init: ## Initialize repository after checkout
 install: ## Install project dependencies
 	@printf "$(call task_icon,install,📦) Installing dependencies...\n\n"
 
-	@yarn install
+	@scripts/gh-packages-auth.sh --install
 
 	@printf "\n"
 
