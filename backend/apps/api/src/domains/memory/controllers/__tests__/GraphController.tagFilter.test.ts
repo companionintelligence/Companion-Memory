@@ -292,9 +292,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
     it('caps the anchor neighborhood at half the budget and represents every type', async () => {
       // A neighborhood big enough to consume the whole 200-node budget on its own.
-      const neighborhood = new Map(
-        [anchor, ...nodesOf('Person', 250)].map((node) => [node.entity_id, node]),
-      );
+      const neighborhood = new Map([anchor, ...nodesOf('Person', 250)].map((node) => [node.entity_id, node]));
       const getUserEntity = jest.fn(async () => anchor);
       const traverseGraph = jest.fn(async () => ({ nodes: neighborhood, edges: [] }));
       const getEntityTypeCounts = jest.fn(async () => [

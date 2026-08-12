@@ -71,9 +71,7 @@ describe('EdgePromoteStage', () => {
     it('derives versions that agree with STAGE_VERSIONS', () => {
       // The derivations throw at module load when the mirror disagrees; assert
       // the current values line up so a drift is also named here, in a spec.
-      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]).toBe(
-        PROMOTE_EDGE_COMMUNICATION_VERSION,
-      );
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]).toBe(PROMOTE_EDGE_COMMUNICATION_VERSION);
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_EVENT]).toBe(PROMOTE_EDGE_EVENT_VERSION);
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_RECEIPT]).toBe(PROMOTE_EDGE_RECEIPT_VERSION);
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_OBSERVATION]).toBe(PROMOTE_EDGE_OBSERVATION_VERSION);

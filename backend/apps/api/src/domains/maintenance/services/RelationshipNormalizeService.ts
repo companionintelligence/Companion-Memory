@@ -85,15 +85,7 @@ export class RelationshipNormalizeService {
          SELECT relationship_id FROM deactivated`,
         [
           userId,
-          [
-            'HAPPENED_AT',
-            'AT_LOCATION',
-            'RELATED_TO',
-            'FRIEND',
-            'COLLEAGUE',
-            'PARTNER',
-            'ROMANTIC_PARTNER',
-          ],
+          ['HAPPENED_AT', 'AT_LOCATION', 'RELATED_TO', 'FRIEND', 'COLLEAGUE', 'PARTNER', 'ROMANTIC_PARTNER'],
         ],
       );
 

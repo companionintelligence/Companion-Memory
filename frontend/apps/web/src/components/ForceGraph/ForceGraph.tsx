@@ -395,7 +395,9 @@ function clusterSeedPosition(
 /** Ring index for a type: preferred order first, then any leftovers alphabetically. */
 function lodTypeRingIndex(entityType: string, presentTypes: readonly string[]): number {
   const preferred = LOD_TYPE_RING_ORDER.filter((type) => presentTypes.includes(type));
-  const extras = presentTypes.filter((type) => !preferred.includes(type as (typeof LOD_TYPE_RING_ORDER)[number])).sort();
+  const extras = presentTypes
+    .filter((type) => !preferred.includes(type as (typeof LOD_TYPE_RING_ORDER)[number]))
+    .sort();
   const ring = [...preferred, ...extras];
   const index = ring.indexOf(entityType);
 
@@ -404,7 +406,9 @@ function lodTypeRingIndex(entityType: string, presentTypes: readonly string[]): 
 
 function lodTypeRingCount(presentTypes: readonly string[]): number {
   const preferred = LOD_TYPE_RING_ORDER.filter((type) => presentTypes.includes(type));
-  const extras = presentTypes.filter((type) => !preferred.includes(type as (typeof LOD_TYPE_RING_ORDER)[number]));
+  const extras = presentTypes.filter(
+    (type) => !preferred.includes(type as (typeof LOD_TYPE_RING_ORDER)[number]),
+  );
 
   return preferred.length + extras.length;
 }
@@ -851,7 +855,10 @@ function ForceGraphBase({
         // Distance is different: it is fixed for the life of the picture, and the collision pass has
         // to reserve the radius the renderer will actually draw.
         radius: lodMode
-          ? Math.min(LOD_MAX_DOT_RADIUS, LOD_DOT_RADIUS + Math.sqrt(Math.max(0, degree)) * LOD_DOT_DEGREE_FACTOR)
+          ? Math.min(
+              LOD_MAX_DOT_RADIUS,
+              LOD_DOT_RADIUS + Math.sqrt(Math.max(0, degree)) * LOD_DOT_DEGREE_FACTOR,
+            )
           : nodeRadius(degree) * (context ? CONTEXT_NODE_SCALE : 1),
         label,
         fullLabel,
@@ -940,17 +947,10 @@ function ForceGraphBase({
     // Classic mode is Webbed Feet (links + settle). LOD overview skips link/charge/center
     // forces entirely — pins hold the type islands still; edges are draw-only.
     const simulation = forceSimulation<ForceNode>(nodeCopies)
-      .force(
-        'charge',
-        lodMode
-          ? null
-          : forceManyBody<ForceNode>().strength(CHARGE_STRENGTH),
-      )
+      .force('charge', lodMode ? null : forceManyBody<ForceNode>().strength(CHARGE_STRENGTH))
       .force(
         'collide',
-        lodMode
-          ? null
-          : forceCollide<ForceNode>().radius((node) => node.radius + COLLIDE_PADDING),
+        lodMode ? null : forceCollide<ForceNode>().radius((node) => node.radius + COLLIDE_PADDING),
       )
       .force(
         'link',
@@ -1109,8 +1109,16 @@ function ForceGraphBase({
     };
 
     const start = () => {
-      idleBreathing = false;
-      cancelAnimationFrame(frame);
+      // Stop the idle breath loop if it owns the frame, then ensure the settle
+      // loop is scheduled. Never cancel an in-flight settle frame — that used to
+      // drop the rAF while `running` stayed true, so drag reheats during settle
+      // killed the animation and left fx unpainted.
+      if (idleBreathing) {
+        idleBreathing = false;
+        cancelAnimationFrame(frame);
+        running = false;
+      }
+
       if (!running) {
         running = true;
         frame = requestAnimationFrame(step);
@@ -1121,6 +1129,17 @@ function ForceGraphBase({
     // drag still moves a single node via fx/fy, but never reheats the whole field.
     reheatRef.current = (alpha: number) => {
       if (lodMode) {
+        // Pins are authoritative in LOD — mirror fx/fy onto x/y before painting.
+        for (const node of nodeCopies) {
+          if (typeof node.fx === 'number') {
+            node.x = node.fx;
+          }
+
+          if (typeof node.fy === 'number') {
+            node.y = node.fy;
+          }
+        }
+
         applyPositions();
 
         return;
@@ -1340,6 +1359,8 @@ function ForceGraphBase({
     // Pointer deltas are screen pixels; the node lives in world coordinates behind the camera.
     drag.node.fx = drag.startX + screenDx / scaleRef.current;
     drag.node.fy = drag.startY + screenDy / scaleRef.current;
+    // Keep label relaxation from shoving the dragged node off the pin.
+    drag.node.pinned = true;
     reheatRef.current?.(REHEAT_ALPHA);
   }, []);
 
@@ -1602,13 +1623,7 @@ function ForceGraphBase({
               const lodLabelled = lodMode && lodView.zoomedIn && lodView.labelIds.has(node.id);
               const baseColor = getTypeColor(node.entity_type);
               const fillColor = isSelected ? 'hsl(var(--primary))' : baseColor;
-              const opacity = isSelected
-                ? 1
-                : isHighlighted
-                  ? 1
-                  : lodMode
-                    ? LOD_DOT_FILL_OPACITY
-                    : 0.9;
+              const opacity = isSelected ? 1 : isHighlighted ? 1 : lodMode ? LOD_DOT_FILL_OPACITY : 0.9;
               const arriving = arrivingIds.has(node.id);
 
               return (

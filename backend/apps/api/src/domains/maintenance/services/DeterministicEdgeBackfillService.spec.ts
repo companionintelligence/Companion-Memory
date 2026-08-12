@@ -22,7 +22,10 @@ interface InsertedRow {
  * relationship-type bind, $4) and records every call. Bounds are
  * caller-supplied (START/END) in most tests so the MIN/MAX branch is skipped.
  */
-function makeDataSource(insertedByType: Record<string, InsertedRow[][]>, bounds?: { min: Date | null; max: Date | null }) {
+function makeDataSource(
+  insertedByType: Record<string, InsertedRow[][]>,
+  bounds?: { min: Date | null; max: Date | null },
+) {
   const inserts: Array<{ sql: string; params: unknown[] }> = [];
   const served: Record<string, number> = {};
 

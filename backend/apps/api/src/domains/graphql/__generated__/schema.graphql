@@ -1185,11 +1185,13 @@ type PersonType implements Node & Taggable {
   gender: String
   id: ID!
   identifiers: [PersonIdentifierType!]!
+  incomingRelationships(limit: Int): [RelationshipType!]
   interactionStats: PersonInteractionStatsType!
   isSelf: Boolean!
   lastName: String
   middleName: String
   name: String
+  outgoingRelationships(limit: Int): [RelationshipType!]
   postalCode: String
   region: String
   streetAddress: String
@@ -1220,10 +1222,12 @@ type PlaceType implements Node & Taggable {
   geoFormat: String
   geolocation: JSON
   id: ID!
+  incomingRelationships(limit: Int): [RelationshipType!]
   latitude: Float
   locationBoundary: JSON
   longitude: Float
   name: String
+  outgoingRelationships(limit: Int): [RelationshipType!]
   parent: PlaceType
   parentId: ID
   placeKind: String

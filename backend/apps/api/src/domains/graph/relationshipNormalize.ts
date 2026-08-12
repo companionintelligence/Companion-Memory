@@ -44,7 +44,10 @@ export const SYMMETRIC_RELATIONSHIP_TYPES: ReadonlySet<RelationshipType> = new S
  * Unknown strings return null (caller treats as not in enum).
  */
 export function normalizeRelationship(raw: string): NormalizedRelationship | null {
-  const key = raw.trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const key = raw
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
 
   // Rejected: identity is not a relationship.
   if (key === 'IS') {
@@ -52,8 +55,7 @@ export function normalizeRelationship(raw: string): NormalizedRelationship | nul
       type: RelationshipType.ASSOCIATED_WITH,
       swapEndpoints: false,
       reject: {
-        reason:
-          'IS is not a relationship — enrich the self entity via ci.entity_identifiers + merge',
+        reason: 'IS is not a relationship — enrich the self entity via ci.entity_identifiers + merge',
       },
     };
   }

@@ -72,8 +72,7 @@ export const EDGE_PROJECTION_RULE_GENERATION = 4;
  * `EstimateLocationStage`: a SUM offset so all-at-1 gives 1, monotone in each
  * term.
  */
-export const PROMOTE_EDGE_COMMUNICATION_VERSION =
-  EDGE_PROJECTION_RULE_GENERATION + PERSON_LINK_VERSION - 1;
+export const PROMOTE_EDGE_COMMUNICATION_VERSION = EDGE_PROJECTION_RULE_GENERATION + PERSON_LINK_VERSION - 1;
 
 /**
  * Event-leg version: tracks BOTH of its producers — `enrich.event_person_link`
@@ -96,8 +95,7 @@ export const PROMOTE_EDGE_CONTENT_VERSION = EDGE_PROJECTION_RULE_GENERATION;
  * by `promote.object` (and importers), so its version rides along — same SUM
  * offset shape as the other legs.
  */
-export const PROMOTE_EDGE_INVENTORY_VERSION =
-  EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
+export const PROMOTE_EDGE_INVENTORY_VERSION = EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
 
 /**
  * Receipt-leg version: `merchant_entity_id` / `place_entity_id` /
@@ -113,8 +111,7 @@ export const PROMOTE_EDGE_RECEIPT_VERSION = EDGE_PROJECTION_RULE_GENERATION;
  * inventory leg. (`place_entity_id` / `content_id` / `event_id` are set at
  * capture time.)
  */
-export const PROMOTE_EDGE_OBSERVATION_VERSION =
-  EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
+export const PROMOTE_EDGE_OBSERVATION_VERSION = EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
 
 /**
  * Position-leg version: `location_entity_id` is snapped to a known place by
@@ -365,11 +362,7 @@ abstract class EdgePromoteStageBase implements Stage {
     }
 
     try {
-      const edgesCreated = await this.edgeService.materializeForSourceIds(
-        ctx.userId,
-        this.sourceKind,
-        ids,
-      );
+      const edgesCreated = await this.edgeService.materializeForSourceIds(ctx.userId, this.sourceKind, ids);
 
       for (const id of ids) {
         results.set(id, { outcome: 'done' });
@@ -463,10 +456,7 @@ export class ContentEdgePromoteStage extends EdgePromoteStageBase {
 export class InventoryEdgePromoteStage extends EdgePromoteStageBase {
   readonly id = PROMOTE_EDGE_INVENTORY_STAGE_ID;
 
-  readonly version = promoteEdgeStageVersion(
-    PROMOTE_EDGE_INVENTORY_STAGE_ID,
-    PROMOTE_EDGE_INVENTORY_VERSION,
-  );
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_INVENTORY_STAGE_ID, PROMOTE_EDGE_INVENTORY_VERSION);
 
   readonly source = PROMOTE_EDGE_INVENTORY_SOURCE;
 
@@ -523,10 +513,7 @@ export class ObservationEdgePromoteStage extends EdgePromoteStageBase {
 export class PositionEdgePromoteStage extends EdgePromoteStageBase {
   readonly id = PROMOTE_EDGE_POSITION_STAGE_ID;
 
-  readonly version = promoteEdgeStageVersion(
-    PROMOTE_EDGE_POSITION_STAGE_ID,
-    PROMOTE_EDGE_POSITION_VERSION,
-  );
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_POSITION_STAGE_ID, PROMOTE_EDGE_POSITION_VERSION);
 
   readonly source = PROMOTE_EDGE_POSITION_SOURCE;
 

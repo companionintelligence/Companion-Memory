@@ -233,7 +233,7 @@ describe('ForceGraph', () => {
     await waitFor(() => {
       // The hovered leaf and the centre it links to stay lit; a sibling leaf fades back.
       expect(leaf).toHaveAttribute('opacity', '1');
-      expect(unrelated).toHaveAttribute('opacity', '0.2');
+      expect(unrelated).toHaveAttribute('opacity', '0.35');
     });
   });
 
@@ -444,7 +444,7 @@ describe('ForceGraph', () => {
 
       // person-0's only neighbour is the centre; a sibling leaf recedes.
       expect(nodeOpacity('Abdul Ameer')).toBe('1');
-      expect(nodeOpacity('Fiona Sewell')).toBe('0.2');
+      expect(nodeOpacity('Fiona Sewell')).toBe('0.35');
     });
 
     it('emphasises the selected thread and recedes everything else', async () => {
@@ -466,7 +466,7 @@ describe('ForceGraph', () => {
       // The thread's endpoints stay lit; a node off the thread fades back.
       expect(nodeOpacity('Abdul Ameer')).toBe('1');
       expect(nodeOpacity('Aqsa Anwar')).toBe('1');
-      expect(nodeOpacity('Fiona Sewell')).toBe('0.2');
+      expect(nodeOpacity('Fiona Sewell')).toBe('0.35');
     });
 
     it('treats a still click on empty canvas as a reset', async () => {

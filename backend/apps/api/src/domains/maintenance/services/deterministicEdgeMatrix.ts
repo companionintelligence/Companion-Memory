@@ -281,7 +281,9 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     description: 'Resolved Item → the Place it was observed at',
     relationshipType: RelationshipType.LOCATED_AT,
     strength: 0.5,
-    properties: { derived_from: 'object_observations.resolved_object_id x object_observations.place_entity_id' },
+    properties: {
+      derived_from: 'object_observations.resolved_object_id x object_observations.place_entity_id',
+    },
     source: 'observations',
     table: 'ci.object_observations o',
     userColumn: 'o.user_id',
@@ -357,8 +359,7 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     idColumn: 'e.entity_id',
     fromIdExpr: 'e.entity_id',
     toIdExpr: 'e.parent_place_id',
-    candidateWhere:
-      `e.parent_place_id IS NOT NULL AND e.entity_type IN ('Location', 'Place') AND e.is_active = TRUE`,
+    candidateWhere: `e.parent_place_id IS NOT NULL AND e.entity_type IN ('Location', 'Place') AND e.is_active = TRUE`,
   },
   {
     // File variant → parent file, resolved through the linked File graph entity.

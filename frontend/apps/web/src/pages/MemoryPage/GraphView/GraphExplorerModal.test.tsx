@@ -168,7 +168,7 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       expect(screen.getAllByTestId('force-node')).toHaveLength(OVERVIEW.nodes.length);
     });
 
-    expect(screen.getByText('3 entities · 2 connections')).toBeInTheDocument();
+    expect(screen.getByText(/3\s+shown\s+·\s+2 connections/)).toBeInTheDocument();
     expect(screen.queryByTestId('graph-back-to-overview')).not.toBeInTheDocument();
   });
 
@@ -212,7 +212,7 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
     });
 
     await nodeGroup('Dora Distant');
-    expect(screen.getByText('3 entities · 2 connections')).toBeInTheDocument();
+    expect(screen.getByText(/3\s+shown\s+·\s+2 connections/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('graph-back-to-overview'));
 
@@ -286,7 +286,7 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
     expect(toggle).toHaveTextContent('2D');
 
     // The shell chrome — stats line and legend — stays up over either renderer.
-    expect(screen.getByText('3 entities · 2 connections')).toBeInTheDocument();
+    expect(screen.getByText(/3\s+shown\s+·\s+2 connections/)).toBeInTheDocument();
 
     fireEvent.click(toggle);
 

@@ -912,9 +912,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
                 ? ` of ~${dotsUniverseTotal.toLocaleString()}`
                 : ''}{' '}
               shown
-              {dotsEligible && mode === 'overview'
-                ? ` · ${sampleHubs.linked.toLocaleString()} hubs`
-                : ''}
+              {dotsEligible && mode === 'overview' ? ` · ${sampleHubs.linked.toLocaleString()} hubs` : ''}
               {displayGraph.links.length > 0 ? ` · ${displayGraph.links.length} connections` : ''}
               {dotsTruncated && dotsEligible ? ' · top by links' : ''}
             </span>

@@ -117,7 +117,12 @@ function mergeNodes(existing: GraphNode[], incoming: GraphNode[]): GraphNode[] {
   return Array.from(byId.values());
 }
 
-function buildDotsUrl(limit: number, includeTypesActive: boolean, includeTypesKey: string, eventTypesKey: string) {
+function buildDotsUrl(
+  limit: number,
+  includeTypesActive: boolean,
+  includeTypesKey: string,
+  eventTypesKey: string,
+) {
   const params = new URLSearchParams();
   params.set('limit', String(limit));
   if (includeTypesActive) {

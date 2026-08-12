@@ -104,9 +104,7 @@ export class RelationshipService {
 
     const allowed = fromMap[to as keyof typeof fromMap] as readonly RelationshipType[];
 
-    return allowed.includes(normalized.type)
-      ? (normalized.type as keyof typeof RelationshipType)
-      : null;
+    return allowed.includes(normalized.type) ? (normalized.type as keyof typeof RelationshipType) : null;
   }
 
   /**

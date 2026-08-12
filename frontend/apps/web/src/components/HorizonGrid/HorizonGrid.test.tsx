@@ -224,9 +224,9 @@ describe('describes — whether the event text adds anything to the title', () =
 
 describe('eventUrl — page link for a captured visit', () => {
   it('reads a http(s) URL from metadata', () => {
-    expect(
-      eventUrl(event({ metadata: { url: 'https://github.com/companionintelligence/CI-Server' } })),
-    ).toBe('https://github.com/companionintelligence/CI-Server');
+    expect(eventUrl(event({ metadata: { url: 'https://github.com/companionintelligence/CI-Server' } }))).toBe(
+      'https://github.com/companionintelligence/CI-Server',
+    );
   });
 
   it('ignores missing or non-http values', () => {
@@ -686,10 +686,7 @@ describe('HorizonGrid — reachable without a pointer', () => {
     render(<HorizonGrid start={MONDAY} days={7} events={[visit]} rhythm={[]} />);
 
     const link = screen.getByRole('link', { name: 'Pull requests' });
-    expect(link).toHaveAttribute(
-      'href',
-      'https://github.com/companionintelligence/CI-Engineering/pulls',
-    );
+    expect(link).toHaveAttribute('href', 'https://github.com/companionintelligence/CI-Engineering/pulls');
     expect(link).toHaveAttribute('target', '_blank');
   });
 

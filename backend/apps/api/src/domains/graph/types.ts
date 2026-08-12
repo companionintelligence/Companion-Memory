@@ -138,11 +138,7 @@ export const RelationshipMap = {
       RelationshipType.ASSOCIATED_WITH,
     ],
     pet: [RelationshipType.OWNS, RelationshipType.CARES_FOR],
-    group: [
-      RelationshipType.MEMBER_OF,
-      RelationshipType.DONATES_TO,
-      RelationshipType.SUBSCRIBES_TO,
-    ],
+    group: [RelationshipType.MEMBER_OF, RelationshipType.DONATES_TO, RelationshipType.SUBSCRIBES_TO],
     place: [
       RelationshipType.LIVES_IN,
       RelationshipType.OWNS,
@@ -174,12 +170,7 @@ export const RelationshipMap = {
       RelationshipType.LEARNS,
       RelationshipType.CELEBRATES,
     ],
-    file: [
-      RelationshipType.CREATED,
-      RelationshipType.OWNS,
-      RelationshipType.EDITED,
-      RelationshipType.SIGNED,
-    ],
+    file: [RelationshipType.CREATED, RelationshipType.OWNS, RelationshipType.EDITED, RelationshipType.SIGNED],
   },
   pet: {
     group: [RelationshipType.MEMBER_OF],

@@ -823,11 +823,7 @@ export class GraphController {
   ) {
     const ownerId = this.ensureUserId(ctx);
 
-    const relationships = await this.graphQuery.getRelationshipsAmong(
-      ownerId,
-      body.ids,
-      SECTION_EDGE_LIMIT,
-    );
+    const relationships = await this.graphQuery.getRelationshipsAmong(ownerId, body.ids, SECTION_EDGE_LIMIT);
 
     return {
       success: true,

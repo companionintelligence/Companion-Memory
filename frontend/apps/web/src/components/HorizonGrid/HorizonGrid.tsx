@@ -761,7 +761,9 @@ const DayRow = memo(function DayRow({
                         data-event-label
                         className={cn(
                           'absolute top-1/2 z-40 max-w-[min(18rem,46vw)] -translate-y-1/2',
-                          expandLeft ? 'right-[calc(100%+8px)] origin-right' : 'left-[calc(100%+8px)] origin-left',
+                          expandLeft
+                            ? 'right-[calc(100%+8px)] origin-right'
+                            : 'left-[calc(100%+8px)] origin-left',
                           'rounded-md border border-border/70 bg-popover/95 px-2.5 py-1.5',
                           'text-[11px] leading-snug text-popover-foreground shadow-lg backdrop-blur-md',
                           'pointer-events-none opacity-0 scale-[0.98]',

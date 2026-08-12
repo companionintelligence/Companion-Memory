@@ -1668,16 +1668,28 @@ export type PersonType = Node & Taggable & {
   gender?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   identifiers: Array<PersonIdentifierType>;
+  incomingRelationships?: Maybe<Array<RelationshipType>>;
   interactionStats: PersonInteractionStatsType;
   isSelf: Scalars['Boolean']['output'];
   lastName?: Maybe<Scalars['String']['output']>;
   middleName?: Maybe<Scalars['String']['output']>;
   name?: Maybe<Scalars['String']['output']>;
+  outgoingRelationships?: Maybe<Array<RelationshipType>>;
   postalCode?: Maybe<Scalars['String']['output']>;
   region?: Maybe<Scalars['String']['output']>;
   streetAddress?: Maybe<Scalars['String']['output']>;
   streetAddress2?: Maybe<Scalars['String']['output']>;
   tags: Array<EntityTagType>;
+};
+
+
+export type PersonTypeIncomingRelationshipsArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type PersonTypeOutgoingRelationshipsArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type PlaceConnection = Connection & {
@@ -1707,10 +1719,12 @@ export type PlaceType = Node & Taggable & {
   geoFormat?: Maybe<Scalars['String']['output']>;
   geolocation?: Maybe<Scalars['JSON']['output']>;
   id: Scalars['ID']['output'];
+  incomingRelationships?: Maybe<Array<RelationshipType>>;
   latitude?: Maybe<Scalars['Float']['output']>;
   locationBoundary?: Maybe<Scalars['JSON']['output']>;
   longitude?: Maybe<Scalars['Float']['output']>;
   name?: Maybe<Scalars['String']['output']>;
+  outgoingRelationships?: Maybe<Array<RelationshipType>>;
   parent?: Maybe<PlaceType>;
   parentId?: Maybe<Scalars['ID']['output']>;
   placeKind?: Maybe<Scalars['String']['output']>;
@@ -1720,6 +1734,16 @@ export type PlaceType = Node & Taggable & {
   type?: Maybe<Scalars['String']['output']>;
   uploaded?: Maybe<Scalars['Boolean']['output']>;
   visitStats: PlaceVisitStatsType;
+};
+
+
+export type PlaceTypeIncomingRelationshipsArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type PlaceTypeOutgoingRelationshipsArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type PlaceVisitStatsType = {

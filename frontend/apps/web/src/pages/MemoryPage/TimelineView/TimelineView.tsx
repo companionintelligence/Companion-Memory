@@ -73,8 +73,7 @@ export function TimelineView({
     if (groupByEventType) {
       const byKind = new Map<string, EntityItem[]>();
       for (const entity of timelineData) {
-        const kind =
-          entity.__typename === 'EventType' && entity.eventType ? entity.eventType : 'other';
+        const kind = entity.__typename === 'EventType' && entity.eventType ? entity.eventType : 'other';
         byKind.set(kind, [...(byKind.get(kind) ?? []), entity]);
       }
 
