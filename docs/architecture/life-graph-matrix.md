@@ -6,7 +6,15 @@ GitHub [#1945](https://github.com/companionintelligence/CI-Server/issues/1945),
 [#1947](https://github.com/companionintelligence/CI-Server/issues/1947).
 
 **Spine:** CTI entities + job-managed relationships + GraphQL shapes.
-UI (dots LOD, Events tab) is a demo of this architecture, not the source of truth.
+UI (dots LOD overview, focus expansion, What-bar Events filter) is a demo of
+this architecture, not the source of truth.
+
+**This is the clear home in the repo for the life-graph work.** There is no
+separate top-level feature folder — code lands in the existing Nest/React
+domains listed under [Where the code lives](#where-the-code-lives). The
+delivery branch / PR that exercised the full stack is
+[#1943](https://github.com/companionintelligence/CI-Server/pull/1943)
+(`feat/graph-focus-communications`).
 
 ## Who / What / Where / When / Why
 
@@ -99,7 +107,54 @@ Entities and relationships define what can appear as GraphQL types. Prefer:
 WS0 ontology (this doc) → WS1 CTI nodes → WS2 write path → WS3 projectors/normalize
 → WS4 L2/groups → WS5 GraphQL shapes → WS6 UI demos (non-blocking).
 
-## Operator endpoints
+## Where the code lives
+
+No new package was invented. The epic extends the domains that already own
+entities, jobs, and the Memory Graph UI:
+
+| Concern | Path |
+| --- | --- |
+| **Ontology / allowlist** | `backend/apps/api/src/domains/graph/types.ts` |
+| **L0 edge catalog** | `backend/apps/api/src/domains/maintenance/services/deterministicEdgeMatrix.ts` |
+| **L0 backfill** | `…/DeterministicEdgeBackfillService.ts` + `POST /api/maintenance/materialize-edges` |
+| **Continuous L0** | `backend/apps/api/src/domains/pipeline/stages/promote/EdgePromoteStage.ts` (`promote.edge_*`) |
+| **Normalize / derive / fold** | `RelationshipNormalizeService`, `DerivedRelationshipService`, `NoteContentFoldService` |
+| **Graph REST** | `domains/memory/controllers/GraphController.ts` (`/graph/node`, `/graph/dots`, `/graph/edges`) |
+| **Graph services** | `GraphUtilityService`, `GraphQueryService` |
+| **GraphQL ego edges** | `PersonType` / `PlaceType` + resolvers (`outgoingRelationships` / `incomingRelationships`) |
+| **Dots + LOD UI** | `frontend/apps/web/src/api/useGraphDots.ts`, `components/ForceGraph/`, `pages/MemoryPage/GraphView/` |
+| **What-bar Events filter** | `components/MemoryHub/entityTypeCategories.ts`, `MemoryEntityTypeNav.tsx` |
+| **Schedule hover titles** | `components/HorizonGrid/` + `api/useScheduleService.ts` (`metadata.url`) |
+
+## What PR #1943 delivered (end-to-end)
+
+Delivered on `feat/graph-focus-communications` against issues #1945–#1947.
+Rough order of the work:
+
+1. **Person focus could not see mail** — linking filled
+   `communications.from_entity_id` / `to_entity_ids`, but nothing wrote
+   Person↔Communication into `ci.relationships`. Focus traversal was blind.
+   First fix: `/graph/node` synthesizes recent `SENT`/`RECEIVED` edges at read
+   time so focus is usable immediately.
+2. **Make the edges real** — declarative L0 matrix + idempotent
+   `materialize-edges` backfill (merge-tombstone aware) + orchestrator leg.
+   Ran on the appliance: ~394k edges across both users; re-run creates 0.
+3. **Keep edges fresh** — `promote.edge_*` nightly stages project the matrix
+   as linkers fill columns (not only on operator backfill).
+4. **Overview shows every CTI type** — waterfill overview slots so Persons do
+   not consume the whole budget; Communications / Events / Content / Places
+   appear as their own nodes.
+5. **Dots LOD UI** — `GET /graph/dots` (~2k hubs, degree-ranked) + progressive
+   hydrate; type-cluster sunflowers; pins (no spring blob); edges on
+   hover/zoom/focus; relatedness meter; soft hover dim.
+6. **Events as a filter, not a view** — Events live in the What bar; the
+   top-row Events view tab was removed (Map / List / Gallery / Graph only).
+7. **Life-graph CTI lock-in** — matrix allowlist + write-time normalisation,
+   derive/normalize/fold jobs, GraphQL ego relationship fields, this doc.
+8. **Schedule polish (same branch)** — narrow capture chips stay quiet; hover
+   expands a selectable title; `metadata.url` opens in a new tab.
+
+### Operator endpoints (recap)
 
 | Endpoint | Stage |
 | --- | --- |
@@ -111,6 +166,7 @@ WS0 ontology (this doc) → WS1 CTI nodes → WS2 write path → WS3 projectors/
 
 ## WS6 — UI demos (non-blocking)
 
-Existing graph UI on `feat/graph-focus-communications` (dots LOD, Events What-bar/tab,
-focus expansion) remains the acceptance demo that the architecture works. No further
-viz work is required to close this epic.
+The Memory Graph UI on this branch (progressive dots LOD, soft hover, focus
+expansion, What-bar Events filter) is the acceptance demo that the architecture
+works. Closing the epic does not require further viz work beyond keeping that
+demo honest as the matrix grows.

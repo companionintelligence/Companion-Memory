@@ -26,6 +26,7 @@ codegen): [graphql-api.md](graphql-api.md).
 |---|---|---|
 | [architecture/architecture.md](architecture/architecture.md) | Platform & ecosystem: services, compose topology, domains, data flows, roadmap | living doc |
 | [architecture/Database.md](architecture/Database.md) | **The database**: engine/extensions, schemas (`ci`/`ci_search`/`ci_etl`/`hbpe`), tables by domain, idempotency/dedup design, indexing (HNSW/GIN/GIST), hypertables, migration workflow | verified 2026-07-06 |
+| [architecture/life-graph-matrix.md](architecture/life-graph-matrix.md) | **Life graph under CTI** (#1945–#1947): ontology, L0/L1/L2 layers, deterministic edge matrix, job path, code map, PR #1943 delivery notes | living doc |
 | [architecture/event-ingest-spec.md](architecture/event-ingest-spec.md) | Unified capture-event ingest (`/v1/events`) spec | partially implemented — see status header |
 | [architecture/hub-inference-integration.md](architecture/hub-inference-integration.md) | Getting LLM + embedding config from CI-Hub's inference proxy | design/proposal |
 | [architecture/test-strategy.md](architecture/test-strategy.md) | Test layers, priorities, conventions, coverage ratchet | active |
