@@ -92,48 +92,75 @@
   color: var(--tl-accent) !important;
 }
 
-/* ── Slide prev/next — beat .tl-slidenav-inverted white-on-light ───────────── */
+/* ── Slide prev/next peek cards ───────────────────────────────────────────── */
 
 .schedule-today-timeline .tl-slidenav-next,
-.schedule-today-timeline .tl-slidenav-previous,
+.schedule-today-timeline .tl-slidenav-previous {
+  top: 42% !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  color: var(--tl-fg) !important;
+}
+
+.schedule-today-timeline .tl-slidenav-previous {
+  left: 10px !important;
+  right: auto !important;
+  text-align: left !important;
+}
+
+.schedule-today-timeline .tl-slidenav-next {
+  right: 10px !important;
+  left: auto !important;
+  text-align: right !important;
+}
+
 .schedule-today-timeline .tl-slidenav-next .tl-slidenav-content-container,
 .schedule-today-timeline .tl-slidenav-previous .tl-slidenav-content-container,
 .schedule-today-timeline .tl-slidenav-next .tl-slidenav-content-container.tl-slidenav-inverted,
-.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-content-container.tl-slidenav-inverted {
-  color: var(--tl-fg) !important;
-  background-color: transparent !important;
-}
-
-.schedule-today-timeline .tl-slidenav-next .tl-slidenav-content-container,
-.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-content-container {
-  background-color: var(--tl-nav-bg) !important;
+.schedule-today-timeline
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  width: 11.5rem !important;
+  max-width: min(11.5rem, 28vw) !important;
+  padding: 0.55rem 0.7rem 0.65rem !important;
+  box-sizing: border-box !important;
+  background-color: color-mix(in oklab, var(--tl-bg) 92%, var(--tl-fg)) !important;
   border: 1px solid var(--tl-border) !important;
-  border-radius: 6px;
-  box-shadow: none !important;
+  border-radius: 10px !important;
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--tl-fg) 12%, transparent) !important;
+  color: var(--tl-fg) !important;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
 }
 
-.schedule-today-timeline .tl-slidenav-next .tl-slidenav-title,
-.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-title,
-.schedule-today-timeline .tl-slidenav-next .tl-slidenav-description,
-.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-description,
+.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-content-container {
+  align-items: flex-start !important;
+}
+
+.schedule-today-timeline .tl-slidenav-next .tl-slidenav-content-container {
+  align-items: flex-end !important;
+}
+
+.schedule-today-timeline .tl-slidenav-next:hover .tl-slidenav-content-container,
+.schedule-today-timeline .tl-slidenav-previous:hover .tl-slidenav-content-container,
+.schedule-today-timeline .tl-slidenav-next:focus-visible .tl-slidenav-content-container,
+.schedule-today-timeline .tl-slidenav-previous:focus-visible .tl-slidenav-content-container {
+  border-color: var(--tl-accent) !important;
+  background-color: var(--tl-bg) !important;
+  box-shadow: 0 2px 10px color-mix(in oklab, var(--tl-fg) 16%, transparent) !important;
+}
+
+/* Icon as a small chevron chip, not the 32px float TL defaults to. */
 .schedule-today-timeline .tl-slidenav-next .tl-slidenav-icon,
 .schedule-today-timeline .tl-slidenav-previous .tl-slidenav-icon,
-.schedule-today-timeline
-  .tl-slidenav-next
-  .tl-slidenav-content-container.tl-slidenav-inverted
-  .tl-slidenav-title,
-.schedule-today-timeline
-  .tl-slidenav-previous
-  .tl-slidenav-content-container.tl-slidenav-inverted
-  .tl-slidenav-title,
-.schedule-today-timeline
-  .tl-slidenav-next
-  .tl-slidenav-content-container.tl-slidenav-inverted
-  .tl-slidenav-description,
-.schedule-today-timeline
-  .tl-slidenav-previous
-  .tl-slidenav-content-container.tl-slidenav-inverted
-  .tl-slidenav-description,
 .schedule-today-timeline
   .tl-slidenav-next
   .tl-slidenav-content-container.tl-slidenav-inverted
@@ -142,9 +169,88 @@
   .tl-slidenav-previous
   .tl-slidenav-content-container.tl-slidenav-inverted
   .tl-slidenav-icon {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 1.5rem !important;
+  height: 1.5rem !important;
+  margin: 0 0 0.15rem !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+  color: var(--tl-accent) !important;
+  background: color-mix(in oklab, var(--tl-accent) 16%, transparent) !important;
+  border-radius: 999px !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+}
+
+.schedule-today-timeline .tl-slidenav-next .tl-slidenav-title,
+.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-title,
+.schedule-today-timeline
+  .tl-slidenav-next
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-title,
+.schedule-today-timeline
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-title {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
   color: var(--tl-fg) !important;
   text-shadow: none !important;
   opacity: 1 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  line-clamp: 2 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+}
+
+.schedule-today-timeline .tl-slidenav-next .tl-slidenav-description,
+.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-description,
+.schedule-today-timeline
+  .tl-slidenav-next
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-description,
+.schedule-today-timeline
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-description {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1.3 !important;
+  letter-spacing: 0.01em !important;
+  color: var(--tl-muted) !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  line-clamp: 2 !important;
+  overflow: hidden !important;
+  white-space: normal !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-today-timeline .tl-slidenav-next .tl-slidenav-title small,
+.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-title small,
+.schedule-today-timeline .tl-slidenav-next .tl-slidenav-description small,
+.schedule-today-timeline .tl-slidenav-previous .tl-slidenav-description small {
+  display: inline !important;
+  font-size: inherit !important;
+  color: inherit !important;
 }
 
 /* ── Time nav (bottom strip) ───────────────────────────────────────────────── */
