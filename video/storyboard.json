@@ -231,13 +231,13 @@
           "url": "ci-memory-living-room-server-acme.ci.computer/memory",
           "alt": "The entity details sheet open over the list, showing one event's full record",
           "motion": "push-in",
-          "_focusNote": "The best beat the old cut had, kept exactly as it was framed, because a rectangle this hard-won should survive a rewrite. The narration promises 'what happened, where it happened, and exactly when', and at rest every one of those field values is about 15px on a 1080-tall canvas. 1.754x makes PLACE, ADDRESS, COORDINATES, TYPE, BEDROOMS and NEIGHBORHOOD readable while still keeping the Details block on screen; a tighter 2.178x version was rejected because it pushed the dates off the bottom, which is one of the three things the line names.\n\nThe left edge of the window falls inside the list underneath, so a few dimmed row subtitles are cut mid-word. That is unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden. RE-CHECKED against a focus-preview end frame and the rendered cut: agreed, keep it.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%.",
+          "_focusNote": "The narration names three field values — 'The place, the address, the exact coordinates' — and until this change the ADDRESS was the one the frame cut. Measured off the rendered landscape cut (video-kit 0.24.0, origin/main @ 208a6410, t=44.0s) and off `ci-video focus-preview --at end`: the old 0.576 window from (0.224, 0.112) ends at plate x 0.800, and the address value runs to about 0.892, so the end frame read '4 Sanctuary Ridge, Laguna' and stopped mid-word on the one line the sentence promises. A caption cannot be true of a value the push-in amputates.\n\n0.625 from (0.313, 0.100) — scale 2.065, down from 2.240 — reaches plate x 0.938 and carries '4 Sanctuary Ridge, Laguna Beach, CA 92651' whole with margin, while PLACE, COORDINATES and TYPE stay above the caption band and the Details block stays on screen. It is LESS zoom than before, not more: the rectangle was mis-aimed, not too tight.\n\nThe left edge still falls inside the list underneath and a few dimmed row subtitles are cut mid-word. That is unchanged and still unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden.\n\nSIDE EFFECT WORTH KNOWING, and it is a mitigation rather than a fix: `capture.mask` paints the sheet's `<time>` elements with `color.card`, which renders as a column of nine identical teal pills down the sheet's right gutter (plate x 0.945-0.974) — indistinguishable from a loading skeleton in an otherwise fully painted page. This window ends at 0.938, so the pills are out of the END frame; they are still there at the start of the push. The real fix is the one hazard 4 in capture.config.mjs already reached for the forecast strip — hide the element rather than paint a rectangle over it — and it needs a re-capture against the full stage, so it is filed there, not faked here.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%. Unchanged.",
           "focus": {
             "landscape": {
-              "x": 0.224,
-              "y": 0.112,
-              "w": 0.576,
-              "h": 0.576
+              "x": 0.313,
+              "y": 0.1,
+              "w": 0.625,
+              "h": 0.625
             },
             "portrait": {
               "x": 0,
@@ -414,19 +414,19 @@
           "id": "graphic-architecture",
           "alt": "Companion Intelligence's architecture diagram: INPUT SURFACES (devices, API plug-ins, native apps, browser) feeding DIGITAL MEMORY (raw data, normalized shapes, database, the user's RL model, insights), feeding AGENTS (Hermes, OpenClaw, OpenCode, NanoClaw, Claude, Codex) under UNIVERSAL MCP SUPPORT.",
           "motion": "drift-down",
-          "_focusNote": "NOT A CAPTURE — the same arrangement as `graphic-traces`, and the same reasons. This is the explainer from the 2026 Q3 Companion Intelligence short deck, the one ci.computer/memory publishes under 'How does Companion Memory work?'. It is composited on #041620 at 3840x2160 and 1080x1920 rather than scaled into the 16:9 shot slot, because the source is 2500x1236 (2.02:1) and the slot would have stretched it.\n\nWHAT EACH VIEWPORT CAN ACTUALLY READ, because the line has to be true of both: in landscape the whole diagram is legible down to the box labels — PERSON, PLACE, THING, CONTENT, EVENT, SPACE and FT SEARCH / RELATIONS / GRAPH / VECTOR, which is exactly what the narration names. In portrait the plate is 1060px wide and the three panel headings (INPUT SURFACES, DIGITAL MEMORY, AGENTS) plus the box labels still read, but the smallest type is texture. The caption names the three panels for that reason: it is the claim both cuts can carry.",
+          "_focusNote": "NOT A CAPTURE — the same arrangement as `graphic-traces`, and the same reasons. This is the explainer from the 2026 Q3 Companion Intelligence short deck, the one ci.computer/memory publishes under 'How does Companion Memory work?'. It is composited on #041620 at 3840x2160 and 1080x1920 rather than scaled into the 16:9 shot slot, because the source is 2500x1236 (2.02:1) and the slot would have stretched it.\n\nTHE CAPTION NAMES THE THREE PANELS, SO THE FRAME HAS TO END ON THEM. At 0.8 from (0, 0) the drift-down ended with its window top at plate y 0.107, and the three panel headings sit at 0.086-0.104 — so the last frame of a nine-second scene sliced INPUT SURFACES, DIGITAL MEMORY and AGENTS in half, horizontally, through the glyphs, under a caption reading 'Input surfaces. Digital memory. Your agents.' The same rectangle cut UNIVERSAL MCP SUPPORT to 'UNIV / MCP S' at the right edge in landscape, and AGENTS to 'AGENT' in portrait.\n\nMeasured with `ci-video focus-preview --at start` and `--at end` at both viewports. drift-down puts its window top at (requested y + a fixed inset) + half the drift, so on this plate the END is always LOWER than the start and there is no y that keeps the headings at a window of 0.8 — the fix has to be a wider window, which shortens the drift. 0.94 from (0.05, 0) lands the landscape end at 0.083, above the headings, and reaches plate x 0.99 so the AGENTS panel and UNIVERSAL MCP SUPPORT are whole. 0.92 from (0.04, 0) does the same in portrait with margin on both sides.\n\npull-back was tried and rejected on measurement, not taste: it ends at the plate's natural size, which is legible in landscape and reduces the portrait diagram to roughly a third of its current height, where the box labels stop reading. `motion` is one enum for both formats, so a move that only works in one is not available.\n\nWHAT EACH VIEWPORT CAN ACTUALLY READ, because the line has to be true of both: in landscape the whole diagram is legible down to the box labels — PERSON, PLACE, THING, CONTENT, EVENT, SPACE and FT SEARCH / RELATIONS / GRAPH / VECTOR, which is exactly what the narration names. In portrait the plate is 1060px wide and the three panel headings plus the box labels still read, but the smallest type is texture. The caption names the three panels for that reason: it is the claim both cuts can carry — and now both cuts carry it at the end of the shot as well as the start.\n\nEXPECTED BUILD LINE, so nobody 'fixes' it: at 0.94 the landscape window leaves less headroom than the drift needs, and the kit says so and pushes in instead — `! scene \"how-it-works\" shot \"graphic-architecture\" (landscape): drift-down had no room at this focus — pushed in instead`. That fallback is the point. It gives landscape a start at the plate's natural size and an end at 0.94 from (0.049, 0.052), both with the headings whole; portrait keeps a real drift-down, 0.055 to 0.082, also with the headings whole at both ends. Writing `motion: \"push-in\"` explicitly would silence the line and take portrait with it — `motion` is one enum for both formats — and a portrait push-in STARTS at 1.394x the plate, where the diagram is about a third of its readable height. `ci-video check` passes with 0 errors either way; the warning is the kit reporting a decision, not a defect.",
           "focus": {
             "landscape": {
-              "x": 0,
-              "y": 0,
-              "w": 0.8,
-              "h": 0.8
+              "x": 0.05,
+              "y": 0.0,
+              "w": 0.94,
+              "h": 0.94
             },
             "portrait": {
-              "x": 0,
-              "y": 0,
-              "w": 0.8,
-              "h": 0.8
+              "x": 0.04,
+              "y": 0.0,
+              "w": 0.92,
+              "h": 0.92
             }
           }
         }
@@ -471,19 +471,19 @@
           "url": "ci-memory-living-room-server-acme.ci.computer/onboarding",
           "alt": "The onboarding trust dial, offering cautious, balanced and hands-off",
           "motion": "push-in",
-          "_focusNote": "The rectangle DROPS THE 'How much trust?' heading on purpose, and that was decided off a rendered frame rather than a preview. A looser 1.754x framing that kept the heading pushed the third option down into the caption scrim, and the rendered result had 'Hands-off — auto-promote and auto-schedule estimate-bearing work' greyed out under the lower third: the one option the line names last was the least readable thing on screen. The scrim is 367px of a 1080 frame, so on a full-bleed shot roughly the bottom third is spoken for; there is no framing of this screen that clears it AND keeps the heading. The caption already carries the heading's meaning, so the heading is what goes.\n\nAt 1.914x the top edge lands in the gap above the first card rather than through the sub-heading — worth checking whenever this rectangle moves, because a frame edge through a line of type reads as a broken render.\n\nThis is also the only screen in the film where a genuine PORTRAIT punch-in is possible, and the reason is worth stating: the cards are inset from the phone's edges. A 9:16 window is square-ish too, so it can only be tightened by cropping the sides, and mobile layouts are full-width almost everywhere. Here 0.94 is enough to reach 1.488x without touching a glyph.\n\nPOINTER. 'You choose' is a click, and the three cards are the control. It lands on Balanced in both cuts — landscape (0.500, 0.545), portrait (0.450, 0.540), both verified inside the card and clear of its type — because Balanced is the option the plate shows SELECTED, teal border and all. Clicking Cautious or Hands-off would render a cursor pressing one card while a different one stays lit, which is the one way this pointer could contradict its own screenshot. Both hotspots are inside the end window of the push (landscape 0.538 of the plate from (0.13, 0.232); portrait 0.75 from (0.025, 0.072)) and inside the plate at rest, so the cursor tracks the control through the whole move. Timing is left at the 58% default: unlike the list row, nothing downstream depends on when this click lands.",
+          "_focusNote": "THE LINE NAMES THREE OPTIONS AND THE FRAME HAS TO HOLD THREE. The previous rectangle did not, and the note it replaces claimed the opposite, so this one carries the measurement.\n\nRead off the rendered landscape cut (video-kit 0.24.0, origin/main @ 208a6410): at t=79.0s, the shot at rest, all three cards are legible. By t=82.5s — the last 2.5s of the scene, over a caption reading 'Cautious, balanced, or hands off. You choose.' — the push has left Cautious and Balanced on screen and pushed Hands-off under the caption scrim, its title greyed to the edge of legibility and its subtitle gone entirely. The sub-heading it was supposed to have DROPPED was still in frame and clipped mid-sentence at the right edge ('...do on its own' with no question mark), because the window was off-centre: 0.538 from x 0.131 centres on plate x 0.400 while the cards centre on 0.500.\n\nThat is the exact failure the old note said a 1.754x framing had been rejected for. It was not fixed by moving to 0.538; it was reproduced.\n\nlandscape 0.58 from (0.21, 0.269) — scale 2.225 against the old 2.398, so barely less zoom. Almost all of the fix is POSITION. Verified on a focus-preview end frame: all three cards whole, top border of Cautious clear of the frame edge, Hands-off's subtitle clear of the caption band, nothing clipped at either side, and the Back/Skip/Next row out of frame.\n\nportrait 0.754 from (0.122, 0.246), scale 1.849. Portrait is the tighter constraint of the two and the geometry is worth writing down: the window can never start lower than 1-w, so clearing the sub-heading's second line (plate y 0.233) caps w at about 0.766, while the card text spans plate x 0.119-0.876 and wants about 0.80 to sit inside with margin. The two cannot both be satisfied. 0.754 takes the first: nothing is sliced, and the longest subtitle ('...auto-schedule estimate-bearing work') reaches the frame edge with its last glyph whole. Re-measure both when this rectangle moves.\n\nPOINTER. 'You choose' is a click, and the three cards are the control. It lands on Balanced in both cuts — landscape (0.500, 0.545), portrait (0.450, 0.540) — because Balanced is the option the plate shows SELECTED, teal border and all. Clicking Cautious or Hands-off would render a cursor pressing one card while a different one stays lit, which is the one way this pointer could contradict its own screenshot. Both hotspots are inside the NEW end windows (landscape 0.210-0.790 x 0.300-0.880; portrait 0.122-0.876 x 0.248-1.002) and inside the plate at rest, so the cursor tracks the control through the whole move; `ci-video check` resolves them and fails if it ever stops being true. Timing is left at the 58% default.",
           "focus": {
             "landscape": {
-              "x": 0.131,
-              "y": 0.203,
-              "w": 0.538,
-              "h": 0.538
+              "x": 0.21,
+              "y": 0.269,
+              "w": 0.58,
+              "h": 0.58
             },
             "portrait": {
-              "x": 0.024,
-              "y": 0,
-              "w": 0.752,
-              "h": 0.738
+              "x": 0.122,
+              "y": 0.246,
+              "w": 0.754,
+              "h": 0.754
             }
           },
           "pointer": {
