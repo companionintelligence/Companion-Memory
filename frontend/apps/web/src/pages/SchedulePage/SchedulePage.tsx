@@ -245,13 +245,13 @@ export function SchedulePage() {
         </Breadcrumb>
       </Portal.Slot>
 
-      <PageContent>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1">
+      <PageContent className="gap-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex items-center gap-0.5">
             <IconButton variant="ghost" label={t('SCHEDULE_PREVIOUS_WEEK')} onClick={goBack}>
               <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
             </IconButton>
-            <h2 className="min-w-[9.5rem] text-center text-lg font-bold text-foreground tabular-nums">
+            <h2 className="min-w-[9rem] text-center text-base font-semibold text-foreground tabular-nums">
               {formatRange(start, end)}
             </h2>
             <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
@@ -260,7 +260,7 @@ export function SchedulePage() {
           </div>
 
           {weekOffset !== 0 && (
-            <Button variant="ghost" size="sm" onClick={goToday} className="text-xs">
+            <Button variant="ghost" size="sm" onClick={goToday} className="h-7 text-xs">
               Back to today
             </Button>
           )}
@@ -268,36 +268,36 @@ export function SchedulePage() {
           {/* Hue answers one question at a time; this picks which one. Committed
               time and rhythm stay told apart by their lanes and by fill weight,
               so colour is free to carry category instead of certainty. */}
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
             <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} />
 
-            <div className="flex shrink-0 flex-col items-end gap-0.5">
-              <div
-                role="radiogroup"
-                aria-label="Colour blocks by activity type or calendar source"
-                className="flex items-center rounded-md border border-border p-0.5"
-              >
-                {(['type', 'source'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    aria-checked={colorMode === mode}
-                    onClick={() => setColorMode(mode)}
-                    className={cn(
-                      'rounded-[4px] px-2 py-0.5 text-[11px] transition-colors',
-                      colorMode === mode
-                        ? 'bg-accent text-accent-foreground'
-                        : 'text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {COLOR_MODE_LABEL[mode]}
-                  </button>
-                ))}
-              </div>
-              <span className="text-[10px] text-muted-foreground">
-                {colorMode === 'type' ? 'What kind of activity' : 'Which calendar or connector'}
-              </span>
+            <div
+              role="radiogroup"
+              aria-label={
+                colorMode === 'type'
+                  ? 'Colour by activity type — what kind of activity'
+                  : 'Colour by source — which calendar or connector'
+              }
+              title={colorMode === 'type' ? 'What kind of activity' : 'Which calendar or connector'}
+              className="flex shrink-0 items-center rounded-md border border-border p-0.5"
+            >
+              {(['type', 'source'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={colorMode === mode}
+                  onClick={() => setColorMode(mode)}
+                  className={cn(
+                    'rounded-[4px] px-2 py-0.5 text-[11px] leading-none transition-colors',
+                    colorMode === mode
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {COLOR_MODE_LABEL[mode]}
+                </button>
+              ))}
             </div>
           </div>
         </div>

@@ -640,9 +640,7 @@ const DayRow = memo(function DayRow({
           aria-label={`${expanded ? 'Collapse' : 'Expand'} ${dayLabel}`}
           onClick={() => setExpanded((value) => !value)}
         >
-          <div
-            className={cn('text-xs leading-tight', isToday ? 'font-medium' : 'text-muted-foreground')}
-          >
+          <div className={cn('text-xs leading-tight', isToday ? 'font-medium' : 'text-muted-foreground')}>
             {dayStart.toLocaleDateString([], { weekday: 'short' })}
           </div>
           <div className={cn('text-[11px] leading-tight', isToday ? '' : 'text-muted-foreground/70')}>
@@ -651,9 +649,7 @@ const DayRow = memo(function DayRow({
         </button>
       ) : (
         <div className="w-10 shrink-0 pt-0.5 text-right">
-          <div
-            className={cn('text-xs leading-tight', isToday ? 'font-medium' : 'text-muted-foreground')}
-          >
+          <div className={cn('text-xs leading-tight', isToday ? 'font-medium' : 'text-muted-foreground')}>
             {dayStart.toLocaleDateString([], { weekday: 'short' })}
           </div>
           <div className={cn('text-[11px] leading-tight', isToday ? '' : 'text-muted-foreground/70')}>
@@ -969,9 +965,7 @@ const DayRow = memo(function DayRow({
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            {expanded
-              ? 'Show less'
-              : `Expand day · ${expandedLaneCount} items`}
+            {expanded ? 'Show less' : `Expand day · ${expandedLaneCount} items`}
           </button>
         )}
 

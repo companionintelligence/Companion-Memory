@@ -170,9 +170,7 @@ export function foldMicroClusters(spans: readonly EventSpan[]): PackedItem[] {
  * user can see what the stacks were hiding.
  */
 export function unpackToSingles(spans: readonly EventSpan[]): PackedItem[] {
-  return [...spans]
-    .map(singleItem)
-    .sort((a, b) => a.leftPct - b.leftPct || a.widthPct - b.widthPct);
+  return [...spans].map(singleItem).sort((a, b) => a.leftPct - b.leftPct || a.widthPct - b.widthPct);
 }
 
 /**

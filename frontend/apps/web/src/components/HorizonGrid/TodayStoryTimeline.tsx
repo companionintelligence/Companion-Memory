@@ -115,9 +115,7 @@ export function TodayStoryTimeline({ events, day }: TodayStoryTimelineProps) {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [themeKey, setThemeKey] = useState(() =>
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-      ? 'dark'
-      : 'light',
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light',
   );
 
   // Rebuild when light/dark flips — TimelineJS bakes default_bg_color at construct.
@@ -200,9 +198,7 @@ export function TodayStoryTimeline({ events, day }: TodayStoryTimelineProps) {
     >
       <div className="flex items-baseline justify-between gap-3 border-b border-border/60 px-3 py-2">
         <h3 className="text-sm font-semibold text-foreground">Today</h3>
-        <span className="text-[11px] tabular-nums text-foreground/80">
-          {data.events.length} slides
-        </span>
+        <span className="text-[11px] tabular-nums text-foreground/80">{data.events.length} slides</span>
       </div>
       {error ? (
         <p role="alert" className="px-3 py-6 text-sm text-muted-foreground">
