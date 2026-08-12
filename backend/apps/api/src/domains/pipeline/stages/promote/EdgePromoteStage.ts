@@ -33,6 +33,10 @@ export const PROMOTE_EDGE_COMMUNICATION_STAGE_ID = 'promote.edge_communication';
 export const PROMOTE_EDGE_EVENT_STAGE_ID = 'promote.edge_event';
 export const PROMOTE_EDGE_CONTENT_STAGE_ID = 'promote.edge_content';
 export const PROMOTE_EDGE_INVENTORY_STAGE_ID = 'promote.edge_inventory';
+export const PROMOTE_EDGE_RECEIPT_STAGE_ID = 'promote.edge_receipt';
+export const PROMOTE_EDGE_OBSERVATION_STAGE_ID = 'promote.edge_observation';
+export const PROMOTE_EDGE_POSITION_STAGE_ID = 'promote.edge_position';
+export const PROMOTE_EDGE_DEVICE_STAGE_ID = 'promote.edge_device';
 
 // ---------------------------------------------------------------------------
 // The versions, DERIVED rather than chosen
@@ -48,8 +52,14 @@ export const PROMOTE_EDGE_INVENTORY_STAGE_ID = 'promote.edge_inventory';
  * Generation 2: the matrix gained `event.child_of` (Event −PART_OF→ parent
  * Event), `content.part_of_event` (Content −PART_OF→ Event) and
  * `inventory.located_at` (Item −LOCATED_AT→ Place).
+ *
+ * Generation 3: the matrix now covers EVERY entity-linkage pair in the
+ * schema — receipts (merchant −LOCATED_AT→ place, document −PART_OF→ purchase
+ * event, event −HAPPENED_AT→ place), object observations (content −PART_OF→
+ * event, item −LOCATED_AT→ place, item −ASSOCIATED_WITH→ content), positions
+ * (owner −VISITED→ place) and devices (owner −OWNS→ device).
  */
-export const EDGE_PROJECTION_RULE_GENERATION = 2;
+export const EDGE_PROJECTION_RULE_GENERATION = 3;
 
 /**
  * Communication-leg version: this stage's edges are a COPY of what
@@ -88,6 +98,36 @@ export const PROMOTE_EDGE_INVENTORY_VERSION =
   EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
 
 /**
+ * Receipt-leg version: `merchant_entity_id` / `place_entity_id` /
+ * `document_content_id` / `event_id` are written by the receipt-extraction
+ * services at ingest, not by a versioned producer stage — projection
+ * generation only, like the content leg.
+ */
+export const PROMOTE_EDGE_RECEIPT_VERSION = EDGE_PROJECTION_RULE_GENERATION;
+
+/**
+ * Observation-leg version: `resolved_object_id` is written by
+ * `promote.object`, so its version rides along — same derivation shape as the
+ * inventory leg. (`place_entity_id` / `content_id` / `event_id` are set at
+ * capture time.)
+ */
+export const PROMOTE_EDGE_OBSERVATION_VERSION =
+  EDGE_PROJECTION_RULE_GENERATION + PROMOTE_OBJECT_VERSION - 1;
+
+/**
+ * Position-leg version: `location_entity_id` is snapped to a known place by
+ * the position domain at capture time (PositionService / KnownPlacesService),
+ * not by a versioned stage — projection generation only.
+ */
+export const PROMOTE_EDGE_POSITION_VERSION = EDGE_PROJECTION_RULE_GENERATION;
+
+/**
+ * Device-leg version: `device_entity_id` is written at device registration —
+ * projection generation only.
+ */
+export const PROMOTE_EDGE_DEVICE_VERSION = EDGE_PROJECTION_RULE_GENERATION;
+
+/**
  * Cross-check a derived version against its `STAGE_VERSIONS` mirror — the same
  * contract every derived-version stage keeps (`promotePlaceStageVersion`,
  * `personLinkStageVersion`): the derivation is the authority, the entry is its
@@ -121,6 +161,10 @@ promoteEdgeStageVersion(PROMOTE_EDGE_COMMUNICATION_STAGE_ID, PROMOTE_EDGE_COMMUN
 promoteEdgeStageVersion(PROMOTE_EDGE_EVENT_STAGE_ID, PROMOTE_EDGE_EVENT_VERSION);
 promoteEdgeStageVersion(PROMOTE_EDGE_CONTENT_STAGE_ID, PROMOTE_EDGE_CONTENT_VERSION);
 promoteEdgeStageVersion(PROMOTE_EDGE_INVENTORY_STAGE_ID, PROMOTE_EDGE_INVENTORY_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_RECEIPT_STAGE_ID, PROMOTE_EDGE_RECEIPT_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_OBSERVATION_STAGE_ID, PROMOTE_EDGE_OBSERVATION_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_POSITION_STAGE_ID, PROMOTE_EDGE_POSITION_VERSION);
+promoteEdgeStageVersion(PROMOTE_EDGE_DEVICE_STAGE_ID, PROMOTE_EDGE_DEVICE_VERSION);
 
 // ---------------------------------------------------------------------------
 // Candidate selection
@@ -178,6 +222,56 @@ export const PROMOTE_EDGE_INVENTORY_SOURCE: StageSource = {
   idColumn: 'object_id',
   userColumn: 'user_id',
   predicate: 's.last_seen_place_entity_id IS NOT NULL',
+};
+
+/** `ci.receipts` rows where extraction resolved at least one linkage PAIR —
+ * every receipt rule needs both of its endpoints, so a row with only one
+ * column filled is not yet a candidate for any of them. */
+export const PROMOTE_EDGE_RECEIPT_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'receipts',
+  idColumn: 'receipt_id',
+  userColumn: 'user_id',
+  predicate:
+    `((s.merchant_entity_id IS NOT NULL AND s.place_entity_id IS NOT NULL) ` +
+    `OR (s.document_content_id IS NOT NULL AND s.event_id IS NOT NULL) ` +
+    `OR (s.event_id IS NOT NULL AND s.place_entity_id IS NOT NULL))`,
+};
+
+/** `ci.object_observations` rows with at least one complete linkage pair —
+ * capture fills content/event/place, `promote.object` fills the resolved
+ * object; a row becomes a candidate as soon as any pair completes. */
+export const PROMOTE_EDGE_OBSERVATION_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'object_observations',
+  idColumn: 'observation_id',
+  userColumn: 'user_id',
+  predicate:
+    `((s.content_id IS NOT NULL AND s.event_id IS NOT NULL) ` +
+    `OR (s.resolved_object_id IS NOT NULL AND s.place_entity_id IS NOT NULL) ` +
+    `OR (s.resolved_object_id IS NOT NULL AND s.content_id IS NOT NULL))`,
+};
+
+/** `ci.position` fixes snapped to a known place — the `position.visited`
+ * rule's candidates. Same per-id ledger `enrich.position_reverse` already
+ * runs over this table; the projection itself collapses a whole slice to at
+ * most a few distinct (owner, place) edges. */
+export const PROMOTE_EDGE_POSITION_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'position',
+  idColumn: 'id',
+  userColumn: 'user_id',
+  predicate: 's.location_entity_id IS NOT NULL',
+};
+
+/** `ci.devices` rows mirrored as a device entity — the `device.owned_by`
+ * rule's candidates. */
+export const PROMOTE_EDGE_DEVICE_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'devices',
+  idColumn: 'device_id',
+  userColumn: 'user_id',
+  predicate: 's.device_entity_id IS NOT NULL',
 };
 
 // ---------------------------------------------------------------------------
@@ -351,6 +445,84 @@ export class InventoryEdgePromoteStage extends EdgePromoteStageBase {
   readonly entityTypes = ['item'] as const;
 
   protected readonly sourceKind: DeterministicEdgeSource = 'inventory';
+
+  // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class ReceiptEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_RECEIPT_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_RECEIPT_STAGE_ID, PROMOTE_EDGE_RECEIPT_VERSION);
+
+  readonly source = PROMOTE_EDGE_RECEIPT_SOURCE;
+
+  readonly entityTypes = ['receipt'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'receipts';
+
+  // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class ObservationEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_OBSERVATION_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(
+    PROMOTE_EDGE_OBSERVATION_STAGE_ID,
+    PROMOTE_EDGE_OBSERVATION_VERSION,
+  );
+
+  readonly source = PROMOTE_EDGE_OBSERVATION_SOURCE;
+
+  readonly entityTypes = ['observation'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'observations';
+
+  // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class PositionEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_POSITION_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(
+    PROMOTE_EDGE_POSITION_STAGE_ID,
+    PROMOTE_EDGE_POSITION_VERSION,
+  );
+
+  readonly source = PROMOTE_EDGE_POSITION_SOURCE;
+
+  readonly entityTypes = ['position'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'positions';
+
+  // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
+  constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {
+    super(edgeService, logger);
+  }
+}
+
+@Injectable()
+export class DeviceEdgePromoteStage extends EdgePromoteStageBase {
+  readonly id = PROMOTE_EDGE_DEVICE_STAGE_ID;
+
+  readonly version = promoteEdgeStageVersion(PROMOTE_EDGE_DEVICE_STAGE_ID, PROMOTE_EDGE_DEVICE_VERSION);
+
+  readonly source = PROMOTE_EDGE_DEVICE_SOURCE;
+
+  readonly entityTypes = ['device'] as const;
+
+  protected readonly sourceKind: DeterministicEdgeSource = 'devices';
 
   // See CommunicationEdgePromoteStage: arity must be visible to the wiring spec.
   constructor(edgeService: DeterministicEdgeBackfillService, logger: LoggerService) {

@@ -18,7 +18,15 @@ import { RelationshipType } from '@ci/domains/graph';
  * edges always land on the canonical, deduplicated person/place.
  */
 /** Which source table a rule projects from — the pipeline's slice unit. */
-export type DeterministicEdgeSource = 'communications' | 'events' | 'content' | 'inventory';
+export type DeterministicEdgeSource =
+  | 'communications'
+  | 'events'
+  | 'content'
+  | 'inventory'
+  | 'receipts'
+  | 'observations'
+  | 'positions'
+  | 'devices';
 
 export interface DeterministicEdgeRule {
   /** Stable rule id, recorded on the edge as `properties.rule`. */
@@ -52,20 +60,36 @@ export interface DeterministicEdgeRule {
 /**
  * THE MATRIX: data type × metadata column → deterministic edge.
  *
- * | source                              | edge                                    |
- * |-------------------------------------|-----------------------------------------|
- * | communications.from_entity_id       | Person -SENT→ Communication             |
- * | communications.to_entity_ids        | Person -RECEIVED→ Communication         |
- * | events.organizer_entity_id          | Person -PARTICIPATED_IN→ Event (organizer) |
- * | events.participant_entity_ids       | Person -PARTICIPATED_IN→ Event          |
- * | events.location_entity_id           | Event -HAPPENED_AT→ Place               |
- * | events.parent_event_id              | Event -PART_OF→ Event                   |
- * | content.event_id                    | Content -PART_OF→ Event                 |
- * | inventory.last_seen_place_entity_id | Item -LOCATED_AT→ Place                 |
+ * | source                                        | edge                                       |
+ * |-----------------------------------------------|--------------------------------------------|
+ * | communications.from_entity_id                 | Person -SENT→ Communication                |
+ * | communications.to_entity_ids                  | Person -RECEIVED→ Communication            |
+ * | events.organizer_entity_id                    | Person -PARTICIPATED_IN→ Event (organizer) |
+ * | events.participant_entity_ids                 | Person -PARTICIPATED_IN→ Event             |
+ * | events.location_entity_id                     | Event -HAPPENED_AT→ Place                  |
+ * | events.parent_event_id                        | Event -PART_OF→ Event                      |
+ * | content.event_id                              | Content -PART_OF→ Event                    |
+ * | inventory.last_seen_place_entity_id           | Item -LOCATED_AT→ Place                    |
+ * | receipts.merchant × place_entity_id           | Merchant -LOCATED_AT→ Place                |
+ * | receipts.document_content_id × event_id       | Content -PART_OF→ Event (the purchase)     |
+ * | receipts.event_id × place_entity_id           | Event -HAPPENED_AT→ Place                  |
+ * | object_observations.content_id × event_id     | Content -PART_OF→ Event                    |
+ * | object_observations.object × place_entity_id  | Item -LOCATED_AT→ Place                    |
+ * | object_observations.object × content_id       | Item -ASSOCIATED_WITH→ Content (depicted)  |
+ * | position.location_entity_id (× users)         | Owner Person -VISITED→ Place               |
+ * | devices.device_entity_id (× users)            | Owner Person -OWNS→ Device                 |
  *
  * Every source id column is filled by the deterministic people/place-linking
- * jobs, and every communication/event row has a same-id mirror in
- * `ci.entities` (CTI), so both endpoints of each pair are real graph nodes.
+ * jobs (or by the connector at ingest), and every communication/event/content
+ * row has a same-id mirror in `ci.entities` (CTI), so both endpoints of each
+ * pair are real graph nodes — the projection's ci.entities JOIN drops any pair
+ * whose endpoint has no mirror yet, and a later run picks it up.
+ *
+ * Rules whose two endpoints are BOTH plain columns of the row (receipts,
+ * observations) relate two other entities THROUGH the row: the row itself is
+ * not a graph node, it is the evidence for the edge. Rules over per-owner
+ * tables (position, devices) join `ci.users` to start the edge at the owner's
+ * own Person entity — that's what hangs telemetry off the account anchor.
  */
 export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
   {
@@ -187,6 +211,133 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     fromIdExpr: 'i.object_id',
     toIdExpr: 'i.last_seen_place_entity_id',
     candidateWhere: 'i.last_seen_place_entity_id IS NOT NULL',
+  },
+  {
+    id: 'receipt.merchant_at_place',
+    description: 'Merchant → the Place the purchase happened at',
+    relationshipType: RelationshipType.LOCATED_AT,
+    strength: 0.55,
+    properties: { derived_from: 'receipts.merchant_entity_id x receipts.place_entity_id' },
+    source: 'receipts',
+    table: 'ci.receipts r',
+    userColumn: 'r.user_id',
+    timeColumn: 'r.created_at',
+    idColumn: 'r.receipt_id',
+    fromIdExpr: 'r.merchant_entity_id',
+    toIdExpr: 'r.place_entity_id',
+    candidateWhere: 'r.merchant_entity_id IS NOT NULL AND r.place_entity_id IS NOT NULL',
+  },
+  {
+    id: 'receipt.document_part_of_event',
+    description: 'Receipt document Content → the purchase Event',
+    relationshipType: RelationshipType.PART_OF,
+    strength: 0.7,
+    properties: { derived_from: 'receipts.document_content_id x receipts.event_id' },
+    source: 'receipts',
+    table: 'ci.receipts r',
+    userColumn: 'r.user_id',
+    timeColumn: 'r.created_at',
+    idColumn: 'r.receipt_id',
+    fromIdExpr: 'r.document_content_id',
+    toIdExpr: 'r.event_id',
+    candidateWhere: 'r.document_content_id IS NOT NULL AND r.event_id IS NOT NULL',
+  },
+  {
+    id: 'receipt.event_at_place',
+    description: 'Purchase Event → the Place it happened at',
+    relationshipType: RelationshipType.HAPPENED_AT,
+    strength: 0.6,
+    properties: { derived_from: 'receipts.event_id x receipts.place_entity_id' },
+    source: 'receipts',
+    table: 'ci.receipts r',
+    userColumn: 'r.user_id',
+    timeColumn: 'r.created_at',
+    idColumn: 'r.receipt_id',
+    fromIdExpr: 'r.event_id',
+    toIdExpr: 'r.place_entity_id',
+    candidateWhere: 'r.event_id IS NOT NULL AND r.place_entity_id IS NOT NULL',
+  },
+  {
+    id: 'observation.content_part_of_event',
+    description: 'Observed Content → the Event it was captured in',
+    relationshipType: RelationshipType.PART_OF,
+    strength: 0.7,
+    properties: { derived_from: 'object_observations.content_id x object_observations.event_id' },
+    source: 'observations',
+    table: 'ci.object_observations o',
+    userColumn: 'o.user_id',
+    timeColumn: 'o.observed_at',
+    idColumn: 'o.observation_id',
+    fromIdExpr: 'o.content_id',
+    toIdExpr: 'o.event_id',
+    candidateWhere: 'o.content_id IS NOT NULL AND o.event_id IS NOT NULL',
+  },
+  {
+    id: 'observation.object_at_place',
+    description: 'Resolved Item → the Place it was observed at',
+    relationshipType: RelationshipType.LOCATED_AT,
+    strength: 0.5,
+    properties: { derived_from: 'object_observations.resolved_object_id x object_observations.place_entity_id' },
+    source: 'observations',
+    table: 'ci.object_observations o',
+    userColumn: 'o.user_id',
+    timeColumn: 'o.observed_at',
+    idColumn: 'o.observation_id',
+    fromIdExpr: 'o.resolved_object_id',
+    toIdExpr: 'o.place_entity_id',
+    candidateWhere: 'o.resolved_object_id IS NOT NULL AND o.place_entity_id IS NOT NULL',
+  },
+  {
+    id: 'observation.object_in_content',
+    description: 'Resolved Item → the Content it is depicted in',
+    relationshipType: RelationshipType.ASSOCIATED_WITH,
+    strength: 0.5,
+    properties: {
+      derived_from: 'object_observations.resolved_object_id x object_observations.content_id',
+      role: 'depicted_in',
+    },
+    source: 'observations',
+    table: 'ci.object_observations o',
+    userColumn: 'o.user_id',
+    timeColumn: 'o.observed_at',
+    idColumn: 'o.observation_id',
+    fromIdExpr: 'o.resolved_object_id',
+    toIdExpr: 'o.content_id',
+    candidateWhere: 'o.resolved_object_id IS NOT NULL AND o.content_id IS NOT NULL',
+  },
+  {
+    // Millions of position fixes collapse to one edge per distinct
+    // (owner, place): the projection's DISTINCT dedupes within a window and the
+    // directed-unique index collapses across windows — telemetry volume in, a
+    // handful of VISITED edges out.
+    id: 'position.visited',
+    description: 'Owner Person → a Place their position snapped to',
+    relationshipType: RelationshipType.VISITED,
+    strength: 0.5,
+    properties: { derived_from: 'position.location_entity_id' },
+    source: 'positions',
+    table: 'ci.position p JOIN ci.users u ON u.id = p.user_id',
+    userColumn: 'p.user_id',
+    timeColumn: 'p.time',
+    idColumn: 'p.id',
+    fromIdExpr: 'u.entity_id',
+    toIdExpr: 'p.location_entity_id',
+    candidateWhere: 'p.location_entity_id IS NOT NULL AND u.entity_id IS NOT NULL',
+  },
+  {
+    id: 'device.owned_by',
+    description: 'Owner Person → their Device entity',
+    relationshipType: RelationshipType.OWNS,
+    strength: 0.8,
+    properties: { derived_from: 'devices.device_entity_id' },
+    source: 'devices',
+    table: 'ci.devices d JOIN ci.users u ON u.id = d.user_id',
+    userColumn: 'd.user_id',
+    timeColumn: 'd.created_at',
+    idColumn: 'd.device_id',
+    fromIdExpr: 'u.entity_id',
+    toIdExpr: 'd.device_entity_id',
+    candidateWhere: 'd.device_entity_id IS NOT NULL AND u.entity_id IS NOT NULL',
   },
 ];
 

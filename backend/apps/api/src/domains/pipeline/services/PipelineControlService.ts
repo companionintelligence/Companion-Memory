@@ -349,6 +349,11 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
   [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: [STAGE_IDS.ENRICH_PERSON_LINK],
   [STAGE_IDS.PROMOTE_EDGE_EVENT]: [STAGE_IDS.ENRICH_EVENT_PERSON_LINK, STAGE_IDS.PROMOTE_PLACE],
   [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: [STAGE_IDS.PROMOTE_OBJECT],
+  // The observation leg's `resolved_object_id` is `promote.object`'s output;
+  // its other columns (content/event/place) are set at capture time. The
+  // receipt, position and device legs read only ingest/capture-time columns —
+  // no producer stage, so no entry.
+  [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: [STAGE_IDS.PROMOTE_OBJECT],
 };
 
 /**

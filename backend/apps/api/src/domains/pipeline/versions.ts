@@ -213,22 +213,28 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.PROMOTE_OBJECT]: 1,
 
   /**
-   * v2 — deterministic edge projection, all legs. Literals mirroring
+   * v3 — deterministic edge projection, all legs. Literals mirroring
    * derivations in `EdgePromoteStage.ts`, which throw at module load if any
    * line disagrees. The communication leg derives from the edge-matrix
    * generation + PERSON_LINK_VERSION (its edges are a COPY of the linker's
    * columns, so a linker bump re-projects); the event leg additionally tracks
    * PROMOTE_PLACE_VERSION (`location_entity_id` is that stage's output); the
-   * inventory leg tracks PROMOTE_OBJECT_VERSION; the content leg has no
-   * versioned producer (importers fill `event_id`), so it is the matrix
-   * generation alone. v2 = matrix generation 2: added `event.child_of`,
-   * `content.part_of_event` and `inventory.located_at`. Bump a producer's
-   * generation and the matching line here in the same commit.
+   * inventory and observation legs track PROMOTE_OBJECT_VERSION; the content,
+   * receipt, position and device legs have no versioned producer (importers,
+   * extraction, capture-time snapping and device registration fill their
+   * columns), so they are the matrix generation alone. v3 = matrix generation
+   * 3: the matrix now covers every entity-linkage pair in the schema —
+   * receipts, object observations, positions and devices gained rules. Bump a
+   * producer's generation and the matching line here in the same commit.
    */
-  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 2,
-  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 2,
-  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 2,
-  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: 2,
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_POSITION]: 3,
+  [STAGE_IDS.PROMOTE_EDGE_DEVICE]: 3,
 };
 
 /**

@@ -1,17 +1,32 @@
 import { type UserServiceContext } from '@ci/common/context';
 import type { DeterministicEdgeBackfillService } from '@ci/domains/maintenance';
+import { DETERMINISTIC_EDGE_RULES } from '@ci/domains/maintenance';
 
 import { STAGE_IDS } from '../../../constants';
 import { STAGE_VERSIONS } from '../../../versions';
 import {
   CommunicationEdgePromoteStage,
+  ContentEdgePromoteStage,
+  DeviceEdgePromoteStage,
   EDGE_PROJECTION_RULE_GENERATION,
   EventEdgePromoteStage,
+  InventoryEdgePromoteStage,
+  ObservationEdgePromoteStage,
+  PositionEdgePromoteStage,
   PROMOTE_EDGE_COMMUNICATION_STAGE_ID,
   PROMOTE_EDGE_COMMUNICATION_VERSION,
+  PROMOTE_EDGE_DEVICE_STAGE_ID,
+  PROMOTE_EDGE_DEVICE_VERSION,
   PROMOTE_EDGE_EVENT_STAGE_ID,
   PROMOTE_EDGE_EVENT_VERSION,
+  PROMOTE_EDGE_OBSERVATION_STAGE_ID,
+  PROMOTE_EDGE_OBSERVATION_VERSION,
+  PROMOTE_EDGE_POSITION_STAGE_ID,
+  PROMOTE_EDGE_POSITION_VERSION,
+  PROMOTE_EDGE_RECEIPT_STAGE_ID,
+  PROMOTE_EDGE_RECEIPT_VERSION,
   promoteEdgeStageVersion,
+  ReceiptEdgePromoteStage,
 } from '../EdgePromoteStage';
 
 const CTX = { userId: 'user-1' } as UserServiceContext;
@@ -39,6 +54,10 @@ describe('EdgePromoteStage', () => {
     it('reports the ids the central declarations use', () => {
       expect(PROMOTE_EDGE_COMMUNICATION_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_COMMUNICATION);
       expect(PROMOTE_EDGE_EVENT_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_EVENT);
+      expect(PROMOTE_EDGE_RECEIPT_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_RECEIPT);
+      expect(PROMOTE_EDGE_OBSERVATION_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_OBSERVATION);
+      expect(PROMOTE_EDGE_POSITION_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_POSITION);
+      expect(PROMOTE_EDGE_DEVICE_STAGE_ID).toBe(STAGE_IDS.PROMOTE_EDGE_DEVICE);
     });
 
     it('derives versions that agree with STAGE_VERSIONS', () => {
@@ -48,6 +67,40 @@ describe('EdgePromoteStage', () => {
         PROMOTE_EDGE_COMMUNICATION_VERSION,
       );
       expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_EVENT]).toBe(PROMOTE_EDGE_EVENT_VERSION);
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_RECEIPT]).toBe(PROMOTE_EDGE_RECEIPT_VERSION);
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_OBSERVATION]).toBe(PROMOTE_EDGE_OBSERVATION_VERSION);
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_POSITION]).toBe(PROMOTE_EDGE_POSITION_VERSION);
+      expect(STAGE_VERSIONS[STAGE_IDS.PROMOTE_EDGE_DEVICE]).toBe(PROMOTE_EDGE_DEVICE_VERSION);
+    });
+
+    it('sweeps every source table the matrix reads — a rule without a stage never runs', async () => {
+      const stages = [
+        new CommunicationEdgePromoteStage(makeService(), makeLogger()),
+        new EventEdgePromoteStage(makeService(), makeLogger()),
+        new ContentEdgePromoteStage(makeService(), makeLogger()),
+        new InventoryEdgePromoteStage(makeService(), makeLogger()),
+        new ReceiptEdgePromoteStage(makeService(), makeLogger()),
+        new ObservationEdgePromoteStage(makeService(), makeLogger()),
+        new PositionEdgePromoteStage(makeService(), makeLogger()),
+        new DeviceEdgePromoteStage(makeService(), makeLogger()),
+      ];
+
+      // Recover each stage's sourceKind from the call it makes; compare the
+      // set against the matrix's sources so adding a rule for a NEW table
+      // fails here until a stage sweeps it.
+      const sweptSources = new Set<string>();
+      for (const stage of stages) {
+        const service = makeService();
+        const observed = new (stage.constructor as new (
+          s: DeterministicEdgeBackfillService,
+          l: never,
+        ) => typeof stage)(service, makeLogger());
+        await observed.run(CTX, ['probe-id']);
+        sweptSources.add(service.materializeForSourceIds.mock.calls[0][1]);
+      }
+
+      const matrixSources = new Set(DETERMINISTIC_EDGE_RULES.map((rule) => rule.source));
+      expect([...matrixSources].sort()).toEqual([...sweptSources].sort());
     });
 
     it('throws when a STAGE_VERSIONS mirror disagrees with the derivation', () => {

@@ -266,6 +266,35 @@ export const STAGE_IDS = {
    * Place.
    */
   PROMOTE_EDGE_INVENTORY: 'promote.edge_inventory',
+
+  /**
+   * The same projection over `ci.receipts`: extraction's resolved columns
+   * become Merchant −LOCATED_AT→ Place, document Content −PART_OF→ purchase
+   * Event, and Event −HAPPENED_AT→ Place — the receipt row is the evidence,
+   * the edge relates the entities it names.
+   */
+  PROMOTE_EDGE_RECEIPT: 'promote.edge_receipt',
+
+  /**
+   * The same projection over `ci.object_observations`: Content −PART_OF→
+   * Event, resolved Item −LOCATED_AT→ Place and Item −ASSOCIATED_WITH→
+   * Content (what the item was depicted in).
+   */
+  PROMOTE_EDGE_OBSERVATION: 'promote.edge_observation',
+
+  /**
+   * The same projection over `ci.position`: fixes snapped to a known place
+   * (`location_entity_id`) become owner Person −VISITED→ Place. Telemetry
+   * volume in, a handful of distinct edges out — the projection's DISTINCT
+   * and the directed-unique index do the collapsing.
+   */
+  PROMOTE_EDGE_POSITION: 'promote.edge_position',
+
+  /**
+   * The same projection over `ci.devices`: registered devices with an entity
+   * mirror become owner Person −OWNS→ Device.
+   */
+  PROMOTE_EDGE_DEVICE: 'promote.edge_device',
 } as const;
 
 export type StageId = (typeof STAGE_IDS)[keyof typeof STAGE_IDS];
