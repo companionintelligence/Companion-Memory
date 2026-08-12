@@ -1,7 +1,7 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { JwtAuthGuard } from '@ci/common/guards';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { PowerSyncTokenService, type PowerSyncCredentials } from '../services/PowerSyncTokenService';
 
@@ -13,12 +13,12 @@ export class PowerSyncController {
    * Issues PowerSync credentials for the authenticated user. The client SDK calls
    * this from its `fetchCredentials()` connector.
    *
-   * JWT-only (`JwtAuthGuard`): it does NOT accept an `x-api-key`, mirroring the other
-   * sensitive `/api/keys`-style endpoints. The native app authenticates data calls with
-   * an API key, so wiring PowerSync into the native client would need API-key support
-   * added here (a follow-up); for now this serves the web JWT session.
+   * Accepts either a JWT session or an `x-api-key` (`JwtOrApiKeyAuthGuard`, the same
+   * guard used across the rest of the API): the native app authenticates data calls
+   * with an API key, so the token endpoint must accept one too for the mobile
+   * PowerSync client to be able to fetch credentials at all.
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('token')
   issueToken(@Context() context: RequestContext): PowerSyncCredentials {
     const { userId } = toServiceContext(context);

@@ -4,26 +4,43 @@
 # CI-Server's /api/powersync/token endpoint). Only small, user-scoped, read-mostly
 # tables are synced; large/server-computed/PII data stays online via GraphQL.
 #
-# Verified user-scoped tables (each has a uuid `id` PK + `user_id`):
-#   - ci.notes            (id, title, content, user_id, created_at, updated_at)
-#   - ci.files            (metadata only — the binary lives in Minio via bucket/key)
-#   - ci_search.tags      (id, label, description, user_id, ...)
+# Verified user-scoped tables (each has a uuid `id`-aliasable PK + `user_id`):
+#   - ci.notes             (id, title, content, user_id, created_at, updated_at)
+#   - ci.files              (metadata only — the binary lives in Minio via bucket/key)
+#   - ci_search.tags        (id, label, description, user_id, ...)
+#   - ci.threads            (thread_id AS id, user_id, title/summary/status/..., no
+#                            model_config/sharing_permissions/embeddings)
+#   - ci.messages           (message_id AS id, thread_id, user_id, role/content/
+#                            content_type/sequence_number only — no token/cost
+#                            accounting, tool_calls, embeddings, or sentiment/intent
+#                            analysis columns)
+#   - ci_search.entity_tag  (id::text AS id, entity_type, entity_id, tag_id,
+#                            created_at — no user_id of its own; scoped via a
+#                            parameter query against its tag's ci_search.tags.user_id,
+#                            see the `entity_tags` bucket below)
 #
 # DELIBERATELY NOT synced (keep online): ci.events / ci.browser_activity /
 # ci.communications (TimescaleDB hypertables, high-churn, PII, embeddings),
 # ci.content (NULL user_id), ci.entities/relationships (graph), ci_search.embeddings
 # (pgvector — huge, server-computed), HBPE tables.
 #
+# NOT YET synced — ci.inventory: as of migration 20260811061402
+# (convert_inventory_to_cti), ci.inventory no longer carries name/description; that
+# text lives on the matching ci.entities row (entities.entity_id = inventory.object_id
+# AND entities.entity_type = 'Item'). PowerSync sync rules do not support JOINs in
+# data or parameter queries (docs.powersync.com/sync/supported-sql lists JOINs as
+# unsupported in both), so a nameless inventory row isn't worth syncing on its own.
+# Do not work around this by denormalizing name/description back onto ci.inventory
+# (a trigger/dual-write would fight the CTI migration's whole point) or by
+# publishing a view (logical replication publishes tables only, never views). The
+# documented PowerSync path, if/when this is prioritized, is a Postgres `pg_ivm`
+# incrementally-maintained materialized view joining ci.inventory + the Item-typed
+# slice of ci.entities, added as its own real relation to POWERSYNC_TABLES.
+#
 # Adding a table here is only half the change: POWERSYNC_TABLES in
 # infrastructure/setup-database/entrypoint.sh drives both the replication role's
 # SELECT grants and the `powersync` publication. A table listed here but missing
 # there fails at replication time with "permission denied".
-#
-# TODO (verify exact table names first): add chat threads/messages (text only),
-# inventory/items, and ci_search.entity_tag (scoped via its tag's user_id). Their
-# table names did not match the assumed ci.threads/ci.messages/ci.inventory at
-# scaffold time — confirm against backend/apps/api/db/postgres/migrations before
-# adding, so a wrong name doesn't break replication.
 
 bucket_definitions:
   user_data:
@@ -47,3 +64,41 @@ bucket_definitions:
       - SELECT id, label, description, user_id, created_at, updated_at, deleted_at
         FROM ci_search.tags
         WHERE user_id = bucket.user_id
+
+      # Threads: chat thread shells. PK is thread_id, not id — aliased below.
+      # Excludes main_topics/mentioned_entities/context_embedding (AI-derived,
+      # heavy), model_config/temperature/max_tokens/system_prompt (server-side model
+      # config), message_count/total_tokens_used/avg_response_time_ms (server-
+      # computed stats), parent_thread_id/fork_point_message_id (branching, not
+      # needed client-side yet), is_private/sharing_permissions (server-enforced).
+      - SELECT thread_id AS id, user_id, title, summary, status, is_archived,
+               created_at, updated_at, last_message_at
+        FROM ci.threads
+        WHERE user_id = bucket.user_id
+
+      # Messages: text-only subset. PK is message_id, not id — aliased below.
+      # Excludes input_tokens/output_tokens/total_tokens/estimated_cost (cost
+      # accounting), tool_calls/tool_call_results (JSON, arbitrary payloads),
+      # message_embedding/extracted_entities/sentiment_score/intent_categories
+      # (server-computed analysis, heavy), and edit/moderation metadata
+      # (parent_message_id, depth, is_edited, is_deleted, edit_history, user_rating,
+      # user_feedback, flagged_for_review, flag_reason).
+      - SELECT message_id AS id, thread_id, user_id, role, content, content_type,
+               sequence_number, created_at, updated_at
+        FROM ci.messages
+        WHERE user_id = bucket.user_id
+
+  # entity_tag has no user_id of its own — it is owned transitively via the tag it
+  # points at. Sync rules don't support JOINs (see header comment), so this follows
+  # PowerSync's documented many-to-many pattern: a parameter query picks the
+  # caller's own tag_ids from ci_search.tags, and the data query filters
+  # entity_tag rows by bucket.tag_id — one bucket instance per tag the user owns.
+  entity_tags:
+    parameters: SELECT id AS tag_id FROM ci_search.tags WHERE user_id = request.user_id()
+
+    data:
+      # id is BIGINT GENERATED ALWAYS AS IDENTITY — cast to text for PowerSync's
+      # required text `id` column.
+      - SELECT id::text AS id, entity_type, entity_id, tag_id, created_at
+        FROM ci_search.entity_tag
+        WHERE tag_id = bucket.tag_id
