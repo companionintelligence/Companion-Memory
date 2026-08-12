@@ -1,6 +1,6 @@
 import { type ReactNode, lazy, useEffect } from 'react';
 
-import { DeviceLayoutProvider, LoadingPage, getApiBaseUrl, isNativePlatform } from '@ci/common';
+import { ConnectionModeProvider, DeviceLayoutProvider, LoadingPage, getApiBaseUrl, isNativePlatform } from '@ci/common';
 import {
   BrowserRouter as Router,
   Routes,
@@ -82,17 +82,19 @@ function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
         <BackgroundProvider>
           <DeviceLayoutProvider args={[]}>
-            <AuthProvider args={[]}>
-              <FeaturesProvider args={[]}>
-                <ModelProvider args={[]}>
-                  <CaptureModalProvider args={[]}>
-                    <ApolloProvider>
-                      <PowerSyncProvider>{children}</PowerSyncProvider>
-                    </ApolloProvider>
-                  </CaptureModalProvider>
-                </ModelProvider>
-              </FeaturesProvider>
-            </AuthProvider>
+            <ConnectionModeProvider args={[]}>
+              <AuthProvider args={[]}>
+                <FeaturesProvider args={[]}>
+                  <ModelProvider args={[]}>
+                    <CaptureModalProvider args={[]}>
+                      <ApolloProvider>
+                        <PowerSyncProvider>{children}</PowerSyncProvider>
+                      </ApolloProvider>
+                    </CaptureModalProvider>
+                  </ModelProvider>
+                </FeaturesProvider>
+              </AuthProvider>
+            </ConnectionModeProvider>
           </DeviceLayoutProvider>
         </BackgroundProvider>
       </ThemeProvider>

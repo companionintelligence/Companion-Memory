@@ -13,6 +13,13 @@ def capacitor_pods
   pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/ios'
   pod 'CapacitorApp', :path => '../../node_modules/@capacitor/app'
   pod 'CapacitorBrowser', :path => '../../node_modules/@capacitor/browser'
+  # Local Hub (Phase 1 skeleton): loopback-only embedded HTTP server. Referenced
+  # directly at the workspace package (not via node_modules like the pods above)
+  # because it isn't hoisted into frontend/apps/mobile/node_modules the way
+  # `@ci/capacitor-local-hub`'s Android side is picked up by capacitor.settings.gradle
+  # -- CocoaPods' `:path` only needs the podspec + ios/ to exist at this location, so
+  # it works whether or not `yarn install` has linked the package into node_modules.
+  pod 'CapacitorLocalHub', :path => '../../../../packages/capacitor-local-hub'
   pod 'CapacitorLocalNotifications', :path => '../../node_modules/@capacitor/local-notifications'
   pod 'CapacitorSplashScreen', :path => '../../node_modules/@capacitor/splash-screen'
   pod 'CapacitorStatusBar', :path => '../../node_modules/@capacitor/status-bar'

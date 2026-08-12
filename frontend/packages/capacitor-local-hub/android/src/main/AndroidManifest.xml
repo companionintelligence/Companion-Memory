@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Required to open the embedded loopback HTTP server's ServerSocket (Android gates
+         all socket I/O, including 127.0.0.1-only sockets, behind INTERNET). The server
+         itself never binds anything but 127.0.0.1 (see LocalHubServer), so this
+         permission does not expose the device to the network, only to the app's own
+         localhost port. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

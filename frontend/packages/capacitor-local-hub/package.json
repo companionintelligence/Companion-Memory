@@ -1,0 +1,39 @@
+{
+  "name": "@ci/capacitor-local-hub",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Capacitor plugin for the on-device Local Hub: a loopback-only embedded HTTP server that will grow into a durable SQLite/SQLCipher outbox plus local llama.cpp inference and the same read endpoints CI-Server's memory domain exposes. This pass (Phase 1) is a skeleton -- start()/stop()/getStatus() and a single bearer-authenticated GET /api/health -- see README.md. Unlike @ci/capacitor-local-llm (Android-only), this plugin ships both Android and iOS native implementations.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "packageManager": "yarn@4.9.1",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "ios/Sources",
+    "CapacitorLocalHub.podspec",
+    "src/"
+  ],
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "android",
+    "ios",
+    "local-hub",
+    "http-server"
+  ],
+  "peerDependencies": {
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^7.0.0",
+    "typescript": "^5.8.3"
+  },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    },
+    "ios": {
+      "src": "ios"
+    }
+  }
+}

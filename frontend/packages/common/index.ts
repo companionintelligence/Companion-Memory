@@ -13,6 +13,13 @@ export {
   persistApiBaseUrl,
   setApiBaseUrl,
 } from './src/utils/apiBase';
+export {
+  CONNECTION_PROBE_TIMEOUT_MS,
+  ConnectionModeProvider,
+  resolveConnectionMode,
+  useConnectionMode,
+} from './src/utils/connectionMode';
+export type { ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
 export { FetchJsonError, fetchJson, type FetchJsonIssue } from './src/utils/fetchJson';
 export {

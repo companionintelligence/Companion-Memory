@@ -105,5 +105,9 @@
   "THEME_TEXTURE_OPACITY": "Texture opacity",
   "RELATIONSHIP_CLEAR_ENTITY": "Clear selected entity",
   "RELATIONSHIP_CLEAR_START_DATE": "Clear start date",
-  "RELATIONSHIP_CLEAR_END_DATE": "Clear end date"
+  "RELATIONSHIP_CLEAR_END_DATE": "Clear end date",
+  "CONNECTION_MODE_CONNECTED": "Connected",
+  "CONNECTION_MODE_LOCAL": "On this phone",
+  "CONNECTION_MODE_CACHED": "Offline copy",
+  "CONNECTION_MODE_FRESH": "Not synced yet"
 }

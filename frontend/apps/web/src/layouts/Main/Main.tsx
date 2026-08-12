@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Outlet } from 'react-router-dom';
 
 import logo from '@/assets/logo.png';
+import { ConnectionModeIndicator } from '@/components/ConnectionModeIndicator';
 import { useTheme } from '@/components/ThemePicker';
 
 import { MobileNavigation } from './MobileNavigation/MobileNavigation';
@@ -21,6 +22,9 @@ export function Main() {
     return (
       <div className="flex flex-col h-lvh">
         <Toaster position="top-right" theme={themeState.mode} />
+        <div className="fixed top-2 right-2 z-40">
+          <ConnectionModeIndicator />
+        </div>
         <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
           <Suspense fallback={<LoadingPage />}>
             <Outlet />
@@ -35,6 +39,10 @@ export function Main() {
 
   return (
     <div className="grid h-lvh min-h-0 grid-cols-[auto_1fr] grid-rows-[auto_1fr]">
+      <div className="fixed top-2 right-2 z-40">
+        <ConnectionModeIndicator />
+      </div>
+
       <div className="flex items-center justify-center py-2 px-3 bg-secondary">
         <Tooltip delayDuration={600}>
           <Tooltip.Content>{t('NAV_LOGO_EXTERNAL')}</Tooltip.Content>

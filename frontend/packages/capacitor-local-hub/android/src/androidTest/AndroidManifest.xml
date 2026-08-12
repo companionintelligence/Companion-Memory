@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Test-only: the self-instrumenting androidTest APK has its own manifest (separate
+         from the real app's, which already sets this at frontend/apps/mobile/android/app/src/main/AndroidManifest.xml)
+         and Android's default Network Security Config blocks cleartext HTTP for apps
+         targeting API 28+. LocalHubServerTest's HttpURLConnection client needs to reach
+         the real http://127.0.0.1:<port> the server under test is bound to. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

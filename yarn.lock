@@ -3034,6 +3034,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@ci/capacitor-local-hub@workspace:frontend/packages/capacitor-local-hub":
+  version: 0.0.0-use.local
+  resolution: "@ci/capacitor-local-hub@workspace:frontend/packages/capacitor-local-hub"
+  dependencies:
+    "@capacitor/core": "npm:^7.0.0"
+    typescript: "npm:^5.8.3"
+  peerDependencies:
+    "@capacitor/core": ^7.0.0
+  languageName: unknown
+  linkType: soft
+
 "@ci/capacitor-local-llm@workspace:frontend/packages/capacitor-local-llm":
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-local-llm@workspace:frontend/packages/capacitor-local-llm"
