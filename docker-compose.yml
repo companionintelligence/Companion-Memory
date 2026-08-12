@@ -96,7 +96,12 @@ services:
       # `companion`, because the service creates and migrates its own `powersync`
       # schema for bucket storage, which a read-only role cannot do.
       - POWERSYNC_CONFIG_PATH=/config/powersync.yaml
-      - PS_REPLICATION_URI=${PS_REPLICATION_URI:-postgresql://powersync:${POWERSYNC_DATABASE_PASSWORD}@database:5432/companion}
+      # The inner default (`:-`) is not cosmetic: compose interpolates every
+      # service in the file regardless of the active profile, so without it a
+      # local `up` warns about POWERSYNC_DATABASE_PASSWORD for a service that
+      # local does not even start. An empty password here fails the same way an
+      # unset one does, in staging/production where this service actually runs.
+      - PS_REPLICATION_URI=${PS_REPLICATION_URI:-postgresql://powersync:${POWERSYNC_DATABASE_PASSWORD:-}@database:5432/companion}
       - PS_STORAGE_URI=${PS_STORAGE_URI:-postgresql://companion:${DATABASE_PASSWORD}@database:5432/companion}
       - PS_JWT_SECRET_B64URL=${PS_JWT_SECRET_B64URL:-}
     networks:
@@ -109,7 +114,15 @@ services:
       setup-database:
         condition: service_completed_successfully
     restart: unless-stopped
-    profiles: [ "local", "staging", "production" ]
+    # Deliberately NOT in "local". The scaffold (#1582/#1585, 2026-06-28) is
+    # server-side only — no client has ever connected, and the README's client
+    # phase (@powersync/web, on-device schema, upload connector) is unstarted.
+    # Meanwhile the container ran on every `make dev`, crash-looping wherever
+    # .env predates the June PowerSync keys, and holding a replication slot for
+    # a reader that does not exist. The token endpoint already returns 503 until
+    # POWERSYNC_URL is set, so nothing in the app changes by not running it.
+    # Add "local" back when the client phase starts.
+    profiles: [ "staging", "production" ]
 
   #############
   # EPHEMERAL #

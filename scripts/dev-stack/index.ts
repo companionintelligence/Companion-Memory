@@ -420,6 +420,11 @@ async function up(key: string): Promise<void> {
       DATABASE_PORT: String(dbPort),
       OBJECT_STORE_URL: `http://localhost:${objPort}`,
       HBPE_HOST: `http://localhost:${hbpePort}`,
+      // Both sidecars need a host-side URL, not the compose service name. The
+      // API runs on the host under overmind, so config's defaults
+      // (http://hbpe-service:8002, http://summary-service:8001) resolve only
+      // inside the compose network — from here they are ENOTFOUND. Mapped to
+      // services.{hbpe,summary}.host via config/custom-environment-variables.json.
       SUMMARY_HOST: `http://localhost:${summaryPort}`,
       APP_PUBLIC_HOSTNAME: host, // this stack's own origin (<key>.localhost); OAuth host is separate
       OVERMIND_SOCKET: overmindSocket,
