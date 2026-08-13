@@ -7,9 +7,13 @@ import { useNavigate } from 'react-router-dom';
 type Status = 'idle' | 'testing' | 'error';
 
 /**
- * Native-only screen for pointing the app at a self-hosted CI-Server. Because the
- * appliance has no single cloud URL, the native client must be told where its
- * server lives. The entered origin is health-checked before being persisted (via
+ * Native-only screen for pointing the app at a self-hosted Companion Memory server.
+ * Because the appliance has no single cloud URL, the native client must be told where
+ * its Memory Server lives.
+ *
+ * Product naming: the repo/service is CI-Server, but users never see that name — in the
+ * UI it is "Companion Memory" (the product) or "Memory Server" (the box it runs on).
+ * Keep new copy on those terms. The entered origin is health-checked before being persisted (via
  * `persistApiBaseUrl`, which stores it in localStorage and applies it for the
  * session). On web this screen is inert — the API origin is always same-origin.
  */
@@ -44,7 +48,7 @@ export function ServerSettingsPage() {
 
     if (!candidate) {
       setStatus('error');
-      setError('Enter a full server URL, e.g. https://ci-server.example.com');
+      setError('Enter a full Memory Server URL, e.g. https://memory.example.com');
 
       return;
     }
@@ -64,7 +68,7 @@ export function ServerSettingsPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Server responded with ${response.status}`);
+        throw new Error(`Memory Server responded with ${response.status}`);
       }
 
       persistApiBaseUrl(candidate);
@@ -75,8 +79,8 @@ export function ServerSettingsPage() {
       setStatus('error');
       setError(
         err instanceof Error && err.name === 'AbortError'
-          ? 'Could not reach the server (timed out). Check the URL and your network.'
-          : `Could not reach the server. ${err instanceof Error ? err.message : ''}`.trim(),
+          ? 'Could not reach your Companion Memory (timed out). Check the URL and your network.'
+          : `Could not reach your Companion Memory. ${err instanceof Error ? err.message : ''}`.trim(),
       );
     } finally {
       // Always clear the abort timer, including the network-error path.
@@ -91,21 +95,21 @@ export function ServerSettingsPage() {
     <div className="w-full max-w-sm">
       <Card>
         <Card.Header>
-          <Card.Title>Connect to your server</Card.Title>
-          <Card.Description>Enter the address of your CI-Server appliance.</Card.Description>
+          <Card.Title>Connect to your Companion Memory</Card.Title>
+          <Card.Description>Enter the address of your Memory Server.</Card.Description>
         </Card.Header>
 
         <Card.Content>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="server-url">Server URL</Label>
+              <Label htmlFor="server-url">Memory Server URL</Label>
               <Input
                 id="server-url"
                 type="url"
                 inputMode="url"
                 autoCapitalize="none"
                 autoCorrect="off"
-                placeholder="https://ci-server.example.com"
+                placeholder="https://memory.example.com"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 disabled={status === 'testing'}
