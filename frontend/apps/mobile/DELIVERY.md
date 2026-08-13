@@ -188,16 +188,20 @@ an escape from policy, but internal tracks let the pipeline start proving itself
 the PR that added them — listing them here so they are visible from the delivery plan,
 not only from a PR description)*:
 
-- 🟠 **iOS API key was backup-migratory — now mitigated, not yet properly fixed.**
-  `capacitor-secure-storage-plugin` writes with `kSecAttrAccessibleAfterFirstUnlock`, not
-  `…ThisDeviceOnly`, so the appliance API key rode along in encrypted backups and
-  **restored onto different hardware.** `ios/App/App/KeychainHardening.swift` now sweeps
-  every `cap_sec` item to `…ThisDeviceOnly` at launch and on backgrounding; verified at
-  runtime on an iOS 27 simulator (`ck` → `cku`, idempotent, secret preserved). The proper
-  fix is still S0 in `SECURITY_ARCHITECTURE.md` — a native store that writes the right
-  class in the first place. Downgraded 🔴→🟠, **not** cleared.
-- 🔴 **Android Keystore silently degrades** to plain Base64 in SharedPreferences if
-  Keystore init throws — logging an error while reporting success.
+- ✅ **iOS API key was backup-migratory — FIXED (slice S0).** `capacitor-secure-storage-plugin`
+  wrote with `kSecAttrAccessibleAfterFirstUnlock`, not `…ThisDeviceOnly`, so the appliance API
+  key rode along in encrypted backups and **restored onto different hardware.** The credential
+  now lives in the Local Hub plugin's `CompanionSecureStore`, which writes
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` with `kSecUseDataProtectionKeychain` in the
+  first place, rather than being corrected after the fact. `KeychainHardening` survives only as
+  a launch-time migration for installs upgrading from a pre-S0 build. Verified at runtime on an
+  iOS 27 simulator: a fresh `CompanionSecureStore` write reads back `cku`.
+- ✅ **Android Keystore silently degraded to plain Base64 — FIXED (slice S0).** The credential
+  now uses an AES-256-GCM key in AndroidKeyStore (StrongBox attempted, with a documented
+  fallback on both `StrongBoxUnavailableException` and a bare `ProviderException`). Every path
+  that cannot encrypt throws `SecureStoreUnavailableException` and **writes nothing** — there is
+  no Base64 or plaintext fallback left in the file. ⚠️ Not yet exercised on an Android device or
+  emulator; `CompanionSecureStoreTest.kt` is an instrumented test that has not been run here.
 - 🟠 **The outbox *is* encrypted at rest — but the iOS ciphertext check has not been run.**
   Both platforms open the outbox as **SQLCipher (AES-256)**, keyed from the platform secure
   store as a raw key (`OutboxStore.kt`, `OutboxStore.swift`, `OutboxDatabaseKey`). ⚠️ This

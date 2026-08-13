@@ -34,8 +34,10 @@ an order where each new data source lands behind the control that makes it defen
 | 4 | **Cleartext cannot be scoped with `networkSecurityConfig`** — the schema has no CIDR support, and the appliance can be any LAN IP. Tailscale Serve is the only path that makes "encrypted in transit" true; ship it as the recommended onboarding path and gate `http://` behind a private-range check plus an interstitial. |
 | 5 | **Communications content is not a mobile problem.** Play's restricted-permissions policy makes `READ_SMS`/`READ_CALL_LOG` effectively unshippable for a memory vault, and iOS exposes no equivalent API at all. Contacts ship metadata-only with tokenized identifiers; message/call *content* routes through CI-Import-Tools on desktop, where it is a deliberate archival act rather than a background daemon. |
 
-**Two defects this audit found in code that is already shipping** (§2.4) — both cheap,
-both blocking nothing, both worth fixing before the next data source lands.
+**Two defects this audit found in code that was already shipping** (§2.4) — both cheap, both
+blocking nothing. **Both are now fixed**, by slice S0; §2.4.1 records what shipped, the one
+deliberate deviation from the spec, and the App Intents regression the move introduced and
+its fix.
 
 **Convention used throughout:** **[V]** = verified by reading the code in this repo, with
 the file cited. **[P]** = proposed, not built. Anything not marked **[V]** is a proposal.
@@ -51,11 +53,13 @@ Every row below was read, not assumed.
 | Fact | Where | Status |
 |---|---|---|
 | Native auth is a long-lived API key sent as `x-api-key`, held in a module singleton so the request layer can read it synchronously | [`common/src/utils/apiAuth.ts`](../../packages/common/src/utils/apiAuth.ts) | **[V]** |
-| Key + key id persist under `ci.apiKey` / `ci.apiKeyId` via `secureStorage*` → `capacitor-secure-storage-plugin` | [`hooks/useAuth.ts:24-25`](../web/src/hooks/useAuth.ts), [`common/src/utils/nativeBridge.ts:110-167`](../../packages/common/src/utils/nativeBridge.ts) | **[V]** |
-| The appliance base URL is *also* mirrored into the keystore so native App Intents can read it | `nativeBridge.ts:393-411` (`syncNativeIntentConfig`) | **[V]** |
-| **iOS**: the plugin writes with `withAccessibility: .afterFirstUnlock` — *not* `…ThisDeviceOnly` | `node_modules/capacitor-secure-storage-plugin/ios/Plugin/SecureStoragePluginPlugin.swift:15` | **[V]** — see §2.4 |
-| **Android**: an RSA/ECB/PKCS1 keypair in AndroidKeyStore (alias `<pkg>_cap_sec`) wraps values stored in the `cap_sec` SharedPreferences file — with a **silent fallback to unencrypted Base64 in the same file** if Keystore init throws | `node_modules/capacitor-secure-storage-plugin/android/…/PasswordStorageHelper.java:53-67, 102-146` | **[V]** — see §2.4 |
-| `android:allowBackup="false"` keeps that SharedPreferences file out of adb/cloud backup | [`AndroidManifest.xml`](./android/app/src/main/AndroidManifest.xml) | **[V]** |
+| Key + key id persist under `ci.apiKey` / `ci.apiKeyId` via `secureStorage*` → **the Local Hub plugin's `CompanionSecureStore`** (was `capacitor-secure-storage-plugin` until S0) | [`hooks/useAuth.ts:24-25`](../web/src/hooks/useAuth.ts), [`common/src/utils/nativeBridge.ts`](../../packages/common/src/utils/nativeBridge.ts) | **[V]** — see §2.4 |
+| The appliance base URL is *also* mirrored into the keystore so native App Intents can read it | `nativeBridge.ts` (`syncNativeIntentConfig`) | **[V]** |
+| The legacy plugin survives **read-only, for migration**: `secureStorageGet` falls through to it, re-writes the value into `CompanionSecureStore`, and deletes the old copy only after the new write resolves | `nativeBridge.ts` (`migrateLegacySecureValue`) | **[V]** |
+| **iOS**: writes are now `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` + `kSecUseDataProtectionKeychain`, under service `com.companionintelligence.localhub.credentials` | [`CompanionSecureStore.swift`](../../packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/CompanionSecureStore.swift) | **[V]** — verified on simulator, §2.4.1 |
+| **iOS**: App Intents read that same store via `CompanionConfig`, with a `cap_sec` fallback for un-migrated installs | [`CompanionConfig.swift`](./ios/App/App/CompanionConfig.swift) | **[V]** — §2.4.1 |
+| **Android**: AES-256-GCM in AndroidKeyStore, StrongBox-if-available, **fails closed** — no Base64 or plaintext fallback remains | [`CompanionSecureStore.kt`](../../packages/capacitor-local-hub/android/src/main/java/com/companionintelligence/localhub/CompanionSecureStore.kt) | **[V]** by reading; **not yet run on a device** |
+| `android:allowBackup="false"` keeps both the legacy and the new SharedPreferences file out of adb/cloud backup | [`AndroidManifest.xml`](./android/app/src/main/AndroidManifest.xml) | **[V]** |
 
 ### 1b. Local durable stores
 
@@ -268,63 +272,78 @@ key degrades to Base64 on disk and the app reports success. `allowBackup="false"
 that file off cloud/adb backup, so the exposure is a rooted or forensically imaged
 device — which is precisely the threat encryption-at-rest exists for.
 
-**[P] Fix for both: stop using `capacitor-secure-storage-plugin` for the API key.** The
-Local Hub plugin already has native code on both platforms and, per §3, already needs a
-Keystore/Keychain path for the DB key. Add two methods to it — `secureGet`/`secureSet`
-against a `CompanionSecureStore` — with:
+**[V] Fix for both, SHIPPED as slice S0: `capacitor-secure-storage-plugin` no longer holds
+the API key.** The Local Hub plugin — which already has native code on both platforms and,
+per §3, already needed a Keystore/Keychain path for the DB key — gained
+`secureGet`/`secureSet`/`secureRemove` against a `CompanionSecureStore`:
 
-- **iOS:** `kSecClassGenericPassword`,
+- **iOS** ([`CompanionSecureStore.swift`](../../packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/CompanionSecureStore.swift)):
+  `kSecClassGenericPassword`,
   `kSecAttrAccessible = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
-  `kSecUseDataProtectionKeychain = true`.
-- **Android:** AES-256-GCM key in AndroidKeyStore, `setUnlockedDeviceRequired(true)` on
-  API 28+, StrongBox via `setIsStrongBoxBacked(true)` with a documented fallback on
-  `StrongBoxUnavailableException` — and **failing closed** rather than writing plaintext.
+  `kSecUseDataProtectionKeychain = true`. Add-then-update-on-`errSecDuplicateItem`, with the
+  accessibility class re-asserted in the *attributes* dictionary on the update path so an
+  item written by an older build is corrected in place.
+- **Android** ([`CompanionSecureStore.kt`](../../packages/capacitor-local-hub/android/src/main/java/com/companionintelligence/localhub/CompanionSecureStore.kt)):
+  AES-256-GCM key in AndroidKeyStore, StrongBox via `setIsStrongBoxBacked(true)` with a
+  documented fallback on `StrongBoxUnavailableException` *and* on a bare `ProviderException`
+  (some devices advertise StrongBox and then fail inside the provider). Every path that
+  cannot encrypt throws `SecureStoreUnavailableException` and **writes nothing** — no
+  Base64, no plaintext, anywhere in the file.
 
-`nativeBridge.ts`'s `secureStorage*` helpers already abstract the plugin behind three
-functions **[V]**, so the call sites (`useAuth.ts`, `syncNativeIntentConfig`) do not
-change. Keep `capacitor-secure-storage-plugin` for non-credential values if convenient,
-or drop it.
+`nativeBridge.ts`'s `secureStorage*` helpers already abstracted the plugin behind three
+functions **[V]**, so `useAuth.ts` and `syncNativeIntentConfig` did not change; they gained
+a read-through migration that copies a legacy value across and deletes the old copy **only
+after** the new write resolves.
 
-**This is the cheapest high-value slice in the document and it blocks nothing.** Do it
-first (S0 in §8).
+**One deliberate deviation from the spec above:** `setUnlockedDeviceRequired(true)` is
+**not** set on Android. It is the Android twin of `kSecAttrAccessibleWhenUnlocked`, not of
+`…AfterFirstUnlock` — it makes the key unusable while the screen is locked, which would break
+exactly the background ingest §4.4 requires and would make the two platforms inconsistent in
+the direction §3.1 argues against. AndroidKeyStore keys are already unavailable before the
+first post-boot unlock on a credential-protected device, which is the `AfterFirstUnlock`
+equivalent. It is a constructor parameter, so restoring it is one edit and one test.
 
-### 2.4.1 [V] Partial fix shipped on iOS — `KeychainHardening` (2026-08-13)
+### 2.4.1 [V] `KeychainHardening` reduced to a one-time migration (2026-08-13)
 
-The full S0 replacement above is still the right destination. In the meantime the **iOS**
-half of D1 is mitigated in-repo by
-[`ios/App/App/KeychainHardening.swift`](./ios/App/App/KeychainHardening.swift), which
-sweeps every `cap_sec` item to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` via
-`SecItemUpdate`. `AppDelegate` runs it at launch and again on entering the background —
-the second call matters because the web layer can store a fresh key mid-session, and a
-device backup realistically happens after the app has left the foreground.
+Before S0 landed, the iOS half of D1 was mitigated by
+[`ios/App/App/KeychainHardening.swift`](./ios/App/App/KeychainHardening.swift), which swept
+every `cap_sec` item to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` via
+`SecItemUpdate`, at launch **and** on entering the background.
 
-**Why a sweep and not simply asking the plugin to write the right class.** That looks like
-a one-line change and is a trap: `SwiftKeychainWrapper.update` puts `kSecAttrAccessible`
-into the **query** dictionary, where it is a *match constraint*, not a change. Asking it
-for `…ThisDeviceOnly` would therefore fail to match any item already stored as
-`…AfterFirstUnlock`, `SecItemUpdate` would return `errSecItemNotFound`, and `set()` would
-return `false` — credential saving would break on upgrade for exactly the users who
-already have a key. `KeychainHardening` matches on service+account only and puts the
-accessibility in the *attributes-to-update* dictionary, which `SecItemUpdate` does accept.
+S0 makes the write correct at the source, so the recurring sweep has nothing left to catch:
+nothing in the app writes to `cap_sec` any more. The background sweep in
+`SceneDelegate.sceneDidEnterBackground` has therefore been **removed**, and what remains is
+called once from `AppDelegate` and renamed `migrateLegacyCredentials()`. It is not dead code
+— on an install upgrading from a pre-S0 build the old items sit on disk with the weaker class
+until the JS migration moves them — but it is now bounded, and it can be deleted along with
+`CompanionConfig`'s legacy branch once no un-migrated install is in the field.
 
-**[V] — verified at runtime**, not reasoned about. A temporary probe (added, run, removed)
-seeded an item with `kSecAttrAccessibleAfterFirstUnlock` on an iOS 27 simulator and logged
-the sweep's effect:
+**Why it was ever a sweep, and why the pod could not simply be asked to write the right
+class.** `SwiftKeychainWrapper.update` puts `kSecAttrAccessible` into the **query**
+dictionary, where it is a *match constraint*, not a change. Asking it for `…ThisDeviceOnly`
+would therefore fail to match any item already stored as `…AfterFirstUnlock`, `SecItemUpdate`
+would return `errSecItemNotFound`, and `set()` would return `false` — credential saving would
+break on upgrade for exactly the users who already have a key. Both `KeychainHardening` and
+`CompanionSecureStore.set`'s update path avoid this by matching on service+account only and
+putting the accessibility in the *attributes-to-update* dictionary, which `SecItemUpdate`
+does accept.
 
-```
-PROBE seed add status=0
-PROBE before=ck        # kSecAttrAccessibleAfterFirstUnlock — backup-migratory
-PROBE upgraded=1
-PROBE after=cku        # …AfterFirstUnlockThisDeviceOnly — the "u" is ThisDeviceOnly
-PROBE idempotent_second_run_upgraded=0
-PROBE value_after=seeded-secret   # the stored secret survived the change
-```
+#### 🔴 The regression S0 introduced, and its fix
 
-**Two caveats, stated plainly.** This is a mitigation layered on a wrong write, so a write
-followed by a backup with *no* intervening background transition is still theoretically
-migratory — S0 remains the real fix. And it covers **iOS only**; D2, the Android Keystore
-fallback that silently writes plain Base64 to SharedPreferences, is untouched and is still
-the more severe of the two.
+S0 moved credentials to the service `com.companionintelligence.localhub.credentials` and its
+migration **deletes** the `cap_sec` copy. `CompanionConfig` — the only reader for Siri/App
+Intents, which run outside the WebView — still queried `cap_sec`, so on every migrated install
+`apiKey` and `baseUrl` were both nil, `isReady` was permanently false, and **every App Intent
+failed** with "Open Companion and set your server address first." `CompanionConfig` now reads
+the current service first and falls back to `cap_sec` for un-migrated installs.
+
+**[V] — verified at runtime on an iOS 27 simulator**, not reasoned about. A harness compiled
+the real `CompanionSecureStore.swift`, `CompanionConfig.swift` and `KeychainHardening.swift`
+into a signed app and asserted, in order: a legacy-plugin write reads back `ck`; the fallback
+reads it; `migrateLegacyCredentials()` upgrades it to `cku`, preserves the secret and is
+idempotent; a fresh `CompanionSecureStore` write is `cku` at the source; and — with the legacy
+copy deleted, i.e. the real post-migration state — the pre-fix lookup finds **nil** while the
+fixed one returns the key and `isReady`. 16/16 checks passed.
 
 > **Incidental finding worth knowing:** an **unsigned** build cannot use the Keychain at
 > all — `SecItemAdd` returns `-34018` (`errSecMissingEntitlement`). That is the
@@ -988,7 +1007,7 @@ Severity: 🔴 **P0** = blocks the next data source · 🟠 **P1** = before the 
 
 | # | Slice | Sev | Effort | Notes |
 |---|---|---|---|---|
-| **S0** | **Fix D1 + D2** — replace `capacitor-secure-storage-plugin` for the API key with a `CompanionSecureStore` in the Local Hub plugin (`…ThisDeviceOnly` on iOS; fail-closed AES-GCM on Android) | 🔴 | **S** | §2.4. Cheapest high-value slice here, blocks nothing, and its Keystore/Keychain plumbing is the same plumbing S1/S2 need. **Do it first.** |
+| **S0** | ~~Fix D1 + D2~~ — replaced `capacitor-secure-storage-plugin` for the API key with a `CompanionSecureStore` in the Local Hub plugin | ✅ **DONE**, with one gap | **S** | §2.4, §2.4.1. `…ThisDeviceOnly` + data-protection keychain on iOS, fail-closed AES-GCM on Android. iOS **[V]** on simulator (16/16, incl. the App Intents regression this move caused — see §2.4.1); ⚠️ Android **[P]** — `CompanionSecureStoreTest.kt` has not been run on a device/emulator. One deliberate spec deviation: `setUnlockedDeviceRequired` is **not** set (§2.4) |
 | **S1** | ~~SQLCipher on the Android outbox~~ | ✅ **DONE** | **M** | Landed with this document. Raw key in `CompanionSecureStore` (fail-closed AES-GCM, never Base64), plaintext→encrypted migration, instrumented ciphertext assertion. Both follow-ups were re-checked: `ITSAppUsesNonExemptEncryption` is **re-opened** (see `DELIVERY.md` §1a — the "OS-only crypto" basis is no longer true) and the 16 KB page-size item is now a real recurring check, not a formality, because `libsqlcipher.so` ships |
 | **S2** | ~~iOS outbox, encrypted from commit one~~ | ✅ **DONE**, with one gap | **L** | Landed with this document — `OutboxStore.swift`, SQLCipher from commit one. ⚠️ **The one thing S1 has that S2 does not** is the file-level assertion that the database is actually ciphertext. Until that runs on iOS, treat S2's encryption as **[P]**, not **[V]** |
 | **S3** | **`disconnectAndClear()` on logout** — close the documented PowerSync gap | 🟠 | **S** | `PowerSyncProvider.tsx:43-51`. One-line-ish; also the wipe primitive S6 needs |
