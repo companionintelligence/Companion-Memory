@@ -115,7 +115,13 @@ final class LocalHubServer {
         // Explicit closure result type: multi-statement closures only infer their return
         // type on newer Swift compilers, and none of this file has ever been compiled.
         return try stateQueue.sync { () -> (baseUrl: String, token: String) in
-            if let server = webServer, server.isRunning, let token = activeToken {
+            // `server.port > 0` is not redundant with `isRunning`. GCDWebServer's
+            // `isRunning` is literally `return (_options ? YES : NO)`, and its internal
+            // `_stop` zeroes `_port` WITHOUT clearing `_options` -- so a suspended server
+            // reports running while its port is 0. Without this check the fast path hands
+            // back "http://127.0.0.1:0" and every request against it fails. See
+            // `suspendInBackgroundDisabled` below for when that happens.
+            if let server = webServer, server.isRunning, server.port > 0, let token = activeToken {
                 return (Self.baseUrl(port: server.port), token)
             }
 
@@ -207,7 +213,24 @@ final class LocalHubServer {
             // `NanoHTTPD(InetAddress.getByName("127.0.0.1"), 0)`.
             try server.start(options: [
                 GCDWebServerOption_Port: 0,
-                GCDWebServerOption_BindToLocalhost: true
+                GCDWebServerOption_BindToLocalhost: true,
+                // GCDWebServer defaults GCDWebServerOption_AutomaticallySuspendInBackground
+                // to YES: it observes UIApplicationDidEnterBackground and tears its own
+                // listener down, then rebinds on foreground. That default is wrong for a
+                // sidecar and diverges from Android, whose NanoHTTPD is not tied to any
+                // lifecycle and keeps one port for the whole process.
+                //
+                // Three things went wrong with it left on. The internal `_stop` sets
+                // `_port = 0` but does NOT clear `_options`, and `isRunning` is just
+                // `_options != nil` -- so a suspended server reports running with port 0,
+                // and both start() and status() published "http://127.0.0.1:0". The
+                // foreground rebind re-reads the stored port option, still 0, so it comes
+                // back on a DIFFERENT ephemeral port. And that rebind is unchecked in
+                // GCDWebServer ("TODO: There's probably nothing we can do on failure"), so
+                // a single failed rebind leaves the server permanently dead while still
+                // claiming to run -- every capture, health probe and flush failing until
+                // the user force-quits the app.
+                GCDWebServerOption_AutomaticallySuspendInBackground: false
             ])
 
             webServer = server
@@ -229,7 +252,12 @@ final class LocalHubServer {
     /// token -- matches the JS-facing `LocalHubStatusResult` contract.
     func status() -> (running: Bool, baseUrl: String?) {
         stateQueue.sync { () -> (running: Bool, baseUrl: String?) in
-            guard let server = webServer, server.isRunning else {
+            // `port > 0` for the same reason as in start(): GCDWebServer can report
+            // isRunning while its port is 0. `LocalHubStatusResult` promises that a
+            // `running: true` carries a usable `baseUrl`, and "http://127.0.0.1:0" is not
+            // one -- reporting not-running is the honest answer, and it prompts the caller
+            // to start() again, which rebuilds.
+            guard let server = webServer, server.isRunning, server.port > 0 else {
                 return (false, nil)
             }
             return (true, Self.baseUrl(port: server.port))
