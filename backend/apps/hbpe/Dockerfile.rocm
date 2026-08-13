@@ -7,7 +7,36 @@
 # on purpose: a bare `docker build` fails at the FROM below rather than
 # building with a uv the rest of the toolchain is not pinned to.
 ARG UV_VERSION
+
+# Declared up here, above the FIRST FROM, because only that global scope is
+# visible to a later FROM — see the wheel stage below. Declared next to that
+# stage instead, it would belong to the uv stage, expand to empty, pin the wheel
+# stage to `scratch` forever, and every build would silently drop back to the
+# source compile while accepting the build arg as though it had worked.
+ARG LLAMA_CPP_ROCM_WHEEL_IMAGE=""
+
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+# ── Prebuilt llama-cpp-python HIP wheel, carried as an image ──────────────────
+# backend/apps/hbpe/build-llama-cpp-rocm-wheel.sh publishes a FROM-scratch image
+# holding one wheel. Passing it here skips the only from-source compile in this
+# image; unset, the build compiles ggml-hip as it always has.
+#
+# Unlike the CUDA wheel, this one is compiled for a FLEET-WIDE gfx target list
+# (AMDGPU_WHEEL_TARGETS in the Makefile) rather than for the card in front of
+# the build, because one published artifact is pulled by appliances with
+# different cards. The consequence is that the wheel path ignores AMDGPU_TARGETS
+# entirely — see the check at the llama-cpp step, which verifies this host's
+# detected card is actually among the targets the wheel carries.
+#
+# Defaulting to `scratch` is what makes the COPY below conditional: Docker has
+# no conditional COPY, but copying from an empty stage yields an empty directory
+# rather than an error, so one unconditional COPY serves both cases.
+#
+# This stage sits above the splice point used by build-llama-cpp-rocm-wheel.sh,
+# so that script's generated Dockerfile carries it too. Harmless — it is never
+# referenced there, and BuildKit only builds stages that are.
+FROM ${LLAMA_CPP_ROCM_WHEEL_IMAGE:-scratch} AS llama-cpp-rocm-wheel
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BUILDER — compiles the HIP backend, then is thrown away.
@@ -109,6 +138,13 @@ RUN uv pip install --no-cache \
     torch torchvision \
     --index-url https://download.pytorch.org/whl/rocm7.2
 
+# ── llama-cpp-python (HIP) ────────────────────────────────────────────────────
+# This banner is the SPLICE POINT for build-llama-cpp-rocm-wheel.sh, which takes
+# everything above it — base image, python, uv sync, torch — and appends its own
+# wheel-build step, so the wheel is compiled in an environment identical to this
+# one. Reword it and that script fails loudly rather than silently producing a
+# truncated Dockerfile; it greps for this line and exits if it is missing.
+#
 # llama-cpp-python (JamePeng fork — required for Qwen3.5 support), the same
 # pinned commit every HBPE image builds (LLAMA_CPP_PYTHON_REF in the
 # Makefile), here with the GGML HIP backend for AMD cards.
@@ -128,11 +164,63 @@ RUN uv pip install --no-cache \
 # is not guaranteed to include this host's card. It is deliberately NOT
 # defaulted to a value here: a wrong architecture compiled in produces a wheel
 # that loads and then finds no usable device at runtime.
+#
+# ── What is verified afterwards, and why it is a MEMBERSHIP test ──────────────
+# The gfx code objects are read back out of the shipped libggml-hip.so and
+# checked against this host's detected card. The check is "is my card among the
+# targets this library carries", not "do the two lists match", because the two
+# paths legitimately produce different lists: a source build compiles for
+# exactly AMDGPU_TARGETS, while a published wheel carries the whole fleet-wide
+# AMDGPU_WHEEL_TARGETS set. Equality would reject every correct wheel.
+#
+# What it does catch is the failure this file already warns about above — a
+# library with no kernels for the card in front of it, which installs cleanly,
+# imports cleanly, and finds no usable device at runtime. That is also what a
+# silently CPU-only build looks like, which is how GGML_HIPBLAS=ON went
+# unnoticed for months, so the empty case is called out separately.
+#
+# `strings` on the offload-bundle triples rather than roc-obj-ls: roc-obj-ls is
+# absent from the runtime image, and using one method everywhere means this
+# check cannot disagree with the wheel builder's for tooling reasons.
+#
+# No stub library is needed to import, unlike the CUDA image: libamdhip64 loads
+# without a device, so this works on a build host with no /dev/kfd.
 ARG LLAMA_CPP_PYTHON_REF
 ARG AMDGPU_TARGETS
-RUN CMAKE_ARGS="-DGGML_HIP=ON${AMDGPU_TARGETS:+ -DAMDGPU_TARGETS=$AMDGPU_TARGETS}" FORCE_CMAKE=1 \
-    uv pip install --no-cache \
-      "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git@${LLAMA_CPP_PYTHON_REF:?set by make build}"
+# Redeclared: the global ARG above the first FROM is not in scope inside a stage.
+ARG LLAMA_CPP_ROCM_WHEEL_IMAGE=""
+COPY --from=llama-cpp-rocm-wheel / /tmp/llama-cpp-wheel/
+RUN set -eu; \
+    wheel=""; \
+    for w in /tmp/llama-cpp-wheel/*.whl; do [ -e "$w" ] || continue; wheel="$w"; break; done; \
+    if [ -n "$wheel" ]; then \
+      echo "llama-cpp-python from prebuilt wheel (image $LLAMA_CPP_ROCM_WHEEL_IMAGE): $wheel"; \
+      uv pip install --no-cache "$wheel"; \
+    else \
+      echo "llama-cpp-python building from source for AMDGPU_TARGETS=${AMDGPU_TARGETS:-<llama.cpp default list>}"; \
+      CMAKE_ARGS="-DGGML_HIP=ON${AMDGPU_TARGETS:+ -DAMDGPU_TARGETS=$AMDGPU_TARGETS}" FORCE_CMAKE=1 \
+      uv pip install --no-cache \
+        "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git@${LLAMA_CPP_PYTHON_REF:?set by make build}"; \
+    fi; \
+    libdir="$(dirname "$(python -c 'import importlib.util; print(importlib.util.find_spec("llama_cpp").origin)')")/lib"; \
+    so="$(ls "$libdir"/libggml-hip.so.*.* | tail -1)"; \
+    got="$(strings -a "$so" | sed -n 's/.*amdgcn-amd-amdhsa--\(gfx[0-9a-z]*\).*/\1/p' | sort -u | paste -sd,)"; \
+    [ -n "$got" ] || { \
+      echo "ERROR: $so carries no gfx code objects — this is a CPU-only build."; \
+      echo "       That is what GGML_HIPBLAS=ON produced silently for months;"; \
+      echo "       check that GGML_HIP=ON reached cmake and the HIP SDK is present."; \
+      exit 1; }; \
+    for t in $(echo "${AMDGPU_TARGETS:-}" | tr ';' ' '); do \
+      echo ",$got," | grep -q ",$t," || { \
+        echo "ERROR: this host's card is $t but the library carries only [$got]."; \
+        echo "       A library without kernels for this card loads and then finds"; \
+        echo "       no usable device at runtime. If this came from a wheel, add"; \
+        echo "       $t to AMDGPU_WHEEL_TARGETS in the Makefile and republish with"; \
+        echo "       build-llama-cpp-rocm-wheel.sh."; \
+        exit 1; }; \
+    done; \
+    echo "llama-cpp-python code objects: [$got] (host card: ${AMDGPU_TARGETS:-unknown})"; \
+    python -c "import llama_cpp; print('llama_cpp', llama_cpp.__version__)"
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY backend/apps/hbpe/src ./backend/apps/hbpe/src

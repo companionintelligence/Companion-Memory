@@ -7,25 +7,120 @@
 # on purpose: a bare `docker build` fails at the FROM below rather than
 # building with a uv the rest of the toolchain is not pinned to.
 ARG UV_VERSION
+
+# Declared up here, above the FIRST FROM, because only that global scope is
+# visible to a later FROM — see the stage it feeds below. Declared next to that
+# stage instead, it would belong to the uv stage, expand to empty, and pin the
+# wheel stage to `scratch` forever: --build-arg FLASH_ATTN_WHEEL_IMAGE would be
+# accepted, do nothing, and drop every build back to the 71 min compile silently.
+ARG FLASH_ATTN_WHEEL_IMAGE=""
+
+# Same placement, same reason, for the llama-cpp-python wheel. See the stage
+# below the uv stage for what it carries.
+ARG LLAMA_CPP_WHEEL_IMAGE=""
+
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+# ── Prebuilt flash-attn wheel, carried as an image ────────────────────────────
+# backend/apps/hbpe/build-flash-attn-wheel.sh publishes a FROM-scratch image
+# holding one wheel, tagged with the local version derived inside that build.
+# Passing it here skips the ~71 min source compile at the flash-attn step below:
+#
+#   make build GPU=cuda \
+#     FLASH_ATTN_WHEEL_IMAGE=ghcr.io/companionintelligence/companion/flash-attn-wheel:<tag>
+#
+# The package is public, so this pulls anonymously — no docker login, and no
+# token in a build arg the way a private URL would need. The wheel is a build of
+# Dao-AILab's BSD-3 flash-attn and contains nothing from this repo; the publish
+# step gates on that rather than assuming it.
+#
+# Defaulting to `scratch` is what makes the COPY below conditional: Docker has no
+# conditional COPY, but copying from an empty stage yields an empty directory
+# rather than an error, so one unconditional COPY serves both cases.
+#
+# This stage sits above the splice point used by build-flash-attn-wheel.sh, so
+# that script's generated Dockerfile carries it too. Harmless — it is never
+# referenced there, and BuildKit only builds stages that are.
+#
+# The ARG this reads is declared above the first FROM, not here; that placement
+# is load-bearing and the comment there says why.
+FROM ${FLASH_ATTN_WHEEL_IMAGE:-scratch} AS flash-attn-wheel
 
-# Install Python 3.11 and system dependencies
+# ── Prebuilt llama-cpp-python wheel, carried as an image ──────────────────────
+# backend/apps/hbpe/build-llama-cpp-wheel.sh publishes this one, the same way
+# and for the same reason: it skips the from-source ggml-cuda compile at the
+# llama-cpp step below, which is the entire cost of a cold build now that
+# flash-attn comes from a wheel.
+#
+#   make build GPU=cuda \
+#     LLAMA_CPP_WHEEL_IMAGE=ghcr.io/companionintelligence/companion/llama-cpp-wheel:<tag>
+#
+# This wheel binds FEWER dimensions than the flash-attn one — python, CUDA
+# major, and the CUDA architecture list, but NOT torch, which ggml does not
+# link. That is why its tag carries the arch list where flash-attn's carries a
+# torch version: the archs are the thing that silently differs between an image
+# and a wheel built for it, and a wheel missing this card's capability loads
+# perfectly and then has no kernels for it.
+#
+# Everything else here matches the flash-attn stage above: public package,
+# anonymous pull, `scratch` default making the COPY below conditional, and the
+# ARG declared above the first FROM rather than next to this line.
+FROM ${LLAMA_CPP_WHEEL_IMAGE:-scratch} AS llama-cpp-wheel
+
+# CUDA 12.9 to match the torch wheels installed below. The two have to move
+# together: torch bundles its own CUDA runtime, but the flash-attn build
+# compiles against THIS image's nvcc and links torch's headers, so a base
+# older than the wheel's toolkit is how you get subtle build failures.
+#
+# 12.1 was the previous pin, alongside torch 2.2.0. That combination caps at
+# compute capability 9.0 — meaning no RTX 50-series at all — and predates
+# NumPy 2, which broke `import torch` during the flash-attn build.
+#
+# `-cudnn-` rather than the old `-cudnn8-`: NVIDIA dropped the version suffix
+# when cuDNN 9 became the default.
+FROM nvidia/cuda:12.9.2-cudnn-devel-ubuntu22.04
+
+# System dependencies. Python does NOT come from apt here — see below.
+#
+# tzdata is not incidental: the forecast API takes an IANA timezone from the
+# request and hands it to ZoneInfo, which reads /usr/share/zoneinfo and raises
+# ZoneInfoNotFoundError without it — surfacing as a misleading "400: Invalid
+# timezone" for a valid one. The CPU image inherits a zone database from its
+# Debian base; an Ubuntu vendor image ships none. DEBIAN_FRONTEND is set
+# because tzdata's postinst otherwise blocks on an interactive prompt.
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-dev \
-    python3-pip \
     postgresql-client \
+    tzdata \
     build-essential \
     cmake \
     git \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uv /uv /usr/local/bin/uv
+
+# ── Python 3.11 from uv, NOT from apt ─────────────────────────────────────────
+# Ubuntu 22.04 ships exactly one python3.11 and it is a RELEASE CANDIDATE:
+#
+#   $ apt-cache policy python3.11
+#   Candidate: 3.11.0~rc1-1~22.04
+#
+# rc1 predates the int/str conversion security fix that added
+# sys.get_int_max_str_digits, and torch._dynamo dereferences that attribute at
+# import time. Every optimiser construction routes through torch._compile,
+# which imports _dynamo, so training dies with `AttributeError: module 'sys'
+# has no attribute 'get_int_max_str_digits'` before it starts. This bit the
+# ROCm image in production; this one carried the same defect unexercised.
+#
+# uv's managed interpreters are python-build-standalone releases, so this is an
+# actual 3.11.x regardless of what the distro packaged. only-managed keeps it
+# deterministic — uv will not fall back to the distro's python3.10 or to a
+# reappearing rc1.
+ENV UV_PYTHON_INSTALL_DIR=/opt/python \
+    UV_PYTHON_PREFERENCE=only-managed
+
+RUN uv python install 3.11
 
 WORKDIR /app
 
@@ -39,16 +134,24 @@ ENV VIRTUAL_ENV=/app/.venv \
     MODELS_DIR=/app/models \
     HF_HOME=/app/models/hf_cache
 
-RUN useradd -m -u 1000 hbpe
+# Everything below /app is created BY hbpe rather than handed over afterwards.
+#
+# The `RUN chown -R hbpe:hbpe /app` this replaces rewrites every file into a new
+# layer — layers are copy-on-write per FILE, so a recursive ownership change
+# duplicates the whole venv byte for byte, differing only in its owner. It cost
+# 16.6 GB in the ROCm image and 1.7 GB in the CPU one, a third of the latter.
+RUN useradd -m -u 1000 hbpe && chown hbpe:hbpe /app
+
+USER hbpe
 
 # ── Locked dependencies ───────────────────────────────────────────────────────
 # See backend/apps/hbpe/Dockerfile for why only this image's own manifests
 # are copied and synced with --frozen. The lock pins torch to the PyTorch
 # CPU build on Linux, so this image excludes it from the sync and installs
 # the CUDA build from the hardware index below.
-COPY pyproject.toml uv.lock .python-version ./
-COPY backend/apps/hbpe/pyproject.toml ./backend/apps/hbpe/pyproject.toml
-COPY backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pyproject.toml
+COPY --chown=hbpe:hbpe pyproject.toml uv.lock .python-version ./
+COPY --chown=hbpe:hbpe backend/apps/hbpe/pyproject.toml ./backend/apps/hbpe/pyproject.toml
+COPY --chown=hbpe:hbpe backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pyproject.toml
 
 RUN uv sync --frozen --package ci-hbpe --no-install-workspace --no-dev \
     --no-install-package torch
@@ -58,30 +161,417 @@ RUN uv sync --frozen --package ci-hbpe --no-install-workspace --no-dev \
 # match the lock exactly, which means it removes anything the lock does not
 # mention — including everything installed here.
 
+# torch 2.13.0, the current release, from the CUDA 12.9 wheel index — matching
+# the base image above.
+#
+# The previous pin was 2.2.0 (Feb 2024, eleven minor versions back) and was the
+# root of three separate problems: it predates NumPy 2, so `import torch` failed
+# during the flash-attn build; no flash-attn wheel is published for it, forcing
+# a two-hour source compile; and its cu121 toolkit cannot target Blackwell.
+# The CPU and ROCm images already track 2.13.0 through the lock and the ROCm
+# index respectively, so this also brings the three back into line.
 RUN uv pip install --no-cache \
-    torch==2.2.0 torchvision \
-    --index-url https://download.pytorch.org/whl/cu121
+    torch==2.13.0 torchvision \
+    --index-url https://download.pytorch.org/whl/cu129
+
+# ── Shared compile-job budget ─────────────────────────────────────────────────
+# Both from-source CUDA compiles below — llama-cpp-python here, flash-attn
+# further down — are template-heavy nvcc builds that will run one compiler per
+# core and exhaust the machine if left to their own defaults. They size
+# themselves from this one script so the two cannot drift: they spend from the
+# same budget, on the same host, at the same time. The measurements behind the
+# defaults are documented above the flash-attn step.
+# The RESERVE is shared — one desktop to stay out of the way of — but the
+# per-job cost is passed by each caller, because it is a property of the compile
+# rather than of the machine, and the two differ by 8x.
+COPY --chmod=755 backend/apps/hbpe/derive-build-jobs.sh /usr/local/bin/derive-build-jobs
+ARG MAX_JOBS
+ARG BUILD_RESERVE_GIB=8
+ARG GIB_PER_JOB
+
+# ── Shared CUDA architecture list ─────────────────────────────────────────────
+# Governs BOTH compiles, for the same reason the job budget does. A kernel
+# compiled for a capability this appliance will never meet is pure build time,
+# and the two steps disagreeing about which those are is how one of them ends up
+# doing several times the work of the other without anyone noticing.
+#
+# Declared here rather than at the flash-attn step because llama-cpp-python
+# needs it too, and did not have it until 2026-08-11: its CMAKE_ARGS set only
+# -DGGML_CUDA=on, so ggml fell back to its own default and built 141 kernels for
+# TEN architectures — sm_50 61 70 75 80 86 89 90 120 121, read back off the
+# shipped libggml-cuda.so with cuobjdump — where three were wanted. That step
+# was the entire cost of a cold build once flash-attn moved to a prebuilt wheel.
+#
+# The consumer/datacenter split and the per-capability reasoning live above the
+# flash-attn step, which is where the values are explained.
+ARG TORCH_CUDA_ARCH_LIST="8.6;8.9;12.0"
 
 # llama-cpp-python (JamePeng fork — required for Qwen3.5 support), the same
 # pinned commit every HBPE image builds (LLAMA_CPP_PYTHON_REF in the
 # Makefile), here with the GGML CUDA backend. Previously this image took the
 # official PyPI package, which is frozen at llama.cpp Aug 2025 and cannot
 # load Qwen3.5 GGUFs — the CPU image could and this one could not.
+#
+# CMAKE_BUILD_PARALLEL_LEVEL is the knob that binds here, not MAX_JOBS:
+# scikit-build-core drives this compile through `cmake --build`, which reads it
+# and passes -j to ninja. Unset — as it was — ninja falls back to nproc + 2,
+# which is 26 concurrent nvcc on the 24-core desktop this was written on, across
+# ggml-cuda's per-architecture kernel instantiations.
+#
+# 2 GiB/job, an eleventh of what flash-attn needs, because ggml-cuda is a much
+# cheaper compile than FlashAttention's templates and does not fan out. Sampled
+# at 1s intervals through this step at 4 jobs: cicc never exceeded the job count
+# — 1:1, not flash-attn's 4:1 — peaked at 289 MiB RSS, and all four compilers
+# together held 0.7 GiB. That is ~0.2 GiB per job, and the first cut at 8
+# starved the step of 20 cores it could have used.
+#
+# 2 rather than the measured 0.2 because that sample covered the opening
+# minutes, not the whole compile, and ggml's heaviest kernel instantiations may
+# not have been reached. 2 leaves ~10x headroom over what was actually seen and
+# still keeps this bounded by cores on any workstation. Once a full build has
+# been sampled, 1 makes it purely core-bound and is probably correct.
+#
+# CMAKE_CUDA_ARCHITECTURES is DERIVED from the shared TORCH_CUDA_ARCH_LIST above
+# rather than written out again, because a second hand-maintained list is a
+# second thing to forget: the two compiles ship in one image, onto one card, and
+# a divergence between them is never intentional. The only difference is
+# spelling — cmake wants 86;89;120 where torch wants 8.6;8.9;12.0 — so the dots
+# come out and nothing else does.
+#
+# Unlike the flash-attn step this does not filter the list against
+# `nvcc --list-gpu-arch`. It does not need to: an architecture this toolkit does
+# not know fails loudly in cmake's compiler check, seconds in, whereas the
+# flash-attn step drops it with a warning because a source build that dies an
+# hour later has cost something. If that asymmetry ever bites, lift the filter
+# up here rather than duplicating it.
+#
+# ── Prebuilt wheel, or a source compile ───────────────────────────────────────
+# This step was the entire cost of a cold build once flash-attn moved to a
+# wheel, and it re-runs more often than its inputs change: derive-build-jobs.sh
+# is COPYed in above BOTH compiles, so editing it — which is what you do when
+# tuning the job budget — invalidates that layer and everything below it, and
+# tuning the budget therefore cost a full recompile to observe the effect of the
+# tuning. With a wheel supplied this step is an install, so that invalidation
+# stops mattering rather than having to be prevented.
+#
+# ccache was tried first and does NOT work here. Recorded so it is not tried
+# again: the cache mount itself was fine — it persisted across builds, 0.13 to
+# 0.26 GB — but the hit rate was 0/417 on a warm cache. `uv pip install
+# --no-cache` unpacks to a fresh mkdtemp every build AND scikit-build-core
+# builds in a second, independently random temp directory, so CCACHE_BASEDIR
+# rewrites absolute paths into relative ones that still contain a random
+# component. Every object hashes differently regardless of NOHASHDIR/BASEDIR.
+# Stabilising both paths is possible but fiddly, and a published wheel removes
+# the compile instead of caching it — for every machine and for CI, not for one
+# developer's local mount.
+#
+# The source fallback is not vestigial. It is what runs on a machine that has
+# not been given a wheel, and it is how the wheel is built in the first place,
+# since build-llama-cpp-wheel.sh splices this file above the budget banner.
+#
+# ── What is verified, and why the import needs a stub ─────────────────────────
+# This wheel binds python, CUDA major, and the ARCHITECTURE LIST. The first two
+# fail loudly on their own: pip refuses a cp312 wheel on cp311, and a CUDA-major
+# mismatch fails to link. The arch list does not fail loudly — a wheel built for
+# the wrong capabilities installs cleanly, imports cleanly, and then has no
+# kernels for this card. So it is read back off the shipped libggml-cuda.so with
+# cuobjdump and compared against what this image asked for.
+#
+# The import check needs a driver this build host does not have: libggml.so
+# links libcuda.so.1, which the container runtime injects at RUNTIME, so
+# `import llama_cpp` fails with "cannot open shared object file" on any machine
+# without a GPU — including CI, and including the ROCm workstation this was
+# developed on. The CUDA devel image ships a stub libcuda for exactly this case.
+# It is symlinked onto LD_LIBRARY_PATH for the duration of the import and
+# removed immediately: the stub MUST NOT survive into the image, where it would
+# shadow the real driver.
 ARG LLAMA_CPP_PYTHON_REF
-RUN CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 \
-    uv pip install --no-cache \
-      "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git@${LLAMA_CPP_PYTHON_REF:?set by make build}"
+# Redeclared: the global ARG above the first FROM is not in scope inside a stage.
+ARG LLAMA_CPP_WHEEL_IMAGE=""
+COPY --from=llama-cpp-wheel / /tmp/llama-cpp-wheel/
+RUN set -eu; \
+    cuda_archs="$(echo "${TORCH_CUDA_ARCH_LIST:?refusing to fall back to ggml's ten-architecture default}" | tr -d '.')"; \
+    wheel=""; \
+    for w in /tmp/llama-cpp-wheel/*.whl; do [ -e "$w" ] || continue; wheel="$w"; break; done; \
+    if [ -n "$wheel" ]; then \
+      echo "llama-cpp-python from prebuilt wheel (image $LLAMA_CPP_WHEEL_IMAGE): $wheel"; \
+      uv pip install --no-cache "$wheel"; \
+    else \
+      CMAKE_BUILD_PARALLEL_LEVEL="$(derive-build-jobs llama-cpp-python 2)"; \
+      export CMAKE_BUILD_PARALLEL_LEVEL; \
+      echo "llama-cpp-python building from source for CUDA arch: $cuda_archs (CMAKE_BUILD_PARALLEL_LEVEL=$CMAKE_BUILD_PARALLEL_LEVEL)"; \
+      CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=$cuda_archs" FORCE_CMAKE=1 \
+      uv pip install --no-cache \
+        "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git@${LLAMA_CPP_PYTHON_REF:?set by make build}"; \
+    fi; \
+    libdir="$(dirname "$(python -c 'import importlib.util; print(importlib.util.find_spec("llama_cpp").origin)')")/lib"; \
+    want="$(echo "$cuda_archs" | tr ';' '\n' | sort -u | paste -sd,)"; \
+    got="$(cuobjdump "$libdir/libggml-cuda.so" | sed -n 's/.*arch = sm_\([0-9]*\).*/\1/p' | sort -u | paste -sd,)"; \
+    [ -n "$got" ] || { echo "ERROR: no CUDA code images in $libdir/libggml-cuda.so — this is a CPU-only build"; exit 1; }; \
+    [ "$want" = "$got" ] || { \
+      echo "ERROR: llama-cpp-python carries kernels for sm_[$got]"; \
+      echo "       but this image is built for sm_[$want]."; \
+      echo "       A wheel for the wrong capabilities installs and imports cleanly"; \
+      echo "       and then has no kernels for this card. Rebuild it with"; \
+      echo "       build-llama-cpp-wheel.sh against the same TORCH_CUDA_ARCH_LIST."; \
+      exit 1; }; \
+    stub="$(mktemp -d)"; \
+    ln -s /usr/local/cuda/lib64/stubs/libcuda.so "$stub/libcuda.so.1"; \
+    LD_LIBRARY_PATH="$stub" python -c "import llama_cpp; print('llama_cpp', llama_cpp.__version__, 'sm_[$got]')"; \
+    rm -rf "$stub"
 
 # Flash Attention 2 — used during Phase 2 HMT training only.
 # Requires torch to be pre-installed (hence the ordering).
-RUN uv pip install --no-cache flash-attn --no-build-isolation
+#
+# psutil first: flash-attn's setup.py imports it while deciding a build job
+# count, but never declares it as a build dependency. Isolation would normally
+# paper over that by resolving build requirements separately — but isolation is
+# exactly what has to be off here, since the build also needs the torch that is
+# already installed, and an isolated build would fetch its own. So the venv is
+# the build environment, and anything setup.py imports has to be in it.
+#
+# Without this the image does not build AT ALL — which is how it came to ship a
+# release-candidate Python (see above) unnoticed: nobody could get far enough
+# to run it.
+# MAX_JOBS bounds how many nvcc processes run at once. flash-attn picks this
+# itself by asking psutil how much memory is free, and picks it badly: on a
+# 24-core / 61 GB machine it chose 2, leaving the box 85% idle while a single
+# build ran for nearly two hours.
+#
+# ninja is what makes MAX_JOBS mean anything. torch's cpp_extension only
+# parallelises through ninja; without it setuptools compiles one file at a time
+# and the variable is read and ignored. Measured: with MAX_JOBS=8 exported and
+# no ninja installed, exactly one nvcc ran and the rate was 1.54 min/object —
+# indistinguishable from the same build at flash-attn's own MAX_JOBS=2. It is a
+# build-time dependency of the same kind as psutil, needed in the venv because
+# --no-build-isolation makes the venv the build environment.
+#
+# DERIVED from the machine doing the build by derive-build-jobs (copied in above
+# the llama-cpp step, which spends from the same budget), not hard-coded — the
+# right number is a property of that host, and a constant would be wrong on
+# every machine except the one it was tuned on. Memory is the dangerous bound —
+# overshooting gets the compiler OOM-killed an hour in, rather than merely
+# running slowly.
+#
+# A ninja job was not one compiler, and that is what took the desktop down.
+# nvcc fans out into cicc — the device-side front-end — and flash-attn's
+# setup.py asks for four of them per nvcc:
+#
+#   def append_nvcc_threads(nvcc_extra_args):        # setup.py, v2.8.3.post1
+#       nvcc_threads = os.getenv("NVCC_THREADS") or "4"
+#       return nvcc_extra_args + ["--threads", nvcc_threads]
+#
+# Measured from the kernel's OOM dump on a 24-core / 61 GiB desktop that this
+# step took down at MAX_JOBS=9 (journalctl, 2026-08-10 22:05:03): 4 live nvcc
+# had 16 live cicc between them — exactly the 4:1 the getenv above predicts —
+# and those 16 held 49.1 GiB of the machine's 61, with swap already at zero.
+# nvcc's own RSS is noise beside that, ~1 MiB each. Twelve mature cicc sat at
+# 3.47-3.79 GiB; the four still warming up were at 1.4-1.7 and climbing, which
+# is the trap in sampling this — read it early and a cicc looks like it costs a
+# third of what it settles at.
+#
+# So the fan-out is pinned rather than budgeted for. NVCC_THREADS=1 below makes
+# one ninja job mean one nvcc meaning one cicc. Left at its default the budget
+# has to carry a hidden 4x, which is how a figure taken from one cicc's RSS came
+# to be four times too small.
+#
+# 4 GiB/job is an AGGREGATE figure, and that distinction is the one worth
+# keeping. What triggers an OOM is the sum of resident compilers, not the worst
+# single one, so budgeting from a single cicc's peak — which is what the two
+# previous figures here both did — measures the wrong quantity in both
+# directions at once.
+#
+# From a completed build of this exact step (6 jobs, 71 min, sampled every 5s;
+# 2026-08-10):
+#
+#   peak aggregate cicc RSS   15.02 GiB     -> 2.50 GiB per job
+#   mean aggregate cicc RSS    5.88 GiB
+#   peak single cicc RSS       6.31 GiB     <- 1.5x the per-job budget, safely
+#
+# and from the crash dump above, at the other end of the concurrency range:
+# 49.1 GiB across 16 jobs -> 3.07 GiB per job. Two independent points, 6 jobs
+# and 16, agreeing within 20%. 4 is the higher of them plus ~30%.
+#
+# Note the third line. A single cicc peaks well ABOVE the per-job budget and
+# that is fine, because they do not peak together: 6 jobs budgeted at 4 GiB
+# reserve 24 and actually touch 15. Do not "fix" that apparent inconsistency by
+# raising the figure to cover the single-process peak — that is how it got to 8.
+#
+# What does NOT hold is leaning on the staggering as concurrency grows. In the
+# crash dump twelve of sixteen cicc sat at 3.47-3.79 GiB simultaneously, so
+# peaks do align once there are enough of them. That is why the aggregate
+# per-job figure is taken from the 16-job sample rather than the 6-job one.
+#
+# This does NOT make the step core-bound on this host. The divisor is
+# MemAvailable, not installed RAM, and the same 61 GiB desktop reports ~49 GiB
+# available with a session on it: (49-16)/4 = 8 jobs against 24 cores, a
+# projected ~25 GiB of compilers where the crash had 49.1. Still memory-bound,
+# just against a budget that measures the thing that actually runs out. Cores
+# only start binding first above ~112 GiB available.
+#
+# The 6-job run this was measured from took 71 min and held the box at load ~7
+# of 24 cores — under-subscribed, which is the cost of NVCC_THREADS=1 removing
+# the intra-file arch parallelism. 8 jobs should recover part of that. If more
+# is wanted, raise MAX_JOBS and not NVCC_THREADS: more files in flight keeps one
+# cicc per job and the budget above stays meaningful, whereas restoring the
+# threads reintroduces the multiplier this whole comment exists to explain.
+#
+# RESERVE is the other half, and the half whose absence actually hurt. Dividing
+# all of MemAvailable hands 100% of the machine to the compilers — at 9 jobs it
+# claimed 45 of 49 GiB and left ~4 GiB for a desktop that was running a browser,
+# an IDE and this repo's own compose stack. What makes that unrecoverable rather
+# than merely slow is oom_score_adj: dockerd starts build processes at -500, so
+# when the kernel went looking for a victim it passed over every cicc and killed
+# the user's browser instead, twice, while the build carried on. A build that
+# overshoots does not fall on the build. Reserve the headroom up front.
+#
+# MAX_JOBS, BUILD_RESERVE_GIB and GIB_PER_JOB are `--build-arg`s declared above
+# the llama-cpp step so they govern BOTH compiles: MAX_JOBS=N skips the
+# derivation entirely, BUILD_RESERVE_GIB retunes the headroom for a headless
+# builder (where it can drop to near zero), and GIB_PER_JOB overrides BOTH call
+# sites' per-job figures at once — useful for bisecting an OOM, blunt for
+# anything else, since it flattens the difference between the two compiles.
+# Note /proc/meminfo is not cgroup-aware, so a memory-capped builder still
+# wants an explicit MAX_JOBS.
+#
+# NVCC_THREADS is declared at the flash-attn step instead, because it is the
+# only compile here that has the knob. Raising it multiplies memory by roughly
+# its own value while MAX_JOBS stays put, so raise the two together or not at
+# all — that coupling, unnoticed, is the whole story above.
+# TORCH_CUDA_ARCH_LIST is the CUDA counterpart of PRUNE_GFX_ARCHS in
+# Dockerfile.rocm: without it flash-attn compiles kernels for every capability
+# the toolkit knows, most of which this appliance will never meet. It is
+# declared up in the shared budget block and governs the llama-cpp step too,
+# which derives cmake's spelling of it; the values below are the explanation for
+# both.
+#
+# The default keeps the CONSUMER parts and drops the datacenter ones, the same
+# split applied to ROCm:
+#
+#   8.6  RTX 3060-3090        keep      8.0  A100          drop
+#   8.9  RTX 4060-4090        keep      9.0  H100 / H200   drop
+#   12.0 RTX 50-series        keep      8.7  Jetson Orin   drop (embedded)
+#
+# Anything below 8.0 is excluded by FlashAttention-2 itself, which requires
+# Ampere or newer — so Turing and Pascal are out regardless of this list.
+#
+# FILTERED against `nvcc --list-gpu-arch` rather than trusted blindly: the
+# supported set is a property of whatever CUDA the base image ships, and 12.0
+# in particular only exists from 12.8 onwards. A base downgrade would otherwise
+# fail deep inside the compile with an unhelpful message; this drops the
+# unsupported entry and says so.
+# ── Skipping the compile with a prebuilt wheel ────────────────────────────────
+# The source build below takes tens of minutes. Two routes skip it, and the step
+# prefers them in this order:
+#
+#   1. FLASH_ATTN_WHEEL_IMAGE — our own wheel, published by
+#      build-flash-attn-wheel.sh and copied in from the stage at the top of this
+#      file. This is the route that works for the pins here, because upstream
+#      has no wheel for them (see below).
+#
+#   2. FLASH_ATTN_WHEEL — a URL, for the day Dao-AILab's published matrix does
+#      cover this image. Their wheels match only when every dimension below
+#      agrees, so read them off the image rather than guessing:
+#
+#        docker build --build-arg FLASH_ATTN_WHEEL=<url> ...
+#
+# The wheels live on the GitHub release for the version, and the filename
+# encodes every dimension it must agree with:
+#
+#   https://github.com/Dao-AILab/flash-attention/releases/download/v<VER>/
+#     flash_attn-<VER>+cu12torch<T>cxx11abi<ABI>-cp311-cp311-linux_x86_64.whl
+#            └ version   └ CUDA  └ torch  └ C++11 ABI   └ python  └ platform
+#                          major    X.Y     TRUE/FALSE
+#
+# Every field has to match or the extension will not import — it links against
+# torch's C++ symbols. Read them off the image rather than guessing:
+#
+#   docker run --rm <image> python -c "import torch; print(torch.__version__, \
+#     torch.version.cuda, torch._C._GLIBCXX_USE_CXX11_ABI)"
+#
+# The ABI flag is the one people get wrong: it is a property of how that torch
+# wheel was compiled, not of this image, and it has flipped between releases.
+# A mismatched wheel installs cleanly and then fails at `import flash_attn`
+# with an undefined-symbol error naming a mangled C++ name — at RUNTIME, in a
+# shipped image, which is why the branch below imports it at build time instead
+# and prints the four values this image actually wants when it fails.
+#
+# There is no wheel for every combination, and upstream does not have one for
+# this image. Checked 2026-08-10: v2.8.3.post1 is the newest FA2 release and
+# ships 50 wheels spanning torch 2.4-2.9 only; the sole cu13/torch2.9 build is
+# cp312 while this image is cp311; everything newer on the releases page is an
+# fa4-v4.0.0 beta carrying no arch wheels at all. torch 2.13 is five minors past
+# the matrix, so the source build is the default rather than the fallback.
+#
+# Building one for this image takes ~71 min (see the job-budget notes above), so
+# it is built once and published rather than repeated per build. That is what
+# build-flash-attn-wheel.sh does: it splices this file up to the compile-job
+# banner so the wheel is compiled in an environment identical to this one, then
+# pushes it to the public GHCR package this image pulls from. Run it, not a
+# hand-rolled pip wheel — the four dimensions above are easy to get wrong by
+# hand and wrong is silent until import time.
+#
+# One thing it handles that a manual build does not: the +cu12torchX.Y local
+# version in the names above is applied by setup.py's CachedWheelsCommand only on
+# the DOWNLOAD path, so a forced source build emits a plain
+# flash_attn-<ver>-cp311-cp311-linux_x86_64.whl. The script derives the tag from
+# the image's own torch/CUDA/ABI and stamps it into the filename and METADATA.
+# Renaming the file afterwards does not work — pip compares the filename version
+# against METADATA. The import check below is the load-bearing protection; the
+# filename is only documentation.
+ARG FLASH_ATTN_VERSION
+ARG FLASH_ATTN_WHEEL=""
+# Redeclared: the global ARG above the first FROM is not in scope inside a stage.
+ARG FLASH_ATTN_WHEEL_IMAGE=""
+ARG NVCC_THREADS=1
+# TORCH_CUDA_ARCH_LIST is NOT redeclared here. It is declared once in the shared
+# budget block, in scope for the whole stage, so that this step and the
+# llama-cpp one cannot be pointed at different cards. Redeclaring it would put
+# the default back in two places and reintroduce exactly that.
+COPY --from=flash-attn-wheel / /tmp/flash-attn-wheel/
+RUN set -eu; \
+    jobs="$(derive-build-jobs flash-attn 4)"; \
+    : "${NVCC_THREADS:?refusing to build empty — setup.py reads this as \`getenv(...) or \"4\"\`, so an empty value silently restores the 4x cicc fan-out the job budget no longer accounts for}"; \
+    supported="$(nvcc --list-gpu-arch | sed 's/compute_\(.*\)\(.\)$/\1.\2/')"; \
+    kept=""; \
+    for arch in $(echo "$TORCH_CUDA_ARCH_LIST" | tr ';' ' '); do \
+      if echo "$supported" | grep -qx "$arch"; then \
+        kept="${kept:+$kept;}$arch"; \
+      else \
+        echo "WARNING: dropping CUDA arch $arch — not supported by this image's nvcc"; \
+      fi; \
+    done; \
+    if [ -z "$kept" ]; then \
+      echo "ERROR: no requested CUDA arch is supported by this nvcc; supported: $(echo $supported | tr '\n' ' ')"; \
+      exit 1; \
+    fi; \
+    echo "flash-attn building for CUDA arch: $kept (MAX_JOBS=$jobs, NVCC_THREADS=${NVCC_THREADS})"; \
+    export MAX_JOBS="$jobs" NVCC_THREADS="${NVCC_THREADS}" TORCH_CUDA_ARCH_LIST="$kept"; \
+    wheel=""; wheel_src=""; \
+    for w in /tmp/flash-attn-wheel/*.whl; do \
+      [ -e "$w" ] || continue; wheel="$w"; wheel_src="image $FLASH_ATTN_WHEEL_IMAGE"; break; \
+    done; \
+    if [ -z "$wheel" ] && [ -n "${FLASH_ATTN_WHEEL:-}" ]; then \
+      wheel="$FLASH_ATTN_WHEEL"; wheel_src="url"; \
+    fi; \
+    if [ -n "$wheel" ]; then \
+      echo "flash-attn from prebuilt wheel ($wheel_src): $wheel"; \
+      uv pip install --no-cache "$wheel"; \
+      python -c "import flash_attn, flash_attn_2_cuda" \
+        || { echo "ERROR: $wheel does not match this image."; \
+             python -c "import torch,sys; print('  image wants: cu%s torch%s cxx11abi%s cp%d%d' % (torch.version.cuda.split('.')[0], '.'.join(torch.__version__.split('+')[0].split('.')[:2]), str(torch._C._GLIBCXX_USE_CXX11_ABI).upper(), sys.version_info[0], sys.version_info[1]))"; \
+             exit 1; }; \
+    else \
+      uv pip install --no-cache psutil ninja; \
+      uv pip install --no-cache "flash-attn==${FLASH_ATTN_VERSION:?set by make build}" --no-build-isolation; \
+    fi
 
 COPY LICENSE.md /LICENSE.md
 
 # ── Application code ──────────────────────────────────────────────────────────
-COPY backend/apps/hbpe/src ./backend/apps/hbpe/src
-COPY backend/packages/telemetry/src ./backend/packages/telemetry/src
-COPY --chmod=755 backend/apps/hbpe/entrypoint.sh ./entrypoint.sh
+COPY --chown=hbpe:hbpe backend/apps/hbpe/src ./backend/apps/hbpe/src
+COPY --chown=hbpe:hbpe backend/packages/telemetry/src ./backend/packages/telemetry/src
+COPY --chown=hbpe:hbpe --chmod=755 backend/apps/hbpe/entrypoint.sh ./entrypoint.sh
 
 # `uv pip install`, not a second `uv sync`, because sync would prune the
 # GPU-specific packages installed above. --no-deps because the dependencies
@@ -92,8 +582,6 @@ RUN uv pip install --no-cache --no-deps ./backend/packages/telemetry ./backend/a
 RUN mkdir -p /app/models/qwen \
              /app/data/token_corpus \
              /app/data/artifacts
-
-RUN chown -R hbpe:hbpe /app
 
 USER hbpe
 

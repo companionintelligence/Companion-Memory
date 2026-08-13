@@ -164,6 +164,14 @@ UV_VERSION := $(shell sed -n 's/^required-version = "==\(.*\)"$$/\1/p' pyproject
 # Bump deliberately: the fork moves fast and is our inference stack.
 LLAMA_CPP_PYTHON_REF := 81190b03f6d177988112dad5fc919491a77705d1
 
+# The version the fork reports AT that ref, which is not derivable from it —
+# it comes from the fork's own metadata and is only known after a build. Its one
+# job is to name the published wheel, so BUMP IT WITH THE REF ABOVE: get it from
+# the filename build-llama-cpp-wheel.sh exports into dist-llama/. Wrong here and
+# the default wheel tag points at nothing, which fails the pull loudly rather
+# than installing anything incorrect.
+LLAMA_CPP_PYTHON_VERSION := 0.3.46
+
 # The AMD gfx architecture llama.cpp's HIP backend compiles for, detected from
 # this host (gfx1100 on an RX 7900, gfx1030 on a 6800/6900). Empty is a valid
 # answer and means "let llama.cpp pick its default target list"; pass
@@ -183,9 +191,131 @@ LLAMA_CPP_PYTHON_REF := 81190b03f6d177988112dad5fc919491a77705d1
 # gfx target.
 AMDGPU_TARGETS ?= $(shell scripts/detect-gpu.sh --amdgpu-arch)
 
-# Passed only to the rocm image: the cpu and cuda Dockerfiles declare no such
-# ARG, and docker warns on a build-arg nothing consumes.
-HBPE_GPU_BUILD_ARGS = $(if $(filter rocm,$(GPU)),--build-arg AMDGPU_TARGETS=$(AMDGPU_TARGETS))
+# The gfx targets the PUBLISHED ROCm wheel is compiled for, which is a different
+# question from AMDGPU_TARGETS above. That one is "what card is in front of me"
+# and is right for a source build; this one is "what cards must one artifact
+# serve", because a published wheel is built once and pulled by every appliance.
+#
+# The set is not invented here — it is the same one Dockerfile.rocm's
+# PRUNE_GFX_ARCHS step deliberately KEEPS, documented there as gfx1030
+# (RX 6800/6900), gfx1100-1103 (RX 7000 and the Phoenix APU), gfx1150/1151
+# (Strix APUs) and gfx1200/1201 (RX 9000). A wheel narrower than that would
+# leave a card whose rocBLAS kernels this image ships without any ggml kernels,
+# which is an incoherent pairing. All nine are supported by the ROCm 7.2
+# toolchain (verified with `llc -march=amdgcn -mcpu=help` in the builder image).
+#
+# The cost is real and worth knowing: HIP emits a code object per target, so
+# both the compile and the shipped libggml-hip.so scale with this list. Trim it
+# if the fleet is narrower than the prune policy assumes — but trim both.
+AMDGPU_WHEEL_TARGETS ?= gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1200;gfx1201
+
+# The flash-attn pin. Installed outside the lock for the same reason
+# llama-cpp-python is — it needs --no-build-isolation plus build-time
+# environment variables, neither of which uv can express in a manifest — so it
+# needs pinning here or not at all. It was the one unpinned dependency in the
+# repo: `uv pip install flash-attn` resolved to whatever was newest that day,
+# so two builds of the same commit could produce different images.
+#
+# CUDA only. flash-attn has no ROCm build, and the CPU image has no use for it.
+FLASH_ATTN_VERSION := 2.8.3.post1
+
+# Optional URL of a prebuilt flash-attn wheel, which skips a source compile of
+# tens of minutes. It must match the image's torch version, CUDA major and
+# C++11 ABI exactly; see the wheel notes in backend/apps/hbpe/Dockerfile.cuda
+# for the naming scheme and how to read those values off the image. Unset by
+# default because no wheel exists for every combination — there was none for
+# torch 2.13 when this was written.
+FLASH_ATTN_WHEEL ?=
+
+# ── Prebuilt wheel images, and the tags that name them ────────────────────────
+# Both expensive CUDA compiles come from FROM-scratch images on GHCR, published
+# by backend/apps/hbpe/build-{flash-attn,llama-cpp}-wheel.sh and copied in by
+# Dockerfile.cuda. Measured 2026-08-11 on a 24-core desktop: with both wheels a
+# full `make build GPU=cuda` is 13.3 s, against ~71 min for the flash-attn
+# source compile and 278 s for llama-cpp's.
+#
+# Images rather than URLs because they survive access control: both packages are
+# public today and pull anonymously, but if either were made private, docker
+# authenticates to the registry on its own, where a private URL would need a
+# token passed as a build arg and baked into image history.
+#
+# THE TAGS ARE COMPOSED FROM THE PINS THEY DESCRIBE, not written out. A literal
+# tag would survive a pin bump and quietly install the wheel built for the
+# PREVIOUS pin — the build-time guards do not cover this: flash-attn's checks the
+# ABI but not the version, and llama-cpp's checks the CUDA architectures but not
+# the fork ref. Composed, a bump nobody has republished for produces a tag that
+# does not exist, and the build fails at the pull with `manifest unknown`. That
+# is the intended behaviour: a loud "republish the wheel" beats a silently wrong
+# image. Republish with `PUSH=1 ./backend/apps/hbpe/build-<name>-wheel.sh`.
+#
+# Each component is read from the file that owns it. `:=` so the seds run once
+# per make invocation rather than once per expansion.
+HBPE_TORCH_VERSION := $(shell sed -n 's/^ *torch==\([0-9.]*\).*/\1/p' backend/apps/hbpe/Dockerfile.cuda | head -1)
+HBPE_CUDA_MAJOR    := $(shell sed -n 's|^FROM nvidia/cuda:\([0-9]*\)\..*|\1|p' backend/apps/hbpe/Dockerfile.cuda | head -1)
+HBPE_CUDA_ARCHS    := $(shell sed -n 's/^ARG TORCH_CUDA_ARCH_LIST="\(.*\)"$$/\1/p' backend/apps/hbpe/Dockerfile.cuda)
+HBPE_PY_VERSION    := $(shell sed -n 's/^RUN uv python install \([0-9.]*\) *$$/\1/p' backend/apps/hbpe/Dockerfile.cuda | head -1)
+HBPE_PY_TAG        := cp$(subst .,,$(HBPE_PY_VERSION))
+
+# torch's local-version segment is MAJOR.MINOR — `basename` drops the patch,
+# turning 2.13.0 into the 2.13 that setup.py stamps into the wheel name.
+HBPE_TORCH_MINOR   := $(basename $(HBPE_TORCH_VERSION))
+# 8.6;8.9;12.0 -> sm86_89_120. Underscores because dots would read as a version.
+HBPE_ARCH_TAG      := sm$(subst ;,_,$(subst .,,$(HBPE_CUDA_ARCHS)))
+
+# The C++11 ABI flag is the one component NOT derived: it is a property of how
+# the torch wheel was compiled, readable only from an installed torch, and it
+# HAS flipped between releases. If it ever flips again this tag keeps naming the
+# old wheel, and the backstop is flash-attn's build-time import of
+# flash_attn_2_cuda, which fails on an undefined symbol — loud, just later than
+# a failed pull would be.
+HBPE_TORCH_ABI     := cxx11abitrue
+
+FLASH_ATTN_WHEEL_IMAGE ?= ghcr.io/companionintelligence/companion/flash-attn-wheel:$(FLASH_ATTN_VERSION)-cu$(HBPE_CUDA_MAJOR)torch$(HBPE_TORCH_MINOR)$(HBPE_TORCH_ABI)-$(HBPE_PY_TAG)
+LLAMA_CPP_WHEEL_IMAGE  ?= ghcr.io/companionintelligence/companion/llama-cpp-wheel:$(LLAMA_CPP_PYTHON_VERSION)-$(shell echo $(LLAMA_CPP_PYTHON_REF) | cut -c1-12)-cu$(HBPE_CUDA_MAJOR)-$(HBPE_ARCH_TAG)-$(HBPE_PY_TAG)
+
+# The ROCm equivalents, read from Dockerfile.rocm rather than Dockerfile.cuda.
+# The python version is read separately even though both images pin 3.11 today:
+# the cp tag is a claim about the image the wheel was built in, and borrowing
+# the CUDA image's value would keep that claim looking right through exactly the
+# divergence that would make it wrong.
+HBPE_ROCM_VERSION    := $(shell sed -n 's|^FROM rocm/dev-ubuntu-22.04:\([0-9]*\.[0-9]*\).*|\1|p' backend/apps/hbpe/Dockerfile.rocm | head -1)
+HBPE_ROCM_PY_VERSION := $(shell sed -n 's/^RUN uv python install \([0-9.]*\) *$$/\1/p' backend/apps/hbpe/Dockerfile.rocm | head -1)
+HBPE_ROCM_PY_TAG     := cp$(subst .,,$(HBPE_ROCM_PY_VERSION))
+# gfx1030;gfx1100;... -> gfx1030_1100_... The repeated "gfx" is dropped so the
+# tag stays readable; build-llama-cpp-rocm-wheel.sh composes it identically.
+HBPE_GFX_TAG         := gfx$(subst ;,_,$(subst gfx,,$(AMDGPU_WHEEL_TARGETS)))
+
+LLAMA_CPP_ROCM_WHEEL_IMAGE ?= ghcr.io/companionintelligence/companion/llama-cpp-rocm-wheel:$(LLAMA_CPP_PYTHON_VERSION)-$(shell echo $(LLAMA_CPP_PYTHON_REF) | cut -c1-12)-rocm$(HBPE_ROCM_VERSION)-$(HBPE_GFX_TAG)-$(HBPE_ROCM_PY_TAG)
+
+# Set any of them to empty to force the source compile:
+#   make build GPU=cuda FLASH_ATTN_WHEEL_IMAGE= LLAMA_CPP_WHEEL_IMAGE=
+#   make build GPU=rocm LLAMA_CPP_ROCM_WHEEL_IMAGE=
+#
+# A sed that stops matching would leave its component empty and compose a
+# plausible-looking tag with a hole in it, so the components are checked rather
+# than trusted. Guarded per variant: a restructured Dockerfile.cuda should not
+# break a ROCm build, or the reverse.
+ifeq ($(GPU),cuda)
+$(if $(HBPE_TORCH_VERSION),,$(error could not read the torch pin from backend/apps/hbpe/Dockerfile.cuda))
+$(if $(HBPE_CUDA_MAJOR),,$(error could not read the CUDA major from the FROM line in backend/apps/hbpe/Dockerfile.cuda))
+$(if $(HBPE_CUDA_ARCHS),,$(error could not read ARG TORCH_CUDA_ARCH_LIST from backend/apps/hbpe/Dockerfile.cuda))
+$(if $(HBPE_PY_VERSION),,$(error could not read the python version from backend/apps/hbpe/Dockerfile.cuda))
+endif
+ifeq ($(GPU),rocm)
+$(if $(HBPE_ROCM_VERSION),,$(error could not read the ROCm version from the FROM line in backend/apps/hbpe/Dockerfile.rocm))
+$(if $(HBPE_ROCM_PY_VERSION),,$(error could not read the python version from backend/apps/hbpe/Dockerfile.rocm))
+$(if $(AMDGPU_WHEEL_TARGETS),,$(error AMDGPU_WHEEL_TARGETS is empty — a published wheel needs an explicit gfx target list))
+endif
+
+# Passed per hardware variant: each Dockerfile declares only the ARGs it uses,
+# and docker warns on a build-arg nothing consumes.
+HBPE_GPU_BUILD_ARGS = \
+	$(if $(filter rocm,$(GPU)),--build-arg AMDGPU_TARGETS=$(AMDGPU_TARGETS) \
+		$(if $(LLAMA_CPP_ROCM_WHEEL_IMAGE),--build-arg LLAMA_CPP_ROCM_WHEEL_IMAGE=$(LLAMA_CPP_ROCM_WHEEL_IMAGE))) \
+	$(if $(filter cuda,$(GPU)),--build-arg FLASH_ATTN_VERSION=$(FLASH_ATTN_VERSION) \
+		$(if $(FLASH_ATTN_WHEEL),--build-arg FLASH_ATTN_WHEEL=$(FLASH_ATTN_WHEEL)) \
+		$(if $(FLASH_ATTN_WHEEL_IMAGE),--build-arg FLASH_ATTN_WHEEL_IMAGE=$(FLASH_ATTN_WHEEL_IMAGE)) \
+		$(if $(LLAMA_CPP_WHEEL_IMAGE),--build-arg LLAMA_CPP_WHEEL_IMAGE=$(LLAMA_CPP_WHEEL_IMAGE)))
 
 
 define BANNER
