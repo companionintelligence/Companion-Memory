@@ -288,7 +288,8 @@ def init_telemetry(component: str) -> bool:
             release=release,
             traces_sample_rate=sample_rate("SENTRY_TRACES_SAMPLE_RATE", 0.1),
             profiles_sample_rate=sample_rate("SENTRY_PROFILES_SAMPLE_RATE", 0.1),
-            enable_metrics=_read(os.environ, "SENTRY_ENABLE_METRICS").lower() != "false",
+            enable_metrics=_read(os.environ, "SENTRY_ENABLE_METRICS").lower()
+            != "false",
             enable_logs=_read(os.environ, "SENTRY_ENABLE_LOGS").lower() != "false",
             send_default_pii=False,
             # Frame locals in these services are memory rows, note bodies and

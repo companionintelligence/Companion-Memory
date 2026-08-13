@@ -41,6 +41,7 @@ export const telemetry = resolveTelemetrySettings(process.env, COMPONENT);
 
 function sampleRate(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
+
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 }
 
