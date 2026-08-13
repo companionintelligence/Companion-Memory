@@ -7,6 +7,15 @@
 > covers how the shell is built and run. This file is the **submission checklist** and
 > **phased roadmap**. Derived from a multi-dimension audit (2026-07-15); re-verify
 > store policies at submission time — they move.
+>
+> **Reading device-native data (health, calendar, contacts, photos, location, motion,
+> app usage…) into the appliance?** See
+> [`DEVICE_DATA_COMPLIANCE.md`](./DEVICE_DATA_COMPLIANCE.md) — per-source permission
+> matrix, which sources are unshippable via the public stores, the phased declaration
+> sequence, and the exact Data Safety / nutrition-label answers. It also flags two
+> **🔴 P0 gaps in this file**: the Play *Health apps declaration* is required of every
+> published app (even with zero health features), and app-wide `usesCleartextTraffic`
+> becomes a User Data policy violation once sensitive data flows.
 
 ---
 
@@ -138,6 +147,8 @@ Phased **Now** (next release train) / **Next** (following quarter) / **Later**. 
 ## 4. Legal / compliance artifacts (own these before EU launch)
 
 Beyond "publish a privacy policy," a personal-data client needs: **controller/processor determination** (the user is arguably the controller for their own appliance; the demo server makes Lifescope a controller/processor for demo data), **GDPR Art. 13/14 disclosures + lawful basis + DPA/RoPA**, **CCPA/CPRA** notice-at-collection (no "sale" → no Do-Not-Sell mechanism, worth stating), **UK-GDPR**, **DSA trader identity**, a **EULA**, an **age/COPPA posture** (recommend 17+), and **EAA accessibility** for EU. Demo-server opsec: TLS-only, isolated/throwaway, rate-limited, residency-considered.
+
+> **See also:** [`SECURITY_ARCHITECTURE.md`](./SECURITY_ARCHITECTURE.md) — encryption at rest, key management, biometric app-lock, remote revoke/wipe, egress accounting, transport, and third-party data minimization, with the hard gates on which device data source may not ship before which control exists.
 
 ---
 
