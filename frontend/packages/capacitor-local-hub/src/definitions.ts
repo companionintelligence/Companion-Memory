@@ -19,18 +19,22 @@ export interface LocalHubStatusResult {
 
 /**
  * Capacitor plugin surface for the on-device "Local Hub" sidecar: a loopback-only HTTP
- * server embedded in the native app. Phase 1 (this package, as shipped today) is a bare
- * skeleton -- lifecycle management plus a single authenticated health check. It exists so
- * later phases have somewhere to land without another native scaffolding pass:
+ * server embedded in the native app. This interface covers only the *lifecycle* --
+ * everything the sidecar actually does is reached over HTTP at the returned `baseUrl`
+ * with the returned bearer token, not through more plugin methods:
  *
- * - Phase 2: a durable outbox (SQLite + SQLCipher) so the web client can queue writes
- *   while offline and let the Local Hub flush them to CI-Server when connectivity returns.
- * - Phase 3: local inference (llama.cpp) plus mirrors of the read endpoints CI-Server's
- *   memory domain exposes today (e.g. `GET /api/memory/search`), served from this same
- *   process so the web client can read/generate fully offline.
+ * - `GET /api/health` -- liveness + API version.
+ * - `/api/outbox…` -- the durable capture queue (enqueue, list, fetch one, delete, record
+ *   a flush attempt, retry). Backed by real on-disk SQLite in app-private storage; writes
+ *   are committed before the response returns. Encryption at rest (SQLCipher) is a
+ *   deliberate follow-up slice and is NOT implemented -- see `README.md`.
+ * - Phase 3 (not built): local inference (llama.cpp) plus mirrors of the read endpoints
+ *   CI-Server's memory domain exposes today (e.g. `GET /api/memory/search`), served from
+ *   this same process so the web client can read/generate fully offline.
  *
- * See `README.md` in this package for the full design and phase boundaries. Reached at
- * runtime via `window.Capacitor.Plugins.LocalHub`.
+ * See `README.md` in this package for the full route contract, the capacity/attempt
+ * policy, and phase boundaries. Reached at runtime via
+ * `window.Capacitor.Plugins.LocalHub`.
  */
 export interface LocalHubPlugin {
   /**

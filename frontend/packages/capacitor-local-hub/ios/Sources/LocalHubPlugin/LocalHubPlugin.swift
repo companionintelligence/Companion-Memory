@@ -1,10 +1,10 @@
 import Capacitor
 import Foundation
 
-/// iOS native half of the Local Hub sidecar's Phase 1 skeleton. See
-/// `src/definitions.ts` for the JS-facing contract this implements and this
-/// package's root `README.md` for the full multi-phase design (the outbox and local
-/// inference phases land later, behind `LocalHubServer`, not in this file).
+/// iOS native half of the Local Hub sidecar. See `src/definitions.ts` for the
+/// JS-facing contract this implements and this package's root `README.md` for the
+/// full multi-phase design. The HTTP surface -- including the durable outbox routes
+/// and, later, local inference -- lives behind `LocalHubServer`, not in this file.
 ///
 /// Registered with `jsName = "LocalHub"` -- this MUST match the string passed to
 /// `registerPlugin<LocalHubPlugin>('LocalHub', …)` in `src/index.ts`, and the

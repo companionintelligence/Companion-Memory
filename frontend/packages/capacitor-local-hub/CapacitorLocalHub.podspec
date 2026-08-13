@@ -23,5 +23,12 @@ Pod::Spec.new do |s|
   # subspecs. Pinned to the 3.5.x line (latest tagged release at the time of writing is
   # 3.5.4); bump the constraint if a newer major is verified compatible.
   s.dependency 'GCDWebServer', '~> 3.5'
+  # The durable outbox (ios/Sources/LocalHubPlugin/OutboxStore.swift) uses the system
+  # SQLite via `import SQLite3`. The iOS SDK's SQLite3 module map already declares
+  # `link "sqlite3"`, so autolinking usually covers this -- declaring it explicitly
+  # costs nothing and removes the "undefined symbol: _sqlite3_open_v2" failure mode if
+  # autolinking is disabled by a build setting. NOT SQLCipher: encryption at rest is a
+  # deliberate follow-up slice, see README.md.
+  s.library = 'sqlite3'
   s.swift_version = '5.1'
 end

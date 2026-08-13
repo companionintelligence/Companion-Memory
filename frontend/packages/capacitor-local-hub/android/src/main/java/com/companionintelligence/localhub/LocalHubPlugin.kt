@@ -17,15 +17,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Android native half of the Local Hub sidecar's Phase 1 skeleton. See `src/definitions.ts`
- * for the JS-facing contract this implements and this package's root `README.md` for the
- * full multi-phase design (outbox, local inference land in later passes behind
- * [LocalHubServer], not here).
+ * Android native half of the Local Hub sidecar. See `src/definitions.ts` for the JS-facing
+ * contract this implements and this package's root `README.md` for the full multi-phase
+ * design (local inference lands in a later pass behind [LocalHubServer], not here).
  *
- * All mutable state (the running [LocalHubServer] instance and its current bearer token)
- * is only ever touched while holding [stateMutex], so concurrent start()/stop()/getStatus()
- * calls from JS -- e.g. a status poll racing a stop() -- can't interleave into an
- * inconsistent state.
+ * All mutable state (the running [LocalHubServer] instance, its current bearer token, and
+ * the [OutboxStore] handle) is only ever touched while holding [stateMutex], so concurrent
+ * start()/stop()/getStatus() calls from JS -- e.g. a status poll racing a stop() -- can't
+ * interleave into an inconsistent state.
  */
 @CapacitorPlugin(name = "LocalHub")
 class LocalHubPlugin : Plugin() {
@@ -35,6 +34,13 @@ class LocalHubPlugin : Plugin() {
     private var server: LocalHubServer? = null
     private var token: String? = null
 
+    /**
+     * Outlives individual server instances on purpose: [stop] tears down the HTTP listener,
+     * but the queued captures behind it are durable user data, so the database handle is
+     * only released when the plugin itself goes away.
+     */
+    private var outbox: OutboxStore? = null
+
     override fun handleOnDestroy() {
         // Synchronous best-effort cleanup: handleOnDestroy has no coroutine to await, but
         // NanoHTTPD#stop() already blocks until its listener thread has joined, so this is
@@ -42,6 +48,10 @@ class LocalHubPlugin : Plugin() {
         server?.stop()
         server = null
         token = null
+        // Only closes the handle; every write was already committed to disk before its
+        // HTTP response was sent, so there is nothing here left to flush.
+        outbox?.close()
+        outbox = null
         pluginScope.cancel()
         super.handleOnDestroy()
     }
@@ -102,9 +112,20 @@ class LocalHubPlugin : Plugin() {
         }
 
         val newToken = generateToken()
-        val newServer = LocalHubServer(newToken)
+        // getContext() is the Capacitor bridge's Context; OutboxStore re-derives the
+        // application context from it, so holding this store can't leak an Activity. The
+        // database itself lands in app-private internal storage
+        // (/data/data/<pkg>/databases/), which is where the durability guarantee comes from.
+        val store = outbox ?: OutboxStore(context).also { outbox = it }
+        val newServer = LocalHubServer(newToken, store)
 
         withContext(Dispatchers.IO) {
+            // Open (and, on first launch, create) the database here rather than lazily on the
+            // first request: it makes a broken/corrupt outbox a start() failure the caller
+            // can see, and keeps that disk I/O off the NanoHTTPD worker that would otherwise
+            // pay for it mid-request.
+            store.writableDatabase
+
             // NanoHTTPD#start busy-waits internally until the socket is actually bound (or
             // throws), so getListeningPort() below is valid the moment this call returns --
             // this is what keeps us from resolving a baseUrl before anything is listening.

@@ -4,6 +4,7 @@ import {
   ConnectionModeProvider,
   DeviceLayoutProvider,
   LoadingPage,
+  OutboxQueueProvider,
   getApiBaseUrl,
   isNativePlatform,
 } from '@ci/common';
@@ -89,17 +90,21 @@ function Providers({ children }: { children: ReactNode }) {
         <BackgroundProvider>
           <DeviceLayoutProvider args={[]}>
             <ConnectionModeProvider args={[]}>
-              <AuthProvider args={[]}>
-                <FeaturesProvider args={[]}>
-                  <ModelProvider args={[]}>
-                    <CaptureModalProvider args={[]}>
-                      <ApolloProvider>
-                        <PowerSyncProvider>{children}</PowerSyncProvider>
-                      </ApolloProvider>
-                    </CaptureModalProvider>
-                  </ModelProvider>
-                </FeaturesProvider>
-              </AuthProvider>
+              {/* Inside ConnectionModeProvider: the outbox flush loop is driven by the
+                  resolved connection mode rather than a timer of its own. */}
+              <OutboxQueueProvider args={[]}>
+                <AuthProvider args={[]}>
+                  <FeaturesProvider args={[]}>
+                    <ModelProvider args={[]}>
+                      <CaptureModalProvider args={[]}>
+                        <ApolloProvider>
+                          <PowerSyncProvider>{children}</PowerSyncProvider>
+                        </ApolloProvider>
+                      </CaptureModalProvider>
+                    </ModelProvider>
+                  </FeaturesProvider>
+                </AuthProvider>
+              </OutboxQueueProvider>
             </ConnectionModeProvider>
           </DeviceLayoutProvider>
         </BackgroundProvider>

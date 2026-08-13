@@ -3,6 +3,15 @@ import { buildApiUrl } from './apiBase';
 
 interface Opts extends RequestInit {
   timeout?: number;
+  /**
+   * Suppress the automatic `x-api-key` header. Set it for requests that are NOT going to
+   * the configured CI-Server appliance — today that means the on-device Local Hub sidecar
+   * (`localHub.ts` / `outbox.ts`), which is a different origin with its own bearer token.
+   * Two reasons, both real: the appliance API key has no business being sent to another
+   * server, and the sidecar's CORS policy allowlists a fixed set of request headers — an
+   * unexpected `x-api-key` fails the WebView's preflight and the request never goes out.
+   */
+  skipApiKey?: boolean;
 }
 
 /**
@@ -163,12 +172,12 @@ async function parseErrorBody(res: Response): Promise<{ serverMessage?: string; 
 }
 
 export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T | undefined> {
-  const { timeout, ...rest } = init ?? {};
+  const { timeout, skipApiKey, ...rest } = init ?? {};
 
   // On native, attach the API key (`x-api-key`). No-op on web (returns `{}`), so the
   // request is unchanged. Callers pass plain-object headers, so a shallow merge is
   // safe; the caller's own headers take precedence on the (unused) key collision.
-  const keyHeaders = apiKeyHeaders();
+  const keyHeaders = skipApiKey ? {} : apiKeyHeaders();
 
   if (Object.keys(keyHeaders).length > 0) {
     rest.headers = { ...keyHeaders, ...(rest.headers as Record<string, string> | undefined) };

@@ -109,5 +109,7 @@
   "CONNECTION_MODE_CONNECTED": "Connected",
   "CONNECTION_MODE_LOCAL": "On this phone",
   "CONNECTION_MODE_CACHED": "Offline copy",
-  "CONNECTION_MODE_FRESH": "Not synced yet"
+  "CONNECTION_MODE_FRESH": "Not synced yet",
+  "OUTBOX_PENDING_COUNT": "{{n}} waiting to sync",
+  "OUTBOX_NEEDS_ATTENTION_COUNT": "{{n}} need your attention"
 }

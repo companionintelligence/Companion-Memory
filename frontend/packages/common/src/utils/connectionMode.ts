@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { buildApiUrl, isNativePlatform } from './apiBase';
 import { createHookContext } from './createHookContext';
 import { fetchJson } from './fetchJson';
+import { localHubHeaders, localHubSession } from './localHub';
 
 export type ConnectionMode = 'connected' | 'local' | 'cached' | 'fresh';
 
@@ -30,34 +31,6 @@ export type ConnectionMode = 'connected' | 'local' | 'cached' | 'fresh';
 // settles quickly instead of hanging on a dead connection. 500ms sits in the
 // middle of the spec'd 300-800ms window.
 export const CONNECTION_PROBE_TIMEOUT_MS = 500;
-
-interface LocalHubStartResult {
-  baseUrl: string;
-  token: string;
-}
-
-/**
- * Minimal shape of the `LocalHub` Capacitor plugin (see
- * `frontend/packages/capacitor-local-hub/src/definitions.ts`, the source of
- * truth). Declared locally rather than imported — same reason every plugin
- * interface in `nativeBridge.ts` is: it keeps the web bundle free of
- * `@capacitor/*` deps. Reached through the same `window.Capacitor.Plugins`
- * runtime bridge, gated by `isNativePlatform()`.
- */
-interface LocalHubPlugin {
-  start(): Promise<LocalHubStartResult>;
-  stop(): Promise<void>;
-  getStatus(): Promise<{ running: boolean; baseUrl?: string }>;
-}
-
-function localHubPlugin(): LocalHubPlugin | undefined {
-  if (typeof window === 'undefined') {
-    return undefined;
-  }
-
-  return (window as unknown as { Capacitor?: { Plugins?: { LocalHub?: LocalHubPlugin } } }).Capacitor?.Plugins
-    ?.LocalHub;
-}
 
 /** Probes the configured remote CI-Server origin's `/api/health` endpoint. */
 async function probeRemote(): Promise<boolean> {
@@ -71,29 +44,28 @@ async function probeRemote(): Promise<boolean> {
 }
 
 /**
- * Probes the on-device LocalHub sidecar (native only). `start()` is
- * idempotent — if the sidecar is already running it returns the existing
- * baseUrl/token without restarting or regenerating the token — so calling it
- * here both ensures the sidecar is up and gets the bearer token its one
- * endpoint requires, with no risk of disrupting an already-running server.
+ * Probes the on-device LocalHub sidecar (native only). `localHubSession()`
+ * calls the plugin's idempotent `start()` — if the sidecar is already running
+ * it returns the existing baseUrl/token without restarting or regenerating the
+ * token — so calling it here both ensures the sidecar is up and gets the bearer
+ * token its endpoints require, with no risk of disrupting a running server.
+ *
+ * `skipApiKey`: the appliance's `x-api-key` has no business going to the
+ * sidecar, and it is not in the sidecar's CORS allowlist — sending it would
+ * fail the WebView's preflight and the probe would never leave the browser.
  */
 async function probeLocal(): Promise<boolean> {
-  if (!isNativePlatform()) {
-    return false;
-  }
+  const session = await localHubSession();
 
-  const hub = localHubPlugin();
-
-  if (!hub) {
+  if (!session) {
     return false;
   }
 
   try {
-    const { baseUrl, token } = await hub.start();
-
-    await fetchJson(`${baseUrl}/api/health`, {
+    await fetchJson(`${session.baseUrl}/api/health`, {
       timeout: CONNECTION_PROBE_TIMEOUT_MS,
-      headers: { Authorization: `Bearer ${token}` },
+      skipApiKey: true,
+      headers: localHubHeaders(session),
     });
 
     return true;
