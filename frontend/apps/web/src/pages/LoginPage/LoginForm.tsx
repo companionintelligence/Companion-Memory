@@ -5,6 +5,7 @@ import {
   Form,
   Input,
   LoadingButton,
+  PasswordInput,
   useForm,
   formDataResolver,
   formDataSchema as s,
@@ -62,7 +63,7 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
             <Form.Item>
               <Form.Label>Password</Form.Label>
               <Form.Control>
-                <Input {...field} type="password" />
+                <PasswordInput {...field} autoComplete="current-password" />
               </Form.Control>
               <Form.Message />
             </Form.Item>
