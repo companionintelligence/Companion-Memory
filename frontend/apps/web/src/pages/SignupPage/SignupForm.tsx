@@ -166,7 +166,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
             <Form.Item>
               <Form.Label>Email</Form.Label>
               <Form.Control>
-                <Input {...field} />
+                <Input {...field} autoComplete="username" />
               </Form.Control>
               <Form.Message />
             </Form.Item>

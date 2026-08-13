@@ -49,7 +49,7 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
             <Form.Item>
               <Form.Label>Email</Form.Label>
               <Form.Control>
-                <Input {...field} />
+                <Input {...field} autoComplete="username" />
               </Form.Control>
               <Form.Message />
             </Form.Item>

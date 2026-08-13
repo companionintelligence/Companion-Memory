@@ -32,6 +32,21 @@ describe('PasswordInput', () => {
     expect(getField()).toHaveAttribute('type', 'password');
   });
 
+  it('keeps browser text assistance off in both states', () => {
+    // Revealing makes this a text input, and browsers exempt only type=password from
+    // spellcheck — enhanced spellcheck would ship the revealed value to a third party.
+    renderField();
+
+    expect(getField()).toHaveAttribute('spellcheck', 'false');
+    expect(getField()).toHaveAttribute('autocapitalize', 'off');
+    expect(getField()).toHaveAttribute('autocorrect', 'off');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+
+    expect(getField()).toHaveAttribute('type', 'text');
+    expect(getField()).toHaveAttribute('spellcheck', 'false');
+  });
+
   it('keeps what the user typed when visibility flips', () => {
     renderField();
 
@@ -42,11 +57,13 @@ describe('PasswordInput', () => {
   });
 
   it('leaves the label pointing at exactly one control', () => {
-    // The toggle's accessible name also contains "password", so a careless implementation
-    // makes label lookups ambiguous and breaks every consumer's tests.
+    // The toggle's accessible name also contains "password", so naming it carelessly
+    // makes label lookups ambiguous and breaks every consumer's tests. Queried without a
+    // selector on purpose — restricting to `input` would exclude the button and so could
+    // never see the ambiguity this guards against.
     renderField();
 
-    expect(screen.getAllByLabelText('Password', { selector: 'input' })).toHaveLength(1);
+    expect(screen.getAllByLabelText('Password')).toHaveLength(1);
   });
 
   it('forwards form-injected props to the input rather than the wrapper', () => {
@@ -89,5 +106,17 @@ describe('PasswordInput', () => {
 
     expect(getField()).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Show password' })).toBeDisabled();
+  });
+
+  it('keeps the toggle out of normal flow even when disabled', () => {
+    // A disabled IconButton wraps itself in a span so its tooltip stays hoverable. That
+    // span must stay inside the absolutely-positioned wrapper, or it sits in flow and
+    // adds a stray line box under the field — a layout break jsdom cannot measure, so
+    // this asserts the containment that prevents it.
+    renderField({ disabled: true });
+
+    const positioner = screen.getByRole('button', { name: 'Show password' }).closest('span.absolute');
+    expect(positioner).not.toBeNull();
+    expect(positioner?.parentElement).toBe(getField().parentElement);
   });
 });
