@@ -2,12 +2,19 @@
 node_modules
 .pnp.*
 .claude/worktrees/
+.worktrees/
 .venv
 **/dist/**
 **/dev-dist/**
 **/build/**
 **/coverage/**
 **/__generated__/**
+# Capacitor copies the built web bundle into the native projects on `cap sync`.
+# Both paths are gitignored, but by the *nested* .gitignore files inside ios/ and
+# android/ — Prettier only reads the root one. Without these, every sync leaves
+# format:check failing on ~100 minified bundle files (sw.js, workbox-*, assets/*).
+frontend/apps/mobile/ios/App/App/public/
+frontend/apps/mobile/android/app/src/main/assets/public/
 frontend/apps/web/src/graphql/index.ts
 frontend/apps/web/src/graphql/gql.ts
 frontend/apps/web/src/graphql/graphql.ts
