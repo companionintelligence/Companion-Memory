@@ -133,8 +133,6 @@ type Documents = {
     "\n  mutation CreateNote($input: CreateNoteInput!) {\n    createNote(input: $input) {\n      success\n      note {\n        id\n        title\n        content\n        updatedAt\n      }\n    }\n  }\n": typeof types.CreateNoteDocument,
     "\n                  fragment NewNote on NoteType {\n                    id\n                    title\n                    content\n                    updatedAt\n                  }\n                ": typeof types.NewNoteFragmentDoc,
     "\n  mutation DeleteNote($input: DeleteByIdInput!) {\n    deleteNote(input: $input) {\n      success\n      deletedId\n    }\n  }\n": typeof types.DeleteNoteDocument,
-    "\n  fragment NoteGridItemFragment on NoteType {\n    id\n    title\n    content\n  }\n": typeof types.NoteGridItemFragmentFragmentDoc,
-    "\n  query GetNotes($first: Int, $after: String) {\n    notes(first: $first, after: $after) {\n      edges {\n        node {\n          id\n          ...NoteGridItemFragment\n        }\n      }\n    }\n  }\n": typeof types.GetNotesDocument,
     "\n  query GetPeople($query: String, $first: Int, $after: String) {\n    people(query: $query, first: $first, after: $after) {\n      totalCount\n      pageInfo {\n        hasNextPage\n        endCursor\n      }\n      edges {\n        cursor\n        node {\n          id\n          name\n          description\n          firstName\n          lastName\n          avatarUrl\n          birthDate\n          isSelf\n          identifiers {\n            kind\n            value\n            label\n          }\n          interactionStats {\n            eventCount\n            communicationCount\n            lastInteractionAt\n          }\n        }\n      }\n    }\n  }\n": typeof types.GetPeopleDocument,
     "\n  query GetPersonDuplicates {\n    personDuplicates {\n      reason\n      value\n      people {\n        id\n        name\n        description\n        avatarUrl\n        isSelf\n      }\n    }\n  }\n": typeof types.GetPersonDuplicatesDocument,
     "\n  mutation MergePeople($input: MergePeopleInput!) {\n    mergePeople(input: $input) {\n      success\n      person {\n        id\n        name\n      }\n    }\n  }\n": typeof types.MergePeopleDocument,
@@ -285,8 +283,6 @@ const documents: Documents = {
     "\n  mutation CreateNote($input: CreateNoteInput!) {\n    createNote(input: $input) {\n      success\n      note {\n        id\n        title\n        content\n        updatedAt\n      }\n    }\n  }\n": types.CreateNoteDocument,
     "\n                  fragment NewNote on NoteType {\n                    id\n                    title\n                    content\n                    updatedAt\n                  }\n                ": types.NewNoteFragmentDoc,
     "\n  mutation DeleteNote($input: DeleteByIdInput!) {\n    deleteNote(input: $input) {\n      success\n      deletedId\n    }\n  }\n": types.DeleteNoteDocument,
-    "\n  fragment NoteGridItemFragment on NoteType {\n    id\n    title\n    content\n  }\n": types.NoteGridItemFragmentFragmentDoc,
-    "\n  query GetNotes($first: Int, $after: String) {\n    notes(first: $first, after: $after) {\n      edges {\n        node {\n          id\n          ...NoteGridItemFragment\n        }\n      }\n    }\n  }\n": types.GetNotesDocument,
     "\n  query GetPeople($query: String, $first: Int, $after: String) {\n    people(query: $query, first: $first, after: $after) {\n      totalCount\n      pageInfo {\n        hasNextPage\n        endCursor\n      }\n      edges {\n        cursor\n        node {\n          id\n          name\n          description\n          firstName\n          lastName\n          avatarUrl\n          birthDate\n          isSelf\n          identifiers {\n            kind\n            value\n            label\n          }\n          interactionStats {\n            eventCount\n            communicationCount\n            lastInteractionAt\n          }\n        }\n      }\n    }\n  }\n": types.GetPeopleDocument,
     "\n  query GetPersonDuplicates {\n    personDuplicates {\n      reason\n      value\n      people {\n        id\n        name\n        description\n        avatarUrl\n        isSelf\n      }\n    }\n  }\n": types.GetPersonDuplicatesDocument,
     "\n  mutation MergePeople($input: MergePeopleInput!) {\n    mergePeople(input: $input) {\n      success\n      person {\n        id\n        name\n      }\n    }\n  }\n": types.MergePeopleDocument,
@@ -796,14 +792,6 @@ export function gql(source: "\n                  fragment NewNote on NoteType {\
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  mutation DeleteNote($input: DeleteByIdInput!) {\n    deleteNote(input: $input) {\n      success\n      deletedId\n    }\n  }\n"): (typeof documents)["\n  mutation DeleteNote($input: DeleteByIdInput!) {\n    deleteNote(input: $input) {\n      success\n      deletedId\n    }\n  }\n"];
-/**
- * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function gql(source: "\n  fragment NoteGridItemFragment on NoteType {\n    id\n    title\n    content\n  }\n"): (typeof documents)["\n  fragment NoteGridItemFragment on NoteType {\n    id\n    title\n    content\n  }\n"];
-/**
- * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function gql(source: "\n  query GetNotes($first: Int, $after: String) {\n    notes(first: $first, after: $after) {\n      edges {\n        node {\n          id\n          ...NoteGridItemFragment\n        }\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetNotes($first: Int, $after: String) {\n    notes(first: $first, after: $after) {\n      edges {\n        node {\n          id\n          ...NoteGridItemFragment\n        }\n      }\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

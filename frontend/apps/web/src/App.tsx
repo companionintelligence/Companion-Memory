@@ -1,6 +1,12 @@
 import { type ReactNode, lazy, useEffect } from 'react';
 
-import { ConnectionModeProvider, DeviceLayoutProvider, LoadingPage, getApiBaseUrl, isNativePlatform } from '@ci/common';
+import {
+  ConnectionModeProvider,
+  DeviceLayoutProvider,
+  LoadingPage,
+  getApiBaseUrl,
+  isNativePlatform,
+} from '@ci/common';
 import {
   BrowserRouter as Router,
   Routes,

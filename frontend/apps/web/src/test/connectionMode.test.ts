@@ -29,7 +29,10 @@ afterEach(() => {
 describe('resolveConnectionMode — "connected"', () => {
   it('resolves "connected" when the remote /api/health endpoint answers (web, no LocalHub in play)', async () => {
     setWindow({});
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => okResponse()),
+    );
 
     await expect(resolveConnectionMode()).resolves.toBe('connected');
   });
@@ -110,7 +113,10 @@ describe('resolveConnectionMode — "local"', () => {
         Plugins: { LocalHub: { start, stop: vi.fn(), getStatus: vi.fn() } },
       },
     });
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => okResponse()),
+    );
 
     await expect(resolveConnectionMode()).resolves.toBe('connected');
     expect(start).not.toHaveBeenCalled();

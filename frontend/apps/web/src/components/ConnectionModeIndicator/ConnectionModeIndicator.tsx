@@ -59,7 +59,10 @@ export function ConnectionModeIndicator() {
       className="cursor-pointer select-none gap-1.5"
       aria-label={label}
     >
-      <span className={cn('inline-block size-1.5 shrink-0 rounded-full', DOT_CLASS[mode])} aria-hidden="true" />
+      <span
+        className={cn('inline-block size-1.5 shrink-0 rounded-full', DOT_CLASS[mode])}
+        aria-hidden="true"
+      />
       <span className={mode === 'connected' ? 'sr-only' : undefined}>{label}</span>
     </Badge>
   );

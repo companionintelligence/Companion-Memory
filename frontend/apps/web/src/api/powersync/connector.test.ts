@@ -33,7 +33,10 @@ function fakeCrudEntry(overrides: Partial<CrudEntry>): CrudEntry {
   } as CrudEntry;
 }
 
-function fakeDatabase(crud: CrudEntry[]): { database: AbstractPowerSyncDatabase; complete: ReturnType<typeof vi.fn> } {
+function fakeDatabase(crud: CrudEntry[]): {
+  database: AbstractPowerSyncDatabase;
+  complete: ReturnType<typeof vi.fn>;
+} {
   const complete = vi.fn().mockResolvedValue(undefined);
 
   const transaction = crud.length > 0 ? { crud, complete } : null;
@@ -68,7 +71,9 @@ describe('GraphQLBackendConnector.fetchCredentials', () => {
   });
 
   it('fetches the powersync token with a Bearer header when a JWT is present', async () => {
-    const fetchMock = stubFetch(jsonResponse({ token: 'ps-token', powersync_url: 'https://sync.example.com' }));
+    const fetchMock = stubFetch(
+      jsonResponse({ token: 'ps-token', powersync_url: 'https://sync.example.com' }),
+    );
     const connector = new GraphQLBackendConnector(() => 'jwt-abc');
 
     const credentials = await connector.fetchCredentials();
@@ -83,7 +88,9 @@ describe('GraphQLBackendConnector.fetchCredentials', () => {
 
   it('fetches with the x-api-key header on native (no JWT)', async () => {
     setApiKey('native-key');
-    const fetchMock = stubFetch(jsonResponse({ token: 'ps-token', powersync_url: 'https://sync.example.com' }));
+    const fetchMock = stubFetch(
+      jsonResponse({ token: 'ps-token', powersync_url: 'https://sync.example.com' }),
+    );
     const connector = new GraphQLBackendConnector(() => null);
 
     await connector.fetchCredentials();
@@ -113,8 +120,15 @@ describe('GraphQLBackendConnector.uploadData', () => {
   });
 
   it('replays a note PUT as createNote and completes the transaction', async () => {
-    const fetchMock = stubFetch(jsonResponse({ data: { createNote: { success: true, note: { id: 'gid' } } } }));
-    const op = fakeCrudEntry({ op: UpdateType.PUT, table: 'notes', id: 'local-1', opData: { title: 'Hi', content: '<p>Hi</p>' } });
+    const fetchMock = stubFetch(
+      jsonResponse({ data: { createNote: { success: true, note: { id: 'gid' } } } }),
+    );
+    const op = fakeCrudEntry({
+      op: UpdateType.PUT,
+      table: 'notes',
+      id: 'local-1',
+      opData: { title: 'Hi', content: '<p>Hi</p>' },
+    });
     const { database, complete } = fakeDatabase([op]);
     const connector = new GraphQLBackendConnector(() => 'jwt-abc');
 
@@ -130,7 +144,12 @@ describe('GraphQLBackendConnector.uploadData', () => {
 
   it('replays a note PATCH as updateNote with the base64 global id', async () => {
     const fetchMock = stubFetch(jsonResponse({ data: { updateNote: { success: true } } }));
-    const op = fakeCrudEntry({ op: UpdateType.PATCH, table: 'notes', id: 'local-1', opData: { title: 'New title' } });
+    const op = fakeCrudEntry({
+      op: UpdateType.PATCH,
+      table: 'notes',
+      id: 'local-1',
+      opData: { title: 'New title' },
+    });
     const { database, complete } = fakeDatabase([op]);
     const connector = new GraphQLBackendConnector(() => 'jwt-abc');
 
@@ -187,7 +206,12 @@ describe('GraphQLBackendConnector.uploadData', () => {
 
   it('drops a record whose mutation reports success: false and still completes', async () => {
     const fetchMock = stubFetch(jsonResponse({ data: { updateNote: { success: false } } }));
-    const op = fakeCrudEntry({ op: UpdateType.PATCH, table: 'notes', id: 'ghost-id', opData: { title: 'x' } });
+    const op = fakeCrudEntry({
+      op: UpdateType.PATCH,
+      table: 'notes',
+      id: 'ghost-id',
+      opData: { title: 'x' },
+    });
     const { database, complete } = fakeDatabase([op]);
     const connector = new GraphQLBackendConnector(() => 'jwt-abc');
 

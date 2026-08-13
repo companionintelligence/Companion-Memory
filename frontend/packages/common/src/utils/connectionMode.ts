@@ -141,7 +141,9 @@ function firstSuccess<T>(probes: Array<Promise<T | null>>): Promise<T | null> {
  * {@link useConnectionMode}.
  */
 export async function resolveConnectionMode(): Promise<ConnectionMode> {
-  const probes: Array<Promise<ConnectionMode | null>> = [probeRemote().then((ok) => (ok ? 'connected' : null))];
+  const probes: Array<Promise<ConnectionMode | null>> = [
+    probeRemote().then((ok) => (ok ? 'connected' : null)),
+  ];
 
   if (isNativePlatform()) {
     probes.push(probeLocal().then((ok) => (ok ? 'local' : null)));

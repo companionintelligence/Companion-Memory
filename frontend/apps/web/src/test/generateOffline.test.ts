@@ -42,7 +42,10 @@ function stubFetchWithFrames(chunks: Array<[Channel, string]>) {
 }
 
 // The mock's recorded args are untyped; read (input, init) via a cast (mirrors fetchJson.test.ts).
-function callArgs(mock: ReturnType<typeof stubFetchWithFrames>, index = 0): [RequestInfo, RequestInit | undefined] {
+function callArgs(
+  mock: ReturnType<typeof stubFetchWithFrames>,
+  index = 0,
+): [RequestInfo, RequestInit | undefined] {
   return mock.mock.calls[index] as unknown as [RequestInfo, RequestInit | undefined];
 }
 
@@ -120,7 +123,10 @@ describe('generateOffline — web (no Capacitor) falls back to /api/llm/generate
 
   it('throws when the response is not ok', async () => {
     setWindow({});
-    vi.stubGlobal('fetch', vi.fn(async (): Promise<Response> => ({ ok: false, status: 500, body: null }) as unknown as Response));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (): Promise<Response> => ({ ok: false, status: 500, body: null }) as unknown as Response),
+    );
 
     await expect(generateOffline('prompt')).rejects.toThrow();
   });

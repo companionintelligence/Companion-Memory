@@ -438,7 +438,10 @@ export interface GenerateOfflineResult {
  * called `loadModel()` (e.g. after the user opted into downloading the on-device model)
  * get a local answer; everyone else transparently gets the remote one.
  */
-export async function generateOffline(prompt: string, options: GenerateOfflineOptions = {}): Promise<GenerateOfflineResult> {
+export async function generateOffline(
+  prompt: string,
+  options: GenerateOfflineOptions = {},
+): Promise<GenerateOfflineResult> {
   const llm = plugins()?.LocalLLM;
 
   if (isNativePlatform() && llm) {
@@ -463,7 +466,11 @@ export async function generateOffline(prompt: string, options: GenerateOfflineOp
 }
 
 /** Drives `generateStream` + the `llmToken` event into a single buffered result, forwarding partials. */
-async function generateLocalStreaming(llm: LocalLlmPlugin, prompt: string, onToken: (token: string) => void): Promise<string> {
+async function generateLocalStreaming(
+  llm: LocalLlmPlugin,
+  prompt: string,
+  onToken: (token: string) => void,
+): Promise<string> {
   let full = '';
 
   const handle = await llm.addListener('llmToken', (event) => {
@@ -520,7 +527,10 @@ const TEXT_CHANNEL = 0;
 const FRAME_HEADER_BYTES = 5;
 
 /** Reads a frame-encoded response body, returning the concatenated TEXT-channel payload. */
-async function decodeTextFrames(body: ReadableStream<Uint8Array>, onToken?: (token: string) => void): Promise<string> {
+async function decodeTextFrames(
+  body: ReadableStream<Uint8Array>,
+  onToken?: (token: string) => void,
+): Promise<string> {
   const reader = body.getReader();
   const textDecoder = new TextDecoder();
   let buffer = new Uint8Array(0);
