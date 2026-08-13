@@ -1,0 +1,402 @@
+name: Mobile Release
+
+# Signed, store-bound builds of the Capacitor app: a TestFlight upload and a Play
+# internal-testing upload. This is the DISTRIBUTION lane and it needs credentials —
+# `mobile-build.yml` remains the credential-free lane that produces an unsigned
+# simulator .app and a debug APK for sideloading.
+#
+# Trigger it from Actions → Mobile Release → Run workflow, or by pushing a
+# `mobile-release-v*` tag:
+#
+#     git tag mobile-release-v0.1.0 && git push origin mobile-release-v0.1.0
+#
+# `dry_run: true` (the default for manual runs) builds and signs everything and
+# uploads the artifacts to the run, but does NOT submit to Apple or Google. Use it to
+# prove the signing chain works before spending a real build number — Apple and Google
+# both permanently burn a build number on upload, so a failed submission after a
+# successful one still costs you that number.
+#
+# ── Required secrets ───────────────────────────────────────────────────────────
+# iOS (App Store Connect API key auth — no Apple ID, no 2FA prompt in CI):
+#   APPSTORE_ISSUER_ID          App Store Connect → Users and Access → Integrations
+#   APPSTORE_KEY_ID             the key's ID
+#   APPSTORE_PRIVATE_KEY        contents of the AuthKey_<KEYID>.p8, PEM text
+#   APPLE_TEAM_ID               10-char team ID
+#   IOS_DIST_CERT_P12_BASE64    base64 of the Apple Distribution .p12
+#   IOS_DIST_CERT_PASSWORD      that .p12's password
+#   IOS_PROVISIONING_PROFILE_BASE64
+#                               base64 of the App Store .mobileprovision for
+#                               com.companionintelligence.app
+# Android:
+#   ANDROID_KEYSTORE_BASE64     base64 of the upload .jks
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+#   ANDROID_KEY_PASSWORD
+#   PLAY_SERVICE_ACCOUNT_JSON   Play Console service-account JSON with
+#                               "Release to testing tracks" permission
+#
+# Each platform is skipped (not failed) when its secrets are absent, so you can wire
+# up one store before the other.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and sign, but do not submit to the stores'
+        type: boolean
+        default: true
+      version_name:
+        description: 'Marketing version (e.g. 0.1.0). Defaults to the tag or 0.1.0.'
+        type: string
+        required: false
+  push:
+    tags:
+      - 'mobile-release-v*'
+
+# The root install pulls the private @companionintelligence/tokens package from GitHub
+# Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`
+# the job's GITHUB_TOKEN cannot read it and every install fails as an anonymous user.
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+  VITE_DISABLE_PWA: 'true'
+
+jobs:
+  # Resolve the version once so both stores get identical numbers for the same run.
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+      dry_run: ${{ steps.v.outputs.dry_run }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version_name }}" ]; then
+            NAME="${{ inputs.version_name }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/mobile-release-v* ]]; then
+            NAME="${GITHUB_REF#refs/tags/mobile-release-v}"
+          else
+            NAME="0.1.0"
+          fi
+          # github.run_number is monotonic per workflow, which is exactly the
+          # "must never repeat, must always increase" contract both stores enforce.
+          echo "name=${NAME}"                        >> "$GITHUB_OUTPUT"
+          echo "code=${{ github.run_number }}"       >> "$GITHUB_OUTPUT"
+          # A tag push is always a real submission; a manual run honours the checkbox.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Version ${NAME} (build ${{ github.run_number }})"
+
+  ios:
+    name: iOS → TestFlight
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for iOS signing secrets
+        id: secrets
+        env:
+          CERT: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          ISSUER: ${{ secrets.APPSTORE_ISSUER_ID }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$PROFILE" ] && [ -n "$ISSUER" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::iOS signing secrets not configured — skipping the TestFlight lane."
+          fi
+
+      - name: Node.js + Corepack (Yarn 4)
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - if: steps.secrets.outputs.present == 'true'
+        run: corepack enable
+
+      - name: Install root dependencies
+        if: steps.secrets.outputs.present == 'true'
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build web bundle
+        if: steps.secrets.outputs.present == 'true'
+        run: yarn workspace @ci/fe-web build
+
+      - name: Install mobile dependencies
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capacitor sync (iOS)
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile
+        run: yarn cap sync ios
+
+      # A dedicated keychain, unlocked and set as the default search list, is what lets
+      # a non-interactive xcodebuild find the identity. `set-key-partition-list` is the
+      # step people miss: without it codesign blocks on a UI prompt that never appears
+      # and the job hangs until it times out.
+      - name: Import signing certificate
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          CERT_B64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_B64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/dist.p12"
+
+      - name: Install provisioning profile
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          # Xcode 16+ reads profiles from ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles;
+          # older tooling reads ~/Library/MobileDevice/Provisioning Profiles. Write both.
+          for DIR in \
+            "$HOME/Library/MobileDevice/Provisioning Profiles" \
+            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$DIR"
+            echo "$PROFILE_B64" | base64 --decode > "$DIR/companion.mobileprovision"
+          done
+          UUID=$(security cms -D -i "$HOME/Library/MobileDevice/Provisioning Profiles/companion.mobileprovision" \
+            | plutil -extract UUID raw -o - -)
+          NAME=$(security cms -D -i "$HOME/Library/MobileDevice/Provisioning Profiles/companion.mobileprovision" \
+            | plutil -extract Name raw -o - -)
+          echo "PROVISIONING_PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+          echo "PROVISIONING_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Installed profile '$NAME' ($UUID)"
+
+      # The project is checked in with CODE_SIGN_STYLE = Automatic and no DEVELOPMENT_TEAM,
+      # which cannot work on a runner that has no Apple ID session. Override to manual
+      # signing on the command line rather than editing the pbxproj, so opening the project
+      # in Xcode locally keeps working exactly as before.
+      - name: Archive
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile/ios/App
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Companion.xcarchive" \
+            -allowProvisioningUpdates NO \
+            MARKETING_VERSION='${{ needs.version.outputs.name }}' \
+            CURRENT_PROJECT_VERSION='${{ needs.version.outputs.code }}' \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID"
+
+      - name: Export .ipa
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile/ios/App
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>uploadSymbols</key><true/>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.companionintelligence.app</key>
+              <string>${PROVISIONING_PROFILE_UUID}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Companion.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+          ls -la "$RUNNER_TEMP/export"
+
+      - name: Upload .ipa artifact
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+
+      # Validate first: it catches the great majority of rejections (missing icons,
+      # bad entitlements, an already-used build number) WITHOUT consuming the upload.
+      - name: Validate with App Store Connect
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          ISSUER: ${{ secrets.APPSTORE_ISSUER_ID }}
+          KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+          IPA=$(find "$RUNNER_TEMP/export" -name '*.ipa' | head -1)
+          xcrun altool --validate-app -f "$IPA" -t ios \
+            --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
+
+      - name: Upload to TestFlight
+        if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run != 'true'
+        env:
+          ISSUER: ${{ secrets.APPSTORE_ISSUER_ID }}
+          KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+        run: |
+          set -euo pipefail
+          IPA=$(find "$RUNNER_TEMP/export" -name '*.ipa' | head -1)
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
+
+      - name: Clean up keychain and keys
+        if: always() && steps.secrets.outputs.present == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -rf "$HOME/.appstoreconnect/private_keys" || true
+
+  android:
+    name: Android → Play (internal)
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for Android signing secrets
+        id: secrets
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Android signing secrets not configured — skipping the Play lane."
+          fi
+
+      - name: Node.js + Corepack (Yarn 4)
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - if: steps.secrets.outputs.present == 'true'
+        run: corepack enable
+
+      - name: Install root dependencies
+        if: steps.secrets.outputs.present == 'true'
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build web bundle
+        if: steps.secrets.outputs.present == 'true'
+        run: yarn workspace @ci/fe-web build
+
+      - name: JDK 21 (Temurin)
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Android SDK
+        if: steps.secrets.outputs.present == 'true'
+        uses: android-actions/setup-android@v3
+      - name: Install SDK components
+        if: steps.secrets.outputs.present == 'true'
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install mobile dependencies
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capacitor sync (Android)
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile
+        run: yarn cap sync android
+
+      - name: Decode keystore
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      # An .aab, not an .apk: Play has required the App Bundle format for new apps
+      # since August 2021.
+      - name: Gradle bundleRelease
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/mobile/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_CODE: ${{ needs.version.outputs.code }}
+          ANDROID_VERSION_NAME: ${{ needs.version.outputs.name }}
+        run: ./gradlew bundleRelease --no-daemon
+
+      - name: Upload .aab artifact
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-android-aab
+          path: frontend/apps/mobile/android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+      - name: Upload to Play (internal track)
+        if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run != 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.companionintelligence.app
+          releaseFiles: frontend/apps/mobile/android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
+      - name: Clean up keystore
+        if: always() && steps.secrets.outputs.present == 'true'
+        run: rm -f "$RUNNER_TEMP/upload.jks" || true

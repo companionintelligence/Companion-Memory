@@ -16,6 +16,13 @@ on:
     tags:
       - 'mobile-v*'
 
+# The root install pulls the private @companionintelligence/tokens package from GitHub
+# Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`
+# the job's GITHUB_TOKEN cannot read it and every install fails as an anonymous user.
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: mobile-build-${{ github.ref }}
   cancel-in-progress: true
@@ -44,6 +51,8 @@ jobs:
       # Root install (Yarn PnP), then build the web bundle the app ships via webDir.
       - name: Install root dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build web bundle
         run: yarn workspace @ci/fe-web build
 
@@ -62,6 +71,8 @@ jobs:
       - name: Install mobile dependencies
         working-directory: frontend/apps/mobile
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Capacitor sync (Android)
         working-directory: frontend/apps/mobile
@@ -94,12 +105,16 @@ jobs:
 
       - name: Install root dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build web bundle
         run: yarn workspace @ci/fe-web build
 
       - name: Install mobile dependencies
         working-directory: frontend/apps/mobile
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # cap sync runs `pod install` — CocoaPods ships on GitHub's macOS runners.
       - name: Capacitor sync (iOS)
