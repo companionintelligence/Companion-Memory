@@ -1842,7 +1842,7 @@ export type Query = {
   /** Distinct event types ("how things happened") present for the user. */
   eventTypes: Array<Scalars['String']['output']>;
   events: EventConnection;
-  /** Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. STOPGAP: excludes browser_activity source rows until schedule event policy is defined. */
+  /** Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Limited to calendar event types (see SCHEDULE_EVENT_TYPES) plus events with no event_type, which is how user-created and accepted-suggestion events arrive. */
   eventsInRange: Array<EventType>;
   /** Get actions for the feed, prioritizing unseen actions */
   feedActions: Array<ActionType>;
