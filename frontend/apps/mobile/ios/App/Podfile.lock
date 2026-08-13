@@ -15,6 +15,14 @@ PODS:
     - Capacitor
   - CapacitorStatusBar (7.0.6):
     - Capacitor
+  - CiCapacitorLocalHub (0.0.0):
+    - Capacitor
+    - GCDWebServer (~> 3.5)
+  - CiCapacitorSpeech (0.0.0):
+    - Capacitor
+  - GCDWebServer (3.5.4):
+    - GCDWebServer/Core (= 3.5.4)
+  - GCDWebServer/Core (3.5.4)
   - SwiftKeychainWrapper (4.0.1)
 
 DEPENDENCIES:
@@ -26,9 +34,12 @@ DEPENDENCIES:
   - CapacitorSecureStoragePlugin (from `../../node_modules/capacitor-secure-storage-plugin`)
   - "CapacitorSplashScreen (from `../../node_modules/@capacitor/splash-screen`)"
   - "CapacitorStatusBar (from `../../node_modules/@capacitor/status-bar`)"
+  - CiCapacitorLocalHub (from `../../../../packages/capacitor-local-hub`)
+  - CiCapacitorSpeech (from `../../../../packages/capacitor-speech`)
 
 SPEC REPOS:
   trunk:
+    - GCDWebServer
     - SwiftKeychainWrapper
 
 EXTERNAL SOURCES:
@@ -48,6 +59,10 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/splash-screen"
   CapacitorStatusBar:
     :path: "../../node_modules/@capacitor/status-bar"
+  CiCapacitorLocalHub:
+    :path: "../../../../packages/capacitor-local-hub"
+  CiCapacitorSpeech:
+    :path: "../../../../packages/capacitor-speech"
 
 SPEC CHECKSUMS:
   Capacitor: 8ef25ba872436d2c5ac2a4791f7255529bdcd93b
@@ -58,8 +73,11 @@ SPEC CHECKSUMS:
   CapacitorSecureStoragePlugin: 450d402026ee3bcc018fa206504d9c0572fee78d
   CapacitorSplashScreen: 409eeaaeac603d264f209c0fcb718aa22fe1f7bb
   CapacitorStatusBar: 416e9e53fd6397e668d4a181cd2131617d949bd6
+  CiCapacitorLocalHub: 841aca4ddb4faa956df4d45c1a3720856b6bba29
+  CiCapacitorSpeech: 5f3efbc77893c90c8ebc5be07a496c5fb617790a
+  GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
   SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
 
-PODFILE CHECKSUM: 2fb8b261fd65f59169a199f36fd093b2e09ae8c8
+PODFILE CHECKSUM: 8cffd03cd443dc00df19a2ccd06b528fa5bbbc14
 
-COCOAPODS: 1.16.2
+COCOAPODS: 1.17.0

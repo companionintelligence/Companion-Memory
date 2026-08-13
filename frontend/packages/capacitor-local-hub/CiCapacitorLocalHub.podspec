@@ -3,14 +3,22 @@ require 'json'
 package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
 
 Pod::Spec.new do |s|
-  s.name = 'CapacitorLocalHub'
+  # MUST be `Ci` + PascalCase of the unscoped package name, and the file MUST be named
+  # `<s.name>.podspec`. `cap sync ios` REGENERATES the `def capacitor_pods` block of
+  # ../../apps/mobile/ios/App/Podfile from the installed plugins, deriving the pod name
+  # from package.json's `name` (`@ci/capacitor-local-hub` -> `CiCapacitorLocalHub`) and
+  # the path from node_modules. A hand-written `pod 'CapacitorLocalHub', :path => ...`
+  # line does not survive a sync, and CocoaPods then fails with
+  # "No podspec found for `CiCapacitorLocalHub`". Renaming here instead of fighting the
+  # generator is what makes `cap sync` idempotent.
+  s.name = 'CiCapacitorLocalHub'
   s.version = package['version']
   s.summary = package['description']
-  # This pod is private and never published to a spec repo -- it's consumed only via a
-  # local `:path =>` entry in ../../apps/mobile/ios/App/Podfile (see
-  # capacitor_pods there). license/homepage/author are filler for CocoaPods' benefit,
-  # not derived from package.json (which has neither field), matching this repo's
-  # "Private & Confidential" status.
+  # This pod is private and never published to a spec repo -- it's consumed only via the
+  # generated `:path =>` entry in ../../apps/mobile/ios/App/Podfile (see capacitor_pods
+  # there). license/homepage/author are filler for CocoaPods' benefit, not derived from
+  # package.json (which has neither field), matching this repo's "Private &
+  # Confidential" status.
   s.license = 'UNLICENSED'
   s.homepage = 'https://github.com/companionintelligence/CI-Server'
   s.author = 'Lifescope Inc.'

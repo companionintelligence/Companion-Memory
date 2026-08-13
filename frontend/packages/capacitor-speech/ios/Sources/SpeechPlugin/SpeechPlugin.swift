@@ -61,7 +61,12 @@ public class SpeechPlugin: CAPPlugin, CAPBridgedPlugin, RecognitionEventSink {
 
     // MARK: - Permissions
 
-    @objc func checkPermissions(_ call: CAPPluginCall) {
+    /// `override public`, not a bare `@objc func`: `CAPPlugin` is an Objective-C class that
+    /// already declares `-checkPermissions:` / `-requestPermissions:` (CAPPlugin.h), so these
+    /// are overrides — and because the base declarations import as `open` on a `public`
+    /// class, an override has to be `public` too. Same shape as
+    /// `@capacitor/local-notifications`' plugin.
+    @objc override public func checkPermissions(_ call: CAPPluginCall) {
         call.resolve([
             "microphone": SpeechRecognitionController.microphonePermissionState(),
             "speechRecognition": SpeechRecognitionController.recognitionPermissionState()
@@ -72,7 +77,7 @@ public class SpeechPlugin: CAPPlugin, CAPBridgedPlugin, RecognitionEventSink {
     /// `SFSpeechRecognizer` authorization *in addition to* the microphone one, so asking
     /// for only one leaves the caller with a session that fails later for a reason the user
     /// was never shown a prompt about.
-    @objc func requestPermissions(_ call: CAPPluginCall) {
+    @objc override public func requestPermissions(_ call: CAPPluginCall) {
         let requested = call.getArray("permissions", String.self) ?? ["microphone", "speechRecognition"]
 
         SpeechRecognitionController.requestAuthorizations(

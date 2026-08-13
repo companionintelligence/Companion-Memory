@@ -11,7 +11,7 @@
     "android/src/androidTest/",
     "android/build.gradle",
     "ios/Sources",
-    "CapacitorLocalHub.podspec",
+    "CiCapacitorLocalHub.podspec",
     "src/"
   ],
   "keywords": [
