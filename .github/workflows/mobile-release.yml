@@ -53,6 +53,13 @@ on:
     tags:
       - 'mobile-release-v*'
 
+# The root install pulls the private @companionintelligence/tokens package from GitHub
+# Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`
+# the job's GITHUB_TOKEN cannot read it and every install fails as an anonymous user.
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: mobile-release-${{ github.ref }}
   cancel-in-progress: false
@@ -127,6 +134,8 @@ jobs:
       - name: Install root dependencies
         if: steps.secrets.outputs.present == 'true'
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build web bundle
         if: steps.secrets.outputs.present == 'true'
         run: yarn workspace @ci/fe-web build
@@ -135,6 +144,8 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/mobile
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Capacitor sync (iOS)
         if: steps.secrets.outputs.present == 'true'
@@ -315,6 +326,8 @@ jobs:
       - name: Install root dependencies
         if: steps.secrets.outputs.present == 'true'
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build web bundle
         if: steps.secrets.outputs.present == 'true'
         run: yarn workspace @ci/fe-web build
@@ -336,6 +349,8 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/mobile
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Capacitor sync (Android)
         if: steps.secrets.outputs.present == 'true'
