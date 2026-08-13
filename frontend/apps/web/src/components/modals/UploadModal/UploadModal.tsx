@@ -76,7 +76,7 @@ export function UploadModal({ open, onClose, onSubmit }: Props) {
       <Dialog.Content className="p-0 flex flex-col gap-0" showCloseButton={false}>
         <Dialog.Header className="flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary rounded-t-lg gap-2 p-2 pl-4">
           <Dialog.Title>Upload files</Dialog.Title>
-          <Dialog.Description className="hidden">Upload files to your server.</Dialog.Description>
+          <Dialog.Description className="hidden">Upload files to your Companion Memory.</Dialog.Description>
 
           <div className="flex items-center justify-end">
             <IconButton label={t('COMMON_CLOSE')} variant="ghost" size="icon" onClick={handleClose}>

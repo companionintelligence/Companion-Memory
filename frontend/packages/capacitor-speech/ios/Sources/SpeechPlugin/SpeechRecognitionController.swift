@@ -223,10 +223,29 @@ final class SpeechRecognitionController: NSObject {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            // .duckOthers rather than a full interruption so a talk-then-listen loop does
-            // not tear down other audio; .record (not .playAndRecord) because the
-            // synthesizer keeps its own session — see SpeechSynthesisController.
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+            // .record (not .playAndRecord) because the synthesizer keeps its own session —
+            // see SpeechSynthesisController. `.duckOthers` is the *preference*: it avoids a
+            // full interruption so a talk-then-listen loop does not tear down other audio.
+            //
+            // It is only a preference because Apple documents `.duckOthers` as usable ONLY
+            // with `.playAndRecord`, `.playback`, and `.multiRoute` — pairing it with
+            // `.record` may be rejected as an illegal argument, and `setCategory` throwing
+            // here would make `startListening` fail *every single time*, taking the whole
+            // STT feature with it. The iOS 27 Simulator accepts the combination (measured),
+            // but the Simulator's AVAudioSession is a partial stub and its permissiveness is
+            // not evidence about real hardware. So: ask for ducking, and if the system
+            // refuses, listen without it rather than not listening at all. Ducking is a
+            // nicety; recognition is the product.
+            //
+            // TODO(speech): on a real device, check whether the duck attempt throws. If it
+            // does, decide deliberately between plain `.record` (what the fallback gives you)
+            // and `.playAndRecord` + `.duckOthers` (ducking back, at the cost of the
+            // separate-session split this file relies on).
+            do {
+                try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+            } catch {
+                try session.setCategory(.record, mode: .measurement, options: [])
+            }
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             return .rejected(code: "audio", message: "Could not configure the audio session: \(error.localizedDescription)")

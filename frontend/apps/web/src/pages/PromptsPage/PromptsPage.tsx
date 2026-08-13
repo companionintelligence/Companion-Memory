@@ -79,7 +79,7 @@ export function PromptsPage() {
         } else if (response.status === 404) {
           throw new Error('API endpoint not found');
         } else if (response.status >= 500) {
-          throw new Error('Server error: Please try again later');
+          throw new Error('Memory Server error: Please try again later');
         } else {
           throw new Error(`Error fetching answers: ${response.statusText}`);
         }
