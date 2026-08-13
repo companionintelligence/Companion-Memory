@@ -1,5 +1,23 @@
 apply plugin: 'com.android.application'
 
+// ---------------------------------------------------------------------------
+// Release signing + version stamping, both driven by the environment so that a
+// plain local `./gradlew assembleDebug` still needs nothing configured.
+//
+// Play REJECTS an upload whose versionCode it has already seen, so a store build
+// cannot use the hard-coded 1 below -- CI passes ANDROID_VERSION_CODE (the run
+// number) and ANDROID_VERSION_NAME (from the release tag). Keep the literals as
+// the local-dev fallback only.
+//
+// Signing is applied ONLY when ANDROID_KEYSTORE_PATH is set and the file is
+// really there. That matters: Gradle will happily build an *unsigned* release
+// AAB, and an unsigned artifact is rejected at the very end of the upload rather
+// than at build time, so the failure lands far from its cause. `assembleRelease`
+// / `bundleRelease` therefore fail fast below when the keystore is half-configured.
+// ---------------------------------------------------------------------------
+def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def hasKeystore = keystorePath != null && !keystorePath.isEmpty() && file(keystorePath).exists()
+
 android {
     namespace "com.companionintelligence.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +25,8 @@ android {
         applicationId "com.companionintelligence.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode System.getenv("ANDROID_VERSION_CODE") ? System.getenv("ANDROID_VERSION_CODE").toInteger() : 1
+        versionName System.getenv("ANDROID_VERSION_NAME") ?: "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,11 +34,40 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasKeystore) {
+                storeFile file(keystorePath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasKeystore) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+}
+
+// Fail at configuration time rather than shipping an unsigned release artifact that
+// only gets rejected once it reaches Play. Debug builds are unaffected.
+gradle.taskGraph.whenReady { graph ->
+    def buildingRelease = graph.allTasks.any { it.name ==~ /(?i).*(assemble|bundle)Release.*/ }
+    if (buildingRelease && !hasKeystore) {
+        throw new GradleException(
+            "A release build was requested but no signing keystore is configured.\n" +
+            "Set ANDROID_KEYSTORE_PATH (to an existing .jks), ANDROID_KEYSTORE_PASSWORD, " +
+            "ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD.\n" +
+            "In CI these come from the repo secrets listed in " +
+            "frontend/apps/mobile/README.md -> 'Store releases'.\n" +
+            "For a local sideload build use ./gradlew assembleDebug instead."
+        )
     }
 }
 

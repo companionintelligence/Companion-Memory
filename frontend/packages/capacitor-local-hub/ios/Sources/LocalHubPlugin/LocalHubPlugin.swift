@@ -35,6 +35,15 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// never reachable from JS -- nothing in the WebView has any business holding it.
     private let secureStore = CompanionSecureStore.credentials()
 
+    /// Capacitor calls `load()` on the main thread at plugin-registration time, before any JS
+    /// can reach `start()`. Warming GCDWebServer here means the class initializer -- which
+    /// `abort()`s under DEBUG unless it runs on the main thread -- is already done by the time
+    /// a call arrives on a background queue. `start()` repeats the guard for its own safety;
+    /// see `LocalHubServer.warmUpOnMainThread`.
+    override public func load() {
+        LocalHubServer.warmUpOnMainThread()
+    }
+
     /// Starts the embedded loopback HTTP server if it isn't already running and
     /// resolves with its `baseUrl`/`token`. If already running, resolves with the
     /// existing `baseUrl`/`token` unchanged -- no restart, no new token minted.

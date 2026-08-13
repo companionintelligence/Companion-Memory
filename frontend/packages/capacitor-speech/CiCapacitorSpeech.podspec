@@ -3,12 +3,15 @@ require 'json'
 package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
 
 Pod::Spec.new do |s|
-  s.name = 'CapacitorSpeech'
+  # `Ci` + PascalCase of the unscoped package name, matching what `cap sync ios`
+  # derives from `@ci/capacitor-speech` when it regenerates the Podfile's
+  # capacitor_pods block -- see the same note in CiCapacitorLocalHub.podspec.
+  s.name = 'CiCapacitorSpeech'
   s.version = package['version']
   s.summary = package['description']
-  # This pod is private and never published to a spec repo -- it's consumed only via a
-  # local `:path =>` entry in ../../apps/mobile/ios/App/Podfile (see capacitor_pods
-  # there), exactly like CapacitorLocalHub. license/homepage/author are filler for
+  # This pod is private and never published to a spec repo -- it's consumed only via the
+  # generated `:path =>` entry in ../../apps/mobile/ios/App/Podfile (see capacitor_pods
+  # there), exactly like CiCapacitorLocalHub. license/homepage/author are filler for
   # CocoaPods' benefit, not derived from package.json (which has neither field),
   # matching this repo's "Private & Confidential" status.
   s.license = 'UNLICENSED'

@@ -71,6 +71,14 @@ infrastructure/cloudflare/config.yml
 # repo — never stage them, or root-level tooling will lint/format the copies.
 .claude/worktrees/
 
+# Gradle output for the local Capacitor plugin packages. frontend/apps/mobile/
+# android/.gitignore already covers the app project, but these packages are
+# their own Gradle modules and were never covered — a release build run inside
+# one committed 430 build artifacts (compiled .class files, merged manifests,
+# intermediate jars). Building normally goes through the app project, so this
+# only bites whoever builds a package directly or opens it in Android Studio.
+frontend/packages/*/android/build/
+
 # Local-only architecture visualization (ChartDB, Compodoc, schema dumps,
 # generated dashboards). Scripts live under tools/architecture-viz/; output
 # and npm install under .local/architecture-viz/.

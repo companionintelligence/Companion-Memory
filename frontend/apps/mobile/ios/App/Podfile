@@ -8,25 +8,32 @@ use_frameworks!
 # Requires CocoaPods 1.6 or newer
 install! 'cocoapods', :disable_input_output_paths => true
 
+# The block below is GENERATED -- do not hand-edit. `cap sync ios` rewrites everything
+# between the method definition and its `end` from the installed Capacitor plugins,
+# deriving each pod name from the package name (`@ci/capacitor-speech` ->
+# `CiCapacitorSpeech`) and each path from node_modules. Comments and hand-added `pod`
+# lines inside it are lost on the next sync. To change what lands there, change the
+# plugin package (its `name`, its `capacitor.ios.src`, or its podspec filename) -- see
+# CiCapacitorLocalHub.podspec. The `target`/`post_install` sections below are outside the
+# block and ARE preserved.
+#
+# Two things about the generator are worth knowing before editing this file. It splices
+# on the literal method-definition text, so a comment that merely quotes that text is
+# treated as the start of the block and corrupts the file. And it emits the *resolved*
+# path: the `@ci/*` plugins are declared with Yarn's `portal:` protocol, so their
+# node_modules entries are symlinks and the generated lines point straight at
+# ../../../../packages/<name> -- CocoaPods compiles the working-tree Swift, with no
+# reinstall between a source edit and a build.
 def capacitor_pods
   pod 'Capacitor', :path => '../../node_modules/@capacitor/ios'
   pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/ios'
   pod 'CapacitorApp', :path => '../../node_modules/@capacitor/app'
   pod 'CapacitorBrowser', :path => '../../node_modules/@capacitor/browser'
-  # Local Hub (Phase 1 skeleton): loopback-only embedded HTTP server. Referenced
-  # directly at the workspace package (not via node_modules like the pods above)
-  # because it isn't hoisted into frontend/apps/mobile/node_modules the way
-  # `@ci/capacitor-local-hub`'s Android side is picked up by capacitor.settings.gradle
-  # -- CocoaPods' `:path` only needs the podspec + ios/ to exist at this location, so
-  # it works whether or not `yarn install` has linked the package into node_modules.
-  pod 'CapacitorLocalHub', :path => '../../../../packages/capacitor-local-hub'
   pod 'CapacitorLocalNotifications', :path => '../../node_modules/@capacitor/local-notifications'
-  # Offline speech (STT + TTS). Same workspace-path rationale as CapacitorLocalHub above.
-  # UNVERIFIED: the iOS side has never been compiled or `pod install`ed — no Mac in the
-  # environment it was written in. Expect to iterate on first real build.
-  pod 'CapacitorSpeech', :path => '../../../../packages/capacitor-speech'
   pod 'CapacitorSplashScreen', :path => '../../node_modules/@capacitor/splash-screen'
   pod 'CapacitorStatusBar', :path => '../../node_modules/@capacitor/status-bar'
+  pod 'CiCapacitorLocalHub', :path => '../../../../packages/capacitor-local-hub'
+  pod 'CiCapacitorSpeech', :path => '../../../../packages/capacitor-speech'
   pod 'CapacitorSecureStoragePlugin', :path => '../../node_modules/capacitor-secure-storage-plugin'
 end
 

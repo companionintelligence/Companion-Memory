@@ -24,9 +24,9 @@
     "@capacitor/local-notifications": "^7.0.0",
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.0",
-    "@ci/capacitor-local-hub": "file:../../packages/capacitor-local-hub",
-    "@ci/capacitor-local-llm": "file:../../packages/capacitor-local-llm",
-    "@ci/capacitor-speech": "file:../../packages/capacitor-speech",
+    "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub",
+    "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm",
+    "@ci/capacitor-speech": "portal:../../packages/capacitor-speech",
     "capacitor-secure-storage-plugin": "^0.11.0"
   },
   "devDependencies": {

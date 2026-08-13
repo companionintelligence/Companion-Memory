@@ -38,9 +38,33 @@ needs it. Nothing ships to either store until the 🔴 P0 items below are done.
 | ✅ `UIRequiredDeviceCapabilities` `armv7` → `arm64` (stale 32-bit template value) | `ios/App/App/Info.plist` |
 | ✅ Android `allowBackup="false"` (keep the private-memory app's local state out of cloud/adb backup) | `android/app/src/main/AndroidManifest.xml` |
 | ✅ **In-app account deletion** — `DELETE /account` (soft-delete + access revocation) and Settings → Account | `backend/.../auth/controllers/AccountController.ts`, `frontend/apps/web/src/pages/SettingsPage/sections/AccountSection.tsx` |
+| ✅ **Signed store lanes** — TestFlight `.ipa` + Play internal `.aab`, with build numbers stamped from CI | `.github/workflows/mobile-release.yml`, `android/app/build.gradle` |
 
-Both native builds (iOS + Android) were verified green on a `mobile-v*` tag after the
-native changes; the backend/frontend work is green on PR CI.
+The backend/frontend work is green on PR CI.
+
+> ### ⚠️ 2026-08-13 — correction to the line that used to sit here
+> This file previously said *"both native builds (iOS + Android) were verified green on a
+> `mobile-v*` tag."* That was true of the **Android** job and misleading about **iOS**.
+> The green iOS job predates the Local Hub / speech plugins; once those landed, `cap sync
+> ios` could not `pod install` at all, so the iOS lane had been failing rather than
+> passing. On the first real Mac build of this branch:
+>
+> - **iOS did not compile.** The `@ci/*` podspecs were named `CapacitorLocalHub` /
+>   `CapacitorSpeech`, but `cap sync` regenerates the Podfile and derives
+>   `CiCapacitorLocalHub` / `CiCapacitorSpeech` from the package names — CocoaPods failed
+>   with "No podspec found". Plus two Swift access-level errors in `SpeechPlugin`.
+> - **Once it compiled, it crashed.** `LocalHub.start()` hit `abort()` inside
+>   `+[GCDWebServer initialize]`, which asserts `[NSThread isMainThread]`; the server was
+>   being constructed on a private serial queue. **Every Debug build died on the first
+>   Local Hub call** — i.e. every developer build and every Xcode-run TestFlight build.
+>
+> All four are fixed, and iOS is now verified the way Android was: clean build from an
+> empty DerivedData (Xcode 27 / iOS 27 sim), app launches and stays up, and the outbox
+> database is created for real in the app container — `sqlite_sequence` present in the
+> live file (which is what proves `AUTOINCREMENT` is actually in effect) and
+> `journal_mode=wal`. **Still unverified on iOS:** anything needing real hardware —
+> transcription accuracy, on-device `SFSpeechRecognizer` availability (the simulator
+> reports `supportsOnDeviceRecognition` differently from a device), and reboot durability.
 
 ---
 
@@ -58,11 +82,15 @@ Owner: **[code]** = doable in-repo · **[acct]** = needs an Apple/Google/Sentry 
   - **Chosen strategy: soft-delete + background purge.** `deleted_at` is a TypeORM `@DeleteDateColumn`, so every read on the user repository skips the row — all three auth entry points (`findById` for JWT *and* API-key, `validatePassword`, `findByEmail`) inherit the gate for free and no future auth path can forget it. `purge_after` is pinned at request time so config changes can't rewrite a promise already made.
   - [ ] 🔴 **[code]** **Remaining: the background purge job** that consumes `purge_after` (batched + hypertable-aware). Until it exists, `purge_after` is a promise with nothing honouring it — deletion revokes access but does not yet delete data, which the privacy policy and Data Safety answers must not overstate.
   - [ ] 🔴 **[acct]** **Remaining: the public web deletion URL** Google requires (in addition to the in-app path).
-- [ ] 🔴 **[code]** **Signed release CI lanes** — `mobile-build.yml` only produces an unsigned debug APK + a Simulator `.app`. Add: iOS `xcodebuild archive → -exportArchive` (app-store method) → `.ipa`; Android `./gradlew bundleRelease` → signed `.aab`. Gate both on the signing secrets (§2). *(Code is in-repo; the certs/keystore behind it are [acct].)*
+- [x] 🔴 **[code]** **Signed release CI lanes** — *done: [`mobile-release.yml`](../../../.github/workflows/mobile-release.yml).* iOS `xcodebuild archive → -exportArchive` (`app-store-connect`) → `.ipa` → `altool --validate-app` → TestFlight; Android `bundleRelease` → signed `.aab` → Play **internal** track. Notes on how it behaves:
+  - **`dry_run` defaults to true** on manual runs: it builds, signs, and *validates* against App Store Connect but does not submit. Use it to prove the signing chain before burning a build number — both stores permanently consume a build number on upload, so a failed submission after a successful one still costs you that number. A `mobile-release-v*` **tag push always submits.**
+  - Each platform **skips rather than fails** when its secrets are absent, so iOS and Android can be wired up independently.
+  - The Android half is verified locally end-to-end: a throwaway keystore produced a signed `app-release.aab` (`META-INF/*.RSA` present) with `versionCode` stamped from the environment. The iOS half is unverifiable without a real Apple Developer account — the certs/profile/API key are all [acct] work, so **first run it with `dry_run: true`.**
+  - `./gradlew bundleRelease` now **fails at configuration time** when no keystore is configured, instead of quietly emitting an unsigned bundle that Play rejects at the end of the upload — a failure that otherwise lands very far from its cause.
 - [ ] 🟠 **[code]** **Scope Android cleartext** — replace app-wide `usesCleartextTraffic="true"` with an `android:networkSecurityConfig`. ⚠️ **Deferred deliberately:** the appliance can be *any* user-entered LAN/tailnet http host, so a scoped config still has to permit cleartext broadly; changing it risks regressing the hard-won LAN-http connectivity. Do this only with an on-device Android retest. Keep the iOS `NSAllowsArbitraryLoadsInWebContent` scoping as the model. Reconcile with the Data Safety "encrypted in transit" answer (see C3 below).
-- [ ] 🟠 **[code]** **Version/build automation** — everything is pinned at `1` / `1.0` / `0.0.0`. Derive iOS `CURRENT_PROJECT_VERSION`, Android `versionCode`, and a web build id from CI (tag + run number) so the *second* upload isn't rejected as a duplicate build.
+- [x] 🟠 **[code]** **Version/build automation** — *done for both native apps.* `mobile-release.yml` resolves the version once and hands the same numbers to both stores: marketing version from the `mobile-release-v*` tag (or a manual input), build number from `github.run_number`, which is monotonic per workflow and so satisfies the "never repeats, always increases" rule both stores enforce. iOS takes them as `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` xcodebuild overrides; Android reads `ANDROID_VERSION_NAME` / `ANDROID_VERSION_CODE` in `build.gradle`, with the old literals kept only as the local-dev fallback. *(A web build id is still unstamped — 🟢, it does not gate a store upload.)*
 - [ ] 🟠 **[code]** **iPad — DECIDED: ship universal (iPhone + iPad).** `Info.plist` already declares all iPad orientations, so the binary **will be reviewed on iPad**. Since we are keeping iPad in scope rather than setting `TARGETED_DEVICE_FAMILY = 1`, the adaptive iPad/split-view layout in `@ci/fe-web` becomes **pre-submission work, not roadmap work**: a phone-shaped webview stretched to iPad is a live 4.2/2.1 rejection risk, and iPad screenshots become mandatory for the listing.
-- [ ] 🟢 **[code]** `CODE_SIGN_IDENTITY = "iPhone Developer"` is the pre-Xcode-9 name → resolves during signing setup (§2); use `Apple Development` / let distribution resolve `Apple Distribution`.
+- [x] 🟢 **[code]** `CODE_SIGN_IDENTITY = "iPhone Developer"` (the pre-Xcode-9 name) and `CODE_SIGN_STYLE = Automatic` with no `DEVELOPMENT_TEAM` — *handled, deliberately without touching the pbxproj.* Automatic signing cannot work on a runner with no Apple ID session, so the release job overrides `CODE_SIGN_STYLE=Manual`, `CODE_SIGN_IDENTITY='Apple Distribution'`, `DEVELOPMENT_TEAM`, and `PROVISIONING_PROFILE_SPECIFIER` on the `xcodebuild` command line. Opening the project in Xcode locally therefore behaves exactly as before. If you later prefer the settings baked in, change them in Xcode and drop the overrides — but *not* both half-done.
 - [ ] 🟠 **[code]** Verify Android 15 **edge-to-edge** (targetSdk 35 forces it) + **16 KB page size** on an API-35 device. ⚠️ **No longer a no-op — the “no native libs” premise is wrong.** The app ships native libraries from two sources: `@ci/capacitor-local-llm` pulls `com.google.ai.edge.litertlm:litertlm-android` (`libLiteRt.so`, `libLiteRtClGlAccelerator.so`, `liblitertlm_jni.so`), and `@ci/capacitor-local-hub` now pulls `net.zetetic:sqlcipher-android` (`libsqlcipher.so`) for outbox encryption at rest. *Checked on the current debug APK:* every packaged `.so` reports ELF `p_align = 0x4000` and every `lib/**` zip entry is stored uncompressed at a 16 KB-aligned offset, so the build is compliant today — but this is now a real check that can regress on any native-dependency bump, not a formality. Raised 🟢→🟠 for that reason.
 
 ### 1b. Signing & store accounts
@@ -86,6 +114,63 @@ Owner: **[code]** = doable in-repo · **[acct]** = needs an Apple/Google/Sentry 
 - **"Sign in with Apple" (4.8)** — N/A. The only federated login is first-party OIDC to your own CI-Portal; there's no Google/Apple/Facebook button and no `ASAuthorization`. Be ready to tell a reviewer CI-Portal is *your* IdP, not a covered third party.
 - **UGC report/block/filter machinery (1.2)** — largely N/A: single-user, self-hosted memory app with no user-to-user surface. State that explicitly as the defense (a reviewer seeing "AI chat + capture" may ask).
 - **Google Photo & Video Permissions policy** — sidestepped today because capture is `getUserMedia`, not `READ_MEDIA_IMAGES`. Do **not** add broad-storage/media-read permissions without the Play declaration (and note only the Photo-Library *Add* usage string exists on iOS — a future in-app library picker needs the *read* string too).
+
+---
+
+## 1e. The ASAP critical path (added 2026-08-13)
+
+The checklist above is the full picture; this is the **ordered** version — what actually
+gates the next store upload, and what can run in parallel. The honest summary: **the
+remaining blockers are almost entirely `[acct]`, not `[code]`.** Engineering can no
+longer pull the date in much; accounts, hosted assets, and legal copy now can.
+
+**Sequence — the long pole is Apple enrollment, so start it today.**
+
+| # | Do this | Owner | Blocks | Can start now? |
+|---|---|---|---|---|
+| 1 | **Apple Developer Program enrollment** + App Store Connect app record for `com.companionintelligence.app` | [acct] | *everything* on iOS | ✅ yes — org verification alone can take days |
+| 2 | **Google Play Console** account + app record; enroll in **Play App Signing**; generate the upload keystore | [acct] | everything on Android | ✅ yes |
+| 3 | Create the **App Store Connect API key**, **Apple Distribution cert**, **App Store provisioning profile**; add all 11 secrets from §2 to the repo | [acct] | first TestFlight build | after 1 |
+| 4 | Run **Mobile Release with `dry_run: true`** — proves signing, export, and App Store Connect validation without consuming a build number | [code] | first real upload | after 3 |
+| 5 | **Demo CI-Server (seeded, public, HTTPS-only) + demo account** | [acct] | *review approval on both stores* | ✅ **yes, and it is the true long pole after enrollment** |
+| 6 | **Privacy policy URL, EULA, public account-deletion URL** | [acct] | submission forms | ✅ yes |
+| 7 | **Nutrition label / Data Safety answers, EU trader status, age rating, screenshots** | [acct] | submission forms | ✅ yes (except iPad shots — see 9) |
+| 8 | **Background purge job** consuming `purge_after` | [code] | truthful deletion claims in 6/7 | ✅ yes |
+| 9 | **iPad layout pass** in `@ci/fe-web`, or set `TARGETED_DEVICE_FAMILY = 1` | [code] | iOS review (4.2/2.1) | ✅ yes — **decide this first, it changes the screenshot set** |
+| 10 | **On-device Android + iOS pass** — cleartext/LAN, edge-to-edge, and the three things the simulator cannot prove (see below) | [both] | launch confidence | after 1–3 |
+
+**Fastest defensible route to "in a store":** items 1–4 put builds in **TestFlight internal**
+and **Play internal testing**, both of which distribute to your own testers. Neither is
+an escape from policy, but internal tracks let the pipeline start proving itself while
+5–7 are still being written.
+
+**The two things most likely to slip the date, ranked:**
+
+1. **The demo server (5).** A self-hosted client with no reviewer-reachable backend is a
+   well-known automatic rejection, and it gates *every* review-based channel on *both*
+   stores. It is not an engineering afterthought — treat it as the launch dependency.
+2. **iPad (9).** `Info.plist` declares all iPad orientations today, so the binary **will
+   be reviewed on iPad** whether or not anyone designed for it. Deciding late is
+   expensive because it invalidates the screenshot set.
+
+**Known-unfixed defects that should not ship, in severity order** *(all acknowledged in
+the PR that added them — listing them here so they are visible from the delivery plan,
+not only from a PR description)*:
+
+- 🟠 **iOS API key was backup-migratory — now mitigated, not yet properly fixed.**
+  `capacitor-secure-storage-plugin` writes with `kSecAttrAccessibleAfterFirstUnlock`, not
+  `…ThisDeviceOnly`, so the appliance API key rode along in encrypted backups and
+  **restored onto different hardware.** `ios/App/App/KeychainHardening.swift` now sweeps
+  every `cap_sec` item to `…ThisDeviceOnly` at launch and on backgrounding; verified at
+  runtime on an iOS 27 simulator (`ck` → `cku`, idempotent, secret preserved). The proper
+  fix is still S0 in `SECURITY_ARCHITECTURE.md` — a native store that writes the right
+  class in the first place. Downgraded 🔴→🟠, **not** cleared.
+- 🔴 **Android Keystore silently degrades** to plain Base64 in SharedPreferences if
+  Keystore init throws — logging an error while reporting success.
+- 🟠 **The outbox is not encrypted at rest** (plaintext SQLite behind the app sandbox).
+  Fine to ship *only* if the privacy policy and Data Safety answers don't imply otherwise.
+- 🟠 **Android app-wide `usesCleartextTraffic="true"`** — the deferred item above, and a
+  User Data policy violation once sensitive data flows.
 
 ---
 

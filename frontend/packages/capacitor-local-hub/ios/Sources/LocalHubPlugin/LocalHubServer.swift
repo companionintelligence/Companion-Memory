@@ -67,12 +67,54 @@ final class LocalHubServer {
     /// database handle is only released when this object goes away.
     private var outbox: OutboxStore?
 
+    /// Guards `warmUpOnMainThread`. Only ever read or written *on the main thread*, which is
+    /// what makes an unsynchronized `var` safe here.
+    private static var isGCDWebServerWarm = false
+
+    /// Runs `+[GCDWebServer initialize]` on the main thread, once.
+    ///
+    /// GCDWebServer's class initializer calls `GCDWebServerInitializeFunctions()`, whose first
+    /// statement is `GWS_DCHECK([NSThread isMainThread])` -- it builds two shared
+    /// `NSDateFormatter`s and wants them created on the main thread. Under `DEBUG`,
+    /// `GWS_DCHECK` expands to a bare `abort()`, so touching `GCDWebServer` for the first time
+    /// from any other thread is an immediate SIGABRT rather than a warning.
+    ///
+    /// `+initialize` fires on the first message to the class, and the first message this file
+    /// sends is the `GCDWebServer()` inside `start()` -- which runs on `stateQueue`, never the
+    /// main thread. That crashed the app on the very first `LocalHub.start()` call from JS
+    /// (confirmed on an iOS 27 simulator: `+[GCDWebServer initialize]` -> `abort` on thread
+    /// `com.companionintelligence.localhub.server.state`).
+    ///
+    /// Allocating and dropping one server is a safe way to force the class initializer: `-init`
+    /// only sets up a serial queue, a dispatch group, and an empty handler array, and a server
+    /// that was never started satisfies every `GWS_DCHECK` in `-dealloc`.
+    ///
+    /// - Important: call this **before** taking `stateQueue`, never from inside it. It can block
+    ///   on the main queue, and `stop()`/`status()` take `stateQueue` from the main thread, so
+    ///   warming up while holding the queue would invert the two locks and deadlock.
+    static func warmUpOnMainThread() {
+        if Thread.isMainThread {
+            guard !isGCDWebServerWarm else { return }
+            _ = GCDWebServer()
+            isGCDWebServerWarm = true
+            return
+        }
+        DispatchQueue.main.sync {
+            guard !isGCDWebServerWarm else { return }
+            _ = GCDWebServer()
+            isGCDWebServerWarm = true
+        }
+    }
+
     /// Starts the server if not already running (fresh port + fresh token), or
     /// returns the already-running instance's `baseUrl`/`token` unchanged.
     func start() throws -> (baseUrl: String, token: String) {
+        // Outside stateQueue on purpose -- see warmUpOnMainThread's Important note.
+        Self.warmUpOnMainThread()
+
         // Explicit closure result type: multi-statement closures only infer their return
         // type on newer Swift compilers, and none of this file has ever been compiled.
-        try stateQueue.sync { () -> (baseUrl: String, token: String) in
+        return try stateQueue.sync { () -> (baseUrl: String, token: String) in
             if let server = webServer, server.isRunning, let token = activeToken {
                 return (Self.baseUrl(port: server.port), token)
             }
