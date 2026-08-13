@@ -270,6 +270,13 @@ def init_telemetry(component: str) -> bool:
         f"{component}@{version}" if version else None
     )
 
+    def sample_rate(name: str, fallback: float) -> float:
+        try:
+            value = float(_read(os.environ, name) or fallback)
+        except (TypeError, ValueError):
+            return fallback
+        return value if 0 <= value <= 1 else fallback
+
     try:
         sentry_sdk.init(
             dsn=_read(os.environ, "SENTRY_DSN"),
@@ -279,9 +286,10 @@ def init_telemetry(component: str) -> bool:
                 or "development"
             ),
             release=release,
-            # Errors only — no tracing, no profiling, no PII.
-            traces_sample_rate=0.0,
-            profiles_sample_rate=0.0,
+            traces_sample_rate=sample_rate("SENTRY_TRACES_SAMPLE_RATE", 0.1),
+            profiles_sample_rate=sample_rate("SENTRY_PROFILES_SAMPLE_RATE", 0.1),
+            enable_metrics=_read(os.environ, "SENTRY_ENABLE_METRICS").lower() != "false",
+            enable_logs=_read(os.environ, "SENTRY_ENABLE_LOGS").lower() != "false",
             send_default_pii=False,
             # Frame locals in these services are memory rows, note bodies and
             # export paths. The SDK's own EventScrubber only redacts top-level

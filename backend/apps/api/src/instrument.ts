@@ -39,16 +39,21 @@ const MANUALLY_HANDLED_INTEGRATIONS = new Set([
 
 export const telemetry = resolveTelemetrySettings(process.env, COMPONENT);
 
+function sampleRate(name: string, fallback: number): number {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
 if (telemetry.enabled && telemetry.dsn) {
   Sentry.init({
     dsn: telemetry.dsn,
     environment: telemetry.environment,
     release: telemetry.release,
     enabled: true,
-    // Error reporting only. Tracing on an appliance that holds the user's whole
-    // timeline would ship request shapes we have no consent to collect.
-    tracesSampleRate: 0,
-    profilesSampleRate: 0,
+    tracesSampleRate: sampleRate('SENTRY_TRACES_SAMPLE_RATE', 0.1),
+    profilesSampleRate: sampleRate('SENTRY_PROFILES_SAMPLE_RATE', 0.1),
+    enableMetrics: process.env.SENTRY_ENABLE_METRICS !== 'false',
+    enableLogs: process.env.SENTRY_ENABLE_LOGS !== 'false',
     // Never attach IPs, cookies or request bodies. This is deliberate and
     // differs from CI-Hub's current setting — see
     // CI-Engineering/architecture/subsystems/security-trust-and-ops.md gap #7.

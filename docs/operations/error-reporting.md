@@ -30,8 +30,8 @@ narrower than a Sentry default install:
 | Setting | Value | Why |
 |---|---|---|
 | `sendDefaultPii` | `false` | No IPs, cookies, or request bodies. |
-| `tracesSampleRate` | `0` | Errors only. Traces would ship request shapes we have no consent to collect. |
-| Session replay | not installed | Would record the user's own memories on screen. |
+| `tracesSampleRate` | `0.1` by default | Override with `SENTRY_TRACES_SAMPLE_RATE`; keep consent and scrubbing enabled. |
+| Session replay | `0.1` of sessions, 100% of error sessions | Override with the `VITE_SENTRY_REPLAYS_*` variables. |
 | `beforeSend` | scrubber | Redacts credentials and home paths, drops cookies/body/query string. |
 
 Two kill switches disable reporting even when a DSN is baked into an image, so
