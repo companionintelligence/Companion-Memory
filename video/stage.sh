@@ -210,9 +210,9 @@ stage_down() {
 # storyboard as jsmith, including the two onboarding ones this identity cannot
 # reach, and abort before the passes that could have shot them.
 #
-# ⚠️ THE STORYBOARD NO LONGER REFERENCES EIGHT OF THE COMMITTED SHOTS —
+# ⚠️ THE STORYBOARD NO LONGER REFERENCES SEVEN OF THE COMMITTED SHOTS —
 # splash-screen, login-form, onboarding-focus, feed-overview, memory-map-view,
-# memory-stats, insight-detail-view and connect-providers. Their PNGs are kept
+# memory-stats and connect-providers. Their PNGs are kept
 # (video/README.md § "What is committed": the shot library is an input anyone
 # can render from, and `memory-map-view` cost a 826,478-item real-corpus load),
 # but NOTHING BELOW SHOOTS THEM ANY MORE, because `ci-video capture` can only
@@ -221,7 +221,7 @@ stage_down() {
 # CI-Server #1891, which restored the Esri attribution control to `Map.tsx`
 # after that shot was captured — re-shoot it from `video/stage.real-corpus.sh`
 # in the same commit as any scene that brings the map back.
-AUTHED_SHOTS=memory-list-view,memory-detail-sheet,memory-search-results,memory-graph-view,insights-list
+AUTHED_SHOTS=memory-list-view,memory-search-results,memory-graph-view,insights-list,insight-detail-view
 FRESH_SHOTS="onboarding-connect onboarding-trust"
 
 # ── shots that are not captures ──────────────────────────────────────────────

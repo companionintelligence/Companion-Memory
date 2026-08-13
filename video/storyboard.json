@@ -19,8 +19,8 @@
     "control": "Your call"
   },
   "media": {
-    "music": null,
-    "musicVolume": 0.14
+    "music": "assets/media/ci-campaign-bed.mp3",
+    "musicLufs": -22
   },
   "scenes": [
     {
@@ -79,8 +79,8 @@
       "seconds": 5,
       "minSeconds": 4.5,
       "title": "Companion Memory",
-      "caption": "A home for your digital memory.",
-      "narration": "Other agents are double agents. Companion Memory works only for you.",
+      "caption": "The other agents are double agents.",
+      "narration": "The other agents are double agents. Companion Memory works only for you.",
       "mark": "./assets/app-icon.jpg"
     },
     {
@@ -227,40 +227,17 @@
       "narration": "Open one, and the whole record is there. The place, the address, the exact coordinates.",
       "shots": [
         {
-          "id": "memory-detail-sheet",
-          "url": "ci-memory-living-room-server-acme.ci.computer/memory",
-          "alt": "The entity details sheet open over the list, showing one event's full record",
-          "motion": "push-in",
-          "_focusNote": "The narration names three field values — 'The place, the address, the exact coordinates' — and until this change the ADDRESS was the one the frame cut. Measured off the rendered landscape cut (video-kit 0.24.0, origin/main @ 208a6410, t=44.0s) and off `ci-video focus-preview --at end`: the old 0.576 window from (0.224, 0.112) ends at plate x 0.800, and the address value runs to about 0.892, so the end frame read '4 Sanctuary Ridge, Laguna' and stopped mid-word on the one line the sentence promises. A caption cannot be true of a value the push-in amputates.\n\n0.625 from (0.313, 0.100) — scale 2.065, down from 2.240 — reaches plate x 0.938 and carries '4 Sanctuary Ridge, Laguna Beach, CA 92651' whole with margin, while PLACE, COORDINATES and TYPE stay above the caption band and the Details block stays on screen. It is LESS zoom than before, not more: the rectangle was mis-aimed, not too tight.\n\nThe left edge still falls inside the list underneath and a few dimmed row subtitles are cut mid-word. That is unchanged and still unavoidable at any usable scale — excluding the list entirely needs a window of 0.48 and the ceiling is 0.526 — and it reads as depth behind the sheet rather than as damage, because the sheet dims everything under it. Flagged rather than hidden.\n\nSIDE EFFECT WORTH KNOWING, and it is a mitigation rather than a fix: `capture.mask` paints the sheet's `<time>` elements with `color.card`, which renders as a column of nine identical teal pills down the sheet's right gutter (plate x 0.945-0.974) — indistinguishable from a loading skeleton in an otherwise fully painted page. This window ends at 0.938, so the pills are out of the END frame; they are still there at the start of the push. The real fix is the one hazard 4 in capture.config.mjs already reached for the forecast strip — hide the element rather than paint a rectangle over it — and it needs a re-capture against the full stage, so it is filed there, not faked here.\n\nPortrait is a full-bleed reframe, not a crop: mobile stacks this record full-width, so w 1.0 asks for coverScale, the phone frame drops away and the record grows 39%. Unchanged.",
-          "focus": {
-            "landscape": {
-              "x": 0.313,
-              "y": 0.1,
-              "w": 0.625,
-              "h": 0.625
-            },
-            "portrait": {
-              "x": 0,
-              "y": 0.015,
-              "w": 0.8,
-              "h": 0.738
-            }
-          },
+          "id": "insight-detail-view",
+          "url": "ci-memory-living-room-server-acme.ci.computer/insights/01936cb0-0000-7000-8000-000000000003",
+          "alt": "A daily project summary with backend development activity, a completed milestone, and a team decision for the next sprint",
+          "motion": "drift-down",
           "capture": {
-            "path": "/memory?view=list&includedEntityTypes=Event",
-            "waitFor": "div[role=\"button\"]",
-            "before": [
-              {
-                "click": "div[role=\"button\"] >> nth=0"
-              },
-              {
-                "waitFor": "[data-slot=\"sheet-content\"] [data-slot=\"sheet-title\"]"
-              }
-            ],
+            "path": "/insights/01936cb0-0000-7000-8000-000000000003",
+            "waitFor": "h1:has-text(\"Daily Summary\")",
             "mask": [
               "time"
             ],
-            "settle": 700
+            "settle": 500
           }
         }
       ]
@@ -418,13 +395,13 @@
           "focus": {
             "landscape": {
               "x": 0.05,
-              "y": 0.0,
+              "y": 0,
               "w": 0.94,
               "h": 0.94
             },
             "portrait": {
               "x": 0.04,
-              "y": 0.0,
+              "y": 0,
               "w": 0.92,
               "h": 0.92
             }
@@ -439,9 +416,9 @@
       "transition": "cut",
       "reveal": "paced",
       "seconds": 8,
-      "title": "Universal MCP support",
-      "caption": "The agents you already use, on a memory that is yours.",
-      "narration": "Which is why the agents you already use plug straight into it, over one MCP server that answers only to you.",
+      "title": "The agents reporting only to you.",
+      "caption": "Hermes and OpenClaw, connected through MCP.",
+      "narration": "Hermes and OpenClaw connect through separate app backends over MCP. Your context stays on the machine you own.",
       "items": [
         {
           "label": "MCP server",
@@ -575,6 +552,114 @@
       "url": "ci.computer/memory",
       "narration": "Companion Memory, from Companion Intelligence. UnCloud your life, at ci dot computer slash memory.",
       "mark": "brand:logo.full"
+    }
+  ],
+  "master": [
+    {
+      "ref": "ask-it",
+      "chapter": "bring",
+      "caption": "The other agents are double agents.",
+      "narration": "The other agents are double agents. Yours should not start from zero. Search the history you chose to keep."
+    },
+    {
+      "ref": "bring-it-home",
+      "caption": "Bring in the mail, calendars, photos, and files you choose.",
+      "narration": "Companion Memory brings the mail, calendars, photos, and files you choose into one searchable memory on hardware you control."
+    },
+    {
+      "ref": "the-record",
+      "caption": "Open a project summary. See the decisions behind it.",
+      "narration": "Open a project summary and inspect the decisions, patterns, and activity behind it."
+    },
+    {
+      "ref": "it-connects",
+      "caption": "People, places, projects, and moments stay connected.",
+      "narration": "Memory connects people, places, projects, and moments so related history is easier to find."
+    },
+    {
+      "ref": "it-notices",
+      "caption": "It can turn activity into useful summaries.",
+      "narration": "It can turn the activity you store into useful summaries and patterns."
+    },
+    {
+      "ref": "your-agents",
+      "caption": "One memory for every agent you choose.",
+      "narration": "Connect the agents you choose. Claude and Codex can use the same Memory, while Hermes and OpenClaw connect through their separate app backends over MCP."
+    },
+    {
+      "ref": "close",
+      "caption": "ci.computer/memory",
+      "cta": "One memory. Every agent you choose. Yours.",
+      "tagline": "UnCloud your life.",
+      "url": "ci.computer/memory",
+      "narration": "One memory. Every agent you choose. Yours. Get Companion Memory at ci dot computer slash memory. UnCloud your life."
+    }
+  ],
+  "deliverables": [
+    {
+      "id": "ci-memory-30",
+      "kind": "short",
+      "name": "Companion Memory 30",
+      "meta": {
+        "pacingTail": 0.16
+      },
+      "scenes": [
+        {
+          "ref": "ask-it",
+          "caption": "The other agents are double agents.",
+          "narration": "The other agents are double agents. Yours should not start from zero.",
+          "seconds": 5.5
+        },
+        {
+          "ref": "bring-it-home",
+          "caption": "The history you choose. One searchable memory.",
+          "narration": "Bring the mail, calendars, photos, and files you choose into one searchable Memory.",
+          "seconds": 6
+        },
+        {
+          "ref": "the-record",
+          "caption": "Open the summary. See the decisions behind it.",
+          "narration": "Open a project summary and see the decisions and activity behind it.",
+          "seconds": 5
+        },
+        {
+          "ref": "it-notices",
+          "caption": "Find patterns across the activity you keep.",
+          "narration": "Find useful summaries and patterns across the activity you keep.",
+          "seconds": 4
+        },
+        {
+          "ref": "your-agents",
+          "caption": "Claude, Codex, Hermes, OpenClaw. One Memory.",
+          "narration": "Give Claude, Codex, Hermes, OpenClaw, and every agent you choose the same Memory.",
+          "seconds": 5
+        },
+        {
+          "ref": "close",
+          "caption": "ci.computer/memory",
+          "cta": "One memory. Every agent you choose. Yours.",
+          "tagline": "UnCloud your life.",
+          "url": "ci.computer/memory",
+          "narration": "One Memory. Every agent you choose. Yours. Get it at ci dot computer slash memory.",
+          "seconds": 5.5
+        }
+      ]
+    },
+    {
+      "id": "ci-memory-bumper-double-agents",
+      "kind": "bumper",
+      "name": "Companion Memory: Double agents",
+      "meta": {
+        "pacing": "fit",
+        "pacingTail": 0.12
+      },
+      "scenes": [
+        {
+          "ref": "ask-it",
+          "caption": "One Memory. Every agent you choose. Yours. · ci.computer/memory",
+          "narration": "The other agents are double agents. One Memory. Yours."
+        }
+      ]
     }
   ]
 }
