@@ -33,6 +33,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnectionMode } from './connectionMode';
 import { createHookContext } from './createHookContext';
 import { FetchJsonError, fetchJson } from './fetchJson';
+import { addAppStateListener } from './nativeBridge';
 import {
   getOutboxItem,
   listOutbox,
@@ -447,12 +448,17 @@ const EMPTY_QUEUE = {
 } satisfies Omit<OutboxQueueState, 'refresh'>;
 
 /**
- * Tracks queue depth and drives the flush loop off the connection mode — no timer of its
- * own. Entering `"connected"` starts a drain; leaving it aborts the drain in progress, so
- * a mode that flickers does not leave a doomed flush running against an unreachable server.
+ * Tracks queue depth and drives the flush loop off two signals — no timer of its own.
+ *
+ * 1. **Entering `"connected"`.** Leaving it aborts the drain in progress, so a mode that
+ *    flickers does not leave a doomed flush running against an unreachable server.
+ * 2. **Returning to the foreground.** A mode transition alone is not enough: the app is not
+ *    probing while backgrounded, so it can leave and return on the same mode with a queue
+ *    that grew in between (a background location fix, or a capture taken during an outage
+ *    the app slept through). Resume therefore re-probes *and* drains on its own.
  */
 function useOutboxQueueState(): OutboxQueueState {
-  const { mode } = useConnectionMode();
+  const { mode, refresh: refreshConnectionMode } = useConnectionMode();
   const [snapshot, setSnapshot] = useState<Omit<OutboxQueueState, 'refresh'>>(EMPTY_QUEUE);
 
   // Monotonic request id: overlapping refreshes (a mode change landing while a post-flush
@@ -510,6 +516,54 @@ function useOutboxQueueState(): OutboxQueueState {
 
     return () => controller.abort();
   }, [mode, refresh]);
+
+  // Read through a ref so resuming does not need to re-subscribe on every mode change —
+  // the listener is registered once and always sees the current mode.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  useEffect(() => {
+    let disposed = false;
+    let unsubscribe: () => void = () => {};
+
+    void addAppStateListener((isActive) => {
+      if (!isActive || disposed) {
+        return;
+      }
+
+      // The OS does not deliver `online`/`offline` to a suspended WebView, so the mode may
+      // describe the network as it was before the app went away. Re-probe first; if that
+      // lands on a different mode the effect above drains, and this drain is a no-op
+      // because `flushOutbox` joins the one already running.
+      refreshConnectionMode();
+
+      if (modeRef.current !== 'connected') {
+        return;
+      }
+
+      // Deliberately unaborted, unlike the mode-driven drain: a resume carries no "the
+      // connection just went away" signal to honor, and tearing down here would cancel a
+      // healthy drain every time the app came forward.
+      void flushOutbox().then(() => {
+        if (!disposed) {
+          refresh();
+        }
+      });
+    }).then((off) => {
+      if (disposed) {
+        off();
+
+        return;
+      }
+
+      unsubscribe = off;
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [refresh, refreshConnectionMode]);
 
   return { ...snapshot, refresh };
 }

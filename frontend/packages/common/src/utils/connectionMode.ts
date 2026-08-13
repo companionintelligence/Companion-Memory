@@ -146,9 +146,17 @@ function useConnectionModeState(): ConnectionModeState {
   // Coalesces overlapping refreshes (e.g. an `online` event firing while a
   // previous check is still in flight) into a single run.
   const inFlightRef = useRef<Promise<void> | null>(null);
+  // Set when a refresh is requested while one is already running. The in-flight
+  // probe started before whatever prompted that request, so its answer may
+  // already be stale — without a trailing re-run, an `offline`/`online` pair
+  // that straddles a single probe leaves the mode pinned to the offline answer
+  // until the next event, and the outbox drain never sees the reconnect.
+  const requeuedRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (inFlightRef.current) {
+      requeuedRef.current = true;
+
       return;
     }
 
@@ -156,6 +164,11 @@ function useConnectionModeState(): ConnectionModeState {
       .then(setMode)
       .finally(() => {
         inFlightRef.current = null;
+
+        if (requeuedRef.current) {
+          requeuedRef.current = false;
+          refresh();
+        }
       });
 
     inFlightRef.current = run;
@@ -168,13 +181,22 @@ function useConnectionModeState(): ConnectionModeState {
       return;
     }
 
-    // Re-probe on network-change events per the design doc. `offline` needs no
-    // listener of its own: there is nothing to probe successfully while
-    // offline, and the next `online` event (or an explicit `refresh()`)
-    // re-checks.
+    // Re-probe on both network-change events. `offline` matters even though no
+    // probe can reach the appliance while it is down: the mode is what drives
+    // the outbox drain, and a drop that leaves `mode` sitting on "connected"
+    // makes the subsequent recovery a non-transition — `online` re-probes,
+    // resolves "connected" again, React bails out on the identical state, and
+    // nothing ever drains the queue the outage filled. Re-probing here moves
+    // the mode to "local" (native, sidecar still up) or "fresh", so coming back
+    // is a real transition. It is a probe, not an assumption, because reaching
+    // the sidecar is exactly what distinguishes those two.
     window.addEventListener('online', refresh);
+    window.addEventListener('offline', refresh);
 
-    return () => window.removeEventListener('online', refresh);
+    return () => {
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('offline', refresh);
+    };
   }, [refresh]);
 
   return { mode, refresh };
