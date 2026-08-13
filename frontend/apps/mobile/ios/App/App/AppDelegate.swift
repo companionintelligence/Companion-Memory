@@ -7,7 +7,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Seals any credential written by a previous version (or a previous session) to
+        // this device, so it cannot ride along in an encrypted backup and restore onto
+        // different hardware. See KeychainHardening for why this is a sweep.
+        KeychainHardening.hardenStoredCredentials()
         return true
     }
 
@@ -19,6 +22,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func applicationDidEnterBackground(_ application: UIApplication) {
         // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
         // If your application supports background execution, this method is called instead of applicationWillTerminate: when the user quits.
+
+        // Repeated here, not just at launch: the web layer can store a fresh API key
+        // mid-session (sign-in, server change), and that write goes through the pod's
+        // migratory `.afterFirstUnlock`. Hardening on the way out of the foreground puts
+        // the fix ahead of any realistic backup, which happens while the device is idle.
+        KeychainHardening.hardenStoredCredentials()
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {

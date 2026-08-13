@@ -282,6 +282,51 @@ or drop it.
 **This is the cheapest high-value slice in the document and it blocks nothing.** Do it
 first (S0 in §8).
 
+### 2.4.1 [V] Partial fix shipped on iOS — `KeychainHardening` (2026-08-13)
+
+The full S0 replacement above is still the right destination. In the meantime the **iOS**
+half of D1 is mitigated in-repo by
+[`ios/App/App/KeychainHardening.swift`](./ios/App/App/KeychainHardening.swift), which
+sweeps every `cap_sec` item to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` via
+`SecItemUpdate`. `AppDelegate` runs it at launch and again on entering the background —
+the second call matters because the web layer can store a fresh key mid-session, and a
+device backup realistically happens after the app has left the foreground.
+
+**Why a sweep and not simply asking the plugin to write the right class.** That looks like
+a one-line change and is a trap: `SwiftKeychainWrapper.update` puts `kSecAttrAccessible`
+into the **query** dictionary, where it is a *match constraint*, not a change. Asking it
+for `…ThisDeviceOnly` would therefore fail to match any item already stored as
+`…AfterFirstUnlock`, `SecItemUpdate` would return `errSecItemNotFound`, and `set()` would
+return `false` — credential saving would break on upgrade for exactly the users who
+already have a key. `KeychainHardening` matches on service+account only and puts the
+accessibility in the *attributes-to-update* dictionary, which `SecItemUpdate` does accept.
+
+**[V] — verified at runtime**, not reasoned about. A temporary probe (added, run, removed)
+seeded an item with `kSecAttrAccessibleAfterFirstUnlock` on an iOS 27 simulator and logged
+the sweep's effect:
+
+```
+PROBE seed add status=0
+PROBE before=ck        # kSecAttrAccessibleAfterFirstUnlock — backup-migratory
+PROBE upgraded=1
+PROBE after=cku        # …AfterFirstUnlockThisDeviceOnly — the "u" is ThisDeviceOnly
+PROBE idempotent_second_run_upgraded=0
+PROBE value_after=seeded-secret   # the stored secret survived the change
+```
+
+**Two caveats, stated plainly.** This is a mitigation layered on a wrong write, so a write
+followed by a backup with *no* intervening background transition is still theoretically
+migratory — S0 remains the real fix. And it covers **iOS only**; D2, the Android Keystore
+fallback that silently writes plain Base64 to SharedPreferences, is untouched and is still
+the more severe of the two.
+
+> **Incidental finding worth knowing:** an **unsigned** build cannot use the Keychain at
+> all — `SecItemAdd` returns `-34018` (`errSecMissingEntitlement`). That is the
+> configuration `mobile-build.yml` produces (`CODE_SIGNING_ALLOWED=NO`), so its artifact
+> cannot exercise sign-in, the API key, or the App Intents' `CompanionConfig` read. Not a
+> shipping bug — real builds are signed — but do not read "the unsigned CI build launched
+> fine" as evidence that the credential path works.
+
 ---
 
 ## 3. Key management

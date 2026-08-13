@@ -155,11 +155,14 @@ an escape from policy, but internal tracks let the pipeline start proving itself
 the PR that added them — listing them here so they are visible from the delivery plan,
 not only from a PR description)*:
 
-- 🔴 **iOS API key is backup-migratory.** `capacitor-secure-storage-plugin` writes with
-  `kSecAttrAccessibleAfterFirstUnlock`, not `…ThisDeviceOnly`, so the appliance API key
-  rides along in encrypted backups and **restores onto different hardware.** Verified by
-  reading the plugin source in `node_modules`; it is a third-party write path, so the fix
-  is a yarn patch or a native re-write of the item, not a one-line change.
+- 🟠 **iOS API key was backup-migratory — now mitigated, not yet properly fixed.**
+  `capacitor-secure-storage-plugin` writes with `kSecAttrAccessibleAfterFirstUnlock`, not
+  `…ThisDeviceOnly`, so the appliance API key rode along in encrypted backups and
+  **restored onto different hardware.** `ios/App/App/KeychainHardening.swift` now sweeps
+  every `cap_sec` item to `…ThisDeviceOnly` at launch and on backgrounding; verified at
+  runtime on an iOS 27 simulator (`ck` → `cku`, idempotent, secret preserved). The proper
+  fix is still S0 in `SECURITY_ARCHITECTURE.md` — a native store that writes the right
+  class in the first place. Downgraded 🔴→🟠, **not** cleared.
 - 🔴 **Android Keystore silently degrades** to plain Base64 in SharedPreferences if
   Keystore init throws — logging an error while reporting success.
 - 🟠 **The outbox is not encrypted at rest** (plaintext SQLite behind the app sandbox).

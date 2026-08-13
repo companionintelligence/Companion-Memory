@@ -12,6 +12,7 @@
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
 		A1B2C3D400000000000000B2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000B1 /* SceneDelegate.swift */; };
 		A1B2C3D400000000000000C2 /* CompanionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000C1 /* CompanionConfig.swift */; };
+		A1B2C3D4000000000000A102 /* KeychainHardening.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000A101 /* KeychainHardening.swift */; };
 		A1B2C3D400000000000000D2 /* CompanionAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000D1 /* CompanionAPI.swift */; };
 		A1B2C3D400000000000000E2 /* CompanionAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000E1 /* CompanionAppIntents.swift */; };
 		A1B2C3D400000000000000F2 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000F1 /* PrivacyInfo.xcprivacy */; };
@@ -29,6 +30,7 @@
 		504EC3071FED79650016851F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000B1 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000C1 /* CompanionConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionConfig.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000A101 /* KeychainHardening.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHardening.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000D1 /* CompanionAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionAPI.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000E1 /* CompanionAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionAppIntents.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000F1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -87,6 +89,7 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A1B2C3D400000000000000B1 /* SceneDelegate.swift */,
 				A1B2C3D400000000000000C1 /* CompanionConfig.swift */,
+				A1B2C3D4000000000000A101 /* KeychainHardening.swift */,
 				A1B2C3D400000000000000D1 /* CompanionAPI.swift */,
 				A1B2C3D400000000000000E1 /* CompanionAppIntents.swift */,
 				A1B2C3D400000000000000F1 /* PrivacyInfo.xcprivacy */,
@@ -228,6 +231,7 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				A1B2C3D400000000000000B2 /* SceneDelegate.swift in Sources */,
 				A1B2C3D400000000000000C2 /* CompanionConfig.swift in Sources */,
+				A1B2C3D4000000000000A102 /* KeychainHardening.swift in Sources */,
 				A1B2C3D400000000000000D2 /* CompanionAPI.swift in Sources */,
 				A1B2C3D400000000000000E2 /* CompanionAppIntents.swift in Sources */,
 			);
