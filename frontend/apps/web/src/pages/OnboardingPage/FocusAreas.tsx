@@ -6,13 +6,18 @@ const focusAreaOptions = [
   {
     id: 'personal_fitness',
     label: 'Personal fitness and health',
-    description:
-      'Track workouts, monitor progress, and build habits that support long-term physical wellbeing',
+    // Describes organizing what you tell it, NOT tracking or monitoring you.
+    // The app takes no measurements and reads no biometrics: a focus area is a
+    // topic tag (a concept node + a PREFERS edge, see OnboardingService
+    // captureFocusAreas). Copy implying workout tracking would both overstate
+    // the product and jeopardise the Play "no health features" certification —
+    // see GOOGLE_HEALTH_DECLARATION.md. Keep these two descriptions literal.
+    description: 'Organize workout notes, routines, and goals so your training context stays in one place',
   },
   {
     id: 'nutrition',
     label: 'Nutrition and meal planning',
-    description: 'Plan meals, organize grocery lists, and align food choices with your health goals',
+    description: 'Plan meals, organize grocery lists, and keep recipes and preferences together',
   },
   {
     id: 'communication',

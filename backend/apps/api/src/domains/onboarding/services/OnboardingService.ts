@@ -51,13 +51,18 @@ const FOCUS_AREAS: Record<string, FocusAreaMetadata> = {
   personal_fitness: {
     id: 'personal_fitness',
     name: 'Personal fitness and health',
-    description:
-      'Track workouts, monitor progress, and build habits that support long-term physical wellbeing',
+    // Kept literal, and kept in sync with the same list in the web onboarding
+    // (FocusAreas.tsx). A focus area becomes a concept node plus a PREFERS edge
+    // (captureFocusAreas below) — a stated interest, nothing measured. Copy
+    // implying the app tracks workouts or monitors progress would overstate the
+    // product and jeopardise the Play "no health features" certification; see
+    // frontend/apps/mobile/GOOGLE_HEALTH_DECLARATION.md.
+    description: 'Organize workout notes, routines, and goals so your training context stays in one place',
   },
   nutrition: {
     id: 'nutrition',
     name: 'Nutrition and meal planning',
-    description: 'Plan meals, organize grocery lists, and align food choices with your health goals',
+    description: 'Plan meals, organize grocery lists, and keep recipes and preferences together',
   },
   communication: {
     id: 'communication',

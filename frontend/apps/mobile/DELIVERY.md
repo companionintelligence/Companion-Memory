@@ -16,6 +16,8 @@
 > **🔴 P0 gaps in this file**: the Play *Health apps declaration* is required of every
 > published app (even with zero health features), and app-wide `usesCleartextTraffic`
 > becomes a User Data policy violation once sensitive data flows.
+>
+> **On that first one:** [`GOOGLE_HEALTH_DECLARATION.md`](./GOOGLE_HEALTH_DECLARATION.md) re-verifies it against primary sources (2026-08-13) — the rule is real, but it binds only *published* apps, so for us it is a **gate on the first Play upload, not an overdue violation**; it also carries the fill-in-the-form plan and the Phase-3 re-declaration sequencing.
 
 ---
 
@@ -32,7 +34,7 @@ needs it. Nothing ships to either store until the 🔴 P0 items below are done.
 | Fix | Where |
 |---|---|
 | ✅ Apple **Privacy Manifest** (`PrivacyInfo.xcprivacy`) authored + wired into the Xcode target | `ios/App/App/PrivacyInfo.xcprivacy` (+ `project.pbxproj`) |
-| ✅ Export-compliance key `ITSAppUsesNonExemptEncryption=false` (skips the per-upload prompt) | `ios/App/App/Info.plist` |
+| ⚠️ Export-compliance key `ITSAppUsesNonExemptEncryption=false` — **declared, but its stated basis is stale now that SQLCipher ships; see §1a** | `ios/App/App/Info.plist` |
 | ✅ `UIRequiredDeviceCapabilities` `armv7` → `arm64` (stale 32-bit template value) | `ios/App/App/Info.plist` |
 | ✅ Android `allowBackup="false"` (keep the private-memory app's local state out of cloud/adb backup) | `android/app/src/main/AndroidManifest.xml` |
 | ✅ **In-app account deletion** — `DELETE /account` (soft-delete + access revocation) and Settings → Account | `backend/.../auth/controllers/AccountController.ts`, `frontend/apps/web/src/pages/SettingsPage/sections/AccountSection.tsx` |
@@ -50,7 +52,7 @@ Owner: **[code]** = doable in-repo · **[acct]** = needs an Apple/Google/Sentry 
 ### 1a. Code / config (in-repo)
 
 - [x] 🔴 **[code]** iOS Privacy Manifest — *done.*
-- [x] 🟠 **[code]** `ITSAppUsesNonExemptEncryption`, `arm64`, Android `allowBackup=false` — *done.*
+- [ ] 🟠 **[code]** `ITSAppUsesNonExemptEncryption`, `arm64`, Android `allowBackup=false` — *`arm64` and `allowBackup=false` are done; the export-compliance key is **re-opened**.* ⚠️ It was ticked on the basis that the app used “only exempt standard cryptography (HTTPS/TLS via the OS, Keychain)”. Bundling SQLCipher for outbox encryption at rest makes that stated basis untrue — the app now performs AES-256 of its own, not merely via an OS service. The likely determination is still *exempt* (mass-market, standard algorithm, published open-source implementation, applied to the app's own data at rest), **but that is a different exemption argument and it needs counsel's confirmation** — including whether an annual self-classification report is owed. `Info.plist` still declares `false` and now carries the full reasoning inline; flip it to `true` if counsel prefers answering the App Store Connect questionnaire per upload.
 - [x] 🔴 **[code]** **In-app account deletion** (Apple 5.1.1(v) + Google Play Data Deletion) — *done: `DELETE /account` + Settings → Account, both CI-green.* **Not exempt** — `SignupPage.tsx` is a real in-app registration flow, so the *initiation* path must live in the app even though data resides on the user's appliance.
   - ⚠️ **What this uncovered:** a hard delete is impossible today. **33 tables** reference `users(id)` with **no `ON DELETE` clause** (→ `NO ACTION`): `events`, `content`, `files`, `threads`, `messages`, `notes`, `embeddings`, `tags`, `sessions`, `questions`, `answers`, all of `hbpe.*`. `DELETE FROM ci.users` raises a foreign-key violation for any account with data — `UserService.remove()` has always had this bug and survives only because nothing calls it. Several user-scoped tables are also TimescaleDB hypertables (~1M+ rows), so even with cascades a synchronous delete would lock for a long time.
   - **Chosen strategy: soft-delete + background purge.** `deleted_at` is a TypeORM `@DeleteDateColumn`, so every read on the user repository skips the row — all three auth entry points (`findById` for JWT *and* API-key, `validatePassword`, `findByEmail`) inherit the gate for free and no future auth path can forget it. `purge_after` is pinned at request time so config changes can't rewrite a promise already made.
@@ -61,7 +63,7 @@ Owner: **[code]** = doable in-repo · **[acct]** = needs an Apple/Google/Sentry 
 - [ ] 🟠 **[code]** **Version/build automation** — everything is pinned at `1` / `1.0` / `0.0.0`. Derive iOS `CURRENT_PROJECT_VERSION`, Android `versionCode`, and a web build id from CI (tag + run number) so the *second* upload isn't rejected as a duplicate build.
 - [ ] 🟠 **[code]** **iPad — DECIDED: ship universal (iPhone + iPad).** `Info.plist` already declares all iPad orientations, so the binary **will be reviewed on iPad**. Since we are keeping iPad in scope rather than setting `TARGETED_DEVICE_FAMILY = 1`, the adaptive iPad/split-view layout in `@ci/fe-web` becomes **pre-submission work, not roadmap work**: a phone-shaped webview stretched to iPad is a live 4.2/2.1 rejection risk, and iPad screenshots become mandatory for the listing.
 - [ ] 🟢 **[code]** `CODE_SIGN_IDENTITY = "iPhone Developer"` is the pre-Xcode-9 name → resolves during signing setup (§2); use `Apple Development` / let distribution resolve `Apple Distribution`.
-- [ ] 🟢 **[code]** Verify Android 15 **edge-to-edge** (targetSdk 35 forces it) + **16 KB page size** (likely a no-op — no native libs) on an API-35 device.
+- [ ] 🟠 **[code]** Verify Android 15 **edge-to-edge** (targetSdk 35 forces it) + **16 KB page size** on an API-35 device. ⚠️ **No longer a no-op — the “no native libs” premise is wrong.** The app ships native libraries from two sources: `@ci/capacitor-local-llm` pulls `com.google.ai.edge.litertlm:litertlm-android` (`libLiteRt.so`, `libLiteRtClGlAccelerator.so`, `liblitertlm_jni.so`), and `@ci/capacitor-local-hub` now pulls `net.zetetic:sqlcipher-android` (`libsqlcipher.so`) for outbox encryption at rest. *Checked on the current debug APK:* every packaged `.so` reports ELF `p_align = 0x4000` and every `lib/**` zip entry is stored uncompressed at a 16 KB-aligned offset, so the build is compliant today — but this is now a real check that can regress on any native-dependency bump, not a formality. Raised 🟢→🟠 for that reason.
 
 ### 1b. Signing & store accounts
 
