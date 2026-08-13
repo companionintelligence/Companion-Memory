@@ -125,7 +125,22 @@ function fakeSidecar() {
       const all = [...store.values()].sort((a, b) => a.seq - b.seq);
       const items = all
         .filter((entry) => status == null || status === 'all' || entry.status === status)
-        .map(({ payload: _payload, ...summary }) => summary);
+        // The list route deliberately omits `payload` (it can be large); only
+        // GET /api/outbox/{id} returns it. Spelled out field by field rather
+        // than destructure-and-drop, both because the eslint config rejects the
+        // unused rest-sibling binding that idiom needs, and because naming the
+        // fields is what makes this a contract mock: if the sidecar's list
+        // shape changes, this stops matching instead of silently passing the
+        // new field through.
+        .map(({ id: itemId, kind, capturedAt, seq, status: itemStatus, attempts, lastError }) => ({
+          id: itemId,
+          kind,
+          capturedAt,
+          seq,
+          status: itemStatus,
+          attempts,
+          lastError,
+        }));
 
       return jsonResponse(200, {
         items,
