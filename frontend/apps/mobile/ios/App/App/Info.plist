@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Companion</string>
+	<string>Companion</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -14,6 +14,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -23,86 +27,31 @@
 			<string>com.companionintelligence.app.oidc</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<!--
-				  Custom URL scheme used to return the OIDC sign-in result from the
-				  system browser back into the native app (deep link). The backend
-				  redirects to `companion://oidc/callback?code=<one-time-code>` and
-				  @capacitor/app surfaces it as an `appUrlOpen` event. Keep this in
-				  sync with `OIDC_NATIVE_SCHEME` in @ci/common (oidcNative.ts) and the
-				  backend's `auth.oidc.nativeRedirectScheme` config.
-				-->
 				<string>companion</string>
 			</array>
 		</dict>
 	</array>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Companion uses the camera to capture photos and videos for your memory.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Companion uses the microphone to record audio and video for your memory.</string>
-	<!--
-	  REQUIRED for @ci/capacitor-speech: Apple states an app CRASHES when it calls
-	  SFSpeechRecognizer.requestAuthorization without this key present. It is a separate
-	  grant from NSMicrophoneUsageDescription above — speech recognition needs both.
-	  The wording reflects what the plugin actually does: recognition runs on-device
-	  whenever SFSpeechRecognizer reports supportsOnDeviceRecognition for the locale, and
-	  the default onDevicePolicy ('require') refuses to start otherwise rather than
-	  silently sending audio to Apple's servers.
-	-->
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Companion turns your speech into text on this device so you can dictate notes and talk to your memory.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Companion saves captured media to your photo library when you choose to.</string>
-	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<!-- 64-bit only. `armv7` (the stale Capacitor-template default) is a 32-bit
-		     slice no iOS-15 device runs; arm64 is the correct required capability. -->
-		<string>arm64</string>
-	</array>
-	<!-- Export compliance: the app uses only exempt standard cryptography (HTTPS/TLS
-	     via the OS, Keychain). Declaring this skips the per-upload encryption
-	     questionnaire in App Store Connect. Revisit if non-exempt custom crypto is added. -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-	<key>UISupportedInterfaceOrientations</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!--
-		  CI-Server appliances are frequently reached over plain HTTP on a LAN or
-		  tailnet (the user's own self-hosted server). Allow cleartext loads so the
-		  app can connect to an http:// server entered on the /server screen — the
-		  target is always a user-specified, first-party appliance.
-
-		  Scoped to WKWebView content (where all our network requests originate) via
-		  NSAllowsArbitraryLoadsInWebContent rather than the app-wide
-		  NSAllowsArbitraryLoads, which is the App-Store-preferred, narrower exception.
-		-->
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-	</dict>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Companion turns your speech into text on this device so you can dictate notes and talk to your memory.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -120,5 +69,26 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
 </dict>
 </plist>

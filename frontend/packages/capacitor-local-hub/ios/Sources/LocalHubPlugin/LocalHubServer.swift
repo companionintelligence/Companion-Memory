@@ -230,6 +230,21 @@ final class LocalHubServer {
                 // a single failed rebind leaves the server permanently dead while still
                 // claiming to run -- every capture, health probe and flush failing until
                 // the user force-quits the app.
+                //
+                // It also removes a UIKit threading violation on this very call, as a real
+                // consequence rather than a coincidence. `-startWithOptions:` reads:
+                //
+                //     if (((_suspendInBackground == NO) ||
+                //          ([[UIApplication sharedApplication] applicationState] != …Background))
+                //         && ![self _start:error])
+                //
+                // `start()` runs on `stateQueue`, so evaluating `applicationState` there is a
+                // UIKit call off the main thread. With this option false the left operand is
+                // true, `||` short-circuits, and `applicationState` is never touched. The
+                // `addObserver` calls below it are likewise wrapped in
+                // `if (_suspendInBackground)`, so no lifecycle observers get registered at all.
+                //
+                // ⚠️ Restoring the default would silently bring back BOTH problems at once.
                 GCDWebServerOption_AutomaticallySuspendInBackground: false
             ])
 
