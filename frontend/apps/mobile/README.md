@@ -131,11 +131,17 @@ signed `.aab` to Play's internal track.
 
 ```bash
 # Rehearsal: build + sign + validate with Apple, but submit nothing.
-gh workflow run "Mobile Release" -f dry_run=true
+gh workflow run mobile-release.yml -f dry_run=true
 
 # The real thing (a tag push always submits — dry_run does not apply):
 git tag mobile-release-v0.1.0 && git push origin mobile-release-v0.1.0
 ```
+
+> **This workflow is not dispatchable until it is on the default branch.** GitHub only
+> exposes a `workflow_dispatch` workflow that exists on `main`, so until this file is
+> merged, `gh workflow run mobile-release.yml` answers
+> `HTTP 404: workflow not found on the default branch` — even with `--ref`. To rehearse
+> signing before the rest of the branch is ready, cherry-pick just this file onto `main`.
 
 **Always do a `dry_run: true` run first.** Both stores permanently consume a build number
 on upload, so a failed submission *after* a successful one still costs you that number.

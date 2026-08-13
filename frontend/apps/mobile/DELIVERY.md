@@ -129,7 +129,8 @@ longer pull the date in much; accounts, hosted assets, and legal copy now can.
 | 1 | **Apple Developer Program enrollment** + App Store Connect app record for `com.companionintelligence.app` | [acct] | *everything* on iOS | ✅ yes — org verification alone can take days |
 | 2 | **Google Play Console** account + app record; enroll in **Play App Signing**; generate the upload keystore | [acct] | everything on Android | ✅ yes |
 | 3 | Create the **App Store Connect API key**, **Apple Distribution cert**, **App Store provisioning profile**; add all 11 secrets from §2 to the repo | [acct] | first TestFlight build | after 1 |
-| 4 | Run **Mobile Release with `dry_run: true`** — proves signing, export, and App Store Connect validation without consuming a build number | [code] | first real upload | after 3 |
+| 3.5 | **Land `mobile-release.yml` on `main`.** GitHub will not dispatch a `workflow_dispatch` workflow that does not exist on the **default branch** — `gh workflow run mobile-release.yml` currently returns `HTTP 404: workflow not found on the default branch`. Either merge PR #1953, or cherry-pick just the workflow file onto `main` to unblock step 4 early | [code] | step 4 | ✅ yes — the cherry-pick does not wait on the rest of the PR |
+| 4 | Run **Mobile Release with `dry_run: true`** — proves signing, export, and App Store Connect validation without consuming a build number | [code] | first real upload | after 3 and 3.5 |
 | 5 | **Demo CI-Server (seeded, public, HTTPS-only) + demo account** | [acct] | *review approval on both stores* | ✅ **yes, and it is the true long pole after enrollment** |
 | 6 | **Privacy policy URL, EULA, public account-deletion URL** | [acct] | submission forms | ✅ yes |
 | 7 | **Nutrition label / Data Safety answers, EU trader status, age rating, screenshots** | [acct] | submission forms | ✅ yes (except iPad shots — see 9) |
