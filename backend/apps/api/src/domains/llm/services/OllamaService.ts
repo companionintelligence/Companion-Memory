@@ -9,10 +9,17 @@ import {
 } from 'ollama';
 
 import type { RequestContext } from '@ci/common/context';
+import { type ApiKeyCapability, FULL_CAPABILITY } from '@ci/common/decorators';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { ToolRegistry, intentToolName, type ToolSchema } from '@ci/domains/tools';
+import {
+  ToolRegistry,
+  capabilityAllows,
+  intentToolName,
+  type ToolInvocationContext,
+  type ToolSchema,
+} from '@ci/domains/tools';
 
 import type { OllamaModel } from '../types';
 
@@ -41,6 +48,34 @@ function chatChunkToGenerateResponse(chunk: ChatResponse): GenerateResponse {
     eval_count: chunk.eval_count,
     eval_duration: chunk.eval_duration,
   };
+}
+
+/**
+ * A request context that may also carry the **authority of the principal driving the chat**.
+ *
+ * Tool calls made from a chat turn are made on behalf of whoever opened that chat, and the model
+ * choosing to call `memory.forget` does not grant authority the caller never had. This is how the
+ * caller's capability reaches {@link ToolRegistry.executeTool} — which is where it is enforced.
+ *
+ * Optional so the many in-process callers (`persona`, `schedule`, the listeners) that pass a bare
+ * `RequestContext` keep compiling: every one of them passes `enableTools: false` and is the
+ * appliance acting as itself, which is full authority. {@link resolveInvocationCapability} makes
+ * that reading explicit rather than accidental.
+ */
+export interface ChatRequestContext extends RequestContext {
+  capability?: ApiKeyCapability;
+}
+
+/**
+ * The authority a chat turn's tool calls run with.
+ *
+ * Absent means "not an outside caller" — the same reading `apiKeyCapabilityOf` gives a session:
+ * a background job or an internal service is the appliance acting on its own behalf. Any surface
+ * that accepts an outside request MUST set it (see OllamaController, which reads it off the
+ * express request); leaving it unset there is what the ungated-LLM-path bug was.
+ */
+function resolveInvocationCapability(context: ChatRequestContext): ApiKeyCapability {
+  return context.capability ?? FULL_CAPABILITY;
 }
 
 interface PromptOptions {
@@ -244,14 +279,14 @@ export class OllamaService {
   }
 
   async chatStream(
-    context: RequestContext,
+    context: ChatRequestContext,
     messages: OllamaMessage[],
     { model, signal, enableTools = false, enableThinking = true }: PromptOptions,
   ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[] }> {
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
-    const availableTools = enableTools ? this.toolRegistry.getAgentFacingTools(context) : [];
+    const availableTools = enableTools ? this.toolsWithinCapability(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
@@ -401,7 +436,7 @@ export class OllamaService {
    * down — rather than being dropped from the parameter type as it used to be.
    */
   async chat(
-    context: RequestContext,
+    context: ChatRequestContext,
     messages: OllamaMessage[],
     options: PromptOptions,
   ): Promise<ChatResponse> {
@@ -409,14 +444,14 @@ export class OllamaService {
   }
 
   private async runChat(
-    context: RequestContext,
+    context: ChatRequestContext,
     messages: OllamaMessage[],
     { model, enableTools = false, format }: PromptOptions,
   ): Promise<ChatResponse> {
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
-    const availableTools = enableTools ? this.toolRegistry.getAgentFacingTools(context) : [];
+    const availableTools = enableTools ? this.toolsWithinCapability(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
     const openAiFormat = typeof format === 'string' ? format : undefined;
@@ -518,7 +553,26 @@ export class OllamaService {
     };
   }
 
-  private async handleToolCalls(context: RequestContext, toolCalls: ToolCall[]): Promise<OllamaMessage[]> {
+  /**
+   * The tools to advertise to the model for this caller.
+   *
+   * Mirrors what MCP's `getToolsForRequest` does for its catalog: do not offer a read-only caller
+   * a delete it will be refused. This is presentation, not enforcement — the model can name any
+   * tool it likes regardless of what it was shown, which is why the registry re-checks — but a
+   * model handed a catalog whose entries fail is a model that retries them.
+   */
+  private toolsWithinCapability(context: ChatRequestContext): ToolSchema[] {
+    const capability = resolveInvocationCapability(context);
+
+    return this.toolRegistry
+      .getAgentFacingTools(context)
+      .filter((schema) => capabilityAllows(schema.privacy, capability));
+  }
+
+  private async handleToolCalls(
+    context: ChatRequestContext,
+    toolCalls: ToolCall[],
+  ): Promise<OllamaMessage[]> {
     if (toolCalls.length === 0) {
       this.logger.debug('No tool calls to evaluate, skipping handling', {
         userId: context.userId,
@@ -533,12 +587,20 @@ export class OllamaService {
       userId: context.userId,
     });
 
+    // The name and arguments below came out of a language model that was reading user-supplied
+    // text, so they are attacker-influenced input, not a decision the caller made. The capability
+    // carried here is what bounds them: the registry refuses anything above it.
+    const invocationContext: ToolInvocationContext = {
+      ...context,
+      capability: resolveInvocationCapability(context),
+    };
+
     const toolResults = await Promise.all(
       toolCalls.map(async (toolCall) => {
         const { name, arguments: args } = toolCall.function;
 
         try {
-          const result = await this.toolRegistry.executeTool(name, context, args);
+          const result = await this.toolRegistry.executeTool(name, invocationContext, args);
 
           return {
             call: toolCall,

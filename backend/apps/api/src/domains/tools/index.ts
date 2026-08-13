@@ -117,6 +117,7 @@ export {
   type ToolSchema,
   type ToolResult,
   type ToolExecutionContext,
+  type ToolInvocationContext,
   type ToolError,
   type IntentDefinition,
   type IntentDomainKey,
@@ -125,3 +126,19 @@ export {
   type IntentPrivacy,
   type CiEntityType,
 } from './core/types';
+// Execution policy — one implementation of "may this caller run this intent, here?", shared by
+// every dispatcher (MCP, the in-house chat model, and the on-device tier via the manifest).
+export {
+  DISPATCH_TIERS,
+  capabilityAllows,
+  capabilityRequiredFor,
+  removesData,
+  resolveDispatch,
+  type DispatchDecision,
+  type DispatchOptions,
+  type DispatchReason,
+  type DispatchRuling,
+  type DispatchTier,
+  type DispatchableIntent,
+  type GatedPrivacy,
+} from './policy';

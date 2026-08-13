@@ -53,6 +53,8 @@ export class GetFamilyMembersTool extends BaseTool<GetFamilyMembersInput, GetFam
     domain: 'people',
     title: 'List relationships',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // The social graph is the user's own data; relationship lookups are local reads.
+    localCapable: true,
     produces: ['person'],
     phrases: ['Who is my family', 'List my relationships'],
     description:

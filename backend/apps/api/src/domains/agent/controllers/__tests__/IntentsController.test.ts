@@ -21,6 +21,7 @@ const MANIFEST: IntentManifest = {
       description: 'Find people in the social graph.',
       parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
       privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+      localCapable: true,
       consumes: [],
       produces: ['person'],
       phrases: ['Find $name'],

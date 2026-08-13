@@ -105,6 +105,9 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
     domain: 'memory',
     title: 'Remember a fact',
     privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+    // A local write is the offline-first case: record it on-device now, let sync carry it up. It is
+    // not destructive, so nothing is lost if the appliance later reconciles it.
+    localCapable: true,
     produces: ['concept', 'person'],
     phrases: ['Remember that $fact', 'Note that $fact'],
     description: 'Create or update entities and relationships in the personal knowledge graph.',

@@ -81,6 +81,8 @@ export class GetEntertainmentPreferencesTool extends BaseTool<
     domain: 'media',
     title: 'Get entertainment taste',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Preferences live in the user's own graph and are small enough to mirror.
+    localCapable: true,
     produces: ['concept'],
     phrases: ['What movies do I like', 'My taste in $media'],
     description:

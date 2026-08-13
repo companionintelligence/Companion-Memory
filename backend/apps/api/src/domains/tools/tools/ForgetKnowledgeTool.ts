@@ -37,6 +37,10 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     domain: 'memory',
     title: 'Forget knowledge',
     privacy: { access: 'delete', sensitivity: 'personal', destructive: true, external: false },
+    // A delete is authoritative on the appliance. A device holding a partial mirror cannot show the
+    // user everything a forget would remove, so it cannot honestly ask for the confirmation this
+    // needs — resolveDispatch queues it regardless, and this says the same thing about the data.
+    localCapable: false,
     consumes: ['concept', 'person'],
     phrases: ['Forget $fact', 'Delete what you know about $topic'],
     description: 'Archive or remove entities and relationships from the knowledge graph.',

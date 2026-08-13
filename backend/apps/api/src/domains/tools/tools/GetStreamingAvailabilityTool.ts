@@ -78,6 +78,9 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     domain: 'media',
     title: 'Find where to stream',
     privacy: { access: 'read', sensitivity: 'low', destructive: false, external: true },
+    // Needs live TMDB + per-service availability, which changes daily and exists nowhere on the
+    // device. The one intent that is categorically not local.
+    localCapable: false,
     phrases: ['Where can I stream $title', 'What service has $title'],
     description:
       'Get currently trending movies and TV shows with real streaming availability data. Can filter by genre and content type. Shows which platforms (Netflix, Hulu, Disney+, etc.) currently have each title available. Use this when users ask about what to watch, want specific genres, or need streaming recommendations.',

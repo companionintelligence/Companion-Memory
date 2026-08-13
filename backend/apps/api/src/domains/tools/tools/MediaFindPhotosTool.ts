@@ -27,6 +27,8 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchRe
     title: 'Find photos & videos',
     description: 'Find photos and videos by description, place, or time.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Photos and videos are already ON the device — this is the intent most obviously local.
+    localCapable: true,
     produces: ['file'],
     phrases: ['Show me photos of $subject', 'Find my videos from $place'],
     parameters: {

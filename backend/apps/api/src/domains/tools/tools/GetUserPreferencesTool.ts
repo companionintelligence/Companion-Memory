@@ -84,6 +84,8 @@ export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, Ge
     domain: 'knowledge',
     title: 'Get preferences',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Preferences live in the user's own graph and are small enough to mirror.
+    localCapable: true,
     produces: ['concept'],
     phrases: ['What are my preferences', 'What does $person like'],
     description:

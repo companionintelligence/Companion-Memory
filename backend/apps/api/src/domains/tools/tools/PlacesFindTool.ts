@@ -27,6 +27,8 @@ export class PlacesFindTool extends BaseTool<PlacesFindInput, SearchResult[]> {
     title: 'Find places',
     description: 'Find locations and places the user has visited, saved, or referenced.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // A scoped read of the user's own places; no geocoding service involved.
+    localCapable: true,
     produces: ['place'],
     phrases: ['Where is $place', 'Find places near $area'],
     parameters: {

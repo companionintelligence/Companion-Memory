@@ -26,6 +26,9 @@ export class PersonaComposeTool extends BaseTool<PersonaComposeInput, HowYoudDoI
     domain: 'memory',
     title: 'How you would do it',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Sends nothing off the appliance, yet is still not local: the compose pipeline is several
+    // server-side LLM stages over the L0 dossier and L1 recall, none of which the device holds.
+    localCapable: false,
     produces: ['concept'],
     phrases: ['How would I $task', 'How should I approach $task'],
     description:

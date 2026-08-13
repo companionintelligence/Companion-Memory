@@ -27,6 +27,9 @@ export class CalendarFindEventsTool extends BaseTool<CalendarFindEventsInput, Se
     title: 'Find events',
     description: 'Find events on the personal timeline — meetings, trips, captures, purchases.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Timeline events are the user's own captures/meetings/trips, mirrored on-device; the query is
+    // a filter over that mirror, so an offline device can answer it (with a partial timeline).
+    localCapable: true,
     produces: ['event'],
     phrases: ['What happened on $date', 'Find my $event'],
     parameters: {

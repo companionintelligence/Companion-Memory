@@ -41,7 +41,7 @@ export class LLMModule {}
 
 export { LlmCoreModule } from './core.module';
 export { OllamaService } from './services/OllamaService';
-export { PROMPT_MODEL } from './services/OllamaService';
+export { PROMPT_MODEL, type ChatRequestContext } from './services/OllamaService';
 export { estimateInferredAnswerConfidence } from './inferredAnswerConfidence';
 export { CV_DETECTION_LINKED_TABLE } from './listeners/CvDetectionsListener';
 export {

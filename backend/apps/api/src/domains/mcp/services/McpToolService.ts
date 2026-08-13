@@ -1,50 +1,28 @@
 import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
 import { z, type ZodTypeAny } from 'zod';
 
-import type { RequestContext } from '@ci/common/context';
-import { type ApiKeyCapability, INTENTS_SCOPE } from '@ci/common/decorators';
+import { INTENTS_SCOPE } from '@ci/common/decorators';
 import { type ApiKeyScopedRequest, apiKeyCapabilityOf, isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
-import { type IntentPrivacy, type JSONSchema, ToolRegistry, intentToolName } from '@ci/domains/tools';
+import {
+  type JSONSchema,
+  type ToolInvocationContext,
+  ToolRegistry,
+  capabilityAllows,
+  capabilityRequiredFor,
+  intentToolName,
+} from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
 
 import { GraphQLToolAdapter } from './GraphQLToolAdapter';
 import { McpExecutorService } from './McpExecutorService';
 
-/**
- * Whether a key at `capability` may run a tool with this privacy label.
- *
- * The labels already exist and are derived structurally — a GraphQL query IS a read, a mutation
- * named `delete*` IS destructive (see GraphQLToolAdapter) — but until now they were advisory:
- * emitted as MCP annotation hints for the client's benefit, enforced nowhere. A client that
- * ignored the hint and called `deleteMemory` succeeded. This is where the label starts to mean
- * something.
- *
- * `delete` and `destructive` are treated the same way deliberately. They are separate fields
- * because they answer different questions, but both answer "can this lose data?" with yes, and
- * a level that allowed one while refusing the other would be a distinction no user could act on.
- */
-function capabilityAllows(
-  // Typed off IntentPrivacy rather than restated as `{ access: string }`: `access` is a closed union
-  // ('read' | 'write' | 'delete'), and a structural copy that widens it to `string` would let a typo
-  // — 'deleted', 'READ' — compile here and silently fall through to the permissive branch. The gate
-  // should not be the one place that stops believing the label's type.
-  privacy: Pick<IntentPrivacy, 'access' | 'destructive'>,
-  capability: ApiKeyCapability,
-): boolean {
-  if (capability === 'full') {
-    return true;
-  }
-
-  const removesData = privacy.access === 'delete' || privacy.destructive;
-
-  if (capability === 'write') {
-    return !removesData;
-  }
-
-  return privacy.access === 'read' && !removesData;
-}
+// `capabilityAllows` used to be defined here, which made the privacy label mean something only to
+// callers who arrived over MCP — the LLM dispatcher reached the same tools through a door with no
+// lock on it. The rule now lives in the tools domain (see `domains/tools/policy`) and is enforced
+// inside ToolRegistry.executeTool for every transport; MCP keeps its pre-check because it owes its
+// client a 403 with a specific message, not because it is the only thing standing there.
 
 @Injectable()
 export class McpToolService implements OnModuleInit {
@@ -129,16 +107,6 @@ export class McpToolService implements OnModuleInit {
     return req.apiKeyScopes?.includes(INTENTS_SCOPE) ?? false;
   }
 
-  /** The lowest capability that could run this tool — named in the refusal so an operator is told
-   *  which level to grant, rather than being left to guess between 'write' and 'full'. */
-  private capabilityNeededFor(tool: McpRegisteredTool): ApiKeyCapability {
-    if (tool.privacy.access === 'delete' || tool.privacy.destructive) {
-      return 'full';
-    }
-
-    return tool.privacy.access === 'read' ? 'read' : 'write';
-  }
-
   getSchemaSDL(): string {
     return this.graphqlAdapter.getSchemaSDL();
   }
@@ -167,7 +135,7 @@ export class McpToolService implements OnModuleInit {
     // blaming the scope.
     if (!capabilityAllows(tool.privacy, capability)) {
       throw new ForbiddenException(
-        `Tool "${name}" requires "${this.capabilityNeededFor(tool)}" access, but this API key is "${capability}"`,
+        `Tool "${name}" requires "${capabilityRequiredFor(tool.privacy)}" access, but this API key is "${capability}"`,
       );
     }
 
@@ -193,10 +161,12 @@ export class McpToolService implements OnModuleInit {
       );
     }
 
-    // Native tool execution
+    // Native tool execution. The capability travels WITH the call rather than being left behind at
+    // the transport: the registry re-checks it, so the pre-check above is the courtesy of a precise
+    // 403 and this is what actually authorizes the execution.
     const userId = (context.req.user as { id?: string })?.id;
-    const requestContext: RequestContext = { userId };
-    const result = await this.toolRegistry.executeTool(name, requestContext, args);
+    const invocationContext: ToolInvocationContext = { userId, capability };
+    const result = await this.toolRegistry.executeTool(name, invocationContext, args);
 
     if (!result.success) {
       throw new Error(result.error?.message ?? `Tool "${name}" execution failed`);

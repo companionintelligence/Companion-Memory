@@ -35,7 +35,7 @@ describe('graph LLM tools — registry harness (B4)', () => {
 
   it('returns TOOL_NOT_FOUND (not a throw) for an unknown tool', async () => {
     const harness = await createGraphToolHarness();
-    const result = await harness.registry.executeTool('doesNotExist', ctx, {});
+    const result = await harness.registry.executeTool('doesNotExist', { ...ctx, capability: 'full' }, {});
 
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('TOOL_NOT_FOUND');

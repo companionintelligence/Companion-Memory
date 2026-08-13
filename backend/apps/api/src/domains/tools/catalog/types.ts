@@ -38,6 +38,16 @@ export interface ManifestIntent {
   description: string;
   parameters: JSONSchema;
   privacy: IntentPrivacy;
+  /**
+   * Whether the on-device tier can serve this intent from local data (see
+   * `IntentDefinition.localCapable`).
+   *
+   * Published so a client can gate its UI without asking the appliance — which is the only way it
+   * *can* ask while offline. Paired with `privacy.destructive` / `privacy.external`, it is the
+   * complete input to the shared `resolveDispatch` rule, so the on-device dispatcher runs the
+   * server's policy rather than a second copy of it.
+   */
+  localCapable: boolean;
   consumes: CiEntityType[];
   produces: CiEntityType[];
   phrases: string[];

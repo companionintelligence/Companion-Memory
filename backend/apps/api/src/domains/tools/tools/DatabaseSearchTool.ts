@@ -64,6 +64,10 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     domain: 'knowledge',
     title: 'Search everything',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Searches only the user's own corpus. On-device the mirror is partial and there is no pgvector
+    // re-ranking, so results degrade to keyword/recency — a worse answer, not an impossible one,
+    // and this is the intent the offline surface exists for.
+    localCapable: true,
     produces: ['event', 'content', 'person', 'place', 'note', 'file'],
     phrases: ['Search for $query', 'Find anything about $query'],
     description:

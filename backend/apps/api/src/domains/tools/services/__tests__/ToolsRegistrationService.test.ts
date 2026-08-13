@@ -7,8 +7,10 @@ function makeLogger() {
 
 const provider = { name: 'native' } as any;
 
-function schema(name: string, domain: string) {
-  return { name, domain };
+const READ = { access: 'read', sensitivity: 'personal', destructive: false, external: false };
+
+function schema(name: string, domain: string, extra: Record<string, unknown> = {}) {
+  return { name, domain, privacy: READ, localCapable: true, ...extra };
 }
 
 describe('ToolsRegistrationService', () => {
@@ -34,6 +36,44 @@ describe('ToolsRegistrationService', () => {
     const service = new ToolsRegistrationService(registry, provider, makeLogger());
 
     await expect(service.onModuleInit()).rejects.toThrow(/unknown domain/);
+  });
+
+  /**
+   * The one local-capability claim the compiler cannot refute. An intent that calls a third-party
+   * service cannot also be servable from on-device data, and shipping that contradiction would
+   * publish a manifest promising an offline answer that can only fail — on a device, offline,
+   * where no operator sees the failure.
+   */
+  it('fails fast when a tool claims to be localCapable and external at once', async () => {
+    const registry = {
+      registerProvider: jest.fn().mockResolvedValue(undefined),
+      getAvailableTools: () => [
+        schema('media.streamingAvailability', 'media', {
+          privacy: { ...READ, external: true },
+          localCapable: true,
+        }),
+      ],
+    } as any;
+
+    const service = new ToolsRegistrationService(registry, provider, makeLogger());
+
+    await expect(service.onModuleInit()).rejects.toThrow(/localCapable but its privacy label says/);
+  });
+
+  it('accepts an external tool that correctly declares itself not local-capable', async () => {
+    const registry = {
+      registerProvider: jest.fn().mockResolvedValue(undefined),
+      getAvailableTools: () => [
+        schema('media.streamingAvailability', 'media', {
+          privacy: { ...READ, external: true },
+          localCapable: false,
+        }),
+      ],
+    } as any;
+
+    const service = new ToolsRegistrationService(registry, provider, makeLogger());
+
+    await expect(service.onModuleInit()).resolves.toBeUndefined();
   });
 
   it('propagates a provider-registration failure', async () => {

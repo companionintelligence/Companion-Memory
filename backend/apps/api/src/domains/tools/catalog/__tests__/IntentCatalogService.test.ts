@@ -13,6 +13,7 @@ function schema(name: string, domain: string, extra: Record<string, unknown> = {
     description: name,
     parameters: { type: 'object' },
     privacy: READ,
+    localCapable: true,
     ...extra,
   };
 }
@@ -25,23 +26,35 @@ describe('IntentCatalogService', () => {
   const schemas = [
     schema('people.find', 'people', { produces: ['person'], phrases: ['Find $name'] }),
     schema('memory.recall', 'memory', { produces: ['concept'] }),
+    schema('media.streamingAvailability', 'media', { localCapable: false }),
   ];
   const service = new IntentCatalogService(fakeRegistry(schemas));
 
   it('builds a manifest (domains + entities + flattened, sorted intents) from the registry', () => {
     const manifest = service.getManifest();
 
-    expect(manifest.version).toBe('1.0.0');
+    expect(manifest.version).toBe('1.1.0');
     expect(typeof manifest.generatedAt).toBe('string');
     expect(Number.isNaN(Date.parse(manifest.generatedAt))).toBe(false);
     expect(manifest.domains).toHaveLength(INTENT_DOMAINS.length);
     expect(manifest.entities).toHaveLength(CI_ENTITIES.length);
-    expect(manifest.intents.map((i) => i.name)).toEqual(['memory.recall', 'people.find']);
+    expect(manifest.intents.map((i) => i.name)).toEqual([
+      'media.streamingAvailability',
+      'memory.recall',
+      'people.find',
+    ]);
 
     const peopleFind = manifest.intents.find((i) => i.name === 'people.find');
     expect(peopleFind?.tool).toBe('people_find');
     expect(peopleFind?.produces).toEqual(['person']);
     expect(peopleFind?.phrases).toEqual(['Find $name']);
+  });
+
+  it('publishes each tool’s own localCapable rather than a default', () => {
+    const byName = new Map(service.getManifest().intents.map((i) => [i.name, i]));
+
+    expect(byName.get('people.find')?.localCapable).toBe(true);
+    expect(byName.get('media.streamingAvailability')?.localCapable).toBe(false);
   });
 
   it('exposes the domain and entity vocabularies directly', () => {

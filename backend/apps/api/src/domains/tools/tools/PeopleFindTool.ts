@@ -28,6 +28,8 @@ export class PeopleFindTool extends BaseTool<PeopleFindInput, SearchResult[]> {
     title: 'Find people',
     description: 'Find people in the social graph matching a name or description.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // A scoped read of the user's own social graph.
+    localCapable: true,
     produces: ['person'],
     phrases: ['Find $name', 'Who is $name'],
     parameters: {

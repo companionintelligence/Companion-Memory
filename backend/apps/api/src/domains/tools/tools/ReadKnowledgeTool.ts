@@ -102,6 +102,8 @@ export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledg
     domain: 'memory',
     title: 'Recall knowledge',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+    // Graph traversal over the user's own entities/relationships — the mirror can serve it.
+    localCapable: true,
     produces: ['concept', 'person'],
     phrases: ['What do you know about $person', 'Recall my $topic'],
     description:

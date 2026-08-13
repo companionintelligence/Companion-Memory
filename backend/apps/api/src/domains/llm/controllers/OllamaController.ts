@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
   forwardRef,
@@ -17,7 +18,7 @@ import { z } from 'zod';
 
 import { Context, type RequestContext, type ServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { Channel, FrameEncoder } from '@ci/common/rpc';
@@ -27,7 +28,7 @@ import { FileService } from '@ci/domains/files';
 import { ActionService } from '@ci/domains/intelligence';
 import { UserContextService } from '@ci/domains/memory';
 
-import { OllamaService } from '../services/OllamaService';
+import { OllamaService, type ChatRequestContext } from '../services/OllamaService';
 import type { PromptInput } from '../types';
 
 const promptSchema = z.object({
@@ -93,8 +94,16 @@ export class OllamaController {
     @Context() context: RequestContext,
     @Body(new ValidationPipe(promptSchema)) input: PromptInput,
     @Res() res: Response,
+    @Req() req: ApiKeyScopedRequest,
   ) {
     const serviceContext = toServiceContext(context);
+
+    // The chat turn below may call tools, and those calls are made on this caller's behalf — so the
+    // caller's authority has to travel with it. `apiKeyCapabilityOf` reads 'full' for a session/JWT
+    // principal (the user themselves, unchanged from before) and the key's real level otherwise, so
+    // a read-only api key can no longer talk the model into `memory.forget`. This endpoint is where
+    // the request object still exists; below here there is only a RequestContext.
+    const chatContext: ChatRequestContext = { ...context, capability: apiKeyCapabilityOf(req) };
 
     const { model: initialModel } = await this.ollamaService.resolveModel(context, {
       requestedModel: input.model,
@@ -190,7 +199,7 @@ export class OllamaController {
       ...conversationMessages,
     ];
 
-    const stream = await this.ollamaService.chatStream(context, messagesWithSystem, {
+    const stream = await this.ollamaService.chatStream(chatContext, messagesWithSystem, {
       model,
       signal,
       enableTools,

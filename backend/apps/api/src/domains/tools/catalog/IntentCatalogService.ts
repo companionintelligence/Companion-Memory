@@ -7,7 +7,9 @@ import { INTENT_DOMAINS } from './domains';
 import { CI_ENTITIES } from './entities';
 import type { CiEntityDescriptor, IntentDomain, IntentManifest, ManifestIntent } from './types';
 
-const MANIFEST_VERSION = '1.0.0';
+// 1.1.0 — added `localCapable` per intent. Additive, so a 1.0.0 client keeps working; a client
+// that wants to decide anything offline needs the field, hence the minor bump rather than silence.
+const MANIFEST_VERSION = '1.1.0';
 
 /**
  * Public read API over the intent catalog — the single seam through which REST (the agent-domain
@@ -31,6 +33,10 @@ export class IntentCatalogService {
       description: schema.description,
       parameters: schema.parameters,
       privacy: schema.privacy,
+      // No `?? false` fallback: the field is required on IntentDefinition precisely so the
+      // manifest never has to guess, and a silent `false` here would publish "not available
+      // offline" for an intent whose author simply forgot to label it.
+      localCapable: schema.localCapable,
       consumes: schema.consumes ?? [],
       produces: schema.produces ?? [],
       phrases: schema.phrases ?? [],

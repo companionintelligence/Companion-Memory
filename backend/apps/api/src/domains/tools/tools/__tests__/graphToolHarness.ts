@@ -404,7 +404,13 @@ export interface GraphToolHarness {
   registry: ToolRegistry;
   graphQuery: GraphQueryService;
   graphRead: GraphReadService;
-  /** Convenience: run a tool through the registry as production does. */
+  /**
+   * Convenience: run a tool through the registry as production does.
+   *
+   * Fills in full authority, so cases can keep passing a bare `{ userId }` — these fixtures test
+   * graph *behaviour*, not the capability gate, which has its own tests in
+   * `policy/__tests__/capabilityPolicy.test.ts` and `registry/__tests__/ToolRegistry.test.ts`.
+   */
   run: (name: string, context: RequestContext, input: unknown) => ReturnType<ToolRegistry['executeTool']>;
 }
 
@@ -439,7 +445,7 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
     registry,
     graphQuery,
     graphRead,
-    run: (name, context, input) => registry.executeTool(name, context, input),
+    run: (name, context, input) => registry.executeTool(name, { ...context, capability: 'full' }, input),
   };
 }
 

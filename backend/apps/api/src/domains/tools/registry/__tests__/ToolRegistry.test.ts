@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { RequestContext } from '@ci/common/context';
+import type { ApiKeyCapability } from '@ci/common/decorators';
 
+import type { IntentPrivacy, ToolInvocationContext } from '../../core/types';
 import { ToolRegistry } from '../ToolRegistry';
 
 function makeLogger() {
@@ -13,7 +14,21 @@ function makeLogger() {
   } as any;
 }
 
-function fakeTool(name: string, data: unknown = { ok: true }) {
+const READ_PRIVACY: IntentPrivacy = {
+  access: 'read',
+  sensitivity: 'personal',
+  destructive: false,
+  external: false,
+};
+
+const DESTRUCTIVE_PRIVACY: IntentPrivacy = {
+  access: 'delete',
+  sensitivity: 'personal',
+  destructive: true,
+  external: false,
+};
+
+function fakeTool(name: string, data: unknown = { ok: true }, privacy: IntentPrivacy = READ_PRIVACY) {
   return {
     schema: {
       name,
@@ -21,7 +36,8 @@ function fakeTool(name: string, data: unknown = { ok: true }) {
       title: name,
       description: name,
       parameters: { type: 'object' },
-      privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+      privacy,
+      localCapable: true,
     },
     execute: jest.fn(async () => ({ success: true, data, executionTimeMs: 1 })),
   } as any;
@@ -46,7 +62,11 @@ function fakeProvider(tools: Record<string, any>) {
   } as any;
 }
 
-const context: RequestContext = { userId: 'user-1' };
+const context: ToolInvocationContext = { userId: 'user-1', capability: 'full' };
+
+function asCapability(capability: ApiKeyCapability): ToolInvocationContext {
+  return { userId: 'user-1', capability };
+}
 
 describe('ToolRegistry', () => {
   function makeRegistry() {
@@ -124,5 +144,112 @@ describe('ToolRegistry', () => {
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('TOOL_NOT_FOUND');
     expect(send).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The gap this closes: enforcement used to live only in McpToolService, so whether the privacy
+   * label meant anything depended on which door the caller came through. Every case here drives
+   * the registry directly — the shared floor under MCP, the chat model, and the on-device tier
+   * alike — and each would have passed (executed the tool) against the pre-fix registry, which
+   * performed no authorization at all.
+   */
+  describe('capability enforcement (the floor every dispatcher stands on)', () => {
+    async function registryWithForget() {
+      const { registry, send } = makeRegistry();
+      const forget = fakeTool('memory.forget', { archived: 1 }, DESTRUCTIVE_PRIVACY);
+      await registry.registerProvider(fakeProvider({ 'memory.forget': forget }));
+
+      return { registry, send, forget };
+    }
+
+    it('refuses a destructive tool to a read-only caller without executing it', async () => {
+      const { registry, send, forget } = await registryWithForget();
+
+      const result = await registry.executeTool('memory_forget', asCapability('read'), {});
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe('TOOL_FORBIDDEN');
+      expect(result.error?.retryable).toBe(false);
+      expect(result.error?.message).toContain('"full"');
+      // The point of the whole exercise: the tool never ran.
+      expect(forget.execute).not.toHaveBeenCalled();
+      // A refusal is not an invocation — feeding it to the behavioral signal would record a
+      // deletion the user never made.
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('refuses a destructive tool to a write caller too (delete is its own level)', async () => {
+      const { registry, forget } = await registryWithForget();
+
+      const result = await registry.executeTool('memory_forget', asCapability('write'), {});
+
+      expect(result.error?.code).toBe('TOOL_FORBIDDEN');
+      expect(forget.execute).not.toHaveBeenCalled();
+    });
+
+    it('lets a full-capability caller run the destructive tool exactly as before', async () => {
+      const { registry, send, forget } = await registryWithForget();
+
+      const result = await registry.executeTool('memory_forget', asCapability('full'), {});
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ archived: 1 });
+      expect(forget.execute).toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('still allows a read-only caller the read tools it is entitled to', async () => {
+      const { registry } = makeRegistry();
+      await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall') }));
+
+      const result = await registry.executeTool('memory_recall', asCapability('read'), {});
+
+      expect(result.success).toBe(true);
+    });
+
+    it('refuses a write tool to a read-only caller but allows it at write', async () => {
+      const { registry } = makeRegistry();
+      const write: IntentPrivacy = { ...READ_PRIVACY, access: 'write' };
+      await registry.registerProvider(
+        fakeProvider({ 'memory.remember': fakeTool('memory.remember', { ok: 1 }, write) }),
+      );
+
+      await expect(registry.executeTool('memory_remember', asCapability('read'), {})).resolves.toMatchObject({
+        success: false,
+        error: { code: 'TOOL_FORBIDDEN' },
+      });
+      await expect(registry.executeTool('memory_remember', asCapability('write'), {})).resolves.toMatchObject(
+        { success: true },
+      );
+    });
+
+    it('checks the tool exists before the capability, so a bad name is not reported as forbidden', async () => {
+      const { registry } = await registryWithForget();
+
+      const result = await registry.executeTool('does_not_exist', asCapability('read'), {});
+
+      expect(result.error?.code).toBe('TOOL_NOT_FOUND');
+    });
+  });
+
+  it('logs an egress warning when an external intent runs, and none when it does not', async () => {
+    const logger = makeLogger();
+    const registry = new ToolRegistry(logger, { send: jest.fn().mockResolvedValue([]) } as any);
+    const external: IntentPrivacy = { ...READ_PRIVACY, external: true, sensitivity: 'low' };
+    await registry.registerProvider(
+      fakeProvider({
+        'media.streamingAvailability': fakeTool('media.streamingAvailability', { titles: [] }, external),
+        'memory.recall': fakeTool('memory.recall'),
+      }),
+    );
+
+    await registry.executeTool('memory_recall', context, {});
+    expect(logger.warn).not.toHaveBeenCalled();
+
+    await registry.executeTool('media_streamingAvailability', context, {});
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('leaves the appliance'),
+      expect.objectContaining({ intent: 'media.streamingAvailability' }),
+    );
   });
 });

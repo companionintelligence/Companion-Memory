@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { RequestContext } from '@ci/common/context';
+import type { ApiKeyCapability } from '@ci/common/decorators';
 
 /**
  * JSON Schema definition for tool parameters
@@ -54,6 +55,11 @@ export type IntentSensitivity = 'low' | 'personal' | 'sensitive';
  * Per-tool privacy + safety label. A dispatcher uses `destructive` to require confirmation and
  * `external` to warn when an action leaves the appliance (CI's whole pitch is local data
  * ownership).
+ *
+ * These are not advisory hints. `access` and `destructive` are enforced on every execution by
+ * {@link capabilityAllows}, called from `ToolRegistry.executeTool` — the one chokepoint every
+ * dispatcher goes through. `destructive` and `external` additionally decide, via
+ * {@link resolveDispatch}, whether an intent may run in the on-device tier at all.
  */
 export interface IntentPrivacy {
   access: IntentAccess;
@@ -98,6 +104,31 @@ export interface IntentDefinition {
   description: string;
   parameters: JSONSchema;
   privacy: IntentPrivacy;
+  /**
+   * Whether this intent can genuinely be served by the on-device (local) tier.
+   *
+   * True when the intent reads or writes **only the user's own data** — the corpus that is (or can
+   * be) mirrored onto the device — and needs neither a third-party service nor a server-only
+   * inference pipeline. A locally-ranked answer may be *worse* than the appliance's (no pgvector
+   * re-ranking, a partial mirror) without making the intent un-servable; "needs the network to
+   * answer at all" is what makes it false.
+   *
+   * Deliberately separate from `privacy.external`: external says the action *leaves* the
+   * appliance, localCapable says the device *can stand in for* the appliance. They agree that
+   * `media.streamingAvailability` is not local (it needs live TMDB), but they answer different
+   * questions — `persona.compose` sends nothing outside yet is still not local, because the
+   * multi-stage compose pipeline lives on the server.
+   *
+   * Required, not optional: an unlabelled intent would default to some guess, and both possible
+   * guesses are wrong — `true` silently promises offline behaviour that does not exist, `false`
+   * silently removes an intent from the offline surface. Boot-time validation in
+   * ToolsRegistrationService additionally rejects the one incoherent combination
+   * (`localCapable && privacy.external`).
+   *
+   * This is a *capability* claim, not a *permission*: whether a local dispatcher may actually run
+   * it is {@link resolveDispatch}'s answer, which also refuses destructive/external intents.
+   */
+  localCapable: boolean;
   /** Entity types this tool reads. */
   consumes?: CiEntityType[];
   /** Entity types this tool returns. */
@@ -150,4 +181,23 @@ export interface ToolExecutionContext extends RequestContext {
   toolName: string;
   executionId: string;
   startTime: Date;
+}
+
+/**
+ * What a dispatcher must state to run a tool: the request context plus the **authority of the
+ * principal on whose behalf the call is made**.
+ *
+ * `capability` is required rather than optional, and that is the whole point. Enforcement used to
+ * live in `McpToolService` alone, so the transport decided whether the privacy label meant
+ * anything: the LLM dispatcher called `ToolRegistry.executeTool` with a bare `RequestContext` and
+ * a prompt-injected chat message could reach `memory.forget` unchecked. Making the field
+ * mandatory means a new dispatcher cannot reach the registry by *forgetting* to authorize — it
+ * has to name a level, in code, where a reviewer can see it.
+ *
+ * Use {@link ApiKeyCapability}'s `'full'` for in-process/system callers (background jobs, the
+ * appliance acting as itself); anything driven by an outside caller must pass that caller's real
+ * capability, e.g. `apiKeyCapabilityOf(req)`.
+ */
+export interface ToolInvocationContext extends RequestContext {
+  capability: ApiKeyCapability;
 }
