@@ -73,6 +73,19 @@ final class SpeechRecognitionController: NSObject {
     /// True between an explicit stop/cancel and the task actually finishing.
     private var closing = false
 
+    /// Monotonic session id, bumped when a session starts and again when it ends.
+    ///
+    /// `SFSpeechRecognitionTask`'s result handler keeps firing after `cancel()` — the
+    /// cancellation itself is delivered *as* a late callback — and the closure has no way to
+    /// tell which session it belongs to. Without this, a straggler from a cancelled task
+    /// calls `finish()` and tears down the session that has since replaced it, so a
+    /// stop-then-immediately-start sequence kills its own successor. Every callback captures
+    /// the generation it was created for and is dropped unless it still matches.
+    private var generation: UInt64 = 0
+
+    /// Audio-disruption observers, live only for the duration of a session.
+    private var observers: [NSObjectProtocol] = []
+
     init(sink: RecognitionEventSink) {
         self.sink = sink
         super.init()
@@ -130,7 +143,7 @@ final class SpeechRecognitionController: NSObject {
     /// Pure probe. Creates a recognizer for the locale and reports what it can actually
     /// promise; opens no microphone and prompts for nothing.
     func capability(languageTag: String?) -> RecognitionCapability {
-        let tag = languageTag ?? Locale.current.identifier
+        let tag = Self.normalizedLanguageTag(languageTag ?? Locale.current.identifier)
         let locale = Locale(identifier: tag)
 
         guard let recognizer = SFSpeechRecognizer(locale: locale) else {
@@ -183,8 +196,11 @@ final class SpeechRecognitionController: NSObject {
 
     /// Locales `SFSpeechRecognizer` supports at all. Says nothing about which are on-device
     /// — iOS has no per-locale inventory — so the caller reports `enumerable: false`.
+    ///
+    /// Deduplicated because canonicalizing to BCP-47 can collapse two ICU identifiers onto
+    /// one tag.
     func supportedLanguageTags() -> [String] {
-        SFSpeechRecognizer.supportedLocales().map { $0.identifier }.sorted()
+        Set(SFSpeechRecognizer.supportedLocales().map { Self.normalizedLanguageTag($0.identifier) }).sorted()
     }
 
     // MARK: - Session
@@ -201,7 +217,7 @@ final class SpeechRecognitionController: NSObject {
             return .rejected(code: "permission-denied", message: "Microphone permission has not been granted.")
         }
 
-        let tag = languageTag ?? Locale.current.identifier
+        let tag = Self.normalizedLanguageTag(languageTag ?? Locale.current.identifier)
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: tag)), recognizer.isAvailable else {
             return .rejected(code: "not-supported", message: "Speech recognition is not available for \(tag).")
         }
@@ -223,24 +239,29 @@ final class SpeechRecognitionController: NSObject {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            // .record (not .playAndRecord) because the synthesizer keeps its own session —
-            // see SpeechSynthesisController. `.duckOthers` is the *preference*: it avoids a
-            // full interruption so a talk-then-listen loop does not tear down other audio.
+            // `.record`, not `.playAndRecord`, because the synthesizer keeps its own session
+            // (see SpeechSynthesisController) — and, as measured below, `.record` gets the
+            // ducking anyway, so widening the category would buy nothing and cost the
+            // separate-session split.
             //
-            // It is only a preference because Apple documents `.duckOthers` as usable ONLY
-            // with `.playAndRecord`, `.playback`, and `.multiRoute` — pairing it with
-            // `.record` may be rejected as an illegal argument, and `setCategory` throwing
-            // here would make `startListening` fail *every single time*, taking the whole
-            // STT feature with it. The iOS 27 Simulator accepts the combination (measured),
-            // but the Simulator's AVAudioSession is a partial stub and its permissiveness is
-            // not evidence about real hardware. So: ask for ducking, and if the system
-            // refuses, listen without it rather than not listening at all. Ducking is a
-            // nicety; recognition is the product.
+            // Apple documents `.duckOthers` as usable ONLY with `.playAndRecord`,
+            // `.playback` and `.multiRoute`, which made pairing it with `.record` look like
+            // an illegal argument that would throw on every single `startListening` and take
+            // the whole STT feature with it. Measured rather than assumed, on an iPhone 17
+            // Pro Max running iOS 27.0:
             //
-            // TODO(speech): on a real device, check whether the duck attempt throws. If it
-            // does, decide deliberately between plain `.record` (what the fallback gives you)
-            // and `.playAndRecord` + `.duckOthers` (ducking back, at the cost of the
-            // separate-session split this file relies on).
+            //     .record + .duckOthers        -> accepted, activated, categoryOptions == 3
+            //     .record (no options)         -> accepted, activated, categoryOptions == 0
+            //     .playAndRecord + .duckOthers -> accepted, activated, categoryOptions == 3
+            //
+            // So the duck attempt does not throw, the fallback never fires on this OS, and
+            // the resulting options are `mixWithOthers | duckOthers` (3) — iOS implies the
+            // former from the latter. Decision: keep `.record` + `.duckOthers`.
+            //
+            // The fallback stays anyway. It is insurance for the OS versions this was *not*
+            // measured on: the deployment target is iOS 15, only iOS 27 was tested, and the
+            // pairing is still undocumented, so a future release is free to start rejecting
+            // it. Ducking is a nicety; recognition is the product.
             do {
                 try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
             } catch {
@@ -253,6 +274,23 @@ final class SpeechRecognitionController: NSObject {
 
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
+
+        // `installTap` does not fail politely on a degenerate format: a 0-channel or
+        // 0 Hz format trips an assertion inside AVAudioEngine and **aborts the process**.
+        // The input node reports exactly that when the microphone is not actually ours —
+        // another app holding it, or a route change landing between `setActive` above and
+        // this line. Validate first and reject, so a hostile audio environment costs the
+        // user a legible error instead of a crash.
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            deactivateSession()
+            return .rejected(
+                code: "audio",
+                message: "The microphone reported an unusable input format "
+                    + "(\(format.channelCount) channels at \(format.sampleRate) Hz). Another app may be using "
+                    + "the microphone, or the audio route changed while starting."
+            )
+        }
+
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             audioRequest.append(buffer)
@@ -273,44 +311,18 @@ final class SpeechRecognitionController: NSObject {
         sessionGuaranteed = onDevice
         listening = true
         closing = false
+        generation &+= 1
+        let sessionId = generation
+
+        observeAudioDisruptions()
 
         task = recognizer.recognitionTask(with: audioRequest) { [weak self] result, error in
-            guard let self = self else { return }
-
-            if let result {
-                let alternatives = result.transcriptions.map { $0.formattedString }
-                if result.isFinal {
-                    self.finish(reason: self.closing ? "stopped" : "final-result", emit: {
-                        self.sink?.onFinal(
-                            alternatives: alternatives.isEmpty ? [result.bestTranscription.formattedString] : alternatives,
-                            mode: self.sessionMode,
-                            guaranteedOnDevice: self.sessionGuaranteed
-                        )
-                    })
-                } else {
-                    self.sink?.onPartial(
-                        transcript: result.bestTranscription.formattedString,
-                        mode: self.sessionMode,
-                        guaranteedOnDevice: self.sessionGuaranteed
-                    )
-                }
-                return
-            }
-
-            if let error {
-                // A cancel() we asked for surfaces here as an error too; do not report it
-                // as a failure the user should see.
-                if self.closing {
-                    self.finish(reason: "cancelled", emit: nil)
-                    return
-                }
-                self.finish(reason: "error", emit: {
-                    self.sink?.onError(
-                        code: "client",
-                        message: error.localizedDescription,
-                        recoverable: true
-                    )
-                })
+            // The result handler runs on a private queue, but everything it touches is
+            // main-confined — the same rule Android states with `@MainThread`. Hop first,
+            // then drop the callback unless it still belongs to the running session.
+            DispatchQueue.main.async {
+                guard let self = self, self.generation == sessionId else { return }
+                self.handle(result: result, error: error)
             }
         }
 
@@ -349,12 +361,58 @@ final class SpeechRecognitionController: NSObject {
 
     // MARK: - Internals
 
+    /// Routes one recognizer callback. Only ever called on the main thread, and only for a
+    /// session that is still the current one.
+    private func handle(result: SFSpeechRecognitionResult?, error: Error?) {
+        if let result {
+            let alternatives = result.transcriptions.map { $0.formattedString }
+            if result.isFinal {
+                finish(reason: closing ? "stopped" : "final-result", emit: {
+                    self.sink?.onFinal(
+                        alternatives: alternatives.isEmpty ? [result.bestTranscription.formattedString] : alternatives,
+                        mode: self.sessionMode,
+                        guaranteedOnDevice: self.sessionGuaranteed
+                    )
+                })
+            } else {
+                sink?.onPartial(
+                    transcript: result.bestTranscription.formattedString,
+                    mode: sessionMode,
+                    guaranteedOnDevice: sessionGuaranteed
+                )
+            }
+            return
+        }
+
+        guard let error else { return }
+
+        // Report the failure even while `closing`. This branch used to drop every error the
+        // moment a stop was in flight and end the session as "cancelled" — so a recognizer
+        // that failed *after* the caller asked it to stop produced no result, no error, and
+        // an end reason that was not true. A real `cancel()` cannot reach here: it finishes
+        // the session synchronously, which retires the generation this callback carries.
+        // Android reports unconditionally too (`SessionListener.onError`).
+        finish(reason: "error", emit: {
+            self.sink?.onError(
+                code: (error as NSError).domain == NSURLErrorDomain ? "network" : "client",
+                message: error.localizedDescription,
+                recoverable: true
+            )
+        })
+    }
+
     /// Ends the session exactly once, tears down audio, then emits (in that order, so a
     /// listener that immediately starts a new session finds this one fully released).
     private func finish(reason: String, emit: (() -> Void)?) {
         guard listening else { return }
         listening = false
 
+        // Retire this session's id before tearing anything down. `task.cancel()` and
+        // `endAudio()` below both provoke further callbacks; bumping first is what makes
+        // them stale rather than letting them re-enter and end the *next* session.
+        generation &+= 1
+
+        removeAudioObservers()
         durationTimer?.cancel()
         durationTimer = nil
 
@@ -378,6 +436,90 @@ final class SpeechRecognitionController: NSObject {
         } catch {
             // Best effort: another audio client may still hold the session.
         }
+    }
+
+    /// Watch the two ways iOS takes the microphone away mid-session without anything
+    /// throwing. Without these, a call, a Siri invocation or a route change leaves the
+    /// session nominally "listening" against a dead tap: no audio, no result, no error, and
+    /// no end event — the caller waits forever.
+    ///
+    /// There is no Android counterpart to mirror (its `SpeechRecognizer` owns the audio and
+    /// reports `ERROR_AUDIO` itself), so the *reporting* follows Android's shape: a
+    /// recoverable `audio` error, then `onEnd("error")`.
+    ///
+    /// Both are registered with `object: nil` rather than filtered on the engine and the
+    /// shared session. Apple does not document the sender of either notification, and a
+    /// filter that guesses wrong does not fail loudly — it silently never fires, which is
+    /// indistinguishable from the bug this code exists to fix. This controller owns exactly
+    /// one engine and there is only one shared audio session, so there is nothing else these
+    /// could be about.
+    private func observeAudioDisruptions() {
+        let center = NotificationCenter.default
+
+        // Sample-rate or channel-count changes, a headset arriving or leaving. AVAudioEngine
+        // stops itself and the installed tap stops delivering buffers.
+        observers.append(
+            center.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.endBecauseAudioStopped(
+                    message: "The audio route changed and recording stopped. Start listening again to continue."
+                )
+            }
+        )
+
+        // A phone call, Siri, or another app taking the session.
+        observers.append(
+            center.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard
+                    let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                    let type = AVAudioSession.InterruptionType(rawValue: raw),
+                    type == .began
+                else {
+                    // `.ended` is deliberately not auto-resumed: by the time it arrives this
+                    // session has been torn down and its recognition task is gone. Starting
+                    // a fresh one is the caller's decision — reopening the microphone behind
+                    // their back is exactly what this plugin exists not to do.
+                    return
+                }
+                self?.endBecauseAudioStopped(
+                    message: "Recording was interrupted (a call, Siri, or another app took the microphone)."
+                )
+            }
+        )
+    }
+
+    private func removeAudioObservers() {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers.removeAll()
+    }
+
+    /// End a session whose microphone has gone silent, telling the caller why.
+    private func endBecauseAudioStopped(message: String) {
+        guard listening else { return }
+        closing = true
+        finish(reason: "error", emit: {
+            self.sink?.onError(code: "audio", message: message, recoverable: true)
+        })
+    }
+
+    /// ICU identifier (`en_US`, sometimes carrying `@keyword=` suffixes) → BCP-47 tag
+    /// (`en-US`). Every `language` field in `src/definitions.ts` is documented as BCP-47,
+    /// and Android already satisfies that via `Locale.toLanguageTag()`; iOS was reporting
+    /// `Locale.identifier` raw, so the same device answered `en_US` on one platform and
+    /// `en-US` on the other.
+    ///
+    /// `canonicalLanguageIdentifier` rather than a `_` → `-` substitution, because it also
+    /// drops the keyword suffixes an ICU identifier can carry.
+    static func normalizedLanguageTag(_ identifier: String) -> String {
+        let canonical = Locale.canonicalLanguageIdentifier(from: identifier)
+        return canonical.isEmpty ? identifier.replacingOccurrences(of: "_", with: "-") : canonical
     }
 
     /// Ends the session at the documented one-minute ceiling with an explicit reason,
