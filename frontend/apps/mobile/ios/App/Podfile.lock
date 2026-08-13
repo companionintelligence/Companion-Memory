@@ -18,11 +18,17 @@ PODS:
   - CiCapacitorLocalHub (0.0.0):
     - Capacitor
     - GCDWebServer (~> 3.5)
+    - SQLCipher (~> 4.9)
   - CiCapacitorSpeech (0.0.0):
     - Capacitor
   - GCDWebServer (3.5.4):
     - GCDWebServer/Core (= 3.5.4)
   - GCDWebServer/Core (3.5.4)
+  - SQLCipher (4.10.0):
+    - SQLCipher/standard (= 4.10.0)
+  - SQLCipher/common (4.10.0)
+  - SQLCipher/standard (4.10.0):
+    - SQLCipher/common
   - SwiftKeychainWrapper (4.0.1)
 
 DEPENDENCIES:
@@ -40,6 +46,7 @@ DEPENDENCIES:
 SPEC REPOS:
   trunk:
     - GCDWebServer
+    - SQLCipher
     - SwiftKeychainWrapper
 
 EXTERNAL SOURCES:
@@ -73,9 +80,10 @@ SPEC CHECKSUMS:
   CapacitorSecureStoragePlugin: 450d402026ee3bcc018fa206504d9c0572fee78d
   CapacitorSplashScreen: 409eeaaeac603d264f209c0fcb718aa22fe1f7bb
   CapacitorStatusBar: 416e9e53fd6397e668d4a181cd2131617d949bd6
-  CiCapacitorLocalHub: 841aca4ddb4faa956df4d45c1a3720856b6bba29
+  CiCapacitorLocalHub: ea986b4e0d0bea8157d6d8fe9634335f0fba5eb8
   CiCapacitorSpeech: 5f3efbc77893c90c8ebc5be07a496c5fb617790a
   GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
+  SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
 
 PODFILE CHECKSUM: 8cffd03cd443dc00df19a2ccd06b528fa5bbbc14
