@@ -1,0 +1,19 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.companionintelligence.localllm" >
+4
+5    <uses-sdk android:minSdkVersion="23" />
+6
+7    <!--
+8         The model download runs as a foreground WorkManager service (large, resumable
+9         transfer) so it survives backgrounding; Android 14+ (API 34) requires declaring
+10         the specific foreground service type permission alongside FOREGROUND_SERVICE.
+11    -->
+12    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+12-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-local-llm/android/src/main/AndroidManifest.xml:6:5-77
+12-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-local-llm/android/src/main/AndroidManifest.xml:6:22-74
+13    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+13-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-local-llm/android/src/main/AndroidManifest.xml:7:5-87
+13-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-local-llm/android/src/main/AndroidManifest.xml:7:22-84
+14
+15</manifest>

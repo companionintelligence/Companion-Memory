@@ -1,0 +1,28 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:1:1-23:12
+INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:1:1-23:12
+	package
+		INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:1:11-69
+uses-permission#android.permission.RECORD_AUDIO
+ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:10:5-71
+	android:name
+		ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:10:22-68
+queries
+ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:18:5-22:15
+intent#action:name:android.intent.action.TTS_SERVICE
+ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:19:9-21:18
+action#android.intent.action.TTS_SERVICE
+ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:20:13-72
+	android:name
+		ADDED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:20:21-69
+uses-sdk
+INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml
+INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml

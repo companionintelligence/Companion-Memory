@@ -18,13 +18,13 @@ include ':capacitor-status-bar'
 project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacitor/status-bar/android')
 
 include ':ci-capacitor-local-hub'
-project(':ci-capacitor-local-hub').projectDir = new File('../node_modules/@ci/capacitor-local-hub/android')
+project(':ci-capacitor-local-hub').projectDir = new File('../../../packages/capacitor-local-hub/android')
 
 include ':ci-capacitor-local-llm'
-project(':ci-capacitor-local-llm').projectDir = new File('../node_modules/@ci/capacitor-local-llm/android')
+project(':ci-capacitor-local-llm').projectDir = new File('../../../packages/capacitor-local-llm/android')
 
 include ':ci-capacitor-speech'
-project(':ci-capacitor-speech').projectDir = new File('../node_modules/@ci/capacitor-speech/android')
+project(':ci-capacitor-speech').projectDir = new File('../../../packages/capacitor-speech/android')
 
 include ':capacitor-secure-storage-plugin'
 project(':capacitor-secure-storage-plugin').projectDir = new File('../node_modules/capacitor-secure-storage-plugin/android')

@@ -1,0 +1,18 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.companionintelligence.localhub" >
+4
+5    <uses-sdk android:minSdkVersion="23" />
+6
+7    <!--
+8         Required to open the embedded loopback HTTP server's ServerSocket (Android gates
+9         all socket I/O, including 127.0.0.1-only sockets, behind INTERNET). The server
+10         itself never binds anything but 127.0.0.1 (see LocalHubServer), so this
+11         permission does not expose the device to the network, only to the app's own
+12         localhost port.
+13    -->
+14    <uses-permission android:name="android.permission.INTERNET" />
+14-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-local-hub/android/src/main/AndroidManifest.xml:8:5-67
+14-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-local-hub/android/src/main/AndroidManifest.xml:8:22-64
+15
+16</manifest>

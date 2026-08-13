@@ -1,0 +1,38 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.companionintelligence.speech" >
+4
+5    <uses-sdk android:minSdkVersion="23" />
+6
+7    <!--
+8         SpeechRecognizer captures from the microphone, so the plugin declares the
+9         permission itself rather than relying on the host app to remember. The host app
+10         (frontend/apps/mobile) also declares it for the in-webview capture flow; the
+11         manifest merger unions identical <uses-permission> entries. The runtime grant is
+12         requested through Capacitor's permission flow (@CapacitorPlugin(permissions = ...)
+13         + requestPermissionForAlias in SpeechPlugin) — the WebView's lazy getUserMedia
+14         grant does not cover a native recognizer.
+15    -->
+16    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+16-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:10:5-71
+16-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:10:22-68
+17
+18    <!--
+19         Package visibility (Android 11 / API 30+). An app targeting API 30+ cannot bind to
+20         a service in another package unless it can "see" that package, and every
+21         TextToSpeech engine is a separate app. Without this, TextToSpeech's OnInitListener
+22         fires with ERROR and no voice is ever available. Declared here so any app that
+23         installs this plugin inherits it, and mirrored in the host app's manifest (which
+24         is where the targetSdk that triggers the requirement is declared).
+25    -->
+26    <queries>
+26-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:18:5-22:15
+27        <intent>
+27-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:19:9-21:18
+28            <action android:name="android.intent.action.TTS_SERVICE" />
+28-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:20:13-72
+28-->/Users/liam/devel/ci-mobile-worktrees/ios-1953/frontend/packages/capacitor-speech/android/src/main/AndroidManifest.xml:20:21-69
+29        </intent>
+30    </queries>
+31
+32</manifest>
