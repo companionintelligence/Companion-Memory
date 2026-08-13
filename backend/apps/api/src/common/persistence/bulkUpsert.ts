@@ -378,7 +378,21 @@ async function executeChunk<Entity extends ObjectLiteral>(
       });
     });
 
+  // Two names for the SAME primary column, and they are NOT interchangeable.
+  // `pkDbName` is the DB column name — Postgres keys RETURNING rows by it, so it
+  // is what we read the returned pk back with below. `pkPropertyPath` is the
+  // ENTITY property path, which is what the ARRAY form of `.returning([...])`
+  // resolves against: QueryBuilder.getReturningColumns() maps every entry through
+  // EntityMetadata.findColumnsWithPropertyPath(), which compares
+  // `column.propertyPath` and NEVER `databaseName`. Passing a column name there
+  // resolves to zero columns and SILENTLY drops the pk from the emitted RETURNING
+  // clause — so `insertedPks` filled with undefined, every dedupable row reported
+  // `inserted: false`, and the CTI base-row write downstream was starved. Entities
+  // whose pk column is plainly named `id` were unaffected, which is why this hid
+  // for seven weeks; it only turned fatal once a deferred FK started requiring the
+  // base row. Affected today: EventEntity (`event_id`) and ItemEntity (`object_id`).
   const pkDbName = meta.primaryColumns[0].databaseName;
+  const pkPropertyPath = meta.primaryColumns[0].propertyPath;
 
   // --- 1. Existence pre-check (single SELECT over all dedupable triples). --------
   // DO NOTHING path only: a row already present is skipped from the INSERT (its
@@ -458,7 +472,11 @@ async function executeChunk<Entity extends ObjectLiteral>(
 
     // Under DO UPDATE every conflicting row is returned, so RETURNING must carry
     // the xmax-derived inserted flag to distinguish inserts from refreshes.
-    insertQb.returning(doUpdate ? `${pkDbName}, (xmax = 0) AS ${insertedFlagAlias}` : [pkDbName]);
+    //
+    // The two branches take DIFFERENT name spaces, deliberately: the string form is
+    // emitted verbatim as SQL (so it wants the DB column name), while the array form
+    // is resolved against entity property paths (see pkPropertyPath above).
+    insertQb.returning(doUpdate ? `${pkDbName}, (xmax = 0) AS ${insertedFlagAlias}` : [pkPropertyPath]);
 
     const insertResult = await insertQb.execute();
 

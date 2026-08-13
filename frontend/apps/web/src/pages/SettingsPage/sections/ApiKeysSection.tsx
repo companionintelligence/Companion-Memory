@@ -7,6 +7,7 @@ import {
   API_KEY_CAPABILITY_READ,
   API_KEY_CAPABILITY_WRITE,
   API_KEY_PROVENANCE_CONNECT,
+  API_KEY_SCOPE_CAPTURE,
   API_KEY_SCOPE_INTENTS,
   API_KEY_SCOPE_MCP,
   API_KEY_SCOPE_MEMORY,
@@ -76,6 +77,12 @@ const SCOPE_OPTIONS = [
     value: API_KEY_SCOPE_MCP,
     label: 'MCP',
     description: 'Reach the Model Context Protocol endpoint (/api/mcp) — pair with Intents to see any tools',
+  },
+  {
+    value: API_KEY_SCOPE_CAPTURE,
+    label: 'Capture',
+    description:
+      'Send observations in: bulk ingest (/api/v1) and file uploads (/api/files). Writes only, reads nothing back',
   },
 ] as const;
 

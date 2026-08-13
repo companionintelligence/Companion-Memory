@@ -44,6 +44,7 @@ export const API_KEY_PROVENANCE_CONNECT = 'connect';
 export const API_KEY_SCOPE_MEMORY = 'memory';
 export const API_KEY_SCOPE_INTENTS = 'intents';
 export const API_KEY_SCOPE_MCP = 'mcp';
+export const API_KEY_SCOPE_CAPTURE = 'capture';
 
 /**
  * What a key may DO on the surfaces its scopes reach — the second, orthogonal axis (the backend's

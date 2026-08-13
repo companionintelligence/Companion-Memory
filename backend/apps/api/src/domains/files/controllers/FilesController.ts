@@ -17,6 +17,7 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { CAPTURE_SCOPE, RequireCapability, RequireScopes, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { FileService } from '../services/FileService';
@@ -25,7 +26,14 @@ import { FileService } from '../services/FileService';
 export class FilesController {
   constructor(private readonly fileService: FileService) {}
 
+  // Granted to `capture` keys: this is how Companion Capture and the browser
+  // extension hand over screenshots and attachments. Empty-scope keys and
+  // session/JWT callers are unaffected — deny-by-default only ever constrained
+  // scope-limited keys, and before `capture` existed there was no scope that
+  // reached this route at all.
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(CAPTURE_SCOPE)
+  @RequireCapability(WRITE_CAPABILITY)
   @Post('upload')
   @UseInterceptors(
     FilesInterceptor('files', undefined, {
@@ -108,7 +116,11 @@ export class FilesController {
    * write the title/description they generated, in place of the server's Ollama
    * image description.
    */
+  // Capture agents set title/description on files they just uploaded, so this
+  // travels with the upload grant rather than needing full authority.
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(CAPTURE_SCOPE)
+  @RequireCapability(WRITE_CAPABILITY)
   @Patch(':id')
   async update(
     @Context() context: RequestContext,

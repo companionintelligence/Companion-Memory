@@ -58,3 +58,35 @@ export const ExtensiveTagsNoImage: Story = {
     imageUrl: undefined,
   },
 };
+
+// A title long enough to wrap, with every corner affordance on at once — the case
+// where the dismiss and chat buttons used to sit on top of the second word.
+export const WithActions: Story = {
+  args: {
+    title: 'Review notes from previous Engineering Strategy sessions',
+    imageUrl: undefined,
+    tags: ['Work'],
+    onDismiss: fn(),
+    showUnseenIndicator: true,
+    chatContext: {
+      title: 'Review notes from previous Engineering Strategy sessions',
+      body: 'Gather and review all meeting minutes related to the Engineering Strategy discussions.',
+      sourceKind: 'action',
+      sourceId: 'story-action',
+    },
+  },
+};
+
+export const WithActionsAndImage: Story = {
+  args: {
+    title: 'Review notes from previous Engineering Strategy sessions',
+    onDismiss: fn(),
+    showUnseenIndicator: true,
+    chatContext: {
+      title: 'Review notes from previous Engineering Strategy sessions',
+      body: 'Gather and review all meeting minutes related to the Engineering Strategy discussions.',
+      sourceKind: 'action',
+      sourceId: 'story-action',
+    },
+  },
+};

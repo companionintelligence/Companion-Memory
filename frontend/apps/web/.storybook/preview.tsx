@@ -1,3 +1,4 @@
+import { DeviceLayoutProvider } from '@ci/common';
 import type { Preview, StoryContext, StoryFn } from '@storybook/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -31,7 +32,12 @@ export const decorators = [
   (story: StoryFn, context: StoryContext) => (
     <MemoryRouter>
       <AuthProvider args={[]}>
-        <FeaturesProvider args={[]}>{story(context.args, context)}</FeaturesProvider>
+        {/* Mirrors App.tsx: anything calling `useDeviceLayout` (BentoCard and every
+            card built on it) throws "must be used within the associated Provider"
+            without this, so the stories rendered as an error panel. */}
+        <DeviceLayoutProvider args={[]}>
+          <FeaturesProvider args={[]}>{story(context.args, context)}</FeaturesProvider>
+        </DeviceLayoutProvider>
       </AuthProvider>
     </MemoryRouter>
   ),

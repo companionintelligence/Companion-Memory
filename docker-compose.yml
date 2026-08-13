@@ -36,6 +36,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      setup-database:
+        condition: service_completed_successfully
     restart: unless-stopped
     profiles: [ "local", "staging", "production" ]
 
@@ -70,8 +72,23 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      setup-database:
+        condition: service_completed_successfully
     restart: unless-stopped
     profiles: [ "local", "staging", "production" ]
+
+  # NOTE: summary-service and hbpe-service declare
+  # `setup-database: service_completed_successfully` above. Two reasons, and the
+  # second is not obvious:
+  #
+  #   1. Correctness — both connect as `companion`, the role setup-database
+  #      creates along with the database and its extensions. Waiting only on
+  #      `database: service_healthy` races that.
+  #   2. `up --wait` — compose treats a service that exits as a failure unless
+  #      something depends on it with service_completed_successfully. Until
+  #      powersync left the "local" profile it was the only such dependent, so
+  #      dropping it made `--wait` fail on setup-database's clean exit(0) and
+  #      tore the whole stack down.
 
   # Local-first sync engine. Reads CI-Server Postgres via logical replication
   # (the `database` image enables wal_level=logical) and serves filtered, per-user

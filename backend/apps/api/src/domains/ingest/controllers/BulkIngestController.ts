@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { DataSource } from 'typeorm';
 
 import { Context, type RequestContext, toServiceContext, type UserServiceContext } from '@ci/common/context';
+import { CAPTURE_SCOPE, RequireCapability, RequireScopes, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
@@ -169,7 +170,17 @@ async function envelopeResponse(
  * (see IngestLifecycleController) — then a set-based `materialized_id`
  * backfill onto the log.
  */
+// Class-level grant: every route here is a capture agent writing observations,
+// so `capture` opens the whole `/v1` plane rather than being repeated per route.
+// Both decorators resolve via reflector.getAllAndOverride([handler, class]), so
+// an individual route can still narrow this if one ever needs to.
+//
+// This only ever WIDENS access: empty-scope keys (the bulk importer, CI-Ingest)
+// and session/JWT callers were never subject to scope enforcement, and no scope
+// reached these routes before `capture` existed.
 @Controller('v1')
+@RequireScopes(CAPTURE_SCOPE)
+@RequireCapability(WRITE_CAPABILITY)
 export class BulkIngestController {
   constructor(
     private readonly communicationService: CommunicationService,

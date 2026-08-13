@@ -7,6 +7,8 @@ import { REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorator
 
 import { IntentsController } from '../../../domains/agent/controllers/IntentsController';
 import { MemoryController } from '../../../domains/agent/controllers/MemoryController';
+import { FilesController } from '../../../domains/files/controllers/FilesController';
+import { BulkIngestController } from '../../../domains/ingest/controllers/BulkIngestController';
 import { McpController } from '../../../domains/mcp/controllers/McpController';
 import { PersonaIntelligenceController } from '../../../domains/persona/controllers/PersonaIntelligenceController';
 
@@ -26,6 +28,11 @@ const SCOPED_CONTROLLERS = [
   IntentsController,
   McpController,
   PersonaIntelligenceController,
+  // The `capture` tier. Both grant at the CLASS level, which is why
+  // effectiveMetadata() below falls back to the class — a per-method scan alone
+  // would see these as unscoped and skip the capability assertion entirely.
+  FilesController,
+  BulkIngestController,
 ];
 
 /** Every own method on a controller prototype (route handlers and helpers alike). */

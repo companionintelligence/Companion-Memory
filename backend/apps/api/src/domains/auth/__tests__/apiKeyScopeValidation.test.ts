@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
-import { INTENTS_SCOPE, MCP_SCOPE, MEMORY_SCOPE } from '@ci/common/decorators';
+import { CAPTURE_SCOPE, INTENTS_SCOPE, MCP_SCOPE, MEMORY_SCOPE } from '@ci/common/decorators';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { createApiKeySchema, updateApiKeySchema } from '../controllers/ApiKeyController';
@@ -31,6 +31,12 @@ describe('api key scope validation', () => {
 
     it('accepts a combination of scopes', () => {
       const input = { name: 'k', scopes: [MEMORY_SCOPE, MCP_SCOPE] };
+
+      expect(pipe.transform(input)).toEqual(input);
+    });
+
+    it('accepts the capture scope, so capture agents can be minted a key that is not full-access', () => {
+      const input = { name: 'k', scopes: [CAPTURE_SCOPE] };
 
       expect(pipe.transform(input)).toEqual(input);
     });

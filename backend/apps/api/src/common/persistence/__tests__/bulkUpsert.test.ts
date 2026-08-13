@@ -564,3 +564,284 @@ describe('bulkInsertIdempotent — chunking (>maxRowsPerChunk splits into multip
     expect(statements.filter((s) => s.kind === 'insert')).toHaveLength(1);
   });
 });
+
+/** A primary column as TypeORM models it: a DB name plus an entity property path. */
+interface PkColumn {
+  databaseName: string;
+  propertyPath: string;
+}
+
+/**
+ * Fake repository that models the ONE TypeORM behaviour the plain fake above
+ * cannot see: how `.returning()` resolves its argument.
+ *
+ * typeorm 0.3.30 `QueryBuilder.getReturningColumns()` maps every entry of the
+ * ARRAY form through `EntityMetadata.findColumnsWithPropertyPath()`, which
+ * matches `column.propertyPath` and NEVER `column.databaseName`; unmatched
+ * entries resolve to zero columns and vanish from the emitted RETURNING clause.
+ * The STRING form is emitted verbatim. Postgres then keys the returned rows by
+ * DB column name.
+ *
+ * `pkColumn` is what makes this fake discriminating: EventEntity/ItemEntity
+ * declare `@PrimaryColumn('uuid', { name: 'event_id' | 'object_id' })`, so their
+ * pk databaseName differs from their property path — which is exactly the case
+ * the plain `{ databaseName: 'id' }` fake cannot reproduce.
+ */
+function makeReturningAwareRepository(pkColumn: PkColumn, initial: Row[] = []) {
+  const table = new Map<string, Row>();
+  for (const r of initial) {
+    table.set(r.id, r);
+  }
+
+  /** Columns the emitted RETURNING clause would actually carry. */
+  const emitted: { columns: string[] } = { columns: [] };
+
+  const existsByTriple = (r: Row): Row | undefined => {
+    if (r.sourceId == null) {
+      return undefined;
+    }
+
+    for (const existing of table.values()) {
+      if (existing.sourceId != null && tripleKey(existing) === tripleKey(r) && existing.userId === r.userId) {
+        return existing;
+      }
+    }
+
+    return undefined;
+  };
+
+  function makeSelectQB() {
+    const params: Record<string, unknown> = {};
+    let scopedUserId: string | undefined;
+    const qb: Record<string, unknown> = {};
+
+    const collect = (_sql: unknown, p?: Record<string, unknown>) => {
+      Object.assign(params, p ?? {});
+      if (p && 'scope_userId' in p) {
+        scopedUserId = p.scope_userId as string;
+      }
+
+      return qb;
+    };
+
+    const wrap =
+      (fn: (sql: unknown, p?: Record<string, unknown>) => unknown) =>
+      (sqlOrBrackets: unknown, p?: Record<string, unknown>) => {
+        const brackets = sqlOrBrackets as { whereFactory?: (b: unknown) => void } | undefined;
+        if (typeof brackets?.whereFactory === 'function') {
+          brackets.whereFactory(qb);
+
+          return qb;
+        }
+
+        return fn(sqlOrBrackets, p);
+      };
+
+    qb.andWhere = wrap(collect);
+    qb.orWhere = qb.andWhere;
+    qb.where = qb.andWhere;
+
+    qb.getMany = async (): Promise<Row[]> => {
+      const triples: { sourceType: string | null; sourceSystem: string | null; sourceId: string | null }[] =
+        [];
+      for (const key of Object.keys(params)) {
+        const m = key.match(/^(pre|post)_type_(\d+)$/);
+        if (m) {
+          triples.push({
+            sourceType: params[`${m[1]}_type_${m[2]}`] as string | null,
+            sourceSystem: params[`${m[1]}_system_${m[2]}`] as string | null,
+            sourceId: params[`${m[1]}_id_${m[2]}`] as string | null,
+          });
+        }
+      }
+
+      const pks = (params.bulk_pks as string[] | undefined) ?? [];
+      const matched = new Map<string, Row>();
+      for (const r of table.values()) {
+        if (scopedUserId != null && r.userId !== scopedUserId) {
+          continue;
+        }
+
+        const byTriple =
+          r.sourceId != null && triples.some((t) => t.sourceId != null && tripleKey(t) === tripleKey(r));
+        if (byTriple || pks.includes(r.id)) {
+          matched.set(r.id, r);
+        }
+      }
+
+      return [...matched.values()];
+    };
+
+    return qb;
+  }
+
+  function makeInsertQB() {
+    let values: Row[] = [];
+    let conflictAction = '';
+    let returning: string | string[] | undefined;
+    const iqb: Record<string, unknown> = {};
+    iqb.insert = () => iqb;
+    iqb.into = () => iqb;
+    iqb.values = (v: Row[]) => {
+      values = v;
+
+      return iqb;
+    };
+
+    iqb.onConflict = (action: string) => {
+      conflictAction = action;
+
+      return iqb;
+    };
+
+    iqb.returning = (arg: string | string[]) => {
+      returning = arg;
+
+      return iqb;
+    };
+
+    iqb.execute = async () => {
+      const doUpdate = / DO UPDATE /i.test(conflictAction);
+      // String form: emitted verbatim (the DO UPDATE branch's
+      // `pk, (xmax = 0) AS bulk_inserted`). Array form: property-path resolution.
+      const verbatim = typeof returning === 'string';
+      const requested = verbatim ? [] : ((returning as string[] | undefined) ?? []);
+      emitted.columns = verbatim
+        ? [pkColumn.databaseName]
+        : requested.filter((e) => e === pkColumn.propertyPath).map(() => pkColumn.databaseName);
+
+      const raw: Record<string, unknown>[] = [];
+      const build = (id: string, insertedFlag: boolean) => {
+        const out: Record<string, unknown> = {};
+        for (const col of emitted.columns) {
+          out[col] = id;
+        }
+
+        if (verbatim) {
+          out.bulk_inserted = insertedFlag;
+        }
+
+        return out;
+      };
+
+      for (const r of values) {
+        const existing = r.sourceId != null ? existsByTriple(r) : undefined;
+        if (existing) {
+          if (doUpdate) {
+            raw.push(build(existing.id, false));
+          }
+
+          continue;
+        }
+
+        table.set(r.id, r);
+        raw.push(build(r.id, true));
+      }
+
+      return { raw };
+    };
+
+    return iqb;
+  }
+
+  const view = {
+    metadata: {
+      tableName: 'fake',
+      target: 'fake',
+      primaryColumns: [pkColumn],
+      columns: Array.from({ length: 6 }, (_, i) => ({ databaseName: `c${i}` })),
+    },
+    create: (x: Partial<Row>) => x as Row,
+    createQueryBuilder: (alias?: string) => (alias ? makeSelectQB() : makeInsertQB()),
+    manager: {
+      transaction: async <T>(cb: (manager: unknown) => Promise<T>): Promise<T> => cb(txManager),
+    },
+  };
+  const txManager = { withRepository: () => view };
+
+  return { repo: view as unknown as Repository<Row>, table, emitted };
+}
+
+// EventEntity: @PrimaryColumn('uuid', { name: 'event_id' }) id!: string
+const RENAMED_PK: PkColumn = { databaseName: 'event_id', propertyPath: 'id' };
+// ContentEntity/CommunicationEntity/BrowserActivityEntity: @PrimaryColumn('uuid') id
+const PLAIN_PK: PkColumn = { databaseName: 'id', propertyPath: 'id' };
+
+describe('bulkInsertIdempotent — inserted flag when the pk COLUMN is renamed (events / inventory)', () => {
+  it('emits the pk in RETURNING for a renamed pk column', async () => {
+    const { repo, emitted } = makeReturningAwareRepository(RENAMED_PK);
+
+    await bulkInsertIdempotent(opts(repo, [row({ id: 'e1', sourceId: 's1' })]));
+
+    // Passing the DB name to the array form resolves to zero columns and drops
+    // the pk from RETURNING, which is what silently broke the inserted flag.
+    expect(emitted.columns).toEqual(['event_id']);
+  });
+
+  it('flags a genuine insert as inserted=true (the gate CTI base-row writes hang off)', async () => {
+    const { repo } = makeReturningAwareRepository(RENAMED_PK);
+
+    const results = await bulkInsertIdempotent(opts(repo, [row({ id: 'e1', sourceId: 's1' })]));
+
+    expect(results[0].inserted).toBe(true);
+  });
+
+  it('still reports inserted=false for an idempotent re-ingest of the same triple', async () => {
+    const existing = [row({ id: 'existing', sourceId: 's1' })];
+    const { repo, table } = makeReturningAwareRepository(RENAMED_PK, existing);
+
+    const results = await bulkInsertIdempotent(
+      opts(repo, [row({ id: 'retry', sourceId: 's1' }), row({ id: 'e2', sourceId: 's2' })]),
+    );
+
+    expect(results[0].entity.id).toBe('existing');
+    expect(results[0].inserted).toBe(false);
+    expect(results[1].inserted).toBe(true);
+    expect(table.size).toBe(2);
+  });
+
+  it('flags an intra-batch duplicate triple exactly once', async () => {
+    const { repo, table } = makeReturningAwareRepository(RENAMED_PK);
+
+    const results = await bulkInsertIdempotent(
+      opts(repo, [row({ id: 'first', sourceId: 'dup' }), row({ id: 'second', sourceId: 'dup' })]),
+    );
+
+    expect(results.filter((r) => r.inserted)).toHaveLength(1);
+    expect(table.size).toBe(1);
+  });
+
+  it('keeps non-dedupable (null source_id) rows at inserted=true', async () => {
+    const { repo } = makeReturningAwareRepository(RENAMED_PK);
+
+    const results = await bulkInsertIdempotent(
+      opts(repo, [row({ id: 'n1', sourceId: null }), row({ id: 'n2', sourceId: null })]),
+    );
+
+    expect(results.map((r) => r.inserted)).toEqual([true, true]);
+  });
+
+  it('leaves the DO UPDATE (string RETURNING) branch untouched', async () => {
+    const seeded = [row({ id: 'existing', sourceId: 's1' })];
+    const { repo } = makeReturningAwareRepository(RENAMED_PK, seeded);
+
+    const refreshed = await bulkInsertIdempotent(
+      opts(repo, [row({ id: 'retry', sourceId: 's1' })], ['direction']),
+    );
+    const fresh = await bulkInsertIdempotent(
+      opts(repo, [row({ id: 'brand-new', sourceId: 's2' })], ['direction']),
+    );
+
+    expect(refreshed[0].inserted).toBe(false);
+    expect(fresh[0].inserted).toBe(true);
+  });
+
+  it('is unchanged when the pk column is plainly named `id` (content, communications)', async () => {
+    const { repo, emitted } = makeReturningAwareRepository(PLAIN_PK);
+
+    const results = await bulkInsertIdempotent(opts(repo, [row({ id: 'c1', sourceId: 's1' })]));
+
+    expect(emitted.columns).toEqual(['id']);
+    expect(results[0].inserted).toBe(true);
+  });
+});

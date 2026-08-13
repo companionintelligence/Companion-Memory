@@ -14,10 +14,19 @@ export const REQUIRE_SCOPES_KEY = 'require_scopes';
  * - `memory` — the `/memory/*` endpoints (all agent apps).
  * - `intents` — the agent intent catalog (`/api/intents`), used by CI-OpenClaw.
  * - `mcp` — the Model Context Protocol endpoint (`/mcp`), used by CI-Hermes.
+ * - `capture` — the observation write plane: `/v1/*` bulk ingest and
+ *   `POST /files/upload`. For capture agents (Companion Capture / CI-Applet,
+ *   CI-Browser-Extension) that stream observations in and read nothing back.
+ *   Deliberately does NOT open GraphQL, `/memory/*` or `/maintenance`: a
+ *   screenshot daemon should be able to write what it saw and nothing else.
+ *   Before this existed the only key such an agent could use was an
+ *   empty-scope (full-authority) one, which is how a capture agent ended up
+ *   holding the chat-agent tier and 403ing on every upload.
  */
 export const MEMORY_SCOPE = 'memory';
 export const INTENTS_SCOPE = 'intents';
 export const MCP_SCOPE = 'mcp';
+export const CAPTURE_SCOPE = 'capture';
 
 /**
  * Declares the API-key scopes a route grants to scope-limited keys.
