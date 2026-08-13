@@ -153,7 +153,7 @@ android/
     SpeechSynthesisController.kt     # TextToSpeech lifecycle, chunking, utterance completion
   src/androidTest/java/com/companionintelligence/speech/
     SpeechControllersTest.kt         # instrumented; see "Test coverage" below
-CapacitorSpeech.podspec
+CiCapacitorSpeech.podspec            # name is DERIVED from the package name; see below
 ios/
   Sources/SpeechPlugin/
     SpeechPlugin.swift               # CAPPlugin/CAPBridgedPlugin, jsName "Speech"
@@ -165,17 +165,20 @@ Consumed by `frontend/apps/mobile` via
 `"@ci/capacitor-speech": "file:../../packages/capacitor-speech"`, picked up by `npx cap sync`
 on the Android side.
 
-> **iOS wiring still needed.** `cap sync` does not manage CocoaPods dependencies the way it
-> manages Android Gradle modules, so the pod must be added by hand to
-> `frontend/apps/mobile/ios/App/Podfile`'s `capacitor_pods` block, next to the existing
-> `CapacitorLocalHub` line:
+> **The podspec filename is not free — it is derived.** `cap sync ios` **regenerates** the
+> Podfile and derives each pod name from the *package* name, stripping the scope and
+> camel-casing the rest: `@ci/capacitor-speech` → **`CiCapacitorSpeech`**. It then emits
 >
 > ```ruby
-> pod 'CapacitorSpeech', :path => '../../../../packages/capacitor-speech'
+> pod 'CiCapacitorSpeech', :path => '../../../../packages/capacitor-speech'
 > ```
 >
-> That edit was **not** made in this pass (the Podfile was outside this change's file set).
-> iOS cannot build the plugin until it is added.
+> and CocoaPods looks for `CiCapacitorSpeech.podspec` in that directory. This README
+> previously said the Podfile entry had to be added by hand and named the pod
+> `CapacitorSpeech` — both wrong, and the second wrong in a way that **stopped iOS building
+> at all** ("No podspec found for `CiCapacitorSpeech`"). Renaming the podspec to the derived
+> name is the fix; do not rename it back, and do not hand-edit the Podfile, because
+> `cap sync` will overwrite it.
 
 ### Yarn `file:` dependencies are copies, not symlinks
 
@@ -213,28 +216,39 @@ cd frontend/apps/mobile && yarn install && npx cap sync android
   accuracy has to be checked by a human on a physical device.
 - Anything about the **language-pack download** path end to end (it depends on network state
   and the system recognition service).
-- The **iOS** implementation, entirely — see below.
+- **iOS speech at runtime**, entirely — see below. It now compiles and links; nothing has
+  ever listened or spoken.
 
-## iOS native implementation status (unverified)
+## iOS native implementation status — compiles, never exercised
 
-The iOS side (`CapacitorSpeech.podspec`, `ios/Sources/SpeechPlugin/*.swift`) was written in an
-environment with **no Mac, no Xcode, and no Swift compiler**, following the same approach and
-carrying the same caveats as `@ci/capacitor-local-hub`'s iOS half:
+> **Corrected 2026-08-13.** This section used to say the iOS side was written with "no Mac,
+> no Xcode, and no Swift compiler", that none of the Swift had been compiled, and that
+> `pod install` had not been run. That is no longer true, and leaving it in place hid a real
+> build failure behind an expected one.
 
-- **None of this Swift has been compiled.** No `swiftc`, no Xcode, not even a syntax check.
-  Typos, argument-label mistakes, and Swift-version-specific behavior would not have been
-  caught. The `CAPPlugin` / `CAPBridgedPlugin` / `CAPPluginCall` API surface was checked
-  against the `@capacitor/ios@7.6.7` source vendored in
-  `frontend/apps/mobile/node_modules/@capacitor/ios` (including that `CAPPluginCall` really
-  does expose `getFloat`/`getBool`/`getArray(_:_:)`), but "read the source" is not "compiled
-  it".
-- **`pod install` has not been run**, and the Podfile entry above has not been added at all.
-- **No runtime testing.** No session has ever been started, no utterance spoken.
+**What is now verified.** The branch was built on a real Mac: `pod install` resolves,
+`ios/Sources/SpeechPlugin/*.swift` **compiles and links**, and the app builds clean from an
+empty DerivedData (Xcode 27 / iOS 27 simulator), launches, and stays up. Getting there took
+two fixes in this plugin: the podspec rename described above, and **two Swift access-level
+errors in `SpeechPlugin`** that no amount of source-reading had caught.
+
+**What is still unverified, and why it cannot be fixed here.** Everything about speech
+actually working. The iOS **simulator has no microphone**, so it is no better than the
+Android emulator for this — it can prove the plugin loads, not that it hears:
+
+- **That speech is transcribed correctly.** No session has ever been started, no utterance
+  spoken. Same status as Android, same blocker: a human on a physical device.
+- **`supportsOnDeviceRecognition`.** The simulator reports it differently from a device, so
+  the very property the `require` policy is built on is unconfirmed on real hardware. This
+  is the one that matters most: it is the runtime check that decides whether the privacy
+  promise can be kept or must be rejected.
 - The `AVAudioSession` interaction between recognition (`.record`) and synthesis
   (`usesApplicationAudioSession = false`) is reasoned from Apple's documentation, not
   observed. A talk-then-listen loop is the case most likely to expose a mistake here.
 - The 55s duration cap is a deliberate margin under Apple's documented ~1 minute; the exact
   framework behavior at the boundary was not observed.
 
-Building, `pod install`, and on-device/simulator testing all need to happen on an actual Mac
-with Xcode before this ships.
+**Four confirmed defects in this plugin are open**, surfaced by a five-lens adversarial
+review of the branch and not closable without a device for the reasons above. Treat "it
+compiles" as exactly that — the Swift is no longer hypothetical, but the *behaviour* still
+is. On-device testing must happen before this ships.

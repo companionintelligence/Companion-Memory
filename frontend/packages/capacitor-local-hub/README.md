@@ -371,8 +371,8 @@ These are deliberate follow-up slices, not oversights:
   (verified by reading `SQLiteOpenHelper`/`SQLiteConnection` in the `sqlcipher-android` sources
   jar), but whether the native side took the raw-key branch is a *performance* property with no
   observable API. Getting it wrong would mean a slower cold start, not a weaker database.
-- **iOS: unverified.** See the section below -- there is no Mac in this environment, so
-  none of the Swift has been compiled or run.
+- **iOS: builds, launches, and creates the outbox -- but the ciphertext assertion above has
+  no iOS equivalent yet.** See the section below.
 
 ## Package layout
 
@@ -395,7 +395,7 @@ android/
   src/androidTest/java/com/companionintelligence/localhub/
     LocalHubServerTest.kt        # on-device HTTP + SQLCipher + migration coverage
     CompanionSecureStoreTest.kt  # on-device AndroidKeyStore coverage, incl. the fail-closed paths
-CapacitorLocalHub.podspec  # CocoaPods spec (Capacitor 7 iOS plugin structure)
+CiCapacitorLocalHub.podspec  # name DERIVED from the package name by `cap sync`; see below
 ios/
   Sources/LocalHubPlugin/
     LocalHubPlugin.swift        # @objc CAPPlugin/CAPBridgedPlugin, jsName "LocalHub"
@@ -417,35 +417,55 @@ and capacity policy are duplicated by hand and must be changed together.
 Consumed by `frontend/apps/mobile` via `"@ci/capacitor-local-hub": "file:../../packages/capacitor-local-hub"`,
 picked up by `npx cap sync` on the Android side (`capacitor.settings.gradle` /
 `capacitor.build.gradle`, generated from that dependency). On iOS, `cap sync` does not
-manage CocoaPods dependencies the way it manages Android Gradle modules, so the pod is
-instead added by hand as a `:path =>` entry in
-`frontend/apps/mobile/ios/App/Podfile`'s `capacitor_pods` block, pointing straight at
-this package directory rather than through `node_modules`.
+manage CocoaPods dependencies the way it manages Android Gradle modules -- but it does
+**regenerate the Podfile**, emitting a `:path =>` entry whose pod name it *derives* from
+the package name: `@ci/capacitor-local-hub` -> **`CiCapacitorLocalHub`**. So the podspec
+filename is not a free choice, and hand-edits to the Podfile do not survive the next
+`cap sync ios`. This podspec was originally named `CapacitorLocalHub.podspec`, which is
+why CocoaPods failed with "No podspec found for `CiCapacitorLocalHub`" and **iOS did not
+build at all**; it is now `CiCapacitorLocalHub.podspec`. Do not rename it back.
 
-## iOS native implementation status (unverified)
+## iOS native implementation status -- built and run, with gaps
 
-The iOS side (`CapacitorLocalHub.podspec`, `ios/Sources/LocalHubPlugin/*.swift`) was
-written in an environment with **no Mac, no Xcode, and no Swift compiler available** --
-by close reading of the actual `@capacitor/ios@7.6.7` source already vendored in this
-repo's `frontend/apps/mobile/node_modules/@capacitor/ios` (used to confirm the exact
-`CAPPlugin`/`CAPBridgedPlugin`/`CAPPluginCall` API this Capacitor version expects) and
-of GCDWebServer's public headers and README fetched from
-[swisspol/GCDWebServer](https://github.com/swisspol/GCDWebServer) on GitHub (used to
-confirm `GCDWebServerOption_BindToLocalhost`, `GCDWebServerOption_Port`,
-`startWithOptions:error:`, `addHandlerForMethod:path:requestClass:processBlock:`, the
-`headers` property type, and `GCDWebServerDataResponse`'s JSON initializer). That
-source-reading gives reasonable confidence the API calls are spelled correctly, but:
+> **Corrected 2026-08-13.** This section used to say the iOS side was written with "no Mac,
+> no Xcode, and no Swift compiler available" and that none of it had been compiled,
+> `pod install`-ed, or run. All three are now false. Worse, while they were true they were
+> load-bearing: they made a **genuine build failure and a launch-path crash** look like the
+> already-acknowledged state of things, so nobody went looking.
 
-- **None of this Swift code has been compiled.** There is no way to run `swiftc`,
-  Xcode, or even a syntax check in this environment. Typos, argument-label mistakes, or
-  Swift-version-specific behavior would not have been caught.
-- **`pod install` has not been run.** The `CapacitorLocalHub.podspec` and the new
-  Podfile entry are unverified beyond visual inspection -- in particular, whether
-  GCDWebServer builds cleanly as a CocoaPods dependency under this Podfile's
-  `use_frameworks!` setting has not been confirmed.
-- **No runtime testing.** The server has never actually been started on a device or
-  simulator; `start()`/`stop()`/`getStatus()` and the `/api/health` request/response
-  cycle are unverified beyond code review.
+The iOS side (`CiCapacitorLocalHub.podspec`, `ios/Sources/LocalHubPlugin/*.swift`) was
+originally written by close reading of the `@capacitor/ios@7.6.7` source vendored in
+`frontend/apps/mobile/node_modules/@capacitor/ios` and of GCDWebServer's public headers.
+It has since been built and run on a real Mac. **Reading the source got the API spelling
+right and the runtime behaviour wrong** -- everything below that was found by building was
+invisible to code review:
+
+- **It did not compile.** The podspec name mismatch described above; CocoaPods could not
+  resolve the pod at all.
+- **Then it crashed -- `SIGABRT` on the first `LocalHub.start()`.**
+  `+[GCDWebServer initialize]` calls `GCDWebServerInitializeFunctions()`, whose first
+  statement is `GWS_DCHECK([NSThread isMainThread])`, and under `DEBUG` that macro is a
+  bare `abort()`. The first message this plugin ever sends GCDWebServer is the constructor
+  inside `start()`, which runs on `stateQueue` -- so **every Debug build died on the first
+  Local Hub call**. `LocalHubServer` now warms the class initializer on the main thread,
+  once. Confirmed on an iOS 27 simulator.
+- **The server suspended itself on backgrounding and came back on a different port.**
+  GCDWebServer defaults `AutomaticallySuspendInBackground` to `YES`; see the comment on
+  that option in `LocalHubServer.swift` for the full mechanism (a suspended server reports
+  `isRunning` with port 0, publishes `http://127.0.0.1:0`, and its unchecked rebind can
+  leave it permanently dead while still claiming to run). A/B measured with `lsof`:
+  `53077` -> gone -> `53092` on the default, versus a stable `52693` with it false.
+  ⚠️ Restoring the default brings back both that and a UIKit-off-main-thread read.
+
+**Now verified:** `pod install` resolves, GCDWebServer builds cleanly under this Podfile's
+`use_frameworks!`, the app builds from an empty DerivedData, launches, stays up, and the
+outbox database is **created for real in the app container** -- `sqlite_sequence` present
+in the live file (which is what proves `AUTOINCREMENT` is in effect) and `journal_mode=wal`.
+
+**Still unverified on iOS:** the `/api/health` request/response cycle end to end against a
+real caller, `stop()`/restart behaviour across a full app lifecycle, and reboot durability
+(a launch is one process). Plus the SQLCipher file-level check immediately below, which is
+the most important one.
 - **The SQLCipher module import is the single riskiest line in the iOS half.**
   `OutboxStore.swift` says `import SQLCipher`, relying on CocoaPods building the
   `SQLCipher` pod as a framework module under this Podfile's `use_frameworks!` (its
@@ -455,21 +475,30 @@ source-reading gives reasonable confidence the API calls are spelled correctly, 
   unencrypted SQLite, compile cleanly, run cleanly, and produce a **plaintext** database
   that looks encrypted from the outside. `s.library = 'sqlite3'` was removed from the
   podspec for the same reason (SQLCipher's own podspec defines `_SQLITE3_H_=1` on the
-  consuming target specifically to keep the system header out). **First real build must
-  verify the file, not just the compile**: enqueue an item, then check the database file
-  does not begin with `SQLite format 3` -- the same assertion the Android suite makes.
+  consuming target specifically to keep the system header out). **The compile half now
+  passes** -- the module resolved and `OutboxStore.swift` builds -- but that only rules out
+  the *safe* failure. 🔴 **The file-level assertion has still not been run on iOS**:
+  enqueue an item, then check the database file does **not** begin with `SQLite format 3`,
+  the same assertion `LocalHubServerTest.kt` makes on Android. Observing that the outbox DB
+  exists and has `sqlite_sequence` does not settle it -- a plaintext database would show
+  exactly the same thing. Until someone runs it, "encrypted at rest on iOS" is a property
+  of the source, not of the artifact.
 - **The `PRAGMA key` / raw-key path** and `verifyKeyAccepted()`'s forced read of
   `sqlite_master` are written from SQLCipher's documented behaviour, not observed. So are
   the `.completeUntilFirstUserAuthentication` protection class and
   `isExcludedFromBackup` on the database file.
-- **`CompanionSecureStore.swift` is entirely unrun.** The `SecItemAdd` ->
-  `errSecDuplicateItem` -> `SecItemUpdate` sequence, the `kSecUseDataProtectionKeychain`
-  attribute appearing in *both* the write attributes and the lookup query, and the
-  re-assertion of `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` on update (which is
-  what upgrades an item written by the old plugin in place) are all reasoned from Apple's
-  documentation. The behaviour that matters most -- that a restored encrypted backup does
-  **not** carry the credential onto new hardware -- can only be verified with two real
-  devices and a real backup/restore cycle.
+- **`CompanionSecureStore.swift` has now run, at least on its happy path.** The outbox
+  database could not have been created without it minting and returning a key, so the
+  generate -> store -> retrieve round trip works on a simulator. Still reasoned from
+  Apple's documentation rather than observed: the `SecItemAdd` -> `errSecDuplicateItem` ->
+  `SecItemUpdate` branch, the `kSecUseDataProtectionKeychain` attribute appearing in *both*
+  the write attributes and the lookup query, and the re-assertion of
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` on update. The behaviour that matters
+  most -- that a restored encrypted backup does **not** carry the credential onto new
+  hardware -- can only be verified with two real devices and a real backup/restore cycle.
+  (Note this is a *different* store from the one `KeychainHardening.swift` sweeps: that one
+  fixes `cap_sec`, written by `capacitor-secure-storage-plugin`. This one is ours and
+  writes the right protection class to begin with.)
 - **App Transport Security**: no `Info.plist` changes were made *for the sidecar*. Reasoning: the
   plugin's `baseUrl` is always a literal IP address (`http://127.0.0.1:<port>`), and
   ATS's cleartext-HTTP restrictions apply only to connections to hostnames, not literal
@@ -520,6 +549,8 @@ of the caveats above, these specifically have never been exercised:
   Apple's guidance (app-private, backed up, not exposed via file sharing the way
   `Documents/` can be) but has not been observed on a device or simulator.
 
-Building, `pod install`, and on-device/simulator testing all need to happen on an
-actual Mac with Xcode before this ships. Treat the Android implementation as the reference
-behavior and the iOS one as a port awaiting its first compile.
+Building and `pod install` have happened; **on-device** testing has not. Treat the Android
+implementation as the reference behavior and the iOS one as a port that now compiles, runs,
+and has had its first three real defects removed -- not as one whose behavior has been
+checked against Android's. The gap that should worry you most is the SQLCipher file-level
+assertion above: Android proves its outbox is ciphertext, and iOS does not yet.

@@ -61,11 +61,11 @@ Every row below was read, not assumed.
 
 | Fact | Where | Status |
 |---|---|---|
-| The sidecar's outbox is **plaintext SQLite** in app-private internal storage (`ci_local_hub_outbox.db`), protected only by the app sandbox + full-disk encryption. The source says so explicitly and carries a `TODO(local-hub): SQLCipher-backed encryption at rest` | [`OutboxStore.kt:60-63`](../../packages/capacitor-local-hub/android/src/main/java/com/companionintelligence/localhub/OutboxStore.kt) | **[V]** |
+| ~~The sidecar's outbox is **plaintext SQLite**…~~ **SUPERSEDED — S1/S2 landed in the same PR that added this document.** The outbox is now **SQLCipher (AES-256)** on both platforms, opened with a 32-byte raw key (`x'…'`, so no PBKDF2) held in `CompanionSecureStore`; Android migrates an existing plaintext database in place. The cited source now reads "Durable, **encrypted**, on-disk store" | [`OutboxStore.kt`](../../packages/capacitor-local-hub/android/src/main/java/com/companionintelligence/localhub/OutboxStore.kt), [`OutboxStore.swift`](../../packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/OutboxStore.swift), `OutboxDatabaseKey` | **[V]** Android (instrumented: the file does **not** begin with `SQLite format 3`) · **[P]** iOS (compiles and creates the DB; that file-level assertion has **not** been run there) |
 | Payloads are stored as raw JSON `TEXT` — whatever a capture contains sits in the clear | `OutboxStore.kt:98, 150` | **[V]** |
 | `onUpgrade` **throws** rather than migrating — deliberately, so an upgrade can never drop unflushed user data | `OutboxStore.kt:112-117` | **[V]** — makes adding SQLCipher a schema-version event, see §2.1 |
 | Hard cap 5000 items, rejects rather than evicts (HTTP 507) | `OutboxStore.kt:339`, [`outbox.ts:51`](../../packages/common/src/utils/outbox.ts) | **[V]** |
-| **iOS has no outbox at all yet** — `LocalHubServer.swift` mentions it only in comments | `capacitor-local-hub/ios/Sources/LocalHubPlugin/*.swift` | **[V]** |
+| ~~**iOS has no outbox at all yet**~~ **SUPERSEDED.** iOS has a real outbox: `OutboxStore.swift`, SQLCipher-backed from commit one (S2's stated goal), verified on an iOS 27 simulator to create the database in the app container — `sqlite_sequence` present, `journal_mode=wal` | [`OutboxStore.swift`](../../packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/OutboxStore.swift) | **[V]** exists · **[P]** ciphertext |
 | PowerSync keeps a local SQLite copy in the WebView via `IDBBatchAtomicVFS` (IndexedDB), file `ci-powersync.db`. The comment states this is the only VFS that works without cross-origin-isolation headers the Capacitor webview can't set — "Do not switch to OPFSCoopSyncVFS or similar" | [`PowerSyncProvider.tsx:27-39`](../web/src/api/powersync/PowerSyncProvider.tsx) | **[V]** |
 | Installed version is `@powersync/web@1.39.1` | `.yarn/cache/@powersync-web-npm-1.39.1-…zip` | **[V]** |
 | Logout calls `database.disconnect()`, **not** `disconnectAndClear()` — locally synced rows survive logout. Flagged in-source as a known gap | `PowerSyncProvider.tsx:43-51` | **[V]** — this is the wipe primitive, see §4 |
@@ -182,7 +182,13 @@ the right gesture.
 
 ### 2.2 The sidecar outbox — SQLCipher (iOS)
 
-**[P]** iOS has no outbox yet **[V]**, so there is nothing to migrate — build it
+> ✅ **BUILT — this section is now a record of the decision, not a proposal.** `OutboxStore.swift`
+> took the second option below: `pod 'SQLCipher'` directly against the C API, `import SQLCipher`,
+> raw key via `PRAGMA key = "x'…'"`. There was indeed nothing to migrate. The one thing this
+> plan called for and did **not** get is its own verification step — see the ciphertext
+> assertion note in `capacitor-local-hub/README.md`.
+
+**[P]** iOS had no outbox when this was written, so there was nothing to migrate — build it
 encrypted from the first commit. Options, in order of preference:
 
 - **GRDB.swift with the SQLCipher subspec** (`pod 'GRDB.swift/SQLCipher'`) — gives a
@@ -531,8 +537,10 @@ Three things are missing:
 1. **The client cannot tell "revoked" from "unreachable."**
 2. **`ci.devices` and `ci.api_keys` are unrelated tables** **[V]** — there is no "this
    phone" to revoke, only "this key," and nothing binds them.
-3. **There is no wipe.** Even if the client knew, deleting a plaintext SQLite file leaves
-   recoverable pages.
+3. **There is still no wipe** — but the reason has changed. It is no longer *blocked*; it is
+   simply not built. With S1/S2 landed, the outbox is SQLCipher-encrypted under a key in
+   `CompanionSecureStore`, so **crypto-shredding is now available**: destroy the key and the
+   pages left on flash are ciphertext. That was the missing primitive.
 
 ### 5.2 Never wipe on a 401
 
@@ -609,6 +617,13 @@ how you either lose a user's last three photos or hand a thief a sync window.
 is step 3 alone: `File.delete()` on a plaintext SQLite database, which leaves fully
 recoverable pages on flash. Marketing a wipe feature on top of that would be a false
 security claim, which is worse than not having the feature. **G-4 in §8.**
+
+> **Update — that gate is satisfied on Android.** S1/S2 landed, so steps 1 and 2 are
+> implementable today: the outbox key lives in `CompanionSecureStore` and destroying it
+> crypto-shreds the database. The remaining work in S6 is the *signal* (a revocation
+> tombstone and a `devices`↔`api_keys` binding), not the erasure primitive. On **iOS**,
+> hold: shredding a key only shreds data if the data was really encrypted, and that is the
+> one assertion still unrun there.
 
 ### 5.7 Delivery of the signal
 
@@ -974,12 +989,12 @@ Severity: 🔴 **P0** = blocks the next data source · 🟠 **P1** = before the 
 | # | Slice | Sev | Effort | Notes |
 |---|---|---|---|---|
 | **S0** | **Fix D1 + D2** — replace `capacitor-secure-storage-plugin` for the API key with a `CompanionSecureStore` in the Local Hub plugin (`…ThisDeviceOnly` on iOS; fail-closed AES-GCM on Android) | 🔴 | **S** | §2.4. Cheapest high-value slice here, blocks nothing, and its Keystore/Keychain plumbing is the same plumbing S1/S2 need. **Do it first.** |
-| **S1** | **SQLCipher on the Android outbox** + Keystore-wrapped raw key + plaintext→encrypted migration | 🔴 | **M** | §2.1, §3.1. Re-check `ITSAppUsesNonExemptEncryption` and the 16 KB page-size item |
-| **S2** | **iOS outbox, encrypted from commit one** — parity with S1 | 🔴 | **L** | §2.2. iOS has no outbox at all today **[V]**; needs a Mac |
+| **S1** | ~~SQLCipher on the Android outbox~~ | ✅ **DONE** | **M** | Landed with this document. Raw key in `CompanionSecureStore` (fail-closed AES-GCM, never Base64), plaintext→encrypted migration, instrumented ciphertext assertion. Both follow-ups were re-checked: `ITSAppUsesNonExemptEncryption` is **re-opened** (see `DELIVERY.md` §1a — the "OS-only crypto" basis is no longer true) and the 16 KB page-size item is now a real recurring check, not a formality, because `libsqlcipher.so` ships |
+| **S2** | ~~iOS outbox, encrypted from commit one~~ | ✅ **DONE**, with one gap | **L** | Landed with this document — `OutboxStore.swift`, SQLCipher from commit one. ⚠️ **The one thing S1 has that S2 does not** is the file-level assertion that the database is actually ciphertext. Until that runs on iOS, treat S2's encryption as **[P]**, not **[V]** |
 | **S3** | **`disconnectAndClear()` on logout** — close the documented PowerSync gap | 🟠 | **S** | `PowerSyncProvider.tsx:43-51`. One-line-ish; also the wipe primitive S6 needs |
 | **S4** | **Biometric app-lock** + `FLAG_SECURE` + iOS blur overlay + `NSFaceIDUsageDescription` | 🟠 | **M** | §4. Already a `DELIVERY.md` **Now** item |
 | **S5** | **Transport** — private-range check in `persistApiBaseUrl`, http:// interstitial, Tailscale Serve onboarding path | 🔴 | **M** | §7. Also fixes the Data Safety answer. **Raised to P0** by `DEVICE_DATA_COMPLIANCE.md`: app-wide cleartext becomes a Play User Data policy *violation* once sensitive data flows, not merely an honest-disclosure problem |
-| **S6** | **Revocation tombstone + `devices`↔`api_keys` join + wipe-on-next-launch via crypto-shred** | 🟠 | **L** | §5. **Blocked by S1+S2** |
+| **S6** | **Revocation tombstone + `devices`↔`api_keys` join + wipe-on-next-launch via crypto-shred** | 🟠 | **L** | §5. ~~Blocked by S1+S2~~ — **unblocked; S1/S2 landed.** The crypto-shred primitive exists now; what remains is the revocation signal and the device↔key binding |
 | **S7** | **Per-source consent** — `privacy_settings` enforcement in the sidecar + consent receipts | 🔴 | **M** | §8.4, §8.8. **Gates every device source** |
 | **S8** | **Egress accounting v1** — JS-layer counters + CI allowlist assertion + Data Flow screen | 🟠 | **M** | §6. Also land `third-party-egress.md`'s attribution fix |
 | **S9** | **Sovereign Mode** — CSP injection + exception list | 🟠 | **L** | §6.3. iOS half unverified |
@@ -994,10 +1009,10 @@ Severity: 🔴 **P0** = blocks the next data source · 🟠 **P1** = before the 
 
 | Gate | Rule |
 |---|---|
-| **G-1** | **No device source of any kind** — not motion, not location, not health — lands in the outbox before **S1** (Android) / **S2** (iOS). The outbox is plaintext today by its own admission **[V]**; adding health or location to it is knowingly writing special-category data to an unencrypted file. |
+| **G-1** | **No device source of any kind** — not motion, not location, not health — lands in the outbox before **S1** (Android) / **S2** (iOS). ⚠️ **S1 and S2 have since landed, so this gate is *close to* lifted but is NOT automatically lifted — that call is the owner's, not this document's.** What changed: the outbox is SQLCipher on both platforms. What has not: the iOS ciphertext assertion is unrun, so on iOS the premise of this gate is still unproven rather than disproven. Recommended reading: **lift for Android, hold for iOS until that check passes.** G-5 (health) is unaffected — it also requires S4 and S5, which have not landed. |
 | **G-2** | **No device-sourced table enters `sync-rules.yaml`** while the local copy is plaintext IndexedDB (§2.3). The current sync set is the ceiling until the sidecar-owns-storage pivot lands. |
 | **G-3** | **No source ships without S7.** A source with no per-source toggle and no consent receipt cannot be disclosed accurately on either store's privacy form, and cannot be turned off by the user. |
-| **G-4** | **Do not ship or market remote wipe before S1+S2.** Without crypto-shredding, "wipe" is `File.delete()` on recoverable plaintext pages — a false security claim, which is worse than no feature (§5.6). |
+| **G-4** | **Do not ship or market remote wipe before S1+S2.** Without crypto-shredding, "wipe" is `File.delete()` on recoverable plaintext pages — a false security claim, which is worse than no feature (§5.6). ✅ **S1+S2 have landed**, so this gate no longer blocks building the feature. It still blocks *marketing* it on iOS until the ciphertext assertion runs — a wipe claim resting on an unverified encryption claim is the same false-security failure one level up. |
 | **G-5** | **Health data requires S1, S2, S4, and S5 all landed.** Art. 9 special-category data, on a device that today has no app-lock and talks cleartext to a LAN host. |
 | **G-6** | **Contacts require S11.** Untokenized third-party identifiers must never reach the server, not even once — a token cannot be un-leaked after the raw number has been synced. |
 | **G-7** | **No SMS, call-log, or message-content ingest from mobile, ever** (§8.2). Blocked by Play restricted-permissions policy on Android and by the absence of any API on iOS. Route via CI-Import-Tools. |

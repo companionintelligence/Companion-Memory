@@ -198,8 +198,18 @@ not only from a PR description)*:
   class in the first place. Downgraded 🔴→🟠, **not** cleared.
 - 🔴 **Android Keystore silently degrades** to plain Base64 in SharedPreferences if
   Keystore init throws — logging an error while reporting success.
-- 🟠 **The outbox is not encrypted at rest** (plaintext SQLite behind the app sandbox).
-  Fine to ship *only* if the privacy policy and Data Safety answers don't imply otherwise.
+- 🟠 **The outbox *is* encrypted at rest — but the iOS ciphertext check has not been run.**
+  Both platforms open the outbox as **SQLCipher (AES-256)**, keyed from the platform secure
+  store as a raw key (`OutboxStore.kt`, `OutboxStore.swift`, `OutboxDatabaseKey`). ⚠️ This
+  line previously read *"the outbox is not encrypted at rest (plaintext SQLite behind the
+  app sandbox)"*, which was already untrue when written — see §1a, which correctly notes
+  that shipping SQLCipher re-opens the export-compliance declaration. What remains open is
+  narrower and specific to iOS: the Android suite asserts the file **does not** begin with
+  `SQLite format 3`, and **no equivalent assertion has been reported on iOS**. Until it is,
+  iOS encryption at rest is a property of the code, not an observed property of the file —
+  and the failure mode is silent (`import SQLite3` instead of `import SQLCipher` compiles
+  and runs cleanly against the OS's *unencrypted* SQLite). Do that check before any Data
+  Safety answer leans on it.
 - 🟠 **Android app-wide `usesCleartextTraffic="true"`** — the deferred item above, and a
   User Data policy violation once sensitive data flows.
 
