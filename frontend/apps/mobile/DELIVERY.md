@@ -27,6 +27,15 @@ backend has an unusual submission profile: the load-bearing unlock is a **seeded
 HTTPS-only demo server** the reviewer can actually use — every review-based channel
 needs it. Nothing ships to either store until the 🔴 P0 items below are done.
 
+> **Demo access, as of 2026-08-13.** The demo **account** exists —
+> **`demo@ci.computer`** on **`hub.ci.computer`** (Portal, which is the OIDC IdP the
+> app's "Sign in with CI Portal" already targets; password lives in the store review
+> notes, never in this repo). The demo **server instance does not** — this is a
+> self-hosted platform, so a reviewer-reachable CI-Server has to be stood up. §1b records
+> which existing hosts were checked and why neither can be used. **Treat "we have a
+> backend" and "a reviewer can reach a backend" as two different facts** — that
+> distinction is the single most likely cause of a first-submission rejection here.
+
 **Landed so far (in-repo, no accounts needed):**
 
 | Fix | Where |
@@ -95,12 +104,25 @@ Owner: **[code]** = doable in-repo · **[acct]** = needs an Apple/Google/Sentry 
 
 - [ ] 🔴 **[acct]** **iOS distribution signing** — Apple Developer Program membership; set `DEVELOPMENT_TEAM`; Apple Distribution cert + App Store provisioning profile for `com.companionintelligence.app`; App Store Connect app record.
 - [ ] 🔴 **[acct]** **Android release signing** — generate an upload keystore, enroll in **Play App Signing**, wire `signingConfigs.release` from `ANDROID_KEYSTORE_BASE64/PASSWORD/KEY_ALIAS/KEY_PASSWORD` (names already referenced in `README.md`).
-- [ ] 🔴 **[acct]** **Demo server + demo account** for App Review / Play pre-launch — a public, seeded, **HTTPS-only** CI-Server + credentials (in review notes *and* ideally an in-app one-tap "Try the demo"). A self-hosted client with no reviewer-reachable backend is a well-known automatic rejection. Serve over TLS so the reviewer path needs no cleartext (keeps the Data-Safety "encrypted in transit" answer truthful for that flow).
+- [ ] 🔴 **[acct]** **Demo server + demo account** for App Review / Play pre-launch. A self-hosted client with no reviewer-reachable backend is a well-known automatic rejection. **Partly satisfied — one half done, one half still to build:**
+  - [x] **Identity.** A Portal test account exists: **`demo@ci.computer`** on **`hub.ci.computer`**. That is the right half to have, because Portal is the OIDC IdP the app's "Sign in with CI Portal" (`companion://` callback) already targets — so the reviewer's *login* path is real. Put the password in App Store Connect review notes and the Play Console, **never in this repo.**
+  - [ ] 🔴 **The reviewer-facing CI-Server origin.** Companion Intelligence is a **self-hosted platform**, so an instance has to be stood up for review — the backend software existing is not the same as a reviewer being able to reach one. Requirements: public DNS, valid TLS, **seeded with realistic memory data**, and **not behind an access gate**.
+  - ⚠️ **Neither existing host works for this, verified 2026-08-13 — do not point App Review at either:**
+
+    | Host | What it actually is | Why it fails review |
+    |---|---|---|
+    | `hub.ci.computer` | Companion Hub / CI Portal — the app store + OIDC IdP + OAuth proxy. Valid TLS (GTS, SAN covers `hub.ci.computer`), `/api/health` → 200 | **`POST /api/graphql` → 404.** The mobile app's `CompanionAPI` talks to `/api/graphql` and `/api/llm/generate`; this host serves neither. It is the identity endpoint, not the memory backend |
+    | `app.ci.computer` | A CI-Server instance | **Behind Cloudflare Access.** Every path answers 401/404 *from Cloudflare's edge*, not the app — the 401 body is a Cloudflare "Unauthorized" page. A reviewer hits a zero-trust login wall and never reaches the product. This is the sharpest form of the trap: the box is up and still unreviewable |
+
+  - **Serve it over TLS** so the reviewer path needs no cleartext — that is what keeps the Data-Safety "encrypted in transit" answer truthful for the flow a reviewer actually exercises (LAN http remains separately disclosed; see C3 below).
+  - Consider an in-app one-tap **"Try the demo"** that pre-fills the origin, so the reviewer never has to type a hostname into the `/server` screen — typing it wrong is itself a rejection path.
 
 ### 1c. Store presence, privacy & legal
 
 - [ ] 🔴 **[acct]** **Hosted Privacy Policy URL** — covers camera/mic/notifications + the personal memory data sent to the user's own server; no third-party sharing; no tracking/ads. Required by both stores + linked in-app.
-- [ ] 🔴 **[acct]** **Apple App Privacy nutrition label** + **Google Data Safety form** — because data is transmitted off-device it counts as *collected*: declare User Content / Photos / Audio / Messages / Location as applicable, **Linked to identity**, **Not used for tracking**, **Not shared**. Explain the self-hosted architecture in review notes. **C2/C3:** if the Lifescope demo server is stood up, data to *that* instance is developer-accessible → reflect it in the label; and cleartext means you **cannot** claim "encrypted in transit = Yes" for LAN flows — disclose accurately.
+- [ ] 🔴 **[acct]** **Apple App Privacy nutrition label** + **Google Data Safety form** — because data is transmitted off-device it counts as *collected*: declare User Content / Photos / Audio / Messages / Location as applicable, **Linked to identity**, **Not used for tracking**, **Not shared**. Explain the self-hosted architecture in review notes.
+  - **C2 is no longer conditional.** It used to read "*if* the Lifescope demo server is stood up…" — but §1b now commits to standing one up, and the Portal account `demo@ci.computer` on `hub.ci.computer` is already a Lifescope-operated identity. So data flowing to Lifescope-operated infrastructure **is** developer-accessible, and the label must say so. "The user hosts it themselves" is true of the product and **not** true of the demo path a reviewer will exercise — answering as though only the self-hosted case exists would be a false declaration on the very flow Apple and Google actually test.
+  - **C3:** cleartext means you **cannot** claim "encrypted in transit = Yes" for LAN flows — disclose accurately. The demo instance being HTTPS keeps that answer truthful *for the reviewer path* but does not retroactively make it true for a user pointing the app at `http://` on their tailnet.
 - [ ] 🔴 **[acct]** **EU trader status** (App Store Connect + Play Console, DSA) — a hard submission gate for EU distribution since 2024. Verify Lifescope's trader identity.
 - [ ] 🟠 **[acct]** **EULA / Terms of Use** — distinct from the privacy policy; both stores expect one for account apps (Apple's standard EULA is fine). Link in-app next to Privacy + Delete-account.
 - [ ] 🟠 **[acct]** **Age rating** — Apple Age Rating + Google IARC. UGC + open LLM chat push this to a mature tier; recommend an **adults-only (17+/"Not directed to children")** posture to avoid COPPA / Play Families data restrictions.
@@ -131,7 +153,7 @@ longer pull the date in much; accounts, hosted assets, and legal copy now can.
 | 3 | Create the **App Store Connect API key**, **Apple Distribution cert**, **App Store provisioning profile**; add all 11 secrets from §2 to the repo | [acct] | first TestFlight build | after 1 |
 | 3.5 | **Land `mobile-release.yml` on `main`.** GitHub will not dispatch a `workflow_dispatch` workflow that does not exist on the **default branch** — `gh workflow run mobile-release.yml` currently returns `HTTP 404: workflow not found on the default branch`. Either merge PR #1953, or cherry-pick just the workflow file onto `main` to unblock step 4 early | [code] | step 4 | ✅ yes — the cherry-pick does not wait on the rest of the PR |
 | 4 | Run **Mobile Release with `dry_run: true`** — proves signing, export, and App Store Connect validation without consuming a build number | [code] | first real upload | after 3 and 3.5 |
-| 5 | **Demo CI-Server (seeded, public, HTTPS-only) + demo account** | [acct] | *review approval on both stores* | ✅ **yes, and it is the true long pole after enrollment** |
+| 5 | **Stand up the reviewer-facing CI-Server** — seeded, public DNS, valid TLS, **no Cloudflare Access in front**. The demo *account* (`demo@ci.computer` at `hub.ci.computer`) already exists; the *instance* does not, and this is a self-hosted platform so someone has to build it | [acct] | *review approval on both stores* | ✅ **yes, and it is the true long pole after enrollment** |
 | 6 | **Privacy policy URL, EULA, public account-deletion URL** | [acct] | submission forms | ✅ yes |
 | 7 | **Nutrition label / Data Safety answers, EU trader status, age rating, screenshots** | [acct] | submission forms | ✅ yes (except iPad shots — see 9) |
 | 8 | **Background purge job** consuming `purge_after` | [code] | truthful deletion claims in 6/7 | ✅ yes |
@@ -148,6 +170,11 @@ an escape from policy, but internal tracks let the pipeline start proving itself
 1. **The demo server (5).** A self-hosted client with no reviewer-reachable backend is a
    well-known automatic rejection, and it gates *every* review-based channel on *both*
    stores. It is not an engineering afterthought — treat it as the launch dependency.
+   The demo *account* is done; the *instance* is not, and on a self-hosted platform that
+   instance is real infrastructure work. Two traps, both already observed on live hosts:
+   pointing review at the **Portal** (which has no `/api/graphql`) and putting the
+   instance behind **Cloudflare Access** (which makes an otherwise healthy box
+   indistinguishable, to a reviewer, from a dead one).
 2. **iPad (9).** `Info.plist` declares all iPad orientations today, so the binary **will
    be reviewed on iPad** whether or not anyone designed for it. Deciding late is
    expensive because it invalidates the screenshot set.
