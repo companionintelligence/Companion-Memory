@@ -20,6 +20,15 @@ import {
 const MONDAY = startOfLocalDay(new Date(2026, 7, 3));
 
 /**
+ * The machine's own zone, read once before anything below can perturb it.
+ *
+ * It has to be captured at module load: once `withTimeZone` has run, Node's
+ * resolved zone reports the *pinned* zone, so reading it later would "restore"
+ * to whatever was last set.
+ */
+const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/**
  * Run `fn` with the process timezone pinned, restoring it afterwards.
  *
  * Anything asserting on the UTC→local mapping, or on a day that is not 24 hours
@@ -30,6 +39,14 @@ const MONDAY = startOfLocalDay(new Date(2026, 7, 3));
  *
  * Build every Date inside the callback: one created outside carries the offset
  * that was in force when it was constructed.
+ *
+ * Restoring cannot use `delete process.env.TZ`, even though that is what an
+ * originally-unset TZ looks like. Deleting the variable does NOT return Node to
+ * the system zone — the resolved zone stays on the last value that was set, so
+ * every later test in the file silently kept running in the pinned zone. That
+ * is invisible on CI (already UTC, so the "leak" is UTC→UTC) and shows up only
+ * on a developer machine in another zone, as absolute-epoch assertions failing
+ * by exactly the offset between the two. Restore by assignment instead.
  */
 function withTimeZone<T>(timeZone: string, fn: () => T): T {
   const previous = process.env.TZ;
@@ -38,11 +55,7 @@ function withTimeZone<T>(timeZone: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env.TZ;
-    } else {
-      process.env.TZ = previous;
-    }
+    process.env.TZ = previous ?? SYSTEM_TIME_ZONE;
   }
 }
 
