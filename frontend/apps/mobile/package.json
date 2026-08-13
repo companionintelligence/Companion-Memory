@@ -26,6 +26,7 @@
     "@capacitor/status-bar": "^7.0.0",
     "@ci/capacitor-local-hub": "file:../../packages/capacitor-local-hub",
     "@ci/capacitor-local-llm": "file:../../packages/capacitor-local-llm",
+    "@ci/capacitor-speech": "file:../../packages/capacitor-speech",
     "capacitor-secure-storage-plugin": "^0.11.0"
   },
   "devDependencies": {

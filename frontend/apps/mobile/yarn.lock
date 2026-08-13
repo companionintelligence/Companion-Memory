@@ -107,10 +107,10 @@ __metadata:
 
 "@ci/capacitor-local-hub@file:../../packages/capacitor-local-hub::locator=%40ci%2Ffe-mobile%40workspace%3A.":
   version: 0.0.0
-  resolution: "@ci/capacitor-local-hub@file:../../packages/capacitor-local-hub#../../packages/capacitor-local-hub::hash=b1f21e&locator=%40ci%2Ffe-mobile%40workspace%3A."
+  resolution: "@ci/capacitor-local-hub@file:../../packages/capacitor-local-hub#../../packages/capacitor-local-hub::hash=372972&locator=%40ci%2Ffe-mobile%40workspace%3A."
   peerDependencies:
     "@capacitor/core": ^7.0.0
-  checksum: 10c0/f83ee35dd00ba4a00f0af3e66d942268824999461711293418897396f51f7bac20a71cfbc75379b6dd187f2c5e4290d7bf27c980802c4845934159aa38f80711
+  checksum: 10c0/0fa2e5a88825cae388c927f0830cb4dbb66fc550ea8d45ad6c3d38e1be46debf5f0c3a5cdf6200968f4b3ce787fe92faa05a97edcf2c6c0a57fe94b0406d4a32
   languageName: node
   linkType: hard
 
@@ -120,6 +120,15 @@ __metadata:
   peerDependencies:
     "@capacitor/core": ^7.0.0
   checksum: 10c0/fddedee4e1080941e7d81d5be5794a630e02cef47f8c1e0f358dc7ede384ba7149a988e951df6a8f0c93a0f005f30ad236ccf7f885bf201637bb390dda7f8bfd
+  languageName: node
+  linkType: hard
+
+"@ci/capacitor-speech@file:../../packages/capacitor-speech::locator=%40ci%2Ffe-mobile%40workspace%3A.":
+  version: 0.0.0
+  resolution: "@ci/capacitor-speech@file:../../packages/capacitor-speech#../../packages/capacitor-speech::hash=3ef13b&locator=%40ci%2Ffe-mobile%40workspace%3A."
+  peerDependencies:
+    "@capacitor/core": ^7.0.0
+  checksum: 10c0/6b88717def401146d42e0600b69da9f93a63d5b0d54f7d494c13fe3c3d56851888a131b164b04acd769a7d455c511a2df5d46ba5ad98904537db448bcfc82a83
   languageName: node
   linkType: hard
 
@@ -138,6 +147,7 @@ __metadata:
     "@capacitor/status-bar": "npm:^7.0.0"
     "@ci/capacitor-local-hub": "file:../../packages/capacitor-local-hub"
     "@ci/capacitor-local-llm": "file:../../packages/capacitor-local-llm"
+    "@ci/capacitor-speech": "file:../../packages/capacitor-speech"
     capacitor-secure-storage-plugin: "npm:^0.11.0"
     typescript: "npm:^5.8.3"
   languageName: unknown

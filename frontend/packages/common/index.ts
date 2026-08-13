@@ -22,6 +22,40 @@ export {
 export type { ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
 export { FetchJsonError, fetchJson, type FetchJsonIssue } from './src/utils/fetchJson';
+export { localHubPlugin, localHubSession, type LocalHubSession } from './src/utils/localHub';
+export {
+  OUTBOX_MAX_ATTEMPTS,
+  OUTBOX_MAX_ITEMS,
+  OUTBOX_WARN_AT,
+  enqueueOutboxItem,
+  getOutboxItem,
+  listOutbox,
+  recordOutboxAttempt,
+  removeOutboxItem,
+  retryOutboxItem,
+} from './src/utils/outbox';
+export type {
+  OutboxAttemptOutcome,
+  OutboxCapacity,
+  OutboxCounts,
+  OutboxEnqueueAck,
+  OutboxEnqueueInput,
+  OutboxFailureReason,
+  OutboxItem,
+  OutboxListing,
+  OutboxResult,
+  OutboxStatus,
+  OutboxStatusFilter,
+} from './src/utils/outbox';
+export {
+  OutboxQueueProvider,
+  flushOutbox,
+  isPermanentFlushFailure,
+  outboxEndpointFor,
+  registerOutboxKind,
+  useOutboxQueue,
+} from './src/utils/outboxFlush';
+export type { FlushOutboxOptions, FlushOutboxSummary, OutboxQueueState } from './src/utils/outboxFlush';
 export {
   addAppStateListener,
   addAppUrlOpenListener,
@@ -46,3 +80,35 @@ export {
   parseOidcCallbackUrl,
 } from './src/utils/oidcNative';
 export type { OidcCallbackParams } from './src/utils/oidcNative';
+export {
+  WEB_SPEECH_UNAVAILABLE_REASON,
+  downloadRecognitionLanguage,
+  ensureSpeechPermissions,
+  installSynthesisLanguage,
+  isSpeaking,
+  listRecognitionLanguages,
+  listSpeechVoices,
+  listSynthesisLanguages,
+  probeSpeechRecognition,
+  probeSpeechSynthesis,
+  speakText,
+  speechPlugin,
+  startDictation,
+  stopSpeaking,
+} from './src/utils/speech';
+export type {
+  DictationOptions,
+  DictationSession,
+  SpeakTextOptions,
+  SpeechEndReason,
+  SpeechErrorCode,
+  SpeechLanguagePackState,
+  SpeechOnDevicePolicy,
+  SpeechRecognitionCapability,
+  SpeechRecognitionMode,
+  SpeechRecognitionTier,
+  SpeechSynthesisCapability,
+  SpeechSynthesisLanguage,
+  SpeechSynthesisLanguageStatus,
+  SpeechVoice,
+} from './src/utils/speech';

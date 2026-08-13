@@ -51,4 +51,17 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- Package visibility (required since Android 11 / API 30, and this app targets 35).
+         Every text-to-speech engine lives in its own package, and an app targeting API 30+
+         cannot bind to a service in a package it cannot "see". Without this declaration
+         TextToSpeech's OnInitListener fires with ERROR and no voice is ever available, with
+         no other diagnostic. @ci/capacitor-speech declares the same element in its own
+         library manifest; the merger unions them, and it is repeated here because this is
+         the module that declares the targetSdk which triggers the requirement. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 </manifest>

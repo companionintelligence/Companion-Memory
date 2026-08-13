@@ -41,6 +41,17 @@
 	<string>Companion uses the camera to capture photos and videos for your memory.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Companion uses the microphone to record audio and video for your memory.</string>
+	<!--
+	  REQUIRED for @ci/capacitor-speech: Apple states an app CRASHES when it calls
+	  SFSpeechRecognizer.requestAuthorization without this key present. It is a separate
+	  grant from NSMicrophoneUsageDescription above — speech recognition needs both.
+	  The wording reflects what the plugin actually does: recognition runs on-device
+	  whenever SFSpeechRecognizer reports supportsOnDeviceRecognition for the locale, and
+	  the default onDevicePolicy ('require') refuses to start otherwise rather than
+	  silently sending audio to Apple's servers.
+	-->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Companion turns your speech into text on this device so you can dictate notes and talk to your memory.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Companion saves captured media to your photo library when you choose to.</string>
 	<key>CFBundleShortVersionString</key>

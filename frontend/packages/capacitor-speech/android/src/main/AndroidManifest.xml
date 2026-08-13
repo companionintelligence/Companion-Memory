@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- SpeechRecognizer captures from the microphone, so the plugin declares the
+         permission itself rather than relying on the host app to remember. The host app
+         (frontend/apps/mobile) also declares it for the in-webview capture flow; the
+         manifest merger unions identical <uses-permission> entries. The runtime grant is
+         requested through Capacitor's permission flow (@CapacitorPlugin(permissions = ...)
+         + requestPermissionForAlias in SpeechPlugin) — the WebView's lazy getUserMedia
+         grant does not cover a native recognizer. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Package visibility (Android 11 / API 30+). An app targeting API 30+ cannot bind to
+         a service in another package unless it can "see" that package, and every
+         TextToSpeech engine is a separate app. Without this, TextToSpeech's OnInitListener
+         fires with ERROR and no voice is ever available. Declared here so any app that
+         installs this plugin inherits it, and mirrored in the host app's manifest (which
+         is where the targetSdk that triggers the requirement is declared). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+</manifest>

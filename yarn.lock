@@ -3056,6 +3056,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@ci/capacitor-speech@workspace:frontend/packages/capacitor-speech":
+  version: 0.0.0-use.local
+  resolution: "@ci/capacitor-speech@workspace:frontend/packages/capacitor-speech"
+  dependencies:
+    "@capacitor/core": "npm:^7.0.0"
+    typescript: "npm:^5.8.3"
+  peerDependencies:
+    "@capacitor/core": ^7.0.0
+  languageName: unknown
+  linkType: soft
+
 "@ci/capture@workspace:*, @ci/capture@workspace:frontend/packages/capture":
   version: 0.0.0-use.local
   resolution: "@ci/capture@workspace:frontend/packages/capture"
