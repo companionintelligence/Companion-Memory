@@ -21,6 +21,18 @@ import GCDWebServer
 /// All mutable state is only ever touched on `stateQueue`, since Capacitor may
 /// invoke plugin methods -- and therefore this class's methods -- from more than one
 /// thread (e.g. a `getStatus()` poll racing a `stop()`).
+///
+/// CORS: the caller is the app's own WebView, but Capacitor still loads it as a real
+/// browser origin (`capacitor://localhost` on iOS), so the browser enforces CORS
+/// against this different-origin loopback server -- confirmed on the Android sibling
+/// server via a real device/emulator run, where `fetch()` rejected with a CORS policy
+/// error despite the server responding fine; ported the same fix here for parity
+/// since GCDWebServer has the identical no-CORS-by-default behavior. A wildcard
+/// `Access-Control-Allow-Origin` doesn't weaken this server's actual security
+/// boundary: the bearer token is what gates real access. The `Authorization` header
+/// also makes every real request "non-simple", so the browser preflights it with an
+/// unauthenticated `OPTIONS` -- that must succeed without the bearer check or every
+/// real request would fail before it's even sent.
 final class LocalHubServer {
     /// Reported by `GET /api/health` -- bump alongside the Local Hub design doc's
     /// phase markers. Kept in sync by hand with the Android `LocalHubServer`'s
@@ -60,6 +72,18 @@ final class LocalHubServer {
                 request: GCDWebServerRequest.self,
                 processBlock: { [weak self] request in
                     self?.handleHealth(request, expectedToken: token)
+                }
+            )
+
+            // Wildcard path/regex so every future route (the outbox, local inference)
+            // gets a working CORS preflight for free without adding an OPTIONS handler
+            // per route -- mirrors the Android `serve()` router's method-first `when`.
+            server.addHandler(
+                forMethod: "OPTIONS",
+                pathRegex: "^/.*$",
+                request: GCDWebServerRequest.self,
+                processBlock: { _ in
+                    Self.withCors(GCDWebServerResponse(statusCode: 204))
                 }
             )
 
@@ -144,6 +168,14 @@ final class LocalHubServer {
         // this stays non-optional without a force-unwrap.
         let response = GCDWebServerDataResponse(jsonObject: object) ?? GCDWebServerResponse()
         response.statusCode = statusCode
+        return withCors(response)
+    }
+
+    @discardableResult
+    private static func withCors(_ response: GCDWebServerResponse) -> GCDWebServerResponse {
+        response.setValue("*", forAdditionalHeader: "Access-Control-Allow-Origin")
+        response.setValue("GET, OPTIONS", forAdditionalHeader: "Access-Control-Allow-Methods")
+        response.setValue(authHeaderName, forAdditionalHeader: "Access-Control-Allow-Headers")
         return response
     }
 

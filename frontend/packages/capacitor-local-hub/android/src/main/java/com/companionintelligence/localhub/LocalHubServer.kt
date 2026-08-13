@@ -17,22 +17,45 @@ import fi.iki.elonen.NanoHTTPD
  * requires the current per-launch bearer [token], so no other app *on the same device*
  * can call it either without having separately obtained the token from a live `start()`
  * call through this plugin.
+ *
+ * CORS: the caller is always the app's own WebView, but it's still a browser context
+ * (Capacitor serves the bundle from `https://localhost` on Android), so plain XHR/fetch
+ * same-origin rules don't apply and the browser enforces CORS against this different-origin
+ * loopback server -- confirmed the hard way (a real device/emulator run showed `fetch()`
+ * rejecting with a CORS policy error despite the server responding fine). A wildcard
+ * `Access-Control-Allow-Origin` doesn't weaken this server's actual security boundary: the
+ * bearer token is what gates real access, and CORS on a token-authenticated loopback server
+ * only prevents the browser from letting arbitrary page JS *read* a response it could not
+ * have produced without the token anyway. The `Authorization` header also makes every real
+ * request "non-simple", so the browser preflights it with an unauthenticated `OPTIONS` --
+ * that must succeed without the bearer check or every real request would fail before it's
+ * even sent.
  */
 class LocalHubServer(
     private val token: String,
 ) : NanoHTTPD(LOOPBACK_ADDRESS, 0) {
 
     override fun serve(session: IHTTPSession): Response =
-        when {
-            session.method == Method.GET && session.uri == HEALTH_PATH -> handleHealth(session)
-            else -> jsonResponse(Response.Status.NOT_FOUND, """{"error":"not_found"}""")
-        }
+        withCors(
+            when {
+                session.method == Method.OPTIONS -> newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, "")
+                session.method == Method.GET && session.uri == HEALTH_PATH -> handleHealth(session)
+                else -> jsonResponse(Response.Status.NOT_FOUND, """{"error":"not_found"}""")
+            },
+        )
 
     private fun handleHealth(session: IHTTPSession): Response {
         if (!isAuthorized(session)) {
             return jsonResponse(Response.Status.UNAUTHORIZED, """{"error":"unauthorized"}""")
         }
         return jsonResponse(Response.Status.OK, """{"status":"ok","version":"$API_VERSION"}""")
+    }
+
+    private fun withCors(response: Response): Response {
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        response.addHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
+        response.addHeader("Access-Control-Allow-Headers", AUTH_HEADER)
+        return response
     }
 
     private fun isAuthorized(session: IHTTPSession): Boolean {
