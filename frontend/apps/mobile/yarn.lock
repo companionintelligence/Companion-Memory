@@ -107,10 +107,10 @@ __metadata:
 
 "@ci/capacitor-local-hub@file:../../packages/capacitor-local-hub::locator=%40ci%2Ffe-mobile%40workspace%3A.":
   version: 0.0.0
-  resolution: "@ci/capacitor-local-hub@file:../../packages/capacitor-local-hub#../../packages/capacitor-local-hub::hash=372972&locator=%40ci%2Ffe-mobile%40workspace%3A."
+  resolution: "@ci/capacitor-local-hub@file:../../packages/capacitor-local-hub#../../packages/capacitor-local-hub::hash=a3ace2&locator=%40ci%2Ffe-mobile%40workspace%3A."
   peerDependencies:
     "@capacitor/core": ^7.0.0
-  checksum: 10c0/0fa2e5a88825cae388c927f0830cb4dbb66fc550ea8d45ad6c3d38e1be46debf5f0c3a5cdf6200968f4b3ce787fe92faa05a97edcf2c6c0a57fe94b0406d4a32
+  checksum: 10c0/52fa8d6ded1ae91e3ecc85655cccd4e68974dfcc2bd80b81592fb26b778f018474e415b84ccc092cd2d00a1060bfa761d215dff4030166f47790c3eefce34070
   languageName: node
   linkType: hard
 

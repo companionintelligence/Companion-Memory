@@ -23,12 +23,21 @@ Pod::Spec.new do |s|
   # subspecs. Pinned to the 3.5.x line (latest tagged release at the time of writing is
   # 3.5.4); bump the constraint if a newer major is verified compatible.
   s.dependency 'GCDWebServer', '~> 3.5'
-  # The durable outbox (ios/Sources/LocalHubPlugin/OutboxStore.swift) uses the system
-  # SQLite via `import SQLite3`. The iOS SDK's SQLite3 module map already declares
-  # `link "sqlite3"`, so autolinking usually covers this -- declaring it explicitly
-  # costs nothing and removes the "undefined symbol: _sqlite3_open_v2" failure mode if
-  # autolinking is disabled by a build setting. NOT SQLCipher: encryption at rest is a
-  # deliberate follow-up slice, see README.md.
-  s.library = 'sqlite3'
+  # The durable outbox (ios/Sources/LocalHubPlugin/OutboxStore.swift) is encrypted at rest
+  # with SQLCipher. This pod compiles SQLCipher's own amalgamated `sqlite3.c` and, because
+  # the consuming Podfile uses `use_frameworks!`, exposes it to Swift as a module named
+  # `SQLCipher` -- which is what `import SQLCipher` in OutboxStore.swift binds to.
+  #
+  # Deliberately NOT `s.library = 'sqlite3'` any more. Linking the system SQLite alongside
+  # SQLCipher is the classic way to end up with `sqlite3_open_v2` resolving to the OS's
+  # unencrypted implementation: it compiles, it runs, and it writes a plaintext database.
+  # SQLCipher's own podspec sets `_SQLITE3_H_=1` on the consuming target precisely to keep
+  # the system header out; adding the system library back would undo that.
+  #
+  # 4.9.0 is the newest version on CocoaPods trunk at the time of writing (the Android side
+  # is on the separate `net.zetetic:sqlcipher-android` line, currently 4.14.1 -- the two
+  # artifacts version independently and do not need to match). Re-verify at build time:
+  # this environment has no Mac and cannot run `pod install`.
+  s.dependency 'SQLCipher', '~> 4.9'
   s.swift_version = '5.1'
 end

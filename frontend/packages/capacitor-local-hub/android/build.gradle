@@ -71,6 +71,24 @@ dependencies {
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 
+    // Encryption at rest for the capture outbox (OutboxStore.kt). This is the CURRENT Zetetic
+    // artifact (package net.zetetic.database.sqlcipher), NOT the legacy
+    // net.zetetic:android-database-sqlcipher (package net.sqlcipher.database) -- the two must
+    // never be mixed.
+    //
+    // Version choice, verified against Maven Central at implementation time rather than
+    // assumed: SECURITY_ARCHITECTURE.md §2.1 named "4.6.x" and told us to re-pin. 4.14.1 is
+    // the newest release whose bundled libsqlcipher.so is 16 KB-page aligned (all four ABIs
+    // report p_align 0x4000, which targetSdk 35 requires) and whose native payload is ~2 MB
+    // per ABI instead of the 4.6-4.13 line's ~4-7 MB. It pulls androidx.sqlite 2.6.2
+    // (minCompileSdk 34, minimum AGP 8.1.1 -- both satisfied here) where 4.13 and earlier
+    // pulled 2.2.0.
+    implementation 'net.zetetic:sqlcipher-android:4.14.1'
+    // Declared explicitly because sqlcipher publishes androidx.sqlite as a *runtime*-only
+    // dependency, while net.zetetic...SQLiteOpenHelper implements androidx's
+    // SupportSQLiteOpenHelper -- so the supertype has to be on the compile classpath too.
+    implementation 'androidx.sqlite:sqlite:2.6.2'
+
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

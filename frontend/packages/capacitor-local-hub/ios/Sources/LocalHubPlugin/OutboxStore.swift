@@ -1,5 +1,11 @@
 import Foundation
-import SQLite3
+// SQLCipher, NOT the system `SQLite3` module. The pod compiles SQLCipher's own `sqlite3.c` and,
+// under this Podfile's `use_frameworks!`, exposes it as a Swift module named `SQLCipher` whose
+// umbrella header is SQLCipher's `sqlite3.h`. Importing `SQLite3` here instead would silently
+// bind these calls to the OS's *unencrypted* SQLite, which would compile, run, and produce a
+// plaintext database -- the failure this whole file exists to prevent, in its most invisible
+// form. See README.md: this is one of the specific things to check on the first real build.
+import SQLCipher
 
 /// One row of the durable capture outbox. `payload` is only populated by single-item reads.
 struct OutboxItem {
@@ -34,6 +40,9 @@ enum EnqueueOutcome {
 enum OutboxStoreError: LocalizedError {
     case openFailed(String)
     case sqlFailed(String)
+    /// The key was applied but the database still would not decrypt -- a wrong key, or a file
+    /// that is not a SQLCipher database at all.
+    case keyRejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -41,6 +50,8 @@ enum OutboxStoreError: LocalizedError {
             return "Could not open the Local Hub outbox database: \(message)"
         case let .sqlFailed(message):
             return "Local Hub outbox database error: \(message)"
+        case let .keyRejected(message):
+            return "The Local Hub outbox database could not be decrypted: \(message)"
         }
     }
 }
@@ -65,11 +76,22 @@ enum OutboxStoreError: LocalizedError {
 ///   the wall clock -- `capturedAt` is client time and can move backwards.
 /// - Capacity is a hard cap (`maxItems`) that rejects, never evicts.
 ///
-/// **Encryption at rest is deliberately NOT implemented in this pass.** The database is
-/// plaintext SQLite protected by the app container plus iOS Data Protection (the default
-/// `NSFileProtectionCompleteUntilFirstUserAuthentication` applies to it). SQLCipher with a
-/// Keychain-held key is a follow-up slice -- see this package's `README.md`.
-/// TODO(local-hub): SQLCipher-backed encryption at rest.
+/// **Encrypted at rest with SQLCipher (AES-256).** The key is 32 bytes of `SecRandomCopyBytes`
+/// held in the Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, applied as a
+/// raw key (`PRAGMA key = "x'…'"`) so no PBKDF2 runs -- see `OutboxDatabaseKey`. Layered on top
+/// of that, the file is given the `.completeUntilFirstUserAuthentication` Data Protection class
+/// -- which pairs exactly with the keychain accessibility above, both meaning "available from
+/// the first unlock after boot", which is what background ingest needs -- and is excluded from
+/// backups, so a restored backup produces a database that cannot be opened rather than one that
+/// silently follows the user's captures onto new hardware.
+///
+/// **What this does and does not protect.** It protects the file at rest: an attacker with
+/// filesystem access sees ciphertext, and destroying the Keychain item makes every copy of the
+/// file permanently unopenable. It does **not** protect a running, unlocked app -- once the
+/// sidecar has opened the database, anything with code execution in this process can read it.
+///
+/// **No migration path exists or is needed on iOS**: unlike Android, no build that shipped this
+/// file has ever run on a device, so there is no plaintext predecessor in any app container.
 ///
 /// **Threading**: GCDWebServer invokes handlers on arbitrary dispatch queues, so several
 /// calls can land here at once. Every public method funnels through the serial `queue`,
@@ -101,10 +123,15 @@ final class OutboxStore {
     /// duration of the `sqlite3_bind_text` call.
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    /// `Library/Application Support/<bundle id>/` -- inside the app container, not visible
-    /// through file sharing the way `Documents/` can be, and included in device backups
-    /// (correct for an outbox: these are user captures that have not reached the server yet,
-    /// not a regenerable cache).
+    /// `Library/Application Support/<bundle id>/` -- inside the app container and not visible
+    /// through file sharing the way `Documents/` can be.
+    ///
+    /// **Excluded from backups**, which is a change from the pre-encryption reasoning. The old
+    /// comment argued the outbox should be backed up because it holds captures that have not
+    /// reached the server. That is no longer coherent now the file is encrypted with a
+    /// `ThisDeviceOnly` key: the key cannot travel with the backup, so a restored copy of the
+    /// file would be permanently unreadable padding. Excluding it makes the outcome explicit
+    /// instead of shipping a backup artifact that only looks like a safety net.
     static func defaultDatabaseURL() throws -> URL {
         let fileManager = FileManager.default
         let base = try fileManager.url(
@@ -125,6 +152,10 @@ final class OutboxStore {
     init(databaseURL: URL, maxItems: Int = OutboxStore.defaultMaxItems) throws {
         self.maxItems = maxItems
 
+        // Resolved before the file is opened, so a missing or unreadable key means no database
+        // gets created at all -- there is no unencrypted fallback anywhere below this line.
+        let keySpec = try OutboxDatabaseKey.rawKeySpec(for: databaseURL)
+
         var handle: OpaquePointer?
         // FULLMUTEX: the connection is shared across GCDWebServer's handler queues. The
         // serial `queue` above already serializes access, but a serialized connection means
@@ -137,12 +168,66 @@ final class OutboxStore {
         }
         database = handle
 
-        // WAL for concurrent readers while the flusher writes; synchronous = FULL so a
-        // committed enqueue is durable across a power loss, not merely across a crash. This
-        // queue's write rate is low enough that the extra fsync is not worth optimizing away.
-        try execute("PRAGMA journal_mode = WAL;")
-        try execute("PRAGMA synchronous = FULL;")
-        try createSchemaIfNeeded()
+        do {
+            // `PRAGMA key` must be the very first statement on the connection -- anything before
+            // it touches the (still-encrypted) file and fails. The `x'…'` form makes SQLCipher
+            // treat the 32 bytes as the key itself rather than as a passphrase to stretch.
+            try execute("PRAGMA key = \"\(keySpec)\";")
+
+            // Forces the header to be decrypted now. Without a read, `PRAGMA key` "succeeds"
+            // even with a wrong key and the failure surfaces later as generic corruption at
+            // some arbitrary call site.
+            try verifyKeyAccepted()
+
+            try applyFileProtection(to: databaseURL)
+
+            // WAL for concurrent readers while the flusher writes; synchronous = FULL so a
+            // committed enqueue is durable across a power loss, not merely across a crash. This
+            // queue's write rate is low enough that the extra fsync is not worth optimizing away.
+            try execute("PRAGMA journal_mode = WAL;")
+            try execute("PRAGMA synchronous = FULL;")
+            try createSchemaIfNeeded()
+        } catch {
+            sqlite3_close(database)
+            database = nil
+            throw error
+        }
+    }
+
+    /// Reads the schema table, which is what actually exercises the key. A wrong key surfaces
+    /// here as `SQLITE_NOTADB` ("file is not a database"), which is the correct answer -- an
+    /// unopenable database is what makes destroying the Keychain item a real crypto-shred.
+    private func verifyKeyAccepted() throws {
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(database, "SELECT count(*) FROM sqlite_master;", nil, nil, &errorPointer)
+        guard result == SQLITE_OK else {
+            let message = errorPointer.map { String(cString: $0) } ?? lastErrorMessage()
+            sqlite3_free(errorPointer)
+            throw OutboxStoreError.keyRejected(message)
+        }
+    }
+
+    /// `.completeUntilFirstUserAuthentication` on the database and its sidecar files, plus
+    /// exclusion from backups.
+    ///
+    /// Applied to `-wal` and `-shm` too: those hold recently written pages, and protecting only
+    /// the main file would leave the newest captures at the container default. They may not
+    /// exist yet at this point (WAL mode is enabled just after), which is why a missing file is
+    /// not an error here -- SQLite creates them with the main file's protection class.
+    private func applyFileProtection(to databaseURL: URL) throws {
+        let fileManager = FileManager.default
+        for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
+            guard fileManager.fileExists(atPath: path) else { continue }
+            try fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: path
+            )
+        }
+
+        var excluded = databaseURL
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try excluded.setResourceValues(values)
     }
 
     deinit {

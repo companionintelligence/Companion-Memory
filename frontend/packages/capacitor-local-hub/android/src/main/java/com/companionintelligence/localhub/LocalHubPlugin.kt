@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * Android native half of the Local Hub sidecar. See `src/definitions.ts` for the JS-facing
@@ -25,6 +26,13 @@ import kotlinx.coroutines.withContext
  * the [OutboxStore] handle) is only ever touched while holding [stateMutex], so concurrent
  * start()/stop()/getStatus() calls from JS -- e.g. a status poll racing a stop() -- can't
  * interleave into an inconsistent state.
+ *
+ * The `secure*` methods are a second, unrelated surface that happens to live here: they expose
+ * [CompanionSecureStore] to JS so the appliance API key stops being held by
+ * `capacitor-secure-storage-plugin`, which silently degrades to unencrypted Base64 when
+ * Keystore initialisation fails. They take no locks -- SharedPreferences and `Cipher` are
+ * already safe to use concurrently -- and deliberately share no state with the server
+ * lifecycle, so reading a credential does not require the sidecar to be running.
  */
 @CapacitorPlugin(name = "LocalHub")
 class LocalHubPlugin : Plugin() {
@@ -94,6 +102,90 @@ class LocalHubPlugin : Plugin() {
         }
     }
 
+    // ------------------------------------------------------------------ secure storage
+
+    /**
+     * Reads one value from [CompanionSecureStore], resolving `{ value: null }` when nothing is
+     * stored under `key`.
+     *
+     * Rejects -- rather than resolving null -- when the keystore itself is unusable or a stored
+     * blob no longer decrypts, so the two cases stay distinguishable at the bridge. The JS
+     * `secureStorageGet` chooses to collapse both into "signed out"; that leniency belongs at
+     * the call site, not here.
+     */
+    @PluginMethod
+    fun secureGet(call: PluginCall) {
+        val key = call.getString("key")
+        if (key.isNullOrEmpty()) {
+            call.reject("A non-empty 'key' is required")
+            return
+        }
+        pluginScope.launch {
+            try {
+                val value = withContext(Dispatchers.IO) { credentialStore.get(key) }
+                val ret = JSObject()
+                // JSObject.put(String, null) would drop the entry; an explicit JSON null keeps
+                // the shape of the resolved object stable for the TS side.
+                if (value == null) ret.put("value", JSONObject.NULL) else ret.put("value", value)
+                call.resolve(ret)
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Secure storage read failed", e)
+            }
+        }
+    }
+
+    /**
+     * Encrypts and commits one value. Rejects if it could not be stored **protected** -- there
+     * is no plaintext fallback anywhere below this, which is the whole point of the store.
+     */
+    @PluginMethod
+    fun secureSet(call: PluginCall) {
+        val key = call.getString("key")
+        val value = call.getString("value")
+        if (key.isNullOrEmpty()) {
+            call.reject("A non-empty 'key' is required")
+            return
+        }
+        if (value == null) {
+            call.reject("A 'value' is required")
+            return
+        }
+        pluginScope.launch {
+            try {
+                withContext(Dispatchers.IO) { credentialStore.set(key, value) }
+                call.resolve()
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Secure storage write failed", e)
+            }
+        }
+    }
+
+    /** Removes one value. Resolves successfully when it was already absent. */
+    @PluginMethod
+    fun secureRemove(call: PluginCall) {
+        val key = call.getString("key")
+        if (key.isNullOrEmpty()) {
+            call.reject("A non-empty 'key' is required")
+            return
+        }
+        pluginScope.launch {
+            try {
+                withContext(Dispatchers.IO) { credentialStore.remove(key) }
+                call.resolve()
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Secure storage remove failed", e)
+            }
+        }
+    }
+
+    /**
+     * Lazy, not a field initializer: a `Plugin` is constructed before Capacitor attaches its
+     * `Context`, so `context` is only safe to read once a method has actually been called.
+     * `by lazy` is thread-safe, which matters because the three secure* methods run on
+     * [pluginScope]'s IO dispatcher.
+     */
+    private val credentialStore: CompanionSecureStore by lazy { CompanionSecureStore.credentials(context) }
+
     /** Must hold [stateMutex]. */
     private suspend fun startLocked(): JSObject {
         val runningServer = server
@@ -123,8 +215,10 @@ class LocalHubPlugin : Plugin() {
             // Open (and, on first launch, create) the database here rather than lazily on the
             // first request: it makes a broken/corrupt outbox a start() failure the caller
             // can see, and keeps that disk I/O off the NanoHTTPD worker that would otherwise
-            // pay for it mid-request.
-            store.writableDatabase
+            // pay for it mid-request. Since the outbox is encrypted, this is also where a
+            // missing keystore key or a failed plaintext->encrypted migration surfaces -- as a
+            // rejected start(), never as a silently empty queue.
+            store.open()
 
             // NanoHTTPD#start busy-waits internally until the socket is actually bound (or
             // throws), so getListeningPort() below is valid the moment this call returns --

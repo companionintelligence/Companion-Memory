@@ -13,10 +13,38 @@
 import { apiKeyHeaders } from './apiAuth';
 import { buildApiUrl, isNativePlatform } from './apiBase';
 
+/**
+ * `capacitor-secure-storage-plugin`. **Legacy — read-only, for migration.** It used to hold
+ * the appliance API key and has two defects that made it unfit for that:
+ *
+ * - iOS writes with `kSecAttrAccessibleAfterFirstUnlock` (not `…ThisDeviceOnly`), so the
+ *   credential is included in encrypted iTunes/Finder backups and restores onto new
+ *   hardware — the long-lived appliance key silently migrates with a backup.
+ * - Android falls back from AndroidKeyStore RSA wrapping to plain Base64 in the same
+ *   `MODE_PRIVATE` SharedPreferences file if Keystore init throws for any reason, logging
+ *   one line and reporting success.
+ *
+ * New writes go to {@link LocalHubPlugin}'s keystore-backed store instead; this interface
+ * survives only so an existing install's value can be read once and moved across.
+ */
 interface SecureStoragePlugin {
   get(options: { key: string }): Promise<{ value: string }>;
   set(options: { key: string; value: string }): Promise<{ value: boolean }>;
   remove(options: { key: string }): Promise<{ value: boolean }>;
+}
+
+/**
+ * Local Hub sidecar (see `frontend/packages/capacitor-local-hub`). Declared locally rather
+ * than imported from that package for the same reason as every other plugin interface here:
+ * it keeps the web bundle free of `@capacitor/*` deps.
+ *
+ * Only the secure-storage surface is declared — the sidecar's HTTP lifecycle is reached
+ * through `apiBase`, not from this module.
+ */
+interface LocalHubPlugin {
+  secureGet(options: { key: string }): Promise<{ value: string | null }>;
+  secureSet(options: { key: string; value: string }): Promise<void>;
+  secureRemove(options: { key: string }): Promise<void>;
 }
 
 interface BrowserPlugin {
@@ -77,6 +105,7 @@ interface LocalLlmPlugin {
 
 interface CapacitorPlugins {
   SecureStoragePlugin?: SecureStoragePlugin;
+  LocalHub?: LocalHubPlugin;
   Browser?: BrowserPlugin;
   App?: AppPlugin;
   SplashScreen?: SplashScreenPlugin;
@@ -104,13 +133,86 @@ function plugins(): CapacitorPlugins | undefined {
 }
 
 /**
+ * Reads through to the legacy `capacitor-secure-storage-plugin` and moves whatever it finds
+ * into the Local Hub's keystore-backed store, so an existing install is never asked to log in
+ * again just because the credential moved house.
+ *
+ * **Order of operations is the safety property.** The old copy is removed only after the new
+ * write has resolved. If the new write fails, the old copy stays exactly where it was and the
+ * next launch tries again; the failure mode is "the value briefly exists in two places", never
+ * "the value exists in none". Losing it would force a full re-login against an appliance whose
+ * URL the user may no longer remember, so a duplicate is by far the cheaper mistake.
+ *
+ * Returns the migrated value, or null when there was nothing to migrate.
+ */
+async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promise<string | null> {
+  const legacy = plugins()?.SecureStoragePlugin;
+
+  if (!legacy) {
+    return null;
+  }
+
+  let legacyValue: string | null = null;
+
+  try {
+    const { value } = await legacy.get({ key });
+
+    legacyValue = value ?? null;
+  } catch {
+    // The legacy plugin throws when the key does not exist — the overwhelmingly common case
+    // on a fresh install. Nothing to migrate.
+    return null;
+  }
+
+  if (legacyValue === null) {
+    return null;
+  }
+
+  await hub.secureSet({ key, value: legacyValue });
+
+  try {
+    await legacy.remove({ key });
+  } catch {
+    // The new copy is already durable, so a failed cleanup is cosmetic: every later read
+    // finds the keystore copy first and never consults the legacy plugin again.
+  }
+
+  return legacyValue;
+}
+
+/**
  * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, or
  * `localStorage` on web. Returns null when absent.
+ *
+ * On native this is the Local Hub plugin's `CompanionSecureStore`, which fails closed rather
+ * than degrading to unencrypted storage. Any native failure is collapsed to null here — the
+ * app then behaves as if signed out, which is recoverable (sign in again) and never results
+ * in a credential being written somewhere weaker.
  */
 export async function secureStorageGet(key: string): Promise<string | null> {
+  const hub = plugins()?.LocalHub;
+
+  if (isNativePlatform() && hub) {
+    try {
+      const { value } = await hub.secureGet({ key });
+
+      if (value !== null && value !== undefined) {
+        return value;
+      }
+
+      return await migrateLegacySecureValue(hub, key);
+    } catch {
+      // Keystore unusable, or a stored blob that no longer decrypts. Treat as "no value":
+      // the recovery is re-authentication, and nothing here writes a weaker copy.
+      return null;
+    }
+  }
+
   const secure = plugins()?.SecureStoragePlugin;
 
   if (isNativePlatform() && secure) {
+    // Native shell without the Local Hub plugin (older build). Fall back rather than lose
+    // access to a credential that install already has.
     try {
       const { value } = await secure.get({ key });
 
@@ -128,8 +230,33 @@ export async function secureStorageGet(key: string): Promise<string | null> {
   }
 }
 
-/** Persist a value to the OS keystore on native, or `localStorage` on web. */
+/**
+ * Persist a value to the OS keystore on native, or `localStorage` on web.
+ *
+ * Failures propagate on purpose: a caller that just stored an API key needs to know if it did
+ * not stick, and the native side rejects rather than falling back to unprotected storage.
+ */
 export async function secureStorageSet(key: string, value: string): Promise<void> {
+  const hub = plugins()?.LocalHub;
+
+  if (isNativePlatform() && hub) {
+    await hub.secureSet({ key, value });
+
+    // Nothing should be left in the legacy store once the keystore copy is authoritative;
+    // otherwise a stale credential lingers in the weaker store indefinitely.
+    const legacy = plugins()?.SecureStoragePlugin;
+
+    if (legacy) {
+      try {
+        await legacy.remove({ key });
+      } catch {
+        // Already absent, which is the normal case after the first migration.
+      }
+    }
+
+    return;
+  }
+
   const secure = plugins()?.SecureStoragePlugin;
 
   if (isNativePlatform() && secure) {
@@ -147,13 +274,26 @@ export async function secureStorageSet(key: string, value: string): Promise<void
 
 /** Remove a value from the OS keystore on native, or `localStorage` on web. */
 export async function secureStorageRemove(key: string): Promise<void> {
+  const hub = plugins()?.LocalHub;
   const secure = plugins()?.SecureStoragePlugin;
 
-  if (isNativePlatform() && secure) {
-    try {
-      await secure.remove({ key });
-    } catch {
-      // Already gone — nothing to do.
+  if (isNativePlatform() && (hub || secure)) {
+    // Both stores are cleared: a sign-out that left a copy behind in the legacy store would
+    // be worse than one that throws.
+    if (hub) {
+      try {
+        await hub.secureRemove({ key });
+      } catch {
+        // Already gone — nothing to do.
+      }
+    }
+
+    if (secure) {
+      try {
+        await secure.remove({ key });
+      } catch {
+        // Already gone — nothing to do.
+      }
     }
 
     return;

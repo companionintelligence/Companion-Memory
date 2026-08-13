@@ -1,10 +1,17 @@
 package com.companionintelligence.localhub
 
+import android.content.ContentValues
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.KeyPairGenerator
+import java.security.KeyStore
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -26,6 +33,12 @@ import org.junit.runner.RunWith
  * Every test gets a freshly deleted database file ([TEST_DATABASE_NAME]) so state can't
  * leak between tests; the durability test deliberately reuses that same file across two
  * separate [OutboxStore]/[LocalHubServer] instances, which is the whole point of it.
+ *
+ * The database is SQLCipher-encrypted, so "a real on-disk database" now also means a real
+ * AndroidKeyStore key behind it. Two groups of tests exist because of that: one that reads the
+ * raw file back off disk and asserts it is *not* plaintext SQLite, and one that builds a
+ * genuine pre-encryption plaintext outbox with the framework driver and asserts every queued
+ * row survives the migration into the encrypted one.
  */
 @RunWith(AndroidJUnit4::class)
 class LocalHubServerTest {
@@ -38,6 +51,8 @@ class LocalHubServerTest {
     @Before
     fun setUp() {
         context.deleteDatabase(TEST_DATABASE_NAME)
+        context.deleteDatabase(LEGACY_TEST_DATABASE_NAME)
+        clearTestKeystoreState()
     }
 
     @After
@@ -47,6 +62,9 @@ class LocalHubServerTest {
         openedStores.forEach { it.close() }
         openedStores.clear()
         context.deleteDatabase(TEST_DATABASE_NAME)
+        context.deleteDatabase(LEGACY_TEST_DATABASE_NAME)
+        context.deleteDatabase("ci_local_hub_outbox_keyless_test.db")
+        clearTestKeystoreState()
     }
 
     // ------------------------------------------------------------------ health + transport
@@ -685,6 +703,232 @@ class LocalHubServerTest {
         )
     }
 
+    // ------------------------------------------------------------------ encryption at rest
+
+    /**
+     * The claim "the outbox is encrypted at rest" reduced to something a test can actually
+     * fail on: a plain SQLite file starts with the 16-byte magic `SQLite format 3\0`, and a
+     * SQLCipher file does not -- its very first page, header included, is ciphertext.
+     *
+     * Paired with a scan for the payload text, because a header check alone would still pass
+     * on a file that merely started with something else.
+     */
+    @Test
+    fun databaseFile_isNotReadableAsPlaintextSqlite() {
+        val token = "cipher-token"
+        val srv = startServer(token)
+
+        val marker = "distinctive-plaintext-marker-4c9a71"
+        assertEquals(
+            201,
+            post(
+                srv,
+                token,
+                "/api/outbox",
+                enqueueBody(
+                    kind = "note",
+                    payload = JSONObject().put("text", marker),
+                    idempotencyKey = "cipher-1",
+                ),
+            ).code,
+        )
+
+        val databaseFile = context.getDatabasePath(TEST_DATABASE_NAME)
+        assertTrue("expected $databaseFile to exist", databaseFile.exists())
+        val bytes = databaseFile.readBytes()
+        assertTrue("expected a non-trivial database file", bytes.size > SQLITE_MAGIC.size)
+
+        val header = bytes.copyOfRange(0, SQLITE_MAGIC.size)
+        assertFalse(
+            "the outbox database still begins with the plain SQLite magic -- it is not encrypted",
+            header.contentEquals(SQLITE_MAGIC),
+        )
+        assertFalse(
+            "the payload text is readable in the raw database file",
+            bytes.containsSubsequence(marker.toByteArray(Charsets.UTF_8)),
+        )
+        assertFalse(
+            "the idempotency key is readable in the raw database file",
+            bytes.containsSubsequence("cipher-1".toByteArray(Charsets.UTF_8)),
+        )
+
+        // The rows are of course perfectly readable *through* the store, which is the point:
+        // encryption at rest protects the file, not a running process that holds the key.
+        val id = get(srv, token, "/api/outbox").json().getJSONArray("items").getJSONObject(0).getString("id")
+        assertEquals(marker, get(srv, token, "/api/outbox/$id").json().getJSONObject("payload").getString("text"))
+    }
+
+    /**
+     * The other half of the same claim: the file is not merely *unreadable as plain SQLite*, it
+     * is unreadable without this specific key. A different key produces a failure, not an empty
+     * queue -- which is what makes destroying the keystore entry a real crypto-shred.
+     */
+    @Test
+    fun databaseFile_cannotBeOpenedWithADifferentKey() {
+        val token = "wrong-key-token"
+        val srv = startServer(token)
+        assertEquals(201, post(srv, token, "/api/outbox", enqueueBody(idempotencyKey = "wrong-key-1")).code)
+        // Close the real handle so the second open is a genuine cold open of the file.
+        srv.stop()
+        startedServers.remove(srv)
+        openedStores.forEach { it.close() }
+        openedStores.clear()
+
+        val impostorNamespace = CompanionSecureStore(context, IMPOSTOR_ALIAS, IMPOSTOR_PREFERENCES)
+        // A valid-looking but wrong 32-byte key, so the failure is "wrong key", not "no key".
+        impostorNamespace.set(OutboxDatabaseKey.DEFAULT_ENTRY_NAME, "ab".repeat(32))
+        val impostor = OutboxStore(
+            context,
+            TEST_DATABASE_NAME,
+            OutboxStore.MAX_ITEMS,
+            null,
+            OutboxDatabaseKey(impostorNamespace),
+        )
+
+        var opened = false
+        try {
+            impostor.open()
+            opened = true
+        } catch (e: Exception) {
+            // Expected: SQLCipher reports the file as unreadable rather than returning rows.
+        } finally {
+            impostor.close()
+        }
+        assertFalse("the encrypted outbox opened with the wrong key", opened)
+    }
+
+    /**
+     * Fail-closed, end to end: with no usable key there is no store, and therefore no database
+     * file -- as opposed to an unencrypted one created "just to keep going".
+     */
+    @Test
+    fun store_withoutAUsableKey_refusesToOpenAndCreatesNoDatabase() {
+        val freshName = "ci_local_hub_outbox_keyless_test.db"
+        context.deleteDatabase(freshName)
+        val databaseFile = context.getDatabasePath(freshName)
+
+        // A namespace whose alias is occupied by a signing RSA key: the AES path cannot use it,
+        // which is the same condition capacitor-secure-storage-plugin answers with plain Base64.
+        occupyAliasWithAnRsaKey(HOSTILE_ALIAS)
+        val hostileNamespace = CompanionSecureStore(context, HOSTILE_ALIAS, HOSTILE_PREFERENCES)
+
+        var constructed = false
+        try {
+            OutboxStore(context, freshName, OutboxStore.MAX_ITEMS, null, OutboxDatabaseKey(hostileNamespace)).close()
+            constructed = true
+        } catch (e: SecureStoreUnavailableException) {
+            // Expected.
+        }
+
+        assertFalse("an outbox store was constructed without a usable key", constructed)
+        assertFalse("a database file was created despite there being no key", databaseFile.exists())
+    }
+
+    // ------------------------------------------------------------------ plaintext -> encrypted
+
+    /**
+     * The upgrade path for an install that already has a plaintext outbox. Those rows are
+     * captures that have never reached any server, so the migration has to move every one of
+     * them -- payload, seq, status, attempts and last error -- and only then get rid of the
+     * plaintext file.
+     */
+    @Test
+    fun plaintextOutbox_isMigratedIntoTheEncryptedDatabase_andTheOldFileIsRemoved() {
+        val legacyFile = writeLegacyPlaintextOutbox(
+            LegacyRow(seq = 1, id = "legacy-a", kind = "note", payload = """{"text":"first legacy capture"}""", capturedAt = "2026-08-13T08:00:00.000Z", idempotencyKey = "legacy-key-a", status = "pending", attempts = 0, lastError = null),
+            LegacyRow(seq = 2, id = "legacy-b", kind = "capture", payload = """{"text":"second legacy capture"}""", capturedAt = "2026-08-13T08:05:00.000Z", idempotencyKey = "legacy-key-b", status = "needs_attention", attempts = 5, lastError = "server said no"),
+            LegacyRow(seq = 9, id = "legacy-c", kind = "note", payload = """{"text":"third legacy capture"}""", capturedAt = "2026-08-13T08:10:00.000Z", idempotencyKey = "legacy-key-c", status = "pending", attempts = 2, lastError = "offline"),
+        )
+        // Sanity: the fixture really is a plaintext SQLite file before we migrate it.
+        assertTrue(legacyFile.readBytes().copyOfRange(0, SQLITE_MAGIC.size).contentEquals(SQLITE_MAGIC))
+
+        val token = "migration-token"
+        val srv = startServer(token, legacyPlaintextDatabaseName = LEGACY_TEST_DATABASE_NAME)
+
+        val listJson = get(srv, token, "/api/outbox").json()
+        val items = listJson.getJSONArray("items")
+        assertEquals("every queued capture must survive the migration", 3, items.length())
+
+        // FIFO order and the original seq values are preserved, so replay order is unchanged.
+        assertEquals("legacy-a", items.getJSONObject(0).getString("id"))
+        assertEquals(1L, items.getJSONObject(0).getLong("seq"))
+        assertEquals("legacy-b", items.getJSONObject(1).getString("id"))
+        assertEquals(2L, items.getJSONObject(1).getLong("seq"))
+        assertEquals("legacy-c", items.getJSONObject(2).getString("id"))
+        assertEquals(9L, items.getJSONObject(2).getLong("seq"))
+
+        // Mutable columns come across too, not just the row.
+        assertEquals("needs_attention", items.getJSONObject(1).getString("status"))
+        assertEquals(5, items.getJSONObject(1).getInt("attempts"))
+        assertEquals("server said no", items.getJSONObject(1).getString("lastError"))
+        assertTrue(items.getJSONObject(0).isNull("lastError"))
+
+        val counts = listJson.getJSONObject("counts")
+        assertEquals(2, counts.getInt("pending"))
+        assertEquals(1, counts.getInt("needsAttention"))
+        assertEquals(3, counts.getInt("total"))
+
+        // Payloads survive verbatim.
+        assertEquals(
+            "second legacy capture",
+            get(srv, token, "/api/outbox/legacy-b").json().getJSONObject("payload").getString("text"),
+        )
+
+        // The plaintext file is gone, and the encrypted one that replaced it is not plaintext.
+        assertFalse("the plaintext outbox was left on disk", legacyFile.exists())
+        val encrypted = context.getDatabasePath(TEST_DATABASE_NAME).readBytes()
+        assertFalse(encrypted.copyOfRange(0, SQLITE_MAGIC.size).contentEquals(SQLITE_MAGIC))
+        assertFalse(
+            "a migrated payload is readable in the encrypted file",
+            encrypted.containsSubsequence("second legacy capture".toByteArray(Charsets.UTF_8)),
+        )
+
+        // The idempotency keys came across as well: re-POSTing one must be recognised as a
+        // replay of the migrated row rather than accepted as a new capture.
+        val replay = post(srv, token, "/api/outbox", enqueueBody(idempotencyKey = "legacy-key-a"))
+        assertEquals(201, replay.code)
+        assertEquals("legacy-a", replay.json().getString("id"))
+        assertEquals(3, get(srv, token, "/api/outbox").json().getJSONObject("counts").getInt("total"))
+    }
+
+    /**
+     * A second launch after a completed migration must not resurrect anything or fail: the
+     * plaintext file is already gone, so the import is a no-op.
+     */
+    @Test
+    fun migration_isANoOpOnEveryLaunchAfterTheFirst() {
+        writeLegacyPlaintextOutbox(
+            LegacyRow(seq = 1, id = "legacy-only", kind = "note", payload = """{"text":"once"}""", capturedAt = "2026-08-13T08:00:00.000Z", idempotencyKey = "legacy-only-key", status = "pending", attempts = 0, lastError = null),
+        )
+
+        val firstServer = startServer("first-launch", legacyPlaintextDatabaseName = LEGACY_TEST_DATABASE_NAME)
+        assertEquals(1, get(firstServer, "first-launch", "/api/outbox").json().getJSONArray("items").length())
+        firstServer.stop()
+        startedServers.remove(firstServer)
+        openedStores.forEach { it.close() }
+        openedStores.clear()
+
+        val secondServer = startServer("second-launch", legacyPlaintextDatabaseName = LEGACY_TEST_DATABASE_NAME)
+        val items = get(secondServer, "second-launch", "/api/outbox").json().getJSONArray("items")
+        assertEquals("the migrated row was duplicated or lost on the second launch", 1, items.length())
+        assertEquals("legacy-only", items.getJSONObject(0).getString("id"))
+    }
+
+    /**
+     * A fresh install has no plaintext predecessor. Nothing should be created, imported, or
+     * shredded -- and the queue starts empty rather than erroring.
+     */
+    @Test
+    fun migration_withNoPlaintextPredecessor_startsAnEmptyQueue() {
+        context.deleteDatabase(LEGACY_TEST_DATABASE_NAME)
+
+        val token = "fresh-install-token"
+        val srv = startServer(token, legacyPlaintextDatabaseName = LEGACY_TEST_DATABASE_NAME)
+
+        assertEquals(0, get(srv, token, "/api/outbox").json().getJSONObject("counts").getInt("total"))
+        assertFalse(context.getDatabasePath(LEGACY_TEST_DATABASE_NAME).exists())
+    }
+
     // ------------------------------------------------------------------ concurrency
 
     /**
@@ -730,8 +974,22 @@ class LocalHubServerTest {
 
     // ------------------------------------------------------------------ helpers
 
-    private fun startServer(token: String, maxItems: Int = OutboxStore.MAX_ITEMS): LocalHubServer {
-        val store = OutboxStore(context, TEST_DATABASE_NAME, maxItems).also { openedStores.add(it) }
+    private fun startServer(
+        token: String,
+        maxItems: Int = OutboxStore.MAX_ITEMS,
+        /**
+         * `null` by default so the ordinary tests never look at, let alone shred, a plaintext
+         * database -- including the production one, which the default would otherwise point at.
+         * The migration tests pass their own throwaway name.
+         */
+        legacyPlaintextDatabaseName: String? = null,
+    ): LocalHubServer {
+        val store = OutboxStore(
+            context,
+            TEST_DATABASE_NAME,
+            maxItems,
+            legacyPlaintextDatabaseName,
+        ).also { openedStores.add(it) }
         return LocalHubServer(token, store).also {
             startedServers.add(it)
             it.start(5000, true)
@@ -814,6 +1072,114 @@ class LocalHubServerTest {
         return connection
     }
 
+    // --- encryption / migration helpers
+
+    /** One row of a pre-encryption plaintext outbox, as the shipped v1 schema stored it. */
+    private data class LegacyRow(
+        val seq: Long,
+        val id: String,
+        val kind: String,
+        val payload: String,
+        val capturedAt: String,
+        val idempotencyKey: String,
+        val status: String,
+        val attempts: Int,
+        val lastError: String?,
+    )
+
+    /**
+     * Builds a real plaintext SQLite outbox with the framework driver -- byte-for-byte what an
+     * install from before this slice has sitting in `databases/`. Writing the fixture through
+     * `android.database.sqlite` rather than through [OutboxStore] is deliberate: the point is
+     * to migrate a file this code can no longer produce.
+     */
+    private fun writeLegacyPlaintextOutbox(vararg rows: LegacyRow): File {
+        context.deleteDatabase(LEGACY_TEST_DATABASE_NAME)
+        val file = context.getDatabasePath(LEGACY_TEST_DATABASE_NAME)
+        file.parentFile?.mkdirs()
+
+        val database = SQLiteDatabase.openOrCreateDatabase(file, null)
+        database.use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE ${OutboxStore.TABLE_NAME} (
+                    ${OutboxStore.COLUMN_SEQ} INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ${OutboxStore.COLUMN_ID} TEXT NOT NULL UNIQUE,
+                    ${OutboxStore.COLUMN_KIND} TEXT NOT NULL,
+                    ${OutboxStore.COLUMN_PAYLOAD} TEXT NOT NULL,
+                    ${OutboxStore.COLUMN_CAPTURED_AT} TEXT NOT NULL,
+                    ${OutboxStore.COLUMN_IDEMPOTENCY_KEY} TEXT NOT NULL UNIQUE,
+                    ${OutboxStore.COLUMN_STATUS} TEXT NOT NULL,
+                    ${OutboxStore.COLUMN_ATTEMPTS} INTEGER NOT NULL DEFAULT 0,
+                    ${OutboxStore.COLUMN_LAST_ERROR} TEXT
+                )
+                """.trimIndent(),
+            )
+            db.version = 1
+            for (row in rows) {
+                db.insertOrThrow(
+                    OutboxStore.TABLE_NAME,
+                    null,
+                    ContentValues().apply {
+                        put(OutboxStore.COLUMN_SEQ, row.seq)
+                        put(OutboxStore.COLUMN_ID, row.id)
+                        put(OutboxStore.COLUMN_KIND, row.kind)
+                        put(OutboxStore.COLUMN_PAYLOAD, row.payload)
+                        put(OutboxStore.COLUMN_CAPTURED_AT, row.capturedAt)
+                        put(OutboxStore.COLUMN_IDEMPOTENCY_KEY, row.idempotencyKey)
+                        put(OutboxStore.COLUMN_STATUS, row.status)
+                        put(OutboxStore.COLUMN_ATTEMPTS, row.attempts)
+                        put(OutboxStore.COLUMN_LAST_ERROR, row.lastError)
+                    },
+                )
+            }
+        }
+        return file
+    }
+
+    /**
+     * Occupies a keystore alias with a signing RSA keypair, so the AES path finds an entry of
+     * the wrong type -- the "keystore is unusable" condition, reproduced rather than mocked.
+     */
+    private fun occupyAliasWithAnRsaKey(aliasName: String) {
+        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore")
+        generator.initialize(
+            KeyGenParameterSpec.Builder(
+                aliasName,
+                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+            )
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
+                .build(),
+        )
+        generator.generateKeyPair()
+    }
+
+    private fun clearTestKeystoreState() {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        for (aliasName in listOf(IMPOSTOR_ALIAS, HOSTILE_ALIAS)) {
+            if (keyStore.containsAlias(aliasName)) {
+                keyStore.deleteEntry(aliasName)
+            }
+        }
+        for (preferencesName in listOf(IMPOSTOR_PREFERENCES, HOSTILE_PREFERENCES)) {
+            context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE).edit().clear().commit()
+        }
+    }
+
+    private fun ByteArray.containsSubsequence(needle: ByteArray): Boolean {
+        if (needle.isEmpty() || needle.size > size) {
+            return false
+        }
+        outer@ for (start in 0..(size - needle.size)) {
+            for (offset in needle.indices) {
+                if (this[start + offset] != needle[offset]) continue@outer
+            }
+            return true
+        }
+        return false
+    }
+
     private data class HttpResult(val code: Int, val body: String, val headers: Map<String, String?>) {
         fun json(): JSONObject = JSONObject(body)
     }
@@ -831,5 +1197,21 @@ class LocalHubServerTest {
          * a process that shares storage with the app.
          */
         const val TEST_DATABASE_NAME = "ci_local_hub_outbox_test.db"
+
+        /**
+         * Stand-in for [OutboxStore.LEGACY_PLAINTEXT_DATABASE_NAME], for the same reason: the
+         * migration tests *shred* this file, and pointing them at the production name would let
+         * a stray run destroy a real user's queued captures.
+         */
+        const val LEGACY_TEST_DATABASE_NAME = "ci_local_hub_outbox_legacy_test.db"
+
+        /** `SQLite format 3 ` -- the 16-byte magic every plain SQLite file starts with. */
+        val SQLITE_MAGIC: ByteArray = "SQLite format 3".toByteArray(Charsets.US_ASCII) + 0.toByte()
+
+        const val IMPOSTOR_ALIAS = "com.companionintelligence.localhub.test.impostor_dek"
+        const val IMPOSTOR_PREFERENCES = "ci_local_hub_test_impostor_dek"
+
+        const val HOSTILE_ALIAS = "com.companionintelligence.localhub.test.hostile_dek"
+        const val HOSTILE_PREFERENCES = "ci_local_hub_test_hostile_dek"
     }
 }

@@ -23,10 +23,17 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "secureGet", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "secureSet", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "secureRemove", returnType: CAPPluginReturnPromise)
     ]
 
     private let server = LocalHubServer()
+
+    /// Credential namespace only. The outbox database key lives in its own namespace and is
+    /// never reachable from JS -- nothing in the WebView has any business holding it.
+    private let secureStore = CompanionSecureStore.credentials()
 
     /// Starts the embedded loopback HTTP server if it isn't already running and
     /// resolves with its `baseUrl`/`token`. If already running, resolves with the
@@ -59,5 +66,60 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             result["baseUrl"] = baseUrl
         }
         call.resolve(result)
+    }
+
+    // MARK: - Secure storage
+
+    /// Reads one value from the Keychain, resolving `{ "value": null }` when nothing is stored.
+    ///
+    /// Rejects -- rather than resolving null -- when the Keychain itself refuses, so the two
+    /// cases stay distinguishable at the bridge. The JS `secureStorageGet` chooses to collapse
+    /// both into "signed out"; that leniency belongs at the call site, not here.
+    @objc func secureGet(_ call: CAPPluginCall) {
+        guard let key = call.getString("key"), !key.isEmpty else {
+            call.reject("A non-empty 'key' is required")
+            return
+        }
+        do {
+            let value = try secureStore.get(key)
+            // NSNull rather than omitting the field, so the resolved object's shape is stable
+            // for the TS side.
+            call.resolve(["value": value ?? NSNull()])
+        } catch {
+            call.reject(error.localizedDescription, nil, error)
+        }
+    }
+
+    /// Stores one value with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, rejecting if
+    /// the Keychain would not take it. There is no weaker fallback below this.
+    @objc func secureSet(_ call: CAPPluginCall) {
+        guard let key = call.getString("key"), !key.isEmpty else {
+            call.reject("A non-empty 'key' is required")
+            return
+        }
+        guard let value = call.getString("value") else {
+            call.reject("A 'value' is required")
+            return
+        }
+        do {
+            try secureStore.set(key, value)
+            call.resolve()
+        } catch {
+            call.reject(error.localizedDescription, nil, error)
+        }
+    }
+
+    /// Removes one value. Resolves successfully when it was already absent.
+    @objc func secureRemove(_ call: CAPPluginCall) {
+        guard let key = call.getString("key"), !key.isEmpty else {
+            call.reject("A non-empty 'key' is required")
+            return
+        }
+        do {
+            try secureStore.remove(key)
+            call.resolve()
+        } catch {
+            call.reject(error.localizedDescription, nil, error)
+        }
     }
 }
