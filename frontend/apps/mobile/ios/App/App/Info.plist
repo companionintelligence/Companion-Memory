@@ -54,6 +54,15 @@
 	<string>Companion turns your speech into text on this device so you can dictate notes and talk to your memory.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Companion saves captured media to your photo library when you choose to.</string>
+	<!--
+	  Location — WHEN-IN-USE ONLY, deliberately. Adding
+	  NSLocationAlwaysAndWhenInUseUsageDescription (plus UIBackgroundModes: location)
+	  is a separate product decision: see DEVICE_DATA_COMPLIANCE.md §3.4 and §7
+	  Phase 4. Guideline 5.1.5 requires location be directly relevant to a feature
+	  the user can see, so the string names the feature rather than the data.
+	-->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Companion records where you are while you use it, so your memory can place your notes, photos and events on a map. Locations are sent only to your own Companion server.</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
@@ -68,9 +77,22 @@
 		     slice no iOS-15 device runs; arm64 is the correct required capability. -->
 		<string>arm64</string>
 	</array>
-	<!-- Export compliance: the app uses only exempt standard cryptography (HTTPS/TLS
-	     via the OS, Keychain). Declaring this skips the per-upload encryption
-	     questionnaire in App Store Connect. Revisit if non-exempt custom crypto is added. -->
+	<!-- Export compliance. THE STATED BASIS FOR THIS CHANGED AND IS NOT YET CONFIRMED
+	     BY COUNSEL - see DELIVERY.md section 1a.
+
+	     The previous basis was "only exempt standard cryptography (HTTPS/TLS via the
+	     OS, Keychain)", i.e. no cryptography of the app's own at all. That is no longer
+	     true: the app now bundles SQLCipher (AES-256 via CommonCrypto) to encrypt the
+	     Local Hub capture outbox at rest, which is app-level crypto rather than an OS
+	     service.
+
+	     The likely outcome is still exempt - mass-market software using a standard,
+	     published, open-source implementation of a standard algorithm, applied to the
+	     app's own data at rest - but "probably exempt on a different basis" is not the
+	     claim the old comment made, and `false` here suppresses the App Store Connect
+	     encryption questionnaire on every upload. Confirm the determination (and whether
+	     an annual self-classification report is owed) before the next submission; set
+	     this to `true` if counsel wants the questionnaire answered per-upload instead. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UISupportedInterfaceOrientations</key>

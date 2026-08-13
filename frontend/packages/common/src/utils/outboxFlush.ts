@@ -42,37 +42,224 @@ import {
 } from './outbox';
 
 /**
+ * The `kind` device-native location fixes are queued under. Routes to `/v1/positions`,
+ * **not** the older `/api/position` below — see {@link DEFAULT_OUTBOX_ROUTES}.
+ */
+export const POSITION_OUTBOX_KIND = 'positions';
+
+/** Where a `kind` is replayed, and what it owes `POST /v1/ingest/finish` afterwards. */
+interface OutboxRoute {
+  path: string;
+  /**
+   * Enrichment legs this kind's rows need once materialized. Omitted for `/v1` kinds means
+   * {@link DEFAULT_V1_FINISH_STAGES}; omitted for non-`/v1` kinds means nothing is owed.
+   */
+  finishStages?: readonly string[];
+}
+
+/**
+ * Positions are not a searchable entity — the appliance's `BACKFILLABLE_ENTITIES` lists
+ * communication/event/content/item/browser-activity/file/person, not position — so a
+ * search-index sweep would do nothing for them. What they *do* need is the two geo legs:
+ * `reverse_geocode` turns the point into address/city on the row itself, and
+ * `estimate_locations` is how every other entity in the timeline inherits a place from the
+ * fixes around it. Skipping these leaves the rows written but inert.
+ */
+const POSITION_FINISH_STAGES = ['reverse_geocode', 'estimate_locations'] as const;
+
+/** Every other `/v1` kind materializes searchable rows with no per-row indexing fan-out. */
+const DEFAULT_V1_FINISH_STAGES = ['search_index'] as const;
+
+/**
  * Where each `kind` is replayed on the appliance. The sidecar treats `kind` as opaque, so
  * routing is a client concern and lives here.
  *
  * Seeded with the ingest routes CI-Server exposes today. A `kind` with no entry is a
  * **permanent** failure — the item lands in `needs_attention` where the user can see it,
  * rather than being retried forever or silently dropped.
+ *
+ * `position` (singular, `/api/position`) is the pre-`/v1` route and is kept only so
+ * anything already queued under that kind still drains. **New captures use
+ * {@link POSITION_OUTBOX_KIND}**: `/api/position` gets the 100kb default body limit
+ * (`BodyParserMiddleware` widens to 10mb only under `/v1`, and it runs before routing so
+ * there is no per-route escape), and it bypasses the capture log, which is the only place
+ * positions are deduped on their provenance triple.
  */
-const DEFAULT_OUTBOX_ENDPOINTS: Record<string, string> = {
-  position: '/api/position',
-  event: '/api/v1/events',
-  content: '/api/v1/contents',
-  communication: '/api/v1/communications',
-  inventory: '/api/v1/inventory',
-  'browser-activity': '/api/v1/browser-activity',
+const DEFAULT_OUTBOX_ROUTES: Record<string, OutboxRoute> = {
+  position: { path: '/api/position' },
+  [POSITION_OUTBOX_KIND]: { path: '/api/v1/positions', finishStages: POSITION_FINISH_STAGES },
+  event: { path: '/api/v1/events' },
+  content: { path: '/api/v1/contents' },
+  communication: { path: '/api/v1/communications' },
+  inventory: { path: '/api/v1/inventory' },
+  'browser-activity': { path: '/api/v1/browser-activity' },
 };
 
-const outboxEndpoints = new Map(Object.entries(DEFAULT_OUTBOX_ENDPOINTS));
+const outboxRoutes = new Map(Object.entries(DEFAULT_OUTBOX_ROUTES));
 
-/** Register (or override) the appliance endpoint a `kind` flushes to. */
-export function registerOutboxKind(kind: string, path: string): void {
-  outboxEndpoints.set(kind, path);
+/**
+ * Register (or override) the appliance endpoint a `kind` flushes to.
+ *
+ * `finishStages` names the enrichment legs the kind's rows need after a drain; leave it
+ * unset to take the default for the path (see {@link DEFAULT_OUTBOX_ROUTES}).
+ */
+export function registerOutboxKind(
+  kind: string,
+  path: string,
+  options: { finishStages?: readonly string[] } = {},
+): void {
+  outboxRoutes.set(kind, { path, ...(options.finishStages ? { finishStages: options.finishStages } : {}) });
 }
 
 /** The appliance endpoint for `kind`, or undefined when the kind is unroutable. */
 export function outboxEndpointFor(kind: string): string | undefined {
-  return outboxEndpoints.get(kind);
+  return outboxRoutes.get(kind)?.path;
+}
+
+/**
+ * The enrichment legs `kind` owes `POST /v1/ingest/finish`, or an empty list when it owes
+ * nothing (an unknown kind, or a legacy route that still emits per-row events itself).
+ */
+export function finishStagesFor(kind: string): readonly string[] {
+  const route = outboxRoutes.get(kind);
+
+  if (!route) {
+    return [];
+  }
+
+  if (route.finishStages) {
+    return route.finishStages;
+  }
+
+  return route.path.startsWith(`${INGEST_PREFIX}/`) ? DEFAULT_V1_FINISH_STAGES : [];
 }
 
 // A flush is background work competing with whatever the user is doing, so it gets a
 // generous but finite bound; a hung upload must not wedge the drain.
 const FLUSH_TIMEOUT_MS = 30_000;
+
+// ---------------------------------------------------------------------------
+// POST /v1/ingest/finish — closing the deferred-indexing loop
+// ---------------------------------------------------------------------------
+
+/** Path prefix of the appliance's machine-ingest plane. */
+const INGEST_PREFIX = '/api/v1';
+
+/**
+ * Every `/v1` bulk endpoint materializes with `emitCreated: false` — no per-row
+ * `*CreatedEvent`, therefore **no search indexing and no enrichment** — and hands that
+ * responsibility to the client. Without this call the appliance holds the rows and shows
+ * the user nothing: a location fix is written but never reverse-geocoded, and never feeds
+ * the location estimates that place the rest of the timeline.
+ */
+export const INGEST_FINISH_PATH = `${INGEST_PREFIX}/ingest/finish`;
+
+/**
+ * `ORCHESTRATE_STAGES`, mirrored. The appliance runs a named subset in *this* canonical
+ * order regardless of the order we send, so this exists purely to make the request
+ * deterministic (and therefore assertable) rather than dependent on Set iteration order.
+ */
+const INGEST_FINISH_STAGE_ORDER = [
+  'extract_people',
+  'link_communications',
+  'link_events',
+  'materialize_edges',
+  'normalize_relationships',
+  'derive_relationships',
+  'fold_notes',
+  'extract_graph',
+  'geocode',
+  'reverse_geocode',
+  'estimate_locations',
+  'media_dimensions',
+  'search_index',
+] as const;
+
+/**
+ * Floor between finishes. Each leg is a backfill sweep, and the orchestrator serializes to
+ * one run per user (a second is a 409), so firing per capture on the web path — where every
+ * fix POSTs individually — would be pure waste.
+ */
+export const INGEST_FINISH_MIN_INTERVAL_MS = 60_000;
+
+/**
+ * Stages owed because rows landed that nothing has enriched yet.
+ *
+ * Kept as debt rather than fired-and-forgotten: a finish that fails (offline, or a 409 from
+ * a concurrent orchestration) leaves the stages owed, so the next drain retries them even
+ * if that drain flushes nothing at all. Without that, a drain which succeeded and *then*
+ * lost the connection would strand its rows unindexed with nothing left to trigger a retry.
+ *
+ * The debt is in-memory, so a process death between a successful flush and a successful
+ * finish defers indexing until the next successful `/v1` flush. Bounded and acceptable;
+ * persisting it would mean a sidecar schema change for a loss window measured in one drain.
+ */
+const owedFinishStages = new Set<string>();
+
+let lastFinishAtMs = 0;
+
+/** Note that `stages` are now owed. Idempotent; unknown stage names are ignored. */
+export function oweIngestFinish(stages: readonly string[]): void {
+  for (const stage of stages) {
+    owedFinishStages.add(stage);
+  }
+}
+
+/**
+ * Run the owed enrichment legs, if any and if the debounce window has passed.
+ *
+ * Resolves `true` when nothing is owed or the finish succeeded; `false` when it was
+ * debounced or failed — in both of those the debt stands and a later call retries it. A
+ * failure here is never fatal: the records are already safely on the appliance, and the
+ * drain that put them there has already reported its own success.
+ */
+export async function settleIngestFinish(options: { force?: boolean } = {}): Promise<boolean> {
+  if (owedFinishStages.size === 0) {
+    return true;
+  }
+
+  const now = Date.now();
+
+  if (!options.force && now - lastFinishAtMs < INGEST_FINISH_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  const known = INGEST_FINISH_STAGE_ORDER.filter((stage) => owedFinishStages.has(stage));
+  // A runtime-registered kind may name a stage this mirror predates; send it too rather
+  // than silently dropping it, since the appliance is the authority on the vocabulary.
+  const extra = [...owedFinishStages].filter(
+    (stage) => !(INGEST_FINISH_STAGE_ORDER as readonly string[]).includes(stage),
+  );
+  const stages = [...known, ...extra];
+
+  try {
+    await fetchJson(INGEST_FINISH_PATH, {
+      method: 'POST',
+      timeout: FLUSH_TIMEOUT_MS,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stages }),
+    });
+  } catch {
+    return false;
+  }
+
+  lastFinishAtMs = now;
+  owedFinishStages.clear();
+
+  return true;
+}
+
+/**
+ * Drop the owed stages and the debounce clock.
+ *
+ * Called on sign-out — enrichment debt belongs to the account that incurred it, and firing
+ * it against the next session would run a maintenance sweep for the wrong user. Tests use
+ * it to isolate, for the same reason.
+ */
+export function resetIngestFinishState(): void {
+  owedFinishStages.clear();
+  lastFinishAtMs = 0;
+}
 
 /**
  * 4xx statuses that are still worth retrying, so they must NOT be classified permanent:
@@ -178,6 +365,12 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
     }
   }
 
+  // Deliberately outside the `succeeded > 0` test: the debt may be left over from an
+  // earlier drain whose finish failed, and a drain that flushes nothing is exactly the
+  // moment that debt would otherwise never be retried. Failure is not propagated — the
+  // records are already on the appliance and the per-item outcomes are already reported.
+  await settleIngestFinish();
+
   return summary;
 }
 
@@ -222,6 +415,10 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
 
     return false;
   }
+
+  // The rows exist on the appliance now, un-enriched and un-indexed. Record the debt
+  // before reporting success, so it survives even if the `/attempt` report below fails.
+  oweIngestFinish(finishStagesFor(full.value.kind));
 
   // Only now, with the appliance having accepted it, is the row allowed to disappear.
   const acked = await recordOutboxAttempt(entry.id, { ok: true });

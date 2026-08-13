@@ -12,10 +12,22 @@ interface PositionStats {
   lastFixAt: string | null;
 }
 
+/** Providers written by the device-native location source — see @ci/common deviceSources. */
+const DEVICE_PROVIDERS = ['browser', 'companion-mobile'];
+
 /**
- * Settings -> Location: browser location tracking (issue #1811). Enable/disable
- * recording of ci.position fixes from this browser, with live counts — the
+ * Settings -> Location: device location tracking (issue #1811). Enable/disable
+ * recording of ci.position fixes from this device, with live counts — the
  * LifeScope locations settings rebuilt on the position store.
+ *
+ * The confirm dialog is also the **prominent disclosure** Play requires for a
+ * sensitive permission (DEVICE_DATA_COMPLIANCE.md §8), which is a rejection cause
+ * in its own right regardless of whether the permission is granted. Three details
+ * there are load-bearing and should not be "tidied": it must appear in-app
+ * immediately before the OS prompt (not in the listing or the privacy policy), it
+ * must answer why/what/how in plain language, and consent must be an affirmative
+ * tap on a button reading **"Agree"** — Play names "Allow access" and "Got it" as
+ * explicitly insufficient. Declining leaves the app fully usable.
  */
 export function LocationSection() {
   const [{ authToken, authenticated }] = useAuth();
@@ -48,7 +60,10 @@ export function LocationSection() {
     void refreshStats();
   }, [refreshStats, enabled]);
 
-  const trackedCount = stats?.byProvider?.browser ?? 0;
+  const trackedCount = DEVICE_PROVIDERS.reduce(
+    (total, provider) => total + (stats?.byProvider?.[provider] ?? 0),
+    0,
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,17 +79,19 @@ export function LocationSection() {
 
       <Card>
         <Card.Header>
-          <Card.Title className="text-base">Browser location tracking</Card.Title>
+          <Card.Title className="text-base">Location tracking on this device</Card.Title>
           <Card.Description>
-            While enabled, this browser records your location as you use Companion — throttled to meaningful
-            movement. Fixes are stored privately in your position history and improve location estimates for
-            everything else in your memory.
+            While enabled, this device records your location as you use Companion — throttled to meaningful
+            movement (about 50 metres) or every five minutes, whichever comes first. Fixes are stored
+            privately in your position history and improve location estimates for everything else in your
+            memory. On phones, a fix taken with no connection is saved on the device and sent when your server
+            is reachable again.
           </Card.Description>
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium">
-              {enabled ? 'Tracking is on for this browser' : 'Tracking is off'}
+              {enabled ? 'Tracking is on for this device' : 'Tracking is off'}
             </div>
             <Switch
               checked={enabled}
@@ -85,12 +102,12 @@ export function LocationSection() {
                   setEnabled(false);
                 }
               }}
-              aria-label="Toggle browser location tracking"
+              aria-label="Toggle location tracking on this device"
             />
           </div>
 
           <div className="text-sm text-muted-foreground">
-            <div>{trackedCount} fixes recorded from browsers</div>
+            <div>{trackedCount} fixes recorded from your devices</div>
             <div>{stats ? `${stats.total} position fixes total` : 'Loading position stats…'}</div>
             {stats?.lastFixAt && <div>Last fix {new Date(stats.lastFixAt).toLocaleString()}</div>}
           </div>
@@ -106,14 +123,26 @@ export function LocationSection() {
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialog.Content>
           <AlertDialog.Header>
-            <AlertDialog.Title>Enable location tracking?</AlertDialog.Title>
+            <AlertDialog.Title>Record your location?</AlertDialog.Title>
             <AlertDialog.Description>
-              Companion will record this browser&apos;s location while you use it. Your browser will ask for
-              permission. Recorded locations stay in your private position history until you delete them;
-              disabling tracking stops new recordings.
+              <span className="block">
+                Companion collects this device&apos;s location — including precise GPS location — while the
+                app is open, so it can place your notes, photos and events on a map and work out where you
+                were when something happened. It does not track you in the background.
+              </span>
+              <span className="mt-2 block">
+                Locations are sent only to your own Companion server. They are not shared with anyone else and
+                are never used for advertising. They stay in your private position history until you delete
+                them, and turning this off stops new recordings.
+              </span>
+              <span className="mt-2 block">
+                Your device will ask for permission next. You can say no and keep using Companion — only this
+                feature turns off.
+              </span>
             </AlertDialog.Description>
           </AlertDialog.Header>
           <AlertDialog.Footer>
+            {/* "Cancel" / "Agree" is the exact affirmative-consent pairing Play asks for. */}
             <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
             <AlertDialog.Action
               onClick={() => {
@@ -121,7 +150,7 @@ export function LocationSection() {
                 setConfirming(false);
               }}
             >
-              Enable
+              Agree
             </AlertDialog.Action>
           </AlertDialog.Footer>
         </AlertDialog.Content>

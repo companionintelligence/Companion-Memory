@@ -50,6 +50,34 @@
     <!-- Local notifications (Android 13+ runtime permission). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+      Location — FOREGROUND ONLY. Both are declared because the runtime prompt for
+      FINE offers the user a "coarse only" choice; without COARSE declared, that
+      choice yields no permission at all rather than a degraded one.
+
+      *** DO NOT ADD ACCESS_BACKGROUND_LOCATION HERE. ***
+      Per DEVICE_DATA_COMPLIANCE.md §3.4 it pulls in Play's separate
+      background-location declaration form plus a video review, AND a
+      foreground-service `location` type declaration with its own description and
+      video. The doc is blunt about the framing risk: a "passive timeline of
+      everywhere I go" reads to a reviewer as untargeted tracking, and the budget
+      is two rejection cycles. Foreground-only ships now and cannot block the rest
+      of the release; background is its own phase (§7 Phase 4) with a named,
+      demonstrable feature behind it.
+
+      What foreground location commits us to (§8): an in-app prominent-disclosure
+      screen shown immediately before the runtime prompt — not in the store
+      listing, not in the privacy policy — with an affirmative "Agree" button, a
+      working decline path, and graceful degradation. Plus a Play location
+      Permissions Declaration and `Location -> Precise location` in Data Safety.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Location hardware is optional: the app is fully usable with tracking off. -->
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Package visibility (required since Android 11 / API 30, and this app targets 35).

@@ -21,6 +21,27 @@ export {
 } from './src/utils/connectionMode';
 export type { ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
+export {
+  MIN_DISTANCE_METERS,
+  MIN_INTERVAL_MS,
+  buildPositionRecord,
+  captureLocationFix,
+  createLocationSampler,
+  deviceSourceKey,
+  fixFromGeolocationPosition,
+  haversineMeters,
+  positionSourceId,
+} from './src/utils/deviceSources';
+export type {
+  CaptureLocationOptions,
+  DeviceLocationFix,
+  LocationCaptureOutcome,
+  LocationSample,
+  LocationSampler,
+  LocationSourceKind,
+  PositionRecord,
+  PositionRecordOptions,
+} from './src/utils/deviceSources';
 export { FetchJsonError, fetchJson, type FetchJsonIssue } from './src/utils/fetchJson';
 export { localHubPlugin, localHubSession, type LocalHubSession } from './src/utils/localHub';
 export {
@@ -48,11 +69,18 @@ export type {
   OutboxStatusFilter,
 } from './src/utils/outbox';
 export {
+  INGEST_FINISH_MIN_INTERVAL_MS,
+  INGEST_FINISH_PATH,
+  POSITION_OUTBOX_KIND,
   OutboxQueueProvider,
+  finishStagesFor,
   flushOutbox,
   isPermanentFlushFailure,
   outboxEndpointFor,
+  oweIngestFinish,
   registerOutboxKind,
+  resetIngestFinishState,
+  settleIngestFinish,
   useOutboxQueue,
 } from './src/utils/outboxFlush';
 export type { FlushOutboxOptions, FlushOutboxSummary, OutboxQueueState } from './src/utils/outboxFlush';

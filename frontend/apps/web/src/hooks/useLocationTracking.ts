@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import {
+  type LocationCaptureOutcome,
+  type LocationSampler,
+  captureLocationFix,
+  createLocationSampler,
+  fixFromGeolocationPosition,
+  isNativePlatform,
+} from '@ci/common';
 
 import { useAuth } from './useAuth';
 
 const STORAGE_KEY = 'ci-location-tracking-enabled';
 /** Keeps multiple hook instances (app-level watcher + settings toggle) in sync. */
 const CHANGE_EVENT = 'ci:location-tracking-changed';
-
-/** Don't send a new fix unless we moved this far... */
-const MIN_DISTANCE_METERS = 50;
-/** ...or this much time passed since the last sent fix. */
-const MIN_INTERVAL_MS = 5 * 60 * 1000;
 
 export function isLocationTrackingEnabled(): boolean {
   try {
@@ -21,21 +23,19 @@ export function isLocationTrackingEnabled(): boolean {
   }
 }
 
-function haversineMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(bLat - aLat);
-  const dLng = toRad(bLng - aLng);
-  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
-
-  return 6371000 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
-}
-
 /**
- * Browser location tracking (issue #1811, LifeScope's location-tracking
- * feature rebuilt): while enabled, watches the browser's geolocation and
- * records fixes into ci.position via POST /api/position (source 'gps',
- * provider 'browser'), throttled to meaningful movement (>=50 m) or a 5-minute
+ * Location tracking (issue #1811, LifeScope's location-tracking feature rebuilt):
+ * while enabled, watches the platform geolocation and records fixes into
+ * ci.position, throttled to meaningful movement (>=50 m) or a 5-minute
  * heartbeat — deliberately better than LifeScope's one-snapshot-per-page-visit.
+ *
+ * The sampling gate, the wire record and the delivery path all live in
+ * `@ci/common` (`utils/deviceSources/location.ts`), because this is the first
+ * **device-native ETL source** and every later one repeats the shape. This hook
+ * is only the browser-geolocation adapter plus the enable toggle. Notably, on
+ * native the capture goes through the durable outbox first — a fix taken with no
+ * connectivity is committed to on-device SQLite before `captureLocationFix`
+ * resolves, and is delivered whenever the appliance is next reachable.
  *
  * The enable flag is per-device (localStorage): location consent is a property
  * of the device, not the account. Toggled from Settings -> Location.
@@ -44,7 +44,13 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
   const { watch = true } = options;
   const [{ authToken, authenticated }] = useAuth();
   const [enabled, setEnabledState] = useState<boolean>(() => isLocationTrackingEnabled());
-  const lastSent = useRef<{ lat: number; lng: number; at: number } | null>(null);
+  const [lastOutcome, setLastOutcome] = useState<LocationCaptureOutcome | null>(null);
+
+  // One gate per hook instance, surviving re-renders. Only the watching instance
+  // ever consults it; the settings instance passes `watch: false`.
+  const samplerRef = useRef<LocationSampler | null>(null);
+
+  samplerRef.current ??= createLocationSampler();
 
   const setEnabled = useCallback((value: boolean) => {
     try {
@@ -81,46 +87,29 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     // is torn down (it blocks on the permission prompt), so a disabled toggle
     // must not still record a fix.
     let cancelled = false;
+    const sampler = samplerRef.current;
 
     const send = (position: GeolocationPosition) => {
       if (cancelled) {
         return;
       }
 
-      const { latitude, longitude, accuracy, altitude, heading, speed } = position.coords;
-      const now = Date.now();
-
-      const prev = lastSent.current;
-      if (prev) {
-        const moved = haversineMeters(prev.lat, prev.lng, latitude, longitude);
-        if (moved < MIN_DISTANCE_METERS && now - prev.at < MIN_INTERVAL_MS) {
-          return;
-        }
-      }
-
-      lastSent.current = { lat: latitude, lng: longitude, at: now };
-
-      void fetchJson('/api/position', {
-        method: 'POST',
-        headers: {
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify([
-          {
-            time: new Date(position.timestamp || now).toISOString(),
-            location: { x: longitude, y: latitude },
-            ...(accuracy && accuracy > 0 ? { accuracy_meters: accuracy } : {}),
-            ...(altitude != null ? { altitude_meters: altitude } : {}),
-            ...(heading != null && heading >= 0 && heading <= 360 ? { heading_degrees: heading } : {}),
-            ...(speed != null && speed >= 0 ? { speed_meters_per_second: speed } : {}),
-            source: 'gps',
-            provider: 'browser',
-          },
-        ]),
-      }).catch(() => {
-        // A dropped fix is fine; the next watch callback retries naturally.
-      });
+      void captureLocationFix(fixFromGeolocationPosition(position), {
+        sampler: sampler ?? undefined,
+        authToken,
+        // Distinguishes a fix recorded by the phone from one recorded by a
+        // desktop browser; both are the user's own devices, stored verbatim.
+        provider: isNativePlatform() ? 'companion-mobile' : 'browser',
+      })
+        .then((outcome) => {
+          if (!cancelled && outcome.status !== 'throttled') {
+            setLastOutcome(outcome);
+          }
+        })
+        .catch(() => {
+          // captureLocationFix reports failures in its result rather than
+          // throwing; this is belt-and-braces so a watch callback never rejects.
+        });
     };
 
     // One immediate fix so enabling has a visible effect, then a watch.
@@ -138,8 +127,11 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     return () => {
       cancelled = true;
       navigator.geolocation.clearWatch(watchId);
+      // Re-enabling should record straight away rather than wait out a
+      // heartbeat left over from the previous session.
+      sampler?.reset();
     };
   }, [watch, enabled, authenticated, authToken]);
 
-  return { enabled, setEnabled };
+  return { enabled, setEnabled, lastOutcome };
 }

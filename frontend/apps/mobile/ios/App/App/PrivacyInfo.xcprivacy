@@ -17,11 +17,26 @@
   2. NSPrivacyCollectedDataTypes — data the DEVELOPER collects. Companion is a client
      for the user's OWN self-hosted CI-Server: captured content is transmitted only to
      that user-controlled appliance, which the developer (Lifescope) has no access to.
-     So the manifest declares no developer collection. NOTE: the App Store Connect
+     Under Apple's access-based definition of "collect" that argues for an empty list,
+     and for most categories this manifest keeps it empty. NOTE: the App Store Connect
      "App Privacy" nutrition label is a SEPARATE artifact — declare the transmitted
      categories there honestly and explain the self-hosted architecture in review
      notes. If a Lifescope-hosted demo server is stood up for App Review, data flowing
      to THAT instance is developer-accessible and must be reflected in the label.
+
+     PRECISE LOCATION IS DECLARED ANYWAY, and the asymmetry is deliberate. The
+     device-native location source (see @ci/common utils/deviceSources/location.ts)
+     transmits continuous position fixes off the device — the single most sensitive
+     stream this app produces. DEVICE_DATA_COMPLIANCE.md §4 works the precedent:
+     Immich, architecturally identical (user-owned server, no vendor cloud), still
+     declares its payload as collected, and under-declaring is the failure mode that
+     gets apps pulled while over-declaring costs a paragraph. The demo server
+     DELIVERY.md §1b requires also makes the clean "developer cannot access it"
+     reading untrue for the shipped binary. Linked: true (it rides the user's
+     account); Tracking: false (no ad SDKs, no analytics, no third-party linkage);
+     purpose: App Functionality only.
+     Keep this in sync with the nutrition label — a manifest and a label pointing
+     opposite directions is a reviewer question nobody wants to answer live.
 
   Tracking: the app shows no ads, runs no analytics SDKs, and links no third-party
   identifiers, so tracking is false with no tracking domains.
@@ -33,7 +48,20 @@
 	<key>NSPrivacyTrackingDomains</key>
 	<array/>
 	<key>NSPrivacyCollectedDataTypes</key>
-	<array/>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePreciseLocation</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>
