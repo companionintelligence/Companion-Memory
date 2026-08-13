@@ -39,15 +39,18 @@ function CameraWithContext({ children, onFrameCaptured, onRecordingFinished, ...
   return (
     <FacingModeProvider args={[]}>
       <RecordingModeProvider args={[]}>
-        <StreamProvider args={[]}>
-          <RecorderProvider args={[{ onFrameCaptured, onRecordingFinished }]}>
-            <MuteControlsProvider args={[]}>
+        {/* MuteControls sits above Stream: the stream applies the mute state to
+            its tracks the moment it is acquired, so a toggle made while the
+            camera is closed still holds when it opens. */}
+        <MuteControlsProvider args={[]}>
+          <StreamProvider args={[]}>
+            <RecorderProvider args={[{ onFrameCaptured, onRecordingFinished }]}>
               <InputDevicesProvider args={[]}>
                 <Camera {...props}>{children}</Camera>
               </InputDevicesProvider>
-            </MuteControlsProvider>
-          </RecorderProvider>
-        </StreamProvider>
+            </RecorderProvider>
+          </StreamProvider>
+        </MuteControlsProvider>
       </RecordingModeProvider>
     </FacingModeProvider>
   );

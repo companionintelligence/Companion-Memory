@@ -1,7 +1,8 @@
 import { createHookContext } from '@ci/common';
-import { type RefObject, useCallback, useRef, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 
 import { useFacingMode } from './useFacingMode';
+import { useMuteControls } from './useMuteControls';
 
 type ReturnType = [
   {
@@ -19,6 +20,7 @@ type ReturnType = [
 
 function useStream(): ReturnType {
   const [{ facingMode }] = useFacingMode();
+  const [{ microphoneEnabled, cameraEnabled }, { applyMuteState }] = useMuteControls();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -75,6 +77,11 @@ function useStream(): ReturnType {
         },
       });
 
+      // Honour the mute toggles *before* the stream reaches the video element or
+      // the recorder. The user may have muted while `getUserMedia` was in flight,
+      // so this reads the live refs rather than this closure's captured state.
+      applyMuteState(stream);
+
       mediaStreamRef.current = stream;
 
       if (videoRef.current) {
@@ -122,7 +129,13 @@ function useStream(): ReturnType {
 
       stopCamera();
     }
-  }, [facingMode, isActive, stopCamera, setIsActive]);
+  }, [facingMode, isActive, stopCamera, setIsActive, applyMuteState]);
+
+  // Covers the other direction: toggling while the camera is already open. The
+  // stream lives in a ref, so this effect keys off the mute state that changed.
+  useEffect(() => {
+    applyMuteState(mediaStreamRef.current);
+  }, [applyMuteState, microphoneEnabled, cameraEnabled]);
 
   return [
     {
