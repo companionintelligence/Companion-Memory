@@ -74,5 +74,11 @@ infrastructure/cloudflare/config.yml
 # Local-only architecture visualization (ChartDB, Compodoc, schema dumps,
 # generated dashboards). Scripts live under tools/architecture-viz/; output
 # and npm install under .local/architecture-viz/.
+#
+# Anchored to the repo root on purpose. A bare `tools/` matches a directory of
+# that name at ANY depth, which silently swallowed every NEW file under
+# backend/apps/api/src/domains/tools/ — the intent catalog. The existing files
+# there survived only because git keeps tracking what it already tracks, so the
+# breakage was invisible until someone added a file.
 .local/
-tools/
+/tools/
