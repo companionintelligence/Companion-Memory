@@ -163,7 +163,14 @@ function fakeSidecar() {
       const all = [...store.values()].sort((a, b) => a.seq - b.seq);
 
       return jsonResponse(200, {
-        items: all.map(({ payload: _payload, ...summary }) => summary),
+        // List responses deliberately omit payloads, exactly as the sidecar does.
+        items: all.map((entry) => {
+          const summary = { ...entry };
+
+          delete summary.payload;
+
+          return summary;
+        }),
         counts: { pending: all.length, needsAttention: 0, total: all.length },
         capacity: { max: 5000, used: all.length, warnAt: 4000 },
       });
