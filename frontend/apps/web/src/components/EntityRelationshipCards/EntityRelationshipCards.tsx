@@ -627,7 +627,8 @@ export function EntityRelationshipCards({ entityId, onOpenRelatedEntity }: Props
             const detailPath = getEntityDetailPath(target.entityType, target.id);
             const lookupKey = getEntityLookupKey(card.otherEntityType, card.otherEntityId);
             const tags = (tagsByEntityKey[lookupKey] ?? card.otherEntityTags).slice(0, 3);
-            const cardClassName = 'p-0 min-h-[96px] transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+            const cardClassName =
+              'p-0 min-h-[96px] transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
             if (onOpenRelatedEntity) {
               return (

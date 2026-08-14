@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  getEntityDetailPath,
-  resolveRelatedEntityTarget,
-} from './EntityRelationshipCards';
+import { getEntityDetailPath, resolveRelatedEntityTarget } from './EntityRelationshipCards';
 
 describe('getEntityDetailPath', () => {
   it('normalizes uppercase graph entity types', () => {
