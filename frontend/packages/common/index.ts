@@ -24,13 +24,19 @@ export { createHookContext } from './src/utils/createHookContext';
 export {
   MIN_DISTANCE_METERS,
   MIN_INTERVAL_MS,
+  buildNoteRecord,
   buildPositionRecord,
   captureLocationFix,
+  captureNote,
   createLocationSampler,
   deviceSourceKey,
   fixFromGeolocationPosition,
+  forgetQueuedNote,
   haversineMeters,
+  isQueuedNote,
+  newNoteId,
   positionSourceId,
+  rememberQueuedNote,
 } from './src/utils/deviceSources';
 export type {
   CaptureLocationOptions,
@@ -39,6 +45,8 @@ export type {
   LocationSample,
   LocationSampler,
   LocationSourceKind,
+  NoteCaptureOutcome,
+  NoteRecord,
   PositionRecord,
   PositionRecordOptions,
 } from './src/utils/deviceSources';
@@ -71,6 +79,7 @@ export type {
 export {
   INGEST_FINISH_MIN_INTERVAL_MS,
   INGEST_FINISH_PATH,
+  NOTE_OUTBOX_KIND,
   POSITION_OUTBOX_KIND,
   OutboxQueueProvider,
   finishStagesFor,

@@ -11,7 +11,7 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 
 import { type Note, NoteEntity } from '../entities/NoteEntity';
 import { NoteCreatedEvent, NoteUpdatedEvent, NoteRemovedEvent } from '../events';
-import type { CreateNoteDto, UpdateNoteDto } from '../types';
+import type { CaptureNoteDto, CaptureNoteResult, CreateNoteDto, UpdateNoteDto } from '../types';
 
 /**
  * Hourly UTC per-user note count. Declared locally so this domain carries no
@@ -111,6 +111,175 @@ export class NoteService {
     const byId = new Map(rows.map((row) => [row.id, row]));
 
     return entities.map((entity) => NoteEntity.toEgressType(byId.get(entity.id) ?? entity));
+  }
+
+  /**
+   * Idempotent upsert of **client-minted** notes — the replay target for the
+   * durable capture outbox (`POST /v1/notes`).
+   *
+   * Unlike {@link createMany}, which is the importer's plain multi-row INSERT,
+   * every input here carries an `id` the client generated *before* the note was
+   * queued. That is the whole point: an offline note has a real identity from
+   * the moment it is written, so nothing has to be reconciled when it lands.
+   * Three consequences, and each is a guard below rather than an assumption:
+   *
+   * 1. **Replay must be free.** Outbox delivery is deliberately at-least-once,
+   *    so the same note arrives twice whenever an `/attempt` report is lost. A
+   *    plain INSERT would raise a unique violation, which the client flusher
+   *    reads as a 5xx-class transient failure and retries to exhaustion — a
+   *    successfully-stored note parked in `needs_attention`. Hence ON CONFLICT.
+   * 2. **A client-supplied id must never reach another user's row.** The
+   *    interactive path is safe by construction (the server mints the id), but
+   *    once the client names it, `repository.save()` is not: with the primary
+   *    key set it UPDATEs whatever row it finds, unscoped by owner, so a
+   *    colliding id would rewrite a stranger's note *and* reassign `user_id`.
+   *    The `n.user_id = EXCLUDED.user_id` predicate is what makes that
+   *    impossible; conflicted ids are reported, never written.
+   * 3. **A stale snapshot must not clobber newer content.** A note edited on
+   *    another client (or online, through `updateNote`) while an older snapshot
+   *    sat in the queue is the ordinary case, not the exotic one. The
+   *    `n.updated_at < EXCLUDED.updated_at` predicate makes the write
+   *    last-write-wins on the CLIENT capture instant.
+   *
+   * `created_at` comes from the capture instant too, and only on the insert
+   * branch — a note written offline last night belongs to last night on the
+   * timeline, and the earliest snapshot to land is the one that says when.
+   *
+   * Emits per row (`NoteCreatedEvent` / `NoteUpdatedEvent`), unlike the other
+   * `/v1` bulk kinds. These are interactive captures replayed a few at a time,
+   * not an import, so live indexing costs nothing here — and it is the only way
+   * they get indexed at all: `note` is in INDEXABLE_ENTITIES but NOT in
+   * BACKFILLABLE_ENTITIES, so the deferred `search_index` sweep cannot reach
+   * them. A drained note therefore ends up in exactly the state it would have
+   * been in had the user been online.
+   */
+  async captureMany(context: UserServiceContext, data: CaptureNoteDto[]): Promise<CaptureNoteResult> {
+    const result: CaptureNoteResult = { created: [], updated: [], stale: [], conflicted: [] };
+
+    if (data.length === 0) {
+      return result;
+    }
+
+    // Collapse repeats within one request to the newest snapshot per id, so a
+    // batch behaves identically to the same snapshots arriving one at a time.
+    const newestById = new Map<string, CaptureNoteDto>();
+    for (const note of data) {
+      const seen = newestById.get(note.id);
+
+      if (!seen || seen.capturedAt.getTime() <= note.capturedAt.getTime()) {
+        newestById.set(note.id, note);
+      }
+    }
+
+    const notes = [...newestById.values()];
+
+    // Classify against what is already stored. The SQL predicates below are the
+    // authority — this read only decides which rows are worth sending and
+    // whether a write is a create or an update (which event to emit). A row
+    // that changes underneath us between the two statements still cannot be
+    // written incorrectly; it just falls out as `stale`.
+    const existing: Array<{ id: string; user_id: string; updated_at: Date }> =
+      await this.noteRepository.manager.query(
+        `SELECT id, user_id, updated_at FROM ci.notes WHERE id = ANY($1::uuid[])`,
+        [notes.map((note) => note.id)],
+      );
+
+    const stored = new Map(existing.map((row) => [row.id, row]));
+    const candidates: CaptureNoteDto[] = [];
+    const expectUpdate = new Set<string>();
+
+    for (const note of notes) {
+      const row = stored.get(note.id);
+
+      if (!row) {
+        candidates.push(note);
+
+        continue;
+      }
+
+      if (row.user_id !== context.userId) {
+        result.conflicted.push(note.id);
+
+        continue;
+      }
+
+      if (new Date(row.updated_at).getTime() >= note.capturedAt.getTime()) {
+        result.stale.push(note.id);
+
+        continue;
+      }
+
+      expectUpdate.add(note.id);
+      candidates.push(note);
+    }
+
+    if (candidates.length === 0) {
+      return result;
+    }
+
+    const written = new Set<string>();
+    // 6 binds per row; same param-budget helper the bulk insert path uses.
+    const chunkSize = computeChunkSize(this.noteRepository.metadata.columns.length);
+
+    for (let offset = 0; offset < candidates.length; offset += chunkSize) {
+      const chunk = candidates.slice(offset, offset + chunkSize);
+      const params: unknown[] = [];
+      const values = chunk.map((note) => {
+        params.push(note.id, note.title ?? null, note.content ?? null, context.userId, note.capturedAt);
+        const base = params.length - 5;
+
+        return `($${base + 1}::uuid, $${base + 2}, $${base + 3}, $${base + 4}::uuid, $${base + 5}::timestamptz, $${base + 5}::timestamptz)`;
+      });
+
+      const rows: Array<{ id: string }> = await this.noteRepository.manager.query(
+        `INSERT INTO ci.notes AS n (id, title, content, user_id, created_at, updated_at)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (id) DO UPDATE
+            SET title      = EXCLUDED.title,
+                content    = EXCLUDED.content,
+                updated_at = EXCLUDED.updated_at
+          WHERE n.user_id = EXCLUDED.user_id
+            AND n.updated_at < EXCLUDED.updated_at
+         RETURNING id`,
+        params,
+      );
+
+      for (const row of rows) {
+        written.add(row.id);
+      }
+    }
+
+    for (const note of candidates) {
+      if (!written.has(note.id)) {
+        // Expected to write and did not: another writer got there first with
+        // something at least as new. Benign, and the same outcome as `stale`.
+        result.stale.push(note.id);
+
+        continue;
+      }
+
+      if (expectUpdate.has(note.id)) {
+        result.updated.push(note.id);
+      } else {
+        result.created.push(note.id);
+      }
+    }
+
+    for (const id of result.created) {
+      await this.eventService.send(NoteCreatedEvent, { noteId: id });
+    }
+
+    for (const id of result.updated) {
+      await this.eventService.send(NoteUpdatedEvent, { noteId: id });
+    }
+
+    if (result.conflicted.length > 0) {
+      this.logger.warn(
+        `Refused ${result.conflicted.length} captured note(s) whose id belongs to another user.`,
+      );
+    }
+
+    return result;
   }
 
   async findById(context: ServiceContext, id: string): Promise<Note | null> {

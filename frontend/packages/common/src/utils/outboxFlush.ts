@@ -48,6 +48,21 @@ import {
  */
 export const POSITION_OUTBOX_KIND = 'positions';
 
+/**
+ * The `kind` user-authored notes are queued under. Routes to `/v1/notes`.
+ *
+ * Registered **statically** in {@link DEFAULT_OUTBOX_ROUTES} rather than through
+ * {@link registerOutboxKind} at the capture site's module scope, and that is
+ * load-bearing rather than stylistic: a drain can run before anything that
+ * creates notes has been imported — the foreground-resume trigger fires from
+ * the queue provider, which mounts at app root, while `NotePage` is a lazily
+ * routed page the user may never open in a given session. A kind registered
+ * only as a side effect of importing its capture module would be unroutable in
+ * exactly that window, and an unroutable kind is a PERMANENT failure: the note
+ * would be parked in `needs_attention` on the first drain after a restart.
+ */
+export const NOTE_OUTBOX_KIND = 'note';
+
 /** Where a `kind` is replayed, and what it owes `POST /v1/ingest/finish` afterwards. */
 interface OutboxRoute {
   path: string;
@@ -91,6 +106,13 @@ const DEFAULT_OUTBOX_ROUTES: Record<string, OutboxRoute> = {
   [POSITION_OUTBOX_KIND]: { path: '/api/v1/positions', finishStages: POSITION_FINISH_STAGES },
   event: { path: '/api/v1/events' },
   content: { path: '/api/v1/contents' },
+  // Explicitly nothing owed, overriding the `/v1` default of `search_index`.
+  // `/v1/notes` emits a per-row NoteCreatedEvent (it replays interactive
+  // captures, not an import), so a drained note is indexed live and the finish
+  // legs have nothing left to do. Asking for `search_index` anyway would fire a
+  // whole-user maintenance sweep that cannot even reach notes — `note` is in
+  // INDEXABLE_ENTITIES but not in the appliance's BACKFILLABLE_ENTITIES.
+  [NOTE_OUTBOX_KIND]: { path: '/api/v1/notes', finishStages: [] },
   communication: { path: '/api/v1/communications' },
   inventory: { path: '/api/v1/inventory' },
   'browser-activity': { path: '/api/v1/browser-activity' },

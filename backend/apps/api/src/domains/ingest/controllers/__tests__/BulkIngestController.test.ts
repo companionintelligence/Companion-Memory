@@ -8,6 +8,7 @@ import type { RequestContext } from '@ci/common/context';
 import { ValidationPipe } from '@ci/common/pipes';
 import type { BrowserActivityService } from '@ci/domains/browser-activity';
 import type { CommunicationService, ContentService, EventService, ItemService } from '@ci/domains/memory';
+import type { NoteService } from '@ci/domains/notes';
 import type { PositionService } from '@ci/domains/position';
 
 import {
@@ -15,6 +16,7 @@ import {
   ingestCommunicationsSchema,
   ingestContentsSchema,
   ingestInventorySchema,
+  ingestNotesSchema,
   ingestPositionsSchema,
 } from '../../types';
 import { BulkIngestController } from '../BulkIngestController';
@@ -38,7 +40,7 @@ function ndjsonReq(body: string): Request {
  * false → ON CONFLICT hit (duplicate). The mock reconstructs the RETURNING
  * triple from the statement's flattened 8-params-per-row bind list.
  */
-function makeController(opts: { captureInserted?: boolean[] } = {}) {
+function makeController(opts: { captureInserted?: boolean[]; noteConflicts?: string[] } = {}) {
   const echo = jest.fn(async (_context: unknown, data: unknown[]) =>
     data.map((_, i) => ({ id: `row-${i}` })),
   );
@@ -95,6 +97,18 @@ function makeController(opts: { captureInserted?: boolean[] } = {}) {
     }),
   } as unknown as DataSource;
 
+  // Notes are the one kind that does not run captureAndMaterialize (no provenance
+  // triple — they dedupe on their client-minted primary key), so the service reports
+  // per-id outcomes rather than returning egress rows.
+  const noteService = {
+    captureMany: jest.fn(async (_context: unknown, data: Array<{ id: string }>) => ({
+      created: data.map((note) => note.id),
+      updated: [],
+      stale: [],
+      conflicted: opts.noteConflicts ?? [],
+    })),
+  } as unknown as NoteService;
+
   const controller = new BulkIngestController(
     communicationService,
     contentService,
@@ -102,6 +116,7 @@ function makeController(opts: { captureInserted?: boolean[] } = {}) {
     browserActivityService,
     positionService,
     eventService,
+    noteService,
     dataSource,
   );
 
@@ -113,6 +128,7 @@ function makeController(opts: { captureInserted?: boolean[] } = {}) {
     browserActivityService,
     positionService,
     eventService,
+    noteService,
     dataSource,
   };
 }
@@ -421,6 +437,107 @@ describe('BulkIngestController', () => {
         source_system: 'google_photos',
         source_id: 'IMG_1.jpg',
       });
+    });
+  });
+
+  describe('POST /v1/notes (durable capture outbox replay)', () => {
+    const note = (id: string, capturedAt = '2026-08-13T10:00:00.000Z') => ({
+      id,
+      title: 'Groceries',
+      content: '<p>Groceries</p>',
+      captured_at: capturedAt,
+    });
+
+    it('hands the snapshot to captureMany with captured_at coerced to a Date', async () => {
+      const { controller, noteService } = makeController();
+
+      const res = await controller.ingestNotes(ctx, {
+        records: [note('11111111-1111-7111-8111-111111111111')],
+      });
+
+      expect(res).toEqual({ ingested: 1, duplicate: 0, rejected: [] });
+
+      const [, dtos] = (noteService.captureMany as jest.Mock).mock.calls[0];
+      expect(dtos).toEqual([
+        {
+          id: '11111111-1111-7111-8111-111111111111',
+          title: 'Groceries',
+          content: '<p>Groceries</p>',
+          capturedAt: new Date('2026-08-13T10:00:00.000Z'),
+        },
+      ]);
+    });
+
+    it('does NOT touch the capture raw log — notes have no provenance triple to key it on', async () => {
+      const { controller, dataSource } = makeController();
+
+      await controller.ingestNotes(ctx, { records: [note('11111111-1111-7111-8111-111111111111')] });
+
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('reports an already-stored snapshot as duplicate, so an at-least-once replay is free', async () => {
+      const { controller, noteService } = makeController();
+      (noteService.captureMany as jest.Mock).mockResolvedValueOnce({
+        created: [],
+        updated: [],
+        stale: ['11111111-1111-7111-8111-111111111111'],
+        conflicted: [],
+      });
+
+      const res = await controller.ingestNotes(ctx, {
+        records: [note('11111111-1111-7111-8111-111111111111')],
+      });
+
+      expect(res).toEqual({ ingested: 0, duplicate: 1, rejected: [] });
+    });
+
+    it('counts an advanced note as ingested', async () => {
+      const { controller, noteService } = makeController();
+      (noteService.captureMany as jest.Mock).mockResolvedValueOnce({
+        created: [],
+        updated: ['11111111-1111-7111-8111-111111111111'],
+        stale: [],
+        conflicted: [],
+      });
+
+      const res = await controller.ingestNotes(ctx, {
+        records: [note('11111111-1111-7111-8111-111111111111')],
+      });
+
+      expect(res.ingested).toBe(1);
+    });
+
+    it('throws 409 on an ownership conflict rather than reporting it inside a 200', async () => {
+      // A per-record `rejected` entry rides an HTTP 200, which the client flusher reads
+      // as success — it would drop the queued row and lose a note the user wrote. A hard
+      // status is classified permanent, so the item is parked in needs_attention instead.
+      const { controller } = makeController({ noteConflicts: ['11111111-1111-7111-8111-111111111111'] });
+
+      await expect(
+        controller.ingestNotes(ctx, { records: [note('11111111-1111-7111-8111-111111111111')] }),
+      ).rejects.toMatchObject({ status: 409 });
+    });
+
+    it('requires an id and a captured_at — the two fields that make replay safe', () => {
+      const pipe = new ValidationPipe(ingestNotesSchema);
+
+      // No id: a replay would insert a second copy instead of collapsing.
+      expect(() =>
+        pipe.transform({ records: [{ content: 'a', captured_at: '2026-08-13T10:00:00.000Z' }] }),
+      ).toThrow(BadRequestException);
+
+      // No captured_at: nothing to compare against a stored note, so a stale snapshot
+      // could clobber newer content.
+      expect(() =>
+        pipe.transform({ records: [{ id: '11111111-1111-7111-8111-111111111111', content: 'a' }] }),
+      ).toThrow(BadRequestException);
+
+      // A non-uuid id would be rejected by Postgres at the cast anyway; catch it here
+      // with the shared 400 shape.
+      expect(() =>
+        pipe.transform({ records: [{ id: 'not-a-uuid', captured_at: '2026-08-13T10:00:00.000Z' }] }),
+      ).toThrow(BadRequestException);
     });
   });
 

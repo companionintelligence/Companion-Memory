@@ -148,6 +148,37 @@ export type BulkContentRecord = z.infer<typeof bulkContentRecordSchema>;
 export type IngestContentsRequest = z.infer<typeof ingestContentsSchema>;
 
 // ---------------------------------------------------------------------------
+// POST /v1/notes → NoteService.captureMany
+// ---------------------------------------------------------------------------
+
+/**
+ * The one bulk kind whose `id` is REQUIRED rather than optional.
+ *
+ * Notes are the outbox's interactive-capture kind: the client mints the id
+ * before the note is queued, so the note has a stable identity from the instant
+ * it is written and nothing has to be reconciled when it drains. That id is
+ * also the idempotency key — notes carry no provenance triple, so the primary
+ * key is what makes an at-least-once replay free (NoteService.captureMany).
+ * Accepting a note without one would mean a replay inserting a second copy,
+ * which is precisely the failure this route exists to avoid.
+ *
+ * `captured_at` is required for the same reason: it is the last-write-wins
+ * discriminator against whatever is already stored, so a snapshot that sat in
+ * the queue while the note was edited elsewhere loses instead of clobbering.
+ */
+export const bulkNoteRecordSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().nullable().optional(),
+  content: z.string().nullable().optional(),
+  captured_at: z.string().datetime(),
+});
+
+export const ingestNotesSchema = bulkEnvelope(bulkNoteRecordSchema);
+
+export type BulkNoteRecord = z.infer<typeof bulkNoteRecordSchema>;
+export type IngestNotesRequest = z.infer<typeof ingestNotesSchema>;
+
+// ---------------------------------------------------------------------------
 // POST /v1/inventory → ItemService.createMany
 // ---------------------------------------------------------------------------
 

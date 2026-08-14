@@ -10,6 +10,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
 import { CommunicationService, ContentService, EventService, ItemService } from '@ci/domains/memory';
+import { NoteService } from '@ci/domains/notes';
 import { PositionService } from '@ci/domains/position';
 
 import { BulkIngestController } from '../controllers/BulkIngestController';
@@ -45,6 +46,18 @@ describe('Bulk ingest routes (/v1/*)', () => {
     }));
 
   const eventService = { create: jest.fn(eventEcho) };
+  // Notes report per-id outcomes rather than egress rows: they are the one /v1 kind
+  // that dedupes on a client-minted primary key instead of a provenance triple.
+  const noteEcho = async (
+    _context: unknown,
+    data: Array<{ id: string }>,
+  ): Promise<{ created: string[]; updated: string[]; stale: string[]; conflicted: string[] }> => ({
+    created: data.map((note) => note.id),
+    updated: [],
+    stale: [],
+    conflicted: [],
+  });
+  const noteService = { captureMany: jest.fn(noteEcho) };
   // Capture-log INSERT always "inserts" (new capture); the trailing UPDATE
   // returns nothing.
   // The capture-log INSERT is set-based; RETURNING echoes the triple so the
@@ -68,6 +81,7 @@ describe('Bulk ingest routes (/v1/*)', () => {
     communicationService.createMany.mockImplementation(echo);
     itemService.createMany.mockImplementation(echo);
     eventService.create.mockImplementation(eventEcho);
+    noteService.captureMany.mockImplementation(noteEcho);
     dataSourceQuery.mockImplementation(captureLogEcho);
   });
 
@@ -81,6 +95,7 @@ describe('Bulk ingest routes (/v1/*)', () => {
         { provide: BrowserActivityService, useValue: browserActivityService },
         { provide: PositionService, useValue: positionService },
         { provide: EventService, useValue: eventService },
+        { provide: NoteService, useValue: noteService },
         { provide: DataSource, useValue: { query: dataSourceQuery } },
       ],
     })
@@ -158,6 +173,67 @@ describe('Bulk ingest routes (/v1/*)', () => {
       expect(eventService.create).toHaveBeenCalledTimes(1);
       // Raw-log INSERT + event_id back-link UPDATE.
       expect(dataSourceQuery).toHaveBeenCalledTimes(2);
+    });
+
+    it('POST /v1/notes ingests a client-minted note through the real pipeline', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/v1/notes')
+        .send({
+          records: [
+            {
+              id: '01920000-0000-7000-8000-000000000001',
+              title: 'Groceries',
+              content: '<p>Groceries</p>',
+              captured_at: '2026-08-13T10:00:00.000Z',
+            },
+          ],
+        })
+        .expect(201);
+
+      expect(res.body).toEqual({ ingested: 1, duplicate: 0, rejected: [] });
+      expect(noteService.captureMany.mock.calls[0][1]).toEqual([
+        {
+          id: '01920000-0000-7000-8000-000000000001',
+          title: 'Groceries',
+          content: '<p>Groceries</p>',
+          capturedAt: new Date('2026-08-13T10:00:00.000Z'),
+        },
+      ]);
+      // No provenance triple, so nothing touches the capture raw log.
+      expect(dataSourceQuery).not.toHaveBeenCalled();
+    });
+
+    it('POST /v1/notes 400s a note with no id, before the service is reached', async () => {
+      // Without an id an at-least-once replay would insert a second copy of the note.
+      const res = await request(app.getHttpServer())
+        .post('/v1/notes')
+        .send({ records: [{ content: '<p>a</p>', captured_at: '2026-08-13T10:00:00.000Z' }] })
+        .expect(400);
+
+      expect(res.body.message).toBe('Validation failed');
+      expect(noteService.captureMany).not.toHaveBeenCalled();
+    });
+
+    it('POST /v1/notes 409s an ownership conflict, so the flusher parks it instead of dropping it', async () => {
+      noteService.captureMany.mockResolvedValueOnce({
+        created: [],
+        updated: [],
+        stale: [],
+        conflicted: ['01920000-0000-7000-8000-000000000001'],
+      });
+
+      await request(app.getHttpServer())
+        .post('/v1/notes')
+        .send({
+          records: [
+            {
+              id: '01920000-0000-7000-8000-000000000001',
+              content: '<p>a</p>',
+              captured_at: '2026-08-13T10:00:00.000Z',
+            },
+          ],
+        })
+        .expect(409);
     });
   });
 

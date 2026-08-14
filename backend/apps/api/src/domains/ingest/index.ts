@@ -1,8 +1,9 @@
 /**
  * REST bulk-ingest plane (`/v1/*`). Hosts the G1 unified capture ingest
  * (POST /v1/events) and the batch ingest endpoints for every bulk kind —
- * communications, contents, inventory, browser-activity, positions (batch file
- * upload lives on the files domain's BulkFilesController at POST /v1/files) —
+ * communications, contents, inventory, browser-activity, positions, notes
+ * (batch file upload lives on the files domain's BulkFilesController at
+ * POST /v1/files) —
  * plus the bulk lifecycle pair POST /v1/ingest/finish + GET /v1/ingest/status,
  * so a machine client can run a complete load → enrich → drain cycle over
  * plain REST.
@@ -28,6 +29,7 @@ import { Module } from '@nestjs/common';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { MemoryModule } from '@ci/domains/memory';
+import { NotesModule } from '@ci/domains/notes';
 import { PositionModule } from '@ci/domains/position';
 
 import { BulkIngestController } from './controllers/BulkIngestController';
@@ -38,7 +40,7 @@ import { IngestStatusService } from './services/IngestStatusService';
  * @internal
  */
 @Module({
-  imports: [MemoryModule, BrowserActivityModule, PositionModule, MaintenanceModule],
+  imports: [MemoryModule, BrowserActivityModule, PositionModule, MaintenanceModule, NotesModule],
   controllers: [BulkIngestController, IngestLifecycleController],
   providers: [IngestStatusService],
 })

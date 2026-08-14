@@ -24,3 +24,4 @@ export { NoteEntity };
 
 export { NoteService };
 export type { Note };
+export type { CaptureNoteDto, CaptureNoteResult, CreateNoteDto, UpdateNoteDto } from './types';
