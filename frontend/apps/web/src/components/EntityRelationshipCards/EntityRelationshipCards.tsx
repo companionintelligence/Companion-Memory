@@ -21,11 +21,23 @@ type RelationshipCard = {
   otherEntityName: string;
   otherEntityType: string;
   otherEntityTags: string[];
+  otherEntityDescription: string | null;
+  otherEntityProperties: Record<string, unknown>;
   relationshipDetails: Array<{ label: string; value: string }>;
+  relationshipProperties: Record<string, unknown>;
   /** Relationship weight (graph link strength), used for stable ordering. */
   strength: number;
   /** Most recent timestamp on the link, used as a secondary sort key. */
   recency: number;
+};
+
+/** Payload for opening a related entity from a relationship card (memory drawer). */
+export type RelatedEntityOpenTarget = {
+  id: string;
+  name: string;
+  entityType: string;
+  description: string | null;
+  properties: Record<string, unknown>;
 };
 
 type NodeTags = {
@@ -35,6 +47,12 @@ type NodeTags = {
 
 interface Props {
   entityId: string;
+  /**
+   * When set (memory drawer), card clicks open the related entity in-sheet
+   * instead of navigating to a full-page route. Full-page entity screens omit
+   * this and keep the default `<Link>` behavior.
+   */
+  onOpenRelatedEntity?: (target: RelatedEntityOpenTarget) => void;
 }
 
 type GlobalResourceType =
@@ -216,7 +234,7 @@ function getVisibleCardCount(width: number): number {
 }
 
 export function getEntityDetailPath(entityType: string, entityId: string): string | null {
-  switch (entityType.toLowerCase()) {
+  switch (normalizeGraphEntityType(entityType)) {
     case 'person':
       return `/people/${entityId}`;
     case 'place':
@@ -236,6 +254,64 @@ export function getEntityDetailPath(entityType: string, entityId: string): strin
     default:
       return null;
   }
+}
+
+/**
+ * Prefer the neighbor entity; when the edge only *references* a communication
+ * in properties (derived_from / source ids), surface that communication id so
+ * the card can still deep-link to the message.
+ */
+export function resolveRelatedEntityTarget(card: {
+  otherEntityId: string;
+  otherEntityName: string;
+  otherEntityType: string;
+  otherEntityDescription: string | null;
+  otherEntityProperties: Record<string, unknown>;
+  relationshipDetails: Array<{ label: string; value: string }>;
+  relationshipProperties?: Record<string, unknown>;
+}): RelatedEntityOpenTarget {
+  const normalizedType = normalizeGraphEntityType(card.otherEntityType);
+
+  if (getEntityDetailPath(normalizedType, card.otherEntityId) || normalizedType === 'communication') {
+    return {
+      id: card.otherEntityId,
+      name: card.otherEntityName,
+      entityType: card.otherEntityType,
+      description: card.otherEntityDescription,
+      properties: card.otherEntityProperties,
+    };
+  }
+
+  const props = card.relationshipProperties ?? {};
+  const candidateKeys = [
+    'communication_id',
+    'communicationId',
+    'source_communication_id',
+    'sourceCommunicationId',
+    'source_id',
+    'sourceId',
+  ];
+
+  for (const key of candidateKeys) {
+    const value = props[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return {
+        id: value.trim(),
+        name: card.otherEntityName,
+        entityType: 'communication',
+        description: card.otherEntityDescription,
+        properties: {},
+      };
+    }
+  }
+
+  return {
+    id: card.otherEntityId,
+    name: card.otherEntityName,
+    entityType: card.otherEntityType,
+    description: card.otherEntityDescription,
+    properties: card.otherEntityProperties,
+  };
 }
 
 function extractTagsFromProperties(properties: Record<string, unknown> | undefined): string[] {
@@ -303,7 +379,7 @@ function getEntityLookupKey(entityType: string, entityId: string): string {
   return `${normalizeGraphEntityType(entityType)}:${entityId}`;
 }
 
-export function EntityRelationshipCards({ entityId }: Props) {
+export function EntityRelationshipCards({ entityId, onOpenRelatedEntity }: Props) {
   const apolloClient = useApolloClient();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [visibleCardCount, setVisibleCardCount] = useState(DEFAULT_VISIBLE_CARDS);
@@ -355,9 +431,13 @@ export function EntityRelationshipCards({ entityId }: Props) {
           otherEntityName: otherNode?.name ?? 'Unnamed Entity',
           otherEntityType: otherNode?.entity_type ?? 'unknown',
           otherEntityTags: extractTagsFromProperties(otherNode?.properties),
+          otherEntityDescription: otherNode?.description ?? null,
+          otherEntityProperties: otherNode?.properties ?? {},
           relationshipDetails: extractRelationshipDetails(link.properties),
           strength: typeof link.strength === 'number' ? link.strength : 0,
           recency: extractRecency(link.properties),
+          // Stash raw link props for communication id recovery in the click handler.
+          relationshipProperties: link.properties ?? {},
         };
       });
   }, [data, entityId]);
@@ -469,7 +549,7 @@ export function EntityRelationshipCards({ entityId }: Props) {
           </p>
           <p className="text-sm font-semibold leading-tight line-clamp-2">{card.otherEntityName}</p>
         </div>
-        <div className="flex max-w-[45%] flex-col items-end gap-1 text-right">
+        <div className="flex max-w-[45%] shrink-0 flex-col items-end gap-1 text-right">
           <p className="text-xs text-muted-foreground uppercase">{card.otherEntityType}</p>
           {tags.length > 0 && (
             <div className="flex flex-wrap justify-end gap-1">
@@ -486,9 +566,9 @@ export function EntityRelationshipCards({ entityId }: Props) {
       </div>
 
       {card.relationshipDetails.length > 0 && (
-        <div className="border-t border-border/50 pt-2 flex flex-wrap gap-x-3 gap-y-1">
+        <div className="border-t border-border/50 pt-2 flex flex-col gap-1">
           {card.relationshipDetails.map((detail) => (
-            <p key={`${card.relationshipId}-${detail.label}`} className="text-xs leading-tight">
+            <p key={`${card.relationshipId}-${detail.label}`} className="text-xs leading-snug break-words">
               <span className="text-muted-foreground">{detail.label}:</span>{' '}
               <span className="text-foreground/85">{detail.value}</span>
             </p>
@@ -523,16 +603,16 @@ export function EntityRelationshipCards({ entityId }: Props) {
         )}
       </div>
 
+      {/* Always wrap at CARD_MIN_WIDTH — never force N equal columns in one row
+          (that squashes cards in the memory detail sheet). */}
       <div
         className="grid gap-3"
         style={{
-          gridTemplateColumns: expanded
-            ? `repeat(auto-fill, minmax(${CARD_MIN_WIDTH}px, 1fr))`
-            : `repeat(${Math.max(1, loading ? visibleCardCount : visibleCards.length)}, minmax(0, 1fr))`,
+          gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${CARD_MIN_WIDTH}px), 1fr))`,
         }}
       >
         {loading &&
-          Array.from({ length: visibleCardCount }).map((_, idx) => (
+          Array.from({ length: Math.max(1, visibleCardCount) }).map((_, idx) => (
             <Card key={`loading-${idx}`} className="p-0 min-h-[96px] animate-pulse">
               <Card.Content className="p-3 flex flex-col gap-2">
                 <div className="h-4 w-2/3 rounded bg-muted" />
@@ -543,9 +623,24 @@ export function EntityRelationshipCards({ entityId }: Props) {
 
         {!loading &&
           visibleCards.map((card) => {
-            const detailPath = getEntityDetailPath(card.otherEntityType, card.otherEntityId);
+            const target = resolveRelatedEntityTarget(card);
+            const detailPath = getEntityDetailPath(target.entityType, target.id);
             const lookupKey = getEntityLookupKey(card.otherEntityType, card.otherEntityId);
             const tags = (tagsByEntityKey[lookupKey] ?? card.otherEntityTags).slice(0, 3);
+            const cardClassName = 'p-0 min-h-[96px] transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+            if (onOpenRelatedEntity) {
+              return (
+                <button
+                  key={card.relationshipId}
+                  type="button"
+                  className="block w-full rounded-xl text-left"
+                  onClick={() => onOpenRelatedEntity(target)}
+                >
+                  <Card className={cardClassName}>{renderCardContent(card, tags)}</Card>
+                </button>
+              );
+            }
 
             if (!detailPath) {
               return (
@@ -557,9 +652,7 @@ export function EntityRelationshipCards({ entityId }: Props) {
 
             return (
               <Link key={card.relationshipId} to={detailPath} className="block">
-                <Card className="p-0 min-h-[96px] transition-colors hover:bg-accent/40">
-                  {renderCardContent(card, tags)}
-                </Card>
+                <Card className={cardClassName}>{renderCardContent(card, tags)}</Card>
               </Link>
             );
           })}
