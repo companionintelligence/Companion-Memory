@@ -152,6 +152,43 @@ a build number already used) — and stops short of submitting.
 Each platform **skips rather than fails** when its secrets are missing, so you can wire up
 one store before the other.
 
+## Xcode Cloud (`ci_scripts/ci_post_clone.sh`)
+
+There is a **second** route to TestFlight: an Xcode Cloud workflow named
+`App | BuildTestFlight`, configured in App Store Connect rather than in this repository.
+Nothing in the repo declares it, so it is easy to miss when reasoning about why an iOS
+build is red — check App Store Connect → Xcode Cloud → Manage Workflows.
+
+Xcode Cloud clones the repo and runs `xcodebuild` against `ios/App/App.xcworkspace`
+directly. It has no equivalent of a workflow step, so everything the GitHub Actions lanes
+do before building has to happen in a post-clone script instead. Without one the build
+fails before compiling anything:
+
+```
+Unable to open base configuration reference file
+'.../ios/App/Pods/Target Support Files/Pods-App/Pods-App.debug.xcconfig'
+```
+
+That file — like `App/Pods`, `App/App/public` and `App/App/capacitor.config.json` — is
+generated and correctly gitignored. `ci_scripts/ci_post_clone.sh` at the repository root
+creates them, running the same sequence as `mobile-build.yml`'s iOS job: install Node 22
+and CocoaPods (Xcode Cloud images ship neither), root `yarn install`, `yarn build:web`,
+then `cap sync ios`, which is what finally runs `pod install`.
+
+> **`NODE_AUTH_TOKEN` must be set on the workflow, as a secret.** `@ci/fe-web` depends on
+> `@companionintelligence/tokens` from GitHub Packages, whose archive URL answers `401`
+> unauthenticated, and this repo is not zero-install — so a cold runner has to fetch it.
+> Add it under App Store Connect → Xcode Cloud → Manage Workflows → Environment →
+> Environment Variables, ticking **Secret**, using a GitHub token with `read:packages`.
+> The script fails immediately with this instruction when the variable is absent, rather
+> than letting `yarn install` die on an opaque 401 several minutes in.
+
+A copy of the script also exists at `ios/App/ci_scripts/ci_post_clone.sh`, forwarding to
+the root one. Apple documents `ci_scripts/` as living beside the Xcode project, but
+repository-root placement is also common and which one a workflow honours depends on its
+configuration; both exist so the script cannot silently fail to run. **Once a build log
+shows which location was used, delete the other.**
+
 ### Required secrets
 
 | Secret | What it is |
