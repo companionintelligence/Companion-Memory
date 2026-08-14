@@ -333,7 +333,7 @@ flowchart LR
 | CI-Portal → CI-Hub | Authenticated tunnel; tenant identity propagated as HTTP headers / JWT |
 | Client apps → CI-Server | GraphQL + REST under `/api`; OAuth-style API keys for service callers |
 | Agents → CI-Server | Same GraphQL/REST plus signed service JWTs (HBPE / summary) |
-| Tools → Agents | MCP servers (e.g. `mcp-servers/web-search`) called by LLM tooling layer |
+| Tools → Agents | Built-in MCP server (`POST /mcp`, `domains/mcp`) over the shared **ToolRegistry** (`domains/tools`); third-party MCP servers run as their own processes, not vendored here |
 
 ---
 
@@ -371,7 +371,7 @@ The roadmap below is synthesized from the current repo state (domains present, c
 | Native shell | Fill in `frontend/apps/native` (currently placeholder) |
 | HBPE | Move from nightly batch to incremental online updates; expose richer prediction reads in `domains/predictions` |
 | Summary | Add monthly + yearly tiers; surface summary timeline in the web SPA |
-| Tools | Expand `mcp-servers/` beyond web-search (calendar, contacts, files) — these slot into `domains/tools` |
+| Tools | Grow the **ToolRegistry** (`domains/tools`) beyond today's surface (calendar, contacts, files) — exposed through `POST /mcp` and `GET /api/intents` |
 | Devices/XR | First-class `position` query API for AR clients (relative coords + headpose) |
 | Marketplace | Publish CI-Server as a polished marketplace app; ensure `metadata/`, screenshot, and `docker-compose.json` are kept current |
 
@@ -415,7 +415,7 @@ gantt
 | How aggressively to prune the graph? | The old facts-as-cold-storage design was never implemented and its tables were dropped; compaction remains an open design question (§7.3). |
 | Where does multi-user logic live? | Today: single user per Hub. Multi-tenant would touch `auth`, `connections`, `etl`, and Portal contracts. |
 | In-Hub saved-search sharing vs. single-tenant model | Saved searches are link-shareable: the share token authorizes running the search **as the owner** (`SearchResolver.runSharedSearch`; `SavedSearchService.findByShareToken` is intentionally not user-scoped) — the first cross-user read path inside a Hub. Capability-scoped (the token only surfaces the owner's stored query/types/tags; viewer-supplied filters are ignored) and still behind `JwtOrApiKeyAuthGuard` (signed-in viewers only, **not** anonymous). A node's sub-fields (media/relations/tags) resolve under the node's owner, so a shared result's signed media URLs are the owner's — forwardable until the URL's TTL. Distinct from the Portal-brokered federation in §7.3. |
-| Tool surface: NestJS controllers vs. MCP servers? | Largely resolved: the shared **ToolRegistry** (`domains/tools`) now feeds both the MCP server (`POST /mcp`, `domains/mcp`) and the intent catalog (`GET /api/intents`) — see [api/auth-and-conventions.md §5](../api/auth-and-conventions.md#5-mcp-surface). The standalone `mcp-servers/web-search` remains a separate LLM-facing helper. |
+| Tool surface: NestJS controllers vs. MCP servers? | Largely resolved: the shared **ToolRegistry** (`domains/tools`) now feeds both the MCP server (`POST /mcp`, `domains/mcp`) and the intent catalog (`GET /api/intents`) — see [api/auth-and-conventions.md §5](../api/auth-and-conventions.md#5-mcp-surface). There is no in-repo `mcp-servers/` tree — the former `web-search` helper was an upstream third-party server cloned at build time, and its build glue was removed in Feb 2026. |
 | Real-time push to clients | No WebSocket/subscription layer yet — XR and wearable clients currently poll. |
 
 ---
