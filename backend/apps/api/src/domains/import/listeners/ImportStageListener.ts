@@ -9,6 +9,7 @@ import { IMPORT_QUEUE } from '../constants';
 import { ImportStageEvent } from '../events';
 import { ImportRunService } from '../services/ImportRunService';
 import { ImportScratchService } from '../services/ImportScratchService';
+import { MediaStage } from '../stages/MediaStage';
 import { ParseStage } from '../stages/ParseStage';
 import { PushStage } from '../stages/PushStage';
 import { UnpackStage } from '../stages/UnpackStage';
@@ -63,6 +64,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
     private readonly scratch: ImportScratchService,
     unpackStage: UnpackStage,
     parseStage: ParseStage,
+    mediaStage: MediaStage,
     pushStage: PushStage,
     private readonly logger: LoggerService,
   ) {
@@ -70,6 +72,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
     this.runners = new Map([
       [unpackStage.kind, unpackStage as ImportStageRunner],
       [parseStage.kind, parseStage as ImportStageRunner],
+      [mediaStage.kind, mediaStage as ImportStageRunner],
       [pushStage.kind, pushStage as ImportStageRunner],
     ]);
   }

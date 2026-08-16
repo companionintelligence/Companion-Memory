@@ -52,6 +52,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { EventsModule } from '@ci/domains/events';
+import { FilesModule } from '@ci/domains/files';
 import { GraphModule } from '@ci/domains/graph';
 import { MemoryModule } from '@ci/domains/memory';
 import { PositionModule } from '@ci/domains/position';
@@ -73,6 +74,7 @@ import { ImportInboxService } from './services/ImportInboxService';
 import { ImportRunService } from './services/ImportRunService';
 import { ImportScratchService } from './services/ImportScratchService';
 import { StagedSourceService } from './services/StagedSourceService';
+import { MediaStage } from './stages/MediaStage';
 import { ParseStage } from './stages/ParseStage';
 import { PushStage } from './stages/PushStage';
 import { UnpackStage } from './stages/UnpackStage';
@@ -97,6 +99,7 @@ import { UnpackStage } from './stages/UnpackStage';
     ]),
     EventsModule,
     BrowserActivityModule,
+    FilesModule,
     GraphModule,
     MemoryModule,
     PositionModule,
@@ -109,6 +112,7 @@ import { UnpackStage } from './stages/UnpackStage';
     StagedSourceService,
     UnpackStage,
     ParseStage,
+    MediaStage,
     PushStage,
     ImportStageListener,
     StagedUploadPurgeCron,

@@ -24,6 +24,7 @@ function build() {
     {} as never,
     stage('unpack'),
     stage('parse'),
+    stage('media'),
     stage('push'),
     stubLogger as never,
   );

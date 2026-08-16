@@ -58,6 +58,11 @@ function makeListener(
     run: jest.fn(async () => ({ processed: 0, total: 0, detail: {} })),
   };
 
+  const mediaStage = {
+    kind: 'media' as const,
+    run: jest.fn(async () => ({ processed: 0, total: 0, detail: {} })),
+  };
+
   const pushStage = {
     kind: 'push' as const,
     run: jest.fn(async () => ({ processed: 0, total: 0, detail: {} })),
@@ -77,6 +82,7 @@ function makeListener(
       scratch as never,
       unpackStage as never,
       parseStage as never,
+      mediaStage as never,
       pushStage as never,
       logger as never,
     ),

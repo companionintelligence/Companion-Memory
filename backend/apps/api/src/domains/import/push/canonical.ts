@@ -736,9 +736,9 @@ export function isMediaType(mediaType: string | null): boolean {
 // non-media half of a directory walk (a PDF, an archive, a key) — its bytes are
 // as uploadable as a photo's, and leaving it out meant a generic import shipped
 // documents with mediaPath null, so nothing ever pushed the file itself.
-const FILE_CLASSIFICATIONS = new Set(['media', 'photo', 'image', 'video', 'audio', 'file']);
+export const FILE_CLASSIFICATIONS = new Set(['media', 'photo', 'image', 'video', 'audio', 'file']);
 /** A row carries a file if its MIME is binary media, or it's classified as one. */
-function isMediaItem(row: StagedItem): boolean {
+export function isMediaItem(row: StagedItem): boolean {
   return isMediaType(row.mediaType) || FILE_CLASSIFICATIONS.has(row.classification ?? '');
 }
 

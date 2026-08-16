@@ -49,7 +49,7 @@ export const IMPORT_QUEUE = 'import-stages';
  * user's data is in `ci.*`; what the appliance then does with it is a different
  * question with a different progress surface.
  */
-export const IMPORT_STAGE_KINDS = ['unpack', 'parse', 'push'] as const;
+export const IMPORT_STAGE_KINDS = ['unpack', 'parse', 'media', 'push'] as const;
 
 export type ImportStageKindName = (typeof IMPORT_STAGE_KINDS)[number];
 
@@ -63,7 +63,14 @@ export type ImportStageKindName = (typeof IMPORT_STAGE_KINDS)[number];
  * finish in a blink, which reads as a stall.
  */
 export const IMPORT_STAGE_WEIGHTS: Record<ImportStageKindName, number> = {
-  unpack: 30,
-  parse: 50,
-  push: 20,
+  unpack: 20,
+  parse: 35,
+  // Bytes, not rows: an archive's photos and voicemails go to the object store
+  // here, and on a photo export this is the longest leg of the whole import —
+  // tens of thousands of files against a store, where parse was reading a tree
+  // and push is writing Postgres. Weighted accordingly, so the bar does not sit
+  // at 55% for an hour and read as a stall. An archive with no media skips it
+  // in a beat, which the rollup handles the same way it handles a fast unpack.
+  media: 30,
+  push: 15,
 };

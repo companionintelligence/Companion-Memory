@@ -8,7 +8,12 @@ import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 
-import { IMPORT_QUEUE, IMPORT_STAGE_WEIGHTS, type ImportStageKindName } from '../constants';
+import {
+  IMPORT_QUEUE,
+  IMPORT_STAGE_KINDS,
+  IMPORT_STAGE_WEIGHTS,
+  type ImportStageKindName,
+} from '../constants';
 import { ImportRunEntity, type ImportRun, type ImportRunSource } from '../entities/ImportRunEntity';
 import { ImportStageEntity, type ImportStage } from '../entities/ImportStageEntity';
 import { ImportStageEvent } from '../events';
@@ -77,12 +82,16 @@ export interface UnpushedRun {
 /**
  * What a run does when the caller does not say: the whole import.
  *
- * `push` joined this list with its runner. Until then it was deliberately
- * absent, because a run listing a stage nothing can execute would either strand
- * there or "skip" it and report a complete import over data that never reached
- * `ci.*` — and the second is worse, since it looks like success.
+ * Taken from {@link IMPORT_STAGE_KINDS} rather than restated. A stage kind
+ * joins this list with its runner — until then a run listing a stage nothing
+ * can execute would either strand there or "skip" it and report a complete
+ * import over data that never reached `ci.*`, and the second is worse, since it
+ * looks like success. Restating the list is how that guarantee silently breaks
+ * in the other direction: `media` was added to the kinds, the CHECK constraint
+ * and the weights, and every new run went on being created without it because
+ * this copy had not heard.
  */
-const DEFAULT_STAGES: readonly ImportStageKindName[] = ['unpack', 'parse', 'push'];
+const DEFAULT_STAGES: readonly ImportStageKindName[] = IMPORT_STAGE_KINDS;
 
 /**
  * How silent a stage must go before the recovery sweep treats its claim as
