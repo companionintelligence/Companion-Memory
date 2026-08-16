@@ -8,6 +8,16 @@ RUN apt-get update && \
     tini \
     curl \
     ca-certificates \
+    # The import domain shells out to both. `unzip` streams the 40-50GB Google
+    # Takeout / Apple Photos splits that cannot fit the in-memory extractor, and
+    # without it every archive at or above 1GB throws. `ffmpeg` ships `ffprobe`,
+    # the only source of container creation time, QuickTime GPS, bitrate and
+    # codec for video — and the sole capture-time source for sidecar-less
+    # Takeout videos, which otherwise fall back to archive mtime and land in the
+    # wrong place on the timeline. It also backs the media-dimensions and
+    # video-thumbnail stages outside import.
+    unzip \
+    ffmpeg \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \

@@ -36,6 +36,7 @@ import path from 'node:path';
 
 import AdmZip from 'adm-zip';
 
+import { systemExtract } from './systemExtract';
 import { CorruptArchiveError, diagnoseArchive, freeBytesAt, InsufficientDiskError } from './unpack';
 
 export interface ExtractLimits {
@@ -270,11 +271,11 @@ function extractViaSystemUnzip(
 
   assertDiskFits(declared, destDir);
 
-  const r = spawnSync('unzip', ['-o', '-qq', archivePath, '-d', destDir], {
-    stdio: 'ignore',
-  });
-  if (!(r.status === 0 || r.status === 1)) {
-    throw new Error(`system unzip failed (exit ${r.status})`);
+  // Containment was asserted above against the archive's own entry names, so it
+  // holds whichever extractor systemExtract picks.
+  const r = systemExtract(archivePath, destDir);
+  if (!r.ok) {
+    throw new Error(`archive extraction failed (${r.detail})`);
   }
 
   const files = names.filter((n) => !n.endsWith('/')).length;

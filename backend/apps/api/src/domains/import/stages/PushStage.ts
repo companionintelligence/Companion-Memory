@@ -11,7 +11,7 @@ import { PositionService } from '@ci/domains/position';
 import type { StagedEntity } from '../entities/StagedEntityEntity';
 import type { StagedItem } from '../entities/StagedItemEntity';
 import { destinationsFor, toCanonical, type CanonicalRecord, type Destination } from '../push/canonical';
-import { toGraphEntity } from '../push/entities';
+import { isGraphExcluded, toGraphEntity } from '../push/entities';
 import {
   toBrowserActivityInput,
   toCommunicationInput,
@@ -202,6 +202,15 @@ export class PushStage implements ImportStageRunner {
     let skipped = 0;
 
     for (const row of staged) {
+      // Bookkeeping types never reach the graph — see isGraphExcluded. Marked
+      // `skipped` rather than left pending so the row reaches a terminal state
+      // and a resumed push does not reconsider it.
+      if (isGraphExcluded(row)) {
+        skipped += 1;
+        await this.markEntity(row.id, 'skipped', null);
+        continue;
+      }
+
       const input = toGraphEntity(row);
 
       if (input == null) {

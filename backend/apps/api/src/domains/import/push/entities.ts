@@ -21,6 +21,30 @@ const ENTITY_TYPES: Record<string, string> = {
 
 const DEFAULT_ENTITY_TYPE = 'Concept';
 
+/**
+ * Staged entity types that are bookkeeping, not things worth a graph node.
+ *
+ * `email_thread` is the whole list today. `gmail.ts` emits one per message so
+ * that a thread's messages can be grouped, and the name it carries is the raw
+ * Message-ID — which, falling through to `Concept`, puts a degree-0 node
+ * bearing a string like `<CAF=…@mail.gmail.com>` into the graph for every email
+ * imported. `GraphController` documents that connective types (Concept, Goal,
+ * Tag) are never removed by the explorer's type filter, and node queries order
+ * by `created_at DESC`, so right after a Gmail import the Concept slice of the
+ * canvas is nothing but Message-IDs, and the entity-type counts are inflated by
+ * one row per email. Upstream measured ≈148k such nodes and excluded the type
+ * by default for exactly this reason.
+ *
+ * Excluded at push rather than at parse: the staged row is still an honest
+ * record of what the parser saw, and threading may yet want to read it.
+ */
+const GRAPH_EXCLUDED_TYPES = new Set(['email_thread']);
+
+/** Whether this staged entity should reach the graph at all. */
+export function isGraphExcluded(staged: StagedEntity): boolean {
+  return GRAPH_EXCLUDED_TYPES.has((staged.type ?? '').trim().toLowerCase());
+}
+
 export function entityTypeFor(staged: StagedEntity): string {
   const type = (staged.type ?? '').trim().toLowerCase();
 

@@ -28,6 +28,8 @@ import path from 'node:path';
 
 import AdmZip from 'adm-zip';
 
+import { systemExtract, systemExtractAvailable } from './systemExtract';
+
 export interface UnpackResult {
   archive: string;
   files: number;
@@ -282,17 +284,9 @@ function declaredBytesFor(archivePath: string, size: number): number {
 // Above this size, skip adm-zip (in-memory + no ZIP64) and stream via `unzip`.
 const LARGE_ZIP_BYTES = 1_000_000_000; // 1 GB
 
-let systemUnzipProbe: boolean | undefined;
+// Extractor availability now means "unzip OR ditto" — see ./systemExtract.
 function systemUnzipAvailable(): boolean {
-  if (systemUnzipProbe === undefined) {
-    try {
-      systemUnzipProbe = spawnSync('unzip', ['-v'], { stdio: 'ignore' }).status === 0;
-    } catch {
-      systemUnzipProbe = false;
-    }
-  }
-
-  return systemUnzipProbe;
+  return systemExtractAvailable();
 }
 
 // Stream-extract via the system `unzip`: handles ZIP64 + 50GB archives, and is
@@ -300,18 +294,17 @@ function systemUnzipAvailable(): boolean {
 // stricter extractors. `-o` overwrites so a resumed/partial extraction
 // completes; `-qq` is silent. unzip exits 0 (ok) or 1 (ok, with warnings such as
 // a skipped bad entry) — both count as success.
-function runSystemUnzip(archive: string, destDir: string): { ok: boolean; files: number } {
-  const r = spawnSync('unzip', ['-o', '-qq', archive, '-d', destDir], { stdio: 'ignore' });
-  const ok = r.status === 0 || r.status === 1;
+function runSystemUnzip(archive: string, destDir: string): { ok: boolean; files: number; detail: string } {
+  const r = systemExtract(archive, destDir);
   let files = 0;
-  if (ok) {
+  if (r.ok) {
     const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8', maxBuffer: 1 << 30 });
     if (list.status === 0) {
       files = list.stdout.split('\n').filter((l) => l && !l.endsWith('/')).length;
     }
   }
 
-  return { ok, files };
+  return { ok: r.ok, files, detail: r.detail };
 }
 
 // Extract one archive into destDir. Small archives go through adm-zip (fast, no
@@ -335,13 +328,14 @@ function extractArchive(full: string, destDir: string, size: number): UnpackResu
 
   if (!systemUnzipAvailable()) {
     throw new Error(
-      `archive is ${(size / 1e9).toFixed(1)}GB (exceeds in-memory unzip) and system 'unzip' is unavailable`,
+      `archive is ${(size / 1e9).toFixed(1)}GB (exceeds in-memory unzip) and no system extractor ` +
+        `('unzip' or 'ditto') is available`,
     );
   }
 
   const r = runSystemUnzip(full, destDir);
   if (!r.ok) {
-    throw new Error('system unzip failed');
+    throw new Error(`archive extraction failed (${r.detail})`);
   }
 
   return { archive: full, files: r.files, method: 'system-unzip' };

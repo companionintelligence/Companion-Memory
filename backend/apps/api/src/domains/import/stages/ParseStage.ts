@@ -168,6 +168,15 @@ export class ParseStage implements ImportStageRunner {
 
     await importer.fileImport(undefined, entry, {
       pipeline: writer,
+      // Where datasources that materialise bytes (MMS parts in
+      // `sms_backup_restore`) are allowed to write them. Left unset they fall
+      // back to `os.tmpdir()`, which is exactly the hazard `configuration.ts`
+      // and `ImportScratchService` both call out: `/tmp` is tmpfs on a stock
+      // appliance, so a large export would consume RAM until the machine died —
+      // and nothing sweeps it, because the purge cron owns `uploadsDir` and the
+      // scratch service owns `scratchDir`. Pointing it at this run's scratch
+      // puts those bytes under the reclaim that already runs when the run ends.
+      mediaStoreDir: context.scratchDir,
       log: (level, message, meta) => {
         if (level === 'error' || level === 'warn') {
           this.logger.warn(message, { runId: context.runId, dataSource: name, ...meta });

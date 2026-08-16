@@ -1,5 +1,5 @@
 import type { StagedEntity } from '../../entities/StagedEntityEntity';
-import { entityTypeFor, naturalKeyFor, toGraphEntity } from '../entities';
+import { entityTypeFor, isGraphExcluded, naturalKeyFor, toGraphEntity } from '../entities';
 
 /**
  * The entity lane, tested at the mapper.
@@ -68,13 +68,30 @@ describe('naturalKeyFor', () => {
   });
 });
 
+describe('isGraphExcluded', () => {
+  it('keeps email_thread out of the graph', () => {
+    // gmail.ts emits one per message carrying the raw Message-ID as its name.
+    // Without this gate they fall through to Concept, and because the explorer
+    // never type-filters connective types away and orders newest-first, the
+    // Concept slice of the canvas becomes Message-ID strings with degree 0 —
+    // one per email imported. Upstream measured ≈148k of them.
+    expect(isGraphExcluded(staged({ type: 'email_thread' }))).toBe(true);
+    expect(isGraphExcluded(staged({ type: 'EMAIL_THREAD' }))).toBe(true);
+  });
+
+  it('lets everything else through', () => {
+    for (const type of ['contact', 'person', 'place', 'music_genre', 'whatever-a-csv-said']) {
+      expect(isGraphExcluded(staged({ type }))).toBe(false);
+    }
+  });
+});
+
 describe('entityTypeFor', () => {
   it.each([
     ['contact', 'Person'],
     ['person', 'Person'],
     ['place', 'Location'],
     ['music_genre', 'Concept'],
-    ['email_thread', 'Concept'],
   ])('files a %s as a %s', (type, expected) => {
     expect(entityTypeFor(staged({ type }))).toBe(expected);
   });
