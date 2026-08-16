@@ -9,6 +9,23 @@ import type { EmittedGraph } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
+/**
+ * A contact is emitted as an ITEM carrying a `contact` edge to its entity, not
+ * as a bare entity. That is the shape the upstream rewrite settled on and it is
+ * load-bearing: the item is what gives a card a stable id to dedup a re-import
+ * against, and the edge is what lets a contact resolve to a person. The old
+ * entity-only emission is precisely what made 5,250 contacts import as zero
+ * items.
+ */
+function contactEntities(emitted: EmittedGraph[]) {
+  return emitted.flatMap((graph) =>
+    (graph.edges ?? [])
+      .filter((edge) => edge.relation === 'contact')
+      .map((edge) => edge.to?.entity)
+      .filter(Boolean),
+  );
+}
+
 describe('vCard datasource', () => {
   it('recognizes .vcf file', async () => {
     const vcfPath = path.join(FIXTURES_DIR, 'sample.vcf');
@@ -27,11 +44,14 @@ describe('vCard datasource', () => {
       log: () => {},
     } as unknown as ImportParams);
 
-    const entities = pipeline.filter((p) => p.entity);
+    const entities = contactEntities(pipeline);
     expect(entities.length).toBe(2);
-    expect(entities[0].entity!.name).toBe('John Doe');
-    expect(entities[0].entity!.metadata?.Source).toBe('vCard');
-    expect(entities[0].entity!.attributes).toBeDefined();
+    expect(entities[0]!.name).toBe('John Doe');
+    expect(entities[0]!.metadata?.Source).toBe('vCard');
+    expect(entities[0]!.attributes).toBeDefined();
+
+    // Every card is now an item too — the half that was missing before.
+    expect(pipeline.filter((p) => p.item).length).toBe(2);
   });
 
   it('unescapes RFC 6350 TEXT backslash sequences in NOTE (and other TEXT fields)', async () => {
@@ -62,7 +82,7 @@ describe('vCard datasource', () => {
         timeframe: {},
         log: () => {},
       } as unknown as ImportParams);
-      const [entity] = pipeline.filter((p) => p.entity).map((p) => p.entity);
+      const [entity] = contactEntities(pipeline);
       expect(entity!.name).toBe('Jane, Q. Public');
       const nickname = entity!.attributes!.find((a: EntityAttribute) => a.name === 'nickname');
       expect(nickname!.value).toBe('J.Q.; The Second');

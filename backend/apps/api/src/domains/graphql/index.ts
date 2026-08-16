@@ -90,7 +90,15 @@ import { UserSnapshotResolver } from './resolvers/UserSnapshotResolver';
       autoSchemaFile: path.join(__dirname, '__generated__/schema.graphql'),
       sortSchema: true,
       playground: false,
-      introspection: true,
+      // Introspection is a development affordance, and it was on unconditionally
+      // — so an UNAUTHENTICATED caller on the LAN could enumerate the entire
+      // schema (64 root fields, every type and argument) from an appliance
+      // holding one person's whole life. The resolvers themselves are guarded
+      // and refuse anonymous reads, so this is disclosure rather than access:
+      // it hands an attacker the map without the keys. Off in production, on
+      // everywhere else, matching how `configuration.ts` gates the other
+      // "fine in dev, never in a real deployment" behaviours.
+      introspection: process.env.NODE_ENV !== 'production',
       graphiql: false,
     }),
     PairingModule,

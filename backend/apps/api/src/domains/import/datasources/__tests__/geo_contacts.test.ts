@@ -58,7 +58,13 @@ describe('New datasources: geojson, vcard, applecontacts', () => {
     const { params, collected } = makeParams();
     await imp.fileImport(undefined, { fullPath: file } as DirEntry, params as unknown as ImportParams);
     expect(collected.length).toBe(1);
-    expect(collected[0].entity!.name).toBe('Jane Doe');
+    // A contact is an ITEM carrying a `contact` edge to its entity — the item is
+    // what gives the card a stable id to dedup a re-import against. Asserting a
+    // bare entity was asserting the shape that made contacts import as zero
+    // items.
+    expect(collected[0].item).toBeDefined();
+    expect(collected[0].edges![0].relation).toBe('contact');
+    expect(collected[0].edges![0].to!.entity!.name).toBe('Jane Doe');
   });
 
   it('recognizes Apple Contacts DB (simulated empty)', async () => {

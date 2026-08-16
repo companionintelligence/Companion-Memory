@@ -149,10 +149,12 @@ exports[`golden corpus twitter: imports its fixture without dropping records 1`]
 
 exports[`golden corpus vcard: imports its fixture without dropping records 1`] = `
 {
-  "byClassification": {},
+  "byClassification": {
+    "contact": 2,
+  },
   "entities": 2,
-  "items": 0,
-  "relationships": 0,
+  "items": 2,
+  "relationships": 2,
   "withLocation": 0,
   "withTimestamp": 0,
 }
