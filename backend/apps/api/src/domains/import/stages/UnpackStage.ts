@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 
 import { extractUploadedArchive, isExtractableArchive } from '../archive/extract';
 import { unpackArchives, type RejectedArchive } from '../archive/unpack';
@@ -58,6 +59,13 @@ export class UnpackStage implements ImportStageRunner {
         // only doubles the run's disk footprint until cleanup — and a 350GB
         // Takeout has ENOSPC'd a 500GB-free disk exactly that way.
         deleteArchiveAfterExtract: true,
+        // Passed explicitly rather than left to the extractor's own defaults,
+        // which are a zip-bomb guard sized for an untrusted upload (100k
+        // entries / 10GB) and reject the archives this stage exists to unpack.
+        // Operators raise or lower them from one place; containment is asserted
+        // per entry either way.
+        maxEntries: config.import.maxArchiveEntries,
+        maxTotalBytes: config.import.maxArchiveBytes,
       });
 
       extractedFiles = result.files;

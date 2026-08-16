@@ -130,7 +130,9 @@
       "__format": "json"
     },
     "uploadsDir": "CI_IMPORT_UPLOADS_DIR",
-    "inboxDir": "CI_IMPORT_INBOX_DIR"
+    "inboxDir": "CI_IMPORT_INBOX_DIR",
+    "maxArchiveEntries": "CI_IMPORT_MAX_ARCHIVE_ENTRIES",
+    "maxArchiveBytes": "CI_IMPORT_MAX_ARCHIVE_BYTES"
   },
   "enrichment": {
     "window": {

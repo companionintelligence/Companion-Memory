@@ -137,11 +137,29 @@ function StageDetail({ stage }: { stage: ImportStage }) {
   const destinations = isRecord(detail.destinations) ? detail.destinations : null;
   const entities = isRecord(detail.entities) ? detail.entities : null;
 
+  // ParseStage catches a throwing parser and carries on with the rest, recording
+  // the casualty here. Nothing read it, so a Gmail parser that blew up inside a
+  // Takeout while Photos succeeded left no trace anywhere in the UI — and
+  // because the per-source counts are filtered to rows > 0, the failed service
+  // also vanished from the badges while "Found: gmail, google_photos" went on
+  // claiming it was read. Distinct from `detail.failed`, which is PushStage's
+  // count of rows that could not be written.
+  const parserFailures = Array.isArray(detail.failures)
+    ? (detail.failures as Array<{ dataSource?: string; error?: string }>)
+    : [];
   const skippedEntities = entities && typeof entities.skipped === 'number' ? entities.skipped : 0;
   const deduped = typeof detail.deduped === 'number' ? detail.deduped : 0;
   const failed = typeof detail.failed === 'number' ? detail.failed : 0;
 
-  if (!recognized.length && !rejected.length && !destinations && !skippedEntities && !deduped && !failed) {
+  if (
+    !recognized.length &&
+    !rejected.length &&
+    !destinations &&
+    !skippedEntities &&
+    !deduped &&
+    !failed &&
+    !parserFailures.length
+  ) {
     return null;
   }
 
@@ -178,6 +196,14 @@ function StageDetail({ stage }: { stage: ImportStage }) {
       {rejected.map((entry) => (
         <p key={entry.archive ?? entry.reason} className="text-destructive">
           Could not read {entry.archive}: {entry.reason}
+        </p>
+      ))}
+
+      {/* Named, because "one service failed" is not actionable and the rest of
+          the import succeeding is exactly why nobody would go looking. */}
+      {parserFailures.map((entry) => (
+        <p key={entry.dataSource ?? entry.error} className="text-destructive">
+          Could not read your {entry.dataSource} data: {entry.error}
         </p>
       ))}
     </div>

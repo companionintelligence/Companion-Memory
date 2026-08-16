@@ -307,6 +307,20 @@ export const ConfigSchema = z.object({
       // because the folder only holds what a user deliberately put there, and
       // compose ships the mount; an absent directory just scans as unavailable.
       inboxDir: z.string().default('/var/lib/ci-import/inbox'),
+      // Zip-bomb guards on extraction. These are a ceiling on what an archive
+      // may expand to, NOT a statement about what this appliance imports: the
+      // uploads controller accepts 50GiB precisely because "Google Takeout
+      // splits run 40-50GB", and a photo Takeout routinely carries several
+      // hundred thousand files. The previous defaults — 100k entries and 10GB —
+      // rejected exactly the archives the rest of the import path is built to
+      // handle, with no way to raise them. Path containment is asserted per
+      // entry regardless and is not affected by either number.
+      maxArchiveEntries: z.coerce.number().int().positive().default(2_000_000),
+      maxArchiveBytes: z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(100 * 1024 ** 3),
     })
     .superRefine((value, context) => {
       // The three areas have different owners and different sweeps: the inbox

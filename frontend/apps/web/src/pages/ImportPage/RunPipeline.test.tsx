@@ -70,6 +70,24 @@ describe('RunPipeline stage detail', () => {
     expect(screen.queryByText(/could not be saved/i)).not.toBeInTheDocument();
   });
 
+  it('names a service whose parser failed, even though the rest of the run succeeded', () => {
+    // The reason this needs a test: ParseStage carries on past a throwing
+    // parser, and the per-source counts are filtered to rows > 0 — so the
+    // failed service disappears from the badges while `recognized` still lists
+    // it. Nothing else in the UI would ever say Gmail was not read.
+    render(
+      <RunPipeline
+        run={runWith({
+          recognized: ['gmail', 'google_photos'],
+          failures: [{ dataSource: 'gmail', error: 'unexpected end of mbox' }],
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/Could not read your gmail data/i)).toBeInTheDocument();
+    expect(screen.getByText(/unexpected end of mbox/i)).toBeInTheDocument();
+  });
+
   it('calls a partial run a success with gaps', () => {
     render(<RunPipeline run={runWith({ pushed: 1, deduped: 0, failed: 0 })} />);
 
