@@ -2,6 +2,8 @@ import { useCallback, useState } from 'react';
 
 import { cn } from '@ci/shadcn';
 
+import { PathHeader } from '@/pages/SourcesPage/PathHeader';
+
 import { HistoryTab } from './HistoryTab';
 import { InboxPanel } from './InboxPanel';
 import { ImportWizard } from './wizard/ImportWizard';
@@ -59,18 +61,14 @@ export function ImportSurface({ variant = 'page', onStageChange }: ImportSurface
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      {/* ONE navigation row, not two. The wizard's step buttons used to sit in
-          a row of their own directly under an Import/Inbox/History tab bar —
-          two bands of chrome, and the tab bar's first entry ("Import") named
-          the same thing as the row beneath it ("1 Pick"). The steps ARE the
-          import surface: clicking one comes back here from Inbox or History,
-          and only the two destinations the steps do not name get a button.
+      {/* Inbox and History ride the path's own heading, level with the name of
+          the thing they belong to. They spent one revision at the end of the
+          step row, which read as a fourth and fifth step of a sequence they are
+          not steps of.
 
-          Deliberately NOT a Radix `Tabs`. A tablist whose selected panel has no
-          trigger is malformed — Radix labels every panel `aria-labelledby` its
-          trigger id, so the wizard's panel pointed at an element that had been
-          removed, and assistive tech announced a tabpanel with no accessible
-          name. Two toggle buttons say what this actually is.
+          What is left below is the step row alone. The steps ARE the import
+          surface — clicking one comes back here from Inbox or History — which
+          is why there is no "Import" button among them.
 
           Onboarding shows none of it. History is meaningless on a first run —
           there are no runs to revisit — and the Inbox is the batch path for
@@ -79,7 +77,31 @@ export function ImportSurface({ variant = 'page', onStageChange }: ImportSurface
           too early; /sources/import carries all of it the moment setup is
           done. What is left is a single linear flow. */}
       {variant === 'page' ? (
-        <div className="flex shrink-0 flex-col gap-2 lg:flex-row lg:items-start">
+        <>
+          <PathHeader
+            path="import"
+            actions={
+              <div
+                role="group"
+                aria-label="Other import views"
+                className="flex shrink-0 gap-1 rounded-md bg-muted p-1 text-sm"
+              >
+                <SurfaceToggle
+                  active={surface === 'inbox'}
+                  onClick={() => setSurface((current) => (current === 'inbox' ? 'import' : 'inbox'))}
+                >
+                  Inbox
+                </SurfaceToggle>
+                <SurfaceToggle
+                  active={surface === 'history'}
+                  onClick={() => setSurface((current) => (current === 'history' ? 'import' : 'history'))}
+                >
+                  History
+                </SurfaceToggle>
+              </div>
+            }
+          />
+
           <WizardSteps
             step={surface === 'import' ? stage : null}
             canExport={canExport}
@@ -87,28 +109,9 @@ export function ImportSurface({ variant = 'page', onStageChange }: ImportSurface
               handleStage(next);
               setSurface('import');
             }}
-            className="min-w-0 flex-1"
+            className="shrink-0"
           />
-
-          <div
-            role="group"
-            aria-label="Other import views"
-            className="flex shrink-0 gap-1 rounded-md bg-muted p-1 text-sm"
-          >
-            <SurfaceToggle
-              active={surface === 'inbox'}
-              onClick={() => setSurface((current) => (current === 'inbox' ? 'import' : 'inbox'))}
-            >
-              Inbox
-            </SurfaceToggle>
-            <SurfaceToggle
-              active={surface === 'history'}
-              onClick={() => setSurface((current) => (current === 'history' ? 'import' : 'history'))}
-            >
-              History
-            </SurfaceToggle>
-          </div>
-        </div>
+        </>
       ) : null}
 
       {/* The wizard stays MOUNTED and is hidden, never unmounted.

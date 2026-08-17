@@ -25,6 +25,29 @@ describe('ImportSurface', () => {
     expect(screen.queryByText('history surface')).not.toBeInTheDocument();
   });
 
+  // The surface renders its own path header, because the Inbox and History
+  // controls sit on it and they belong to this component's state.
+  it('introduces the path above its content', () => {
+    render(<ImportSurface />);
+
+    expect(screen.getByRole('heading', { name: 'Import' })).toBeInTheDocument();
+    expect(screen.getByText('Effort')).toBeInTheDocument();
+    expect(screen.getByText(/wait hours or days/i)).toBeInTheDocument();
+  });
+
+  // Level with the name of the path they belong to, not at the end of the step
+  // row — where they read as a fourth and fifth step of a sequence they are no
+  // part of.
+  it('puts Inbox and History on the heading, not in the step row', () => {
+    render(<ImportSurface />);
+
+    const views = screen.getByRole('group', { name: /other import views/i });
+
+    expect(views).toBeInTheDocument();
+    expect(views.closest('header')).not.toBeNull();
+    expect(views.closest('ol')).toBeNull();
+  });
+
   it('switches to the Inbox', () => {
     render(<ImportSurface />);
 

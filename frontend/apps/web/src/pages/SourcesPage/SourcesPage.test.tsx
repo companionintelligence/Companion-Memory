@@ -116,16 +116,6 @@ describe('SourcesPage', () => {
     expect(screen.queryByText(/About a minute, once\./)).not.toBeInTheDocument();
   });
 
-  it('introduces a path above its own content', async () => {
-    // The import path's header is rendered by the page, outside the surface's
-    // scroll region, so this is the one it can assert directly.
-    renderAt('/sources/import');
-
-    expect(await screen.findByText('Effort')).toBeInTheDocument();
-    expect(screen.getByText(/wait hours or days/i)).toBeInTheDocument();
-    expect(screen.getByText(/Your whole history/i)).toBeInTheDocument();
-  });
-
   describe('once something is flowing', () => {
     it('drops the first-run guidance and reports counts instead', async () => {
       h.connections = 3;

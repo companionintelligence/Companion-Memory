@@ -7,7 +7,6 @@ import { ImportSurface } from '@/pages/ImportPage/ImportPage';
 
 import { ConnectPanel } from './ConnectPanel';
 import { DevicesPanel } from './DevicesPanel';
-import { PathHeader } from './PathHeader';
 import { SOURCE_PATHS, SourcePathTiles, type SourcePath } from './SourcePathTiles';
 import { useSourceCounts } from './useSourceCounts';
 
@@ -73,14 +72,11 @@ export function SourcesPage() {
         <div className="flex min-h-0 flex-1 flex-col gap-6">
           <SourcePathTiles active={active} counts={counts} paths={paths} />
 
-          {/* Import keeps its own scroll shape — the wizard pins a step row and
-              a Continue button and scrolls the list between them — so its header
-              sits outside that region rather than inside the scroller. */}
+          {/* Import renders its own header: the Inbox and History controls sit
+              on it, and they belong to the surface's state rather than the
+              page's. */}
           {active === 'import' ? (
-            <>
-              <PathHeader path="import" />
-              <ImportSurface />
-            </>
+            <ImportSurface />
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
               {active === 'connect' && <ConnectPanel />}
