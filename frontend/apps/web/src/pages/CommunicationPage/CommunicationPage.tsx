@@ -1,8 +1,8 @@
 import { type ReactNode, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { GlobalUID, LoadingPage, Portal, usePageTitle, EmptyState } from '@ci/common';
-import { Breadcrumb, Card, Label } from '@ci/shadcn';
+import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
+import { Card, Label } from '@ci/shadcn';
 import { User } from '@ci/shadcn/icons';
 import { useParams, Link } from 'react-router-dom';
 
@@ -135,40 +135,7 @@ export function CommunicationPage() {
     );
   }
 
-  return (
-    <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Page>Communication</Breadcrumb.Page>
-            </Breadcrumb.Item>
-
-            {communication && (
-              <>
-                <Breadcrumb.Separator className="hidden md:block" />
-                <Breadcrumb.Item>
-                  <Breadcrumb.Page>
-                    {communication.subject || communication.preview || renderTypeSubject(communication.type)}
-                  </Breadcrumb.Page>
-                </Breadcrumb.Item>
-              </>
-            )}
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
-      {content}
-    </>
-  );
+  return <>{content}</>;
 }
 
 function renderTypeSubject(type: string) {

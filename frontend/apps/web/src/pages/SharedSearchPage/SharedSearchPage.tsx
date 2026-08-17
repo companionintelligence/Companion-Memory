@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { EmptyState, LoadingPage, Portal, useDeviceLayout, usePageTitle } from '@ci/common';
-import { Breadcrumb, Sheet, Tabs } from '@ci/shadcn';
+import { Sheet, Tabs } from '@ci/shadcn';
 import { Images, List, Map as MapIcon, Share2, type LucideIcon } from '@ci/shadcn/icons';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
@@ -34,30 +34,6 @@ const GET_SHARED_SAVED_SEARCH = gql(`
     }
   }
 `);
-
-/** Breadcrumb that leads home like the rest of the app, trailing with the share. */
-function SharedBreadcrumb({ trail }: { trail: string }) {
-  return (
-    <Portal.Slot id="breadcrumbs">
-      <Breadcrumb>
-        <Breadcrumb.List>
-          <Breadcrumb.Item className="hidden md:block">
-            <Breadcrumb.Link asChild>
-              <Link to="/feed">Companion</Link>
-            </Breadcrumb.Link>
-          </Breadcrumb.Item>
-          <Breadcrumb.Separator className="hidden md:block" />
-          <Breadcrumb.Item>
-            <Breadcrumb.Page className="flex items-center gap-1.5">
-              <Share2 className="h-4 w-4" />
-              {trail}
-            </Breadcrumb.Page>
-          </Breadcrumb.Item>
-        </Breadcrumb.List>
-      </Breadcrumb>
-    </Portal.Slot>
-  );
-}
 
 function ViewTabs({ activeTab, setActiveTab }: { activeTab: string; setActiveTab: (v: string) => void }) {
   return (
@@ -114,8 +90,6 @@ function SharedSearchBody({ name, description }: { name: string; description: st
 
   return (
     <>
-      <SharedBreadcrumb trail={`Shared · ${name}`} />
-
       {/* Desktop hosts the view tabs in the global header slot; the mobile layout
           has no such slot, so render them inline in the page body instead. */}
       {!isMobile && <Portal.Slot id="nav-views">{tabs}</Portal.Slot>}
@@ -123,7 +97,17 @@ function SharedSearchBody({ name, description }: { name: string; description: st
       <PageContent className="p-0 gap-0">
         {isMobile && <div className="px-2 pt-2">{tabs}</div>}
 
-        {description && <div className="px-4 pt-3 text-sm text-muted-foreground">{description}</div>}
+        {/* The share names itself here now. It used to be named only by the
+            breadcrumb, and this page — unlike every page behind the rail — has
+            no menu naming it: a viewer arrives from a link with no idea whose
+            search this is or what it is called. */}
+        <div className="px-4 pt-3">
+          <h1 className="flex items-center gap-2 text-lg font-semibold">
+            <Share2 aria-hidden className="h-4 w-4 shrink-0 text-muted-foreground" />
+            {name}
+          </h1>
+          {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+        </div>
         {!loading && activeTab !== 'map' && (
           <div className="px-4 pt-1 text-xs text-muted-foreground">
             {totalCount.toLocaleString()} result{totalCount === 1 ? '' : 's'}
@@ -185,8 +169,6 @@ export function SharedSearchPage() {
   if (!shared) {
     return (
       <>
-        <SharedBreadcrumb trail="Shared Search" />
-
         {/* Cause-agnostic: the backend cannot distinguish a revoked token from a
             typo'd/never-valid one, so don't assert a specific reason. */}
         <EmptyState

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
-import { apiKeyHeaders, buildApiUrl, Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, IconButton, Table, Card, ToggleGroup, Badge, Tooltip } from '@ci/shadcn';
+import { apiKeyHeaders, buildApiUrl, usePageTitle } from '@ci/common';
+import { Button, IconButton, Table, Card, ToggleGroup, Badge, Tooltip } from '@ci/shadcn';
 import {
   AlertCircle,
   RefreshCw,
@@ -14,7 +14,6 @@ import {
   ChevronUp,
 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
@@ -244,22 +243,6 @@ export function PromptsPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            <Breadcrumb.Separator className="hidden md:block" />
-            <Breadcrumb.Item>
-              <Breadcrumb.Page>Questions</Breadcrumb.Page>
-            </Breadcrumb.Item>
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       <PageContent className="gap-4 p-0">
         <MemoryHubShell>
           <div className="flex flex-col gap-4 px-4 pb-4">

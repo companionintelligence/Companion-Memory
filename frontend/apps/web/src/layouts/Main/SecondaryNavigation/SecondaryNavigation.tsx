@@ -119,13 +119,25 @@ function SourcesSubmenu() {
 }
 
 export function SecondaryNavigation() {
-  const { expanded } = usePowerRail();
+  const { expanded, setHovered } = usePowerRail();
   const { isFeatureEnabled } = useFeatures();
   const feedBadgeCount = useFeedBadgeCount();
 
   return (
     <nav
       id="power-rail"
+      // Hover expands it, the way it did in early versions — the pin is for
+      // keeping it that way. `onFocus`/`onBlur` with capture so tabbing into a
+      // collapsed rail reveals the labels too; a keyboard user gets the same
+      // affordance a pointer does.
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setHovered(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setHovered(false);
+        }
+      }}
       data-state={expanded ? 'expanded' : 'collapsed'}
       className={cn(
         'flex h-full flex-col overflow-x-hidden p-2 transition-[width] duration-200',

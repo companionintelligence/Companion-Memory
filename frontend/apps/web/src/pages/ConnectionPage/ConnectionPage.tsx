@@ -1,17 +1,8 @@
 import { type ReactNode, useState } from 'react';
 
 import { isReference, type Reference, useMutation, useQuery } from '@apollo/client';
+import { apiKeyHeaders, buildApiUrl, GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import {
-  apiKeyHeaders,
-  buildApiUrl,
-  GlobalUID,
-  LoadingPage,
-  Portal,
-  usePageTitle,
-  EmptyState,
-} from '@ci/common';
-import {
-  Breadcrumb,
   Card,
   Label,
   Button,
@@ -24,7 +15,7 @@ import {
   formDataSchema as s,
 } from '@ci/shadcn';
 import { AlertCircle, Ban, CheckCircle2, Clock, RefreshCw, Settings, Trash2 } from '@ci/shadcn/icons';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { gql, makeFragmentData } from '@/graphql';
@@ -612,35 +603,6 @@ export function ConnectionPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/sources/connect">Sources</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            {connection && (
-              <>
-                <Breadcrumb.Separator className="hidden md:block" />
-                <Breadcrumb.Item>
-                  <Breadcrumb.Page>{connection.name}</Breadcrumb.Page>
-                </Breadcrumb.Item>
-              </>
-            )}
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       {content}
 
       {/* Edit Connection Modal */}

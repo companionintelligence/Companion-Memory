@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Card, Skeleton, ToggleGroup } from '@ci/shadcn';
+import { usePageTitle } from '@ci/common';
+import { Button, Card, Skeleton, ToggleGroup } from '@ci/shadcn';
 import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
@@ -25,22 +25,6 @@ export function StatsPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            <Breadcrumb.Separator className="hidden md:block" />
-            <Breadcrumb.Item>
-              <Breadcrumb.Page>Stats</Breadcrumb.Page>
-            </Breadcrumb.Item>
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       <PageContent>
         {error && !data && <ErrorNotice message={error} onRetry={refresh} />}
         {loading && !data && <StatsSkeleton />}

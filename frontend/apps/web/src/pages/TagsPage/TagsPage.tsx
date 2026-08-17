@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { EmptyState, Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb, Input } from '@ci/shadcn';
+import { EmptyState, usePageTitle } from '@ci/common';
+import { Input } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -43,32 +43,6 @@ export function TagsPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item>
-              <Breadcrumb.Link asChild>
-                <Link to="/memory">Memory</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator />
-
-            <Breadcrumb.Item>
-              <Breadcrumb.Page>Tags</Breadcrumb.Page>
-            </Breadcrumb.Item>
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       <PageContent className="gap-4 p-0">
         <MemoryHubShell>
           <div className="flex flex-col gap-4 px-4 pb-4">

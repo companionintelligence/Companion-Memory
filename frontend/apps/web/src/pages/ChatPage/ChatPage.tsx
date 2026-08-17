@@ -1,9 +1,9 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import { Portal, useDeviceLayout, usePageTitle } from '@ci/common';
-import { Breadcrumb, Button, Card } from '@ci/shadcn';
+import { Button, Card } from '@ci/shadcn';
 import { Loader2, RefreshCw, Send, Sparkles, X } from '@ci/shadcn/icons';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { useThreadService } from '@/api';
 import { usePersonaCompose } from '@/api/usePersonaCompose';
@@ -278,32 +278,6 @@ function ChatPageContent() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            <Breadcrumb.Separator className="hidden md:block" />
-            <Breadcrumb.Item>
-              <Breadcrumb.Link asChild>
-                <Link to="/chat">Chat</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            {thread && (
-              <>
-                <Breadcrumb.Separator className="hidden md:block" />
-                <Breadcrumb.Item>
-                  <Breadcrumb.Page>{thread.name || thread.id}</Breadcrumb.Page>
-                </Breadcrumb.Item>
-              </>
-            )}
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       <Portal.Slot id="actions">
         <ModelSelector withToggles />
       </Portal.Slot>

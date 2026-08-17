@@ -1,11 +1,11 @@
 import { type ReactNode, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { GlobalUID, LoadingPage, Portal, usePageTitle, EmptyState } from '@ci/common';
-import { Breadcrumb, Button, IconButton, Tooltip } from '@ci/shadcn';
+import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
+import { Button, IconButton, Tooltip } from '@ci/shadcn';
 import { Link as LinkIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvolutionPanel';
 import { EntityGraph } from '@/components/EntityGraph';
@@ -226,36 +226,6 @@ export function PersonPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/people">People</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            {person && (
-              <>
-                <Breadcrumb.Separator className="hidden md:block" />
-
-                <Breadcrumb.Item>
-                  <Breadcrumb.Page>{person?.name || 'Unnamed'}</Breadcrumb.Page>
-                </Breadcrumb.Item>
-              </>
-            )}
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       {content}
 
       {id && (

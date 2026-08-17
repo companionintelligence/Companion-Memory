@@ -1,9 +1,8 @@
 import { useMemo } from 'react';
 
-import { Portal, usePageTitle } from '@ci/common';
-import { Badge, Breadcrumb, Button, Card, Skeleton } from '@ci/shadcn';
+import { usePageTitle } from '@ci/common';
+import { Badge, Button, Card, Skeleton } from '@ci/shadcn';
 import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
-import { Link } from 'react-router-dom';
 import { Cell, Pie, PieChart } from 'recharts';
 
 import { PageContent } from '@/components/layout';
@@ -84,22 +83,6 @@ export function JobsPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            <Breadcrumb.Separator className="hidden md:block" />
-            <Breadcrumb.Item>
-              <Breadcrumb.Page>Jobs</Breadcrumb.Page>
-            </Breadcrumb.Item>
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       <PageContent>
         <div className="flex flex-col gap-4">
           <SummaryCard

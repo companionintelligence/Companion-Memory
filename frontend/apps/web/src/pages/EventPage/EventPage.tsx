@@ -1,8 +1,8 @@
 import { type ReactNode, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { GlobalUID, LoadingPage, Portal, usePageTitle, EmptyState } from '@ci/common';
-import { Breadcrumb, Card, Label } from '@ci/shadcn';
+import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
+import { Card, Label } from '@ci/shadcn';
 import { User } from '@ci/shadcn/icons';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 
@@ -178,36 +178,5 @@ export function EventPage() {
     );
   }
 
-  return (
-    <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Page>Event</Breadcrumb.Page>
-            </Breadcrumb.Item>
-
-            {event && (
-              <>
-                <Breadcrumb.Separator className="hidden md:block" />
-                <Breadcrumb.Item>
-                  <Breadcrumb.Page>{event.title}</Breadcrumb.Page>
-                </Breadcrumb.Item>
-              </>
-            )}
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
-      {content}
-    </>
-  );
+  return <>{content}</>;
 }

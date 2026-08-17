@@ -1,6 +1,6 @@
-import { Portal, ErrorPage, LoadingPage, usePageTitle } from '@ci/common';
-import { Breadcrumb, Badge, Card } from '@ci/shadcn';
-import { Link, useParams } from 'react-router-dom';
+import { ErrorPage, LoadingPage, usePageTitle } from '@ci/common';
+import { Badge, Card } from '@ci/shadcn';
+import { useParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 
@@ -44,32 +44,6 @@ export function SummaryDetailPage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            <Breadcrumb.Separator className="hidden md:block" />
-            <Breadcrumb.Item>
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Feed</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-            {summary && (
-              <>
-                <Breadcrumb.Separator />
-                <Breadcrumb.Item>
-                  <Breadcrumb.Page>{summary.title || 'Summary'}</Breadcrumb.Page>
-                </Breadcrumb.Item>
-              </>
-            )}
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       <PageContent>
         <div className="max-w-4xl mx-auto space-y-6">
           <div className="space-y-4">

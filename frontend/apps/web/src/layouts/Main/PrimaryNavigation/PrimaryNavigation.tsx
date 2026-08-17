@@ -89,7 +89,6 @@ export function PrimaryNavigation() {
           ) : (
             <>
               <div className="flex min-w-0 shrink-0 flex-row flex-wrap items-center gap-2">
-                <Portal id="breadcrumbs" />
                 <Portal id="nav-views" className="flex flex-row items-center empty:hidden" />
               </div>
               {!isSharedView && (

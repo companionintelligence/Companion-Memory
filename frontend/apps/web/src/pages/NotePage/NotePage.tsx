@@ -4,7 +4,6 @@ import { useQuery, useMutation } from '@apollo/client';
 import {
   GlobalUID,
   LoadingPage,
-  Portal,
   buildNoteRecord,
   captureNote,
   forgetQueuedNote,
@@ -14,9 +13,9 @@ import {
   useOutboxQueue,
 } from '@ci/common';
 import { Editor } from '@ci/editor';
-import { Breadcrumb, Spinner } from '@ci/shadcn';
+import { Spinner } from '@ci/shadcn';
 import { Check, CloudOff, TriangleAlert } from '@ci/shadcn/icons';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import TimeAgo from 'react-timeago';
 
 import { PageContent } from '@/components/layout';
@@ -363,32 +362,6 @@ export function NotePage() {
 
   return (
     <>
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/feed">Companion</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item className="hidden md:block">
-              <Breadcrumb.Link asChild>
-                <Link to="/notes">Notes</Link>
-              </Breadcrumb.Link>
-            </Breadcrumb.Item>
-
-            <Breadcrumb.Separator className="hidden md:block" />
-
-            <Breadcrumb.Item>
-              <Breadcrumb.Page>{displayTitle || 'Untitled'}</Breadcrumb.Page>
-            </Breadcrumb.Item>
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
-
       {/* `authoredContent` carries an offline note across the remount that navigating to
           its minted id forces (`key` changes), where there is no server `note` to rebuild
           from. See the state declaration. */}

@@ -1,5 +1,4 @@
-import { Portal, usePageTitle } from '@ci/common';
-import { Breadcrumb } from '@ci/shadcn';
+import { usePageTitle } from '@ci/common';
 import { Navigate, useParams } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
@@ -60,15 +59,6 @@ export function SourcesPage() {
           Connect": "Companion" is the whole app and leads to Feed, and the last
           crumb repeated the tile already highlighted on screen. Two steps of a
           three-step path that nobody navigates by. */}
-      <Portal.Slot id="breadcrumbs">
-        <Breadcrumb>
-          <Breadcrumb.List>
-            <Breadcrumb.Item>
-              <Breadcrumb.Page>Sources</Breadcrumb.Page>
-            </Breadcrumb.Item>
-          </Breadcrumb.List>
-        </Breadcrumb>
-      </Portal.Slot>
 
       <PageContent>
         {/* No page heading or standfirst: the breadcrumb above already reads

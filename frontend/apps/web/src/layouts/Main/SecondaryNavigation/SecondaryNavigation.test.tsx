@@ -88,10 +88,24 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Jobs' })).toHaveAttribute('href', '/jobs');
   });
 
-  it('carries the account control in the rail', () => {
+  // The account's destinations are rail rows now, not a dropdown behind an
+  // avatar: one list of everywhere you can go, opening in one direction.
+  it('carries the account destinations as rail rows, not a menu', () => {
     renderRail();
 
-    expect(screen.getByRole('button', { name: 'Account' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Colours' })).toBeInTheDocument();
+
+    // Nothing is reachable only by opening a second surface.
+    expect(screen.queryByRole('button', { name: 'Account' })).not.toBeInTheDocument();
+  });
+
+  it('offers the theme as a visible choice once expanded', () => {
+    renderRail();
+
+    // Collapsed it is one cycling icon; the segmented control needs the width.
+    expect(screen.getByRole('button', { name: /Theme:/ })).toBeInTheDocument();
   });
 
   // `end={false}`: both halves are Sources, and the rail should say so on
