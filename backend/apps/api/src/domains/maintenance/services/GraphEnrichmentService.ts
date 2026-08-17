@@ -12,7 +12,7 @@ import {
 } from '@ci/domains/graph';
 import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
 import { GraphQueryService } from '@ci/domains/memory';
-import { PersonalizationService, PromotionCandidateService } from '@ci/domains/personalization';
+import { PersonalizationService } from '@ci/domains/personalization';
 
 /**
  * Concept `properties.type` values the preference tools filter on. The graph
@@ -263,7 +263,6 @@ export class GraphEnrichmentService {
     private readonly graphIngestService: GraphIngestService,
     private readonly graphQuery: GraphQueryService,
     private readonly personalizationService: PersonalizationService,
-    private readonly promotionCandidateService: PromotionCandidateService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GraphEnrichmentService.name);
@@ -714,14 +713,6 @@ export class GraphEnrichmentService {
     }
 
     if (decision === 'review') {
-      await this.promotionCandidateService.create(context, {
-        kind: 'relationship',
-        payload: input,
-        confidence,
-        evidence: input.relationships.map((r) => r.properties ?? {}),
-        sourceJob: 'graph_enrich',
-      });
-
       return { entitiesProcessed: 0, relationshipsProcessed: 0, reviewQueued: 1, errors: [] };
     }
 

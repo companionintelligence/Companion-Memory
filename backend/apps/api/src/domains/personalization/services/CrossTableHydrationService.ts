@@ -13,7 +13,6 @@ import {
 import { shouldSkipHydrationCandidate } from '../utils/hydrationCandidateFilter';
 
 import { PersonalizationService } from './PersonalizationService';
-import { PromotionCandidateService } from './PromotionCandidateService';
 
 export interface HydrationResult {
   readonly sampledRecords: number;
@@ -33,7 +32,6 @@ export class CrossTableHydrationService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly graphIngestService: GraphIngestService,
     private readonly personalizationService: PersonalizationService,
-    private readonly promotionCandidateService: PromotionCandidateService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(CrossTableHydrationService.name);
@@ -128,13 +126,6 @@ export class CrossTableHydrationService {
         },
       ];
 
-      const payload = {
-        entities,
-        relationships,
-        valueText: text.slice(0, 500),
-        sourceQuestionText: row.questionText ?? null,
-      };
-
       const decision = await this.personalizationService.decideAction(context.userId, {
         kind: 'graph_edge',
         confidence: 0.69,
@@ -147,13 +138,6 @@ export class CrossTableHydrationService {
       }
 
       if (decision === 'review') {
-        await this.promotionCandidateService.create(context, {
-          kind: 'entity',
-          payload,
-          confidence: 0.69,
-          evidence: [{ text: text.slice(0, 500) }],
-          sourceJob,
-        });
         result.reviewQueued += 1;
         continue;
       }

@@ -1,0 +1,1774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Selectors — CI-Server</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #141816;
+    --soft: #3f4843;
+    --mute: #7a847e;
+    --line: #e3e7e4;
+    --line-strong: #c9d0cb;
+    --paper: #fafaf8;
+    --surface: #ffffff;
+    --accent: #0b5c4a;
+    --accent-2: #147a63;
+    --accent-soft: #e4f3ee;
+    --focus: #0b5c4a33;
+    --ease: cubic-bezier(.22, 1, .36, 1);
+    --ease-spring: cubic-bezier(.34, 1.4, .64, 1);
+    --serif: "Fraunces", Georgia, serif;
+    --sans: "DM Sans", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background: var(--paper);
+    font-family: var(--sans);
+    font-optical-sizing: auto;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ambient wash — quiet, not decorative noise */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background:
+      radial-gradient(900px 480px at 0% 0%, #e8f3ee 0%, transparent 60%),
+      radial-gradient(700px 400px at 100% 10%, #f3efe6 0%, transparent 55%);
+    opacity: .85;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+
+  /* ── hero ── */
+  .hero {
+    display: grid;
+    gap: 1.25rem;
+    padding-bottom: 2.5rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+    animation: rise .7s var(--ease) both;
+  }
+  .eyebrow {
+    font-size: .7rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--mute);
+    font-weight: 600;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2.4rem, 5vw, 3.4rem);
+    line-height: 1.05;
+    letter-spacing: -.03em;
+    margin: 0;
+  }
+  .lede {
+    max-width: 48ch;
+    color: var(--soft);
+    font-size: 1.1rem;
+    margin: 0;
+  }
+  .hint {
+    font-size: .85rem;
+    color: var(--mute);
+    margin: 0;
+  }
+  .hint kbd {
+    font: 600 .75rem var(--sans);
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    border-radius: 5px;
+    padding: .1rem .35rem;
+    color: var(--soft);
+  }
+
+  /* ── toc ── */
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    margin-top: .5rem;
+  }
+  .toc a {
+    text-decoration: none;
+    color: var(--soft);
+    font-size: .82rem;
+    font-weight: 500;
+    padding: .4rem .7rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease), transform .25s var(--ease-spring);
+  }
+  .toc a:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    transform: translateY(-1px);
+  }
+
+  /* ── sections ── */
+  .cat {
+    margin-top: 3.5rem;
+    scroll-margin-top: 1.5rem;
+  }
+  .cat-head {
+    display: grid;
+    gap: .35rem;
+    margin-bottom: 1.25rem;
+    max-width: 52ch;
+  }
+  .cat-head h2 {
+    font-family: var(--serif);
+    font-size: 1.55rem;
+    font-weight: 600;
+    letter-spacing: -.02em;
+    margin: 0;
+  }
+  .cat-head p {
+    margin: 0;
+    color: var(--soft);
+    font-size: .95rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+  }
+
+  /* ── cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 1.15rem 1.2rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: .85rem;
+    transition: border-color .25s var(--ease), box-shadow .3s var(--ease), transform .35s var(--ease);
+    animation: rise .6s var(--ease) both;
+  }
+  .card:nth-child(1) { animation-delay: .02s; }
+  .card:nth-child(2) { animation-delay: .06s; }
+  .card:nth-child(3) { animation-delay: .1s; }
+  .card:nth-child(4) { animation-delay: .14s; }
+  .card:nth-child(5) { animation-delay: .18s; }
+  .card:nth-child(6) { animation-delay: .22s; }
+  .card:hover {
+    border-color: var(--line-strong);
+    box-shadow: 0 16px 40px -24px rgba(20, 24, 22, .28);
+    transform: translateY(-2px);
+  }
+  .card:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus);
+  }
+
+  .kind {
+    font-size: .65rem;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--mute);
+  }
+  .card h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: -.015em;
+  }
+  .prompt {
+    margin: 0;
+    font-size: .92rem;
+    color: var(--soft);
+  }
+
+  .stage {
+    margin-top: .15rem;
+    padding: .9rem;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #f7f8f7 0%, #f1f3f1 100%);
+    border: 1px solid var(--line);
+    min-height: 104px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: .55rem;
+  }
+
+  .note {
+    margin: 0;
+    font-size: .78rem;
+    color: var(--mute);
+    padding-top: .15rem;
+  }
+
+  /* ── interactive atoms ── */
+  button, .opt, .chip, .bar, .thumb, .node, .rank-row {
+    font: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+
+  /* pills / binary */
+  .pill {
+    appearance: none;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--ink);
+    border-radius: 999px;
+    padding: .42rem .9rem;
+    font-size: .84rem;
+    font-weight: 500;
+    transition:
+      background .2s var(--ease),
+      color .2s var(--ease),
+      border-color .2s var(--ease),
+      transform .2s var(--ease-spring),
+      box-shadow .2s var(--ease);
+  }
+  .pill:hover { border-color: var(--accent); color: var(--accent); }
+  .pill:active { transform: scale(.96); }
+  .pill[aria-pressed="true"],
+  .pill.is-on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 6px 16px -8px rgba(11, 92, 74, .7);
+  }
+  .pill.ghost {
+    background: transparent;
+    border-style: dashed;
+    color: var(--mute);
+  }
+  .pill.ghost[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-style: solid;
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: none;
+  }
+
+  /* choice rows */
+  .opts { display: grid; gap: .35rem; }
+  .opt {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 10px;
+    padding: .5rem .65rem;
+    font-size: .84rem;
+    color: var(--ink);
+    transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease);
+  }
+  .opt:hover { border-color: var(--line-strong); }
+  .opt:active { transform: scale(.985); }
+  .opt[aria-checked="true"] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .mark {
+    width: 1rem;
+    height: 1rem;
+    border: 1.5px solid var(--mute);
+    flex: 0 0 auto;
+    transition: background .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
+    position: relative;
+  }
+  .opt[data-kind="radio"] .mark { border-radius: 50%; }
+  .opt[data-kind="check"] .mark { border-radius: 4px; }
+  .opt[aria-checked="true"] .mark {
+    border-color: var(--accent);
+    background: var(--accent);
+    box-shadow: inset 0 0 0 2px #fff;
+  }
+  .opt[data-kind="check"][aria-checked="true"] .mark::after {
+    content: "";
+    position: absolute;
+    left: 3px; top: 1px;
+    width: 4px; height: 7px;
+    border: solid #fff;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(40deg);
+    box-shadow: none;
+  }
+
+  /* chips */
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .chip {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 8px;
+    padding: .32rem .55rem;
+    font-size: .8rem;
+    color: var(--soft);
+    transition: all .2s var(--ease);
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+  .chip[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-color: #6fad9a;
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* text fields */
+  .field {
+    width: 100%;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--surface);
+    padding: .55rem .7rem;
+    font: inherit;
+    font-size: .86rem;
+    color: var(--ink);
+    outline: none;
+    transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  .field::placeholder { color: var(--mute); }
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus);
+  }
+  textarea.field {
+    min-height: 4.5rem;
+    resize: vertical;
+    line-height: 1.4;
+  }
+
+  /* scale */
+  .scale {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: .3rem;
+  }
+  .scale button {
+    appearance: none;
+    border: 0;
+    border-radius: 8px 8px 4px 4px;
+    background: #dfe6e2;
+    color: var(--mute);
+    font-size: .72rem;
+    font-weight: 600;
+    height: 2.2rem;
+    transition: background .2s var(--ease), color .2s var(--ease), transform .2s var(--ease-spring);
+  }
+  .scale button:hover { background: #c8d4ce; color: var(--soft); }
+  .scale button[aria-pressed="true"] {
+    background: var(--accent);
+    color: #fff;
+    transform: translateY(-3px);
+  }
+  .ends {
+    display: flex;
+    justify-content: space-between;
+    font-size: .7rem;
+    color: var(--mute);
+  }
+
+  /* slider / timeline rail */
+  .rail-wrap { display: grid; gap: .45rem; }
+  .rail {
+    --pct: 50%;
+    position: relative;
+    height: 2.2rem;
+    display: flex;
+    align-items: center;
+    touch-action: none;
+  }
+  .rail-track {
+    position: absolute;
+    left: 0; right: 0;
+    height: 4px;
+    border-radius: 999px;
+    background: #d5ddd8;
+  }
+  .rail-fill {
+    position: absolute;
+    left: 0;
+    width: var(--pct);
+    height: 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width .05s linear;
+  }
+  .rail-knob {
+    position: absolute;
+    left: var(--pct);
+    width: 18px;
+    height: 18px;
+    margin-left: -9px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    box-shadow: 0 2px 8px rgba(11, 92, 74, .25);
+    transition: transform .2s var(--ease-spring);
+    cursor: grab;
+  }
+  .rail:active .rail-knob,
+  .rail.is-drag .rail-knob {
+    transform: scale(1.15);
+    cursor: grabbing;
+  }
+  .rail.range .rail-fill {
+    left: var(--a);
+    width: calc(var(--b) - var(--a));
+  }
+  .rail.range .rail-knob.a { left: var(--a); }
+  .rail.range .rail-knob.b { left: var(--b); }
+
+  /* segment */
+  .seg {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .seg button {
+    appearance: none;
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: transparent;
+    padding: .48rem .3rem;
+    font-size: .78rem;
+    font-weight: 500;
+    color: var(--soft);
+    transition: background .2s var(--ease), color .2s var(--ease);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* thumbs */
+  .thumbs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: .4rem;
+  }
+  .thumbs.two { grid-template-columns: 1fr 1fr; }
+  .thumb {
+    appearance: none;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    aspect-ratio: 1;
+    padding: 0;
+    background:
+      linear-gradient(145deg, #c5d5c8, #6f8f7d 55%, #3f5c4d);
+    transition: border-color .2s var(--ease), transform .25s var(--ease-spring), box-shadow .2s var(--ease);
+  }
+  .thumb:nth-child(2) {
+    background: linear-gradient(160deg, #dcc7a4, #a07a4f 50%, #5c3d22);
+  }
+  .thumb:nth-child(3) {
+    background: linear-gradient(120deg, #b9c8d8, #6a86a3 55%, #33485c);
+  }
+  .thumb:hover { transform: scale(1.03); }
+  .thumb[aria-pressed="true"] {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    transform: scale(1.04);
+  }
+
+  /* bars */
+  .bars {
+    display: flex;
+    align-items: flex-end;
+    gap: .3rem;
+    height: 72px;
+  }
+  .bar {
+    flex: 1;
+    border: 0;
+    border-radius: 5px 5px 2px 2px;
+    background: #c5d2cb;
+    height: var(--h, 40%);
+    min-height: 12px;
+    padding: 0;
+    transition: background .2s var(--ease), transform .25s var(--ease-spring), box-shadow .2s var(--ease);
+  }
+  .bar:hover { background: #a9bdb3; transform: scaleY(1.04); transform-origin: bottom; }
+  .bar[aria-pressed="true"] {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  /* people */
+  .person {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    width: 100%;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 10px;
+    padding: .45rem .6rem;
+    font-size: .84rem;
+    text-align: left;
+    transition: border-color .2s var(--ease), background .2s var(--ease);
+  }
+  .person:hover { border-color: var(--line-strong); }
+  .person[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .avatar {
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #8fb5a8, #2f5c4d);
+    flex: 0 0 auto;
+  }
+  .avatar.b { background: linear-gradient(135deg, #c4a77d, #6e4a28); }
+  .avatar.c { background: linear-gradient(135deg, #9aabb8, #3d5160); }
+
+  /* rank */
+  .rank { display: grid; gap: .3rem; }
+  .rank-row {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 9px;
+    padding: .4rem .55rem;
+    font-size: .82rem;
+    transition: transform .25s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  .rank-row:hover { border-color: var(--line-strong); }
+  .rank-row.is-lift {
+    transform: scale(1.02);
+    border-color: var(--accent);
+    box-shadow: 0 10px 24px -16px rgba(20,24,22,.45);
+    z-index: 1;
+  }
+  .rank-n {
+    width: 1.2rem;
+    height: 1.2rem;
+    border-radius: 5px;
+    background: #eef1ee;
+    color: var(--mute);
+    font-size: .68rem;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+  }
+
+  /* map */
+  .map {
+    height: 86px;
+    border-radius: 10px;
+    position: relative;
+    overflow: hidden;
+    background:
+      linear-gradient(#e5ebe5 1px, transparent 1px) 0 0 / 16px 16px,
+      linear-gradient(90deg, #e5ebe5 1px, transparent 1px) 0 0 / 16px 16px,
+      #eef2ee;
+    cursor: crosshair;
+  }
+  .pin {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    margin: -14px 0 0 -7px;
+    border-radius: 50% 50% 50% 0;
+    background: var(--accent);
+    transform: rotate(-45deg);
+    box-shadow: 0 0 0 4px rgba(11, 92, 74, .18);
+    transition: left .35s var(--ease), top .35s var(--ease), transform .25s var(--ease-spring);
+    pointer-events: none;
+  }
+  .pin.pop { animation: pin-pop .35s var(--ease-spring); }
+
+  .place-memory { display: grid; gap: .55rem; }
+  .place-memory .map.place-fixed {
+    height: 72px;
+    cursor: default;
+  }
+  .place-meta {
+    display: grid;
+    gap: .1rem;
+  }
+  .place-meta strong {
+    font-size: .88rem;
+    font-weight: 600;
+    letter-spacing: -.01em;
+  }
+  .place-meta span {
+    font-size: .75rem;
+    color: var(--mute);
+  }
+
+  /* graph */
+  .graph {
+    height: 88px;
+    position: relative;
+  }
+  .graph svg { width: 100%; height: 100%; display: block; }
+  .graph .link { stroke: #b7c7be; stroke-width: 2; transition: stroke .2s, stroke-width .2s; }
+  .graph .link.is-on { stroke: var(--accent); stroke-width: 3; }
+  .graph .node {
+    fill: #8fa896;
+    stroke: #fff;
+    stroke-width: 2;
+    cursor: pointer;
+    transition: fill .2s var(--ease), r .25s var(--ease-spring);
+  }
+  .graph .node:hover { fill: #6f8f7d; }
+  .graph .node.is-on { fill: var(--accent); }
+
+  /* crop overlay */
+  .crop {
+    position: relative;
+    aspect-ratio: 16/9;
+    border-radius: 10px;
+    overflow: hidden;
+    background: linear-gradient(145deg, #c5d5c8, #5d7a68);
+    cursor: pointer;
+  }
+  .crop-box {
+    position: absolute;
+    inset: 18% 22% 28% 20%;
+    border: 2px solid #fff;
+    border-radius: 4px;
+    box-shadow: 0 0 0 999px rgba(0,0,0,.28);
+    transition: inset .35s var(--ease);
+  }
+  .crop[data-region="1"] .crop-box { inset: 12% 10% 40% 45%; }
+  .crop[data-region="2"] .crop-box { inset: 35% 15% 15% 15%; }
+
+  /* toast feedback */
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 1.4rem;
+    transform: translateX(-50%) translateY(120%);
+    background: var(--ink);
+    color: #f5f7f5;
+    font-size: .82rem;
+    font-weight: 500;
+    padding: .55rem .9rem;
+    border-radius: 999px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.2);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform .4s var(--ease), opacity .3s var(--ease);
+    z-index: 50;
+    max-width: min(90vw, 420px);
+    text-align: center;
+  }
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+
+  .footer {
+    margin-top: 4rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+    color: var(--mute);
+    font-size: .8rem;
+  }
+
+  .principles {
+    margin-top: 3.5rem;
+    padding: 1.4rem 1.5rem;
+    border-radius: 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .principles h2 {
+    font-family: var(--serif);
+    font-size: 1.25rem;
+    margin: 0 0 .6rem;
+  }
+  .principles ol {
+    margin: 0;
+    padding-left: 1.15rem;
+    color: var(--soft);
+    display: grid;
+    gap: .35rem;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pin-pop {
+    0% { transform: rotate(-45deg) scale(.6); }
+    70% { transform: rotate(-45deg) scale(1.15); }
+    100% { transform: rotate(-45deg) scale(1); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      transition-duration: .01ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="eyebrow">CI-Server · Design</div>
+      <h1>Selectors</h1>
+      <p class="lede">
+        Essential prompt controls — one decision at a time.
+        Click, drag, and type. Each sketch is live.
+      </p>
+      <p class="hint">Tip: try the pills, rails, and graph nodes. Feedback appears below. <kbd>Esc</kbd> clears the toast.</p>
+      <nav class="toc" aria-label="Jump">
+        <a href="#binary">Binary</a>
+        <a href="#choice">Choice</a>
+        <a href="#open">Open</a>
+        <a href="#scale">Scale</a>
+        <a href="#time">Time</a>
+        <a href="#people">People</a>
+        <a href="#place">Place</a>
+        <a href="#media">Media</a>
+        <a href="#graph">Graph</a>
+        <a href="#data">Data</a>
+      </nav>
+    </header>
+
+    <!-- BINARY -->
+    <section class="cat" id="binary">
+      <div class="cat-head">
+        <h2>Binary</h2>
+        <p>Hard bits. Confirm, deny, keep — nuance waits for the next step.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Confirm</div>
+          <h3>Yes / No</h3>
+          <p class="prompt">Was this lunch with Alex?</p>
+          <div class="stage">
+            <div class="row" data-group="single">
+              <button type="button" class="pill is-on" aria-pressed="true" data-value="Yes">Yes</button>
+              <button type="button" class="pill" aria-pressed="false" data-value="No">No</button>
+            </div>
+          </div>
+          <p class="note">Entity merge · face → person · calendar attribution</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Tri-state</div>
+          <h3>Yes / No / Not sure</h3>
+          <p class="prompt">Is this your primary work laptop?</p>
+          <div class="stage">
+            <div class="row" data-group="single">
+              <button type="button" class="pill" aria-pressed="false" data-value="Yes">Yes</button>
+              <button type="button" class="pill" aria-pressed="false" data-value="No">No</button>
+              <button type="button" class="pill ghost is-on" aria-pressed="true" data-value="Not sure">Not sure</button>
+            </div>
+          </div>
+          <p class="note">Uncertain enrichment · soft deferral</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Triage</div>
+          <h3>Keep / Discard</h3>
+          <p class="prompt">Keep this browser visit in Memory?</p>
+          <div class="stage">
+            <div class="row" data-group="single">
+              <button type="button" class="pill is-on" aria-pressed="true" data-value="Keep">Keep</button>
+              <button type="button" class="pill" aria-pressed="false" data-value="Discard">Discard</button>
+            </div>
+          </div>
+          <p class="note">Noisy ingest without forcing a category</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Review</div>
+          <h3>Approve / Edit</h3>
+          <p class="prompt">Save this summary as written?</p>
+          <div class="stage">
+            <div class="row" data-group="single">
+              <button type="button" class="pill is-on" aria-pressed="true" data-value="Approve">Approve</button>
+              <button type="button" class="pill" aria-pressed="false" data-value="Edit first">Edit first</button>
+            </div>
+          </div>
+          <p class="note">Promotion review · generated titles</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Toggle</div>
+          <h3>Segmented truth</h3>
+          <p class="prompt">This recurring event is still active.</p>
+          <div class="stage">
+            <div class="seg" data-group="single">
+              <button type="button" aria-pressed="true" data-value="True">True</button>
+              <button type="button" aria-pressed="false" data-value="False">False</button>
+              <button type="button" aria-pressed="false" data-value="—">—</button>
+            </div>
+          </div>
+          <p class="note">Preference bits the user owns</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Swipe stack</div>
+          <h3>Pick a face</h3>
+          <p class="prompt">Which photo is you?</p>
+          <div class="stage">
+            <div class="thumbs" data-group="single">
+              <button type="button" class="thumb is-on" aria-pressed="true" data-value="Photo A" aria-label="Photo A"></button>
+              <button type="button" class="thumb" aria-pressed="false" data-value="Photo B" aria-label="Photo B"></button>
+              <button type="button" class="thumb" aria-pressed="false" data-value="Photo C" aria-label="Photo C"></button>
+            </div>
+          </div>
+          <p class="note">High-volume labeling · visual over filenames</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- CHOICE -->
+    <section class="cat" id="choice">
+      <div class="cat-head">
+        <h2>Choice</h2>
+        <p>Bounded options when the ontology is known. Three to seven beats a novel.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Single</div>
+          <h3>Radio list</h3>
+          <p class="prompt">What kind of place is Café Lune?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="Café / restaurant"><span class="mark"></span>Café / restaurant</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Workplace"><span class="mark"></span>Workplace</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Friend’s home"><span class="mark"></span>Friend’s home</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Other"><span class="mark"></span>Other…</button>
+            </div>
+          </div>
+          <p class="note">Place types · event types · genres</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Multi</div>
+          <h3>Checklist</h3>
+          <p class="prompt">Which topics should this insight cover?</p>
+          <div class="stage">
+            <div class="opts" data-group="multi" data-kind="check">
+              <button type="button" class="opt" data-kind="check" aria-checked="true" data-value="Health"><span class="mark"></span>Health</button>
+              <button type="button" class="opt" data-kind="check" aria-checked="true" data-value="Work"><span class="mark"></span>Work</button>
+              <button type="button" class="opt" data-kind="check" aria-checked="false" data-value="Family"><span class="mark"></span>Family</button>
+              <button type="button" class="opt" data-kind="check" aria-checked="false" data-value="Travel"><span class="mark"></span>Travel</button>
+            </div>
+          </div>
+          <p class="note">Focus areas · filter presets</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Chips</div>
+          <h3>Tag cloud</h3>
+          <p class="prompt">Pick tags that fit this thread.</p>
+          <div class="stage">
+            <div class="chips" data-group="multi">
+              <button type="button" class="chip" aria-pressed="true" data-value="hiring">hiring</button>
+              <button type="button" class="chip" aria-pressed="true" data-value="tailscale">tailscale</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="design">design</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="finance">finance</button>
+            </div>
+          </div>
+          <p class="note">Soft taxonomy · interest capture</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Duel</div>
+          <h3>A / B</h3>
+          <p class="prompt">Which title is clearer?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="A"><span class="mark"></span>A — Q2 planning notes</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="B"><span class="mark"></span>B — Sync with finance</button>
+            </div>
+          </div>
+          <p class="note">Pairwise ranking of generations</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Mood</div>
+          <h3>Feeling grid</h3>
+          <p class="prompt">How did this meeting feel?</p>
+          <div class="stage">
+            <div class="chips" data-group="single">
+              <button type="button" class="chip" aria-pressed="false" data-value="Energizing">Energizing</button>
+              <button type="button" class="chip" aria-pressed="true" data-value="Fine">Fine</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Draining">Draining</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Stressful">Stressful</button>
+            </div>
+          </div>
+          <p class="note">Outcome bits for completion detection</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Searchable</div>
+          <h3>Person find</h3>
+          <p class="prompt">Which existing person is this?</p>
+          <div class="stage">
+            <input class="field" type="search" placeholder="Search people…" data-filter="people" aria-label="Search people" />
+            <div class="opts" data-group="single" id="people-filter">
+              <button type="button" class="person" aria-pressed="true" data-value="Hanzla Mateen" data-filter-text="hanzla mateen"><span class="avatar"></span> Hanzla Mateen</button>
+              <button type="button" class="person" aria-pressed="false" data-value="Alex Rivera" data-filter-text="alex rivera"><span class="avatar b"></span> Alex Rivera</button>
+              <button type="button" class="person" aria-pressed="false" data-value="Sam Okonkwo" data-filter-text="sam okonkwo"><span class="avatar c"></span> Sam Okonkwo</button>
+            </div>
+          </div>
+          <p class="note">Large catalogs — never a 40-item radio list</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- OPEN -->
+    <section class="cat" id="open">
+      <div class="cat-head">
+        <h2>Open text</h2>
+        <p>When the answer isn’t in the ontology yet. Short invents labels; long captures meaning.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Short</div>
+          <h3>One-line label</h3>
+          <p class="prompt">What should we call this place?</p>
+          <div class="stage">
+            <input class="field" type="text" placeholder="e.g. Mom’s house" data-live="label" />
+          </div>
+          <p class="note">Naming · nicknames · project codes</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Long</div>
+          <h3>Paragraph</h3>
+          <p class="prompt">What was this trip really about?</p>
+          <div class="stage">
+            <textarea class="field" placeholder="A few sentences…" data-live="story"></textarea>
+          </div>
+          <p class="note">Journal-grade enrichment</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Scaffold</div>
+          <h3>Guided write</h3>
+          <p class="prompt">Starters shape the blank page.</p>
+          <div class="stage">
+            <div class="chips" data-group="multi" data-scaffold>
+              <button type="button" class="chip" aria-pressed="false" data-value="What" data-insert="What happened: ">What</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Who" data-insert="Who was there: ">Who</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="How" data-insert="How it felt: ">How</button>
+            </div>
+            <textarea class="field" id="scaffold-field" placeholder="Write freely…"></textarea>
+          </div>
+          <p class="note">Chips insert prompts — still freeform</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Complete</div>
+          <h3>Sentence stem</h3>
+          <p class="prompt">I usually go to the gym on ______.</p>
+          <div class="stage">
+            <input class="field" type="text" placeholder="weeknights after work" data-live="habit" />
+          </div>
+          <p class="note">Habit capture without abstract prefs</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- SCALE -->
+    <section class="cat" id="scale">
+      <div class="cat-head">
+        <h2>Scale &amp; rank</h2>
+        <p>Intensity and order without essays. Odd scales; labeled ends.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Likert</div>
+          <h3>1–5 intensity</h3>
+          <p class="prompt">How important is this relationship?</p>
+          <div class="stage">
+            <div class="scale" data-group="single">
+              <button type="button" aria-pressed="false" data-value="1">1</button>
+              <button type="button" aria-pressed="false" data-value="2">2</button>
+              <button type="button" aria-pressed="true" data-value="3">3</button>
+              <button type="button" aria-pressed="false" data-value="4">4</button>
+              <button type="button" aria-pressed="false" data-value="5">5</button>
+            </div>
+            <div class="ends"><span>Low</span><span>High</span></div>
+          </div>
+          <p class="note">Trust dial · salience · energy cost</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Spectrum</div>
+          <h3>Privacy slider</h3>
+          <p class="prompt">How private should this memory stay?</p>
+          <div class="stage">
+            <div class="rail-wrap">
+              <div class="rail" data-rail data-value="72" style="--pct:72%">
+                <div class="rail-track"></div>
+                <div class="rail-fill"></div>
+                <div class="rail-knob" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="72" aria-label="Privacy"></div>
+              </div>
+              <div class="ends"><span>Shareable</span><span id="privacy-label">Mostly vault</span></div>
+            </div>
+          </div>
+          <p class="note">Continuous prefs with a live label</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Order</div>
+          <h3>Drag to rank</h3>
+          <p class="prompt">Order focus areas for the next month.</p>
+          <div class="stage">
+            <div class="rank" id="rank-list" data-rank>
+              <button type="button" class="rank-row" draggable="true" data-value="Health"><span class="rank-n">1</span> Health</button>
+              <button type="button" class="rank-row" draggable="true" data-value="Deep work"><span class="rank-n">2</span> Deep work</button>
+              <button type="button" class="rank-row" draggable="true" data-value="Family"><span class="rank-n">3</span> Family</button>
+            </div>
+          </div>
+          <p class="note">Drag rows · numbers update live</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- TIME -->
+    <section class="cat" id="time">
+      <div class="cat-head">
+        <h2>Time</h2>
+        <p>Rails people already understand — day, window, cadence — not raw timestamps.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Point</div>
+          <h3>Day chips</h3>
+          <p class="prompt">Which day did this happen?</p>
+          <div class="stage">
+            <div class="chips" data-group="single">
+              <button type="button" class="chip" aria-pressed="false" data-value="Today">Today</button>
+              <button type="button" class="chip" aria-pressed="true" data-value="Yesterday">Yesterday</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Pick date">Pick date…</button>
+            </div>
+          </div>
+          <p class="note">Relative first · absolute as fallback</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Range</div>
+          <h3>Trip window</h3>
+          <p class="prompt">When were you in Lisbon?</p>
+          <div class="stage">
+            <div class="rail-wrap">
+              <div class="rail range" data-range style="--a:28%; --b:64%">
+                <div class="rail-track"></div>
+                <div class="rail-fill"></div>
+                <div class="rail-knob a" data-end="a" tabindex="0" role="slider" aria-label="Start"></div>
+                <div class="rail-knob b" data-end="b" tabindex="0" role="slider" aria-label="End"></div>
+              </div>
+              <div class="ends"><span>Mar</span><span id="range-label">Apr – May</span><span>Jun</span></div>
+            </div>
+          </div>
+          <p class="note">Drag either end · life chapters</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Window</div>
+          <h3>Preset scope</h3>
+          <p class="prompt">Search memories from…</p>
+          <div class="stage">
+            <div class="seg" data-group="single">
+              <button type="button" aria-pressed="false" data-value="7d">7d</button>
+              <button type="button" aria-pressed="true" data-value="30d">30d</button>
+              <button type="button" aria-pressed="false" data-value="1y">1y</button>
+            </div>
+          </div>
+          <p class="note">Explorer defaults · analytics</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Cadence</div>
+          <h3>Recurrence</h3>
+          <p class="prompt">How often does this happen?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="Weekdays"><span class="mark"></span>Weekdays</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Weekly on Thu"><span class="mark"></span>Weekly on Thu</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Custom"><span class="mark"></span>Custom…</button>
+            </div>
+          </div>
+          <p class="note">Habits · HBPE priors</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Density</div>
+          <h3>Activity scrub</h3>
+          <p class="prompt">Jump to the busiest day.</p>
+          <div class="stage">
+            <div class="bars" data-group="single">
+              <button type="button" class="bar" style="--h:35%" aria-pressed="false" data-value="Mon" aria-label="Mon"></button>
+              <button type="button" class="bar" style="--h:55%" aria-pressed="false" data-value="Tue" aria-label="Tue"></button>
+              <button type="button" class="bar" style="--h:88%" aria-pressed="true" data-value="Wed" aria-label="Wed"></button>
+              <button type="button" class="bar" style="--h:42%" aria-pressed="false" data-value="Thu" aria-label="Thu"></button>
+              <button type="button" class="bar" style="--h:65%" aria-pressed="false" data-value="Fri" aria-label="Fri"></button>
+              <button type="button" class="bar" style="--h:28%" aria-pressed="false" data-value="Sat" aria-label="Sat"></button>
+            </div>
+          </div>
+          <p class="note">Select by the shape of life</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Day-part</div>
+          <h3>When you deep-work</h3>
+          <p class="prompt">When do you usually focus?</p>
+          <div class="stage">
+            <div class="chips" data-group="single">
+              <button type="button" class="chip" aria-pressed="false" data-value="Morning">Morning</button>
+              <button type="button" class="chip" aria-pressed="true" data-value="Afternoon">Afternoon</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Evening">Evening</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Late night">Late night</button>
+            </div>
+          </div>
+          <p class="note">Capacity without exact hours</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- PEOPLE -->
+    <section class="cat" id="people">
+      <div class="cat-head">
+        <h2>People</h2>
+        <p>Identity resolution is the highest-value loop. Show a face when we have one.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Who</div>
+          <h3>Person picker</h3>
+          <p class="prompt">Who is in this photo?</p>
+          <div class="stage">
+            <div class="opts" data-group="single">
+              <button type="button" class="person" aria-pressed="true" data-value="Hanzla Mateen"><span class="avatar"></span> Hanzla Mateen</button>
+              <button type="button" class="person" aria-pressed="false" data-value="Create new"><span class="avatar b"></span> Create new person…</button>
+            </div>
+          </div>
+          <p class="note">Face clusters · aliases · chat participants</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Set</div>
+          <h3>Attendees</h3>
+          <p class="prompt">Who was actually there?</p>
+          <div class="stage">
+            <div class="chips" data-group="multi">
+              <button type="button" class="chip" aria-pressed="true" data-value="Alex">Alex</button>
+              <button type="button" class="chip" aria-pressed="true" data-value="Sam">Sam</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Priya">Priya</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="+ add">+ add</button>
+            </div>
+          </div>
+          <p class="note">Calendar vs reality</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Role</div>
+          <h3>Relationship</h3>
+          <p class="prompt">How do you know Priya?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="Coworker"><span class="mark"></span>Coworker</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Friend"><span class="mark"></span>Friend</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Family"><span class="mark"></span>Family</button>
+            </div>
+          </div>
+          <p class="note">Edge types · privacy by role</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- PLACE -->
+    <section class="cat" id="place">
+      <div class="cat-head">
+        <h2>Place</h2>
+        <p>Prefer the pin over typing an address.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Map</div>
+          <h3>Drop a pin</h3>
+          <p class="prompt">Is this where dinner was? Click the map.</p>
+          <div class="stage">
+            <div class="map" id="map-stage" data-map>
+              <div class="pin" style="left:58%;top:42%"></div>
+            </div>
+          </div>
+          <p class="note">GPS clusters · venue snap</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Nearby</div>
+          <h3>Venue list</h3>
+          <p class="prompt">Which place matches this check-in?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="Blue Bottle"><span class="mark"></span>Blue Bottle · 120m</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Sightglass"><span class="mark"></span>Sightglass · 240m</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Neither"><span class="mark"></span>Neither — search</button>
+            </div>
+          </div>
+          <p class="note">Distance as a clue</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Significant</div>
+          <h3>Home / work / other</h3>
+          <p class="prompt">What is this frequent location?</p>
+          <div class="stage">
+            <div class="seg" data-group="single">
+              <button type="button" aria-pressed="true" data-value="Home">Home</button>
+              <button type="button" aria-pressed="false" data-value="Work">Work</button>
+              <button type="button" aria-pressed="false" data-value="Other">Other</button>
+            </div>
+          </div>
+          <p class="note">Few, sticky categories</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Place + open</div>
+          <h3>What did you do here?</h3>
+          <p class="prompt">Pin the place — then say what happened, in your words.</p>
+          <div class="stage">
+            <div class="place-memory">
+              <div class="map place-fixed" aria-hidden="true">
+                <div class="pin" style="left:62%;top:38%"></div>
+              </div>
+              <div class="place-meta">
+                <strong>Blue Bottle · Mint Plaza</strong>
+                <span>Yesterday · 2:14 PM · San Francisco</span>
+              </div>
+              <textarea class="field" placeholder="What did you do here?" data-live="place-memory" rows="2"></textarea>
+            </div>
+          </div>
+          <p class="note">Evidence first · open text second · perfect for visit enrichment</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- MEDIA -->
+    <section class="cat" id="media">
+      <div class="cat-head">
+        <h2>Media</h2>
+        <p>The artifact is the control — pick, crop, or scrub.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Gallery</div>
+          <h3>Pick among images</h3>
+          <p class="prompt">Which screenshot is the receipt?</p>
+          <div class="stage">
+            <div class="thumbs" data-group="single">
+              <button type="button" class="thumb" aria-pressed="false" data-value="Shot 1" aria-label="Shot 1"></button>
+              <button type="button" class="thumb is-on" aria-pressed="true" data-value="Shot 2" aria-label="Shot 2"></button>
+              <button type="button" class="thumb" aria-pressed="false" data-value="Shot 3" aria-label="Shot 3"></button>
+            </div>
+          </div>
+          <p class="note">Near-duplicate disambiguation</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Region</div>
+          <h3>Crop focus</h3>
+          <p class="prompt">Click to cycle the region that matters.</p>
+          <div class="stage">
+            <div class="crop" data-crop data-region="0" role="button" tabindex="0" aria-label="Cycle crop region">
+              <div class="crop-box"></div>
+            </div>
+          </div>
+          <p class="note">Point the model at a subregion</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Scrub</div>
+          <h3>Media moment</h3>
+          <p class="prompt">Jump to when they said the deadline.</p>
+          <div class="stage">
+            <div class="rail-wrap">
+              <div class="rail" data-rail data-value="40" style="--pct:40%" data-media>
+                <div class="rail-track"></div>
+                <div class="rail-fill"></div>
+                <div class="rail-knob" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="40" aria-label="Timestamp"></div>
+              </div>
+              <div class="ends"><span>0:00</span><span id="media-label">2:00</span><span>5:00</span></div>
+            </div>
+          </div>
+          <p class="note">Long media → a timestamp as the answer</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- GRAPH -->
+    <section class="cat" id="graph">
+      <div class="cat-head">
+        <h2>Graph</h2>
+        <p>The canvas is the control — node, edge, or neighborhood.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Node</div>
+          <h3>Tap a hub</h3>
+          <p class="prompt">Who is the hub of this project cluster?</p>
+          <div class="stage">
+            <div class="graph" data-graph-nodes>
+              <svg viewBox="0 0 220 90" aria-hidden="true">
+                <line class="link" x1="40" y1="45" x2="110" y2="45" />
+                <line class="link" x1="110" y1="45" x2="175" y2="22" />
+                <line class="link" x1="110" y1="45" x2="170" y2="68" />
+                <circle class="node" cx="40" cy="45" r="9" data-value="Leaf A" tabindex="0" role="button" />
+                <circle class="node is-on" cx="110" cy="45" r="12" data-value="Hub" tabindex="0" role="button" />
+                <circle class="node" cx="175" cy="22" r="8" data-value="Leaf B" tabindex="0" role="button" />
+                <circle class="node" cx="170" cy="68" r="8" data-value="Leaf C" tabindex="0" role="button" />
+              </svg>
+            </div>
+          </div>
+          <p class="note">Disambiguate visually</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Edge</div>
+          <h3>Connection type</h3>
+          <p class="prompt">Is this link “manages” or “friends with”?</p>
+          <div class="stage">
+            <div class="graph" data-graph-edge>
+              <svg viewBox="0 0 220 70">
+                <line class="link is-on" x1="50" y1="35" x2="170" y2="35" />
+                <circle class="node is-on" cx="50" cy="35" r="10" />
+                <circle class="node is-on" cx="170" cy="35" r="10" />
+              </svg>
+            </div>
+            <div class="chips" data-group="single">
+              <button type="button" class="chip" aria-pressed="true" data-value="Coworker">Coworker</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Friend">Friend</button>
+              <button type="button" class="chip" aria-pressed="false" data-value="Reports to">Reports to</button>
+            </div>
+          </div>
+          <p class="note">Edge confirm after a graph click</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- DATA -->
+    <section class="cat" id="data">
+      <div class="cat-head">
+        <h2>Data</h2>
+        <p>Put the evidence in the control — bar, snippet, forecast, diff.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="kind">Chart</div>
+          <h3>Pick a day</h3>
+          <p class="prompt">Which day felt busiest?</p>
+          <div class="stage">
+            <div class="bars" data-group="single">
+              <button type="button" class="bar" style="--h:35%" aria-pressed="false" data-value="Mon" aria-label="Mon"></button>
+              <button type="button" class="bar" style="--h:50%" aria-pressed="false" data-value="Tue" aria-label="Tue"></button>
+              <button type="button" class="bar" style="--h:92%" aria-pressed="true" data-value="Wed" aria-label="Wed"></button>
+              <button type="button" class="bar" style="--h:40%" aria-pressed="false" data-value="Thu" aria-label="Thu"></button>
+              <button type="button" class="bar" style="--h:60%" aria-pressed="false" data-value="Fri" aria-label="Fri"></button>
+            </div>
+          </div>
+          <p class="note">Stats as a prompt surface</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Snippet</div>
+          <h3>Source of truth</h3>
+          <p class="prompt">Which note wins?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="A"><span class="mark"></span>“Ship by Friday — Alex”</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="B"><span class="mark"></span>“Deadline moved to Mon”</button>
+            </div>
+          </div>
+          <p class="note">Conflict resolution between memories</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Forecast</div>
+          <h3>Accept a slot</h3>
+          <p class="prompt">Block deep work here tomorrow?</p>
+          <div class="stage">
+            <div class="opts" data-group="single" data-kind="radio">
+              <button type="button" class="opt" data-kind="radio" aria-checked="true" data-value="Tue AM"><span class="mark"></span>Tue 9:00–11:00 · high fit</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="Tue PM"><span class="mark"></span>Tue 14:00–16:00 · medium</button>
+              <button type="button" class="opt" data-kind="radio" aria-checked="false" data-value="None"><span class="mark"></span>None of these</button>
+            </div>
+          </div>
+          <p class="note">HBPE / planner as selectable cards</p>
+        </article>
+
+        <article class="card">
+          <div class="kind">Diff</div>
+          <h3>Accept edits</h3>
+          <p class="prompt">Update this person record?</p>
+          <div class="stage">
+            <div class="field" style="min-height:auto; cursor:default" tabindex="-1">
+              name: Alex → <strong>Alex Rivera</strong><br />
+              org: — → <strong>Acme</strong>
+            </div>
+            <div class="row" data-group="single">
+              <button type="button" class="pill is-on" aria-pressed="true" data-value="Accept all">Accept all</button>
+              <button type="button" class="pill" aria-pressed="false" data-value="Pick fields">Pick fields…</button>
+            </div>
+          </div>
+          <p class="note">Structured yes with visibility</p>
+        </article>
+      </div>
+    </section>
+
+    <aside class="principles">
+      <h2>Principles</h2>
+      <ol>
+        <li>One job per selector — two answers means two steps.</li>
+        <li>Evidence in the frame beats asking someone to recall from scratch.</li>
+        <li>Ontology first, text last: choice → scale → short → long.</li>
+        <li>Always allow escape: Skip, Not sure, Other, None.</li>
+        <li>Log the selector type with the answer so analytics stay honest.</li>
+      </ol>
+    </aside>
+
+    <footer class="footer">
+      <code>docs/design/selectors-catalog.html</code> · interactive ideation · not wired to product routes
+    </footer>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const toastEl = document.getElementById('toast');
+      let toastTimer;
+
+      function toast(msg) {
+        toastEl.textContent = msg;
+        toastEl.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+      }
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') toastEl.classList.remove('show');
+      });
+
+      function selectedValues(group) {
+        const nodes = [...group.querySelectorAll('[aria-pressed="true"], [aria-checked="true"]')];
+        return nodes.map((n) => n.dataset.value || n.textContent.trim()).filter(Boolean);
+      }
+
+      function announce(group, el) {
+        const card = group.closest('.card');
+        const title = card?.querySelector('h3')?.textContent?.trim() || 'Selector';
+        const multi = group.dataset.group === 'multi';
+        const values = selectedValues(group);
+        if (!values.length && el?.dataset?.value) {
+          toast(`${title}: ${el.dataset.value}`);
+          return;
+        }
+        toast(`${title}: ${values.join(', ') || '—'}`);
+      }
+
+      function setPressed(el, on, attr = 'aria-pressed') {
+        el.setAttribute(attr, on ? 'true' : 'false');
+        el.classList.toggle('is-on', on);
+      }
+
+      // Generic single / multi groups
+      document.querySelectorAll('[data-group]').forEach((group) => {
+        group.addEventListener('click', (e) => {
+          const el = e.target.closest('[data-value], .opt, .person, .bar, .thumb, .pill, .chip, .seg button, .scale button');
+          if (!el || !group.contains(el)) return;
+          if (el.matches('input, textarea')) return;
+
+          const multi = group.dataset.group === 'multi';
+          const checkAttr = el.hasAttribute('aria-checked') ? 'aria-checked' : 'aria-pressed';
+
+          if (multi) {
+            const next = el.getAttribute(checkAttr) !== 'true';
+            setPressed(el, next, checkAttr);
+          } else {
+            group.querySelectorAll(`[${checkAttr}], .is-on`).forEach((n) => {
+              if (n.hasAttribute(checkAttr) || n.classList.contains('is-on') || n.matches('button, .opt, .person, .bar, .thumb, .pill, .chip')) {
+                setPressed(n, false, n.hasAttribute('aria-checked') ? 'aria-checked' : 'aria-pressed');
+              }
+            });
+            setPressed(el, true, checkAttr);
+          }
+
+          // scaffold chips insert text
+          if (group.hasAttribute('data-scaffold') && el.dataset.insert) {
+            const field = document.getElementById('scaffold-field');
+            if (field && el.getAttribute('aria-pressed') === 'true') {
+              const needsBreak = field.value && !field.value.endsWith('\n') ? '\n' : '';
+              field.value += needsBreak + el.dataset.insert;
+              field.focus();
+            }
+          }
+
+          announce(group, el);
+        });
+      });
+
+      // Live text fields
+      document.querySelectorAll('[data-live]').forEach((field) => {
+        field.addEventListener('change', () => {
+          const v = field.value.trim();
+          if (v) toast(`Saved: “${v.slice(0, 48)}${v.length > 48 ? '…' : ''}”`);
+        });
+      });
+
+      // People filter
+      const filterInput = document.querySelector('[data-filter="people"]');
+      const peopleBox = document.getElementById('people-filter');
+      filterInput?.addEventListener('input', () => {
+        const q = filterInput.value.trim().toLowerCase();
+        peopleBox.querySelectorAll('[data-filter-text]').forEach((row) => {
+          row.style.display = !q || row.dataset.filterText.includes(q) ? '' : 'none';
+        });
+      });
+
+      // Single rails
+      function privacyLabel(pct) {
+        if (pct < 25) return 'Open';
+        if (pct < 50) return 'Friends';
+        if (pct < 75) return 'Mostly vault';
+        return 'Vault';
+      }
+      function mediaLabel(pct) {
+        const sec = Math.round((pct / 100) * 300);
+        const m = Math.floor(sec / 60);
+        const s = String(sec % 60).padStart(2, '0');
+        return `${m}:${s}`;
+      }
+
+      function bindRail(rail) {
+        const knob = rail.querySelector('.rail-knob:not([data-end])') || rail.querySelector('.rail-knob');
+        if (!knob || rail.classList.contains('range')) return;
+
+        const set = (pct, announceChange) => {
+          pct = Math.min(100, Math.max(0, pct));
+          rail.style.setProperty('--pct', pct + '%');
+          rail.dataset.value = String(Math.round(pct));
+          knob.setAttribute('aria-valuenow', String(Math.round(pct)));
+          if (rail.hasAttribute('data-media')) {
+            document.getElementById('media-label').textContent = mediaLabel(pct);
+          } else {
+            const label = document.getElementById('privacy-label');
+            if (label) label.textContent = privacyLabel(pct);
+          }
+          if (announceChange) {
+            const card = rail.closest('.card');
+            const title = card?.querySelector('h3')?.textContent?.trim() || 'Slider';
+            const shown = rail.hasAttribute('data-media')
+              ? mediaLabel(pct)
+              : privacyLabel(pct);
+            toast(`${title}: ${shown}`);
+          }
+        };
+
+        const posToPct = (clientX) => {
+          const rect = rail.getBoundingClientRect();
+          return ((clientX - rect.left) / rect.width) * 100;
+        };
+
+        let dragging = false;
+        const onMove = (clientX) => set(posToPct(clientX), false);
+        const onUp = (clientX) => {
+          dragging = false;
+          rail.classList.remove('is-drag');
+          set(posToPct(clientX), true);
+          window.removeEventListener('pointermove', onPointerMove);
+          window.removeEventListener('pointerup', onPointerUp);
+        };
+        const onPointerMove = (e) => onMove(e.clientX);
+        const onPointerUp = (e) => onUp(e.clientX);
+
+        rail.addEventListener('pointerdown', (e) => {
+          if (e.button != null && e.button !== 0) return;
+          dragging = true;
+          rail.classList.add('is-drag');
+          onMove(e.clientX);
+          window.addEventListener('pointermove', onPointerMove);
+          window.addEventListener('pointerup', onPointerUp);
+        });
+
+        knob.addEventListener('keydown', (e) => {
+          let pct = Number(rail.dataset.value || 50);
+          if (e.key === 'ArrowRight' || e.key === 'ArrowUp') pct += 5;
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') pct -= 5;
+          else if (e.key === 'Home') pct = 0;
+          else if (e.key === 'End') pct = 100;
+          else return;
+          e.preventDefault();
+          set(pct, true);
+        });
+      }
+
+      document.querySelectorAll('[data-rail]').forEach(bindRail);
+
+      // Range rail
+      document.querySelectorAll('[data-range]').forEach((rail) => {
+        let a = 28, b = 64;
+        const months = ['Mar', 'Apr', 'May', 'Jun'];
+        const label = document.getElementById('range-label');
+
+        const render = (announceChange) => {
+          rail.style.setProperty('--a', a + '%');
+          rail.style.setProperty('--b', b + '%');
+          const i0 = Math.min(3, Math.floor((a / 100) * 3));
+          const i1 = Math.min(3, Math.floor((b / 100) * 3));
+          const text = i0 === i1 ? months[i0] : `${months[i0]} – ${months[i1]}`;
+          if (label) label.textContent = text;
+          if (announceChange) toast(`Trip window: ${text}`);
+        };
+
+        const posToPct = (clientX) => {
+          const rect = rail.getBoundingClientRect();
+          return Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+        };
+
+        let active = null;
+        const onPointerMove = (e) => {
+          const pct = posToPct(e.clientX);
+          if (active === 'a') a = Math.min(pct, b - 4);
+          else b = Math.max(pct, a + 4);
+          render(false);
+        };
+        const onPointerUp = () => {
+          rail.classList.remove('is-drag');
+          render(true);
+          active = null;
+          window.removeEventListener('pointermove', onPointerMove);
+          window.removeEventListener('pointerup', onPointerUp);
+        };
+
+        rail.querySelectorAll('.rail-knob').forEach((knob) => {
+          knob.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            active = knob.dataset.end;
+            rail.classList.add('is-drag');
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', onPointerUp);
+          });
+        });
+
+        rail.addEventListener('pointerdown', (e) => {
+          if (e.target.classList.contains('rail-knob')) return;
+          const pct = posToPct(e.clientX);
+          active = Math.abs(pct - a) < Math.abs(pct - b) ? 'a' : 'b';
+          if (active === 'a') a = Math.min(pct, b - 4);
+          else b = Math.max(pct, a + 4);
+          rail.classList.add('is-drag');
+          render(false);
+          window.addEventListener('pointermove', onPointerMove);
+          window.addEventListener('pointerup', onPointerUp);
+        });
+
+        render(false);
+      });
+
+      // Rank drag
+      const rank = document.getElementById('rank-list');
+      let dragEl = null;
+      rank?.querySelectorAll('.rank-row').forEach((row) => {
+        row.addEventListener('dragstart', () => {
+          dragEl = row;
+          row.classList.add('is-lift');
+        });
+        row.addEventListener('dragend', () => {
+          row.classList.remove('is-lift');
+          dragEl = null;
+          [...rank.children].forEach((r, i) => {
+            r.querySelector('.rank-n').textContent = String(i + 1);
+          });
+          const order = [...rank.children].map((r) => r.dataset.value).join(' → ');
+          toast(`Rank: ${order}`);
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          if (!dragEl || dragEl === row) return;
+          const rect = row.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          rank.insertBefore(dragEl, before ? row : row.nextSibling);
+        });
+      });
+
+      // Map pin
+      const map = document.getElementById('map-stage');
+      map?.addEventListener('click', (e) => {
+        const rect = map.getBoundingClientRect();
+        const x = ((e.clientX - rect.left) / rect.width) * 100;
+        const y = ((e.clientY - rect.top) / rect.height) * 100;
+        const pin = map.querySelector('.pin');
+        pin.style.left = x + '%';
+        pin.style.top = y + '%';
+        pin.classList.remove('pop');
+        void pin.offsetWidth;
+        pin.classList.add('pop');
+        toast(`Pin: ${Math.round(x)}%, ${Math.round(y)}%`);
+      });
+
+      // Crop cycle
+      const crop = document.querySelector('[data-crop]');
+      crop?.addEventListener('click', () => {
+        const next = (Number(crop.dataset.region || 0) + 1) % 3;
+        crop.dataset.region = String(next);
+        toast(`Region ${next + 1} of 3`);
+      });
+      crop?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          crop.click();
+        }
+      });
+
+      // Graph nodes
+      document.querySelectorAll('[data-graph-nodes] .node').forEach((node) => {
+        const activate = () => {
+          const root = node.closest('[data-graph-nodes]');
+          root.querySelectorAll('.node').forEach((n) => n.classList.remove('is-on'));
+          node.classList.add('is-on');
+          toast(`Node: ${node.dataset.value}`);
+        };
+        node.addEventListener('click', activate);
+        node.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activate();
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

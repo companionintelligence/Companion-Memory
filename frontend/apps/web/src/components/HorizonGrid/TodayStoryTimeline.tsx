@@ -1,12 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { gql, useQuery } from '@apollo/client';
 import timelineJsUrl from '@knight-lab/timelinejs/dist/js/timeline.js?url';
 import '@knight-lab/timelinejs/dist/css/timeline.css';
 
 import type { ScheduleEvent } from '@/api/useScheduleService';
 
-import { buildTodayTimelineData } from './scheduleToTimeline';
+import { buildTimelineData, eventFallsOnDay } from './scheduleToTimeline';
 import './timelineTheme.css';
+
+const TIMELINE_LOOKBACK_DAYS = 14;
+const TIMELINE_LOOKAHEAD_DAYS = 21;
+
+const GET_TIMELINE_EVENTS = gql(`
+  query GetTimelineEvents($from: DateTime!, $to: DateTime!) {
+    eventsInRange(from: $from, to: $to) {
+      id
+      title
+      description
+      startTime
+      endTime
+      isAllDay
+      status
+      category
+      locationName
+      sourceSystem
+      externalSyncStatus
+      metadata
+    }
+  }
+`);
 
 interface TodayStoryTimelineProps {
   events: readonly ScheduleEvent[];
@@ -102,16 +125,48 @@ function timelineBgFromTheme(): Rgb {
   return cssColorToRgb('var(--card)', isDark ? { r: 20, g: 28, b: 32 } : { r: 250, g: 250, b: 248 });
 }
 
+function startOfLocalDay(date: Date): Date {
+  const day = new Date(date);
+  day.setHours(0, 0, 0, 0);
+
+  return day;
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+
+  return next;
+}
+
 /**
- * TimelineJS3 storytelling strip for "today" — sits above the week grid.
+ * TimelineJS3 storytelling strip — sits above the week grid.
  *
- * Fixed height; TimelineJS owns its own internal scroll/nav. Dense capture days
- * are sampled (see `scheduleToTimeline`) so the deck stays a readable story,
- * not a dump of every browser tick.
+ * Hidden when the focused day has nothing on it. When a day with events is
+ * opened, the deck is the surrounding schedule so the TimelineJS nav can walk
+ * forward and back from that day.
  */
 export function TodayStoryTimeline({ events, day }: TodayStoryTimelineProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const data = useMemo(() => buildTodayTimelineData(events, day), [events, day]);
+  const dayHasEvents = useMemo(() => events.some((event) => eventFallsOnDay(event, day)), [events, day]);
+  const range = useMemo(() => {
+    const start = startOfLocalDay(day);
+
+    return {
+      from: addDays(start, -TIMELINE_LOOKBACK_DAYS).toISOString(),
+      to: addDays(start, TIMELINE_LOOKAHEAD_DAYS).toISOString(),
+    };
+  }, [day]);
+
+  const { data: fetched } = useQuery<{ eventsInRange?: ScheduleEvent[] | null }>(GET_TIMELINE_EVENTS, {
+    variables: range,
+    skip: !dayHasEvents,
+    fetchPolicy: 'cache-and-network',
+    errorPolicy: 'all',
+  });
+
+  const storyEvents = fetched?.eventsInRange ?? events;
+  const { data, startAtSlide } = useMemo(() => buildTimelineData(storyEvents, day), [storyEvents, day]);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [themeKey, setThemeKey] = useState(() =>
@@ -164,7 +219,8 @@ export function TodayStoryTimeline({ events, day }: TodayStoryTimelineProps) {
               timenav_height_percentage: 35,
               marker_height_min: 24,
               marker_padding: 3,
-              start_at_slide: 0,
+              // Title is slide 0; land on the first event of the focused day.
+              start_at_slide: startAtSlide + 1,
               hash_bookmark: false,
               default_bg_color: timelineBgFromTheme(),
               font: 'Default',
@@ -185,19 +241,21 @@ export function TodayStoryTimeline({ events, day }: TodayStoryTimelineProps) {
       cancelled = true;
       host.replaceChildren();
     };
-  }, [data, themeKey]);
+  }, [data, startAtSlide, themeKey]);
 
-  if (data.events.length === 0) {
+  if (!dayHasEvents || data.events.length === 0) {
     return null;
   }
 
+  const heading = day.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+
   return (
     <section
-      aria-label="Today as a story"
+      aria-label={`${heading} as a story`}
       className="schedule-today-timeline overflow-hidden rounded-lg border border-border/80 bg-card/40 shadow-sm"
     >
       <div className="flex items-baseline justify-between gap-3 border-b border-border/60 px-3 py-2">
-        <h3 className="text-sm font-semibold text-foreground">Today</h3>
+        <h3 className="text-sm font-semibold text-foreground">{heading}</h3>
         <span className="text-[11px] tabular-nums text-foreground/80">{data.events.length} slides</span>
       </div>
       {error ? (

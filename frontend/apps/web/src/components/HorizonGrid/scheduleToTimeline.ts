@@ -124,24 +124,20 @@ function isEmbeddableMedia(url: string): boolean {
   }
 }
 
-/**
- * Rank events for the story strip: calendar / non-browser first, then longer
- * visits, then unique titles — truncated to MAX_SLIDES.
- */
-export function selectTodayStoryEvents(events: readonly ScheduleEvent[], day: Date): ScheduleEvent[] {
-  const start = new Date(day);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+export function localDayKey(date: Date): string {
+  const day = new Date(date);
+  day.setHours(0, 0, 0, 0);
 
-  const todays = events.filter((event) => {
-    const t = new Date(event.startTime).getTime();
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+}
 
-    return t >= start.getTime() && t < end.getTime();
-  });
+export function eventFallsOnDay(event: ScheduleEvent, day: Date): boolean {
+  return localDayKey(new Date(event.startTime)) === localDayKey(day);
+}
 
-  const calendar = todays.filter((e) => !isBrowserCapture(e));
-  const browsing = todays.filter((e) => isBrowserCapture(e));
+function sampleDay(eventsOnDay: ScheduleEvent[]): ScheduleEvent[] {
+  const calendar = eventsOnDay.filter((event) => !isBrowserCapture(event));
+  const browsing = eventsOnDay.filter((event) => isBrowserCapture(event));
 
   browsing.sort((a, b) => {
     const d = durationMs(b) - durationMs(a);
@@ -152,7 +148,6 @@ export function selectTodayStoryEvents(events: readonly ScheduleEvent[], day: Da
     return a.title.localeCompare(b.title);
   });
 
-  // Prefer distinct titles so 40 YouTube ticks don't monopolise the deck.
   const seenTitles = new Set<string>();
   const uniqueBrowsing: ScheduleEvent[] = [];
   for (const event of browsing) {
@@ -165,29 +160,96 @@ export function selectTodayStoryEvents(events: readonly ScheduleEvent[], day: Da
     uniqueBrowsing.push(event);
   }
 
-  const merged = [...calendar, ...uniqueBrowsing].sort(
+  return [...calendar, ...uniqueBrowsing].sort(
     (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
   );
+}
 
-  return merged.slice(0, MAX_SLIDES);
+/**
+ * Story slides around `focusDay`: that day's events stay complete, then
+ * neighbours fill in so TimelineJS can walk forward and back.
+ */
+export function selectStoryEvents(
+  events: readonly ScheduleEvent[],
+  focusDay: Date,
+  max = MAX_SLIDES,
+): { events: ScheduleEvent[]; startAtSlide: number } {
+  const buckets = new Map<string, ScheduleEvent[]>();
+  for (const event of events) {
+    const key = localDayKey(new Date(event.startTime));
+    const bucket = buckets.get(key) ?? [];
+    bucket.push(event);
+    buckets.set(key, bucket);
+  }
+
+  const days = [...buckets.keys()].sort();
+  const sampled = days.map((key) => sampleDay(buckets.get(key) ?? []));
+  const focusKey = localDayKey(focusDay);
+  const focusIndex = days.indexOf(focusKey);
+  if (focusIndex < 0 || sampled[focusIndex]?.length === 0) {
+    return { events: [], startAtSlide: 0 };
+  }
+
+  const chosen: ScheduleEvent[] = [...sampled[focusIndex]];
+  let before = focusIndex - 1;
+  let after = focusIndex + 1;
+  while (chosen.length < max && (before >= 0 || after < sampled.length)) {
+    if (before >= 0) {
+      const extra = sampled[before];
+      const room = max - chosen.length;
+      chosen.unshift(...extra.slice(-room));
+      before -= 1;
+    }
+
+    if (chosen.length >= max) {
+      break;
+    }
+
+    if (after < sampled.length) {
+      const extra = sampled[after];
+      const room = max - chosen.length;
+      chosen.push(...extra.slice(0, room));
+      after += 1;
+    }
+  }
+
+  const startAtSlide = Math.max(
+    0,
+    chosen.findIndex((event) => eventFallsOnDay(event, focusDay)),
+  );
+
+  return { events: chosen, startAtSlide };
+}
+
+/** @deprecated Use selectStoryEvents — kept for the one-day sample. */
+export function selectTodayStoryEvents(events: readonly ScheduleEvent[], day: Date): ScheduleEvent[] {
+  return selectStoryEvents(events, day).events.filter((event) => eventFallsOnDay(event, day));
 }
 
 export function buildTodayTimelineData(events: readonly ScheduleEvent[], day: Date): TimelineJsData {
-  const selected = selectTodayStoryEvents(events, day);
+  return buildTimelineData(events, day).data;
+}
+
+export function buildTimelineData(
+  events: readonly ScheduleEvent[],
+  day: Date,
+): { data: TimelineJsData; startAtSlide: number } {
+  const selected = selectStoryEvents(events, day);
   const label = day.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
   return {
-    scale: 'human',
-    title: {
-      unique_id: 'today-title',
-      start_date: partsOf(day),
-      text: {
-        headline: 'Today',
-        text: `${label} · ${selected.length} moment${selected.length === 1 ? '' : 's'} in focus${
-          events.length > selected.length ? ` (of ${events.length} on the day)` : ''
-        }`,
+    startAtSlide: selected.startAtSlide,
+    data: {
+      scale: 'human',
+      title: {
+        unique_id: 'focus-title',
+        start_date: partsOf(day),
+        text: {
+          headline: label,
+          text: 'Use the timeline to move forward or back through your schedule.',
+        },
       },
+      events: selected.events.map(toSlide),
     },
-    events: selected.map(toSlide),
   };
 }

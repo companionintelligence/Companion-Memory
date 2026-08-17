@@ -6,7 +6,7 @@ import { Events, EventPayloads, OnEvent } from '@ci/domains/events';
 import { Answer, AnswerService, QuestionService } from '@ci/domains/intelligence';
 import { estimateInferredAnswerConfidence, OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
 import { UserContextService } from '@ci/domains/memory';
-import { PersonalizationService, PromotionCandidateService } from '@ci/domains/personalization';
+import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
 const RELATED_ANSWER_LIMIT = 10;
@@ -20,7 +20,6 @@ export class AnswerInferenceListener {
     private readonly searchService: SearchService,
     private readonly userContextService: UserContextService,
     private readonly personalizationService: PersonalizationService,
-    private readonly promotionCandidateService: PromotionCandidateService,
     private readonly ollamaService: OllamaService,
     private readonly logger: LoggerService,
   ) {
@@ -48,15 +47,6 @@ export class AnswerInferenceListener {
     const question = await this.questionService.findById(serviceContext, payload.questionId);
 
     if (!question) {
-      return;
-    }
-
-    if (await this.promotionCandidateService.hasPendingInferredFactReview(ownerId)) {
-      this.logger.log('Answer inference skipped — pending inferred-answer review', {
-        userId: ownerId,
-        questionId: payload.questionId,
-      });
-
       return;
     }
 
@@ -141,25 +131,10 @@ Rules:
     });
 
     if (decision === 'review') {
-      const inferredPayload = {
+      this.logger.log('Inferred answer left unwritten for context prompt', {
+        userId: ownerId,
         questionId: payload.questionId,
-        questionText: question.text,
-        inferredText,
-      };
-
-      const candidate = await this.promotionCandidateService.create(serviceContext, {
-        kind: 'inferred_fact',
-        payload: inferredPayload,
-        confidence: estimateInferredAnswerConfidence(resolvedAnswers.length, dossierBlock.length > 0),
-        sourceJob: 'infer.question.answer',
       });
-
-      if (candidate) {
-        this.logger.log('Inferred answer queued for review', {
-          userId: ownerId,
-          questionId: payload.questionId,
-        });
-      }
 
       return;
     }

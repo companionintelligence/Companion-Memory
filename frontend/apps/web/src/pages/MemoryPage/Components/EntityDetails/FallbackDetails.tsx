@@ -50,8 +50,21 @@ export function FallbackDetails({ entity }: Props) {
   const record = entity as unknown as Record<string, unknown>;
   const kind = prettyKind(entity.__typename);
 
-  const title = firstString(record, ['title', 'name', 'filename', 'label', 'subject']) ?? kind;
-  const body = firstString(record, ['description', 'text', 'content', 'summary', 'snippet', 'preview']);
+  const question =
+    record.question && typeof record.question === 'object'
+      ? firstString(record.question as Record<string, unknown>, ['text', 'question'])
+      : null;
+  const title =
+    question ?? firstString(record, ['title', 'name', 'filename', 'label', 'subject', 'answer']) ?? kind;
+  const body = firstString(record, [
+    'answer',
+    'description',
+    'text',
+    'content',
+    'summary',
+    'snippet',
+    'preview',
+  ]);
   const url = firstString(record, ['url', 'sourceUrl', 'previewUrl']);
   const when = firstDate(record, ['time', 'startTime', 'createdAt', 'updatedAt']);
 

@@ -5,6 +5,7 @@ import type { LoggerService } from '@ci/common/logging';
 import type { RecallService } from '@ci/domains/agent';
 import type { OllamaService } from '@ci/domains/llm';
 import type { UserContextService } from '@ci/domains/memory';
+import { flexWindow, type PlacementService } from '@ci/domains/personalization';
 
 import type { CreateCandidateDto } from '../../types';
 import type { CandidateService } from '../CandidateService';
@@ -79,6 +80,10 @@ function makeService(content: Reply | Reply[]) {
       ollamaService,
       userContextService,
       recallService,
+      {
+        timezoneFor: async () => 'UTC',
+        flexWindow,
+      } as unknown as PlacementService,
       logger,
     ),
     upserted,
@@ -199,7 +204,7 @@ describe('TaskBreakdownService.breakDown', () => {
     expect(proposals[0].rationale).toBe('You wrote: overdue');
     expect(proposals[1].rationale).toBe('You wrote this down.');
     expect(proposals[0].l0_class).toBe('ERRAND');
-    expect(proposals[0].window_start).toBe(AT);
+    expect(proposals[0].window_start).toEqual(flexWindow('UTC', AT).windowStart);
   });
 
   it('is idempotent for one dump and distinct across sittings', async () => {

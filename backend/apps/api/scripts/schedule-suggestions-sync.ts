@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { ActionEntity } from '@ci/domains/intelligence';
+import { PlacementService } from '@ci/domains/personalization';
 import { EventCandidateEntity, CandidateService, SuggestionSyncService } from '@ci/domains/schedule';
 import { SummaryEntity } from '@ci/domains/summaries';
 
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
           } as unknown as CandidateService)
         : candidateService,
       { getProfile: async () => ({ autoSchedule: false }) } as never,
+      new PlacementService(db, null as never),
       logger,
     );
 

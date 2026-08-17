@@ -42,5 +42,7 @@ export { TaskService, PlanningTimeService };
 
 export { TASK_STATUSES };
 
+export { isValidTimezone, localDateInTZ, todayInTZ, zonedWallTimeToUTC } from './time/zoned';
+
 export type { Task, TaskStatus, TaskDependency };
 export type { CreateTaskDto, UpdateTaskDto, FindTasksOptions } from './types';

@@ -590,7 +590,7 @@ describe('HorizonGrid', () => {
   it('renders a committed event on its day', () => {
     render(<HorizonGrid start={MONDAY} days={7} events={[event()]} rhythm={[]} />);
 
-    expect(screen.getByText('Standup')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Standup,/)).toBeInTheDocument();
   });
 
   it('renders an overnight event on both days it touches', () => {
@@ -609,7 +609,7 @@ describe('HorizonGrid', () => {
   it('renders without a rhythm layer — committed time alone is still true', () => {
     render(<HorizonGrid start={MONDAY} days={7} events={[event()]} rhythm={[]} />);
 
-    expect(screen.getByText('Standup')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Standup,/)).toBeInTheDocument();
   });
 
   it('stacks overlapping events so neither is buried under the other', () => {
@@ -676,8 +676,8 @@ describe('HorizonGrid — reachable without a pointer', () => {
   });
 
   it('titles a chip too narrow to show any text of its own', () => {
-    // Narrow ticks keep the day quiet — title lives on the native attribute and
-    // expands on hover, so a bare colour swatch is never nameless.
+    // Narrow ticks keep the day quiet — the name lives on the native title
+    // attribute and in the hover tooltip, so a bare colour swatch is never nameless.
     const triage = event({
       id: 'e2',
       title: 'Triage',
@@ -690,7 +690,7 @@ describe('HorizonGrid — reachable without a pointer', () => {
     expect(screen.getByTitle('Standup')).toBeInTheDocument();
   });
 
-  it('opens a captured visit URL from the expanded narrow title', () => {
+  it('opens a captured visit URL from the event tooltip', async () => {
     const visit = event({
       title: 'Pull requests',
       metadata: { url: 'https://github.com/companionintelligence/CI-Engineering/pulls' },
@@ -698,9 +698,14 @@ describe('HorizonGrid — reachable without a pointer', () => {
 
     render(<HorizonGrid start={MONDAY} days={7} events={[visit]} rhythm={[]} />);
 
-    const link = screen.getByRole('link', { name: 'Pull requests' });
-    expect(link).toHaveAttribute('href', 'https://github.com/companionintelligence/CI-Engineering/pulls');
-    expect(link).toHaveAttribute('target', '_blank');
+    screen.getByLabelText(/^Pull requests,/).focus();
+
+    const links = await screen.findAllByRole('link', { name: 'Pull requests' });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', 'https://github.com/companionintelligence/CI-Engineering/pulls');
+      expect(link).toHaveAttribute('target', '_blank');
+    }
   });
 
   it('gives the rhythm lane a text equivalent instead of colour alone', () => {

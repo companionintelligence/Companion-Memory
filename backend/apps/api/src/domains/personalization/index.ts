@@ -7,58 +7,65 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LlmCoreModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
 
+import './events';
+
+import { ContextPromptController } from './controllers/ContextPromptController';
 import { PersonalizationController } from './controllers/PersonalizationController';
-import { PromotionCandidateEntity } from './entities/PromotionCandidateEntity';
+import { ContextPromptEntity } from './entities/ContextPromptEntity';
+import { ContextPromptPersistListener } from './listeners/ContextPromptPersistListener';
 import { FeedQueuePopulationListener } from './listeners/FeedQueuePopulationListener';
+import { PlacementService } from './placement';
+import { ContextPromptGenerateService } from './services/ContextPromptGenerateService';
+import { ContextPromptPersistService } from './services/ContextPromptPersistService';
+import { ContextPromptService } from './services/ContextPromptService';
 import { CrossTableHydrationService } from './services/CrossTableHydrationService';
 import { LifeContextService } from './services/LifeContextService';
 import { PersonalizationService } from './services/PersonalizationService';
-import { PromotionCandidateService } from './services/PromotionCandidateService';
-import { PromotionReviewPromptService } from './services/PromotionReviewPromptService';
-import { PromotionReviewService } from './services/PromotionReviewService';
 
 @Module({
   imports: [
     EventsModule,
-    TypeOrmModule.forFeature([PromotionCandidateEntity]),
+    TypeOrmModule.forFeature([ContextPromptEntity]),
     MemoryModule,
     GraphModule,
     IntelligenceModule,
     LlmCoreModule,
   ],
-  controllers: [PersonalizationController],
+  controllers: [PersonalizationController, ContextPromptController],
   providers: [
     PersonalizationService,
-    PromotionCandidateService,
-    PromotionReviewPromptService,
+    ContextPromptService,
+    PlacementService,
+    ContextPromptGenerateService,
+    ContextPromptPersistService,
+    ContextPromptPersistListener,
     CrossTableHydrationService,
     LifeContextService,
-    PromotionReviewService,
     FeedQueuePopulationListener,
   ],
   exports: [
     PersonalizationService,
-    PromotionCandidateService,
-    PromotionReviewPromptService,
+    ContextPromptService,
+    PlacementService,
+    ContextPromptGenerateService,
     CrossTableHydrationService,
     LifeContextService,
-    PromotionReviewService,
   ],
 })
 export class PersonalizationModule {}
 
 export {
   PersonalizationService,
-  PromotionCandidateService,
-  PromotionReviewPromptService,
+  ContextPromptService,
+  ContextPromptGenerateService,
   CrossTableHydrationService,
   LifeContextService,
-  PromotionReviewService,
+  PlacementService,
 };
+export { estimateActivityDurationMinutes, flexWindow } from './placement';
 export type {
   PersonalizationProfile,
   TrustMode,
   PersonalizationDecision,
   PersonalizationActionKind,
-  PromotionCandidateKind,
 } from './types';

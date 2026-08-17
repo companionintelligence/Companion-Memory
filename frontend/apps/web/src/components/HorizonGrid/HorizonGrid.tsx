@@ -422,7 +422,7 @@ function packLanes(spans: EventSpan[]): number[] {
   );
 }
 
-/** Folded browser pile — one chip, hover list of titles/links. */
+/** Folded browser pile — one chip; titles live in the tooltip. */
 function ClusterChip({
   item,
   top,
@@ -432,12 +432,11 @@ function ClusterChip({
   item: Extract<PackedItem, { kind: 'cluster' }>;
   top: number;
   colorMode: ColorMode;
-  /** Clicking the stack (not a link in the hover list) unpacks the day. */
+  /** Clicking the stack unpacks the day. */
   onExpandDay?: () => void;
 }) {
   const lead = item.spans[0]?.event;
   const color = lead ? eventColor(lead, colorMode) : classColor('UNKNOWN');
-  const expandLeft = item.leftPct + item.widthPct > 72;
   const count = item.spans.length;
   const label = `${count} overlapping activities`;
 
@@ -451,7 +450,7 @@ function ClusterChip({
           aria-label={label}
           title={label}
           className={cn(
-            'group/chip absolute z-[5] cursor-pointer overflow-visible whitespace-nowrap border text-[11px] leading-[26px]',
+            'group/chip absolute z-[5] cursor-pointer overflow-hidden whitespace-nowrap border text-[11px] leading-[26px]',
             'rounded-md text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring',
             'transition-[filter,z-index] duration-150 hover:z-30 focus-within:z-30 hover:brightness-110',
           )}
@@ -467,10 +466,6 @@ function ClusterChip({
             boxShadow: `2px 2px 0 ${chipFill(color)}, 4px 4px 0 ${chipBorder(color)}`,
           }}
           onClick={(clickEvent) => {
-            if ((clickEvent.target as HTMLElement | null)?.closest?.('a, [data-event-label]')) {
-              return;
-            }
-
             clickEvent.stopPropagation();
             onExpandDay?.();
           }}
@@ -478,55 +473,39 @@ function ClusterChip({
           <span className="px-1.5 font-semibold tabular-nums text-background mix-blend-difference">
             {count}
           </span>
-          <div
-            data-event-label
-            className={cn(
-              'absolute top-1/2 z-40 max-h-56 min-w-[12rem] max-w-[min(22rem,55vw)] -translate-y-1/2',
-              'overflow-y-auto overscroll-contain rounded-md border border-border/70 bg-popover/95',
-              'px-2.5 py-2 shadow-lg backdrop-blur-md [scrollbar-width:thin]',
-              expandLeft ? 'right-[calc(100%+8px)] origin-right' : 'left-[calc(100%+8px)] origin-left',
-              'pointer-events-none scale-[0.98] opacity-0 transition-[opacity,transform] duration-150 ease-out',
-              'group-hover/chip:pointer-events-auto group-hover/chip:scale-100 group-hover/chip:opacity-100',
-              'group-focus-within/chip:pointer-events-auto group-focus-within/chip:scale-100 group-focus-within/chip:opacity-100',
-            )}
-            onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-          >
-            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              {count} in this moment
-            </p>
-            <ul className="space-y-1">
-              {item.spans.map(({ event }) => {
-                const url = eventUrl(event);
-
-                return (
-                  <li key={event.id} className="text-[11px] leading-snug">
-                    {url ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        draggable={false}
-                        className="select-text font-medium text-foreground underline-offset-2 hover:underline"
-                        onClick={(clickEvent) => clickEvent.stopPropagation()}
-                      >
-                        {event.title}
-                      </a>
-                    ) : (
-                      <span className="select-text font-medium">{event.title}</span>
-                    )}
-                    <span className="ml-1.5 text-[10px] text-muted-foreground tabular-nums">
-                      {formatClock(new Date(event.startTime))}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
         </div>
       </Tooltip.Trigger>
       <Tooltip.Content side="top">
-        <p className="text-xs font-medium">{label}</p>
-        <p className="text-[10px] opacity-75">Hover for titles · expand the day to unpack</p>
+        <div className="max-w-64 space-y-1 text-left">
+          <p className="text-xs font-medium">{label}</p>
+          <ul className="space-y-0.5">
+            {item.spans.map(({ event }) => {
+              const url = eventUrl(event);
+
+              return (
+                <li key={event.id} className="text-[11px] leading-snug">
+                  {url ? (
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium underline-offset-2 hover:underline"
+                      onClick={(clickEvent) => clickEvent.stopPropagation()}
+                    >
+                      {event.title}
+                    </a>
+                  ) : (
+                    <span className="font-medium">{event.title}</span>
+                  )}
+                  <span className="ml-1.5 text-[10px] opacity-75 tabular-nums">
+                    {formatClock(new Date(event.startTime))}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="text-[10px] opacity-75">Expand the day to unpack</p>
+        </div>
       </Tooltip.Content>
     </Tooltip>
   );
@@ -539,8 +518,10 @@ interface DayRowProps {
   dayEvents: ScheduleEvent[];
   lookup: (utcDate: string) => RhythmDay | undefined;
   isToday: boolean;
+  isSelected: boolean;
   nowPct: number | null;
   colorMode: ColorMode;
+  onSelectDay?: (dayStart: Date) => void;
   onDropCandidate?: (candidateId: string, startTime: Date) => void;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
 }
@@ -550,8 +531,10 @@ const DayRow = memo(function DayRow({
   dayEvents,
   lookup,
   isToday,
+  isSelected,
   nowPct,
   colorMode,
+  onSelectDay,
   onDropCandidate,
   onMoveEvent,
 }: DayRowProps) {
@@ -597,6 +580,12 @@ const DayRow = memo(function DayRow({
   const isDropTarget = dropPct !== null;
   const acceptsDrops = Boolean(onDropCandidate ?? onMoveEvent);
 
+  const openDayStory = () => {
+    if (dayEvents.length > 0) {
+      onSelectDay?.(dayStart);
+    }
+  };
+
   /** Ratio across the lane for a pointer event, from the lane's own box. */
   const ratioFor = (event: { clientX: number; currentTarget: HTMLElement }): number => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -625,38 +614,38 @@ const DayRow = memo(function DayRow({
         'flex items-stretch gap-3 rounded-lg px-2 py-2 transition-colors [contain-intrinsic-size:auto_120px] [content-visibility:auto]',
         // Today is marked with a rail rather than a wash — a filled row drowns
         // its own rhythm lane, which is the thing you most want to read there.
-        isToday ? 'bg-accent/15 ring-1 ring-inset ring-primary/25' : 'hover:bg-accent/15',
+        isSelected
+          ? 'bg-accent/20 ring-1 ring-inset ring-primary/40'
+          : isToday
+            ? 'bg-accent/15 ring-1 ring-inset ring-primary/25'
+            : 'hover:bg-accent/15',
         isDropTarget && 'bg-primary/10 ring-1 ring-inset ring-primary/60',
       )}
     >
-      {canExpand ? (
-        <button
-          type="button"
+      <button
+        type="button"
+        className={cn(
+          'w-10 shrink-0 rounded-md pt-0.5 text-right outline-none',
+          'cursor-pointer hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
+        )}
+        aria-pressed={isSelected}
+        aria-label={`Show ${dayLabel} as a story`}
+        onClick={() => onSelectDay?.(dayStart)}
+      >
+        <div
           className={cn(
-            'w-10 shrink-0 rounded-md pt-0.5 text-right outline-none',
-            'cursor-pointer hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
+            'text-xs leading-tight',
+            isSelected || isToday ? 'font-medium' : 'text-muted-foreground',
           )}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${dayLabel}`}
-          onClick={() => setExpanded((value) => !value)}
         >
-          <div className={cn('text-xs leading-tight', isToday ? 'font-medium' : 'text-muted-foreground')}>
-            {dayStart.toLocaleDateString([], { weekday: 'short' })}
-          </div>
-          <div className={cn('text-[11px] leading-tight', isToday ? '' : 'text-muted-foreground/70')}>
-            {dayStart.getDate()}
-          </div>
-        </button>
-      ) : (
-        <div className="w-10 shrink-0 pt-0.5 text-right">
-          <div className={cn('text-xs leading-tight', isToday ? 'font-medium' : 'text-muted-foreground')}>
-            {dayStart.toLocaleDateString([], { weekday: 'short' })}
-          </div>
-          <div className={cn('text-[11px] leading-tight', isToday ? '' : 'text-muted-foreground/70')}>
-            {dayStart.getDate()}
-          </div>
+          {dayStart.toLocaleDateString([], { weekday: 'short' })}
         </div>
-      )}
+        <div
+          className={cn('text-[11px] leading-tight', isSelected || isToday ? '' : 'text-muted-foreground/70')}
+        >
+          {dayStart.getDate()}
+        </div>
+      </button>
 
       <div
         className="relative min-w-0 flex-1"
@@ -765,14 +754,18 @@ const DayRow = memo(function DayRow({
                   // Empty day chrome expands; chips/links keep their own jobs.
                   // Do NOT match role=listitem — the day row itself uses that.
                   if (
-                    (clickEvent.target as HTMLElement | null)?.closest?.(
-                      '[data-schedule-chip], a, button, [data-event-label]',
-                    )
+                    (clickEvent.target as HTMLElement | null)?.closest?.('[data-schedule-chip], a, button')
                   ) {
                     return;
                   }
 
-                  setExpanded((value) => !value);
+                  setExpanded((value) => {
+                    if (!value) {
+                      openDayStory();
+                    }
+
+                    return !value;
+                  });
                 }
               : undefined
           }
@@ -786,7 +779,14 @@ const DayRow = memo(function DayRow({
                     item={item}
                     top={lanes[index] * (LANE_HEIGHT_PX + LANE_GAP_PX)}
                     colorMode={colorMode}
-                    onExpandDay={canExpand ? () => setExpanded(true) : undefined}
+                    onExpandDay={
+                      canExpand
+                        ? () => {
+                            setExpanded(true);
+                            openDayStory();
+                          }
+                        : undefined
+                    }
                   />
                 );
               }
@@ -796,7 +796,6 @@ const DayRow = memo(function DayRow({
               const movable = Boolean(onMoveEvent);
               const color = eventColor(event, colorMode);
               const url = eventUrl(event);
-              const expandLeft = leftPct + widthPct > 72;
 
               return (
                 <Tooltip key={`${event.id}-${dayStart.toDateString()}`}>
@@ -811,7 +810,7 @@ const DayRow = memo(function DayRow({
                       onDragStart={
                         movable
                           ? (e) => {
-                              if ((e.target as Element | null)?.closest?.('a, [data-event-label]')) {
+                              if ((e.target as Element | null)?.closest?.('a')) {
                                 e.preventDefault();
 
                                 return;
@@ -851,7 +850,7 @@ const DayRow = memo(function DayRow({
                         'transition-[filter,box-shadow,z-index] duration-150',
                         'hover:z-30 focus-within:z-30',
                         movable && 'cursor-grab active:cursor-grabbing hover:brightness-110',
-                        isNarrow ? 'overflow-visible' : 'overflow-hidden px-2',
+                        isNarrow ? 'overflow-hidden' : 'overflow-hidden px-2',
                         event.status === 'tentative' && 'border-dashed text-muted-foreground',
                         continuesFrom ? 'rounded-l-none border-l-0' : 'rounded-l-md',
                         continuesTo ? 'rounded-r-none border-r-0' : 'rounded-r-md',
@@ -882,45 +881,23 @@ const DayRow = memo(function DayRow({
                         ) : (
                           <span className="block truncate select-text">{event.title}</span>
                         ))}
-
-                      {isNarrow && (
-                        <div
-                          data-event-label
-                          className={cn(
-                            'absolute top-1/2 z-40 max-w-[min(18rem,46vw)] -translate-y-1/2',
-                            expandLeft
-                              ? 'right-[calc(100%+8px)] origin-right'
-                              : 'left-[calc(100%+8px)] origin-left',
-                            'rounded-md border border-border/70 bg-popover/95 px-2.5 py-1.5',
-                            'text-[11px] leading-snug text-popover-foreground shadow-lg backdrop-blur-md',
-                            'pointer-events-none scale-[0.98] opacity-0',
-                            'transition-[opacity,transform] duration-150 ease-out',
-                            'group-hover/chip:pointer-events-auto group-hover/chip:scale-100 group-hover/chip:opacity-100',
-                            'group-focus-within/chip:pointer-events-auto group-focus-within/chip:scale-100 group-focus-within/chip:opacity-100',
-                          )}
-                          onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-                        >
-                          {url ? (
-                            <a
-                              href={url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              draggable={false}
-                              className="select-text font-medium text-foreground underline-offset-2 hover:underline"
-                              onClick={(clickEvent) => clickEvent.stopPropagation()}
-                            >
-                              {event.title}
-                            </a>
-                          ) : (
-                            <span className="select-text font-medium">{event.title}</span>
-                          )}
-                        </div>
-                      )}
                     </div>
                   </Tooltip.Trigger>
                   <Tooltip.Content side="top">
                     <div className="max-w-64 space-y-1 text-left">
-                      <p className="text-xs font-medium">{event.title}</p>
+                      {url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block text-xs font-medium underline-offset-2 hover:underline"
+                          onClick={(clickEvent) => clickEvent.stopPropagation()}
+                        >
+                          {event.title}
+                        </a>
+                      ) : (
+                        <p className="text-xs font-medium">{event.title}</p>
+                      )}
                       <p className="text-[10px] opacity-75">
                         {event.isAllDay
                           ? 'All day'
@@ -963,7 +940,15 @@ const DayRow = memo(function DayRow({
             data-testid="day-expand-toggle"
             className="mt-1 text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() =>
+              setExpanded((value) => {
+                if (!value) {
+                  openDayStory();
+                }
+
+                return !value;
+              })
+            }
           >
             {expanded ? 'Show less' : `Expand day · ${expandedLaneCount} items`}
           </button>
@@ -1055,8 +1040,10 @@ interface VirtualDayListProps {
   eventsByDayKey: Map<string, ScheduleEvent[]>;
   lookup: (utcDate: string) => RhythmDay | undefined;
   today: Date;
+  selectedDay: Date;
   nowPct: number;
   colorMode: ColorMode;
+  onSelectDay?: (dayStart: Date) => void;
   onDropCandidate?: (candidateId: string, startTime: Date) => void;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
 }
@@ -1071,8 +1058,10 @@ function VirtualDayList({
   eventsByDayKey,
   lookup,
   today,
+  selectedDay,
   nowPct,
   colorMode,
+  onSelectDay,
   onDropCandidate,
   onMoveEvent,
 }: VirtualDayListProps) {
@@ -1165,8 +1154,10 @@ function VirtualDayList({
             dayEvents={eventsByDayKey.get(key) ?? []}
             lookup={lookup}
             isToday={isToday}
+            isSelected={sameLocalDay(dayStart, selectedDay)}
             nowPct={isToday ? nowPct : null}
             colorMode={colorMode}
+            onSelectDay={onSelectDay}
             onDropCandidate={onDropCandidate}
             onMoveEvent={onMoveEvent}
           />
@@ -1195,6 +1186,10 @@ interface HorizonGridProps {
    * the chips stay put.
    */
   onMoveEvent?: (eventId: string, startTime: Date) => void;
+  /** Day whose story strip is open. Defaults to today. */
+  selectedDay?: Date;
+  /** Click a weekday label to open that day's story. */
+  onSelectDay?: (dayStart: Date) => void;
   /** What hue encodes: activity class, or the calendar it came from. */
   colorMode?: ColorMode;
   /**
@@ -1224,6 +1219,8 @@ export function HorizonGrid({
   rhythm,
   onDropCandidate,
   onMoveEvent,
+  selectedDay,
+  onSelectDay,
   colorMode = 'type',
   footer,
   className,
@@ -1295,8 +1292,10 @@ export function HorizonGrid({
         eventsByDayKey={eventsByDayKey}
         lookup={lookup}
         today={today}
+        selectedDay={selectedDay ?? today}
         nowPct={nowPct}
         colorMode={colorMode}
+        onSelectDay={onSelectDay}
         onDropCandidate={onDropCandidate ? handleDropCandidate : undefined}
         onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
       />

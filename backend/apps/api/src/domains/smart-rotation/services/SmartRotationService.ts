@@ -102,7 +102,7 @@ export class SmartRotationService {
     switch (workType) {
       case 'graph_link':
       case 'graph_enrich':
-      case 'promotion_review':
+      case 'context_prompt':
       case 'hydrate_answers':
       case 'hydrate_inventory':
         return 5;

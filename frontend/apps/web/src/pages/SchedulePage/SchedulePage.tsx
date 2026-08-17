@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { EmptyState, LoadingPage, Portal, usePageTitle } from '@ci/common';
 import { Breadcrumb, Button, IconButton, cn } from '@ci/shadcn';
@@ -149,6 +149,12 @@ export function SchedulePage() {
 
     return { start: from, end: addDays(from, DAYS_IN_VIEW) };
   }, [weekOffset]);
+
+  const [selectedDay, setSelectedDay] = useState(start);
+
+  useEffect(() => {
+    setSelectedDay(start);
+  }, [start]);
 
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
     useScheduleService(start, end);
@@ -327,15 +333,15 @@ export function SchedulePage() {
 
         {showScheduleSurface && (
           <>
-            {/* Today (when on this week), then Possibilities, then the week.
-                Possibilities stays a full-width rail so a drag still runs
-                downward onto a day. */}
+            {/* Story strip when the selected day has events, then Possibilities,
+                then the week. Possibilities stays a full-width rail so a drag
+                still runs downward onto a day. */}
             <div className="flex flex-col gap-4">
               {weekOffset !== 0 && !hasAnything && !fetching && (
                 <p className="text-sm text-muted-foreground">Nothing on the calendar this week.</p>
               )}
 
-              {weekOffset === 0 && <TodayStoryTimeline events={events} day={start} />}
+              <TodayStoryTimeline events={events} day={selectedDay} />
 
               <TaskSlate
                 candidates={candidates}
@@ -353,6 +359,8 @@ export function SchedulePage() {
                 events={events}
                 rhythm={rhythm}
                 colorMode={colorMode}
+                selectedDay={selectedDay}
+                onSelectDay={setSelectedDay}
                 onDropCandidate={handleDrop}
                 onMoveEvent={handleMove}
                 footer={rhythmFooter(generatedAt, rhythmCoversWindow)}

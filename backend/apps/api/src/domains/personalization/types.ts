@@ -34,15 +34,3 @@ export interface DecideActionInput {
   readonly confidence: number;
   readonly hasUserInput?: boolean;
 }
-
-export const PROMOTION_CANDIDATE_KINDS = [
-  'relationship',
-  'entity',
-  'schedule_accept',
-  'inferred_fact',
-] as const;
-
-export type PromotionCandidateKind = (typeof PROMOTION_CANDIDATE_KINDS)[number];
-
-export const PROMOTION_CANDIDATE_STATUSES = ['pending', 'accepted', 'rejected'] as const;
-export type PromotionCandidateStatus = (typeof PROMOTION_CANDIDATE_STATUSES)[number];

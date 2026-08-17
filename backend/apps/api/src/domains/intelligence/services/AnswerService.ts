@@ -58,6 +58,9 @@ export class AnswerService {
       user: {
         id: context.userId,
       },
+      ...(data.answerMethod !== undefined ? { answerMethod: data.answerMethod } : {}),
+      ...(data.answerSource !== undefined ? { answerSource: data.answerSource } : {}),
+      ...(data.sessionContext !== undefined ? { sessionContext: data.sessionContext } : {}),
     });
 
     const entity = await this.answerRepository.save(instance);

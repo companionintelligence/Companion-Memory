@@ -5,19 +5,17 @@ import { Repository } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { ActionEntity } from '@ci/domains/intelligence';
-import { PersonalizationService } from '@ci/domains/personalization';
+import {
+  estimateActivityDurationMinutes,
+  PersonalizationService,
+  PlacementService,
+} from '@ci/domains/personalization';
 import { SummaryEntity } from '@ci/domains/summaries';
 
 import { EventCandidateEntity, type RationaleSource } from '../entities/EventCandidateEntity';
 import type { CreateCandidateDto } from '../types';
 
 import { CandidateService } from './CandidateService';
-
-/** How far ahead an adapted suggestion claims it could happen. */
-const DEFAULT_WINDOW_DAYS = 7;
-
-/** Nothing here is a scheduled commitment, so durations are a starting guess. */
-const DEFAULT_DURATION_MINUTES = 30;
 
 /** Cap per source so one noisy generator cannot flood the slate. */
 const MAX_PER_SOURCE = 25;
@@ -108,6 +106,7 @@ export class SuggestionSyncService {
     private readonly candidateRepository: Repository<EventCandidateEntity>,
     private readonly candidateService: CandidateService,
     private readonly personalizationService: PersonalizationService,
+    private readonly placement: PlacementService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SuggestionSyncService.name);
@@ -120,11 +119,12 @@ export class SuggestionSyncService {
    */
   async sync(context: UserServiceContext): Promise<number> {
     const now = new Date();
-    const windowEnd = new Date(now.getTime() + DEFAULT_WINDOW_DAYS * 86_400_000);
+    const timezone = context.userId ? await this.placement.timezoneFor(context.userId) : 'UTC';
+    const { windowStart, windowEnd } = this.placement.flexWindow(timezone, now);
 
     const proposals = [
-      ...(await this.fromActions(context, now, windowEnd)),
-      ...(await this.fromInsights(context, now, windowEnd)),
+      ...(await this.fromActions(context, windowStart, windowEnd)),
+      ...(await this.fromInsights(context, windowStart, windowEnd)),
     ];
 
     if (proposals.length === 0) {
@@ -175,7 +175,7 @@ export class SuggestionSyncService {
         window_start: windowStart,
         window_end: windowEnd,
         time_flex: 'week' as const,
-        duration_minutes: DEFAULT_DURATION_MINUTES,
+        duration_minutes: estimateActivityDurationMinutes(action.title, action.text),
         dedupe_key: `action:${action.id}`,
         generator: 'adapter/action',
         confidence: priorityToFit(action.priority),
@@ -232,7 +232,7 @@ export class SuggestionSyncService {
           window_start: windowStart,
           window_end: windowEnd,
           time_flex: 'week',
-          duration_minutes: DEFAULT_DURATION_MINUTES,
+          duration_minutes: estimateActivityDurationMinutes(title, detail),
           dedupe_key: `insight:${insight.summaryId}:${index}`,
           generator: 'adapter/insight',
           confidence: insight.confidenceScore ?? 0.5,

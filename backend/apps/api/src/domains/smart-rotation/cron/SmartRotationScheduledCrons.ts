@@ -82,14 +82,14 @@ export class SmartRotationGraphEnrichCron {
   }
 }
 
-/** Surface pending promotion candidates for review — every 4 hours. */
+/** Fill the feed context-prompt slot — every 4 hours. */
 @Injectable()
-export class SmartRotationPromotionReviewCron {
+export class SmartRotationContextPromptCron {
   constructor(private readonly rotationService: SmartRotationService) {}
 
-  @Cron(SMART_ROTATION_CRONS.promotion_review)
+  @Cron(SMART_ROTATION_CRONS.context_prompt)
   async run(): Promise<void> {
-    await this.rotationService.runScheduledWork('promotion_review');
+    await this.rotationService.runScheduledWork('context_prompt');
   }
 }
 

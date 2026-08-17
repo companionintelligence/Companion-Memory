@@ -4,19 +4,13 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import {
-  EXCLUDE_QUESTIONS_WITH_PENDING_INFERRED_REVIEW,
-  EXCLUDE_QUESTIONS_WITH_REJECTED_INFERRED_REVIEW,
-} from '@ci/common/persistence';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
 import { QuestionService } from '@ci/domains/intelligence';
 import { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import {
+  ContextPromptGenerateService,
   CrossTableHydrationService,
   LifeContextService,
-  PersonalizationService,
-  PromotionCandidateService,
-  PromotionReviewService,
 } from '@ci/domains/personalization';
 import { PythonFunctionService } from '@ci/domains/python-functions';
 import { SuggestionSyncService } from '@ci/domains/schedule';
@@ -37,9 +31,7 @@ export class SmartRotationListener {
     private readonly pythonFunctionService: PythonFunctionService,
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly maintenanceOrchestratorService: MaintenanceOrchestratorService,
-    private readonly personalizationService: PersonalizationService,
-    private readonly promotionCandidateService: PromotionCandidateService,
-    private readonly promotionReviewService: PromotionReviewService,
+    private readonly contextPromptGenerateService: ContextPromptGenerateService,
     private readonly crossTableHydrationService: CrossTableHydrationService,
     private readonly lifeContextService: LifeContextService,
     @InjectDataSource()
@@ -70,12 +62,6 @@ export class SmartRotationListener {
       }
 
       case 'answer_infer': {
-        if (await this.promotionCandidateService.hasPendingInferredFactReview(userId)) {
-          this.logger.log('Smart rotation answer infer skipped — pending inferred-answer review', { userId });
-
-          return;
-        }
-
         const questionId = await this.findTopUnansweredQuestionId(userId);
 
         if (!questionId) {
@@ -210,11 +196,10 @@ export class SmartRotationListener {
         return;
       }
 
-      case 'promotion_review': {
-        const context = { userId } as UserServiceContext;
-        const surfaced = await this.promotionReviewService.surfacePendingReviews(context);
+      case 'context_prompt': {
+        const created = await this.contextPromptGenerateService.generateIfEmpty(userId);
 
-        this.logger.log('Smart rotation promotion review', { userId, surfaced });
+        this.logger.log('Smart rotation context prompt', { userId, created });
 
         return;
       }
@@ -279,8 +264,6 @@ export class SmartRotationListener {
             AND a.answer_text IS NOT NULL
             AND TRIM(a.answer_text) <> ''
         )
-        ${EXCLUDE_QUESTIONS_WITH_PENDING_INFERRED_REVIEW}
-        ${EXCLUDE_QUESTIONS_WITH_REJECTED_INFERRED_REVIEW}
       ORDER BY q.created_at ASC
       LIMIT 1;
       `,

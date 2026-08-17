@@ -7,7 +7,7 @@ export const SMART_ROTATION_WORK_LABELS: Record<string, string> = {
   summaries: 'Summaries / dossier',
   graph_link: 'Graph linking',
   graph_enrich: 'Graph enrichment',
-  promotion_review: 'Promotion review',
+  context_prompt: 'Context prompt',
   hydrate_answers: 'Hydrate answers',
   hydrate_inventory: 'Hydrate inventory',
 };

@@ -4,7 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { ActionEntity } from '@ci/domains/intelligence';
-import { PersonalizationService } from '@ci/domains/personalization';
+import { flexWindow, PersonalizationService, PlacementService } from '@ci/domains/personalization';
 import { SummaryEntity } from '@ci/domains/summaries';
 
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
@@ -61,6 +61,13 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
         { provide: getRepositoryToken(EventCandidateEntity), useValue: candidates },
         { provide: CandidateService, useValue: candidateService },
         { provide: PersonalizationService, useValue: personalization },
+        {
+          provide: PlacementService,
+          useValue: {
+            timezoneFor: async () => 'UTC',
+            flexWindow,
+          },
+        },
         { provide: LoggerService, useValue: { setContext: jest.fn(), log: jest.fn(), debug: jest.fn() } },
       ],
     }).compile();
@@ -79,6 +86,18 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
     expect(first.dedupe_key).toBe('action:act-1');
     expect(first.title).toBe('Review goals for Backlog Grooming');
     expect(first.generator).toBe('adapter/action');
+  });
+
+  it('stores a week window from midnight and estimates duration instead of stamping 30', async () => {
+    await setup([action({ title: 'Plan Your Trip to Japan', text: 'research flights and hotels' })]);
+
+    await service.sync(ctx);
+
+    const [first] = proposals();
+    expect(first.duration_minutes).toBe(45);
+    expect(first.window_start.getUTCHours()).toBe(0);
+    expect(first.window_start.getUTCMinutes()).toBe(0);
+    expect(first.window_end.getTime() - first.window_start.getTime()).toBe(7 * 86_400_000);
   });
 
   it('keeps a because on every projected action', async () => {

@@ -31,6 +31,11 @@ codegen): [graphql-api.md](graphql-api.md).
 | [architecture/hub-inference-integration.md](architecture/hub-inference-integration.md) | Getting LLM + embedding config from CI-Hub's inference proxy | design/proposal |
 | [architecture/test-strategy.md](architecture/test-strategy.md) | Test layers, priorities, conventions, coverage ratchet | active |
 
+## Design explorations — [`docs/design/`](design/)
+
+- [design/selectors.md](design/selectors.md) — catalog of one-decision feed / onboarding selectors
+- [design/selectors-catalog.html](design/selectors-catalog.html) — interactive HTML mocks
+
 ## Features
 
 - [saved-search-sharing.md](saved-search-sharing.md) — saved searches: full-filter capture,

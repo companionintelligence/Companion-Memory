@@ -454,7 +454,10 @@ export class OllamaService {
     const availableTools = enableTools ? this.toolsWithinCapability(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
-    const openAiFormat = typeof format === 'string' ? format : undefined;
+    // vLLM / OpenAI-compat only honors `format: 'json'` (json_object). A JSON
+    // Schema object is still useful on the native Ollama path; collapse it here
+    // so structured callers still get JSON rather than prose.
+    const openAiFormat = typeof format === 'string' ? format : format != null ? 'json' : undefined;
 
     const accumulatedMessages: OllamaMessage[] = [];
 

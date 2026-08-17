@@ -2,6 +2,7 @@ import '../styles.css';
 
 import type { MemoryEntity } from '../../useEntityService';
 
+import { AnswerDetails } from './AnswerDetails';
 import { BrowserActivityDetails } from './BrowserActivityDetails';
 import { CommunicationDetails } from './CommunicationDetails';
 import { ConceptDetails } from './ConceptDetails';
@@ -24,6 +25,8 @@ export interface Props {
 
 function getCategoryComponent({ entity }: Props) {
   switch (entity.__typename) {
+    case 'AnswerType':
+      return <AnswerDetails entity={entity} />;
     case 'BrowserActivityType':
       return <BrowserActivityDetails entity={entity} />;
     case 'CommunicationType':

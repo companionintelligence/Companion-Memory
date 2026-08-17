@@ -95,9 +95,6 @@ function makeService(opts: {
   const personalizationService = {
     decideAction: jest.fn().mockResolvedValue('auto'),
   };
-  const promotionCandidateService = {
-    create: jest.fn(),
-  };
 
   const service = new GraphEnrichmentService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,8 +107,6 @@ function makeService(opts: {
     graphQuery as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     personalizationService as any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    promotionCandidateService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     makeLogger() as any,
   );

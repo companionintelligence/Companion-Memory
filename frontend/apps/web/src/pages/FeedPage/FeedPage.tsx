@@ -16,10 +16,10 @@ import { useModalControls } from '@/hooks';
 import { BentoCard } from '../../components/BentoCard';
 import { Carousel } from '../../components/Carousel';
 
+import { ContextPromptCard } from './ContextPromptCard';
 import { FeedModal } from './FeedModal';
 import type { INSIGHT_CARD_FRAGMENT } from './InsightCard';
 import { InsightCard } from './InsightCard';
-import { PromotionReviewCard } from './PromotionReviewCard';
 import { QuestionCard } from './QuestionCard';
 import type { SUMMARY_CARD_FRAGMENT } from './SummaryCard';
 import { SummaryCard } from './SummaryCard';
@@ -425,7 +425,7 @@ export function FeedPage() {
           </div>
         )}
 
-        <PromotionReviewCard />
+        <ContextPromptCard />
 
         {(actionsEnabled || Boolean(question)) && (
           <>

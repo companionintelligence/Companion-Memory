@@ -6,16 +6,13 @@ import { LoggerService } from '@ci/common/logging';
 import { RecallService } from '@ci/domains/agent';
 import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
 import { UserContextService } from '@ci/domains/memory';
+import { estimateActivityDurationMinutes, PlacementService } from '@ci/domains/personalization';
 
 import { type CreateCandidateDto, USER_AUTHORED_GENERATOR_PREFIX } from '../types';
 
 import { CandidateService } from './CandidateService';
 
 /** How far ahead a brain-dumped task claims it could happen. */
-const DEFAULT_WINDOW_DAYS = 7;
-
-/** Fallback when the model gives no duration. Same starting guess the adapters use. */
-const DEFAULT_DURATION_MINUTES = 30;
 
 /** Bound the model's output. A dump that yields 40 cards has not been broken down, it has been transcribed. */
 const MAX_TASKS = 12;
@@ -164,6 +161,7 @@ export class TaskBreakdownService {
     private readonly ollamaService: OllamaService,
     private readonly userContextService: UserContextService,
     private readonly recallService: RecallService,
+    private readonly placement: PlacementService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(TaskBreakdownService.name);
@@ -219,7 +217,8 @@ export class TaskBreakdownService {
       return [];
     }
 
-    const windowEnd = new Date(at.getTime() + DEFAULT_WINDOW_DAYS * 86_400_000);
+    const timezone = context.userId ? await this.placement.timezoneFor(context.userId) : 'UTC';
+    const { windowStart, windowEnd } = this.placement.flexWindow(timezone, at);
     // One dump is one batch: the index alone would collide across dumps, and the
     // raw text alone would collide if the user submits the same list twice on
     // purpose. Together they make re-submitting the same dump idempotent within
@@ -233,10 +232,10 @@ export class TaskBreakdownService {
       // one, and for a hand-written task the honest answer is "you said so".
       rationale: task.detail ? `You wrote: ${task.detail}` : 'You wrote this down.',
       rationale_sources: [{ kind: 'answer', id: batch, note: 'typed on the schedule' }],
-      window_start: at,
+      window_start: windowStart,
       window_end: windowEnd,
       time_flex: 'week',
-      duration_minutes: task.duration_minutes ?? DEFAULT_DURATION_MINUTES,
+      duration_minutes: task.duration_minutes ?? estimateActivityDurationMinutes(task.title, task.detail),
       l0_class: task.l0_class,
       dedupe_key: `braindump:${batch}:${index}`,
       generator: `${USER_AUTHORED_GENERATOR_PREFIX}llm`,

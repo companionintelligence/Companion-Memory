@@ -5,14 +5,14 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 import { UserContextService } from '@ci/domains/memory';
 
+import { ContextPromptService } from './ContextPromptService';
 import { PersonalizationService } from './PersonalizationService';
-import { PromotionCandidateService } from './PromotionCandidateService';
 
 export interface LifeOptimizationContext {
   readonly trustMode: string;
   readonly dossierBlock: string;
   readonly recentGraphDeltas: unknown[];
-  readonly pendingPromotions: number;
+  readonly pendingContextPrompts: number;
   readonly insightVolumeMultiplier: number;
 }
 
@@ -22,7 +22,7 @@ export class LifeContextService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly userContextService: UserContextService,
     private readonly personalizationService: PersonalizationService,
-    private readonly promotionCandidateService: PromotionCandidateService,
+    private readonly contextPromptService: ContextPromptService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(LifeContextService.name);
@@ -45,13 +45,13 @@ export class LifeContextService {
       [userId],
     )) as DeltaRow[];
 
-    const pendingPromotions = await this.promotionCandidateService.countPending(userId);
+    const pendingContextPrompts = await this.contextPromptService.countPending(userId);
 
     return {
       trustMode: profile.trustMode,
       dossierBlock,
       recentGraphDeltas: deltaRows.map((r) => r.delta),
-      pendingPromotions,
+      pendingContextPrompts,
       insightVolumeMultiplier: profile.insightVolumeMultiplier,
     };
   }
