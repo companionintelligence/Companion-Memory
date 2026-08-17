@@ -41,6 +41,7 @@ export function mockSavedSearch(
       eventTypes: ['visited'],
       startTime: '2024-06-01T00:00:00.000Z',
       endTime: '2024-06-30T23:59:59.999Z',
+      datePreset: null,
       sortBy: 'time',
       sortOrder: 'desc',
       connectors: ['google-photos'],

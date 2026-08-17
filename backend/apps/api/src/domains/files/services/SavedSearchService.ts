@@ -10,6 +10,7 @@ import { EventService } from '@ci/domains/events';
 
 import { SavedSearch, SavedSearchEntity } from '../entities/SavedSearchEntity';
 import { SavedSearchCreatedEvent, SavedSearchUpdatedEvent, SavedSearchDeletedEvent } from '../events';
+import { DEFAULT_SAVED_SEARCHES } from '../seeds/defaultSavedSearches';
 import type { CreateSavedSearchDto, UpdateSavedSearchDto } from '../types';
 
 const TAG_REGEX = /#([\w-]+)/g;
@@ -43,6 +44,42 @@ export class SavedSearchService {
     });
 
     return SavedSearchEntity.toEgressType(entity);
+  }
+
+  /**
+   * Insert the starter library for a user who has no saved searches yet.
+   * Idempotent: a user who already has any row (including after deleting some
+   * seeds but keeping others) is left alone, so a boot or a revisit cannot
+   * duplicate the catalog. Matches the actions-seed pattern.
+   *
+   * @returns true when the catalog was inserted
+   */
+  async ensureDefaults(context: UserServiceContext): Promise<boolean> {
+    const existing = await this.savedSearchRepository.count({
+      where: { userId: context.userId },
+    });
+
+    if (existing > 0) {
+      return false;
+    }
+
+    const rows = DEFAULT_SAVED_SEARCHES.map((seed) => {
+      const entity = new SavedSearchEntity();
+      entity.id = uuidv7();
+      entity.name = seed.name;
+      entity.description = seed.description;
+      entity.query = seed.query ?? '';
+      entity.entityTypes = seed.entityTypes ?? [];
+      entity.tags = this.assembleTags({ query: seed.query, tags: seed.tags });
+      entity.filters = seed.filters ?? null;
+      entity.userId = context.userId;
+
+      return entity;
+    });
+
+    await this.savedSearchRepository.save(rows);
+
+    return true;
   }
 
   async findAll(context: ServiceContext): Promise<SavedSearch[]> {

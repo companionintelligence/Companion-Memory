@@ -188,6 +188,24 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     expect(input.eventTypes).toEqual(['visited']); // but NOT for filters
   });
 
+  it('resolves a rolling datePreset into start/end so One year ago today still filters', async () => {
+    const { resolver, savedSearchService, execSpy } = makeResolver();
+    savedSearchService.findByShareToken.mockResolvedValue({
+      userId: 'owner-9',
+      query: null,
+      entityTypes: [],
+      tags: [],
+      filters: { datePreset: 'one-year-ago' },
+    });
+
+    await resolver.search(viewerCtx, { shareToken: 'tok' } as SearchInput);
+
+    const [, input] = execSpy.mock.calls[0];
+    expect(input.startTime).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    expect(input.endTime).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    expect(new Date(input.startTime as string).getFullYear()).toBe(new Date().getFullYear() - 1);
+  });
+
   it('handles a shared search with no stored filters (filters column null)', async () => {
     const { resolver, savedSearchService, execSpy } = makeResolver();
     savedSearchService.findByShareToken.mockResolvedValue({

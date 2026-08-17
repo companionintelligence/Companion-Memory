@@ -33,6 +33,7 @@ import { seedNotes } from './seed-notes';
 import { seedPeople } from './seed-people';
 import { seedPlaces } from './seed-places';
 import { seedRelationships } from './seed-relationships';
+import { seedSavedSearches } from './seed-saved-searches';
 import { seedSummaries } from './seed-summaries';
 import { seedThreads } from './seed-threads';
 import { seedUsers } from './seed-users';
@@ -122,6 +123,7 @@ const logger = new LoggerService();
 
   try {
     await seedUsers(module, multibar);
+    await seedSavedSearches(module, multibar);
     await seedPeople(module, multibar);
     await seedAnswers(module, multibar, path.resolve(dataDir, 'data', 'answers.csv'));
     await seedThreads(module, multibar);

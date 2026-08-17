@@ -77,5 +77,9 @@ describe('savedSearchFiltersEdit', () => {
       expect(input).not.toHaveProperty('connectors');
       expect(input).not.toHaveProperty('semantic');
     });
+
+    it('keeps a rolling datePreset so editing a seed does not drop When', () => {
+      expect(toFiltersInput({ datePreset: 'last-week' })).toEqual({ datePreset: 'last-week' });
+    });
   });
 });

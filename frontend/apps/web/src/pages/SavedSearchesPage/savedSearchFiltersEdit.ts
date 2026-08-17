@@ -8,6 +8,7 @@ export interface EditableFilters {
   eventTypes?: string[] | null;
   startTime?: string | null;
   endTime?: string | null;
+  datePreset?: string | null;
   sortBy?: string | null;
   sortOrder?: string | null;
   connectors?: string[] | null;
@@ -94,6 +95,7 @@ export function toFiltersInput(filters: EditableFilters): EditableFilters | null
   setIf('places', list(filters.places));
   setIf('startTime', filters.startTime || undefined);
   setIf('endTime', filters.endTime || undefined);
+  setIf('datePreset', filters.datePreset || undefined);
   setIf('sortBy', filters.sortBy || undefined);
   setIf('sortOrder', filters.sortOrder || undefined);
   setIf('hasLocation', filters.hasLocation ? true : undefined);

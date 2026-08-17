@@ -34,6 +34,8 @@ function makeResolver() {
   const savedSearchService = {
     findByShareToken: jest.fn(),
     setSharing: jest.fn(),
+    ensureDefaults: jest.fn().mockResolvedValue(false),
+    findAll: jest.fn().mockResolvedValue([]),
   };
 
   // Shared search enabled: these tests exercise sharedSavedSearch, so the gate
@@ -104,5 +106,21 @@ describe('SavedSearchResolver.setSavedSearchSharing', () => {
 
     expect(result.success).toBe(false);
     expect(result.savedSearch).toBeUndefined();
+  });
+});
+
+describe('SavedSearchResolver.savedSearches', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('seeds defaults before listing so a first visit has the starter library', async () => {
+    const { resolver, savedSearchService } = makeResolver();
+    savedSearchService.findAll.mockResolvedValue([sampleEntity]);
+
+    const result = await resolver.savedSearches(ownerCtx, { first: 50 });
+
+    expect(savedSearchService.ensureDefaults).toHaveBeenCalledWith({ userId: 'owner-1' });
+    expect(savedSearchService.findAll).toHaveBeenCalledWith({ userId: 'owner-1' });
+    expect(result.totalCount).toBe(1);
+    expect(result.edges[0]?.node.name).toBe('My search');
   });
 });

@@ -17,6 +17,7 @@ function activeFilterDimensions(
     hasLocation?: boolean | null;
     startTime?: string | null;
     endTime?: string | null;
+    datePreset?: string | null;
     eventTypes?: string[] | null;
     semantic?: boolean | null;
   } | null,
@@ -30,7 +31,7 @@ function activeFilterDimensions(
   const dimensions: Array<[boolean, string]> = [
     [Boolean(filters.people?.length), 'Who'],
     [Boolean(filters.places?.length || filters.hasLocation), 'Where'],
-    [Boolean(filters.startTime || filters.endTime), 'When'],
+    [Boolean(filters.startTime || filters.endTime || filters.datePreset), 'When'],
     [Boolean(filters.eventTypes?.length), 'How'],
     [Boolean(filters.connectors?.length), 'Source'],
     [Boolean(filters.semantic), 'Semantic'],
@@ -58,6 +59,7 @@ export const SavedSearchGridItemFragment = gql(`
       eventTypes
       startTime
       endTime
+      datePreset
       sortBy
       sortOrder
       connectors

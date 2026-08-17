@@ -25,6 +25,7 @@ import { FileEntity, type File, type SignedFile } from './entities/FileEntity';
 import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntity';
 import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
 import { MediaDimensionsBackfillListener } from './listeners/MediaDimensionsBackfillListener';
+import { SeedDefaultSavedSearchesListener } from './listeners/SeedDefaultSavedSearchesListener';
 import { FileService } from './services/FileService';
 import { MediaDimensionsService } from './services/MediaDimensionsService';
 import { SavedSearchService } from './services/SavedSearchService';
@@ -40,6 +41,7 @@ import { SavedSearchService } from './services/SavedSearchService';
     MediaDimensionsService,
     FilePreviewGenerationListener,
     MediaDimensionsBackfillListener,
+    SeedDefaultSavedSearchesListener,
   ],
   controllers: [FilesController, BulkFilesController],
   exports: [FileService, SavedSearchService, MediaDimensionsService],
@@ -54,6 +56,8 @@ export type { MediaDimensions } from './services/MediaDimensionsService';
 export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';
 export type { File, SignedFile, SavedSearch };
 export type { SavedSearchFilters } from './types';
+export { resolveSavedSearchDateRange, isRollingDatePreset } from './seeds/resolveDatePreset';
+export { DEFAULT_SAVED_SEARCHES } from './seeds/defaultSavedSearches';
 export {
   FileCreatedEvent,
   FileUpdatedEvent,

@@ -34,6 +34,7 @@ const UPDATE_SAVED_SEARCH = gql(`
           eventTypes
           startTime
           endTime
+          datePreset
           sortBy
           sortOrder
           connectors

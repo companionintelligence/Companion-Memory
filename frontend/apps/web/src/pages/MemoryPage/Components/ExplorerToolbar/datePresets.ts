@@ -1,5 +1,5 @@
 /** Rolling date presets for the Memory explorer When filter. */
-export type DatePreset = 'yesterday' | 'last-week' | 'last-month';
+export type DatePreset = 'yesterday' | 'last-week' | 'last-month' | 'one-year-ago';
 
 export type DatePresetSelection = DatePreset | 'custom';
 
@@ -7,6 +7,7 @@ export const DATE_PRESET_OPTIONS: ReadonlyArray<{ value: DatePresetSelection; la
   { value: 'yesterday', label: 'Yesterday' },
   { value: 'last-week', label: 'Last week' },
   { value: 'last-month', label: 'Last month' },
+  { value: 'one-year-ago', label: 'One year ago' },
   { value: 'custom', label: 'Custom' },
 ];
 
@@ -18,7 +19,7 @@ export const WHEN_PRESET_GRID: ReadonlyArray<{ value: DatePresetSelection; label
   { value: 'last-month', label: 'Last month' },
 ];
 
-const ROLLING_PRESETS = new Set<string>(['yesterday', 'last-week', 'last-month']);
+const ROLLING_PRESETS = new Set<string>(['yesterday', 'last-week', 'last-month', 'one-year-ago']);
 
 export function isRollingDatePreset(value: string | null | undefined): value is DatePreset {
   return Boolean(value && ROLLING_PRESETS.has(value));
@@ -61,6 +62,16 @@ export function resolveDatePreset(preset: DatePreset, now = new Date()): { from:
     return {
       from: startOfLocalDay(from).toISOString(),
       to: endOfLocalDay(now).toISOString(),
+    };
+  }
+
+  if (preset === 'one-year-ago') {
+    const day = new Date(todayStart);
+    day.setFullYear(day.getFullYear() - 1);
+
+    return {
+      from: startOfLocalDay(day).toISOString(),
+      to: endOfLocalDay(day).toISOString(),
     };
   }
 

@@ -149,6 +149,10 @@ export class SavedSearchResolver {
   ): Promise<SavedSearchConnection> {
     const serviceContext = toServiceContext(context);
 
+    // First visit (or a fresh Memory) gets the starter library. No-ops when the
+    // user already has any saved search, so a reboot cannot duplicate seeds.
+    await this.savedSearchService.ensureDefaults(serviceContext);
+
     const entities = await this.savedSearchService.findAll(serviceContext);
 
     const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {

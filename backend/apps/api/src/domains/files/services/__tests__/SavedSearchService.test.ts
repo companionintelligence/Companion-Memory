@@ -1,5 +1,6 @@
 import { type UserServiceContext } from '@ci/common/context';
 
+import { DEFAULT_SAVED_SEARCHES } from '../../seeds/defaultSavedSearches';
 import { SavedSearchService } from '../SavedSearchService';
 
 /**
@@ -15,6 +16,7 @@ function makeRepo() {
   return {
     update: jest.fn(),
     findOne: jest.fn(),
+    count: jest.fn(),
     create: jest.fn((row: Record<string, unknown>) => row),
     save: jest.fn(async (row: Record<string, unknown>) => row),
   };
@@ -166,5 +168,49 @@ describe('SavedSearchService.findByShareToken', () => {
 
     expect(result).toBeNull();
     expect(repo.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('SavedSearchService.ensureDefaults', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('no-ops when the user already has saved searches', async () => {
+    const repo = makeRepo();
+    repo.count.mockResolvedValue(3);
+    const { service } = makeService(repo);
+
+    await expect(service.ensureDefaults(ownerCtx)).resolves.toBe(false);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('inserts the starter catalog once when the user has none', async () => {
+    const repo = makeRepo();
+    repo.count.mockResolvedValue(0);
+    const { service } = makeService(repo);
+
+    await expect(service.ensureDefaults(ownerCtx)).resolves.toBe(true);
+    expect(repo.save).toHaveBeenCalledTimes(1);
+
+    const rows = repo.save.mock.calls[0][0] as unknown as Array<Record<string, unknown>>;
+    expect(rows.length).toBe(DEFAULT_SAVED_SEARCHES.length);
+    expect(rows[0]).toMatchObject({
+      name: 'Recent Entertainment',
+      userId: 'owner-1',
+    });
+    expect(rows.some((row) => row.name === 'All my stuff')).toBe(true);
+    expect(rows.some((row) => row.name === 'Yoga for the Power Mad')).toBe(true);
+    expect(rows.some((row) => row.name === 'Shopping List')).toBe(true);
+  });
+
+  it('extracts hashtags from a seed query into tags', async () => {
+    const repo = makeRepo();
+    repo.count.mockResolvedValue(0);
+    const { service } = makeService(repo);
+
+    await service.ensureDefaults(ownerCtx);
+
+    const rows = repo.save.mock.calls[0][0] as unknown as Array<{ name: string; tags: string[] }>;
+    const diet = rows.find((row) => row.name === 'MicroFlesh Diet');
+    expect(diet?.tags).toEqual(expect.arrayContaining(['NotBeyondMeat', 'PossibleBurger']));
   });
 });

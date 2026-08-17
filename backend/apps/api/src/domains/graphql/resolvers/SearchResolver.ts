@@ -7,7 +7,7 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
-import { FileService, SavedSearchService } from '@ci/domains/files';
+import { FileService, SavedSearchService, resolveSavedSearchDateRange } from '@ci/domains/files';
 import { AnswerService } from '@ci/domains/intelligence';
 import {
   CommunicationService,
@@ -205,6 +205,7 @@ export class SearchResolver {
     // viewer's input), so the full who/where/when/how/sort/semantic set is safe
     // to apply — it can only ever surface what the owner shared.
     const filters = saved.filters ?? {};
+    const dateRange = resolveSavedSearchDateRange(filters);
 
     return this.executeSearch(
       { userId: saved.userId },
@@ -213,8 +214,8 @@ export class SearchResolver {
         includeTypes: saved.entityTypes ?? undefined,
         tags: saved.tags ?? undefined,
         eventTypes: filters.eventTypes,
-        startTime: filters.startTime,
-        endTime: filters.endTime,
+        startTime: dateRange.startTime,
+        endTime: dateRange.endTime,
         connectors: filters.connectors,
         people: filters.people,
         places: filters.places,

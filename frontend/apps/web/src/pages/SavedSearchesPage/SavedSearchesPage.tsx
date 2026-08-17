@@ -35,7 +35,7 @@ export function SavedSearchesPage() {
   usePageTitle('Saved Searches - Companion Intelligence');
 
   const { data, loading } = useQuery(GET_SAVED_SEARCHES, {
-    variables: { first: 50 },
+    variables: { first: 300 },
   });
 
   const [savedSearchToDelete, setSavedSearchToDelete] = useState<FragmentType<
