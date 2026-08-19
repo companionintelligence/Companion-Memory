@@ -658,6 +658,10 @@ describe('a contact card is a person, not a document', () => {
 
   it('still routes a plain file to content, so the file rule is untouched', () => {
     expect(kindFor('file', null)).toBe('import.archive_item');
-    expect(destinationsFor(contactRecord({ kind: kindFor('file', null) })).length).toBeGreaterThan(0);
+    // Pinned to the destination, not merely to "somewhere". The record is
+    // undated so the result is deterministic, and `.length > 0` would have
+    // passed if the file rule regressed from ['content'] to ['events'] --
+    // exactly what this test's name claims to guard.
+    expect(destinationsFor(contactRecord({ kind: kindFor('file', null) }))).toEqual(['content']);
   });
 });
