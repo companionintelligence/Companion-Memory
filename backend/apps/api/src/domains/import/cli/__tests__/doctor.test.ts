@@ -10,8 +10,8 @@ const finding = (
 ): DoctorFinding => ({
   title: 'Something is wrong with the data in a way worth a sentence',
   scope: 'ci.communications',
-  remedy: 'Run the backfill named in the migration header, then re-check.',
-  mirrors: 'db/postgres/migrations/20260819000746_backfill_communications_thread_id_from_import_staging.sql',
+  remedy: 'Fix the parser named in the breakdown, re-import, then re-check.',
+  mirrors: 'db/postgres/migrations/20260809184710_clean_stage_support.sql',
   count: 0,
   breakdown: null,
   sample: null,
@@ -82,7 +82,7 @@ describe('ci-import doctor', () => {
     // Biggest first, so the source most responsible reads first.
     expect(text).toContain('breakdown google_photos=2,090 facebook=8');
     expect(text).toContain('sample    {"event_id":"abc","file_id":"def"}');
-    expect(text).toContain('remedy    Run the backfill');
+    expect(text).toContain('remedy    Fix the parser');
   });
 
   it('hides the clean checks under --failures-only', async () => {

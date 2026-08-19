@@ -66,7 +66,10 @@ describe('doctor check registry', () => {
     // start failing an agent's loop on data that is correct, and demoting one
     // would stop the loop noticing a defect that really shipped.
     expect(findCheck('capture-events-without-content')?.severity).toBe('high');
-    expect(findCheck('comms-missing-thread-id')?.severity).toBe('high');
+    // chat.db really contains messages Apple never joined to a conversation,
+    // so a NULL thread_id can be the honest value and the count never reaches
+    // zero on a real iMessage corpus — not machine-actionable, hence medium.
+    expect(findCheck('comms-missing-thread-id')?.severity).toBe('medium');
     // A calendar legitimately holds events that have not happened yet.
     expect(findCheck('events-dated-in-future')?.severity).toBe('medium');
     // A phone-shaped name is the honest fallback when the export named nobody.
