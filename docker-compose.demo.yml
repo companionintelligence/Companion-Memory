@@ -1,0 +1,83 @@
+# Reviewer-facing demo overlay.
+#
+# Companion Memory is self-hosted, so an App Store / Play reviewer has no appliance
+# to point the app at — and a client with no reviewer-reachable backend is a
+# well-known automatic rejection. This overlay runs an ordinary production stack
+# whose only job is to be reachable, seeded, and safe to leave on the public
+# internet.
+#
+# Layer it ON TOP of the production overlay, never instead of it:
+#
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.production.yml \
+#                  -f docker-compose.demo.yml ...
+#
+# It changes exactly four things, each for a reason:
+#
+#   1. The gateway binds to LOOPBACK only. Production publishes 8642 on every
+#      interface; this box also runs other stacks holding real data, so the only
+#      public path here is the Cloudflare tunnel, and nothing on the LAN or the
+#      tailnet reaches the demo by accident.
+#   2. The HBPE sidecar's AMD GPU device passthrough is removed. Production hard-codes
+#      /dev/kfd + /dev/dri; on a host without them compose refuses to start the
+#      service at all, and the demo does not need GPU inference.
+#   3. The API is given the OIDC/Portal environment. The production overlay passes the
+#      API a FIXED env list that does not include OIDC_ISSUER_URL or APP_BASE_URL —
+#      on a Hub-managed install CI-Hub injects those. Nothing injects them here, so
+#      without this block the reviewer's "Sign in with CI Portal" button dead-ends on
+#      `OIDC initiate blocked: OIDC_ISSUER_URL is not configured`.
+#   4. Seeded demo content is public-facing, so error reporting is pinned to a demo
+#      environment tag rather than inheriting a production one.
+#
+# It deliberately does NOT bring up `powersync` (see docker-compose.yml — the client
+# half is unwired and it holds a replication slot for a reader that does not exist).
+# The deploy script names services explicitly rather than relying on the profile.
+
+services:
+  gateway:
+    # `!override` REPLACES the inherited list. This is load-bearing and easy to get
+    # wrong: compose APPENDS `ports` across files, so without the tag the production
+    # `8642:8642` survives and the demo is published on every interface of a box that
+    # also runs stacks holding real data. Verify after any edit with:
+    #   docker compose -f … config | grep -A4 'ports:'
+    # — exactly one entry, host_ip 127.0.0.1.
+    ports: !override
+      - "127.0.0.1:${DEMO_GATEWAY_PORT:-8642}:8642"
+
+  hbpe-service:
+    # Same reasoning as `ports` above — clear the inherited AMD device list rather
+    # than appending to it.
+    devices: !reset []
+    group_add: !reset []
+
+  api:
+    environment:
+      # --- The reviewer's login path -------------------------------------------
+      # CI-Portal is the IdP the app's "Sign in with CI Portal" already targets.
+      # OIDC_ISSUER_URL must name the SAME Portal the demo account lives on
+      # (production is https://hub.ci.computer; the app's built-in fallback is the
+      # *development* Portal at hub.companionintelligence.com — see
+      # frontend/apps/web/src/pages/DeviceConnectPage/portal-client.ts).
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL, e.g. https://hub.ci.computer}
+      # The public origin, used to build the OIDC redirect_uri. Behind the tunnel the
+      # inbound request host is not the public name, so this must be set explicitly
+      # or the reviewer is redirected somewhere unreachable.
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL, e.g. https://demo.ci.computer}
+      OIDC_NATIVE_REDIRECT_SCHEME: ${OIDC_NATIVE_REDIRECT_SCHEME:-companion}
+      PORTAL_OIDC_ENABLED: ${PORTAL_OIDC_ENABLED:-true}
+      PORTAL_OIDC_ISSUER: ${PORTAL_OIDC_ISSUER:-}
+      PORTAL_OIDC_JWKS_URI: ${PORTAL_OIDC_JWKS_URI:-}
+      PORTAL_OIDC_AUDIENCE: ${PORTAL_OIDC_AUDIENCE:-}
+      CI_CLOUD_URL: ${CI_CLOUD_URL:-}
+      # A reviewer arriving through OIDC has no invite code, so JIT provisioning has
+      # to be allowed or first sign-in fails on a signup-code prompt.
+      ENABLE_REQUIRE_SIGNUP_CODES: ${ENABLE_REQUIRE_SIGNUP_CODES:-false}
+      # --- Chat --------------------------------------------------------------------
+      # Reviewers WILL open the chat screen. Point this at a reachable
+      # OpenAI-compatible endpoint, or accept that chat errors in the demo.
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-}
+      # --- Telemetry ----------------------------------------------------------------
+      SENTRY_ENV: ${SENTRY_ENV:-demo}

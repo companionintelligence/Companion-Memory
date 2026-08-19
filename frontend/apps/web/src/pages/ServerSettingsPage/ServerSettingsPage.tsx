@@ -4,6 +4,7 @@ import { buildApiUrl, getApiBaseUrl, persistApiBaseUrl, resolveHttpOrigin } from
 import { Button, Card, Input, Label } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
+import { TryDemoButton } from '@/components/TryDemoButton';
 import { probeMemoryOrigin } from '@/pages/DeviceConnectPage/portal-client';
 
 type Status = 'idle' | 'testing' | 'error';
@@ -110,6 +111,7 @@ export function ServerSettingsPage() {
             <Button type="submit" className="w-full" disabled={status === 'testing'}>
               {status === 'testing' ? 'Testing…' : 'Test & Connect'}
             </Button>
+            <TryDemoButton disabled={status === 'testing'} />
             <Button
               type="button"
               variant="ghost"

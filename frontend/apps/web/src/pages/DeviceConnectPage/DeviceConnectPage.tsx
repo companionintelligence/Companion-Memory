@@ -4,6 +4,7 @@ import { persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
 import { Button, Card, Input, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
+import { TryDemoButton } from '@/components/TryDemoButton';
 import { useAuth, useCurrentUser } from '@/hooks';
 
 import {
@@ -463,6 +464,7 @@ export function DeviceConnectPage() {
               >
                 Enter a Memory Server URL instead
               </Button>
+              <TryDemoButton disabled={busy || oidcController !== null} />
             </div>
           ) : (
             <div className="flex flex-col gap-3">

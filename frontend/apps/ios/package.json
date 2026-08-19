@@ -5,7 +5,7 @@
   "description": "Native iOS shell (Capacitor) wrapping the @ci/fe-web build as a thin client. Standalone project (NOT a yarn workspace) so the root Yarn PnP install stays intact; it consumes the web build via webDir, not as a dependency.",
   "packageManager": "yarn@4.9.1",
   "scripts": {
-    "build:web": "cd ../../.. && VITE_DISABLE_PWA=true yarn workspace @ci/fe-web build",
+    "build:web": "cd ../../.. && VITE_DISABLE_PWA=true VITE_CI_HUB_ENVIRONMENT=\"${VITE_CI_HUB_ENVIRONMENT:-production}\" VITE_DEMO_SERVER_URL=\"${VITE_DEMO_SERVER_URL:-https://demo.ci.computer}\" yarn workspace @ci/fe-web build",
     "sync:safari-extension": "bash scripts/sync-safari-extension.sh",
     "sync": "cap sync ios && yarn sync:safari-extension",
     "build": "yarn build:web && yarn sync",

@@ -20,6 +20,30 @@ interface ImportMetaEnv {
 
   /** Environment label for Sentry (falls back to Vite's `MODE`). */
   readonly VITE_CI_SERVER_ENVIRONMENT?: string;
+
+  /**
+   * Origin of the hosted, reviewer-facing demo Memory Server, e.g.
+   * `https://demo.ci.computer`. Optional and **https-only** — when unset (or set to a
+   * non-https value) the in-app "Try the demo" affordance does not render at all. Set
+   * by the iOS/Android `build:web` scripts so store builds always carry it; a
+   * self-hoster's own web build has no demo button. See `src/lib/demoServer.ts`.
+   */
+  readonly VITE_DEMO_SERVER_URL?: string;
+
+  /**
+   * Which CI-Portal the native Portal flows target: `production` selects
+   * `hub.ci.computer`, anything else falls back to the **development** Portal at
+   * `hub.companionintelligence.com` (see `pages/DeviceConnectPage/portal-client.ts`).
+   *
+   * The iOS/Android `build:web` scripts pin this to `production`, because the default
+   * is the dev Portal and a store build that keeps it sends an App Review / Play
+   * reviewer to a Portal that does not hold the demo account. `VITE_CI_CLOUD_URL`
+   * still overrides both when an explicit origin is needed.
+   */
+  readonly VITE_CI_HUB_ENVIRONMENT?: string;
+
+  /** Explicit CI-Portal origin; overrides `VITE_CI_HUB_ENVIRONMENT` when set. */
+  readonly VITE_CI_CLOUD_URL?: string;
 }
 
 interface ImportMeta {
