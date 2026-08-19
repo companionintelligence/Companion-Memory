@@ -453,7 +453,15 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
     });
 
     it('preloads edges among busy dots when switching to 3D overview', async () => {
-      const fetchMock = vi.fn(async (input: RequestInfo) => {
+      // The fake routes on the URL alone, but it is *typed* with both of fetch's
+      // parameters: the assertion below reads the init argument back out of
+      // `mock.calls`, and an implementation that declares only `input` types the
+      // call tuple as one element, so indexing `[1]` has no type.
+      type FetchFake = (
+        input: RequestInfo,
+        init?: RequestInit,
+      ) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
+      const fetchMock = vi.fn<FetchFake>(async (input) => {
         const url = typeof input === 'string' ? input : input.url;
 
         if (url.includes('/api/graph/edges')) {
@@ -486,7 +494,7 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
           String(typeof input === 'string' ? input : (input as Request).url).includes('/api/graph/edges'),
         );
         expect(edgeCall).toBeDefined();
-        const body = JSON.parse((edgeCall![1] as RequestInit).body as string) as { ids: string[] };
+        const body = JSON.parse(edgeCall![1]?.body as string) as { ids: string[] };
         expect(body.ids[0]).toBe('user-1');
       } finally {
         globalThis.fetch = previousFetch;
