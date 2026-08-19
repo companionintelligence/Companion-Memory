@@ -20,6 +20,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 import { disconnectAndClearPowerSync } from '@/api/powersync/session';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
+import { safeRedirectPath } from '@/lib/safeRedirect';
 
 const authChannel = new BroadcastChannel('auth');
 
@@ -341,7 +342,10 @@ function useAuth(): ReturnValue {
           setAccessToken(jwt);
         }
 
-        const returnTo = (location.state as { from?: string })?.from ?? '/';
+        // Guarded: router state survives history entries and is not something to
+        // navigate to unchecked. Anything that is not a same-origin relative path
+        // (an absolute URL, or a protocol-relative `//evil.com`) falls back to '/'.
+        const returnTo = safeRedirectPath((location.state as { from?: string })?.from) ?? '/';
         navigate(returnTo, { replace: true });
       } catch (err: unknown) {
         setLoginError(err);

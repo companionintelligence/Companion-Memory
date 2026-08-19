@@ -22,9 +22,13 @@ export function AppletPairPage() {
   }
 
   if (!authToken) {
-    const returnTo = encodeURIComponent(`/pair?token=${pairingToken ?? ''}`);
+    // Match ProtectedRoute: hand the destination to /login as router state under
+    // `from`. That is the key LoginPage and useAuth actually read — the previous
+    // `?returnTo=` query param was read by nothing, so signing in here dropped the
+    // pairing token and landed the user on the home page with no way back.
+    const from = `/pair${pairingToken ? `?token=${encodeURIComponent(pairingToken)}` : ''}`;
 
-    return <Navigate to={`/login?returnTo=${returnTo}`} />;
+    return <Navigate to="/login" state={{ from }} replace />;
   }
 
   if (!pairingToken) {

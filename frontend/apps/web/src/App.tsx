@@ -1,4 +1,4 @@
-import { type ReactNode, lazy, useEffect } from 'react';
+import { type ReactNode, Suspense, lazy, useEffect } from 'react';
 
 import {
   ConnectionModeProvider,
@@ -40,6 +40,7 @@ import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
 
+const AppletPairPage = lazy(() => import('@/pages/AppletPairPage'));
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
 const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
@@ -192,6 +193,25 @@ function AppRoutes() {
             <ProtectedRoute>
               <ProviderPage />
             </ProtectedRoute>
+          }
+        />
+
+        {/*
+          Where CI-Capture (and any other client) sends the user to approve a
+          pairing request: /pair?token=<pairing token>, handled by
+          POST /api/pairing/complete. Deliberately not wrapped in ProtectedRoute —
+          the page runs its own auth check so it can carry the pairing token
+          through the sign-in round-trip, which a bounce to /login would drop. It
+          paints its own full-screen centered card, so it stays outside
+          CenteredLayout too; only the Suspense boundary for the lazy chunk is
+          needed here.
+        */}
+        <Route
+          path="/pair"
+          element={
+            <Suspense fallback={<LoadingPage />}>
+              <AppletPairPage />
+            </Suspense>
           }
         />
 

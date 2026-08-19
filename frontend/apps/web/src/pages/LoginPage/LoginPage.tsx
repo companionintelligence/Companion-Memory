@@ -7,6 +7,7 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom';
 
 import { OidcButton } from '@/components/OidcButton';
 import { useAuth } from '@/hooks';
+import { safeRedirectPath } from '@/lib/safeRedirect';
 
 import { LoginForm, type LoginFormData } from './LoginForm';
 
@@ -19,7 +20,9 @@ export function LoginPage() {
   // Where ProtectedRoute sent us from (e.g. a /shared/<token> deep link). The
   // OIDC sign-in is a full-page navigation that discards router state, so carry
   // the destination through as a query param the callback can return to.
-  const from = (location.state as { from?: string } | null)?.from;
+  // Guarded here as well as server-side (safeRelativePath in OidcController), so a
+  // protocol-relative or absolute value never reaches the outbound URL at all.
+  const from = safeRedirectPath((location.state as { from?: string } | null)?.from) ?? undefined;
   // CI Portal (OIDC) is the primary sign-in path. Email/password is kept behind
   // an opt-in toggle rather than shown as the default, so it isn't the first
   // thing users try where it isn't the configured method.
