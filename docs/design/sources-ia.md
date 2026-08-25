@@ -173,10 +173,14 @@ working:
 
 ## The import surface's own navigation
 
-Inside `/sources/import`, the wizard's three steps **are** the navigation:
-Pick · Export · Sync on the left, with Inbox and History as two toggle buttons
-on the same row. There is no "Import" button, because the steps name that
-surface already.
+Inside `/sources/import`, three pressed-state buttons on the path heading —
+Wizard · Inbox · History — pick the surface, and each click shows that surface
+(re-clicking the one you are on keeps it; it used to toggle back to the wizard).
+Below them the wizard's step row, Pick · Export · Sync, is the wizard's own
+navigation and is shown only with the wizard. (It once stayed up on Inbox and
+History as the way back, with no step current — but a step button never read
+as a way out of the folder view, which is why the wizard has a button of its
+own and the row now goes with it.)
 
 It is deliberately **not** a Radix `Tabs`. A tablist whose displayed panel has
 no trigger is malformed — Radix labels every panel `aria-labelledby` its

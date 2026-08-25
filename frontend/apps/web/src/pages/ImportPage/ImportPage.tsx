@@ -30,14 +30,14 @@ export interface ImportSurfaceProps {
  * onboarding dialog.
  *
  * The wizard is the default surface: pick your services, export each one with
- * the instructions on the card, sync everything staged in one go. Its three
- * steps double as the navigation row, so it needs no tab of its own. Inbox is
+ * the instructions on the card, sync everything staged in one go. Inbox is
  * the batch alternative — a mounted folder to move archives into, imported all
  * at once and consumed as they go. History is every run the appliance has done,
  * with the live pipeline for whatever is still going. Those two are tabs rather
  * than more of the page because the wizard is a flow someone walks once per
  * archive-gathering session, while Inbox and History are what they come back
- * to.
+ * to. The wizard has a tab of its own alongside them; its step row belongs to
+ * the wizard and shows only with it.
  *
  * On /sources/import the tiles stay put and this whole surface scrolls under
  * them — path header, steps, search, catalog — same as Connect and Devices.
@@ -61,14 +61,18 @@ export function ImportSurface({ variant = 'page', onStageChange }: ImportSurface
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Inbox and History ride the path's own heading, level with the name of
-          the thing they belong to. They spent one revision at the end of the
-          step row, which read as a fourth and fifth step of a sequence they are
-          not steps of.
+      {/* Wizard, Inbox and History ride the path's own heading, level with the
+          name of the thing they belong to. Inbox and History spent one revision
+          at the end of the step row, which read as a fourth and fifth step of a
+          sequence they are not steps of.
 
-          What is left below is the step row alone. The steps ARE the import
-          surface — clicking one comes back here from Inbox or History — which
-          is why there is no "Import" button among them.
+          Below is the wizard's step row, and only while the wizard is showing.
+          For a while it stayed up on Inbox and History as the way back — every
+          step a return button, none marked current — but nobody read a step as
+          a way out of the folder view, and three greyed steps over a run list
+          were chrome for a flow you had left. The Wizard button is the way
+          back now, so the row can be what it looks like: where you are in the
+          wizard.
 
           Onboarding shows none of it. History is meaningless on a first run —
           there are no runs to revisit — and the Inbox is the batch path for
@@ -83,33 +87,25 @@ export function ImportSurface({ variant = 'page', onStageChange }: ImportSurface
             actions={
               <div
                 role="group"
-                aria-label="Other import views"
+                aria-label="Import views"
                 className="flex shrink-0 gap-1 rounded-md bg-muted p-1 text-sm"
               >
-                <SurfaceToggle
-                  active={surface === 'inbox'}
-                  onClick={() => setSurface((current) => (current === 'inbox' ? 'import' : 'inbox'))}
-                >
+                <SurfaceToggle active={surface === 'import'} onClick={() => setSurface('import')}>
+                  Wizard
+                </SurfaceToggle>
+                <SurfaceToggle active={surface === 'inbox'} onClick={() => setSurface('inbox')}>
                   Inbox
                 </SurfaceToggle>
-                <SurfaceToggle
-                  active={surface === 'history'}
-                  onClick={() => setSurface((current) => (current === 'history' ? 'import' : 'history'))}
-                >
+                <SurfaceToggle active={surface === 'history'} onClick={() => setSurface('history')}>
                   History
                 </SurfaceToggle>
               </div>
             }
           />
 
-          <WizardSteps
-            step={surface === 'import' ? stage : null}
-            canExport={canExport}
-            onStep={(next) => {
-              handleStage(next);
-              setSurface('import');
-            }}
-          />
+          {surface === 'import' ? (
+            <WizardSteps step={stage} canExport={canExport} onStep={handleStage} />
+          ) : null}
         </>
       ) : null}
 
@@ -180,8 +176,10 @@ function SurfaceToggle({
   return (
     <button
       type="button"
-      // A real toggle: pressing the one you are on returns you to the wizard,
-      // which is what makes `aria-pressed` the honest state for it.
+      // One of three, exactly one pressed: clicking shows that surface and
+      // clicking it again keeps it there. It used to toggle back to the wizard,
+      // which turned a re-click into a surprise trip elsewhere. Not a tablist —
+      // see the test file for why.
       aria-pressed={active}
       onClick={onClick}
       className={cn(

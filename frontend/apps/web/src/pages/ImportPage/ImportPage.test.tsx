@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ImportSurface } from './ImportPage';
@@ -16,13 +16,16 @@ vi.mock('./InboxPanel', () => ({ InboxPanel: () => <div>inbox surface</div> }));
 vi.mock('./HistoryTab', () => ({ HistoryTab: () => <div>history surface</div> }));
 
 /**
- * One machinery, one navigation row: the wizard's three steps are the default
- * surface (the page exists to walk someone through an import), with the Inbox
- * folder and History one click away on the same row. There is no "Import" tab
- * — the steps are it, and clicking one is the way back.
+ * One machinery, one navigation row: the wizard is the default surface (the
+ * page exists to walk someone through an import), with the Inbox folder and
+ * History one click away. Three buttons on the heading — Wizard, Inbox,
+ * History — each showing its surface. The step row is the wizard's own and
+ * shows only with it; it once stayed up on the other surfaces as the way
+ * back, but nobody read a step as the way out of the Inbox.
  *
- * Not a tablist: the wizard has no trigger of its own, and a tablist whose
- * selected panel has no trigger is malformed. Two toggle buttons instead.
+ * Not a tablist: a Radix Tabs unmounts the panel you leave, and the wizard's
+ * state must survive a trip to History (see the last test). Plain pressed
+ * buttons over a hidden-not-unmounted wizard instead.
  */
 describe('ImportSurface', () => {
   // The defect the pinned region exists for: /sources/import opens on Pick — a
@@ -116,14 +119,21 @@ describe('ImportSurface', () => {
   // Level with the name of the path they belong to, not at the end of the step
   // row — where they read as a fourth and fifth step of a sequence they are no
   // part of.
-  it('puts Inbox and History on the heading, not in the step row', () => {
+  it('puts Wizard, Inbox and History on the heading, not in the step row', () => {
     render(<ImportSurface />);
 
-    const views = screen.getByRole('group', { name: /other import views/i });
+    const views = screen.getByRole('group', { name: /import views/i });
 
     expect(views).toBeInTheDocument();
     expect(views.closest('header')).not.toBeNull();
     expect(views.closest('ol')).toBeNull();
+    expect(
+      within(views)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Wizard', 'Inbox', 'History']);
+    // The wizard is showing, and its button says so.
+    expect(within(views).getByRole('button', { name: 'Wizard' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('switches to the Inbox', () => {
@@ -133,26 +143,46 @@ describe('ImportSurface', () => {
     expect(screen.getByText('inbox surface')).toBeInTheDocument();
   });
 
-  it('switches to History, and a step button is the way back', () => {
+  it('switches to History', () => {
     render(<ImportSurface />);
 
     fireEvent.click(screen.getByRole('button', { name: /history/i }));
     expect(screen.getByText('history surface')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /Pick/ }));
-    expect(screen.getByText(/wizard surface/)).toBeInTheDocument();
   });
 
-  it('pressing the surface you are on returns to the wizard', () => {
+  it('the Wizard button is the obvious way back', () => {
+    render(<ImportSurface />);
+
+    const wizard = screen.getByRole('button', { name: 'Wizard' });
+
+    fireEvent.click(screen.getByRole('button', { name: /inbox/i }));
+    expect(wizard).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByText(/wizard surface/)?.closest('.hidden')).not.toBeNull();
+
+    fireEvent.click(wizard);
+    expect(wizard).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('inbox surface')).not.toBeInTheDocument();
+    expect(screen.getByText(/wizard surface/).closest('.hidden')).toBeNull();
+  });
+
+  // These used to toggle: pressing the one you were on bounced you to the
+  // wizard, so a second click on Inbox — to "make sure" — silently left it.
+  it('pressing the surface you are on keeps you there', () => {
     render(<ImportSurface />);
 
     const inbox = screen.getByRole('button', { name: /inbox/i });
 
     fireEvent.click(inbox);
-    expect(inbox).toHaveAttribute('aria-pressed', 'true');
-
     fireEvent.click(inbox);
-    expect(inbox).toHaveAttribute('aria-pressed', 'false');
+    expect(inbox).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('inbox surface')).toBeInTheDocument();
+
+    const history = screen.getByRole('button', { name: /history/i });
+
+    fireEvent.click(history);
+    fireEvent.click(history);
+    expect(history).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('history surface')).toBeInTheDocument();
     expect(screen.queryByText('inbox surface')).not.toBeInTheDocument();
   });
 
@@ -166,20 +196,28 @@ describe('ImportSurface', () => {
     expect(screen.queryAllByRole('tabpanel')).toHaveLength(0);
   });
 
-  it('marks no step current while another surface is showing', () => {
+  it('shows the step row only with the wizard', () => {
     render(<ImportSurface />);
 
     expect(screen.getByRole('button', { name: /Pick/ })).toHaveAttribute('aria-current', 'step');
 
+    // A row of steps over the Inbox is chrome for a flow you have left — and
+    // saying "you are on Pick" while the Inbox is on screen would be a lie.
     fireEvent.click(screen.getByRole('button', { name: /inbox/i }));
+    expect(screen.queryByRole('button', { name: /Pick/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sync/ })).not.toBeInTheDocument();
 
-    // Saying "you are on Pick" while the Inbox is on screen would be a lie.
-    expect(screen.getByRole('button', { name: /Pick/ })).not.toHaveAttribute('aria-current');
+    fireEvent.click(screen.getByRole('button', { name: /history/i }));
+    expect(screen.queryByRole('button', { name: /Pick/ })).not.toBeInTheDocument();
+
+    // Back on the wizard it returns, at the step you were on.
+    fireEvent.click(screen.getByRole('button', { name: 'Wizard' }));
+    expect(screen.getByRole('button', { name: /Pick/ })).toHaveAttribute('aria-current', 'step');
   });
 
   // The defect this file exists to pin: the wizard holds the services you
   // picked, the export card you are on and the runs each card started. It used
-  // to be UNMOUNTED on a trip to History, so coming back via the Export step
+  // to be UNMOUNTED on a trip to History, so coming back to the Export step
   // landed you on an Export screen with nothing in it.
   it('keeps the wizard mounted across a trip to History', () => {
     render(<ImportSurface />);
@@ -192,7 +230,7 @@ describe('ImportSurface', () => {
     expect(wizard).toBeInTheDocument();
     expect(wizard.closest('[hidden], .hidden')).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Pick/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wizard' }));
     expect(screen.getByText(/wizard surface/)).toBe(wizard);
   });
 });
