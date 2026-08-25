@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { WizardSteps } from './WizardSteps';
 
 /**
- * The wizard's navigation row: three steps, whose state (todo/active/done)
+ * The wizard's navigation row: three steps, whose state (pick/export/sync)
  * has to track where the wizard actually is, and whose Export entry is a real
  * gate, not just a visual one: clicking it before anything is picked must not
  * navigate anywhere.
