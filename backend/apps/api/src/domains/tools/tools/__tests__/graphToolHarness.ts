@@ -22,6 +22,7 @@ import { GraphNodeEntity, GraphQueryService, GraphReadService, RelationshipEntit
 
 import type { BaseTool } from '../../core/BaseTool';
 import { NativeToolProvider } from '../../providers/NativeToolProvider';
+import { openGate } from '../../registry/__tests__/gateDouble';
 import { ToolRegistry } from '../../registry/ToolRegistry';
 import { GetEntertainmentPreferencesTool } from '../GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from '../GetFamilyMembersTool';
@@ -435,7 +436,7 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
   ];
 
   const provider = new NativeToolProvider(tools, makeFakeLogger());
-  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any);
+  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any, openGate().double);
   await registry.registerProvider(provider);
 
   return {

@@ -19,7 +19,9 @@ import {
   type ToolInvokedPayload,
 } from '../events';
 import { capabilityAllows, capabilityRequiredFor } from '../policy';
+import type { ToolGateRuling } from '../policy/toolGate';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
+import { PendingActionService } from '../services/PendingActionService';
 
 /**
  * Centralized registry for managing all tools from various providers.
@@ -40,6 +42,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly logger: LoggerService,
     private readonly events: EventService,
+    private readonly pendingActions: PendingActionService,
   ) {
     this.logger.setContext(ToolRegistry.name);
   }
@@ -307,6 +310,19 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
    * giving the model a legible "you are not allowed to do that" to relay instead of an opaque
    * "tool execution failed". Transports that owe their client an HTTP status (MCP) keep their own
    * pre-check and throw there; this is the backstop underneath it.
+   *
+   * ## Two gates, in this order, and the order is the security property
+   *
+   * 1. `capabilityAllows` → `TOOL_FORBIDDEN`. A caller without the authority is refused, full
+   *    stop. **A denial is never written to `ci.pending_actions`.** `dispatchPolicy.ts` orders
+   *    capability before tier for exactly this reason: queuing a refusal would turn "you may not
+   *    do that" into "you may do that after one extra tap".
+   * 2. {@link PendingActionService.evaluate} → `TOOL_QUEUED`. An intent the caller IS authorised
+   *    for but that must not fire unconfirmed — destructive or external work under a cautious
+   *    trust dial, or anything `resolveDispatch` refuses to run in the tier the call came from —
+   *    is parked as a pending action and reported back, symmetrically with the refusal above: a
+   *    ToolResult, never a throw, so the model receives it conversationally and can tell the user
+   *    their appliance is waiting on them.
    */
   async executeTool(name: string, context: ToolInvocationContext, input: unknown): Promise<ToolResult> {
     const resolved = this.resolveRegisteredTool(name);
@@ -399,15 +415,25 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    // The dispatch gate. Reached only by a caller the capability check already cleared, so
+    // everything below decides WHETHER TO ASK, never whether the caller is allowed.
+    const gate = await this.pendingActions.evaluate(tool.schema, context);
+
+    if (gate.decision !== 'execute') {
+      return this.refuseOrQueue(toolName, tool, context, input, gate);
+    }
+
     if (privacy.external) {
       // `external` is the label that says data leaves the appliance, which is the one thing CI
-      // promises it does not do quietly. It gates nothing today (see the README note on the warn
-      // path); surfacing every egress in the log is the floor, not the finished feature.
+      // promises it does not do quietly. It no longer gates nothing: an external intent that
+      // reaches this line is one the gate above cleared — the trust dial said auto, or the
+      // pending action was confirmed. The warn stays as the record of every egress.
       this.logger.warn(`Intent leaves the appliance: ${name}`, {
         toolName: name,
         intent: tool.schema.name,
         userId: context.userId,
         sensitivity: privacy.sensitivity,
+        gate: gate.reason,
       });
     }
 
@@ -428,6 +454,84 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     });
 
     return result;
+  }
+
+  /**
+   * Turn a non-`execute` gate ruling into a {@link ToolResult}.
+   *
+   * A `deny` (which `capabilityAllows` above has already caught — this is the belt to its braces)
+   * is refused outright and **never** written to the queue. A `queue` is parked and named, so the
+   * caller has an id to approve.
+   *
+   * Deliberately NOT emitted as `tool.invoked`, for the same reason a refusal is not: nothing was
+   * invoked, and feeding a queued proposal into the behavioural signal would teach prediction that
+   * the user did this.
+   */
+  private async refuseOrQueue(
+    toolName: string,
+    tool: BaseTool,
+    context: ToolInvocationContext,
+    input: unknown,
+    gate: ToolGateRuling,
+  ): Promise<ToolResult> {
+    if (gate.decision === 'deny') {
+      this.logger.warn(`Refused tool at dispatch gate: ${toolName}`, {
+        toolName,
+        intent: tool.schema.name,
+        userId: context.userId,
+        capability: context.capability,
+        reason: gate.reason,
+      });
+
+      return {
+        success: false,
+        error: { code: 'TOOL_FORBIDDEN', message: gate.explanation, retryable: false },
+      };
+    }
+
+    if (!context.userId) {
+      // The queue is owner-scoped: there is nobody to ask. Refusing is the safe direction —
+      // executing anyway would be the gate quietly deciding it did not matter.
+      this.logger.warn(`Cannot queue intent without an owner: ${toolName}`, {
+        toolName,
+        intent: tool.schema.name,
+        reason: gate.reason,
+      });
+
+      return {
+        success: false,
+        error: {
+          code: 'TOOL_CONFIRMATION_UNAVAILABLE',
+          message: `${gate.explanation}, but this call has no user to confirm it`,
+          retryable: false,
+        },
+      };
+    }
+
+    const action = await this.pendingActions.propose(
+      tool.schema,
+      toolName,
+      { ...context, userId: context.userId },
+      input,
+      gate,
+    );
+
+    return {
+      success: false,
+      error: {
+        code: 'TOOL_QUEUED',
+        message: gate.explanation,
+        // Retryable in the sense that matters to a caller: the same call succeeds once the owner
+        // approves. Re-issuing it blindly only queues a second proposal, which is why the id and
+        // the deadline are handed back.
+        retryable: false,
+        details: {
+          pendingActionId: action.id,
+          reason: gate.reason,
+          expiresAt: action.expiresAt?.toISOString() ?? null,
+        },
+      },
+    };
   }
 
   /**

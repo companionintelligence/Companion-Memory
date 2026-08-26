@@ -3,6 +3,23 @@ import type { RequestContext } from '@ci/common/context';
 import type { ApiKeyCapability } from '@ci/common/decorators';
 
 /**
+ * Where an intent is being dispatched from.
+ *
+ * Canonical home for this type: `core/types.ts` is foundational to every `policy/*` module
+ * (dispatchPolicy and capabilityPolicy both import intent types from here), so defining it here
+ * — rather than in `policy/dispatchPolicy.ts`, which then re-exports it — keeps that dependency
+ * one-directional. The reverse used to be a type-only import, which avoids a RUNTIME cycle but
+ * not the module-graph one `no-circular` checks.
+ *
+ * - `appliance` — the CI-Server itself: full corpus, network, and the user's own authority.
+ * - `local` — the on-device tier (the mobile Local Hub sidecar / on-device model), running against
+ *   a partial mirror, possibly offline, and with no way to ask the appliance anything right now.
+ */
+export const DISPATCH_TIERS = ['appliance', 'local'] as const;
+
+export type DispatchTier = (typeof DISPATCH_TIERS)[number];
+
+/**
  * JSON Schema definition for tool parameters
  */
 export interface JSONSchema {
@@ -244,4 +261,25 @@ export interface ToolExecutionContext extends RequestContext {
  */
 export interface ToolInvocationContext extends RequestContext {
   capability: ApiKeyCapability;
+  /**
+   * Which tier this call is being dispatched from. Defaults to `'appliance'` —
+   * the server acting as itself, which is every in-process dispatcher.
+   *
+   * A caller that names `'local'` is telling the appliance the request
+   * originated on the on-device tier, which is what makes `resolveDispatch`'s
+   * three `queue` reasons reachable at this chokepoint: the device may be able
+   * to REACH the appliance and still be the wrong place to have confirmed a
+   * deletion or an outbound message. `IntentsController` accepts it as
+   * `?tier=local` on the execute route, the same vocabulary the manifest route
+   * already publishes rulings under.
+   */
+  tier?: DispatchTier;
+  /**
+   * The `ci.pending_actions` row this call is the confirmed replay of.
+   *
+   * NOT a bearer token: the gate re-reads the row and honours it only if it
+   * exists, belongs to `userId`, and is `approved`. It never affects the
+   * capability check, which runs first and unconditionally.
+   */
+  pendingActionId?: string;
 }

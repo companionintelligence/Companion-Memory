@@ -237,7 +237,8 @@
     "grounded.prompts": true,
     "derivation.engines": true,
     "ingest.selfHeal": true,
-    "solid.protocol": false
+    "solid.protocol": false,
+    "tools.pendingActions": false
   },
   "environment": {
     "database.query.logging": false

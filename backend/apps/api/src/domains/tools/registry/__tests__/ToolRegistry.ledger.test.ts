@@ -3,6 +3,8 @@ import type { IntentPrivacy, ToolInvocationContext, ToolResult } from '../../cor
 import { TOOL_INVOCATION_ERROR_MAX_LENGTH } from '../../events';
 import { ToolRegistry, outcomeOf } from '../ToolRegistry';
 
+import { openGate } from './gateDouble';
+
 function makeLogger() {
   return {
     setContext: jest.fn(),
@@ -51,7 +53,8 @@ function fakeProvider(name: string, tools: Record<string, any>) {
 
 function makeRegistry() {
   const send = jest.fn().mockResolvedValue([]);
-  const registry = new ToolRegistry(makeLogger(), { send } as any);
+  const { double: pendingActions } = openGate();
+  const registry = new ToolRegistry(makeLogger(), { send } as any, pendingActions);
 
   return { registry, send };
 }

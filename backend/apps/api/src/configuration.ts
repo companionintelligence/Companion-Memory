@@ -873,6 +873,20 @@ export const ConfigSchema = z.object({
      * default — the surface stays dark (routes 404) until explicitly enabled.
      */
     'solid.protocol': booleanStringSchema,
+    /**
+     * The dispatch gate: `ToolRegistry.executeTool` consults `resolveToolGate`
+     * and parks a destructive/external/not-locally-permitted intent in
+     * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.
+     *
+     * OFF by default, and off is byte-identical to the pre-gate behaviour —
+     * `PendingActionService.evaluate` pins the tier to `appliance` and skips the
+     * trust dial, so the only ruling it can produce is the `execute` every call
+     * already got. Turn it on with ENABLE_PENDING_ACTIONS=true; what changes
+     * then is `cautious` trust mode (destructive/external intents ask first) and
+     * `?tier=local` execute calls (queued rather than run). `hands_off` and
+     * `balanced` behave exactly as they do today either way.
+     */
+    'tools.pendingActions': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

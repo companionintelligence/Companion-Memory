@@ -32,18 +32,24 @@ import { ImportModule } from '@ci/domains/import';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { ParsingModule } from '@ci/domains/parsing';
+import { PersonalizationService } from '@ci/domains/personalization/services/PersonalizationService';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
 import { UserModule } from '@ci/domains/user';
 
 import { IntentCatalogService } from './catalog/IntentCatalogService';
+import { PendingActionsController } from './controllers/PendingActionsController';
 import { ToolInvocationsController } from './controllers/ToolInvocationsController';
+import { PendingActionExpiryCron } from './cron/PendingActionExpiryCron';
 import { ToolInvocationRetentionCron } from './cron/ToolInvocationRetentionCron';
+import { PendingActionEntity } from './entities/PendingActionEntity';
 import { ToolInvocationEntity } from './entities/ToolInvocationEntity';
 import { ToolInvokedListener } from './listeners/ToolInvokedListener';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
+import { PendingActionConfirmService } from './services/PendingActionConfirmService';
+import { PendingActionService } from './services/PendingActionService';
 import { ToolInvocationLedgerService } from './services/ToolInvocationLedgerService';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 import { AnomaliesRecentTool } from './tools/AnomaliesRecentTool';
@@ -136,15 +142,31 @@ const nativeToolInstances = [
     // For MessagingSendTool/MessagingListChatsTool/MessagingListMessagesTool's
     // BlueBubblesClientService dependency.
     BlueBubblesModule,
-    // ci.tool_invocations — the bounded invocation ledger the tool.invoked listener writes.
-    TypeOrmModule.forFeature([ToolInvocationEntity]),
+    // ci.tool_invocations — the bounded invocation ledger the tool.invoked listener writes —
+    // and ci.pending_actions, this domain's FIRST database access before either table existed.
+    // See PendingActionEntity for why the latter has to be durable.
+    TypeOrmModule.forFeature([ToolInvocationEntity, PendingActionEntity]),
   ],
   controllers: [
     // The ledger's reader. Without it ci.tool_invocations would be another write-only table.
     ToolInvocationsController,
+    PendingActionsController,
   ],
   providers: [
     ToolRegistry,
+    PendingActionService,
+    PendingActionConfirmService,
+    // Registered as a provider so its @Cron method is discovered by the
+    // scheduler; nothing injects it, so it is deliberately NOT exported.
+    PendingActionExpiryCron,
+    // PersonalizationService is provided HERE rather than reached through
+    // PersonalizationModule: that module imports LlmCoreModule, which imports
+    // this one, so a module edge would close a cycle and need a forwardRef —
+    // which this codebase does not use for module graphs. Its only state is a
+    // 60-second profile cache and both of its dependencies come from
+    // MemoryModule, already imported above, so a second instance is cheap and
+    // behaviourally identical.
+    PersonalizationService,
     // Consumes the durable tool.invoked signal (and registers its telemetry queue), appending it
     // to ci.tool_invocations.
     ToolInvokedListener,
@@ -168,12 +190,27 @@ const nativeToolInstances = [
     // Read API over the tool catalog (manifest), consumed by the agent REST controller + MCP.
     IntentCatalogService,
   ],
-  exports: [ToolRegistry, IntentCatalogService],
+  exports: [ToolRegistry, IntentCatalogService, PendingActionService, PendingActionConfirmService],
 })
 export class ToolsModule {}
 
 // Exports
 export { ToolRegistry, outcomeOf } from './registry/ToolRegistry';
+export { PendingActionService } from './services/PendingActionService';
+export { PendingActionConfirmService } from './services/PendingActionConfirmService';
+export { PendingActionEntity } from './entities/PendingActionEntity';
+export type { PendingAction } from './entities/PendingActionEntity';
+export {
+  PENDING_ACTION_STATUSES,
+  PENDING_ACTION_TRANSITIONS,
+  TERMINAL_PENDING_ACTION_STATUSES,
+  assertPendingActionTransition,
+  authorisesExecution,
+  canTransitionPendingAction,
+  isTerminalPendingActionStatus,
+  IllegalPendingActionTransitionError,
+  type PendingActionStatus,
+} from './pendingActionStatus';
 export { IntentCatalogService } from './catalog/IntentCatalogService';
 export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
 export { BaseTool } from './core/BaseTool';
@@ -218,3 +255,10 @@ export {
   type DispatchableIntent,
   type GatedPrivacy,
 } from './policy';
+export {
+  needsConfirmation,
+  resolveToolGate,
+  type ToolGateReason,
+  type ToolGateRuling,
+  type ToolGateOptions,
+} from './policy/toolGate';

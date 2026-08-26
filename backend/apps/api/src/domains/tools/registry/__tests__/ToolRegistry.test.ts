@@ -4,6 +4,8 @@ import type { ApiKeyCapability } from '@ci/common/decorators';
 import type { IntentPrivacy, ToolInvocationContext } from '../../core/types';
 import { ToolRegistry } from '../ToolRegistry';
 
+import { openGate } from './gateDouble';
+
 function makeLogger() {
   return {
     setContext: jest.fn(),
@@ -80,7 +82,7 @@ function asCapability(capability: ApiKeyCapability): ToolInvocationContext {
 describe('ToolRegistry', () => {
   function makeRegistry() {
     const send = jest.fn().mockResolvedValue([]);
-    const registry = new ToolRegistry(makeLogger(), { send } as any);
+    const registry = new ToolRegistry(makeLogger(), { send } as any, openGate().double);
 
     return { registry, send };
   }
@@ -140,7 +142,7 @@ describe('ToolRegistry', () => {
 
   it('never fails the tool call when telemetry emission throws', async () => {
     const send = jest.fn().mockRejectedValue(new Error('bus down'));
-    const registry = new ToolRegistry(makeLogger(), { send } as any);
+    const registry = new ToolRegistry(makeLogger(), { send } as any, openGate().double);
     await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall', { ok: 1 }) }));
 
     const result = await registry.executeTool('memory_recall', context, {});
@@ -383,7 +385,7 @@ describe('ToolRegistry', () => {
 
   it('logs an egress warning when an external intent runs, and none when it does not', async () => {
     const logger = makeLogger();
-    const registry = new ToolRegistry(logger, { send: jest.fn().mockResolvedValue([]) } as any);
+    const registry = new ToolRegistry(logger, { send: jest.fn().mockResolvedValue([]) } as any, openGate().double);
     const external: IntentPrivacy = { ...READ_PRIVACY, external: true, sensitivity: 'low' };
     await registry.registerProvider(
       fakeProvider({
