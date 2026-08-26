@@ -26,6 +26,7 @@ import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntit
 import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
 import { MediaDimensionsBackfillListener } from './listeners/MediaDimensionsBackfillListener';
 import { SeedDefaultSavedSearchesListener } from './listeners/SeedDefaultSavedSearchesListener';
+import { FilePreviewService } from './services/FilePreviewService';
 import { FileService } from './services/FileService';
 import { MediaDimensionsService } from './services/MediaDimensionsService';
 import { SavedSearchService } from './services/SavedSearchService';
@@ -39,16 +40,21 @@ import { SavedSearchService } from './services/SavedSearchService';
     FileService,
     SavedSearchService,
     MediaDimensionsService,
+    FilePreviewService,
     FilePreviewGenerationListener,
     MediaDimensionsBackfillListener,
     SeedDefaultSavedSearchesListener,
   ],
   controllers: [FilesController, BulkFilesController],
-  exports: [FileService, SavedSearchService, MediaDimensionsService],
+  exports: [FileService, SavedSearchService, MediaDimensionsService, FilePreviewService],
 })
 export class FilesModule {}
 
 export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { FilePreviewService } from './services/FilePreviewService';
+export type { PreviewOutcome, PreviewSkipReason } from './services/FilePreviewService';
+export { FilePreviewSweepRequestEvent, FILE_PREVIEW_SWEEP_QUEUE } from './events';
+export type { FilePreviewSweepRequestPayload } from './events';
 export { BulkFilesController, MAX_FILES_PER_BATCH } from './controllers/BulkFilesController';
 export type { BulkFileUploadResult } from './controllers/BulkFilesController';
 export { MediaDimensionsService } from './services/MediaDimensionsService';

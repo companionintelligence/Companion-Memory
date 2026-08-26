@@ -484,7 +484,11 @@ describe('SyncOrchestrator.executeTransformJobs', () => {
     expect(connectionSyncJobService.search).toHaveBeenCalledWith(expect.anything(), {
       status: 'success',
       lastTransformed: null,
-      orderBy: 'updated_at:DESC',
+      transformClaimable: true,
+      // Oldest first. The sweep is one two-slot queue for the whole box while
+      // every connection completes up to two sync jobs a minute, so
+      // newest-first left anything that once fell behind untransformed forever.
+      orderBy: 'updated_at:ASC',
       limit: 2,
     });
 
@@ -676,13 +680,22 @@ describe('SyncOrchestrator.orchestrateSyncJobs', () => {
    */
   function searchOver(rows: ConnectionSyncJob[]) {
     return jest.fn(async (_ctx: unknown, query: SearchConnectionSyncJobDto) => {
+      // Honour the sort the sweep asks for: the latest-success read sorts on
+      // completed_at, everything else on updated_at. A stand-in that always
+      // sorted on updated_at could not tell the two apart — which is exactly
+      // the confusion the sweep itself used to have.
+      const [field = 'updated_at', direction = 'DESC'] = (query.orderBy ?? 'updated_at:DESC').split(':');
+      const key = (row: ConnectionSyncJob) =>
+        new Date((field === 'completed_at' ? row.completedAt : row.updatedAt) ?? 0).getTime();
+      const sign = direction === 'ASC' ? 1 : -1;
+
       const matched = rows
         .filter((row) => query.connectionId == null || row.connectionId === query.connectionId)
         .filter((row) => query.endpointName == null || row.endpointName === query.endpointName)
         .filter((row) => query.type == null || row.type === query.type)
         .filter((row) => query.status == null || row.status === query.status)
         .filter((row) => query.statuses == null || query.statuses.includes(row.status))
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        .sort((a, b) => sign * (key(a) - key(b)));
 
       return query.limit == null ? matched : matched.slice(0, query.limit);
     });
@@ -824,11 +837,18 @@ describe('SyncOrchestrator.orchestrateSyncJobs', () => {
     );
   });
 
-  it("starts a new incremental job carrying forward the previous success's nextCursor", async () => {
+  it("starts a new incremental job carrying forward the previous success's nextCursor once the interval has passed", async () => {
     const { orchestrator, connectionSyncJobService } = buildOrchestrator({
       connectionService: { findActiveConnections: jest.fn().mockResolvedValue([activeConnection()]) },
       connectionSyncJobService: {
-        search: searchOver([makeSyncJob({ status: 'success', nextCursor: { page: 9 } })]),
+        search: searchOver([
+          makeSyncJob({
+            status: 'success',
+            nextCursor: { page: 9 },
+            completedAt: new Date(Date.now() - 11 * 60_000),
+            updatedAt: new Date(Date.now() - 11 * 60_000),
+          }),
+        ]),
       },
     });
 
@@ -838,6 +858,121 @@ describe('SyncOrchestrator.orchestrateSyncJobs', () => {
       expect.anything(),
       expect.objectContaining({ type: 'incremental', cursor: { page: 9 }, status: 'pending' }),
     );
+  });
+
+  it('does not start the next incremental job until 10 minutes after the last success', async () => {
+    // Only the FIRST incremental job on an endpoint is immediate (the
+    // `creates the first incremental sync job` case above). After that the
+    // sweep used to queue the next one the minute the previous one succeeded —
+    // a provider call per endpoint per minute, and a sync job for the transform
+    // sweep to spend a slot on, whether or not anything had changed.
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
+      connectionService: { findActiveConnections: jest.fn().mockResolvedValue([activeConnection()]) },
+      connectionSyncJobService: {
+        search: searchOver([
+          makeSyncJob({
+            status: 'success',
+            nextCursor: { page: 9 },
+            completedAt: new Date(Date.now() - 9 * 60_000),
+            updatedAt: new Date(Date.now() - 9 * 60_000),
+          }),
+        ]),
+      },
+    });
+
+    await orchestrator.orchestrateSyncJobs();
+
+    expect(connectionSyncJobService.create).not.toHaveBeenCalled();
+  });
+
+  it('measures the interval from the most recently COMPLETED success, not the most recently touched one', async () => {
+    // The transform sweep bumps updated_at when it claims/finishes a job, and
+    // it drains oldest-first — so an old success is "touched" every minute.
+    // Sorting the latest-success read on updated_at made that old job the
+    // latest, its completedAt was long past the interval, and a new poll was
+    // queued every tick regardless of the job that actually just finished.
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
+      connectionService: { findActiveConnections: jest.fn().mockResolvedValue([activeConnection()]) },
+      connectionSyncJobService: {
+        search: searchOver([
+          makeSyncJob({
+            id: 'old-but-just-transformed',
+            status: 'success',
+            nextCursor: { page: 1 },
+            completedAt: new Date(Date.now() - 40 * 60_000),
+            updatedAt: new Date(),
+          }),
+          makeSyncJob({
+            id: 'actually-latest',
+            status: 'success',
+            nextCursor: { page: 2 },
+            completedAt: new Date(Date.now() - 2 * 60_000),
+            updatedAt: new Date(Date.now() - 2 * 60_000),
+          }),
+        ]),
+      },
+    });
+
+    await orchestrator.orchestrateSyncJobs();
+
+    expect(connectionSyncJobService.create).not.toHaveBeenCalled();
+  });
+
+  it('does not restart a finished historical walk from an old page that was merely re-transformed', async () => {
+    // Same updated_at trap on the historical side, and worse: the old page
+    // still carries its nextCursor, so "latest success has a cursor" queued a
+    // job that re-fetched every page after it.
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
+      connectionService: {
+        findActiveConnections: jest
+          .fn()
+          .mockResolvedValue([{ connection: historicalConnection(undefined), lastSyncedAt: null }]),
+      },
+      connectionSyncJobService: {
+        search: searchOver([
+          makeSyncJob({
+            id: 'page-1-just-transformed',
+            type: 'historical',
+            status: 'success',
+            nextCursor: { nextLink: 'https://graph.example/page2' },
+            completedAt: new Date(Date.now() - 60 * 60_000),
+            updatedAt: new Date(),
+          }),
+          makeSyncJob({
+            id: 'last-page',
+            type: 'historical',
+            status: 'success',
+            nextCursor: {},
+            completedAt: new Date(Date.now() - 50 * 60_000),
+            updatedAt: new Date(Date.now() - 50 * 60_000),
+          }),
+        ]),
+      },
+    });
+
+    await orchestrator.orchestrateSyncJobs();
+
+    expect(connectionSyncJobService.create).not.toHaveBeenCalled();
+  });
+
+  it('falls back to updatedAt for the interval when a success row carries no completedAt', async () => {
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
+      connectionService: { findActiveConnections: jest.fn().mockResolvedValue([activeConnection()]) },
+      connectionSyncJobService: {
+        search: searchOver([
+          makeSyncJob({
+            status: 'success',
+            nextCursor: { page: 9 },
+            completedAt: null,
+            updatedAt: new Date(),
+          }),
+        ]),
+      },
+    });
+
+    await orchestrator.orchestrateSyncJobs();
+
+    expect(connectionSyncJobService.create).not.toHaveBeenCalled();
   });
 
   it('leaves an endpoint whose only history is failures alone, rather than retrying it every minute', async () => {

@@ -389,6 +389,7 @@ type CommunicationType implements Node & Taggable {
   direction: String!
   from: PersonType
   id: ID!
+  metadata: JSON!
   participantsMetadata: JSON!
   preview: String
   sourceId: String

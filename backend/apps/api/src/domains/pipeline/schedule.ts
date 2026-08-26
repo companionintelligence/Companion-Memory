@@ -294,6 +294,20 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * Same shape as media_dimensions, and for the same reasons: local CPU
+   * (sharp / ffmpeg) plus an object-storage read per file, and the upload
+   * path already covers the common case — this sweep is the net under it.
+   * An on-demand run is available through `POST /api/maintenance/file-preview-sweep`.
+   */
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
    * Every key is a request to someone else's server, so this is metered even
    * though nobody bills for it: provider oEmbed endpoints and Wikimedia both
    * rate-limit, and a full-corpus first pass (tens of thousands of YouTube and

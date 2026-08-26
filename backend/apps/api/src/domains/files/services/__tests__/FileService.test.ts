@@ -150,6 +150,30 @@ describe('FileService.create — hash dedup', () => {
     expect(result.id).toBe(savedRow.id);
   });
 
+  it('does NOT dedup a PREVIEW variant against another parent’s identical preview', async () => {
+    // Two videos that are re-uploads of the same footage render byte-identical
+    // 300px frames. Deduping the second preview onto the first left the second
+    // parent with no PREVIEW row at all — the explorer then drew nothing (or
+    // the raw .mp4) for it. A derived variant belongs to its parent; identical
+    // bytes across parents are two rows.
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({ id: 'other-parents-preview', userId: 'owner-1', hash: 'same-frame' });
+    const { service, s3Send } = makeService(repo);
+
+    const result = await service.create(ownerCtx, {
+      buffer: Buffer.from('identical preview bytes'),
+      contentType: 'image/jpeg',
+      variant: FileVariant.PREVIEW,
+      parentId: 'parent-2',
+    });
+
+    expect(repo.findOne).not.toHaveBeenCalled();
+    expect(repo.save).toHaveBeenCalledTimes(1);
+    expect(s3Send).toHaveBeenCalledTimes(1);
+    expect(result.id).not.toBe('other-parents-preview');
+    expect((repo.save.mock.calls[0][0] as Record<string, unknown>).parentId).toBe('parent-2');
+  });
+
   it('dedups by externalId before ever computing a hash', async () => {
     const repo = makeRepo();
     const existing = {

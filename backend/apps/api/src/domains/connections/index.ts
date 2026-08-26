@@ -128,6 +128,7 @@ export type {
   FacebookLike,
   FacebookPhoto,
   FacebookPost,
+  FacebookPostAttachment,
   FacebookVideo,
   GmailMessage,
   EmailParticipant,

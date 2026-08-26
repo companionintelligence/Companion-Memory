@@ -2,7 +2,10 @@ import sharp from 'sharp';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EventListenerRegistry } from '@ci/domains/events';
-import { FileUploadedEvent, PreviewGeneratedEvent } from '@ci/domains/files';
+// FilePreviewService through the files PUBLIC barrel — `no-cross-domain-internals`
+// allows only index.ts/events.ts across a domain boundary. (The listener import
+// below predates the rule and sits in the known-violations baseline.)
+import { FilePreviewService, FileUploadedEvent, PreviewGeneratedEvent } from '@ci/domains/files';
 
 import { FilePreviewGenerationListener } from '../../../files/listeners/FilePreviewGenerationListener';
 import { FileService } from '../../../files/services/FileService';
@@ -239,11 +242,15 @@ describe('image-description: live and backfill sends share one singletonKey', ()
     const mediaDimensionsService = { fromImageBuffer: jest.fn(async () => ({ width: 16, height: 16 })) };
     const eventService = makeEventService();
 
+    // The send under test now lives in FilePreviewService; the listener is the
+    // upload-path trigger over it, so it is driven the same way as before.
     const listener = new FilePreviewGenerationListener(
-      fileService as never,
-      mediaDimensionsService as never,
-      eventService as never,
-      makeLogger() as never,
+      new FilePreviewService(
+        fileService as never,
+        mediaDimensionsService as never,
+        eventService as never,
+        makeLogger() as never,
+      ),
     );
 
     await listener.generatePreview({ fileId: 'file-1', userId: ownerCtx.userId } as never);

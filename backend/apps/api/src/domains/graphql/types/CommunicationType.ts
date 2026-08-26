@@ -52,6 +52,13 @@ export class CommunicationType implements Node, Taggable {
   @Field(() => GraphQLJSONObject)
   participantsMetadata!: Record<string, unknown>;
 
+  // The connector's catch-all for what has no column of its own — for a
+  // Facebook post, its `permalink_url` (the post on facebook.com), the shared
+  // `link`, the post type. Opaque JSON for the same reason as
+  // participantsMetadata; the drawer reads the page URL out of it.
+  @Field(() => GraphQLJSONObject)
+  metadata!: Record<string, unknown>;
+
   @Field(() => String, { nullable: true })
   sourceType!: string | null;
 
@@ -75,6 +82,7 @@ export class CommunicationType implements Node, Taggable {
       tags: [], // Hydrated by resolver
       threadId: entity.threadId,
       participantsMetadata: entity.participantsMetadata,
+      metadata: entity.metadata ?? {},
       sourceType: entity.sourceType,
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,

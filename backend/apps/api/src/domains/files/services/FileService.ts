@@ -123,7 +123,16 @@ export class FileService implements OnModuleInit {
 
     const hash = await this.getFileHash(file);
 
-    if (hash) {
+    // Hash dedup is for ORIGINALS only. A PREVIEW/THUMBNAIL row belongs to
+    // its parent; two parents whose derived bytes happen to match are two
+    // rows. Deduping them was how previews went missing: the 300px frame of
+    // one video is byte-identical to the 300px frame of a re-upload of the
+    // same footage, so the SECOND parent's preview resolved to the first's
+    // and no row was written for it — the listener then reported success
+    // and the file had no thumbnail, permanently. Concurrent preview jobs
+    // raced past the check (the ledger showed 20 previews over 14 hashes on
+    // one connector alone), which is what made the loss look random.
+    if (hash && (file.variant ?? FileVariant.ORIGINAL) === FileVariant.ORIGINAL) {
       const existing = await this.findByHash(context, hash);
 
       if (existing) {

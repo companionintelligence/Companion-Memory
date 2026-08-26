@@ -110,6 +110,17 @@ export const STAGE_IDS = {
   ENRICH_MEDIA_DIMENSIONS: 'enrich.media_dimensions',
 
   /**
+   * Generate the 300px JPEG `PREVIEW` variant for `ci.files` originals that
+   * have none. The upload path (`FilePreviewGenerationListener`) only ever
+   * ran once per upload and had no way back: a preview that was lost — to
+   * the hash dedup that used to collapse identical previews across parents,
+   * to a worker restart, or simply to predating the listener — stayed lost,
+   * and the explorer drew the file's full original (or, for a video, nothing
+   * decodable) in its place. Same generator, driven by the ledger.
+   */
+  ENRICH_FILE_PREVIEW: 'enrich.file_preview',
+
+  /**
    * Dense-embed `ci.content` into `ci_search.embeddings`. The conversion that
    * justifies the whole rebuild, because its version is not a hand-chosen
    * integer: it is a function of `(embedding model, pgvector width)`, so

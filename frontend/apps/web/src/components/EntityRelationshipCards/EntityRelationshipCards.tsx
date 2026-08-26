@@ -452,7 +452,9 @@ export function EntityRelationshipCards({
 
     const nodeById = new Map(data.nodes.map((node) => [node.id, node]));
     const typeAllowlist = relationshipTypes ? new Set(relationshipTypes) : null;
-    const entityAllowlist = entityTypes ? new Set(entityTypes.map((type) => normalizeGraphEntityType(type))) : null;
+    const entityAllowlist = entityTypes
+      ? new Set(entityTypes.map((type) => normalizeGraphEntityType(type)))
+      : null;
 
     return data.links
       .filter((link) => link.source === entityId || link.target === entityId)
@@ -477,7 +479,9 @@ export function EntityRelationshipCards({
           relationshipProperties: link.properties ?? {},
         };
       })
-      .filter((card) => !entityAllowlist || entityAllowlist.has(normalizeGraphEntityType(card.otherEntityType)));
+      .filter(
+        (card) => !entityAllowlist || entityAllowlist.has(normalizeGraphEntityType(card.otherEntityType)),
+      );
   }, [data, entityId, relationshipTypes, entityTypes]);
 
   // Deterministic ordering: strongest first, then most recent, then a stable
@@ -580,18 +584,28 @@ export function EntityRelationshipCards({
 
   const renderCardContent = (card: RelationshipCard, tags: string[]) => (
     <Card.Content className="p-3 flex flex-col gap-2">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-1">
+      {/* The header WRAPS, and the card grows to fit. It used to be a single
+          line with the type column capped at max-w-[45%]: at the 180px minimum
+          card width that is ~70px, and ORGANIZATION (or COMMUNICATION) set in
+          uppercase text-xs is wider than that. A single word cannot wrap, and a
+          flex child anchored to the end edge overflows toward the START — so
+          the label was drawn across the name. Now the label keeps its width
+          (whitespace-nowrap, no max-w) and, when it cannot share a line with
+          the name, drops to its own line, still right-aligned (ml-auto). The
+          name is no longer clamped either: a long name makes a taller card
+          rather than an elided one. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
+        <div className="min-w-0 flex-[1_1_8rem] space-y-1">
           {/* The edge type (DOCUMENTS, SENT, PARTICIPATED_IN…) is deliberately not
               shown: it is the graph's vocabulary, not the reader's, and read
               from the wrong end of the edge ("Documents" over a song on an
               event's card) it misleads more than it informs. The other entity's
               name and type badge say what the link is. Still on the card data
               for sorting/filtering. */}
-          <p className="text-sm font-semibold leading-tight line-clamp-2">{card.otherEntityName}</p>
+          <p className="text-sm font-semibold leading-tight break-words">{card.otherEntityName}</p>
         </div>
-        <div className="flex max-w-[45%] shrink-0 flex-col items-end gap-1 text-right">
-          <p className="text-xs text-muted-foreground uppercase">{card.otherEntityType}</p>
+        <div className="ml-auto flex shrink-0 flex-col items-end gap-1 text-right">
+          <p className="text-xs text-muted-foreground uppercase whitespace-nowrap">{card.otherEntityType}</p>
           {tags.length > 0 && (
             <div className="flex flex-wrap justify-end gap-1">
               {tags.map((tag) => (
@@ -678,13 +692,13 @@ export function EntityRelationshipCards({
             if (onOpenRelatedEntity) {
               return (
                 <ChatAbout key={card.relationshipId} context={chatContext}>
-                <button
-                  type="button"
-                  className="block w-full rounded-xl text-left"
-                  onClick={() => onOpenRelatedEntity(target)}
-                >
-                  <Card className={cardClassName}>{renderCardContent(card, tags)}</Card>
-                </button>
+                  <button
+                    type="button"
+                    className="block w-full rounded-xl text-left"
+                    onClick={() => onOpenRelatedEntity(target)}
+                  >
+                    <Card className={cardClassName}>{renderCardContent(card, tags)}</Card>
+                  </button>
                 </ChatAbout>
               );
             }
@@ -692,18 +706,16 @@ export function EntityRelationshipCards({
             if (!detailPath) {
               return (
                 <ChatAbout key={card.relationshipId} context={chatContext}>
-                <Card className="p-0 min-h-[96px]">
-                  {renderCardContent(card, tags)}
-                </Card>
+                  <Card className="p-0 min-h-[96px]">{renderCardContent(card, tags)}</Card>
                 </ChatAbout>
               );
             }
 
             return (
               <ChatAbout key={card.relationshipId} context={chatContext}>
-              <Link to={detailPath} className="block">
-                <Card className={cardClassName}>{renderCardContent(card, tags)}</Card>
-              </Link>
+                <Link to={detailPath} className="block">
+                  <Card className={cardClassName}>{renderCardContent(card, tags)}</Card>
+                </Link>
               </ChatAbout>
             );
           })}

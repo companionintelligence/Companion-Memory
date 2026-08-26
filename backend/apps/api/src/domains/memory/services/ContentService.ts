@@ -837,6 +837,18 @@ export class ContentService {
       updateData.sourceData = data.source_data;
     }
 
+    if (data.source_type !== undefined) {
+      updateData.sourceType = data.source_type;
+    }
+
+    if (data.source_system !== undefined) {
+      updateData.sourceSystem = data.source_system;
+    }
+
+    if (data.source_id !== undefined) {
+      updateData.sourceId = data.source_id;
+    }
+
     const basePatch: Partial<Pick<ContentBaseEntity, 'name'>> = {};
     if (data.title !== undefined) {
       basePatch.name = data.title;
@@ -918,6 +930,37 @@ export class ContentService {
     });
 
     return true;
+  }
+
+  /**
+   * The content row a provenance triple already resolves to, if any.
+   *
+   * The per-row connector transforms cannot use `createMany`'s ON CONFLICT
+   * path (it does not emit ContentCreatedEvent, so the row would not be
+   * indexed until a manual backfill), and `search()` has no triple filter.
+   * This is the read half of their find-then-update, mirroring
+   * CommunicationService.findBySource.
+   */
+  async findBySource(
+    context: ServiceContext,
+    source: { source_type: string; source_system: string; source_id: string },
+  ): Promise<Content | null> {
+    const entity = await this.contentRepository.findOne({
+      where: {
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+        sourceType: source.source_type,
+        sourceSystem: source.source_system,
+        sourceId: source.source_id,
+      },
+    });
+
+    if (!entity) {
+      return null;
+    }
+
+    const [content] = await this.composeMany([entity]);
+
+    return content ?? null;
   }
 
   async search(context: ServiceContext, filters: SearchContentDto): Promise<Content[]> {

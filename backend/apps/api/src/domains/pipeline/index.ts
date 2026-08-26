@@ -54,6 +54,7 @@ import { PipelineShardEntity } from './entities/PipelineShardEntity';
 import { PipelineStateEntity } from './entities/PipelineStateEntity';
 import { RecordRejectionEntity } from './entities/RecordRejectionEntity';
 import { DeadLetterReaperListener } from './listeners/DeadLetterReaperListener';
+import { FilePreviewSweepRequestListener } from './listeners/FilePreviewSweepRequestListener';
 import { GraphEdgeSweepRequestListener } from './listeners/GraphEdgeSweepRequestListener';
 import { PipelineSliceListener } from './listeners/PipelineSliceListener';
 import { PIPELINE_TICK, PipelineTickCron } from './listeners/PipelineTickCron';
@@ -73,6 +74,7 @@ import { ObjectDuplicateDetectStage } from './stages/clean/ObjectDuplicateDetect
 import { TemporalRepairStage } from './stages/clean/TemporalRepairStage';
 import { EstimateLocationStage } from './stages/enrich/EstimateLocationStage';
 import { EventReverseStage } from './stages/enrich/EventReverseStage';
+import { FilePreviewStage } from './stages/enrich/FilePreviewStage';
 import { GeocodeStage } from './stages/enrich/GeocodeStage';
 import { MediaDimensionsStage } from './stages/enrich/MediaDimensionsStage';
 import { EventPersonLinkStage, PersonLinkStage } from './stages/enrich/PersonLinkStage';
@@ -141,6 +143,7 @@ import { PositionPlacePromoteStage } from './stages/promote/PositionPlacePromote
  */
 const stageProviders: Provider[] = [
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_MEDIA_DIMENSIONS], useClass: MediaDimensionsStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_FILE_PREVIEW], useClass: FilePreviewStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_UNFURL], useClass: UnfurlStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.INDEX_EMBED], useClass: EmbedStage },
   // The rest of the dense-embed family — one id per source table, one shared
@@ -281,6 +284,7 @@ const stageProviders: Provider[] = [
     // traversal reads, and nothing was telling it a corpus had landed.
     GraphEdgeSweepRequestListener,
     UnfurlSweepRequestListener,
+    FilePreviewSweepRequestListener,
     PipelineTickCron,
     // The cron owns the schedule and the cluster-safe advisory lock; the control
     // service owns what a tick DOES. Binding by token rather than importing the

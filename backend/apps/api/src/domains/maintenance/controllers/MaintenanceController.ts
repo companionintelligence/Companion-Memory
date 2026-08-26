@@ -24,7 +24,12 @@ import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
 import { EventService as SignallingEventService } from '@ci/domains/events';
-import { MediaDimensionsBackfillRequestEvent, MEDIA_DIMENSIONS_QUEUE } from '@ci/domains/files';
+import {
+  FILE_PREVIEW_SWEEP_QUEUE,
+  FilePreviewSweepRequestEvent,
+  MediaDimensionsBackfillRequestEvent,
+  MEDIA_DIMENSIONS_QUEUE,
+} from '@ci/domains/files';
 import { EventEntity } from '@ci/domains/memory';
 import { EstimateLocationBatchRequestEvent, GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
 import {
@@ -629,6 +634,32 @@ export class MaintenanceController {
    * could resolve. Idempotent — never overwrites real coordinates, never chains
    * an estimate off another estimate.
    */
+  /**
+   * On-demand `enrich.file_preview` sweep: render the PREVIEW variant for
+   * every ORIGINAL image/video of the caller's that has none. The stage runs
+   * on its own daily cadence too; this asks for it now — after a connector
+   * import whose thumbnails came up blank, say. Idempotent per user: the
+   * request queue is `policy: 'short'` keyed on the user, so a second click
+   * while one is queued is a no-op.
+   */
+  @Post('file-preview-sweep')
+  async filePreviewSweep(@Context() context: RequestContext): Promise<{ status: 'enqueued' | 'noop' }> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { status: 'noop' };
+    }
+
+    await this.signallingEventService.send(
+      FilePreviewSweepRequestEvent,
+      { userId, requestedBy: 'maintenance-api' },
+      { queue: FILE_PREVIEW_SWEEP_QUEUE, singletonKey: `file-preview-sweep:${userId}` },
+    );
+
+    return { status: 'enqueued' };
+  }
+
   @Post('estimate-locations')
   async estimateLocations(
     @Context() context: RequestContext,

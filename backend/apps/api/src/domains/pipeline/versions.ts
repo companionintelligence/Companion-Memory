@@ -111,6 +111,19 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 1,
 
   /**
+   * v1 — first ledger-driven run of the preview generator (`FilePreviewService`,
+   * the same sharp / ffmpeg path the upload listener uses).
+   *
+   * Bump when the generator can decode something it previously could not, or
+   * when the preview itself changes shape (size, format, frame choice for
+   * video). Note the stage's source predicate excludes files that already
+   * carry a PREVIEW, so a bump re-offers only the preview-LESS corpus; a
+   * change that must re-render existing previews needs the predicate widened
+   * too — see FilePreviewStage.
+   */
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: 1,
+
+  /**
    * v1 — oEmbed (YouTube/Spotify/Vimeo/SoundCloud/Dailymotion/X), Wikidata +
    * Wikipedia for Netflix + Prime titles, OpenGraph with oEmbed discovery for
    * the rest. Bump when a resolver's ANSWER for an unchanged key changes (new

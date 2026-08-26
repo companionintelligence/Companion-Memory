@@ -94,6 +94,24 @@ export type ImageDescriptionBackfillRequestPayload = {
   limit?: number;
 };
 
+/**
+ * Ask for an `enrich.file_preview` sweep now, rather than at the stage's
+ * scheduled cadence: generate the PREVIEW variant for every ORIGINAL image
+ * or video of the user's that has none. Consumed by the pipeline domain's
+ * `FilePreviewSweepRequestListener`, which starts the sweep — the same
+ * handoff shape as `UnfurlSweepRequestEvent`.
+ */
+export const FilePreviewSweepRequestEvent = 'file.preview-sweep-request';
+
+/** Dedicated queue for the request, so it is not queued behind preview generation itself. */
+export const FILE_PREVIEW_SWEEP_QUEUE = 'file-preview-sweep';
+
+export type FilePreviewSweepRequestPayload = {
+  userId: string;
+  /** Who asked — for the log line. */
+  requestedBy: string;
+};
+
 defineEvent<FileCreatedPayload>(FileCreatedEvent);
 defineEvent<FileUpdatedPayload>(FileUpdatedEvent);
 defineEvent<FileUploadedPayload>(FileUploadedEvent);
@@ -101,6 +119,7 @@ defineEvent<FileDeletedPayload>(FileRemovedEvent);
 defineEvent<PreviewGeneratedPayload>(PreviewGeneratedEvent);
 defineEvent<MediaDimensionsBackfillRequestPayload>(MediaDimensionsBackfillRequestEvent);
 defineEvent<ImageDescriptionBackfillRequestPayload>(ImageDescriptionBackfillRequestEvent);
+defineEvent<FilePreviewSweepRequestPayload>(FilePreviewSweepRequestEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
@@ -111,6 +130,7 @@ declare module '@ci/domains/events/registry' {
     [PreviewGeneratedEvent]: PreviewGeneratedPayload;
     [MediaDimensionsBackfillRequestEvent]: MediaDimensionsBackfillRequestPayload;
     [ImageDescriptionBackfillRequestEvent]: ImageDescriptionBackfillRequestPayload;
+    [FilePreviewSweepRequestEvent]: FilePreviewSweepRequestPayload;
   }
 }
 
