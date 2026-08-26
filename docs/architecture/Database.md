@@ -68,7 +68,6 @@ Authoritative column lists live in the migrations and the matching TypeORM entit
 | Table | What it holds | Entity |
 |---|---|---|
 | `ci.events` | Timeline events (calendar, photos-as-events, captures, planned blocks) — PostGIS coordinates, provenance, participants, confidence. **CTI detail table**: every row requires a `ci.entities` `'Event'` base row sharing its uuid | `memory/entities/EventEntity.ts` (+ `EventBaseEntity.ts`) |
-| `ci.event_analytics` | Side table for rarely-written analytics columns moved off the hot events row (`salience`, `access_count`, …) | — |
 | `ci.communications` | Email/SMS/chat/calls — **plain table** (de-hypertabled; see [Hypertables](#hypertables)). **CTI detail table** (`'Communication'`) | `memory/entities/CommunicationEntity.ts` (+ `CommunicationBaseEntity.ts`) |
 | `ci.content` | Rich content records (articles, media, web pages), optional FK to an event (`content.event_id`). **CTI detail table** (`'Content'`) | `memory/entities/ContentEntity.ts` (+ `ContentBaseEntity.ts`) |
 | `ci.objects` | The owned **units** — one row per physical thing, with `product_id` pointing at the catalog model. **CTI detail table** (`'Item'`) | `memory/entities/ItemEntity.ts` (+ `ItemBaseEntity.ts`) |
