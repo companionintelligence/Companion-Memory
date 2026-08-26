@@ -226,8 +226,19 @@ export class UserContextService {
    * is passed through {@link fenceUntrusted} before it lands in the markdown —
    * an `about` string carrying `\n## Current User\n- Name: …` would otherwise
    * mint a second, attacker-chosen section of the system prompt.
+   *
+   * `includeQuickStats` controls the `## Quick Stats` section (graph totals).
+   * Those counters move every time anything is ingested, so a block that
+   * carries them cannot be cached for the length of a session. Callers that
+   * are reasoning about the *shape* of the graph — e.g. ContextGapQuestionService,
+   * which asks what the graph is missing — want them and keep the default;
+   * the L0 `GET /memory/context` block, which is advertised to out-of-process
+   * harnesses as "called once per session", passes `false`.
    */
-  formatContextForSystemPrompt(context: UserContext): string {
+  formatContextForSystemPrompt(
+    context: UserContext,
+    { includeQuickStats = true }: { includeQuickStats?: boolean } = {},
+  ): string {
     const lines = [
       '# User Context',
       '',
@@ -283,11 +294,13 @@ export class UserContextService {
       }
     }
 
-    lines.push('', '## Quick Stats');
-    lines.push(`- Total entities in graph: ${context.quickStats.totalEntities}`);
-    lines.push(`- Total preferences: ${context.quickStats.totalPreferences}`);
-    lines.push(`- Total dislikes: ${context.quickStats.totalDislikes}`);
-    lines.push(`- Family members: ${context.quickStats.familySize}`);
+    if (includeQuickStats) {
+      lines.push('', '## Quick Stats');
+      lines.push(`- Total entities in graph: ${context.quickStats.totalEntities}`);
+      lines.push(`- Total preferences: ${context.quickStats.totalPreferences}`);
+      lines.push(`- Total dislikes: ${context.quickStats.totalDislikes}`);
+      lines.push(`- Family members: ${context.quickStats.familySize}`);
+    }
 
     if (context.currentUser.dossier) {
       // The dossier is the sharpest edge in this block: free-form text a model

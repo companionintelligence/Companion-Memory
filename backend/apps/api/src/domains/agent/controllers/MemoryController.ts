@@ -72,6 +72,12 @@ export class MemoryController {
    * Returns a pre-formatted markdown block summarising the user's knowledge
    * graph: name, relationships, preferences, and dossier. Intended to be
    * called once per session (system_prompt_block), not per turn.
+   *
+   * Because harnesses cache this block for the length of a session, nothing
+   * that moves with the wall clock or with ingest volume belongs in it:
+   * `## Quick Stats` (graph totals) is suppressed, and the forecast block is
+   * asked for in its `stable` form (no `Generated:` line, no "still ahead of
+   * now" filter). Anything genuinely per-turn goes through `POST /memory/recall`.
    */
   @UseGuards(ApiKeyGuard)
   @RequireScopes(MEMORY_SCOPE)
@@ -85,10 +91,14 @@ export class MemoryController {
       const blocks: string[] = [];
 
       if (userCtx) {
-        blocks.push(this.userContextService.formatContextForSystemPrompt(userCtx));
+        blocks.push(
+          this.userContextService.formatContextForSystemPrompt(userCtx, { includeQuickStats: false }),
+        );
       }
 
-      const forecastBlock = await this.forecastContextService.getRestOfDayBlock(serviceContext);
+      const forecastBlock = await this.forecastContextService.getRestOfDayBlock(serviceContext, new Date(), {
+        stable: true,
+      });
       if (forecastBlock) {
         blocks.push(forecastBlock);
       }
