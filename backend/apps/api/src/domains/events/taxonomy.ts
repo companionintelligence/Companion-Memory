@@ -116,12 +116,6 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.search,
     description: 'Drop a forgotten agent memory from the search index.',
   },
-  'search.embed.entity': {
-    label: 'Embed for semantic search',
-    category: JOB_CATEGORIES.search,
-    description:
-      'Compute the vector embedding that makes an entity findable by meaning rather than keyword. Runs on the local model, so a backlog here is usually the model being busy.',
-  },
 
   // ── Ingest ──────────────────────────────────────────────────────────────
   'file.created': {
