@@ -177,6 +177,18 @@ interface PromptOptions {
   enableTools?: boolean;
   enableThinking?: boolean;
   /**
+   * Context window to ask the backend for, in tokens (Ollama `options.num_ctx`).
+   * Absent leaves the backend's own default alone, which is what every caller
+   * did before {@link ContextBudget} existed.
+   */
+  numCtx?: number;
+  /**
+   * Cap on the model's own answer, in tokens. Maps to OpenAI `max_tokens`;
+   * native Ollama has no separate output cap (`num_ctx` bounds the whole
+   * transcript), so it is only sent on the OpenAI-compat path.
+   */
+  maxOutputTokens?: number;
+  /**
    * `'json'` asks for syntactically valid JSON and nothing more — the model is
    * still free to invent key names, which small models reliably do. A JSON
    * Schema object instead constrains generation to that shape via grammar, so
@@ -489,8 +501,8 @@ export class OllamaService implements OnModuleInit {
   async chatStream(
     context: ChatRequestContext,
     messages: OllamaMessage[],
-    { model, signal, enableTools = false, enableThinking = true }: PromptOptions,
-  ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[] }> {
+    { model, signal, enableTools = false, enableThinking = true, numCtx, maxOutputTokens }: PromptOptions,
+  ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[]; error?: Error }> {
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
@@ -508,6 +520,13 @@ export class OllamaService implements OnModuleInit {
     // advertised-tool generate.
     const maxToolRounds = 2;
     let generateRounds = 0;
+    // A backend failure inside the generator is logged and the stream ends
+    // quietly (an empty assistant row) rather than throwing at the consumer —
+    // long-standing behavior the SSE controller depends on. Recording it here
+    // additively lets a caller that CAN do something about a specific failure
+    // (ChatTurnService retrying a context overflow with a smaller history
+    // budget) see it, without changing what happens to every other caller.
+    let streamError: Error | undefined;
 
     const stream = (async function* (self) {
       do {
@@ -542,6 +561,7 @@ export class OllamaService implements OnModuleInit {
               signal,
               enableThinking,
               salvageTools: enableTools,
+              maxTokens: maxOutputTokens,
             });
 
             for await (const chunk of iterator) {
@@ -570,6 +590,11 @@ export class OllamaService implements OnModuleInit {
               // branch above and uses chat_template_kwargs.enable_thinking.
               ...(enableThinking && { think: true }),
               ...(iterationWillCallTools && { tools: ollamaTools }),
+              // Ollama sizes num_ctx from the memory it sees, which on a
+              // unified-memory box means the model's full window (and a giant
+              // KV cache) for a one-line chat. CI-Hub already computed the
+              // right number for this hardware; honor it when it reached us.
+              ...(numCtx != null && numCtx > 0 && { options: { num_ctx: numCtx } }),
             });
 
             handleAbort = () => iterator.abort();
@@ -611,6 +636,8 @@ export class OllamaService implements OnModuleInit {
         } catch (err) {
           if (!(err instanceof DOMException && err.name === 'AbortError')) {
             const error = err as Error;
+
+            streamError = error instanceof Error ? error : new Error(String(err));
 
             self.logger.error('LLM prompt evaluation completed', {
               model: lastChunk?.model ?? model,
@@ -668,7 +695,12 @@ export class OllamaService implements OnModuleInit {
       get: () => accumulatedMessages,
     });
 
-    return stream as typeof stream & { messages: OllamaMessage[] };
+    Object.defineProperty(stream, 'error', {
+      enumerable: true,
+      get: () => streamError,
+    });
+
+    return stream as typeof stream & { messages: OllamaMessage[]; error?: Error };
   }
 
   /**
