@@ -746,6 +746,58 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  // The chat-turn memory producer. `ci.agent_memories` was written by exactly
+  // one caller (POST /memory/write, ApiKeyGuard-only), so on an appliance whose
+  // owner talks to their own web chat the table stayed empty and everything
+  // downstream of it — compaction, the fragment embedding, the recall message
+  // channel — had nothing to read. `TurnFragmentCron` is the missing producer.
+  // Consumed by `domains/agent/cron/TurnFragmentCron.ts` and
+  // `domains/agent/services/TurnFragmentService.ts`.
+  agentMemory: z
+    .object({
+      turnFragments: z
+        .object({
+          /**
+           * Minutes between fan-out ticks. Bounded 5..15 on purpose: below 5
+           * the cron re-scans the same settling turns for no gain, above 15 a
+           * fragment written now is not recallable for a quarter of an hour,
+           * which is long enough that the next question in the same session
+           * misses it.
+           */
+          intervalMinutes: z.coerce.number().int().min(5).max(15).default(10),
+          /**
+           * How far back a tick looks. Must comfortably exceed
+           * `intervalMinutes` so a skipped tick (restart, a long-running
+           * previous tick) still gets picked up by the next one.
+           */
+          lookbackMinutes: z.coerce
+            .number()
+            .int()
+            .positive()
+            .max(24 * 60)
+            .default(120),
+          /**
+           * Turns younger than this are left alone. A tool-calling turn writes
+           * several assistant rows against one prompt, and the fragment id is
+           * keyed on the prompt (not the text) so the FIRST write wins — a
+           * settle delay is what stops a half-finished chain becoming the
+           * permanent fragment.
+           */
+          settleMinutes: z.coerce.number().int().nonnegative().default(3),
+          /** Turns distilled per user per tick. Bounds one user's backlog. */
+          maxTurnsPerUser: z.coerce.number().int().positive().default(25),
+          /**
+           * Below this many characters (prompt + reply, after `<think>` is
+           * stripped) the turn is not worth a fragment — "hi"/"thanks" pairs
+           * would otherwise dominate the recall channel.
+           */
+          minFragmentChars: z.coerce.number().int().nonnegative().default(40),
+          /** Per-side cap. A 40k-token reply is not a memory fragment. */
+          maxSideChars: z.coerce.number().int().positive().default(2000),
+        })
+        .default({}),
+    })
+    .default({}),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     /**
@@ -812,6 +864,13 @@ export const ConfigSchema = z.object({
     hbpe: booleanStringSchema,
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,
+    /**
+     * Enables `TurnFragmentCron`: the appliance's own chat turns become raw
+     * `ci.agent_memories` fragments. OFF by default — turning it on starts
+     * writing conversation text into the recall channel, and (with
+     * `agent.memory.compaction` also on) into the knowledge graph.
+     */
+    'agent.memory.turnFragments': booleanStringSchema,
     /**
      * Enables saved-search sharing: the `/shared/<token>` capability-link path
      * (resolving a shared saved search and running it as its owner) and the

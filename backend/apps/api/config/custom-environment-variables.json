@@ -242,6 +242,34 @@
       "__format": "json"
     }
   },
+  "agentMemory": {
+    "turnFragments": {
+      "intervalMinutes": {
+        "__name": "CI_TURN_FRAGMENTS_INTERVAL_MINUTES",
+        "__format": "json"
+      },
+      "lookbackMinutes": {
+        "__name": "CI_TURN_FRAGMENTS_LOOKBACK_MINUTES",
+        "__format": "json"
+      },
+      "settleMinutes": {
+        "__name": "CI_TURN_FRAGMENTS_SETTLE_MINUTES",
+        "__format": "json"
+      },
+      "maxTurnsPerUser": {
+        "__name": "CI_TURN_FRAGMENTS_MAX_TURNS_PER_USER",
+        "__format": "json"
+      },
+      "minFragmentChars": {
+        "__name": "CI_TURN_FRAGMENTS_MIN_CHARS",
+        "__format": "json"
+      },
+      "maxSideChars": {
+        "__name": "CI_TURN_FRAGMENTS_MAX_SIDE_CHARS",
+        "__format": "json"
+      }
+    }
+  },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",
@@ -264,6 +292,7 @@
     "tags.page": "ENABLE_TAGS_PAGE",
     "hbpe": "ENABLE_HBPE",
     "agent.memory.compaction": "ENABLE_AGENT_MEMORY_COMPACTION",
+    "agent.memory.turnFragments": "ENABLE_AGENT_MEMORY_TURN_FRAGMENTS",
     "shared.search": "ENABLE_SHARED_SEARCH",
     "onboarding.preference.steps": "ENABLE_ONBOARDING_PREFERENCE_STEPS",
     "actions": "ENABLE_ACTIONS",

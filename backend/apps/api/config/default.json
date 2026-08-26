@@ -207,6 +207,16 @@
       "deleteBatchSize": 500
     }
   },
+  "agentMemory": {
+    "turnFragments": {
+      "intervalMinutes": 10,
+      "lookbackMinutes": 120,
+      "settleMinutes": 3,
+      "maxTurnsPerUser": 25,
+      "minFragmentChars": 40,
+      "maxSideChars": 2000
+    }
+  },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,
@@ -229,6 +239,7 @@
     "tags.page": true,
     "hbpe": true,
     "agent.memory.compaction": false,
+    "agent.memory.turnFragments": false,
     "shared.search": true,
     "onboarding.preference.steps": false,
     "actions": true,

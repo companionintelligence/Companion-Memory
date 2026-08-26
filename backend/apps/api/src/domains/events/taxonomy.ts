@@ -116,6 +116,12 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.search,
     description: 'Drop a forgotten agent memory from the search index.',
   },
+  'agent-memory.turn-fragments': {
+    label: 'Remember a chat turn',
+    category: JOB_CATEGORIES.ingest,
+    description:
+      'Turn one user\u2019s finished chat turns into raw memory fragments, so what was said in chat can be recalled later and compacted into the graph.',
+  },
 
   // ── Ingest ──────────────────────────────────────────────────────────────
   'file.created': {
