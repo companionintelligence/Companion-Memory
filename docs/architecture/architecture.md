@@ -248,7 +248,6 @@ The table below is grouped roughly by concern rather than alphabetically.
 | `powersync` | The PowerSync token endpoint (`GET /api/powersync/token`) for local-first clients |
 | `devices` | IoT/wearable device registry |
 | `position` | GPS + relative coordinates (hypertable; supports headpose / AR) |
-| `user-snapshots` | `ci.user_snapshots` — the periodic per-user state snapshot hypertable |
 | `browser-activity` | Browser extension capture (`ci.browser_activity` is the sole home for page views — the 2026-08-08 fold into `ci.events`/`ci.content` was reverted) |
 | `search-ingress` / `search-next` | Search index **write** path (queue listeners + the shared `searchTexts.ts` document builders → `ci_search`) / search **read** path (the combinable `search` query, `mapPins`, tags) |
 | `graphql` | Apollo schema assembly and resolvers |
@@ -328,7 +327,7 @@ erDiagram
 See [Database.md](Database.md) for the canonical, verified schema: schemas
 (`ci`/`ci_search`/`ci_etl`/`ci_import`/`ci_derived`/`hbpe`), tables by domain, the
 provenance-triple idempotency/dedup design, indexing (HNSW/GIN/GIST), hypertables
-(`position`, `user_snapshots`, `hbpe.prediction_log`), and the list of dropped
+(`position`, `hbpe.prediction_log`), and the list of dropped
 legacy tables (`measurements`/`sensors`/`documents`/`document_chunks`/`facts` are
 gone).
 

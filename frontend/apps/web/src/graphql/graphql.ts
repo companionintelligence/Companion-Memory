@@ -1396,25 +1396,6 @@ export type GraphType = {
   nodes: Array<GraphNodeType>;
 };
 
-export type IngestUserSnapshotInput = {
-  cwd?: InputMaybe<Scalars['String']['input']>;
-  deviceId: Scalars['ID']['input'];
-  focusApp?: InputMaybe<Scalars['String']['input']>;
-  focusTitle?: InputMaybe<Scalars['String']['input']>;
-  fsEventCount: Scalars['Int']['input'];
-  monotonicMs: Scalars['Float']['input'];
-  observedAt: Scalars['DateTime']['input'];
-  payload: Scalars['JSON']['input'];
-  sessionId: Scalars['ID']['input'];
-  snapshotKind: Scalars['String']['input'];
-};
-
-export type IngestUserSnapshotPayload = {
-  __typename?: 'IngestUserSnapshotPayload';
-  errorMessage?: Maybe<Scalars['String']['output']>;
-  success: Scalars['Boolean']['output'];
-};
-
 export type InsightItemType = {
   __typename?: 'InsightItemType';
   keyActions: Array<Scalars['String']['output']>;
@@ -1893,7 +1874,6 @@ export type Mutation = {
   forageSample?: Maybe<ForageTrialType>;
   /** Name occupancy branches from memory via the LLM; falls back to occupancy labels on failure */
   guessBranchialForecast?: Maybe<BranchialTreeType>;
-  ingestUserSnapshot: IngestUserSnapshotPayload;
   linkItemToProduct: UpdateItemPayload;
   /** Mark an action as dismissed */
   markActionAsDismissed?: Maybe<ActionType>;
@@ -2289,11 +2269,6 @@ export type MutationDeleteTaskArgs = {
 
 export type MutationForagePinArgs = {
   branch: Scalars['String']['input'];
-};
-
-
-export type MutationIngestUserSnapshotArgs = {
-  input: IngestUserSnapshotInput;
 };
 
 

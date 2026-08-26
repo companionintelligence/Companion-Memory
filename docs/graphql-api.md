@@ -15,9 +15,8 @@
   `/api/graphql` (the proxy strips `/api`). Details:
   [api/graphql.md §1](api/graphql.md#1-endpoint--how-to-call-it).
 - Every resolver requires a credential — session JWT Bearer, `x-api-key`, or Portal OIDC
-  Bearer via `JwtOrApiKeyAuthGuard`, which 37 of the 39 resolvers declare. The other two are no
-  looser: `ingestUserSnapshot` takes a session bearer only (`JwtAuthGuard` — no API key), and
-  `GraphResolver` declares no guard but still refuses an anonymous caller, because its `graph`
+  Bearer via `JwtOrApiKeyAuthGuard`, which every resolver but one declares. The exception is no
+  looser: `GraphResolver` declares no guard but still refuses an anonymous caller, because its `graph`
   query resolves the user through `toServiceContext`, which throws `UnauthorizedException` when
   the request carries no principal. No GraphQL field is pre-auth.
   Details: [api/auth-and-conventions.md §1–2](api/auth-and-conventions.md#1-authentication-mechanisms).

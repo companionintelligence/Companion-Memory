@@ -8,6 +8,19 @@
 > as [ADR-0002](adr/0002-timescaledb-hypertable-criteria.md). Workstream steps
 > 1, 3, 4, 5 and 7 are done, step 2 is decided-as-no, and only step 6 remains
 > open (and see the note under it: the table it concerns was never created).
+>
+> **[2026-08-26] `ci.user_snapshots` is gone, not retained.** This audit called it
+> the table with "the strongest unrealised retention argument". The follow-up
+> found the reason retention was never worth arguing about: the table had no
+> `SELECT` anywhere in the repo, and its ingest mutation
+> (`ingestUserSnapshot`) had no caller in any repo — nor could it, since its
+> `JwtAuthGuard` 401s the api-key/Portal-OIDC credentials CI-Capture presents,
+> and CI-Capture's supported lane POSTs the same payload to `/v1/events`
+> instead. Dropped in `20260826202515_retire_user_snapshots`, which settles the
+> retention question the only way it can be settled for a dataset with no
+> consumer. **Two** surviving hypertables now: `ci.position` and
+> `hbpe.prediction_log`. Everything below is the pre-2026-08-26 state.
+>
 > Supersedes and merges the earlier
 > `COMMUNICATIONS-HYPERTABLE-CASE.md`. Originally written against main as of
 > 2026-08-05; reconciled against main as of 2026-08-07 — the deltas found are
