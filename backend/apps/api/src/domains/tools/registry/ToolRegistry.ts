@@ -182,9 +182,17 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
    * Get all available tool schemas (for LLM function calling). Schemas carry the dotted intent
    * `name`; callers that advertise to the LLM/MCP derive the executable name via
    * {@link intentToolName}.
+   *
+   * Tools that name an {@link IntentDefinition.ownerUserId} are visible only to that user. This
+   * map is process-global and every provider loads into it once, so an MCP-client tool built from
+   * one account's stored server config would otherwise be offered to every other account's chat —
+   * along with the description of a server they never configured. `context` was previously logged
+   * here and nothing else; it now decides what the caller is shown.
    */
   getAvailableTools(context?: RequestContext): ToolSchema[] {
-    const schemas = Array.from(this.tools.values()).map((tool) => tool.schema);
+    const schemas = Array.from(this.tools.values())
+      .map((tool) => tool.schema)
+      .filter((schema) => this.isVisibleTo(schema, context?.userId));
 
     this.logger.debug(`Retrieved ${schemas.length} available tools`, {
       userId: context?.userId,
@@ -192,6 +200,17 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     });
 
     return schemas;
+  }
+
+  /**
+   * An unowned tool is everyone's; an owned one is only its owner's.
+   *
+   * A caller with no `userId` (an api-key request that never resolved to a user, an in-process
+   * system job) is deliberately treated as "nobody", not as "everybody": the alternative would
+   * make an unauthenticated surface the widest one.
+   */
+  private isVisibleTo(schema: ToolSchema, userId: string | undefined): boolean {
+    return schema.ownerUserId == null || schema.ownerUserId === userId;
   }
 
   /**
@@ -224,7 +243,12 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
         return provider?.includeInOutboundCatalog !== false;
       })
-      .map(([, tool]) => tool.schema);
+      .map(([, tool]) => tool.schema)
+      // A user-owned tool is never part of the appliance's public manifest, whatever its
+      // provider's flag says. Today the two rules agree (the only owning provider is also the
+      // only one opted out of the catalog), and this is the one that stays true if a future
+      // provider sets ownership without opting out.
+      .filter((schema) => this.isVisibleTo(schema, context?.userId));
 
     this.logger.debug(`Retrieved ${schemas.length} outbound-catalog tools`, {
       userId: context?.userId,
@@ -305,6 +329,29 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     }
 
     const { name: toolName, tool } = resolved;
+
+    // Ownership before capability, and reported as "not found" rather than "forbidden": a tool
+    // built from someone else's stored config does not exist as far as this caller is concerned,
+    // and a distinct refusal would confirm that another account has a server by that name.
+    // Hiding it from `getAvailableTools` is presentation only — a model (or a client naming a
+    // tool directly) can ask for anything, which is why the refusal lives here.
+    if (!this.isVisibleTo(tool.schema, context.userId)) {
+      this.logger.warn(`Refused tool owned by another user: ${name}`, {
+        toolName,
+        intent: tool.schema.name,
+        userId: context.userId,
+        provider: this.toolToProvider.get(toolName),
+      });
+
+      return {
+        success: false,
+        error: {
+          code: 'TOOL_NOT_FOUND',
+          message: `Tool '${name}' not found`,
+          retryable: false,
+        },
+      };
+    }
 
     const { privacy } = tool.schema;
 

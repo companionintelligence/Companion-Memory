@@ -75,7 +75,9 @@ export class McpClientManagerService implements OnModuleDestroy {
 
     this.reconnectTimers.clear();
 
-    await Promise.allSettled(Array.from(this.connections.keys()).map((configId) => this.disconnect(configId)));
+    await Promise.allSettled(
+      Array.from(this.connections.keys()).map((configId) => this.disconnect(configId)),
+    );
   }
 
   /**
@@ -95,10 +97,13 @@ export class McpClientManagerService implements OnModuleDestroy {
     try {
       await this.withTimeout(sweep, McpClientManagerService.BOOT_SWEEP_TIMEOUT_MS, 'MCP boot connect sweep');
     } catch (error) {
-      this.logger.warn('MCP boot connect sweep exceeded its time budget; remaining connects continue in background', {
-        error: (error as Error)?.message,
-        configCount: configs.length,
-      });
+      this.logger.warn(
+        'MCP boot connect sweep exceeded its time budget; remaining connects continue in background',
+        {
+          error: (error as Error)?.message,
+          configCount: configs.length,
+        },
+      );
     }
   }
 
@@ -257,10 +262,17 @@ export class McpClientManagerService implements OnModuleDestroy {
    * its server's stored grant. The approval set travels WITH the tool rather than being fetched
    * separately by the provider so the intersect can never read a grant from a different row than
    * the tool it is judging.
+   *
+   * Deliberately NOT filtered by user, for the same reason {@link connectAllEnabled} is not: the
+   * provider is loaded into the process-global {@link ToolRegistry} once, outside any request, so
+   * there is no user to filter by at this point. Each entry instead carries the `userId` that owns
+   * the config, and the provider stamps it onto the synthesized intent as `ownerUserId` — that is
+   * what the registry filters on, per request, when it lists or executes a tool.
    */
   async listAllDiscoveredTools(): Promise<
     Array<{
       configId: string;
+      userId: string;
       slug: string;
       tool: McpDiscoveredTool;
       approvedTools: McpApprovedTool[] | null;
@@ -269,6 +281,7 @@ export class McpClientManagerService implements OnModuleDestroy {
     const configs = await this.repo.find({ where: { enabled: true } });
     const entries: Array<{
       configId: string;
+      userId: string;
       slug: string;
       tool: McpDiscoveredTool;
       approvedTools: McpApprovedTool[] | null;
@@ -278,6 +291,7 @@ export class McpClientManagerService implements OnModuleDestroy {
       for (const tool of config.discoveredTools ?? []) {
         entries.push({
           configId: config.id,
+          userId: config.userId,
           slug: config.slug,
           tool,
           approvedTools: config.approvedTools ?? null,
@@ -496,7 +510,11 @@ export class McpClientManagerService implements OnModuleDestroy {
   }
 }
 
-function toDiscoveredTool(tool: { name: string; description?: string; inputSchema: unknown }): McpDiscoveredTool {
+function toDiscoveredTool(tool: {
+  name: string;
+  description?: string;
+  inputSchema: unknown;
+}): McpDiscoveredTool {
   return {
     name: tool.name,
     description: tool.description,
@@ -572,7 +590,9 @@ function extractTextContent(result: unknown): string | undefined {
   const text = content
     .filter(
       (block): block is { type: 'text'; text: string } =>
-        typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text' &&
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'text' &&
         typeof (block as { text?: unknown }).text === 'string',
     )
     .map((block) => block.text)

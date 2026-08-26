@@ -77,7 +77,7 @@ export class McpToolProvider implements ToolProvider {
     const entries = await this.manager.listAllDiscoveredTools();
     const next = new Map<string, McpDynamicTool>();
 
-    for (const { configId, slug, tool, approvedTools } of entries) {
+    for (const { configId, userId, slug, tool, approvedTools } of entries) {
       if (!isToolApproved(tool, approvedTools)) {
         this.logger.debug('Withholding unapproved MCP tool from the assistant tool set', {
           configId,
@@ -94,7 +94,7 @@ export class McpToolProvider implements ToolProvider {
         continue;
       }
 
-      next.set(intentName, this.buildDynamicTool(intentName, configId, tool));
+      next.set(intentName, this.buildDynamicTool(intentName, configId, userId, tool));
     }
 
     this.toolCache = next;
@@ -119,7 +119,12 @@ export class McpToolProvider implements ToolProvider {
     };
   }
 
-  private buildDynamicTool(intentName: string, configId: string, tool: McpDiscoveredTool): McpDynamicTool {
+  private buildDynamicTool(
+    intentName: string,
+    configId: string,
+    ownerUserId: string,
+    tool: McpDiscoveredTool,
+  ): McpDynamicTool {
     const schema: IntentDefinition = {
       name: intentName,
       domain: 'mcp',
@@ -129,8 +134,16 @@ export class McpToolProvider implements ToolProvider {
       privacy: { access: 'write', sensitivity: 'sensitive', destructive: true, external: true },
       localCapable: false,
       category: 'mcp',
+      // Unlike a native intent, this tool is not a capability of the appliance: it is a bound call
+      // into one user's configured server, authenticated with the secrets that user saved (the
+      // `configId` closed over below decides whose credentials go out on the wire). The registry
+      // is process-global, so without this the tool would be listed to, and runnable by, every
+      // other account on the box.
+      ownerUserId,
     };
 
-    return new McpDynamicTool(schema, this.logger, (input) => this.manager.callTool(configId, tool.name, input));
+    return new McpDynamicTool(schema, this.logger, (input) =>
+      this.manager.callTool(configId, tool.name, input),
+    );
   }
 }

@@ -43,6 +43,15 @@ function fakeTool(name: string, data: unknown = { ok: true }, privacy: IntentPri
   } as any;
 }
 
+/** A tool materialized from one user's stored config (what the MCP-client provider builds). */
+function ownedTool(name: string, ownerUserId: string, data: unknown = { ok: true }) {
+  const tool = fakeTool(name, data);
+  tool.schema.domain = 'mcp';
+  tool.schema.ownerUserId = ownerUserId;
+
+  return tool;
+}
+
 function fakeProvider(tools: Record<string, any>) {
   const map = new Map(Object.entries(tools));
 
@@ -273,6 +282,102 @@ describe('ToolRegistry', () => {
       const result = await registry.executeTool('memory_create_relationships', asCapability('write'), {});
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  /**
+   * The registry is one process-global map, loaded once per provider, outside any request. A tool
+   * materialized from a single user's stored config (an MCP-client tool, bound to that user's
+   * server and secrets) therefore used to be listed to — and executable by — every other account
+   * on the appliance. Every case below fails against the pre-fix registry, which filtered nothing
+   * and only logged `context.userId`.
+   *
+   * On a single-account appliance this is a no-op; it is correctness for a multi-account box.
+   */
+  describe('per-user tool ownership', () => {
+    async function registryWithOwnedTool() {
+      const { registry, send } = makeRegistry();
+      const owned = ownedTool('mcp.github.create_issue', 'user-1', { issue: 7 });
+      await registry.registerProvider(
+        fakeProvider({ 'mcp.github.create_issue': owned, 'memory.recall': fakeTool('memory.recall') }),
+      );
+
+      return { registry, send, owned };
+    }
+
+    it('lists an owned tool to its owner alongside the unowned ones', async () => {
+      const { registry } = await registryWithOwnedTool();
+
+      expect(
+        registry
+          .getAvailableTools({ userId: 'user-1' })
+          .map((s) => s.name)
+          .sort(),
+      ).toEqual(['mcp.github.create_issue', 'memory.recall']);
+    });
+
+    it('hides another user\'s owned tool while still listing the unowned ones', async () => {
+      const { registry } = await registryWithOwnedTool();
+
+      expect(registry.getAvailableTools({ userId: 'user-2' }).map((s) => s.name)).toEqual(['memory.recall']);
+      expect(registry.getAgentFacingTools({ userId: 'user-2' }).map((s) => s.name)).toEqual(['memory.recall']);
+    });
+
+    it('treats a caller with no userId as nobody, not as everybody', async () => {
+      const { registry } = await registryWithOwnedTool();
+
+      expect(registry.getAvailableTools().map((s) => s.name)).toEqual(['memory.recall']);
+      expect(registry.getOutboundCatalogTools().map((s) => s.name)).toEqual(['memory.recall']);
+    });
+
+    it('refuses to execute another user\'s owned tool, and does not run or record it', async () => {
+      const { registry, send, owned } = await registryWithOwnedTool();
+
+      const result = await registry.executeTool('mcp_github_create_issue', {
+        userId: 'user-2',
+        capability: 'full',
+      }, {});
+
+      expect(result.success).toBe(false);
+      // Reported as missing, not forbidden: a distinct refusal would confirm the other account
+      // has a server by that name.
+      expect(result.error?.code).toBe('TOOL_NOT_FOUND');
+      expect(owned.execute).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('refuses it to an unauthenticated caller too (naming it directly is not a way in)', async () => {
+      const { registry, owned } = await registryWithOwnedTool();
+
+      const result = await registry.executeTool('mcp_github_create_issue', { capability: 'full' }, {});
+
+      expect(result.error?.code).toBe('TOOL_NOT_FOUND');
+      expect(owned.execute).not.toHaveBeenCalled();
+    });
+
+    it('still executes the owned tool for its owner', async () => {
+      const { registry, send, owned } = await registryWithOwnedTool();
+
+      const result = await registry.executeTool('mcp_github_create_issue', {
+        userId: 'user-1',
+        capability: 'full',
+      }, {});
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ issue: 7 });
+      expect(owned.execute).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves unowned native tools reachable by any user, including one with no userId', async () => {
+      const { registry } = await registryWithOwnedTool();
+
+      await expect(
+        registry.executeTool('memory_recall', { userId: 'user-2', capability: 'full' }, {}),
+      ).resolves.toMatchObject({ success: true });
+      await expect(registry.executeTool('memory_recall', { capability: 'full' }, {})).resolves.toMatchObject({
+        success: true,
+      });
     });
   });
 

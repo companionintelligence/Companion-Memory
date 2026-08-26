@@ -143,6 +143,21 @@ export interface IntentDefinition {
    * it is {@link resolveDispatch}'s answer, which also refuses destructive/external intents.
    */
   localCapable: boolean;
+  /**
+   * The user this tool belongs to, when it is not a capability of the appliance itself.
+   *
+   * Absent on every native intent — `memory.recall` is the same tool for everyone, and the tool
+   * scopes its own reads by the caller's `context.userId`. Set only by a provider whose tools are
+   * materialized from ONE user's stored configuration and carry that user's credentials: today
+   * exactly the MCP-client provider, where a tool is a bound call into a server that a specific
+   * user configured, authenticated with the secrets that user saved.
+   *
+   * The {@link ToolRegistry} is a process-global map keyed by tool name, so without this field a
+   * tool built from one user's config is listed to — and executable by — every other account on
+   * the appliance. `getAvailableTools` hides an owned tool from anyone but its owner, and
+   * `executeTool` refuses it, so ownership is enforced rather than merely advertised.
+   */
+  ownerUserId?: string;
   /** Entity types this tool reads. */
   consumes?: CiEntityType[];
   /** Entity types this tool returns. */
