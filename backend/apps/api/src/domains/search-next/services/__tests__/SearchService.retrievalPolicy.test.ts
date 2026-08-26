@@ -2,6 +2,7 @@ import type { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
+import type { EventService } from '@ci/domains/events';
 import {
   RETRIEVAL_POLICY_DEFAULTS,
   type RetrievalPolicy,
@@ -49,8 +50,9 @@ function makeService(policy: RetrievalPolicy = RETRIEVAL_POLICY_DEFAULTS) {
   const retrievalPolicy = {
     get: jest.fn().mockResolvedValue(policy),
   } as unknown as RetrievalPolicyService;
+  const events = { send: jest.fn().mockResolvedValue([]) } as unknown as EventService;
 
-  return { service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy), query };
+  return { service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, events), query };
 }
 
 describe('SearchService under the fail-open baseline — SQL is unchanged', () => {

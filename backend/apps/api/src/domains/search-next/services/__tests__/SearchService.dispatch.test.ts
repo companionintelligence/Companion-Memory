@@ -2,6 +2,7 @@ import type { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
+import type { EventService } from '@ci/domains/events';
 import { RETRIEVAL_POLICY_DEFAULTS, type RetrievalPolicyService } from '@ci/domains/retrieval-policy';
 
 import { SearchService, SEMANTIC_DISTANCE_THRESHOLD } from '../SearchService';
@@ -11,7 +12,7 @@ import { SearchService, SEMANTIC_DISTANCE_THRESHOLD } from '../SearchService';
  * SearchResolver, MCP tools, RecallService. It has zero direct coverage: the
  * only existing spec (SearchService.searchMessages.test.ts) exercises the
  * separate naive-RAG message channel, not this dispatcher. These pin the
- * mode-selection contract (`autoSearch`'s word-count/special-char heuristic)
+ * mode-selection contract (`resolveAutoMode`'s word-count/special-char heuristic)
  * and the default type-exclusion behind it, using a stubbed DataSource so no
  * Postgres is required — the SQL/tenancy half of SearchService lives in
  * SearchService.scoping.integration.spec.ts against a real one.
@@ -33,16 +34,19 @@ function makeService() {
     get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS),
   } as unknown as RetrievalPolicyService;
 
-  const service = new SearchService(dataSource, embeddingGenerationService, retrievalPolicy);
+  const send = jest.fn().mockResolvedValue([]);
+  const events = { send } as unknown as EventService;
 
-  return { service, query, embeddingGenerationService, retrievalPolicy };
+  const service = new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, events);
+
+  return { service, query, embeddingGenerationService, retrievalPolicy, send };
 }
 
 describe('SearchService.search — mode dispatch', () => {
   it('an explicit mode is honored verbatim, bypassing auto-detection', async () => {
     const { service, embeddingGenerationService } = makeService();
 
-    // 'urgent' is a single word — autoSearch would route this to keyword
+    // 'urgent' is a single word — auto would route this to keyword
     // (no embedding call). An explicit 'semantic' must still call the
     // embedding service; the mode argument overrides the heuristic entirely.
     await service.search(CONTEXT, { query: 'urgent', mode: 'semantic' });

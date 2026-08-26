@@ -220,6 +220,7 @@ function makeHarness(
     dataSource as never,
     { generateEmbeddingString: jest.fn() } as never,
     { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as never,
+    { send: jest.fn().mockResolvedValue([]) } as never,
   );
 
   return {
@@ -320,6 +321,7 @@ describe('RecallProbeService', () => {
       { query: jest.fn() } as never,
       { generateEmbeddingString: jest.fn() } as never,
       { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as never,
+      { send: jest.fn().mockResolvedValue([]) } as never,
     );
 
     await service.probe(new Date('2026-08-23T05:20:13.000Z'));

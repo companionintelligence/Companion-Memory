@@ -93,9 +93,12 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
     });
     await dataSource.initialize();
 
-    service = new SearchService(dataSource, embeddingGenerationService, {
-      get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS),
-    } as never);
+    service = new SearchService(
+      dataSource,
+      embeddingGenerationService,
+      { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as never,
+      { send: jest.fn().mockResolvedValue([]) } as never,
+    );
   });
 
   afterAll(async () => {

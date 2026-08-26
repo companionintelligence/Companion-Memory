@@ -2,6 +2,7 @@ import type { DataSource, QueryRunner } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
+import type { EventService } from '@ci/domains/events';
 import { RETRIEVAL_POLICY_DEFAULTS, type RetrievalPolicyService } from '@ci/domains/retrieval-policy';
 
 import {
@@ -88,9 +89,10 @@ function makeService(): Harness {
   const retrievalPolicy = {
     get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS),
   } as unknown as RetrievalPolicyService;
+  const events = { send: jest.fn().mockResolvedValue([]) } as unknown as EventService;
 
   return {
-    service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy),
+    service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, events),
     poolQueries,
     runnerQueries,
     runner,

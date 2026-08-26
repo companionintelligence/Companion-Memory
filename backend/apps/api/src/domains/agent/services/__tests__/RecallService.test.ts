@@ -2,6 +2,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import { UNTRUSTED_CLOSE, UNTRUSTED_GUARD, UNTRUSTED_OPEN } from '@ci/common/prompt/untrustedBlock';
 import type { EntityResolutionService } from '@ci/domains/entity-resolution';
+import type { EventService } from '@ci/domains/events';
 import type { GraphExpansionService } from '@ci/domains/graph';
 import { RETRIEVAL_POLICY_DEFAULTS, type RetrievalPolicyService } from '@ci/domains/retrieval-policy';
 import type { SearchService } from '@ci/domains/search-next';
@@ -67,6 +68,8 @@ function build(
     findByIds: overrides.findByIds ?? jest.fn().mockResolvedValue([]),
   } as unknown as AgentMemoryService;
   const logger = { setContext() {}, warn() {}, log() {} } as unknown as LoggerService;
+  const send = jest.fn().mockResolvedValue([]);
+  const events = { send } as unknown as EventService;
 
   // The compiled-in baseline — the same object `RetrievalPolicyService` returns
   // when `ci.retrieval_policy` is empty or unreachable, so every assertion here
@@ -81,11 +84,12 @@ function build(
     serializer,
     graphExpansion,
     agentMemory,
+    events,
     logger,
     retrievalPolicy,
   );
 
-  return { service, search, searchAnchored };
+  return { service, search, searchAnchored, send };
 }
 
 describe('RecallService.recall — default strategy is untouched', () => {
@@ -385,5 +389,124 @@ describe('RecallService.recall — the two channels that bypass entity resolutio
       voice: 'other',
       ref: { type: 'agent-memory', id: 'mem-3', at: '2024-05-01T10:00:00.000Z' },
     });
+  });
+});
+
+/**
+ * A successful ZERO-RESULT recall used to be completely silent: `resultCount`
+ * is computed, handed to a caller who throws it away, and never persisted; the
+ * only log calls in this class are `.warn` on the two failure paths. These pin
+ * the write that makes an empty recall countable — and the line it must not
+ * cross, which is putting the question itself on a queue.
+ */
+describe('RecallService — retrieval.query telemetry', () => {
+  const GROUNDED = { strategy: 'grounded' as const };
+
+  /** The payload of the Nth `send` call. */
+  function payloadOf(send: jest.Mock, index = 0): Record<string, unknown> {
+    return (send.mock.calls[index] as [string, Record<string, unknown>])[1];
+  }
+
+  it('records a successful recall that found NOTHING — the case that was silent', async () => {
+    const { service, send } = build({ search: jest.fn().mockResolvedValue([]) });
+
+    const result = await service.recall(CONTEXT, { query: 'where does Jordan live', maxResults: 5 });
+
+    expect(result.resultCount).toBe(0);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    const [name, payload, options] = send.mock.calls[0] as [string, Record<string, unknown>, unknown];
+
+    expect(name).toBe('retrieval.query');
+    expect(options).toStrictEqual({ queue: 'telemetry' });
+    expect(payload.caller).toBe('recall');
+    expect(payload.resultCount).toBe(0);
+  });
+
+  it('records the line count it actually handed back on a hit', async () => {
+    const { service, send } = build({
+      search: jest.fn().mockResolvedValue([
+        { type: 'person', id: 'p1' },
+        { type: 'person', id: 'p2' },
+      ]),
+    });
+
+    const result = await service.recall(CONTEXT, { query: 'where does Jordan live', maxResults: 5 });
+
+    expect(result.resultCount).toBe(2);
+    expect(payloadOf(send).resultCount).toBe(2);
+  });
+
+  it('records the strategy as the mode taken, so grounded and default are separable', async () => {
+    const { service, send } = build({
+      searchAnchored: jest.fn().mockResolvedValue([{ type: 'person', id: 'p1' }]),
+    });
+
+    await service.recall(CONTEXT, { query: 'what is your favorite cuisine', maxResults: 5 }, GROUNDED);
+
+    expect(payloadOf(send).modeTaken).toBe('grounded');
+
+    const { service: plain, send: plainSend } = build({
+      search: jest.fn().mockResolvedValue([{ type: 'person', id: 'p1' }]),
+    });
+
+    await plain.recall(CONTEXT, { query: 'where does Jordan live', maxResults: 5 });
+
+    expect(payloadOf(plainSend).modeTaken).toBe('seed-then-fallback');
+  });
+
+  it('records the EFFECTIVE seed exclusions, including the always-excluded message type', async () => {
+    const { service, send } = build({ search: jest.fn().mockResolvedValue([]) });
+
+    await service.recall(CONTEXT, { query: 'where does Jordan live' }, { excludeTypes: ['position'] });
+
+    expect(payloadOf(send).excludeTypes).toStrictEqual(['message', 'position']);
+  });
+
+  it('never puts the question on the queue — only how many tokens long it was', async () => {
+    const { service, send } = build({ search: jest.fn().mockResolvedValue([]) });
+
+    await service.recall(CONTEXT, { query: 'divorce lawyer recommendation from Priya Sharma' });
+
+    const serialised = JSON.stringify(payloadOf(send));
+
+    expect(serialised).not.toContain('divorce');
+    expect(serialised).not.toContain('Priya');
+    expect(payloadOf(send)).not.toHaveProperty('query');
+    expect(payloadOf(send).queryTokenCount).toBe(6);
+  });
+
+  it('does NOT record an empty query — that is a caller passing nothing, not a failed answer', async () => {
+    const { service, send } = build();
+
+    await service.recall(CONTEXT, { query: '   ' });
+
+    // Counting it would inflate the zero-result rate with non-questions and
+    // make the alert built on that rate unreadable.
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does NOT record a THROWN recall as a zero result', async () => {
+    // A broken retrieval is not an empty one. Folding them together would let
+    // an outage read as "the corpus has no answer".
+    const { service, send } = build({
+      search: jest.fn().mockRejectedValue(new Error('the index is on fire')),
+    });
+
+    const result = await service.recall(CONTEXT, { query: 'where does Jordan live' });
+
+    expect(result.resultCount).toBe(0);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('still returns the block when the telemetry emit rejects', async () => {
+    const { service, send } = build({
+      search: jest.fn().mockResolvedValue([{ type: 'person', id: 'p1' }]),
+    });
+    send.mockRejectedValue(new Error('pg-boss is down'));
+
+    const result = await service.recall(CONTEXT, { query: 'where does Jordan live' });
+
+    expect(result.resultCount).toBe(1);
   });
 });

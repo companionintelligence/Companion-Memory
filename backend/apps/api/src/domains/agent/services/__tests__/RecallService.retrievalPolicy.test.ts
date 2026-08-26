@@ -1,6 +1,7 @@
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EntityResolutionService } from '@ci/domains/entity-resolution';
+import type { EventService } from '@ci/domains/events';
 import type { GraphExpansionService } from '@ci/domains/graph';
 import {
   RETRIEVAL_POLICY_DEFAULTS,
@@ -65,6 +66,7 @@ function build(policy: RetrievalPolicy = RETRIEVAL_POLICY_DEFAULTS) {
 
   const graphExpansion = { expand: jest.fn().mockResolvedValue([]) } as unknown as GraphExpansionService;
   const agentMemory = { findByIds: jest.fn().mockResolvedValue([]) } as unknown as AgentMemoryService;
+  const events = { send: jest.fn().mockResolvedValue([]) } as unknown as EventService;
   const logger = { setContext() {}, warn() {}, log() {} } as unknown as LoggerService;
   const retrievalPolicy = { get: jest.fn().mockResolvedValue(policy) } as unknown as RetrievalPolicyService;
 
@@ -74,6 +76,7 @@ function build(policy: RetrievalPolicy = RETRIEVAL_POLICY_DEFAULTS) {
     serializer,
     graphExpansion,
     agentMemory,
+    events,
     logger,
     retrievalPolicy,
   );

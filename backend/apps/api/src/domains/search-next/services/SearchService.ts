@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EventService } from '@ci/domains/events';
 import {
   RETRIEVAL_POLICY_DEFAULTS,
   RetrievalPolicyService,
@@ -11,6 +12,7 @@ import {
   tsRankWeightsLiteral,
 } from '@ci/domains/retrieval-policy';
 
+import { queryTokenCount, RetrievalQueryEvent, type RetrievalQueryPayload } from '../events';
 import { buildPromptQuery, type BuildPromptQueryOptions } from '../promptQuery';
 import type { EntityIdentifier, IndexableEntity, PromptSearchResult } from '../types';
 
@@ -241,6 +243,7 @@ export class SearchService {
     private readonly dataSource: DataSource,
     private readonly embeddingGenerationService: EmbeddingGenerationService,
     private readonly retrievalPolicy: RetrievalPolicyService,
+    private readonly events: EventService,
   ) {}
 
   /**
@@ -279,9 +282,17 @@ export class SearchService {
     const resolvedOptions = this.applyDefaultTypeExclusions(options);
     const { mode = 'auto' } = resolvedOptions;
 
-    let results: EntityIdentifier<IndexableEntity>[];
+    // Resolve 'auto' BEFORE dispatching rather than inside a private
+    // `autoSearch`, so the mode that actually ran is a value this method holds
+    // and can record. Logged as 'auto' it would be unreadable: auto is the
+    // default, so it is most calls, and the three strategies it picks between
+    // have completely different recall behaviour.
+    const modeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
+    const startedAt = Date.now();
 
-    switch (mode) {
+    let results: ScoredSearchResult[];
+
+    switch (modeTaken) {
       case 'semantic':
         results = await this.semanticSearch(context, resolvedOptions);
         break;
@@ -298,16 +309,42 @@ export class SearchService {
         results = await this.hybridSearch(context, resolvedOptions);
         break;
 
-      case 'auto':
       default:
-        results = await this.autoSearch(context, resolvedOptions);
+        results = await this.keywordSearch(context, resolvedOptions);
         break;
     }
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search',
+      modeTaken,
+      queryTokenCount: queryTokenCount(resolvedOptions.query),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      resultCount: results.length,
+      topScore: topScoreOf(results),
+      latencyMs: Date.now() - startedAt,
+    });
 
     return results.map((result) => ({
       id: result.id,
       type: result.type,
     }));
+  }
+
+  /**
+   * Emit one {@link RetrievalQueryEvent} onto the `telemetry` queue, and never
+   * wait for it.
+   *
+   * Not awaited and never rethrown: a search that already produced its answer
+   * must not fail, or slow down, because a telemetry row could not be enqueued.
+   * The failure is not silent at the queue layer — `PGBossEventService` logs an
+   * unknown or suppressed queue itself — so the catch here is the last resort
+   * for a genuinely broken connection, which the retrieval path cannot act on
+   * anyway.
+   */
+  private recordQuery(payload: RetrievalQueryPayload): void {
+    void this.events.send(RetrievalQueryEvent, payload, { queue: 'telemetry' }).catch(() => undefined);
   }
 
   /**
@@ -339,12 +376,28 @@ export class SearchService {
     const { prompt, maxResults = 25 } = options;
     const groups = buildPromptQuery(prompt, { subjectIsName: options.subjectIsName });
     const limit = Math.max(1, Math.trunc(maxResults));
+    const startedAt = Date.now();
 
     // No groups means the prompt named nothing. Short-circuit rather than send a
     // query with an empty tsquery: `vector @@ ''::tsquery` is a NULL comparison
     // that already returns no rows, but relying on that makes "asked nothing"
     // and "asked for everything" one code path, and only one of them is safe.
     if (groups.length === 0) {
+      // Recorded, not skipped. "The prompt named nothing we could search on" is
+      // a zero-result retrieval like any other, and it is the one an operator
+      // most wants counted: it is the shape a failing ask executor takes.
+      this.recordQuery({
+        userId: context.userId,
+        caller: 'search_prompt',
+        modeTaken: 'prompt',
+        queryTokenCount: queryTokenCount(prompt),
+        includeTypes: options.includeTypes ?? null,
+        excludeTypes: options.excludeTypes ?? null,
+        resultCount: 0,
+        topScore: null,
+        latencyMs: Date.now() - startedAt,
+      });
+
       return { items: [], totalMatches: 0, truncated: false, limit };
     }
 
@@ -427,6 +480,21 @@ export class SearchService {
     // same value; zero rows means zero matches.
     const totalMatches = rows.length > 0 ? Number(rows[0].total_matches) : 0;
 
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_prompt',
+      modeTaken: 'prompt',
+      queryTokenCount: queryTokenCount(prompt),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      // The PAGE size, not `totalMatches`: every other caller records what it
+      // handed back, and a zero_result rate computed over a mixture of the two
+      // would mean nothing.
+      resultCount: rows.length,
+      topScore: rows.length > 0 ? Number(rows[0].score) : null,
+      latencyMs: Date.now() - startedAt,
+    });
+
     return {
       items: rows.map((row) => ({
         id: row.entity_id,
@@ -462,6 +530,7 @@ export class SearchService {
     maxResults = MESSAGE_DEFAULT_K,
     distanceFloor = MESSAGE_DISTANCE_FLOOR,
   ): Promise<{ id: string; score: number }[]> {
+    const startedAt = Date.now();
     const vector = await this.embeddingGenerationService.generateEmbeddingString(query);
 
     // ORDER BY the raw distance operator (ascending) — NOT `1 - (embedding <=> $2)
@@ -485,10 +554,29 @@ export class SearchService {
 
     const rows = await this.dataSource.query(sql, [context.userId, vector, distanceFloor]);
 
-    return rows.map((row: { entity_id: string; score: string }) => ({
+    const hits = rows.map((row: { entity_id: string; score: string }) => ({
       id: row.entity_id,
       score: parseFloat(row.score),
     }));
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_messages',
+      modeTaken: 'semantic',
+      queryTokenCount: queryTokenCount(query),
+      // This channel is 'message' BY CONSTRUCTION (the predicate is in the SQL,
+      // not in an option), which is precisely why it is recorded as an include:
+      // it is the one retrieval path that reads the type every other path
+      // excludes by default, so a reader comparing its zero-result rate against
+      // `search`'s is comparing two different corpora.
+      includeTypes: ['message'],
+      excludeTypes: null,
+      resultCount: hits.length,
+      topScore: topScoreOf(hits),
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return hits;
   }
 
   /**
@@ -537,10 +625,27 @@ export class SearchService {
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     const { maxResults = 25, maxAnchorMatches = ANCHOR_MAX_MATCHES } = options;
     const limit = Math.max(1, Math.trunc(maxResults));
+    const startedAt = Date.now();
 
     const anchor = await this.findAnchorLexeme(context, question, maxAnchorMatches);
 
     if (!anchor) {
+      // "No term in the question is selective enough to anchor on" is the
+      // deliberate empty answer this method documents. It still has to be
+      // COUNTED, or the anchored channel's zero-result rate is measured only
+      // over the calls that got as far as running a query.
+      this.recordQuery({
+        userId: context.userId,
+        caller: 'search_anchored',
+        modeTaken: 'no_anchor',
+        queryTokenCount: queryTokenCount(question),
+        includeTypes: options.includeTypes ?? null,
+        excludeTypes: options.excludeTypes ?? null,
+        resultCount: 0,
+        topScore: null,
+        latencyMs: Date.now() - startedAt,
+      });
+
       return [];
     }
 
@@ -583,6 +688,20 @@ export class SearchService {
     }
 
     const rows: Omit<ScoredRowResult, 'score'>[] = await this.dataSource.query(sql, params);
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_anchored',
+      modeTaken: 'anchored',
+      queryTokenCount: queryTokenCount(question),
+      includeTypes: options.includeTypes ?? null,
+      excludeTypes: options.excludeTypes ?? null,
+      resultCount: rows.length,
+      // This statement selects no score at all — it orders by embedding
+      // distance and returns identifiers — so there is no top score to claim.
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
 
     return rows.map((row) => ({
       id: row.entity_id,
@@ -651,37 +770,6 @@ export class SearchService {
       // same GraphQL-union reason.
       excludeTypes: ['message', 'position'],
     };
-  }
-
-  /**
-   * Automatically selects the best search strategy based on query characteristics.
-   *
-   * - Short queries (≤3 words) or special chars: keyword only (fast, no embedding call)
-   * - Medium queries (4-7 words): boosted keyword (embedding call for relevance boost)
-   * - Long queries (≥8 words): semantic only (conceptual/natural language)
-   */
-  private async autoSearch(
-    context: UserServiceContext,
-    options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
-    const { query } = options;
-
-    // Auto-detect search strategy based on query characteristics
-    const wordCount = query.trim().split(/\s+/).length;
-    const hasSpecialChars = /[@.:\-_]/.test(query);
-
-    // Short queries or those with special characters (emails, IDs) → keyword only (fast)
-    if (wordCount <= 3 || hasSpecialChars) {
-      return this.keywordSearch(context, options);
-    }
-
-    // Long natural language queries → semantic (conceptual matching)
-    if (wordCount >= 8) {
-      return this.semanticSearch(context, options);
-    }
-
-    // Medium length queries → boosted keyword (best balance of speed and relevance)
-    return this.boostedKeywordSearch(context, options);
   }
 
   /**
@@ -1079,4 +1167,51 @@ export class SearchService {
 
 function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
+}
+
+/**
+ * Which strategy `mode: 'auto'` picks for a query. Unchanged rules, lifted out
+ * of the private `autoSearch` it used to live inside so that
+ * {@link SearchService.search} can name the mode it is about to run — the
+ * dispatcher needs the DECISION, not just its effect, in order to record it.
+ *
+ * - Short queries (≤3 words) or special chars: keyword only (fast, no embedding call)
+ * - Medium queries (4-7 words): boosted keyword (embedding call for relevance boost)
+ * - Long queries (≥8 words): semantic only (conceptual/natural language)
+ */
+export function resolveAutoMode(query: string): 'keyword' | 'boosted' | 'semantic' {
+  const wordCount = query.trim().split(/\s+/).length;
+  const hasSpecialChars = /[@.:\-_]/.test(query);
+
+  // Short queries or those with special characters (emails, IDs) → keyword only (fast)
+  if (wordCount <= 3 || hasSpecialChars) {
+    return 'keyword';
+  }
+
+  // Long natural language queries → semantic (conceptual matching)
+  if (wordCount >= 8) {
+    return 'semantic';
+  }
+
+  // Medium length queries → boosted keyword (best balance of speed and relevance)
+  return 'boosted';
+}
+
+/**
+ * Highest score in a result set, or null when there is none to report.
+ *
+ * A max rather than `results[0]`: every ranked path here already returns its
+ * best row first, but a log column that quietly assumes that would start lying
+ * the day a caller re-orders a result set before it is recorded.
+ */
+function topScoreOf(results: { score: number }[]): number | null {
+  let top: number | null = null;
+
+  for (const result of results) {
+    if (Number.isFinite(result.score) && (top === null || result.score > top)) {
+      top = result.score;
+    }
+  }
+
+  return top;
 }

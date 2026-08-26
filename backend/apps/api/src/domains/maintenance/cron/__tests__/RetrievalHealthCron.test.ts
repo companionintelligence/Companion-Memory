@@ -3,6 +3,7 @@ import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants'
 import { PersonalizationService, type TrustMode } from '@ci/domains/personalization';
 
 import type { RetrievalHealthAlert, RetrievalHealthRun } from '../../services/RetrievalHealthService';
+import type { RetrievalQueryAlert } from '../../services/RetrievalQueryLogService';
 import { ALERT_REPEAT_DAYS, RETRIEVAL_HEALTH_CRON, RetrievalHealthCron } from '../RetrievalHealthCron';
 
 /**
@@ -62,6 +63,7 @@ function makeRun(alerts: RetrievalHealthAlert[] = [ALERT]): RetrievalHealthRun {
 function makeCron(
   options: {
     alerts?: RetrievalHealthAlert[];
+    queryAlerts?: RetrievalQueryAlert[];
     actionsEnabled?: boolean;
     recentKeys?: string[];
     users?: string[];
@@ -86,6 +88,14 @@ function makeCron(
   };
 
   const retrievalHealthService = { capture: jest.fn(async () => makeRun(options.alerts)) };
+  const retrievalQueryLogService = {
+    capture: jest.fn(async () => ({
+      capturedAt: new Date('2026-08-21T03:40:50.000Z'),
+      windows: [],
+      alerts: options.queryAlerts ?? [],
+      pruned: 0,
+    })),
+  };
   const actionService = { create: jest.fn(async () => ({ id: 'action' })) };
   const featureService = { isFeatureEnabled: jest.fn(async () => options.actionsEnabled ?? true) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -93,6 +103,7 @@ function makeCron(
   const cron = new RetrievalHealthCron(
     dataSource as never,
     retrievalHealthService as never,
+    retrievalQueryLogService as never,
     actionService as never,
     featureService as never,
     logger as never,
@@ -102,6 +113,7 @@ function makeCron(
     cron,
     dataSource,
     retrievalHealthService,
+    retrievalQueryLogService,
     actionService,
     featureService,
     logger,
@@ -159,6 +171,9 @@ describe('RetrievalHealthCron schedule', () => {
         // costs ~20s.
         jest.doMock('@ci/domains/intelligence', () => ({ ActionService: class {} }));
         jest.doMock('../../services/RetrievalHealthService', () => ({ RetrievalHealthService: class {} }));
+        jest.doMock('../../services/RetrievalQueryLogService', () => ({
+          RetrievalQueryLogService: class {},
+        }));
 
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const module = require('../RetrievalHealthCron') as typeof import('../RetrievalHealthCron');
@@ -173,6 +188,7 @@ describe('RetrievalHealthCron schedule', () => {
       jest.dontMock('@ci/common/roles');
       jest.dontMock('@ci/domains/intelligence');
       jest.dontMock('../../services/RetrievalHealthService');
+      jest.dontMock('../../services/RetrievalQueryLogService');
 
       return registered;
     };
@@ -312,5 +328,123 @@ describe('RetrievalHealthCron trust dial', () => {
 
     expect(injected).not.toHaveLength(0);
     expect(injected).not.toContain(PersonalizationService);
+  });
+});
+
+/**
+ * The zero-result-rate half. `ci.retrieval_health_snapshots` measures index
+ * COVERAGE and `ci.recall_probe_results` measures ANN recall over query vectors
+ * SAMPLED FROM THE INDEX — both can read healthy while every question a person
+ * actually asks returns nothing. `ci.retrieval_query_log` is what measures the
+ * answers, and this cron is what turns that into a card.
+ */
+describe('RetrievalHealthCron zero-result alerts', () => {
+  const QUERY_ALERT: RetrievalQueryAlert = {
+    userId: USER,
+    alert: {
+      reason: 'zero_result_rate',
+      key: 'retrieval_query_log:search:zero_result_rate',
+      title: 'Most of your recent searches found nothing',
+      text: '60 of your last 100 searches (60%) came back empty over the past 7 days.',
+      detail: { caller: 'search', total: 100, zeroResults: 60, zeroResultRate: 0.6 },
+    },
+  };
+
+  it('rolls up the query log on every run, even when the coverage half is clean', async () => {
+    // The rollup also PRUNES, so making it conditional would leave the query
+    // log unbounded.
+    const { cron, retrievalQueryLogService } = makeCron({ alerts: [] });
+
+    await cron.captureRetrievalHealth();
+
+    expect(retrievalQueryLogService.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it('raises the card even when the coverage half found nothing wrong', async () => {
+    const { cron, actionService } = makeCron({ alerts: [], queryAlerts: [QUERY_ALERT] });
+
+    await cron.captureRetrievalHealth();
+
+    expect(actionService.create).toHaveBeenCalledTimes(1);
+
+    const [context, dto] = actionService.create.mock.calls[0] as unknown as [
+      { userId: string },
+      { metadata: Record<string, unknown> },
+    ];
+
+    expect(context.userId).toBe(USER);
+    expect(dto.metadata).toMatchObject({
+      key: 'retrieval_query_log:search:zero_result_rate',
+      kind: 'retrieval_health',
+      reason: 'zero_result_rate',
+      caller: 'search',
+      zeroResults: 60,
+    });
+  });
+
+  it('raises it against THAT user only, never fanned out to every onboarded account', async () => {
+    // A zero-result rate is measured from one person's own queries. Fanning it
+    // out would tell four other people about a hole only the fifth one hit.
+    const second = '00000000-0000-0000-0000-0000000000bb';
+    const { cron, actionService } = makeCron({
+      alerts: [],
+      users: [USER, second],
+      queryAlerts: [QUERY_ALERT],
+    });
+
+    await cron.captureRetrievalHealth();
+
+    expect(actionService.create).toHaveBeenCalledTimes(1);
+
+    const [context] = actionService.create.mock.calls[0] as unknown as [{ userId: string }];
+
+    expect(context.userId).toBe(USER);
+  });
+
+  it('carries no entityType on the card, because there is no one type it is about', async () => {
+    const { cron, actionService } = makeCron({ alerts: [], queryAlerts: [QUERY_ALERT] });
+
+    await cron.captureRetrievalHealth();
+
+    const [, dto] = actionService.create.mock.calls[0] as unknown as [
+      unknown,
+      { metadata: Record<string, unknown> },
+    ];
+
+    expect(dto.metadata).not.toHaveProperty('entityType');
+  });
+
+  it("is deduped on metadata->>'key' like every other card", async () => {
+    const { cron, actionService } = makeCron({
+      alerts: [],
+      queryAlerts: [QUERY_ALERT],
+      recentKeys: ['retrieval_query_log:search:zero_result_rate'],
+    });
+
+    await cron.captureRetrievalHealth();
+
+    expect(actionService.create).not.toHaveBeenCalled();
+  });
+
+  it('is suppressed with the rest when the actions feature is off — but the rollup still ran', async () => {
+    const { cron, actionService, retrievalQueryLogService } = makeCron({
+      alerts: [],
+      queryAlerts: [QUERY_ALERT],
+      actionsEnabled: false,
+    });
+
+    await cron.captureRetrievalHealth();
+
+    expect(retrievalQueryLogService.capture).toHaveBeenCalledTimes(1);
+    expect(actionService.create).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the feature flag when neither half has anything to say', async () => {
+    const { cron, featureService, actionService } = makeCron({ alerts: [], queryAlerts: [] });
+
+    await cron.captureRetrievalHealth();
+
+    expect(featureService.isFeatureEnabled).not.toHaveBeenCalled();
+    expect(actionService.create).not.toHaveBeenCalled();
   });
 });

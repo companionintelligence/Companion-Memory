@@ -4,9 +4,16 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { fenceUntrusted, untrustedBlock } from '@ci/common/prompt/untrustedBlock';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
+import { EventService } from '@ci/domains/events';
 import { GraphExpansionService } from '@ci/domains/graph';
 import { type RetrievalPolicy, RetrievalPolicyService } from '@ci/domains/retrieval-policy';
-import { type IndexableEntity, SearchService } from '@ci/domains/search-next';
+import {
+  type IndexableEntity,
+  queryTokenCount,
+  RetrievalQueryEvent,
+  type RetrievalQueryPayload,
+  SearchService,
+} from '@ci/domains/search-next';
 
 import type { EvidenceVoice, RecallDto, RecallLine, RecallResult } from '../types';
 
@@ -140,10 +147,29 @@ export class RecallService {
     private readonly serializer: SerializerService,
     private readonly graphExpansion: GraphExpansionService,
     private readonly agentMemory: AgentMemoryService,
+    private readonly events: EventService,
     private readonly logger: LoggerService,
     private readonly retrievalPolicy: RetrievalPolicyService,
   ) {
     this.logger.setContext(RecallService.name);
+  }
+
+  /**
+   * Emit one `retrieval.query` row onto the `telemetry` queue, fire-and-forget.
+   *
+   * `recall` already computes `resultCount` and hands it to its caller, who
+   * throws it away — so a recall that returned NOTHING has, until now, been
+   * completely silent (the only log calls in this class are `.warn` on the two
+   * failure paths). This is the write that makes an empty recall countable.
+   * Never awaited and never rethrown: recall has already produced its answer.
+   */
+  private recordQuery(payload: RetrievalQueryPayload): void {
+    void this.events.send(RetrievalQueryEvent, payload, { queue: 'telemetry' }).catch((err: unknown) => {
+      this.logger.warn('retrieval.query emit failed (non-fatal)', {
+        userId: payload.userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   async recall(
@@ -153,8 +179,35 @@ export class RecallService {
   ): Promise<RecallResult> {
     const maxResults = dto.maxResults ?? DEFAULT_MAX_RESULTS;
     const query = this.sanitizeQuery(dto.query);
+    const startedAt = Date.now();
+    const strategy = options.strategy ?? 'seed-then-fallback';
+    // 'message' is always excluded from the seed channels; it has its own
+    // naive-RAG channel below. Resolved once here so the telemetry row states
+    // the filter the seeds actually ran with rather than the caller's request.
+    const seedExcludeTypes: IndexableEntity[] = ['message', ...(options.excludeTypes ?? [])];
+
+    /** One telemetry row for this recall. See {@link recordQuery}. */
+    const record = (resultCount: number): void =>
+      this.recordQuery({
+        userId: context.userId,
+        caller: 'recall',
+        modeTaken: strategy,
+        queryTokenCount: queryTokenCount(dto.query),
+        includeTypes: null,
+        excludeTypes: seedExcludeTypes,
+        resultCount,
+        // Recall merges three channels with three different score scales
+        // (ts_rank seeds, graph neighbours with no score at all, cosine
+        // message hits). There is no comparable top score to state, and
+        // inventing one would put incomparable numbers in one column.
+        topScore: null,
+        latencyMs: Date.now() - startedAt,
+      });
 
     if (!query) {
+      // NOT recorded. An empty query is a caller passing nothing, not a
+      // question this appliance failed to answer; counting it would inflate the
+      // zero-result rate with non-questions and make the alert unreadable.
       return { block: '', resultCount: 0, lines: [] };
     }
 
@@ -166,11 +219,13 @@ export class RecallService {
 
     try {
       const results =
-        options.strategy === 'grounded'
-          ? await this.groundedSeeds(context, dto.query, maxResults, policy, options.excludeTypes)
-          : await this.seedThenFallback(context, query, maxResults, policy, options.excludeTypes);
+        strategy === 'grounded'
+          ? await this.groundedSeeds(context, dto.query, maxResults, policy, seedExcludeTypes)
+          : await this.seedThenFallback(context, query, maxResults, policy, seedExcludeTypes);
 
       if (results.length === 0) {
+        record(0);
+
         return { block: '', resultCount: 0, lines: [] };
       }
 
@@ -206,6 +261,11 @@ export class RecallService {
       }
 
       if (lines.length === 0) {
+        // Seeds were found but none of them survived resolution/serialisation,
+        // so the caller still got nothing. Counted as a zero result, because
+        // from the asker's side that is exactly what it is.
+        record(0);
+
         return { block: '', resultCount: 0, lines: [] };
       }
 
@@ -303,8 +363,13 @@ export class RecallService {
         '## Relevant context',
       );
 
+      record(lines.length);
+
       return { block, resultCount: lines.length, lines };
     } catch (err) {
+      // NOT recorded as a zero result. A thrown recall is a broken retrieval,
+      // not an empty one, and folding the two together would let an outage read
+      // as "the corpus has no answer". It already has its own warn line.
       this.logger.warn('Recall failed', {
         userId: context.userId,
         error: err instanceof Error ? err.message : String(err),
@@ -350,10 +415,8 @@ export class RecallService {
     query: string,
     maxResults: number,
     policy: RetrievalPolicy,
-    excludeTypes: IndexableEntity[] = [],
+    exclude: IndexableEntity[] = [],
   ) {
-    const exclude: IndexableEntity[] = ['message', ...excludeTypes];
-
     const seeded = await this.searchService.search(context, {
       query,
       mode: policy.recallSeedMode,
@@ -403,10 +466,8 @@ export class RecallService {
     rawQuery: string,
     maxResults: number,
     policy: RetrievalPolicy,
-    excludeTypes: IndexableEntity[] = [],
+    exclude: IndexableEntity[] = [],
   ) {
-    const exclude: IndexableEntity[] = ['message', ...excludeTypes];
-
     const [anchored, semantic] = await Promise.all([
       // The RAW question, not the sanitised one: `searchAnchored` needs the
       // sentence both to pick lexemes from and to embed, and natural language

@@ -157,6 +157,7 @@ describeWithDatabase(`RecallProbeService against the live schema (${availability
         dataSource,
         { generateEmbeddingString: jest.fn() } as never,
         { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as never,
+        { send: jest.fn().mockResolvedValue([]) } as never,
       ),
       noopLogger,
     );

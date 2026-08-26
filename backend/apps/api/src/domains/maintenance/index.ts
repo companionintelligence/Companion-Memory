@@ -30,9 +30,11 @@ import { EntityTypeProposalEntity } from './entities/EntityTypeProposalEntity';
 import { GraphEnrichmentProposalEntity } from './entities/GraphEnrichmentProposalEntity';
 import { RecallProbeResultEntity } from './entities/RecallProbeResultEntity';
 import { RetrievalHealthSnapshotEntity } from './entities/RetrievalHealthSnapshotEntity';
+import { RetrievalQueryLogEntity } from './entities/RetrievalQueryLogEntity';
 import { CommunicationParticipantLinkListener } from './listeners/CommunicationParticipantLinkListener';
 import { DerivationRunListener } from './listeners/DerivationRunListener';
 import { EstimateLocationBatchListener } from './listeners/EstimateLocationBatchListener';
+import { RetrievalQueryLogListener } from './listeners/RetrievalQueryLogListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { DerivedRelationshipService } from './services/DerivedRelationshipService';
 import { DeterministicEdgeBackfillService } from './services/DeterministicEdgeBackfillService';
@@ -53,6 +55,7 @@ import { PersonStubBackfillService } from './services/PersonStubBackfillService'
 import { RecallProbeService } from './services/RecallProbeService';
 import { RelationshipNormalizeService } from './services/RelationshipNormalizeService';
 import { RetrievalHealthService } from './services/RetrievalHealthService';
+import { RetrievalQueryLogService } from './services/RetrievalQueryLogService';
 import { SearchIndexBackfillService } from './services/SearchIndexBackfillService';
 import { SummaryBackfillService } from './services/SummaryBackfillService';
 
@@ -67,6 +70,7 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
       GraphEnrichmentProposalEntity,
       RecallProbeResultEntity,
       RetrievalHealthSnapshotEntity,
+      RetrievalQueryLogEntity,
     ]),
     EventsModule,
     SearchIngressModule,
@@ -111,6 +115,8 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     SummaryBackfillService,
     EmbedCoverageTelemetryService,
     RetrievalHealthService,
+    RetrievalQueryLogService,
+    RetrievalQueryLogListener,
     RetrievalHealthCron,
     RecallProbeService,
     RecallProbeCron,
@@ -142,6 +148,7 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     SummaryBackfillService,
     EmbedCoverageTelemetryService,
     RetrievalHealthService,
+    RetrievalQueryLogService,
     RecallProbeService,
     EntityTypeAuditService,
     LocationEstimateService,

@@ -26,7 +26,10 @@ function makeService() {
     get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS),
   } as unknown as RetrievalPolicyService;
 
-  const service = new SearchService(dataSource, embeddingGenerationService, retrievalPolicy);
+  const send = jest.fn().mockResolvedValue([]);
+  const service = new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, {
+    send,
+  } as never);
 
   return { service, query, embeddingGenerationService };
 }
