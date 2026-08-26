@@ -6,5 +6,10 @@
   ],
   "*.plist": ["node scripts/check-plist-duplicate-keys.mjs"],
   "*.py": ["uv run ruff check --fix", "uv run ruff format"],
-  "**/src/ci/__init__.py": ["sh scripts/check-ci-namespace.sh"]
+  "**/src/ci/__init__.py": ["sh scripts/check-ci-namespace.sh"],
+  "frontend/apps/{android,ios}/package.json": ["node scripts/check-capacitor-native-sync.mjs"],
+  "frontend/apps/android/android/capacitor.settings.gradle": ["node scripts/check-capacitor-native-sync.mjs"],
+  "frontend/apps/android/android/app/capacitor.build.gradle": ["node scripts/check-capacitor-native-sync.mjs"],
+  "frontend/apps/ios/ios/App/Podfile": ["node scripts/check-capacitor-native-sync.mjs"],
+  "frontend/packages/capacitor-*/package.json": ["node scripts/check-capacitor-native-sync.mjs"]
 }
