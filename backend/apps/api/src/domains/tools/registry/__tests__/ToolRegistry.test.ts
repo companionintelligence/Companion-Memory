@@ -117,10 +117,15 @@ describe('ToolRegistry', () => {
       tool: 'memory_recall',
       domain: 'memory',
       userId: 'user-1',
-      success: true,
+      outcome: 'success',
       access: 'read',
       external: false,
+      destructive: false,
+      // The provider that served it, which is what tells a ledger reader whether a call came from
+      // a native intent or a user's own MCP server.
+      source: 'fake',
     });
+    expect(typeof (payload as { occurredAt?: unknown }).occurredAt).toBe('string');
     expect(options).toEqual({ queue: 'telemetry' });
   });
 
@@ -173,9 +178,24 @@ describe('ToolRegistry', () => {
       expect(result.error?.message).toContain('"full"');
       // The point of the whole exercise: the tool never ran.
       expect(forget.execute).not.toHaveBeenCalled();
-      // A refusal is not an invocation — feeding it to the behavioral signal would record a
-      // deletion the user never made.
-      expect(send).not.toHaveBeenCalled();
+      // …and the refusal IS recorded, as `outcome: 'refused'`. The original reason for staying
+      // silent — that feeding a refusal into the behavioral signal would record a deletion the
+      // user never made — is preserved by the outcome value rather than by the silence: a
+      // behavioural consumer filters `outcome <> 'refused'`, while an operator can finally see the
+      // denied call.
+      expect(send).toHaveBeenCalledTimes(1);
+      const [, payload] = send.mock.calls[0];
+      expect(payload).toMatchObject({
+        intent: 'memory.forget',
+        tool: 'memory_forget',
+        outcome: 'refused',
+        errorCode: 'TOOL_FORBIDDEN',
+        capability: 'read',
+        destructive: true,
+        access: 'delete',
+      });
+      // Nothing ran, so nothing took time. A 0 here would read as "returned instantly".
+      expect(payload.durationMs).toBeUndefined();
     });
 
     it('refuses a destructive tool to a write caller too (delete is its own level)', async () => {

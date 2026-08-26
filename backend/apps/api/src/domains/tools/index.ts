@@ -20,6 +20,7 @@
  */
 
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { BlueBubblesModule } from '@ci/domains/bluebubbles';
@@ -37,9 +38,13 @@ import { SummariesModule } from '@ci/domains/summaries';
 import { UserModule } from '@ci/domains/user';
 
 import { IntentCatalogService } from './catalog/IntentCatalogService';
+import { ToolInvocationsController } from './controllers/ToolInvocationsController';
+import { ToolInvocationRetentionCron } from './cron/ToolInvocationRetentionCron';
+import { ToolInvocationEntity } from './entities/ToolInvocationEntity';
 import { ToolInvokedListener } from './listeners/ToolInvokedListener';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
+import { ToolInvocationLedgerService } from './services/ToolInvocationLedgerService';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
 import { AnomaliesRecentTool } from './tools/AnomaliesRecentTool';
 import { BriefListTool } from './tools/BriefListTool';
@@ -131,11 +136,21 @@ const nativeToolInstances = [
     // For MessagingSendTool/MessagingListChatsTool/MessagingListMessagesTool's
     // BlueBubblesClientService dependency.
     BlueBubblesModule,
+    // ci.tool_invocations — the bounded invocation ledger the tool.invoked listener writes.
+    TypeOrmModule.forFeature([ToolInvocationEntity]),
+  ],
+  controllers: [
+    // The ledger's reader. Without it ci.tool_invocations would be another write-only table.
+    ToolInvocationsController,
   ],
   providers: [
     ToolRegistry,
-    // Consumes the durable tool.invoked signal (and registers its telemetry queue).
+    // Consumes the durable tool.invoked signal (and registers its telemetry queue), appending it
+    // to ci.tool_invocations.
     ToolInvokedListener,
+    ToolInvocationLedgerService,
+    // The 365-day bound. Ships with the table, not after it — see the cron's own note on api_logs.
+    ToolInvocationRetentionCron,
     // Native tools (each a curated intent)
     ...nativeToolInstances,
     // Native tool provider with injected tools
@@ -158,12 +173,18 @@ const nativeToolInstances = [
 export class ToolsModule {}
 
 // Exports
-export { ToolRegistry };
+export { ToolRegistry, outcomeOf } from './registry/ToolRegistry';
 export { IntentCatalogService } from './catalog/IntentCatalogService';
 export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
 export { BaseTool } from './core/BaseTool';
-export { ToolInvokedEvent } from './events';
-export type { ToolInvokedPayload } from './events';
+export { ToolInvokedEvent, TOOL_INVOCATION_OUTCOMES, TOOL_INVOCATION_ERROR_MAX_LENGTH } from './events';
+export type { ToolInvokedPayload, ToolInvocationOutcome } from './events';
+export { ToolInvocationEntity } from './entities/ToolInvocationEntity';
+export {
+  ToolInvocationLedgerService,
+  TOOL_INVOCATION_RETENTION_DAYS,
+} from './services/ToolInvocationLedgerService';
+export type { ToolInvocationQuery } from './services/ToolInvocationLedgerService';
 export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
 export {
   intentToolName,

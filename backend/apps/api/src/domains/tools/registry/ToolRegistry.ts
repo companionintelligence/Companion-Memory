@@ -12,7 +12,12 @@ import {
   type ToolSchema,
   type ToolResult,
 } from '../core/types';
-import { ToolInvokedEvent } from '../events';
+import {
+  TOOL_INVOCATION_ERROR_MAX_LENGTH,
+  ToolInvokedEvent,
+  type ToolInvocationOutcome,
+  type ToolInvokedPayload,
+} from '../events';
 import { capabilityAllows, capabilityRequiredFor } from '../policy';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
 
@@ -308,8 +313,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
       // Warn, not debug: a refused call is a caller trying to do something it was not granted —
       // whether that is a misconfigured integration or an injected chat message, an operator wants
-      // to see it. Deliberately NOT emitted as `tool.invoked`: nothing was invoked, and feeding a
-      // refusal into the behavioral signal would teach prediction that the user did this.
+      // to see it.
       this.logger.warn(`Refused tool: ${name}`, {
         toolName: name,
         intent: tool.schema.name,
@@ -320,11 +324,29 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
         destructive: privacy.destructive,
       });
 
+      const message = `Tool '${name}' requires "${required}" access, but this caller is "${context.capability}"`;
+
+      // Emitted as `tool.invoked` with `outcome: 'refused'`. This used to be deliberately silent,
+      // with a good reason: nothing was invoked, and feeding a refusal into the behavioral signal
+      // would teach prediction that the user did this. That reason is intact and now expressed in
+      // the data instead of in the absence of it — HBPE and any other behavioural consumer filter
+      // `outcome <> 'refused'` and see exactly what they saw before. What changes is that the
+      // operator, for whom a denied call is the single most interesting row in the ledger, can now
+      // see it after the log line has scrolled away.
+      await this.recordInvocation({
+        ...this.invocationFacts(toolName, tool, context),
+        outcome: 'refused',
+        errorCode: 'TOOL_FORBIDDEN',
+        error: message,
+        // No duration: nothing ran, so there is nothing to have taken time. A zero here would read
+        // as "the tool returned instantly".
+      });
+
       return {
         success: false,
         error: {
           code: 'TOOL_FORBIDDEN',
-          message: `Tool '${name}' requires "${required}" access, but this caller is "${context.capability}"`,
+          message,
           retryable: false,
         },
       };
@@ -350,35 +372,68 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
     const result = await tool.execute(context, input);
 
-    await this.emitInvoked(toolName, tool, context, result);
+    await this.recordInvocation({
+      ...this.invocationFacts(toolName, tool, context),
+      outcome: outcomeOf(result),
+      errorCode: result.error?.code,
+      error: result.error?.message,
+      durationMs: result.executionTimeMs,
+    });
 
     return result;
   }
 
   /**
-   * Emit the durable `tool.invoked` behavioral signal (routed to the `telemetry` queue). Never
-   * throws: a telemetry failure must not fail an already-completed tool call.
+   * The half of a {@link ToolInvokedPayload} that is the same whether the call ran or was refused:
+   * who called, what they named, and the curated privacy facets of it.
+   *
+   * `occurredAt` is stamped here rather than left to the consumer because the event is durable —
+   * it can be delivered minutes later, or replayed off a dead letter, and a row timestamped at
+   * insert time would silently date every replayed call to the replay.
    */
-  private async emitInvoked(
+  private invocationFacts(
     toolName: string,
     tool: BaseTool,
-    context: RequestContext,
-    result: ToolResult,
-  ): Promise<void> {
+    context: ToolInvocationContext,
+  ): Omit<ToolInvokedPayload, 'outcome'> {
     const { schema } = tool;
 
+    return {
+      intent: schema.name,
+      tool: toolName,
+      domain: schema.domain,
+      source: this.toolToProvider.get(toolName) ?? 'unknown',
+      userId: context.userId,
+      correlationId: context.traceId,
+      apiKeyId: context.apiKeyId,
+      capability: context.capability,
+      occurredAt: new Date().toISOString(),
+      access: schema.privacy.access,
+      external: schema.privacy.external,
+      destructive: schema.privacy.destructive,
+    };
+  }
+
+  /**
+   * Emit the durable `tool.invoked` signal (routed to the `telemetry` queue), which
+   * {@link ToolInvokedListener} appends to `ci.tool_invocations`. Never throws: a telemetry
+   * failure must not fail an already-completed tool call.
+   *
+   * Public because the GraphQL-over-MCP plane does not go through this registry at all —
+   * `McpToolService` branches on `tool.source === 'graphql'` and returns via the GraphQL executor,
+   * so without a way in it would be the one dispatcher with no ledger row. It calls this.
+   *
+   * Truncates `error` to {@link TOOL_INVOCATION_ERROR_MAX_LENGTH} at the emit rather than only at
+   * the insert: the payload is serialised into `pgboss.job` on the way, and an unbounded tool
+   * error message would be copied into the queue table too.
+   */
+  async recordInvocation(payload: ToolInvokedPayload): Promise<void> {
     try {
       await this.events.send(
         ToolInvokedEvent,
         {
-          intent: schema.name,
-          tool: toolName,
-          domain: schema.domain,
-          userId: context.userId,
-          success: result.success,
-          durationMs: result.executionTimeMs,
-          access: schema.privacy.access,
-          external: schema.privacy.external,
+          ...payload,
+          error: payload.error?.slice(0, TOOL_INVOCATION_ERROR_MAX_LENGTH),
         },
         { queue: 'telemetry' },
       );
@@ -418,4 +473,21 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
       .filter(([toolName]) => this.toolToProvider.get(toolName) === providerName)
       .map(([, tool]) => tool.schema);
   }
+}
+
+/**
+ * Which of the four outcomes a completed {@link ToolResult} represents.
+ *
+ * A deadline is separated from an ordinary failure because the two need different operator
+ * responses — a timeout says the appliance or a third party is slow, an error says the call was
+ * wrong — and the only evidence either way is the error code the tool chose.
+ */
+export function outcomeOf(result: ToolResult): ToolInvocationOutcome {
+  if (result.success) {
+    return 'success';
+  }
+
+  return result.error?.code != null && /TIMEOUT|TIMED_OUT|ETIMEDOUT/i.test(result.error.code)
+    ? 'timeout'
+    : 'error';
 }

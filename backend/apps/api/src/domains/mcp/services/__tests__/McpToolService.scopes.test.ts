@@ -61,6 +61,9 @@ describe('McpToolService — scope-limited callers', () => {
       getOutboundCatalogTools: () => [nativeIntent, nativeWriteIntent],
       getRegisteredToolNames: () => [nativeIntent.name, nativeWriteIntent.name],
       executeTool: jest.fn().mockResolvedValue({ success: true, data: { ok: true } }),
+      // The GraphQL branch now records its own tool.invoked through the registry (it never
+      // reaches executeTool), so the fixture has to offer it.
+      recordInvocation: jest.fn().mockResolvedValue(undefined),
     };
 
     const executor = {
