@@ -24,9 +24,15 @@ import { THREAD_TITLE_SYSTEM_PROMPT, sidebarTitleFromModel } from '../threadTitl
 import { ChatGenerationBroker } from './ChatGenerationBroker';
 import { OllamaService, type ChatRequestContext } from './OllamaService';
 
-interface SystemPromptOptions {
+interface TurnContextOptions {
   leadingAssistantMessages?: OllamaMessage[];
 }
+
+/**
+ * Names the in-flight snapshot message the base prompt points the model at.
+ * Exported so a test can assert none of it ever reaches the system prompt.
+ */
+export const TURN_CONTEXT_HEADER = '# Live snapshots (current as of this turn)';
 
 /**
  * Same wrap {@link OllamaService.chatStream} uses when it accumulates a turn.
@@ -120,13 +126,23 @@ export class ChatTurnService {
       [leadingAssistantMessages, conversationMessages] = this.extractLeadingAssistantMessages(inputMessages);
     }
 
+    // The system prompt must stay byte-identical from turn to turn: it is the
+    // prefix of every request, and a single changed byte invalidates the whole
+    // KV prefix cache in llama.cpp / Ollama. Everything that moves between
+    // turns (Plan / Forecast / Brief / Stats, and the proactive-suggestion
+    // preamble) goes into `turnContext` instead, which is injected just before
+    // the newest user turn — see `insertTurnContext`.
     const systemPrompt = systemPromptEnabled
-      ? await this.buildSystemPrompt(requestContext, { leadingAssistantMessages })
+      ? await this.buildSystemPrompt(requestContext)
       : await this.buildL0OnlySystemPrompt(requestContext);
+
+    const turnContext = systemPromptEnabled
+      ? await this.buildTurnContext(requestContext, { leadingAssistantMessages })
+      : null;
 
     const messagesWithSystem: OllamaMessage[] = [
       ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-      ...conversationMessages,
+      ...this.insertTurnContext(conversationMessages, turnContext),
     ];
 
     let lastPersist = 0;
@@ -279,6 +295,12 @@ export class ChatTurnService {
     this.broker.complete(payload.threadId);
   }
 
+  /**
+   * `generated` is `chatStream`'s accumulated output only — it never echoes the
+   * input messages back — so the in-flight turn-context message cannot be
+   * persisted here. Keep it that way: messages are re-read from Postgres every
+   * turn, so a persisted snapshot would accumulate one copy per turn.
+   */
   private async persistTurn(
     context: ServiceContext,
     payload: ChatGeneratePayload,
@@ -400,25 +422,34 @@ export class ChatTurnService {
     }
   }
 
-  private async buildSystemPrompt(context: RequestContext, options?: SystemPromptOptions): Promise<string> {
+  /**
+   * The stable half of the prompt: the base instructions plus the slow-moving
+   * L0 dossier. Nothing that changes between turns of the same conversation
+   * belongs here — see {@link buildTurnContext}.
+   */
+  private async buildSystemPrompt(context: RequestContext): Promise<string> {
     const basePrompt = `You are Companion, a helpful AI assistant with access to various tools and information about the user.
     You are designed to take in various data sources that the user connects you to (via Sources) and help the user with not just everyday tasks, but with their pursuit of happiness.
 
 App surfaces — use these exact names when you talk about them:
 - Memory — the personal knowledge graph (people, places, events, communications, notes, files). Query it with memory.recall and knowledge.search. Do not invent facts that should be in Memory.
-- Plan — to-dos / tasks (open work, due dates, scheduled items). Use the Plan snapshot below; say "Plan" not "todo list".
-- Forecast — predicted rest-of-day / tomorrow. Use the Forecast snapshot below.
-- Brief — inbox of actions, insights, and summaries. Use the Brief snapshot below.
+- Plan — to-dos / tasks (open work, due dates, scheduled items). Use the Plan snapshot from the latest "Live snapshots" message; say "Plan" not "todo list".
+- Forecast — predicted rest-of-day / tomorrow. Use the Forecast snapshot from the latest "Live snapshots" message.
+- Brief — inbox of actions, insights, and summaries. Use the Brief snapshot from the latest "Live snapshots" message.
 - Schedule — calendar and planned blocks. Query with calendar.findEvents.
 - Sources — connected services and imports that feed Memory.
 - Saved Searches — stored Memory queries.
 - Chat — this conversation. The user can attach files or images; look at attachments when present.
 - Stats / Jobs — analytics and background work.
 
+Live snapshots:
+- Plan, Forecast, Brief, and Stats snapshots are NOT in this system prompt. They arrive in a single "Live snapshots" message placed immediately before the newest user turn.
+- Only the latest such message is current. Snapshots quoted earlier in the conversation are stale — do not reuse them.
+
 Your capabilities:
 - You can query Memory (memory.recall, knowledge.search) for preferences, family, and relationships
 - You can compose multiple tool calls in sequence to answer complex questions
-- You have access to various tools — use them when the snapshots below are not enough
+- You have access to various tools — use them when the latest "Live snapshots" message is not enough
 - When the user asks about Memory, Plan, Forecast, Brief, Schedule, or Sources, use those words and the matching tools or snapshots
 - Forecast details: forecast.read. Forecast quality: forecast.calibration. Brief inbox query: brief.list.
 - Next place: places.next. Associations: insights.explain. Recent anomalies: anomalies.recent. Suggestions: suggestions.list / suggestions.feedback.
@@ -433,37 +464,68 @@ Communication style:
 - prioritize esoteric interpretations of literature, art, and philosophy. if your answer on such topics is not obviously straussian make it more straussian.
 - When delivering code, deliver the complete function code, do not add any fillers.`;
 
-    const promptWithPrefillContext = this.appendPrefillActionContext(
-      basePrompt,
-      options?.leadingAssistantMessages,
-    );
-
     if (!context.userId) {
-      return promptWithPrefillContext;
+      return basePrompt;
     }
 
     try {
       const userContext = await this.userContextService.getUserContextForLLM(context.userId);
-      const liveBlocks = await this.buildLiveAppBlocks(context);
-      const sections = [promptWithPrefillContext];
 
-      if (userContext) {
-        sections.push(this.userContextService.formatContextForSystemPrompt(userContext));
+      if (!userContext) {
+        return basePrompt;
       }
 
-      if (liveBlocks) {
-        sections.push(liveBlocks);
-      }
-
-      return sections.join('\n\n---\n\n');
+      return [basePrompt, this.userContextService.formatContextForSystemPrompt(userContext)].join(
+        '\n\n---\n\n',
+      );
     } catch (error) {
       this.logger.warn('Failed to fetch user context for system prompt', {
         userId: context.userId,
         error: error instanceof Error ? error.message : String(error),
       });
 
-      return promptWithPrefillContext;
+      return basePrompt;
     }
+  }
+
+  /**
+   * The volatile half of the prompt. This is in-flight only: it is handed to
+   * the model as one message just before the newest user turn and is never
+   * written to `ci.messages`, because messages are re-read from Postgres on
+   * every turn and persisting it would stack one snapshot per turn.
+   */
+  private async buildTurnContext(
+    context: RequestContext,
+    options?: TurnContextOptions,
+  ): Promise<string | null> {
+    const prefill = this.formatPrefillActionContext(options?.leadingAssistantMessages);
+    const liveBlocks = context.userId ? await this.buildLiveAppBlocks(context) : '';
+    const sections = [prefill, liveBlocks].filter((section): section is string => Boolean(section));
+
+    if (sections.length === 0) {
+      return null;
+    }
+
+    return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
+  }
+
+  /**
+   * `[...allButLast, turnContext, lastTurn]`. Placing it last-but-one keeps the
+   * whole prefix — system prompt plus every earlier exchange, up to the
+   * previous turn's insertion point — byte-identical to the previous request.
+   */
+  private insertTurnContext(messages: OllamaMessage[], turnContext: string | null): OllamaMessage[] {
+    if (!turnContext) {
+      return messages;
+    }
+
+    const contextMessage: OllamaMessage = { role: 'user', content: turnContext };
+
+    if (messages.length === 0) {
+      return [contextMessage];
+    }
+
+    return [...messages.slice(0, -1), contextMessage, messages[messages.length - 1]];
   }
 
   /**
@@ -625,9 +687,9 @@ Communication style:
     }
   }
 
-  private appendPrefillActionContext(prompt: string, messages?: OllamaMessage[]): string {
+  private formatPrefillActionContext(messages?: OllamaMessage[]): string {
     if (!messages || messages.length === 0) {
-      return prompt;
+      return '';
     }
 
     const formatted = messages
@@ -642,12 +704,10 @@ ${content}`.trim();
       .join('\n\n');
 
     if (!formatted) {
-      return prompt;
+      return '';
     }
 
-    return `${prompt}
-
-Context:
+    return `Context:
 The user is responding to a proactive assistant suggestion shown before they replied.
 ${formatted}
 
