@@ -237,6 +237,124 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
     expect(candidates.save).not.toHaveBeenCalled();
   });
 
+  /**
+   * `feedback_reason` is the consumer's input, and it carries information
+   * `status` cannot: a `never` and a `not_like_this` decline both land on
+   * `status = 'never'`. These fixtures are deliberately identical apart from
+   * the reason, so a suppression keyed on status instead would make the second
+   * test below fail.
+   *
+   * `adapter/insight` + an `insight:` dedupe key keeps retireStale (which only
+   * looks at `action:` rows) from mutating them out from under the assertion —
+   * the repository mock returns the same rows to every `find`.
+   */
+  function retiredRow(feedbackReason: string, status: string): EventCandidateEntity {
+    return {
+      id: 'cand-retired',
+      userId: 'user-1',
+      title: 'Decline the Thursday sync',
+      description: 'Decline the Thursday sync',
+      status,
+      feedbackReason,
+      generator: 'adapter/insight',
+      dedupeKey: 'insight:sum-OLD:1',
+    } as EventCandidateEntity;
+  }
+
+  /** The same two key actions, re-minted under a new summary id. */
+  const regenerated = () => insight({ summaryId: 'sum-2' });
+
+  /**
+   * A repository `find` that actually honours the `where` it is handed, so
+   * these tests can tell "queried by feedback_reason" apart from "queried by
+   * status" — the entire distinction this feature turns on. A blanket
+   * `mockResolvedValue` hands the row back either way and would prove nothing.
+   */
+  function findHonouringWhere(rows: EventCandidateEntity[]) {
+    return async (options: { where?: Record<string, unknown> } = {}) =>
+      rows.filter((row) =>
+        Object.entries(options.where ?? {}).every(
+          ([key, value]) => (row as unknown as Record<string, unknown>)[key] === value,
+        ),
+      );
+  }
+
+  it('does not re-propose an idea retired with "never", even under a fresh dedupe key', async () => {
+    await setup([], [regenerated()]);
+    candidates.find.mockImplementation(findHonouringWhere([retiredRow('never', 'never')]));
+
+    await service.sync(ctx);
+
+    const rows = proposals();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe('Group related tasks into one block');
+    expect(rows[0].dedupe_key).toBe('insight:sum-2:0');
+  });
+
+  it('keeps proposing an idea declined as "not_like_this" — the idea was right, the framing was not', async () => {
+    await setup([], [regenerated()]);
+    candidates.find.mockImplementation(findHonouringWhere([retiredRow('not_like_this', 'never')]));
+
+    await service.sync(ctx);
+
+    const rows = proposals();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r: { title: string }) => r.title)).toStrictEqual([
+      'Group related tasks into one block',
+      'Decline the Thursday sync',
+    ]);
+  });
+
+  it('does not treat "source_dismissed" as a user verdict on the idea', async () => {
+    await setup([], [regenerated()]);
+    candidates.find.mockImplementation(findHonouringWhere([retiredRow('source_dismissed', 'declined')]));
+
+    await service.sync(ctx);
+
+    expect(proposals()).toHaveLength(2);
+  });
+
+  it('does not let a deferral suppress the idea it deferred', async () => {
+    await setup([], [regenerated()]);
+    candidates.find.mockImplementation(findHonouringWhere([retiredRow('not_now', 'snoozed')]));
+
+    await service.sync(ctx);
+
+    expect(proposals()).toHaveLength(2);
+  });
+
+  it('matches a retired idea on its detail too, not just its label', async () => {
+    await setup([], [insight({ content: { key_actions: ['Pre-Read Prep: Read the board deck.'] } })]);
+    candidates.find.mockImplementation(
+      findHonouringWhere([
+        {
+          ...retiredRow('never', 'never'),
+          title: 'Pre-Read Prep',
+          description: 'Draft a brief two-page document.',
+        } as EventCandidateEntity,
+      ]),
+    );
+
+    await service.sync(ctx);
+
+    // Same label, different task — retiring one must not retire the other.
+    const rows = proposals();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].description).toBe('Read the board deck.');
+  });
+
+  it('asks the repository for retired rows by feedback reason, not by status', async () => {
+    await setup([], [regenerated()]);
+
+    await service.sync(ctx);
+
+    // The suppression lookup runs before retireStale's own `find`.
+    expect(candidates.find.mock.calls[0][0].where).toStrictEqual({
+      userId: 'user-1',
+      feedbackReason: 'never',
+    });
+  });
+
   it('does not retire candidates that came from an insight', async () => {
     await setup([]);
     candidates.find.mockResolvedValue([
@@ -390,8 +508,9 @@ describe('SuggestionSyncService — tryAutoAccept', () => {
 
     await service.sync(ctx);
 
-    // First call is retireStale's `find`; the auto-accept query is the second.
-    const autoAcceptQuery = candidates.find.mock.calls[1]?.[0];
+    // Call order on the candidate repository: suppressRetiredIdeas, then
+    // retireStale, then the auto-accept query.
+    const autoAcceptQuery = candidates.find.mock.calls[2]?.[0];
     expect(autoAcceptQuery).toMatchObject({
       where: { userId: 'user-1', status: 'open' },
       order: { confidence: 'DESC' },
