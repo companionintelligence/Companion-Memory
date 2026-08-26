@@ -2,6 +2,7 @@ import type { DataSource, QueryRunner } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { RETRIEVAL_POLICY_DEFAULTS, type RetrievalPolicyService } from '@ci/domains/retrieval-policy';
 
 import {
   HNSW_DEFAULT_EF_SEARCH,
@@ -82,8 +83,14 @@ function makeService(): Harness {
     generateEmbeddingString: jest.fn().mockResolvedValue('[0.1,0.2]'),
   } as unknown as EmbeddingGenerationService;
 
+  // Compiled-in baseline policy — this file's assertions are about ef_search
+  // coherence, unaffected by RetrievalPolicyService's own tests elsewhere.
+  const retrievalPolicy = {
+    get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS),
+  } as unknown as RetrievalPolicyService;
+
   return {
-    service: new SearchService(dataSource, embeddingGenerationService),
+    service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy),
     poolQueries,
     runnerQueries,
     runner,
