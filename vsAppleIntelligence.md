@@ -17,25 +17,39 @@
 > **Δ 2026-08-19** — two claims from the round-2 writing no longer hold and are corrected
 > throughout below. (1) The **model-tier router** was a prototype (`domains/model-routing`,
 > `ModelTierRouter`, `POST /api/model-routing/plan`) and was removed wholesale in commit
-> `34f6eed5b` (PR #1618) days after it landed; nothing matching it exists in the tree today, and
-> on-device-vs-appliance placement is decided by the intent **dispatch policy** (`resolveDispatch`),
-> not by a model router. (2) **Intent demotion** (`CI_PREFER_INTENTS`, `ToolRegistry.markSuperseded`,
+> `34f6eed5b` (PR #1618) days after it landed — **but it came back**: `2a7b85930` (2026-06-28)
+> re-landed `domains/model-routing` and it is live on `main` today, registered at
+> `application.ts:135`. See the **Δ 2026-08-26** correction below for its current state.
+> On-device-vs-appliance *intent* placement remains a separate concern, decided by the
+> dispatch policy (`resolveDispatch`). (2) **Intent demotion** (`CI_PREFER_INTENTS`, `ToolRegistry.markSuperseded`,
 > `IntentRegistry.getSupersededToolNames`) is gone too — every tool is an intent, so
 > `getAgentFacingTools` now returns the full list. The donation event was renamed
 > `intent.invoked` → **`tool.invoked`**, emitted by `ToolRegistry.executeTool`.
+
+> **Δ 2026-08-26** — the "removed wholesale" claim above is **wrong as of today** and is corrected
+> throughout. `domains/model-routing` was re-landed by `2a7b85930` and is live on `main`:
+> `ModelTierRouter` (`services/ModelTierRouter.ts`), `GET /api/model-routing/tiers`,
+> `POST /api/model-routing/plan`, registered as `ModelRoutingModule` at `application.ts:135`.
+> What was *actually* missing until now is an **internal caller** — nothing outside the domain
+> consulted it, while `OllamaService` picked chat models directly. That is now wired:
+> `OllamaService.resolveModel` consults the router behind `llm.tierRouting.enabled`
+> (`LLM_TIER_ROUTING_ENABLED`), **off by default**, because the router's on-device context window
+> (8_192) is an admitted estimate and must not become every appliance's escalation threshold
+> unasked. The attested compute target behind the escalated tier is still not built — that half of
+> G7 is genuinely 🔴.
 
 **What's still missing:**
 
 1. **The enforcing dispatcher** — the labels exist and the agent is steered toward curated intents, but no gate intercepts a `destructive` or `external` intent at execution to require confirmation or check permission. The single biggest remaining adoption.
 2. **The uniform `EntityQuery` resolver** — the entity registry shipped; the per-type resolve/disambiguate contract did not.
-3. **A verifiable-transparency cloud tier** (PCC analogue) — neither half exists: the model-tier router prototype was removed, and the trustworthy compute target behind it was never built.
+3. **A verifiable-transparency cloud tier** (PCC analogue) — the *decision* half now exists and is wired (`ModelTierRouter`, consulted by `OllamaService.resolveModel` behind `llm.tierRouting.enabled`); the **trustworthy compute target** it would escalate to was never built.
 
 **Top 5 things Apple did that CI now does too (no longer "things to steal"):**
 
 1. ✅ Canonical **CI Intent + Entity Schema** (our "App Intents") — typed semantic actions + entity contracts, defined once in CI-Server, consumed by both harnesses through the MCP server.
 2. ✅ **CI Schema Domains** — twelve today: `memory.*`, `knowledge.*`, `people.*`, `places.*`, `calendar.*`, `media.*`, `import.*`, `forecast.*`, `brief.*`, `insights.*`, `anomalies.*`, `suggestions.*` (`domains/tools/catalog/domains.ts`).
 3. ✅ **App-declared intents** — CI-Hub's manifest now has `agents.intents[]`, so installing an app *expands the agent's vocabulary*.
-4. 🔴 **On-device ↔ private-cloud model tiering** — the router prototype was removed and the attested cloud tier was never built. What *did* survive is the **dispatch policy** (`resolveDispatch`: `appliance` vs `local` tier → `execute` / `queue` / `deny`), which the phones read from `GET /api/intents?tier=local` instead of reimplementing.
+4. 🟡 **On-device ↔ private-cloud model tiering** — the router is live (`domains/model-routing`) and now has its first internal caller: `OllamaService.resolveModel` selects the chat model through it when `llm.tierRouting.enabled` is set (off by default). The **attested cloud tier** it would escalate to is still not built. Alongside it, the **dispatch policy** (`resolveDispatch`: `appliance` vs `local` tier → `execute` / `queue` / `deny`) decides *intent* placement, which the phones read from `GET /api/intents?tier=local` instead of reimplementing.
 5. ✅ **Intent donation → HBPE** — every tool invocation emits `tool.invoked` as a behavioural signal.
 
 ---
@@ -49,7 +63,7 @@ The roadmap below has been implemented across five repos (foundation-first), the
 | Item | Status | PR |
 |---|---|---|
 | **P0** CI Intent Catalog + Schema Domains, exposed via the MCP server | ✅ shipped | [CI-Server #1575](https://github.com/companionintelligence/CI-Server/pull/1575) (consolidates #1570, #1571, #1572) |
-| **P1** On-device ↔ private-cloud model-tier router (privacy-pinning) | 🔴 not started | `domains/model-routing` removed wholesale in `34f6eed5b` (PR #1618); to be redesigned |
+| **P1** On-device ↔ private-cloud model-tier router (privacy-pinning) | 🟡 shipped, opt-in | Removed in `34f6eed5b` (PR #1618), **re-landed in `2a7b85930`** and live on `main`. `ModelTierRouter` + `POST /api/model-routing/plan`, registered at `application.ts:135`; consulted by `OllamaService.resolveModel` behind `llm.tierRouting.enabled` (default off). Escalation target still TBD |
 | **P1** App-declared intents in the CI-Hub manifest (`agents.intents`) | ✅ shipped | [CI-Hub #813](https://github.com/companionintelligence/CI-Hub/pull/813) |
 | **P2** Intent donation → behavioral signal (HBPE seam) | ✅ shipped | #1575, then reshaped: `ToolRegistry.executeTool` emits `tool.invoked` (`domains/tools/events.ts`), consumed by `ToolInvokedListener` on the `telemetry` queue. The original `IntentDonationService` / `intent.invoked` pair no longer exists |
 | **P2** Entity registry (catalog of the typed content intents operate on) | ✅ shipped | #1575 |
@@ -277,7 +291,7 @@ This is precisely the fragmentation Apple's single schema + system runtime elimi
 | G4 | App **registers intents** into the system | 🔴 → 🟢 **closed** — CI-Hub manifest's `agents.intents[]` registers an app's typed intents into the catalog | Installing a marketplace app now grows the agent's vocabulary |
 | G5 | **Central dispatcher** + confirmation/disambiguation UX | 🔴 → 🟡 **partial** — the raw/curated split was *removed* rather than steered around: the camelCase tools (`databaseSearch`, `getFamilyMembers`, …) were rewritten as dotted intents (`knowledge.search`, `people.relationships`, …), so there is no raw path to hide. Authority *is* now enforced centrally: `ToolRegistry.executeTool` checks the caller's `read`/`write`/`full` capability against the intent's privacy label for every transport (MCP, the in-house chat model, the on-device tier), and `capability` is a mandatory field on `ToolInvocationContext` so a new dispatcher cannot execute without stating one. API-key *scopes* are enforced deny-by-default in the auth guards. A *user-facing* confirmation gate on `destructive` / `external` intents is still to come | Enforcement of authority is central; interactive confirmation is not |
 | G6 | **Per-intent privacy labels** | 🔴 → 🟢 **closed** — every intent carries `IntentPrivacy { access, sensitivity, destructive, external }`; published in the manifest and used by the harnesses' UI guidance | A trust model now has somewhere to attach |
-| G7 | **Attested cloud escalation** (PCC) + one-line model swap | 🔴 not started — an earlier `ModelTierRouter` prototype (tier by context size + reasoning level + tool depth, `localOnly` privacy-pinning, cloud-down fallback) was removed; both the decision layer and the attested compute target remain to be built | Neither the decision layer nor the trustworthy compute target exists yet |
+| G7 | **Attested cloud escalation** (PCC) + one-line model swap | 🟡 **half closed** — the decision layer is live: `ModelTierRouter` (tier by context size + reasoning level + tool depth, `localOnly` privacy-pinning, cloud-down fallback) was removed in `34f6eed5b` and **re-landed in `2a7b85930`**, and now has an internal caller — `OllamaService.resolveModel` picks the chat model through it when `llm.tierRouting.enabled` is set. The **attested compute target** remains to be built | The decision layer exists (opt-in); the trustworthy compute target does not |
 | G8 | **Donation loop** intent → prediction | 🔴 → 🟢 **closed** — every tool invocation emits `tool.invoked` (renamed from `intent.invoked`); `ToolInvokedListener` consumes it on the `telemetry` queue as a behavioural signal | The agent-action flywheel is wired |
 
 Where **CI already leads** Apple — and this list has *grown* since round 1:
@@ -314,7 +328,7 @@ The original priority list mapped Apple-idea → CI-recommendation. Most of thos
 | **P2** | **Intent donation → HBPE** | Intent donation | ✅ shipped (#1575) | — |
 | **P2** | **EntityQuery + DisplayRepresentation contract** | AppEntity | 🔶 partial — registry + descriptors shipped | Uniform `resolve(byId \| byName \| disambiguate)` per entity type, so "find John" works the same on every surface |
 | **P3** | **Per-intent privacy labels + dispatcher** | Intent privacy + Siri dispatch | 🔶 partial — labels ✅; capability enforcement inside `ToolRegistry.executeTool` ✅; *user confirmation* ⏳ (the demotion layer that was the first steering move has since been deleted) | A dispatcher that intercepts execution to **ask the human**: confirms `destructive` intents, warns on `external`, and gates by `sensitivity` |
-| **P3** | **Verifiable-transparency cloud tier** | PCC transparency | ⏳ deferred (infra) | A stateless, attested compute target — plus, now, the routing layer that would point at it, since the prototype was removed. Published images, dual roots of trust, non-targetability |
+| **P3** | **Verifiable-transparency cloud tier** | PCC transparency | ⏳ deferred (infra) | A stateless, attested compute target. The routing layer that would point at it already exists (`ModelTierRouter`, wired into `OllamaService.resolveModel` behind `llm.tierRouting.enabled`); what is missing is the target itself — published images, dual roots of trust, non-targetability |
 | **NEW** | **Memory benchmark suite** as ongoing CI gate | (no Apple analogue) | ✅ shipped ([CI-Server #1587](https://github.com/companionintelligence/CI-Server/pull/1587)) | Adopt it as the regression bar — every change touching `domains/memory/**` should re-baseline naive on Jordan/Priya and surface deltas on smart adapters (mem0, hindsight, ci_server) when run live |
 
 ### What to do next, in priority order

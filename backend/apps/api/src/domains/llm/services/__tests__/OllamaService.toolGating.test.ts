@@ -14,6 +14,7 @@
  * the actual gate rather than a mock of it, and every one of them would have passed the destructive
  * call straight through against the pre-fix code.
  */
+import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
 import { OllamaService, type ChatRequestContext } from '../OllamaService';
@@ -102,9 +103,13 @@ async function setup(toolName: string, privacy: Record<string, unknown>) {
 
   const driver = driverCalling(toolName);
   const llmEndpointService = { getOpenAiDriver: () => driver } as any;
-  const service = new OllamaService(llmEndpointService, registry, makeLogger(), {
-    isFeatureEnabled: jest.fn(async () => false),
-  } as any);
+  const service = new OllamaService(
+    llmEndpointService,
+    registry,
+    makeLogger(),
+    { isFeatureEnabled: jest.fn(async () => false) } as any,
+    new ModelTierRouter(),
+  );
 
   return { service, tool, driver };
 }
@@ -241,6 +246,7 @@ describe('OllamaService tool dispatch is gated by the caller’s capability', ()
       {
         isFeatureEnabled: jest.fn(async () => false),
       } as any,
+      new ModelTierRouter(),
     );
 
     await service.chat(context('read'), [{ role: 'user', content: 'forget everything' }], {

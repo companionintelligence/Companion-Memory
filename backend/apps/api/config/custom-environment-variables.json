@@ -74,7 +74,19 @@
   "llm": {
     "apiBase": "LLM_API_BASE",
     "apiKey": "LLM_API_KEY",
-    "chatModel": "LLM_DEFAULT_CHAT_MODEL"
+    "chatModel": "LLM_DEFAULT_CHAT_MODEL",
+    "tierRouting": {
+      "enabled": {
+        "__name": "LLM_TIER_ROUTING_ENABLED",
+        "__format": "boolean"
+      },
+      "onDeviceModel": "LLM_TIER_ROUTING_ON_DEVICE_MODEL",
+      "escalatedModel": "LLM_TIER_ROUTING_ESCALATED_MODEL",
+      "onDeviceContextTokens": {
+        "__name": "LLM_TIER_ROUTING_ON_DEVICE_CONTEXT_TOKENS",
+        "__format": "json"
+      }
+    }
   },
   "services": {
     "ollama": {

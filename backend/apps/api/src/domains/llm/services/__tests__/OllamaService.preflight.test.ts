@@ -1,3 +1,5 @@
+import { ModelTierRouter } from '@ci/domains/model-routing';
+
 import { nearestModelIds, OllamaService, PROMPT_MODEL } from '../OllamaService';
 
 /**
@@ -59,6 +61,7 @@ function buildService(served: string[] | Error) {
     { getAgentFacingTools: () => [] } as never,
     logger as never,
     { isFeatureEnabled: jest.fn(async () => false) } as never,
+    new ModelTierRouter(),
   );
 
   return { service, logger, listModels };
@@ -154,6 +157,7 @@ describe('OllamaService chat-model preflight', () => {
       { getAgentFacingTools: () => [] } as never,
       logger as never,
       { isFeatureEnabled: jest.fn(async () => false) } as never,
+      new ModelTierRouter(),
     );
 
     const preflight = service.preflightChatModel();

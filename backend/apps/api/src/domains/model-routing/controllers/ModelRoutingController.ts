@@ -12,6 +12,7 @@ const routingRequestSchema = z
     reasoningLevel: z.enum(['light', 'moderate', 'deep']).optional(),
     toolDepth: z.number().int().nonnegative().optional(),
     requiresLargeContext: z.boolean().optional(),
+    onDeviceContextTokens: z.number().int().positive().optional(),
     localOnly: z.boolean().optional(),
     cloudAvailable: z.boolean().optional(),
     forceTier: z.enum(['on_device', 'private_cloud']).optional(),

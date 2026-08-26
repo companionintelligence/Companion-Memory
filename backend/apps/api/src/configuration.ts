@@ -232,6 +232,38 @@ export const ConfigSchema = z.object({
       apiBase: z.string().optional(),
       apiKey: z.string().default('ollama'),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
+      /**
+       * Model-tier routing (`domains/model-routing`, `ModelTierRouter`) applied to
+       * chat model selection in `OllamaService.resolveModel`.
+       *
+       * OFF by default and deliberately so: the router's on-device context window
+       * (8K) is an estimate mirroring Apple's on-device/PCC split, not a measured
+       * property of whatever the appliance is serving. With `enabled: false`
+       * `resolveModel` behaves exactly as it did before routing existed.
+       */
+      tierRouting: z
+        .object({
+          /** Consult `ModelTierRouter` when choosing the chat model. */
+          enabled: z.boolean().default(false),
+          /**
+           * Model id to use for the `on_device` tier. Empty = keep the model the
+           * existing served-model resolution picked.
+           */
+          onDeviceModel: z.string().default(''),
+          /**
+           * Model id to use for the escalated `private_cloud` tier. Empty means the
+           * escalated tier has no target, so the router is told the cloud tier is
+           * unavailable and every task stays on-device.
+           */
+          escalatedModel: z.string().default(''),
+          /**
+           * Real usable context window of `onDeviceModel`, in tokens. Overrides the
+           * router's estimated 8K so the escalation threshold is a deployment fact
+           * rather than a guess. 0 = fall back to the router's own profile.
+           */
+          onDeviceContextTokens: z.number().int().nonnegative().default(0),
+        })
+        .default({}),
     })
     .default({}),
   // Local-first sync (PowerSync). The server issues short-lived client tokens via

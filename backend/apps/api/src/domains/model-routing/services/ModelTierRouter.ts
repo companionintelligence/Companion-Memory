@@ -55,7 +55,7 @@ export class ModelTierRouter {
       const wantedCloud = wantsEscalation || request.forceTier === 'private_cloud';
       reasons.push('localOnly: privacy pins this task on-device');
 
-      return this.decision('on_device', reasoningLevel, reasons, wantedCloud);
+      return this.decision('on_device', reasoningLevel, reasons, wantedCloud, request);
     }
 
     // 2. Explicit override (not privacy-pinned).
@@ -66,27 +66,27 @@ export class ModelTierRouter {
       if (request.forceTier === 'private_cloud' && request.cloudAvailable === false) {
         reasons.push('cloud unavailable: falling back on-device');
 
-        return this.decision('on_device', reasoningLevel, reasons, true);
+        return this.decision('on_device', reasoningLevel, reasons, true, request);
       }
 
-      return this.decision(request.forceTier, reasoningLevel, reasons, false);
+      return this.decision(request.forceTier, reasoningLevel, reasons, false, request);
     }
 
     // 3. Heuristic escalation.
     if (!wantsEscalation) {
       reasons.push('task fits on-device limits');
 
-      return this.decision('on_device', reasoningLevel, reasons, false);
+      return this.decision('on_device', reasoningLevel, reasons, false, request);
     }
 
     // 4. Escalate if the cloud tier is reachable, else fall back.
     if (request.cloudAvailable === false) {
       reasons.push('cloud unavailable: falling back on-device (may truncate)');
 
-      return this.decision('on_device', reasoningLevel, reasons, true);
+      return this.decision('on_device', reasoningLevel, reasons, true, request);
     }
 
-    return this.decision('private_cloud', reasoningLevel, reasons, false);
+    return this.decision('private_cloud', reasoningLevel, reasons, false, request);
   }
 
   /** Decide whether the task's shape calls for the escalated tier. */
@@ -95,7 +95,7 @@ export class ModelTierRouter {
     escalationReasons: string[];
   } {
     const reasons: string[] = [];
-    const onDeviceCtx = TIER_PROFILES.on_device.maxContextTokens;
+    const onDeviceCtx = this.onDeviceContextTokens(request);
 
     if (request.requiresLargeContext) {
       reasons.push('caller requires large context');
@@ -116,13 +116,33 @@ export class ModelTierRouter {
     return { wantsEscalation: reasons.length > 0, escalationReasons: reasons };
   }
 
+  /**
+   * The on-device context window this request should be judged against: the
+   * caller's measured value when it supplied one, else the estimated profile.
+   */
+  private onDeviceContextTokens(request: RoutingRequest): number {
+    const override = request.onDeviceContextTokens;
+
+    return typeof override === 'number' && override > 0 ? override : TIER_PROFILES.on_device.maxContextTokens;
+  }
+
   private decision(
     tier: ModelTier,
     reasoningLevel: ReasoningLevel,
     reasons: string[],
     downgraded: boolean,
+    request: RoutingRequest,
   ): RoutingDecision {
-    return { tier, reasoningLevel, profile: TIER_PROFILES[tier], reasons, downgraded };
+    const base = TIER_PROFILES[tier];
+    const onDeviceCtx = this.onDeviceContextTokens(request);
+    // Report the window the decision was actually made against, so a caller that
+    // told us the real on-device size does not read back the estimate.
+    const profile =
+      tier === 'on_device' && onDeviceCtx !== base.maxContextTokens
+        ? { ...base, maxContextTokens: onDeviceCtx }
+        : base;
+
+    return { tier, reasoningLevel, profile, reasons, downgraded };
   }
 
   /** The static tier profiles, for discovery. */
