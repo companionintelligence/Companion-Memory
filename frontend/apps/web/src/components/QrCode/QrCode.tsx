@@ -38,6 +38,8 @@ export interface QrCodeProps {
    * is reading this over a screen share — and "just scan it" is not a
    * recovery. If you find yourself wanting to omit this, the answer is that
    * the surface should not be showing a QR code at all.
+   *
+   * The one exception is `reveal`, where it waits with the code — see there.
    */
   fallback: string;
   /** Rendered size of the code in px. */
@@ -61,12 +63,16 @@ export interface QrCodeProps {
   /** Rendered above the code. */
   caption?: ReactNode;
   /**
-   * Start blurred behind a "Show code" button.
+   * Start hidden behind a "Show code" button — the code AND the `fallback`.
    *
    * For payloads that are credentials. A QR of a secret is strictly worse than
    * the clipboard: screen-share codecs re-encode it cleanly enough to scan, and
    * a screenshot persists it in a camera roll that syncs. Revealing on an
    * explicit press at least makes the exposure a decision.
+   *
+   * The `fallback` is the same secret in plaintext, so it waits too. Blurring
+   * only the machine-readable copy while printing the human-readable one under
+   * it protects nothing.
    */
   reveal?: boolean;
   className?: string;
@@ -83,8 +89,10 @@ export function QrCode({
   className,
 }: QrCodeProps) {
   const { t } = useTranslation();
-  const [revealed, setRevealed] = useState(!reveal);
+  const [revealed, setRevealed] = useState(false);
   const fallbackId = useId();
+
+  const hidden = reveal && !revealed;
 
   const markSize = Math.round(size * MARK_SCALE);
 
@@ -110,11 +118,15 @@ export function QrCode({
           // edge to find, and the border above is teal, not plate-white.
           marginSize={4}
           imageSettings={mark ? { src: logo, height: markSize, width: markSize, excavate: true } : undefined}
-          className={cn('block transition-[filter]', !revealed && 'blur-md')}
-          aria-describedby={fallbackId}
+          className={cn('block transition-[filter]', hidden && 'blur-md')}
+          // The description IS the payload, so it only exists while the payload
+          // does. Pointing at an id that is not in the document while hidden
+          // would be a dangling reference, and rendering the text off-screen to
+          // satisfy it would hand the secret straight back to a screen reader.
+          aria-describedby={hidden ? undefined : fallbackId}
         />
 
-        {!revealed && (
+        {hidden && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Button size="sm" onClick={() => setRevealed(true)}>
               <QrCodeIcon className="h-4 w-4" />
@@ -125,17 +137,24 @@ export function QrCode({
       </div>
 
       {/*
-        Always present, never behind the reveal: this is the escape hatch for a
-        camera that won't focus, and hiding it would recreate the dead end the
-        `fallback` prop exists to prevent. It is the same string the code
-        encodes, selectable and copyable.
+        The same string the code encodes, selectable and copyable — so it waits
+        on exactly the same gate the code does.
+
+        Without `reveal` (the default) that gate is open from the start, and
+        this is the escape hatch for the camera that won't focus, the phone that
+        is the device showing the code, the screen share. With `reveal` set the
+        payload is a credential, and printing it in plaintext under a blurred
+        picture of itself would conceal nothing — the blur would be theatre.
+        Both halves are the payload, so both wait.
       */}
-      <p
-        id={fallbackId}
-        className="max-w-full text-center text-xs break-all text-muted-foreground select-all"
-      >
-        {fallback}
-      </p>
+      {!hidden && (
+        <p
+          id={fallbackId}
+          className="max-w-full text-center text-xs break-all text-muted-foreground select-all"
+        >
+          {fallback}
+        </p>
+      )}
 
       {reveal && revealed && (
         <Button variant="ghost" size="sm" onClick={() => setRevealed(false)}>
