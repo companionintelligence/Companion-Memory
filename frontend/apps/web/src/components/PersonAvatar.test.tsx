@@ -49,6 +49,29 @@ describe('PersonAvatar', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', '/static/avatars/ada.png');
   });
 
+  it('renders a data: URI as-is, never prefixing it with /static', () => {
+    // vcard.ts embeds a contact's photo as exactly this shape
+    // (data:image/jpeg;base64,...). Before this case existed it fell into the
+    // relative-path branch above and became `/staticdata:image/jpeg;base64,...`
+    // — a path that cannot resolve to anything, so it 404s and every
+    // vCard-imported photo silently showed initials instead. Confirmed against
+    // a real 4,697-person import: this was not a hypothetical edge case, it
+    // was the common case for every contact that had a photo at all.
+    const dataUri = 'data:image/jpeg;base64,/9j/AAA';
+
+    render(<PersonAvatar name="Ada Lovelace" avatarUrl={dataUri} />);
+
+    expect(screen.getByRole('img')).toHaveAttribute('src', dataUri);
+  });
+
+  it('renders a data:image/png URI as-is too, not just jpeg', () => {
+    const dataUri = 'data:image/png;base64,iVBORw0KGgo=';
+
+    render(<PersonAvatar name="Ada Lovelace" avatarUrl={dataUri} />);
+
+    expect(screen.getByRole('img')).toHaveAttribute('src', dataUri);
+  });
+
   it('renders initials, not a broken-image glyph, when there is no avatarUrl', () => {
     render(<PersonAvatar name="Ada Lovelace" avatarUrl={null} />);
 

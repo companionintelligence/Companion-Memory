@@ -145,6 +145,17 @@ export function paletteFor(label: string | null | undefined): { readonly bg: str
  * The same absolute-or-`/static`-relative convention every avatar-rendering
  * call site already used ad hoc: a full URL is used as-is, anything else is
  * assumed to be an object-store-relative path and gets `/static` prefixed.
+ *
+ * A `data:` URI is a THIRD case, not a variant of either: it is already the
+ * complete image, not a reference to fetch one, so it must be returned as-is
+ * too. Before this branch existed, one slipped through the relative-path
+ * fallback and got `/static` prepended onto it — `vcard.ts` embeds a
+ * contact's photo as exactly this (`data:image/jpeg;base64,...`), so every
+ * vCard-imported Person with a real photo requested
+ * `/staticdata:image/jpeg;base64,...`, a path that cannot resolve to
+ * anything, got a 400, and fell back to initials. Confirmed against a real
+ * 4,697-person import: every contact carrying a data: URI avatar showed
+ * initials instead of their photo.
  */
 function resolveAvatarUrl(avatarUrl: string | null | undefined): string | undefined {
   const trimmed = avatarUrl?.trim();
@@ -153,7 +164,11 @@ function resolveAvatarUrl(avatarUrl: string | null | undefined): string | undefi
     return undefined;
   }
 
-  return /^https?:\/\//.test(trimmed) ? trimmed : `/static${trimmed}`;
+  if (/^https?:\/\//.test(trimmed) || /^data:/.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `/static${trimmed}`;
 }
 
 interface Props {
