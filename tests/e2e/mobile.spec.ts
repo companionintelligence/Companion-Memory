@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Runs in the `mobile` project (Pixel 5 viewport, authenticated). At this width
 // MemoryPage renders MobileMemoryPage via ResponsiveLoader. Assertions stay on

@@ -1,6 +1,5 @@
+import { expect, test } from './fixtures/authenticated';
 import path from 'node:path';
-
-import { expect, test } from '@playwright/test';
 
 /**
  * The single most valuable e2e gap this session found: nothing drove an
@@ -38,7 +37,8 @@ test('imports a vCard export end-to-end and the contacts land in Memory', async 
   // Step 2: Export. The upload input is hidden (DropZone renders a real
   // <input type="file"> for click-to-browse, not just drag-and-drop) but
   // still targetable by its aria-label.
-  await expect(page.getByText('Apple Contacts')).toBeVisible();
+  // Role-scoped: the drop zone's own copy ("Drop your Apple Contacts export\n  // here") also contains this string, so a bare text match is ambiguous.
+  await expect(page.getByRole('heading', { name: 'Apple Contacts' })).toBeVisible();
   await page.getByLabel('Choose export files to import').setInputFiles(FIXTURE);
 
   // The upload completes and its unpack+parse run starts immediately

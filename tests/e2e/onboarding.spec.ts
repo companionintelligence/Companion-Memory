@@ -44,16 +44,31 @@ test('completes onboarding for a new user', async ({ page }) => {
   const skipButton = page.getByRole('button', { name: 'Skip' });
   const finishButton = page.getByRole('button', { name: 'Run my first sync and finish' });
 
+  // Wait for the wizard's controls to mount before the loop starts. Step 1
+  // animates its heading in, so an immediate `isVisible()` can miss the footer
+  // and break the loop on iteration 0 — which then reads as "the wizard is
+  // broken" when nothing is wrong.
+  await expect(skipButton.or(finishButton).first()).toBeVisible({ timeout: 15_000 });
+
   for (let i = 0; i < 20; i++) {
     if (await finishButton.isVisible().catch(() => false)) {
       break;
     }
 
-    if (!(await skipButton.isVisible().catch(() => false))) {
+    if ((await skipButton.count()) === 0) {
       break;
     }
 
+    // The source step ("Connect a source") is a long, inner-scrolling panel and
+    // its footer sits below the fold, so Skip is present but not in view.
+    // Test on presence, scroll it in, then click — `isVisible()` alone would
+    // abandon the walk on a step that is working.
+    await skipButton.scrollIntoViewIfNeeded().catch(() => {});
     await skipButton.click();
+
+    // Each step swaps the panel; let the next one settle before re-querying,
+    // otherwise the click can land on the outgoing step's detached footer.
+    await page.waitForTimeout(300);
   }
 
   await expect(finishButton).toBeVisible({ timeout: 10_000 });

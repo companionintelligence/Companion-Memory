@@ -1,6 +1,6 @@
-import path from 'node:path';
+import type { PlaywrightWorkerArgs } from '@playwright/test';
 
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 /**
  * Guards the connect recipe an external MCP client follows: mint an API key in the UI, point a
@@ -22,11 +22,44 @@ const INITIALIZE = {
 };
 
 /**
- * The same file `global-setup.ts` writes. Resolved absolutely: `playwright.request.newContext`
- * resolves a relative `storageState` against `process.cwd()`, unlike the identical string in
- * `playwright.e2e.config.ts`, which the runner resolves against the config directory.
+ * Mint a session for the API-only calls below. There is no shared storageState
+ * file to borrow: sessions are bound to ip + user_agent and rotate with a 30s
+ * grace window, so each consumer signs in for itself (see
+ * `fixtures/authenticated.ts`).
  */
-const AUTH_FILE = path.resolve(__dirname, '../../playwright/.auth/user.json');
+async function authenticatedRequestContext(playwright: PlaywrightWorkerArgs['playwright'], baseURL: string) {
+  const ctx = await playwright.request.newContext({ baseURL });
+  const email = process.env.AUTH_DEFAULT_USER_EMAIL || 'jsmith@example.com';
+  const password = process.env.AUTH_DEFAULT_USER_PASSWORD;
+
+  await ctx.get('/api/authenticate/csrf');
+  const csrf = (await ctx.storageState()).cookies.find((c) => c.name === 'csrfToken')?.value;
+  const res = await ctx.post('/api/authenticate', {
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf ?? '' },
+    data: { username: email, password },
+  });
+
+  expect(res.ok(), `E2E login failed: ${res.status()} ${await res.text()}`).toBeTruthy();
+
+  // Logging in re-mints the CSRF token from the `anon.` scope to the user's, so
+  // read it back *after* the POST.
+  const userCsrf = (await ctx.storageState()).cookies.find((c) => c.name === 'csrfToken')?.value ?? '';
+
+  // `/api/keys` is behind `JwtOrPortalAuthGuard` — it wants a **bearer JWT**,
+  // not the session cookie. `/authenticate/refresh` is what mints one from the
+  // session, exactly as the app does on load; without it every call here is a
+  // flat 401 no matter how valid the session is.
+  const refreshed = await ctx.post('/api/authenticate/refresh', { headers: { 'X-CSRF-Token': userCsrf } });
+
+  expect(
+    refreshed.ok(),
+    `Token refresh failed: ${refreshed.status()} ${await refreshed.text()}`,
+  ).toBeTruthy();
+
+  const { accessToken } = (await refreshed.json()) as { accessToken: string };
+
+  return { ctx, csrf: userCsrf, accessToken };
+}
 
 /** Streamable HTTP replies as plain JSON or as an SSE `data:` line — accept either. */
 function parseMcpBody(contentType: string, text: string): Record<string, unknown> {
@@ -48,12 +81,15 @@ test.describe('MCP endpoint accepts an operator API key', () => {
   let keyId: string;
 
   test.beforeAll(async ({ playwright, baseURL }) => {
-    // Authenticated via storageState from global-setup; POST /keys is session-guarded and returns
+    // POST /keys is session-guarded and returns
     // the raw key exactly once — the same path a user follows in Settings → API Keys.
-    const ctx = await playwright.request.newContext({ baseURL, storageState: AUTH_FILE });
+    const { ctx, csrf, accessToken } = await authenticatedRequestContext(playwright, baseURL!);
 
     try {
-      const res = await ctx.post('/api/keys', { data: { name: 'e2e-mcp' } });
+      const res = await ctx.post('/api/keys', {
+        headers: { 'X-CSRF-Token': csrf, Authorization: `Bearer ${accessToken}` },
+        data: { name: 'e2e-mcp' },
+      });
 
       expect(res.ok(), `Key creation failed: ${res.status()} ${await res.text()}`).toBeTruthy();
 
@@ -74,10 +110,12 @@ test.describe('MCP endpoint accepts an operator API key', () => {
       return;
     }
 
-    const ctx = await playwright.request.newContext({ baseURL, storageState: AUTH_FILE });
+    const { ctx, csrf, accessToken } = await authenticatedRequestContext(playwright, baseURL!);
 
     try {
-      await ctx.delete(`/api/keys/${keyId}`);
+      await ctx.delete(`/api/keys/${keyId}`, {
+        headers: { 'X-CSRF-Token': csrf, Authorization: `Bearer ${accessToken}` },
+      });
     } finally {
       await ctx.dispose();
     }
