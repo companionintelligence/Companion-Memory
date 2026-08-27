@@ -33,6 +33,22 @@ describe('EntityFieldsCard', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 
+  it('hides an empty field in view mode when hideWhenEmpty is set', () => {
+    render(
+      <EntityFieldsCard
+        fields={[
+          { key: 'title', label: 'Title', value: 'Invoice' },
+          { key: 'text', label: 'Text', value: '', multiline: true, hideWhenEmpty: true },
+        ]}
+        editMode={false}
+      />,
+    );
+
+    expect(screen.getByText('Invoice')).toBeInTheDocument();
+    expect(screen.queryByText('Text')).not.toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
+  });
+
   it('persists every field, not only the one that was touched', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const onEditModeChange = vi.fn();

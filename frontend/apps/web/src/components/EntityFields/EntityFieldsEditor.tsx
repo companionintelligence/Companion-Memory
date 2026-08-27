@@ -11,6 +11,8 @@ export interface EditField {
   multiline?: boolean;
   inputType?: string;
   placeholder?: string;
+  /** Omit this field from the read-only view when `value` is empty. */
+  hideWhenEmpty?: boolean;
 }
 
 /** A read-only label/value pair shown alongside the editable fields. */
@@ -150,13 +152,15 @@ interface FieldsProps {
  * entity views so both render (and edit) the same fields.
  */
 export function EntityFields({ fields, editing, values, onChange, idPrefix = 'field' }: FieldsProps) {
-  if (fields.length === 0) {
+  const visible = editing ? fields : fields.filter((field) => !field.hideWhenEmpty || Boolean(field.value));
+
+  if (visible.length === 0) {
     return null;
   }
 
   return (
     <>
-      {fields.map((field) => {
+      {visible.map((field) => {
         const id = `${idPrefix}-${field.key}`;
 
         return (
