@@ -232,6 +232,38 @@ export const ConfigSchema = z.object({
       apiBase: z.string().optional(),
       apiKey: z.string().default('ollama'),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
+      /**
+       * Model-tier routing (`domains/model-routing`, `ModelTierRouter`) applied to
+       * chat model selection in `OllamaService.resolveModel`.
+       *
+       * OFF by default and deliberately so: the router's on-device context window
+       * (8K) is an estimate mirroring Apple's on-device/PCC split, not a measured
+       * property of whatever the appliance is serving. With `enabled: false`
+       * `resolveModel` behaves exactly as it did before routing existed.
+       */
+      tierRouting: z
+        .object({
+          /** Consult `ModelTierRouter` when choosing the chat model. */
+          enabled: z.boolean().default(false),
+          /**
+           * Model id to use for the `on_device` tier. Empty = keep the model the
+           * existing served-model resolution picked.
+           */
+          onDeviceModel: z.string().default(''),
+          /**
+           * Model id to use for the escalated `private_cloud` tier. Empty means the
+           * escalated tier has no target, so the router is told the cloud tier is
+           * unavailable and every task stays on-device.
+           */
+          escalatedModel: z.string().default(''),
+          /**
+           * Real usable context window of `onDeviceModel`, in tokens. Overrides the
+           * router's estimated 8K so the escalation threshold is a deployment fact
+           * rather than a guess. 0 = fall back to the router's own profile.
+           */
+          onDeviceContextTokens: z.number().int().nonnegative().default(0),
+        })
+        .default({}),
     })
     .default({}),
   // Local-first sync (PowerSync). The server issues short-lived client tokens via
@@ -652,6 +684,120 @@ export const ConfigSchema = z.object({
       alwaysReviewBelowConfidence: z.coerce.number().min(0).max(1).default(0.55),
     })
     .default({}),
+  agent: z
+    .object({
+      // Retention for `ci.agent_memories` — the raw fragments the agent writes
+      // through `POST /memory/write`, which `MemoryCompactionService` promotes
+      // into the knowledge graph and `RecallService` re-reads verbatim as its
+      // naive-RAG channel. See AgentMemoryRetentionService for why the two
+      // lifecycle halves are given very different treatment.
+      memoryRetention: z
+        .object({
+          /**
+           * Off keeps every fragment forever, which is the behaviour that
+           * shipped before this sweep existed. It exists so an operator can
+           * stop an irreversible job without editing code, not because keeping
+           * everything is a defensible steady state.
+           */
+          enabled: booleanStringSchema.default(true),
+          /**
+           * Days a PROCESSED fragment is kept after `processed_at` is stamped.
+           *
+           * The house convention (365) rather than something shorter, because
+           * on this table the raw text is not dead weight after compaction:
+           * `RecallService`'s message channel vector-searches these fragments
+           * and unions their text in precisely because the graph
+           * serialisation the compactor produces is lossy ("Priya Sharma —
+           * lives in Phoenix" versus the sentence that also said she moved
+           * from Eugene last spring). Shortening this trades recall detail for
+           * disk, and the disk is not the constraint: a fragment is a few
+           * hundred bytes of text plus one dense embedding, so even a chatty
+           * producer costs low hundreds of MB a year.
+           *
+           * Shorten it on an appliance whose owner would rather the raw
+           * conversational text not outlive its distillation — that is the
+           * reason to move this number, not space.
+           */
+          processedDays: z.coerce.number().int().positive().default(365),
+          /**
+           * Age at which an UNPROCESSED fragment is reported as a stuck
+           * pipeline. Never a deletion trigger: an unprocessed fragment is the
+           * only copy of text nothing has promoted anywhere, so age alone can
+           * never be grounds for destroying it. A week is long enough that a
+           * paused compaction cron or an Ollama outage has visibly failed to
+           * clear rather than merely fallen behind — the compactor takes 100
+           * fragments every five minutes when it is healthy.
+           */
+          stuckAfterDays: z.coerce.number().int().positive().default(7),
+          /** Days a raised stuck-pipeline card suppresses its own repeat. */
+          stuckAlertRepeatDays: z.coerce.number().int().positive().default(7),
+          /**
+           * Fragments deleted per nightly sweep.
+           *
+           * Deliberately small. Each deletion goes through
+           * `AgentMemoryService.remove`, which also emits the event that reaps
+           * the fragment's `ci_search.embeddings` row — correctness the sweep
+           * cannot get from a bulk `DELETE` — so this bounds a per-row path,
+           * not one statement. A backlog drains across nights and is logged
+           * while it lasts.
+           */
+          deleteBatchSize: z.coerce.number().int().positive().default(500),
+        })
+        .default({}),
+    })
+    .default({}),
+  // The chat-turn memory producer. `ci.agent_memories` was written by exactly
+  // one caller (POST /memory/write, ApiKeyGuard-only), so on an appliance whose
+  // owner talks to their own web chat the table stayed empty and everything
+  // downstream of it — compaction, the fragment embedding, the recall message
+  // channel — had nothing to read. `TurnFragmentCron` is the missing producer.
+  // Consumed by `domains/agent/cron/TurnFragmentCron.ts` and
+  // `domains/agent/services/TurnFragmentService.ts`.
+  agentMemory: z
+    .object({
+      turnFragments: z
+        .object({
+          /**
+           * Minutes between fan-out ticks. Bounded 5..15 on purpose: below 5
+           * the cron re-scans the same settling turns for no gain, above 15 a
+           * fragment written now is not recallable for a quarter of an hour,
+           * which is long enough that the next question in the same session
+           * misses it.
+           */
+          intervalMinutes: z.coerce.number().int().min(5).max(15).default(10),
+          /**
+           * How far back a tick looks. Must comfortably exceed
+           * `intervalMinutes` so a skipped tick (restart, a long-running
+           * previous tick) still gets picked up by the next one.
+           */
+          lookbackMinutes: z.coerce
+            .number()
+            .int()
+            .positive()
+            .max(24 * 60)
+            .default(120),
+          /**
+           * Turns younger than this are left alone. A tool-calling turn writes
+           * several assistant rows against one prompt, and the fragment id is
+           * keyed on the prompt (not the text) so the FIRST write wins — a
+           * settle delay is what stops a half-finished chain becoming the
+           * permanent fragment.
+           */
+          settleMinutes: z.coerce.number().int().nonnegative().default(3),
+          /** Turns distilled per user per tick. Bounds one user's backlog. */
+          maxTurnsPerUser: z.coerce.number().int().positive().default(25),
+          /**
+           * Below this many characters (prompt + reply, after `<think>` is
+           * stripped) the turn is not worth a fragment — "hi"/"thanks" pairs
+           * would otherwise dominate the recall channel.
+           */
+          minFragmentChars: z.coerce.number().int().nonnegative().default(40),
+          /** Per-side cap. A 40k-token reply is not a memory fragment. */
+          maxSideChars: z.coerce.number().int().positive().default(2000),
+        })
+        .default({}),
+    })
+    .default({}),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     /**
@@ -719,6 +865,13 @@ export const ConfigSchema = z.object({
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,
     /**
+     * Enables `TurnFragmentCron`: the appliance's own chat turns become raw
+     * `ci.agent_memories` fragments. OFF by default — turning it on starts
+     * writing conversation text into the recall channel, and (with
+     * `agent.memory.compaction` also on) into the knowledge graph.
+     */
+    'agent.memory.turnFragments': booleanStringSchema,
+    /**
      * Enables saved-search sharing: the `/shared/<token>` capability-link path
      * (resolving a shared saved search and running it as its owner) and the
      * frontend "make public" control. Off by default — the access model is still
@@ -779,6 +932,20 @@ export const ConfigSchema = z.object({
      * default — the surface stays dark (routes 404) until explicitly enabled.
      */
     'solid.protocol': booleanStringSchema,
+    /**
+     * The dispatch gate: `ToolRegistry.executeTool` consults `resolveToolGate`
+     * and parks a destructive/external/not-locally-permitted intent in
+     * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.
+     *
+     * OFF by default, and off is byte-identical to the pre-gate behaviour —
+     * `PendingActionService.evaluate` pins the tier to `appliance` and skips the
+     * trust dial, so the only ruling it can produce is the `execute` every call
+     * already got. Turn it on with ENABLE_PENDING_ACTIONS=true; what changes
+     * then is `cautious` trust mode (destructive/external intents ask first) and
+     * `?tier=local` execute calls (queued rather than run). `hands_off` and
+     * `balanced` behave exactly as they do today either way.
+     */
+    'tools.pendingActions': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,

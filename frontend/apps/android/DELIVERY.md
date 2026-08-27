@@ -246,6 +246,15 @@ Phased **Now** (next release train) / **Next** (following quarter) / **Later**. 
 | **Biometric app-lock** (Face ID / Touch ID / fingerprint) | M | A private memory app holding a long-lived API key in the keystore should gate access. New Capacitor biometric plugin + native permission strings. |
 | **Reviewer demo mode** | M | See §2 — one-tap "Try the demo" against the hosted sample server; unblocks review *and* new-user onboarding. |
 
+> **Not the same thing as the in-app camera scan already shipped.** The "Scan QR Code"
+> button on the Memory Server URL screen (`ServerSettingsPage`, `scanQrCode()` in
+> `@ci/common`'s native bridge) is a user-initiated camera scan of a plain `http(s)`
+> origin — no deep link, no router, no OS-level handoff. The **QR server-pairing deep
+> link** item above is a different mechanism: an *incoming* `companion://pair?origin=…`
+> URL that the OS hands to the app (e.g. from tapping a QR result outside the app, or a
+> notification), requiring the in-app deep-link router this table lists as a separate
+> prerequisite. Building the camera-scan path does not close this item.
+
 ### Next
 | Item | Effort | Notes |
 |---|---|---|

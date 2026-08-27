@@ -89,24 +89,6 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/import/push/__tests__/commercePlane.test.ts",
-    "to": "src/domains/memory/types.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/import/push/__tests__/undatedRecords.test.ts",
-    "to": "src/domains/pipeline/stages/clean/TemporalRepairStage.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/domains/llm/listeners/__tests__/llmQueuePolicy.test.ts",
     "to": "src/domains/smart-rotation/listeners/AnswerInferenceListener.ts",
     "rule": {
@@ -334,6 +316,60 @@
     "type": "dependency",
     "from": "src/domains/planning/services/TodoScanService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/index.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/policy/__tests__/toolGate.test.ts",
+    "to": "src/domains/personalization/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/policy/toolGate.ts",
+    "to": "src/domains/personalization/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/services/__tests__/PendingActionService.test.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/services/__tests__/PendingActionService.test.ts",
+    "to": "src/domains/personalization/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/services/PendingActionService.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"

@@ -37,22 +37,21 @@ describe('RFC 2047 encoded-word decoding', () => {
     expect(decodeHeaderField(encoded)).toBe('Hello World');
   });
 
-  // Known limitation, not yet fixed: decodeHeaderField treats every declared
-  // charset OTHER than us-ascii as UTF-8 (`charset.toLowerCase() ===
-  // 'us-ascii' ? 'ascii' : 'utf8'`). A real ISO-8859-1/windows-1252 header —
-  // common from older or non-US mail clients — therefore decodes as mojibake
-  // instead of the correct text. This test pins the CURRENT (wrong) behavior
-  // so a silent regression elsewhere in the tokenizer doesn't hide behind "we
-  // never test non-UTF-8 charsets anyway"; if/when charset-aware decoding is
-  // added, this assertion should change to expect 'café', not '�'.
-  it('currently mis-decodes an ISO-8859-1 (Latin-1) encoded-word as mojibake', () => {
-    // "café" in ISO-8859-1/Latin-1: 'é' is the single byte 0xE9, Q-encoded as "=E9".
+  it('decodes an ISO-8859-1 (Latin-1) encoded-word correctly, not as mojibake', () => {
+    // "café" in ISO-8859-1/Latin-1: 'é' is the single byte 0xE9, Q-encoded as
+    // "=E9". Previously every charset other than us-ascii was forced through
+    // as UTF-8, and the lone 0xE9 byte — an invalid UTF-8 lead byte — decoded
+    // to the replacement character instead of 'é'. decodeHeaderField now goes
+    // through the shared charset-aware decodeWithCharset (see email_mime.ts).
     const encoded = '=?ISO-8859-1?Q?caf=E9?=';
-    const decoded = decodeHeaderField(encoded);
-    // What SHOULD happen (correct Latin-1 decode) — currently NOT what we get:
-    expect(decoded).not.toBe('café');
-    // What ACTUALLY happens: the lone 0xE9 byte is an invalid UTF-8 lead byte,
-    // so Node's utf8 decoder substitutes the replacement character.
-    expect(decoded).toBe('caf�');
+    expect(decodeHeaderField(encoded)).toBe('café');
+  });
+
+  it('decodes a windows-1252 encoded-word correctly', () => {
+    // "€100" — the Euro sign is 0x80 in windows-1252 (undefined in Latin-1
+    // proper, which is why windows-1252 and ISO-8859-1 are not the same
+    // charset despite sharing a label colloquially).
+    const encoded = '=?windows-1252?Q?=80100?=';
+    expect(decodeHeaderField(encoded)).toBe('€100');
   });
 });

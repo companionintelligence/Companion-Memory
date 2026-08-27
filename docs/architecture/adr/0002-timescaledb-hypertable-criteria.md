@@ -106,3 +106,10 @@ retention. The failure mode was misapplication, not the tool.
 > no retention policy. The 84 migrations added since — including the whole `ci_import`
 > staging schema and the `ci_derived` analytics schema — contain no `create_hypertable`
 > call at all.
+
+> **Status check, 2026-08-26.** Two survivors, not three. `ci.user_snapshots` was
+> dropped (`20260826202515_retire_user_snapshots`) along with the `user-snapshots`
+> domain and the `ingestUserSnapshot` mutation: it passed gates 1, 2, 4 and 5 on the
+> shape of its data, but it had **no reader at all** and no reachable writer, which is
+> a gate this ADR does not state and should. Read it as a precondition to the five:
+> *a table nothing queries does not need a partitioning strategy, it needs deleting.*

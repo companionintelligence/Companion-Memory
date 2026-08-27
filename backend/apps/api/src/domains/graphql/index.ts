@@ -33,7 +33,6 @@ import { ScheduleModule } from '@ci/domains/schedule';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
 import { UserModule } from '@ci/domains/user';
-import { UserSnapshotsModule } from '@ci/domains/user-snapshots';
 
 import { GraphQLController } from './controllers/GraphQLController';
 import { AttachmentFileLoader } from './loaders/AttachmentFileLoader';
@@ -107,7 +106,6 @@ import { TagResolver } from './resolvers/TagResolver';
 import { TaskResolver } from './resolvers/TaskResolver';
 import { ThreadResolver } from './resolvers/ThreadResolver';
 import { UserResolver } from './resolvers/UserResolver';
-import { UserSnapshotResolver } from './resolvers/UserSnapshotResolver';
 
 @Module({
   imports: [
@@ -162,7 +160,6 @@ import { UserSnapshotResolver } from './resolvers/UserSnapshotResolver';
     ScheduleModule,
     SummariesModule,
     UserModule,
-    UserSnapshotsModule,
   ],
   providers: [
     ActionResolver,
@@ -237,7 +234,6 @@ import { UserSnapshotResolver } from './resolvers/UserSnapshotResolver';
     ThreadLoader,
     ThreadMessagesLoader,
     ThreadResolver,
-    UserSnapshotResolver,
     UserResolver,
   ],
   controllers: [GraphQLController],

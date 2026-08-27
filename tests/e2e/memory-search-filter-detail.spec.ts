@@ -1,14 +1,14 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated. On /memory the global search box writes the `?search` param
 // live (debounced) so results filter in place. ExplorerToolbar's real search
-// input has placeholder "Search your memory…" (not "Search") — read from the
+// input has placeholder "Search memory…" (not "Search") — read from the
 // current ExplorerToolbar.tsx source (`MemorySearchField`).
 
 test('typing in search drives the ?search URL param', async ({ page }) => {
   await page.goto('/memory/events');
 
-  await page.getByPlaceholder('Search your memory…').fill('coffee');
+  await page.getByPlaceholder('Search memory…').fill('coffee');
 
   await expect(page).toHaveURL(/search=coffee/);
 });
@@ -16,7 +16,7 @@ test('typing in search drives the ?search URL param', async ({ page }) => {
 test('clearing the search removes the ?search param', async ({ page }) => {
   await page.goto('/memory?search=coffee');
 
-  const box = page.getByPlaceholder('Search your memory…');
+  const box = page.getByPlaceholder('Search memory…');
   await expect(box).toHaveValue('coffee');
   await box.fill('');
 

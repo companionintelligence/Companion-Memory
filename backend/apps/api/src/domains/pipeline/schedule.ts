@@ -389,6 +389,33 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * NIGHTLY. Counts contradictory single-valued edges; changes none of them.
+   *
+   * Same tier as its `clean.*` siblings, and the reasoning is the same one
+   * `clean.object_duplicate_detect` gives: the output is a REPORT nobody can
+   * act on until they look at it, so an hour of freshness buys nothing, and
+   * arrival-triggering a corpus-wide group-by at import rate is exactly the
+   * shape this file exists to refuse.
+   *
+   * `cost: 'local'` is exact — one SELECT per slice over
+   * `relationships_from_idx`, no provider and no Ollama. Not `metered`, so no
+   * `perRunCap`: there is no bill for a cap to bound, and capping a stage whose
+   * entire deliverable is a COUNT would make that count a sample of itself.
+   *
+   * No `STAGE_DEPENDENCIES` ordering. It reads `ci.relationships`, which the
+   * `promote.edge_*` legs write, but it is a detector: running before them
+   * counts fewer edges rather than wrong ones, and the next night's pass sees
+   * whatever landed. A gate would buy precision this stage does not claim.
+   */
+  [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
    * NIGHTLY. Proposes merge candidates; a human disposes.
    *
    * Consumes `ci.identifier_claims`, which both person-link legs write, so it

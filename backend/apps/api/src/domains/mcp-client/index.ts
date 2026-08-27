@@ -7,7 +7,10 @@
  * - **`McpSecretCodec`**: per-field AES-256-GCM encrypt/decrypt for `env`/`auth` secret values.
  * - **`McpClientManagerService`**: owns every live connection (connect/disconnect/reconnect
  *   backoff/probe), and is the only place a secret is ever decrypted to a real value.
- * - **`McpToolProvider`**: wraps every discovered tool as a `McpDynamicTool`; assistant-only
+ * - **`mcpToolDigest`**: the pinning primitive — sha256 over each tool's canonicalised
+ *   `inputSchema` (sorted keys, prose stripped), plus the approved/new/drifted diff the settings UI
+ *   renders. One implementation, shared by the provider's intersect and the approve endpoint.
+ * - **`McpToolProvider`**: wraps every APPROVED discovered tool as a `McpDynamicTool`; assistant-only
  *   (`includeInOutboundCatalog = false`) so nothing here is re-exposed on CI-Server's own outbound
  *   `/api/intents` or MCP server surface.
  * - **`McpToolsRegistrationService`**: registers the provider and runs the boot-time connect sweep,
@@ -55,7 +58,9 @@ export { McpServerConfigEntity } from './entities/McpServerConfigEntity';
 export { getMcpSuggestedCatalog, HIGH_RISK_CATALOG_SLUGS } from './catalog/mcpSuggestedCatalog';
 export type { McpCatalogEntry } from './catalog/mcpSuggestedCatalog';
 export type {
+  ApproveMcpToolsDto,
   CreateMcpServerConfigDto,
+  McpApprovedTool,
   McpAuthConfig,
   McpConnectionStatus,
   McpDiscoveredTool,
@@ -65,6 +70,8 @@ export type {
   McpSecretEntry,
   McpServerConfigDraft,
   McpServerConfigEgress,
+  McpToolApproval,
+  McpToolApprovalState,
   McpTransport,
   TestMcpServerConfigDraftDto,
   UpdateMcpServerConfigDto,

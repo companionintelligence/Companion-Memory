@@ -22,6 +22,13 @@ export default [
       // the root config instead of the per-workspace ones.
       '.claude/worktrees/**',
       '.worktrees/**',
+      // The Safari Web Extension's Resources/ is filled at build time from
+      // CI-Browser-Extension (see frontend/apps/ios/scripts/sync-safari-extension.sh)
+      // and is gitignored — but, again, ESLint does not read .gitignore. Without
+      // this, `yarn lint` reports ~8,000 errors in vendored bundle output the
+      // moment anyone builds iOS locally. CI never sees it, because CI lints a
+      // fresh checkout that has never run the sync.
+      'frontend/apps/ios/ios/App/SafariWebExtension/Resources/**',
       // Same reason: the uv workspace's virtualenv. Several Python packages
       // ship browser JS inside site-packages (torch and scikit-learn both do),
       // and linting a vendored bundle with this repo's rules is meaningless.

@@ -45,7 +45,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Companion uses the camera to capture photos and videos for your memory.</string>
+	<string>Companion uses the camera to capture photos and videos for your memory, and to scan a QR code to connect to your Companion Memory server.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Companion connects to your Companion appliance on your local network, so your notes, photos and events stay on hardware you control.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

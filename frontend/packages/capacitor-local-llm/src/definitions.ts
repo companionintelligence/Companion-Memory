@@ -4,7 +4,7 @@ import type { PluginListenerHandle } from '@capacitor/core';
  * Lifecycle of a model on disk.
  * - `not_downloaded` — never fetched, or removed via {@link LocalLlmPlugin.deleteModel}.
  * - `downloading` — a resumable WorkManager download is in flight.
- * - `ready` — the `.task` file is fully on disk and loadable.
+ * - `ready` — the model file is fully on disk and loadable.
  * - `error` — the last download attempt failed (see `error` on {@link ModelStatusResult}).
  */
 export type LocalLlmModelStatus = 'not_downloaded' | 'downloading' | 'ready' | 'error';
@@ -18,12 +18,12 @@ export interface LocalLlmAvailability {
 }
 
 export interface ModelIdOptions {
-  /** Identifier of a known model, e.g. `'gemma3-1b-it-int4'`. See `LOCAL_LLM_MODELS`. */
+  /** Identifier of a known model, e.g. `'qwen3-0.6b-int4'`. See `LOCAL_LLM_MODELS`. */
   modelId: string;
 }
 
 export interface DownloadModelOptions extends ModelIdOptions {
-  /** Direct download URL for the model's `.task` file (Hugging Face `resolve` link). */
+  /** Direct download URL for the model's `.litertlm` file (Hugging Face `resolve` link). */
   url: string;
 }
 
@@ -103,7 +103,7 @@ export interface LocalLlmPlugin {
 
   /**
    * Enqueue a resumable, foreground WorkManager download (HTTP Range resume) for the
-   * model's `.task` file. Progress is reported via the `modelDownloadProgress` event.
+   * model's file. Progress is reported via the `modelDownloadProgress` event.
    * Resolves once the download is *enqueued*, not once it completes — listen for the
    * `ready`/`error` status via `modelDownloadProgress` or poll `getModelStatus`.
    */
@@ -158,15 +158,27 @@ export interface LocalLlmPlugin {
   removeAllListeners(): Promise<void>;
 }
 
-/** Known downloadable models. Only one is offered today: Gemma3-1B-IT, int4-quantized. */
+/**
+ * Known downloadable models. Only one is offered today: Qwen3-0.6B, int4-quantized —
+ * the same model and file iOS ships (`LocalLLMModels.swift`), not the `gemma3-1b-it-int4`
+ * this used to point at.
+ *
+ * That older entry sat on `litert-community/Gemma3-1B-IT`, a repo Hugging Face now serves
+ * `gated: "auto"` — an anonymous in-app download got `401 GatedRepo` for every user who
+ * had not already fetched the file by hand, which was every new install. Re-verified
+ * before this change (`curl -s https://huggingface.co/api/models/litert-community/Qwen3-0.6B`
+ * → `"gated": false`; a ranged download returns `206`/`accept-ranges: bytes`). `.litertlm`
+ * is the engine's native bundle format and loads on Android exactly like the `.task` files
+ * this catalog used to list — nothing else about `LocalLlmEngine.load()` changes.
+ */
 export const LOCAL_LLM_MODELS = {
-  'gemma3-1b-it-int4': {
-    modelId: 'gemma3-1b-it-int4',
-    label: 'Gemma3 1B IT (int4)',
-    /** Hugging Face `resolve` link for the `.task` file consumed by LiteRT-LM's `Engine`. */
-    url: 'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task?download=true',
-    /** litert-community/Gemma3-1B-IT, `Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task` (2025-05-14 build). */
-    sizeBytes: 554_661_246,
+  'qwen3-0.6b-int4': {
+    modelId: 'qwen3-0.6b-int4',
+    label: 'Qwen3 0.6B (int4)',
+    /** Hugging Face `resolve` link for the `.litertlm` file consumed by LiteRT-LM's `Engine`. */
+    url: 'https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm?download=true',
+    /** litert-community/Qwen3-0.6B, `Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm`. */
+    sizeBytes: 344_437_808,
     /** Approximate peak RSS while loaded, per Google's model card — used for the RAM floor. */
     estimatedPeakMemoryBytes: 2_147_483_648,
     defaultConfig: { topK: 64, topP: 0.95, temperature: 1.0, maxTokens: 1024 },

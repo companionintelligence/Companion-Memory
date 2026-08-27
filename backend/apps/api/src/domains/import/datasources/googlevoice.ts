@@ -8,6 +8,8 @@ import { stripCallLogHeading } from '@ci/domains/graph';
 import { isShortCode } from '../staging/identity';
 
 import { attachmentMediaKind } from './attachment_extract';
+import { matchingDivCloseIndex } from './htmlBlocks';
+import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { AttachmentDescriptor, ImportParams, EntityAttribute, Relationship } from './timeline';
@@ -195,7 +197,7 @@ function extractTranscript(raw: string): string | undefined {
     return undefined;
   }
 
-  const text = decodeHtml(stripTags(match[1])).trim();
+  const text = flattenToLine(match[1]);
 
   return text || undefined;
 }
@@ -497,7 +499,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
         continue;
       } // call log / missed call without a text body
 
-      const text = decodeHtml(stripTags(qHtml)).trim();
+      const text = flattenToLine(qHtml);
       const whenStr = /<(?:abbr|span) class="dt"[^>]*title="([^"]+)"/i.exec(block)?.[1];
       const ts = whenStr ? new Date(whenStr) : undefined;
 
@@ -817,9 +819,10 @@ function counterpartEdges(
  * attachment whose per-message index is >= 2 (168 x "-2", 48 x "-3", … 1 x
  * "-15") and NOT ONE has index 1.
  *
- * Counting `<div` / `</div>` finds the real close. Scanning resumes AFTER the
- * block rather than inside it: a message div never nests another message div,
- * and re-entering one would attribute the same attachments twice.
+ * {@link matchingDivCloseIndex} (./htmlBlocks) counts `<div`/`</div>` to find
+ * the real close. Scanning resumes AFTER the block rather than inside it: a
+ * message div never nests another message div, and re-entering one would
+ * attribute the same attachments twice.
  */
 function messageBlocks(raw: string): string[] {
   const blocks: string[] = [];
@@ -835,39 +838,6 @@ function messageBlocks(raw: string): string[] {
   return blocks;
 }
 
-/**
- * Index of the `</div>` closing the div whose body starts at `from`.
- *
- * Returns the end of the string when the markup is unbalanced, so a truncated
- * export still yields its final block instead of silently dropping it — the
- * lazy regex used to "recover" from bad markup by ending the block early, and
- * ending it late loses nothing that was ever parsed out of it.
- */
-function matchingDivCloseIndex(raw: string, from: number): number {
-  const tagRegex = /<(\/?)div\b[^>]*>/gi;
-  tagRegex.lastIndex = from;
-  let depth = 0;
-  let tag: RegExpExecArray | null;
-  while ((tag = tagRegex.exec(raw)) !== null) {
-    if (!tag[1]) {
-      depth++;
-      continue;
-    }
-
-    if (depth === 0) {
-      return tag.index;
-    }
-
-    depth--;
-  }
-
-  return raw.length;
-}
-
-function stripTags(h: string): string {
-  return h.replace(/<[^>]+>/g, '');
-}
-
 function decodeHtml(h: string): string {
   return h
     .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
@@ -875,6 +845,13 @@ function decodeHtml(h: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"');
+}
+
+// A voicemail transcript / SMS body has no paragraph structure of its own —
+// any newline the shared htmlToText introduces at a tag boundary is markup,
+// not something the caller said, so it collapses to a flat line.
+function flattenToLine(html: string): string {
+  return htmlToText(html).replace(/\s+/g, ' ').trim();
 }
 
 function extractSender(block: string): GVEntity {

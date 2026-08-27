@@ -15,6 +15,7 @@
   "dependencies": {
     "@capacitor-community/background-geolocation": "^1.2.26",
     "@capacitor-community/sqlite": "^7.0.1",
+    "@capacitor-mlkit/barcode-scanning": "^7.5.0",
     "@capacitor/app": "^7.0.0",
     "@capacitor/browser": "^7.0.0",
     "@capacitor/camera": "^7.0.0",

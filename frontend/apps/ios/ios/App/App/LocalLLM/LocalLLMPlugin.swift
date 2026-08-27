@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import UIKit
 
 /// On-device chat completion for iOS, implementing the **same JS contract** as the Android
 /// `@ci/capacitor-local-llm` plugin (`isAvailable` / `loadModel` / `unloadModel` / `generate` /
@@ -8,14 +9,12 @@ import Foundation
 /// `/api/llm/generate` when the plugin is absent, so implementing it here makes on-device inference
 /// work on iOS with **no web-layer changes at all**.
 ///
-/// Two differences from Android:
-///
-/// - **A different default model.** Android's catalog points at a Gemma repo that is now
-///   `gated: "auto"` on Hugging Face and answers `401 GatedRepo` to an anonymous download; this ships
-///   the ungated Qwen3-0.6B instead. See `LocalLLMModels.swift` for the measurements.
-/// - **Hand-written tools.** See `CompanionIntentTools.swift` — LiteRT-LM's Swift `Tool` reflects
-///   over compile-time properties and has no runtime-schema equivalent of Android's `OpenApiTool`.
-///   This one is forced by the runtime, not chosen.
+/// One difference from Android: **hand-written tools.** See `CompanionIntentTools.swift` —
+/// LiteRT-LM's Swift `Tool` reflects over compile-time properties and has no runtime-schema
+/// equivalent of Android's `OpenApiTool`. This one is forced by the runtime, not chosen. The
+/// model itself no longer differs — both platforms ship Qwen3-0.6B (`litert-community/Qwen3-0.6B`)
+/// since Android's original Gemma catalog entry sat on a repo Hugging Face now serves
+/// `gated: "auto"`, 401-ing every anonymous download. See `LocalLLMModels.swift`.
 ///
 /// This lives in the app target rather than in `@ci/capacitor-local-llm` (which declares itself
 /// Android-only and has no `ios/`) because moving it into that package needs a podspec, a vendored
@@ -145,8 +144,14 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
 
     Task {
       do {
-        try await engine.load(modelPath: path, maxTokens: info?.defaultMaxTokens)
-        call.resolve()
+        // Fetched here, not lazily: LiteRT-LM fixes the tool set when the conversation is
+        // created (now done inside load(), not per-call — see LocalLLMEngine), so tools must
+        // exist before load(). Matches Android's loadModel(), which fetches at the same point
+        // for the same reason. No-ops (and logs) when the appliance is unreachable or intent
+        // tools were never configured, leaving a toolless — but working — local model.
+        let tools = CompanionToolContext.executableTools()
+        try await engine.load(modelPath: path, maxTokens: info?.defaultMaxTokens, tools: tools)
+        call.resolve(["toolCount": tools.count])
       } catch {
         call.reject("Failed to load model: \(error.localizedDescription)")
       }
@@ -176,7 +181,9 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
-  /// Non-streaming: buffers the whole reply. Tools are attached when the conversation is created.
+  /// Non-streaming: buffers the whole reply. Tools were attached when the conversation was
+  /// created, at `loadModel()` — the model's turn history now lives inside that persistent
+  /// conversation too, so this only ever sends the one new prompt.
   @objc func generate(_ call: CAPPluginCall) {
     guard let prompt = call.getString("prompt") else {
       call.reject("prompt is required")
@@ -184,11 +191,11 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       return
     }
 
+    let backgroundTask = beginBackgroundTask()
     Task {
+      defer { endBackgroundTask(backgroundTask) }
       do {
-        let tools = CompanionToolContext.executableTools()
-        let stream = try await engine.streamCompletion(
-          turns: [ChatTurn(role: "user", text: prompt)], tools: tools)
+        let stream = try await engine.streamCompletion(prompt: prompt)
         var text = ""
 
         for try await delta in stream {
@@ -212,11 +219,11 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     generationTask?.cancel()
+    let backgroundTask = beginBackgroundTask()
     generationTask = Task {
+      defer { endBackgroundTask(backgroundTask) }
       do {
-        let tools = CompanionToolContext.executableTools()
-        let stream = try await engine.streamCompletion(
-          turns: [ChatTurn(role: "user", text: prompt)], tools: tools)
+        let stream = try await engine.streamCompletion(prompt: prompt)
 
         for try await delta in stream {
           notifyListeners("llmToken", data: ["partial": delta, "done": false])
@@ -234,6 +241,38 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
           call.reject("Generation failed: \(error.localizedDescription)")
         }
       }
+    }
+  }
+
+  /// Requests a little extra runtime from the OS so a brief backgrounding mid-generation (a
+  /// notification banner, a quick app-switch) doesn't get the process suspended mid-token —
+  /// before this, nothing protected an in-flight generation at all. `beginBackgroundTask` is
+  /// bounded (historically ~30s, longer on some iOS versions) and best-effort, not a guarantee;
+  /// `BGContinuedProcessingTask` (iOS 26+) is the fuller answer but needs a mandatory visible
+  /// system progress UI and its own Info.plist wiring, which is a UX feature, not a bug fix — see
+  /// doc 01, "Competitive Landscape, Offline and Local Mobile AI" §6.
+  ///
+  /// Returns a `BackgroundTask` box rather than the raw `UIBackgroundTaskIdentifier`: the normal
+  /// completion path and the expiration handler both want to end the same task, and
+  /// `endBackgroundTask` called twice on one identifier is a hard runtime crash — the box makes
+  /// "exactly once" a property of the type instead of something both call sites have to agree on.
+  private func beginBackgroundTask() -> BackgroundTask {
+    let box = BackgroundTask()
+    let id = UIApplication.shared.beginBackgroundTask(withName: "LocalLLM.generate") { [weak self] in
+      // Expiration handler: the OS is about to suspend us. Cancel cleanly rather than being
+      // killed mid-token, then release the task so we are not force-terminated for overrunning it.
+      Task { await self?.engine.cancel() }
+      if let endedID = box.end() {
+        UIApplication.shared.endBackgroundTask(endedID)
+      }
+    }
+    box.begin(id)
+    return box
+  }
+
+  private func endBackgroundTask(_ box: BackgroundTask) {
+    if let endedID = box.end() {
+      UIApplication.shared.endBackgroundTask(endedID)
     }
   }
 
@@ -282,6 +321,36 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
-  /// 6 GB, matching the RAM floor the Android catalog declares for the same class of int4 model.
-  private static let minimumPhysicalMemoryBytes: UInt64 = 6 * 1024 * 1024 * 1024
+  /// 4 GB: reconciled with Android's floor (`MIN_TOTAL_MEMORY_BYTES`), which used to be 3 GB
+  /// against this file's 6 GB for models with the same ~2 GB estimated peak RSS — an unexplained
+  /// 2x gap between platforms gating the identical workload. 4 GB is that ~2 GB footprint plus
+  /// ~2 GB of headroom for the OS, the WebView, and the rest of the app before jetsam takes the
+  /// process rather than `isAvailable()` politely declining up front.
+  private static let minimumPhysicalMemoryBytes: UInt64 = 4 * 1024 * 1024 * 1024
+}
+
+/// Ensures a `UIBackgroundTaskIdentifier` is ended exactly once, no matter which of two racing
+/// call sites — the normal completion path and the OS's expiration handler — gets there first.
+/// Calling `UIApplication.endBackgroundTask` twice on the same identifier is a hard runtime crash,
+/// not just a logic bug, so "exactly once" has to be a property of the type, not a convention both
+/// call sites remember to follow.
+private final class BackgroundTask {
+  private let lock = NSLock()
+  private var identifier: UIBackgroundTaskIdentifier = .invalid
+  private var ended = false
+
+  func begin(_ identifier: UIBackgroundTaskIdentifier) {
+    lock.lock()
+    defer { lock.unlock() }
+    self.identifier = identifier
+  }
+
+  /// Returns the identifier to end, or `nil` if it was already ended (or never began).
+  func end() -> UIBackgroundTaskIdentifier? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !ended, identifier != .invalid else { return nil }
+    ended = true
+    return identifier
+  }
 }

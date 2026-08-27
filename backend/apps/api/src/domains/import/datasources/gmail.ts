@@ -8,7 +8,7 @@ import readline from 'node:readline';
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
-import { parseMime, readableBody, type ParsedMimeResult } from './email_mime';
+import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import {
   extractReceiptFields,
   isLikelyReceipt,
@@ -611,7 +611,13 @@ function parseHeaders(raw: string): Record<string, string> {
     }
 
     const key = line.slice(0, idx).trim();
-    const val = line.slice(idx + 1).trim();
+    // decodeHeaderField is a cheap no-op (one .includes('=?') check) unless a
+    // value actually carries a `=?charset?…?=` encoded-word — Subject and a
+    // display name inside From/To/Cc are the fields real mail actually
+    // encodes this way, and nothing else legitimately contains the marker, so
+    // decoding unconditionally is safe and keeps this one map correct
+    // end-to-end rather than requiring every reader to remember to decode.
+    const val = decodeHeaderField(line.slice(idx + 1).trim());
     if (!map[key]) {
       map[key] = val;
     } else {

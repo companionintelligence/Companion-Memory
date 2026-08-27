@@ -11,6 +11,21 @@ const FORECAST_BUCKET_DURATION_MS = 30 * 60 * 1000;
 const FORECAST_HORIZON = '24h';
 const MAX_FORECAST_LINES = 24;
 
+export interface ForecastBlockOptions {
+  /**
+   * Render a block that is a pure function of the forecast payload, with no
+   * wall-clock input at all: no `Generated:` line, and no "has this bucket
+   * elapsed yet" filter — the forecast's own 24h horizon is rendered instead
+   * of the slice of it that is still ahead of `now`.
+   *
+   * The L0 `GET /memory/context` block passes this. That endpoint is
+   * advertised to out-of-process harnesses (CI-Hermes, CI-OpenClaw) as
+   * "called once per session"; a block whose text changes every 30 minutes
+   * makes that contract impossible to honour.
+   */
+  stable?: boolean;
+}
+
 @Injectable()
 export class ForecastContextService {
   constructor(
@@ -23,7 +38,11 @@ export class ForecastContextService {
     this.logger.setContext(ForecastContextService.name);
   }
 
-  async getRestOfDayBlock(context: UserServiceContext, now = new Date()): Promise<string> {
+  async getRestOfDayBlock(
+    context: UserServiceContext,
+    now = new Date(),
+    { stable = false }: ForecastBlockOptions = {},
+  ): Promise<string> {
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return '';
     }
@@ -33,19 +52,23 @@ export class ForecastContextService {
         this.hbpeService.getForecast(context, FORECAST_HORIZON),
         this.getUserTimezone(context.userId),
       ]);
-      const todaysBuckets = forecast.buckets
-        .filter((bucket) => this.isRemainingToday(bucket, timezone, now))
-        .slice(0, MAX_FORECAST_LINES);
+      const todaysBuckets = (
+        stable
+          ? forecast.buckets.filter((bucket) => !Number.isNaN(new Date(bucket.start_time).getTime()))
+          : forecast.buckets.filter((bucket) => this.isRemainingToday(bucket, timezone, now))
+      ).slice(0, MAX_FORECAST_LINES);
 
       if (todaysBuckets.length === 0) {
         return '';
       }
 
-      const lines = [
-        '## Predicted Rest Of Day',
-        `Generated: ${this.formatDateTime(new Date(forecast.generated_at), timezone)}`,
-        `Status: ${forecast.system_status}`,
-      ];
+      const lines = stable
+        ? ['## Predicted Day Ahead', `Status: ${forecast.system_status}`]
+        : [
+            '## Predicted Rest Of Day',
+            `Generated: ${this.formatDateTime(new Date(forecast.generated_at), timezone)}`,
+            `Status: ${forecast.system_status}`,
+          ];
 
       todaysBuckets.forEach((bucket) => {
         const start = this.formatTime(new Date(bucket.start_time), timezone);

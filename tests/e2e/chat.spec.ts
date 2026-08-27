@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated. Tagged @llm because sending a message requires a model to be
 // available (Ollama or an LLM mock). The default CI E2E run excludes @llm; run

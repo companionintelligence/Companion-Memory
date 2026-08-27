@@ -1095,3 +1095,92 @@ describe('QuestionService.findCatalogue', () => {
     expect(page.data[0].key).toBeNull();
   });
 });
+
+/**
+ * The writer for `ci.questions.times_answered`, which had none at all: the
+ * column was selected into the catalogue payload (`q.times_answered` in
+ * findCatalogue) and typed through to the frontend while stuck at its
+ * `DEFAULT 0`.
+ *
+ * There is no database in this suite, so what is checked here is the STATEMENT:
+ * that the bump is a relative UPDATE the database applies, not a value this
+ * process computed from a row it read a moment ago. That distinction is the
+ * whole point — a read-modify-write loses one of two concurrent answers, which
+ * is a live bug elsewhere in this repo (PR #2378).
+ */
+describe('QuestionService.recordQuestionAnswered', () => {
+  function makeCountingService() {
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    const dataSource = {
+      query: jest.fn(async (sql: string, params?: unknown[]) => {
+        calls.push({ sql, params });
+
+        return [];
+      }),
+    };
+
+    const service = new QuestionService(
+      dataSource as never,
+      { create: jest.fn(), save: jest.fn() } as never,
+      { send: jest.fn() } as never,
+    );
+
+    return { service, calls };
+  }
+
+  it('increments in the database, in one statement, with no prior read', async () => {
+    const { service, calls } = makeCountingService();
+
+    await service.recordQuestionAnswered('q-1');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toMatch(/UPDATE ci\.questions/);
+    expect(calls[0].sql).toMatch(/SET times_answered\s*=\s*times_answered\s*\+\s*1/);
+    expect(calls[0].sql).toMatch(/WHERE question_id = \$1/);
+    expect(calls[0].params).toStrictEqual(['q-1']);
+
+    // A read-modify-write would need to SELECT the current value first. Nothing
+    // may select it, and nothing may assign it a value this process computed.
+    expect(calls[0].sql).not.toMatch(/SELECT/i);
+    expect(calls[0].sql).not.toMatch(/SET times_answered\s*=\s*\$/);
+  });
+
+  it('answering twice issues two increments of 1, not one write of 2', async () => {
+    const { service, calls } = makeCountingService();
+
+    await service.recordQuestionAnswered('q-1');
+    await service.recordQuestionAnswered('q-1');
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.sql).toMatch(/times_answered\s*=\s*times_answered\s*\+\s*1/);
+      expect(call.params).toStrictEqual(['q-1']);
+    }
+  });
+
+  it('folds a batch into per-question counts and adds them relatively', async () => {
+    const { service, calls } = makeCountingService();
+
+    await service.recordManyQuestionsAnswered(['q-1', 'q-2', 'q-1']);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toMatch(/SET times_answered\s*=\s*q\.times_answered\s*\+\s*c\.n/);
+    expect(calls[0].sql).not.toMatch(/SELECT times_answered/i);
+
+    // Two answers to q-1 count twice — the batch is aggregated, not deduped.
+    const [ids, counts] = calls[0].params as [string[], number[]];
+    expect(ids).toHaveLength(2);
+    expect(counts).toHaveLength(2);
+    const byId = new Map(ids.map((id, index) => [id, counts[index]]));
+    expect(byId.get('q-1')).toBe(2);
+    expect(byId.get('q-2')).toBe(1);
+  });
+
+  it('issues no statement for an empty batch', async () => {
+    const { service, calls } = makeCountingService();
+
+    await service.recordManyQuestionsAnswered([]);
+
+    expect(calls).toStrictEqual([]);
+  });
+});

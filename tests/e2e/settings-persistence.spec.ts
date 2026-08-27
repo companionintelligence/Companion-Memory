@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated. The theme is persisted to localStorage under ThemeProvider's
 // real `storageKey` — 'vite-ui-theme' (App.tsx: `<ThemeProvider storageKey="vite-ui-theme">`),

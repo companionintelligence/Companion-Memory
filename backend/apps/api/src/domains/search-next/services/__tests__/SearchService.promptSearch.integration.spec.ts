@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { RETRIEVAL_POLICY_DEFAULTS } from '@ci/domains/retrieval-policy';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { SearchService } from '../SearchService';
@@ -92,7 +93,12 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
     });
     await dataSource.initialize();
 
-    service = new SearchService(dataSource, embeddingGenerationService);
+    service = new SearchService(
+      dataSource,
+      embeddingGenerationService,
+      { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as never,
+      { send: jest.fn().mockResolvedValue([]) } as never,
+    );
   });
 
   afterAll(async () => {

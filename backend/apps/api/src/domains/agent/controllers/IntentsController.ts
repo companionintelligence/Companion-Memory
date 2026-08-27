@@ -94,6 +94,13 @@ export class IntentsController {
    * Path name may be dotted (`insights.explain`) or underscored (`insights_explain`).
    * Unknown intent → HTTP 404 so harnesses fall through to the other prefix.
    * Known intent → HTTP 200 ToolResult, including `success: false`.
+   *
+   * `?tier=local` states that the call originated on the on-device tier — the same vocabulary the
+   * GET routes already publish rulings under, now honoured on the way IN. It is what makes
+   * `resolveDispatch`'s three `queue` reasons reachable at the execute chokepoint: an intent the
+   * device may not perform on-device is parked as a pending action (HTTP 200, `TOOL_QUEUED`) for
+   * the owner to confirm, rather than silently running with the device's say-so. Omitting it means
+   * `appliance`, which is every existing caller and is unchanged.
    */
   @Post(':name/execute')
   @HttpCode(200)
@@ -103,6 +110,7 @@ export class IntentsController {
     @Body() body: unknown,
     @Context() context: RequestContext,
     @Req() req: ApiKeyScopedRequest,
+    @Query('tier') tier?: string,
   ): Promise<ToolResult> {
     const toolName = resolveExecuteName(name);
 
@@ -112,7 +120,7 @@ export class IntentsController {
 
     return this.registry.executeTool(
       toolName,
-      { ...context, capability: apiKeyCapabilityOf(req) },
+      { ...context, capability: apiKeyCapabilityOf(req), tier: parseTier(tier) },
       body ?? {},
     );
   }

@@ -23,6 +23,7 @@ import {
   personAppearanceListSql,
 } from './appearanceBrowse';
 import { EntityService } from './EntityService';
+import { type JsonbLeafPatch, buildJsonbLeafPatchSql } from './jsonbLeafPatch';
 
 /** Map properties JSONB identity keys onto the typed Person columns. */
 function typedColumnsFromProperties(properties: Record<string, unknown> = {}): {
@@ -162,7 +163,6 @@ export class PersonService extends EntityService<PersonEntity, Person> {
           linkedTable: data.linkedTable,
           linkedId: data.linkedId,
           searchContent: data.searchContent,
-          lastAccessed: data.lastAccessed,
           userId: context.userId,
           properties,
           ...typedColumnsFromProperties(properties),
@@ -192,7 +192,7 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     }
 
     // Reload so @AfterLoad projects the normalized fields and DB-side defaults
-    // (e.g. last_accessed) are present. `save` runs neither, and egress strips
+    // (e.g. created_at) are present. `save` runs neither, and egress strips
     // the normalized keys out of `properties`, so the saved instance alone
     // would expose them in neither place.
     const created = await this.repository.findOne({ where: { id: entity.id } });
@@ -233,7 +233,6 @@ export class PersonService extends EntityService<PersonEntity, Person> {
         linkedTable: item.linkedTable,
         linkedId: item.linkedId,
         searchContent: item.searchContent,
-        lastAccessed: item.lastAccessed,
         userId: context.userId,
         properties,
         ...typedColumnsFromProperties(properties),
@@ -669,6 +668,62 @@ export class PersonService extends EntityService<PersonEntity, Person> {
 
     if (set.properties) {
       qb = qb.setParameter('propertiesPatch', JSON.stringify(data.propertiesPatch));
+    }
+
+    const result = await qb.execute();
+
+    if ((result.affected ?? 0) === 0) {
+      return null;
+    }
+
+    await this.eventService.send(PersonUpdatedEvent, {
+      personId: id,
+    });
+
+    return this.findById(context, id);
+  }
+
+  /**
+   * Patch individual *leaves* of the properties JSONB.
+   *
+   * `patch()` merges at the top level only (`properties || patch`), so a caller
+   * that wants to change one key inside a sub-object has to read the whole
+   * sub-object, spread it, and send it back — a read-modify-write that loses the
+   * other writer's update whenever two of them touch different leaves of the
+   * same sub-object (e.g. `planner.trust_mode` vs
+   * `planner.image_description_enabled`).
+   *
+   * This writes each leaf with `jsonb_set(..., '{a,b}', value, true)` in a single
+   * statement, reading nothing in the application, so concurrent writers to
+   * different leaves cannot clobber each other.
+   *
+   * Paths must be at least two segments deep — top-level keys go through
+   * `patch()`, which also keeps the typed identity columns in sync.
+   */
+  async patchPropertyLeaves(
+    context: ServiceContext,
+    id: string,
+    leaves: JsonbLeafPatch[],
+  ): Promise<Person | null> {
+    if (leaves.length === 0) {
+      return this.findById(context, id);
+    }
+
+    const { expression, parameters } = buildJsonbLeafPatchSql('properties', leaves);
+
+    let qb = this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ properties: () => expression })
+      .where('entity_id = :id', { id })
+      .andWhere(`entity_type = 'Person'`);
+
+    if (context.userId !== SYSTEM_USER) {
+      qb = qb.andWhere('owner_user_id = :userId', { userId: context.userId });
+    }
+
+    for (const [name, value] of Object.entries(parameters)) {
+      qb = qb.setParameter(name, value);
     }
 
     const result = await qb.execute();

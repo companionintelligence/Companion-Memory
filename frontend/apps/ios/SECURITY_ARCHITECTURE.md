@@ -56,6 +56,7 @@ Every row below was read, not assumed.
 | **iOS**: the plugin writes with `withAccessibility: .afterFirstUnlock` — *not* `…ThisDeviceOnly` | `node_modules/capacitor-secure-storage-plugin/ios/Plugin/SecureStoragePluginPlugin.swift:15` | **[V]** — see §2.4 |
 | **Android**: an RSA/ECB/PKCS1 keypair in AndroidKeyStore (alias `<pkg>_cap_sec`) wraps values stored in the `cap_sec` SharedPreferences file — with a **silent fallback to unencrypted Base64 in the same file** if Keystore init throws | `node_modules/capacitor-secure-storage-plugin/android/…/PasswordStorageHelper.java:53-67, 102-146` | **[V]** — see §2.4 |
 | `android:allowBackup="false"` keeps that SharedPreferences file out of adb/cloud backup | [`AndroidManifest.xml`](../android/android/app/src/main/AndroidManifest.xml) | **[V]** |
+| **On-device LLM tool calling reuses this exact credential** — `configureIntentTools({baseUrl, apiKey})` is handed the same key from the web layer, not read from the Keychain/Keystore by this plugin itself — so it inherits D1/D2 as-is. See §11 | [`LocalLLMPlugin.swift`](./ios/App/App/LocalLLM/LocalLLMPlugin.swift), [`LocalLlmPlugin.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmPlugin.kt) | **[V]** |
 
 ### 1b. Local durable stores
 
@@ -161,7 +162,7 @@ to what any one device actually downloads from an AAB, since Play splits per ABI
 
 1. **16 KB page size stops being a no-op.** `DELIVERY.md` §1a says "likely a no-op — no
    native libs." That is *already* false: `@ci/capacitor-local-llm` pulls
-   `com.google.ai.edge.litertlm:litertlm-android:0.11.0` **[V]**, which ships native
+   `com.google.ai.edge.litertlm:litertlm-android:0.14.0` **[V]**, which ships native
    libraries. SQLCipher makes it doubly so. Both need an API-35 device check.
 2. **`ITSAppUsesNonExemptEncryption=false` needs re-examination on iOS.** The Info.plist
    comment states the basis as "only exempt standard cryptography (HTTPS/TLS via the OS,
@@ -1040,6 +1041,36 @@ Severity: 🔴 **P0** = blocks the next data source · 🟠 **P1** = before the 
   work.
 - [`docs/architecture/third-party-egress.md`](../../../docs/architecture/third-party-egress.md)
   — the server-side half of §6; its recommendations become Sovereign Mode's exception list.
+
+---
+
+## 11. On-device LLM tool calling (`capacitor-local-llm` / `LocalLLMPlugin`)
+
+Added 2026-08-26, auditing code that landed after §0-§10's 2026-08-13 basis. Not named
+anywhere above despite depending on the exact credential surface §2.4 covers — worth
+fixing here rather than leaving the gap implicit.
+
+| Fact | Where | Status |
+|---|---|---|
+| Tool calls reach the appliance over `POST /mcp` (JSON-RPC, session-id handshake), authenticated with the same `x-api-key` as §1a | [`CompanionIntentClient.swift`](./ios/App/App/LocalLLM/CompanionIntentClient.swift), [`intents/CompanionIntentClient.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/CompanionIntentClient.kt) | **[V]** |
+| The server — not the phone — computes the execute/queue/deny ruling per intent; both platforms re-check that ruling immediately before invoking a tool, not only at registration ("one security rule, not three") | [`dispatchPolicy.ts`](../../../backend/apps/api/src/domains/tools/policy/dispatchPolicy.ts), [`CompanionIntentTools.swift`](./ios/App/App/LocalLLM/CompanionIntentTools.swift), [`IntentToolProvider.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/IntentToolProvider.kt) | **[V]** |
+| **"Fully on-device" only covers tool-less generation.** Bare chat completion needs no network; the agent-harness capability — the feature's actual differentiator — requires reaching the appliance for every tool call. Worth stating here plainly, not only in the model's own README, since it changes what "the device is offline" means for anyone relying on tool calling | [`LocalLLMEngine.swift`](./ios/App/App/LocalLLM/LocalLLMEngine.swift) | **[V]** |
+| Model weights (~330 MB) live in app-private storage — iOS `Application Support`, excluded from backup; Android the app-private files dir — and are treated as public, re-downloadable weights, not user data needing encryption at rest | [`LocalLLMModels.swift`](./ios/App/App/LocalLLM/LocalLLMModels.swift) | **[V]** |
+| As of this pass: both platforms gained a live thermal-state check (refuses to start generation, and cancels one in flight, once the OS reports `.critical` / `THERMAL_STATUS_SEVERE`) and a background-execution guard (Android: a foreground service around the call; iOS: `beginBackgroundTask`). Neither existed before — an app backgrounded or overheating mid-generation had no protection at all | [`LocalLLMEngine.swift`](./ios/App/App/LocalLLM/LocalLLMEngine.swift), [`LocalLlmGenerationService.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmGenerationService.kt) | **[V]** |
+| Also fixed this pass: Android's only offered model was 401-gated (Hugging Face `gated: "auto"`); both platforms now ship the same ungated model, at a reconciled LiteRT-LM engine version and a reconciled 4 GB RAM floor (was 3 GB Android / 6 GB iOS for models with the same ~2 GB estimated peak RSS) | [`LocalLlmModels.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmModels.kt) | **[V]** |
+
+**Inherited, not fixed here:** this plugin's credential dependency is one more reason
+**S0** (§9a — fix D1/D2) is "do it first," not "do it eventually." Nothing in this
+section changes that priority or attempts the fix itself.
+
+**Not addressed here, named rather than left implicit:** no on-device retrieval grounds
+"memory" answers locally — grounding is the live MCP call above, not a local index, so the
+product's core differentiator is unavailable in exactly the scenario (offline) where it
+would matter most; iOS and Android still bind tools through structurally different
+mechanisms (Android: a runtime OpenAPI-schema adapter; iOS: hand-written `Tool` structs,
+because LiteRT-LM's Swift surface has no schema-string entry point — forced by the
+runtime, not chosen); and no commit in this project's history reports a completed
+real-device inference run, on either platform, for this feature at all.
 
 ---
 

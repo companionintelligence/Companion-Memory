@@ -31,9 +31,6 @@ export class PersonEntity extends BaseEntity {
   @Column({ type: 'text', name: 'linked_id', nullable: true })
   linkedId!: string | null;
 
-  @Column({ type: 'timestamptz', name: 'last_accessed', default: () => 'NOW()' })
-  lastAccessed!: Date;
-
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive!: boolean;
 
@@ -173,7 +170,6 @@ export class PersonEntity extends BaseEntity {
       searchContent: entity.searchContent,
       linkedTable: entity.linkedTable,
       linkedId: entity.linkedId,
-      lastAccessed: entity.lastAccessed,
       userId: entity.userId ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

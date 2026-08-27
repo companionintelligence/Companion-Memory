@@ -7,6 +7,8 @@ PODS:
     - Capacitor
   - CapacitorCamera (7.0.5):
     - Capacitor
+  - CapacitorCommunityBackgroundGeolocation (1.2.26):
+    - Capacitor
   - CapacitorCommunitySqlite (7.0.3):
     - Capacitor
     - SQLCipher
@@ -14,6 +16,9 @@ PODS:
   - CapacitorCordova (7.6.7)
   - CapacitorLocalNotifications (7.0.6):
     - Capacitor
+  - CapacitorMlkitBarcodeScanning (7.5.0):
+    - Capacitor
+    - GoogleMLKit/BarcodeScanning (= 7.0.0)
   - CapacitorPushNotifications (7.0.7):
     - Capacitor
   - CapacitorSecureStoragePlugin (0.11.0):
@@ -32,11 +37,57 @@ PODS:
   - GCDWebServer (3.5.4):
     - GCDWebServer/Core (= 3.5.4)
   - GCDWebServer/Core (3.5.4)
+  - GoogleDataTransport (10.1.1):
+    - nanopb (~> 3.30910.0)
+    - PromisesObjC (~> 2.4)
+  - GoogleMLKit/BarcodeScanning (7.0.0):
+    - GoogleMLKit/MLKitCore
+    - MLKitBarcodeScanning (~> 6.0.0)
+  - GoogleMLKit/MLKitCore (7.0.0):
+    - MLKitCommon (~> 12.0.0)
+  - GoogleToolboxForMac/Defines (4.2.1)
+  - GoogleToolboxForMac/Logger (4.2.1):
+    - GoogleToolboxForMac/Defines (= 4.2.1)
+  - "GoogleToolboxForMac/NSData+zlib (4.2.1)":
+    - GoogleToolboxForMac/Defines (= 4.2.1)
+  - GoogleUtilities/Environment (8.1.3):
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Logger (8.1.3):
+    - GoogleUtilities/Environment
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Privacy (8.1.3)
+  - GoogleUtilities/UserDefaults (8.1.3):
+    - GoogleUtilities/Logger
+    - GoogleUtilities/Privacy
+  - GTMSessionFetcher/Core (3.5.0)
+  - MLImage (1.0.0-beta6)
+  - MLKitBarcodeScanning (6.0.0):
+    - MLKitCommon (~> 12.0)
+    - MLKitVision (~> 8.0)
+  - MLKitCommon (12.0.0):
+    - GoogleDataTransport (~> 10.0)
+    - GoogleToolboxForMac/Logger (< 5.0, >= 4.2.1)
+    - "GoogleToolboxForMac/NSData+zlib (< 5.0, >= 4.2.1)"
+    - GoogleUtilities/Logger (~> 8.0)
+    - GoogleUtilities/UserDefaults (~> 8.0)
+    - GTMSessionFetcher/Core (< 4.0, >= 3.3.2)
+  - MLKitVision (8.0.0):
+    - GoogleToolboxForMac/Logger (< 5.0, >= 4.2.1)
+    - "GoogleToolboxForMac/NSData+zlib (< 5.0, >= 4.2.1)"
+    - GTMSessionFetcher/Core (< 4.0, >= 3.3.2)
+    - MLImage (= 1.0.0-beta6)
+    - MLKitCommon (~> 12.0)
+  - nanopb (3.30910.0):
+    - nanopb/decode (= 3.30910.0)
+    - nanopb/encode (= 3.30910.0)
+  - nanopb/decode (3.30910.0)
+  - nanopb/encode (3.30910.0)
   - powersync-sqlite-core (0.4.14)
   - PowersyncCapacitor (0.5.3):
     - Capacitor
     - powersync-sqlite-core (~> 0.4.12)
     - SQLCipher (~> 4.0)
+  - PromisesObjC (2.4.1)
   - SQLCipher (4.10.0):
     - SQLCipher/standard (= 4.10.0)
   - SQLCipher/common (4.10.0)
@@ -50,9 +101,11 @@ DEPENDENCIES:
   - "CapacitorApp (from `../../node_modules/@capacitor/app`)"
   - "CapacitorBrowser (from `../../node_modules/@capacitor/browser`)"
   - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
+  - "CapacitorCommunityBackgroundGeolocation (from `../../node_modules/@capacitor-community/background-geolocation`)"
   - "CapacitorCommunitySqlite (from `../../node_modules/@capacitor-community/sqlite`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorLocalNotifications (from `../../node_modules/@capacitor/local-notifications`)"
+  - "CapacitorMlkitBarcodeScanning (from `../../node_modules/@capacitor-mlkit/barcode-scanning`)"
   - "CapacitorPushNotifications (from `../../node_modules/@capacitor/push-notifications`)"
   - CapacitorSecureStoragePlugin (from `../../node_modules/capacitor-secure-storage-plugin`)
   - "CapacitorSplashScreen (from `../../node_modules/@capacitor/splash-screen`)"
@@ -64,7 +117,18 @@ DEPENDENCIES:
 SPEC REPOS:
   trunk:
     - GCDWebServer
+    - GoogleDataTransport
+    - GoogleMLKit
+    - GoogleToolboxForMac
+    - GoogleUtilities
+    - GTMSessionFetcher
+    - MLImage
+    - MLKitBarcodeScanning
+    - MLKitCommon
+    - MLKitVision
+    - nanopb
     - powersync-sqlite-core
+    - PromisesObjC
     - SQLCipher
     - SwiftKeychainWrapper
     - ZIPFoundation
@@ -78,12 +142,16 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/browser"
   CapacitorCamera:
     :path: "../../node_modules/@capacitor/camera"
+  CapacitorCommunityBackgroundGeolocation:
+    :path: "../../node_modules/@capacitor-community/background-geolocation"
   CapacitorCommunitySqlite:
     :path: "../../node_modules/@capacitor-community/sqlite"
   CapacitorCordova:
     :path: "../../node_modules/@capacitor/ios"
   CapacitorLocalNotifications:
     :path: "../../node_modules/@capacitor/local-notifications"
+  CapacitorMlkitBarcodeScanning:
+    :path: "../../node_modules/@capacitor-mlkit/barcode-scanning"
   CapacitorPushNotifications:
     :path: "../../node_modules/@capacitor/push-notifications"
   CapacitorSecureStoragePlugin:
@@ -104,9 +172,11 @@ SPEC CHECKSUMS:
   CapacitorApp: f01a913211780e0718dae9750442c3e23f96e106
   CapacitorBrowser: 6d09f59655e89aede71654ef08b98de55cf032b6
   CapacitorCamera: 9e952270be355797f769aa835bb7643a96c871fe
+  CapacitorCommunityBackgroundGeolocation: 750523ec6dd1cc94cf4e2bf7787605106753f73c
   CapacitorCommunitySqlite: 4813d82ad33001e612a39d313cb5d28066cbafda
   CapacitorCordova: 139e2ed3d91c54b5aeae7941135c9f9aefc6da1d
   CapacitorLocalNotifications: 2e3f5b717ec9cd2bd64d93c99a9470941e1c80be
+  CapacitorMlkitBarcodeScanning: afd6fc431b550026a2c052e11ab2b71c7ae30011
   CapacitorPushNotifications: 0527809a9619ed775439d5ab2c2d996122b48319
   CapacitorSecureStoragePlugin: 450d402026ee3bcc018fa206504d9c0572fee78d
   CapacitorSplashScreen: 409eeaaeac603d264f209c0fcb718aa22fe1f7bb
@@ -114,12 +184,23 @@ SPEC CHECKSUMS:
   CiCapacitorLocalHub: ea986b4e0d0bea8157d6d8fe9634335f0fba5eb8
   CiCapacitorSpeech: 5f3efbc77893c90c8ebc5be07a496c5fb617790a
   GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
+  GoogleDataTransport: a24e58982ab3ba2f64d79613e027fe7f57e88539
+  GoogleMLKit: eff9e23ec1d90ea4157a1ee2e32a4f610c5b3318
+  GoogleToolboxForMac: d1a2cbf009c453f4d6ded37c105e2f67a32206d8
+  GoogleUtilities: 4e0c2ad9fa0d0d18b5c4df8bf57b461cba35b0bb
+  GTMSessionFetcher: 5aea5ba6bd522a239e236100971f10cb71b96ab6
+  MLImage: 0ad1c5f50edd027672d8b26b0fee78a8b4a0fc56
+  MLKitBarcodeScanning: 0a3064da0a7f49ac24ceb3cb46a5bc67496facd2
+  MLKitCommon: 07c2c33ae5640e5380beaaa6e4b9c249a205542d
+  MLKitVision: 45e79d68845a2de77e2dd4d7f07947f0ed157b0e
+  nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   powersync-sqlite-core: 6ce0b8b254812855e4ec52899ddc3ac6a30bda12
   PowersyncCapacitor: ee07596c1d9d91a5e182272895a199768de88a75
+  PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
   SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
   ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
 
-PODFILE CHECKSUM: ae8635ff90d0dbccb5e2405ac87853cbfd060af3
+PODFILE CHECKSUM: e325f7a6bb8aed470076bd07603c9cf39c0deb60
 
-COCOAPODS: 1.16.2
+COCOAPODS: 1.17.0

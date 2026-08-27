@@ -5,6 +5,15 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
+"@capacitor-community/background-geolocation@npm:^1.2.26":
+  version: 1.2.26
+  resolution: "@capacitor-community/background-geolocation@npm:1.2.26"
+  peerDependencies:
+    "@capacitor/core": ">=3.0.0"
+  checksum: 10c0/32904b5821885fafb51cbcbb35c088351644b410b62a3f98658447147ca13dc63ea1bc60491ffc3e09d3de3feccfd9eca4f9b95aeb05deea2ecbeb5ae94c217e
+  languageName: node
+  linkType: hard
+
 "@capacitor-community/sqlite@npm:^7.0.1":
   version: 7.0.3
   resolution: "@capacitor-community/sqlite@npm:7.0.3"
@@ -13,6 +22,15 @@ __metadata:
   peerDependencies:
     "@capacitor/core": ">=7.0.0"
   checksum: 10c0/fb81677d80a53e6c3e283c09f3d5d4442f8d1988adf1b5bf7a6066cc34bb8c4151ab34c529549d7124ecc1c750867a663bef8b4e70d846943d9f4ead53219e33
+  languageName: node
+  linkType: hard
+
+"@capacitor-mlkit/barcode-scanning@npm:^7.5.0":
+  version: 7.5.0
+  resolution: "@capacitor-mlkit/barcode-scanning@npm:7.5.0"
+  peerDependencies:
+    "@capacitor/core": ">=7.0.0"
+  checksum: 10c0/66f6763f833301f3b1e584fd2bfe38f8f54bfebe292673af472f161b52878dc5f9919befec5590386c931511b72b83ab74ed299f62bda47e36f1f56829c1ee57
   languageName: node
   linkType: hard
 
@@ -153,7 +171,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/fe-android@workspace:."
   dependencies:
+    "@capacitor-community/background-geolocation": "npm:^1.2.26"
     "@capacitor-community/sqlite": "npm:^7.0.1"
+    "@capacitor-mlkit/barcode-scanning": "npm:^7.5.0"
     "@capacitor/android": "npm:^7.0.0"
     "@capacitor/app": "npm:^7.0.0"
     "@capacitor/browser": "npm:^7.0.0"
@@ -167,7 +187,7 @@ __metadata:
     "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub"
     "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm"
     "@ci/capacitor-speech": "portal:../../packages/capacitor-speech"
-    "@powersync/capacitor": "npm:^0.4.1"
+    "@powersync/capacitor": "npm:^0.5.2"
     capacitor-secure-storage-plugin: "npm:^0.11.0"
     typescript: "npm:^5.8.3"
   languageName: unknown
@@ -282,15 +302,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@powersync/capacitor@npm:^0.4.1":
-  version: 0.4.1
-  resolution: "@powersync/capacitor@npm:0.4.1"
-  dependencies:
-    async-mutex: "npm:^0.5.0"
+"@powersync/capacitor@npm:^0.5.2":
+  version: 0.5.3
+  resolution: "@powersync/capacitor@npm:0.5.3"
   peerDependencies:
     "@capacitor-community/sqlite": ^7.0.2
-    "@powersync/web": ^1.34.0
-  checksum: 10c0/fc78619378f33fa05619743badf88df9088c0bb415e0d0e3ecc3b6d8a37bd48591e6b21b5bf5bb6c1c0f24a28b248d82ea7e6d531493e33ce3942e40635e7869
+    "@powersync/web": ^1.38.0
+  checksum: 10c0/18713d3b584dc6904a9ca525796534774a67f846d577ac9585d14391fb95368d2d4c1ca508c5eaf7c25b8bd26b03741a05968c9f923a62714a153518d4842350
   languageName: node
   linkType: hard
 
@@ -437,15 +455,6 @@ __metadata:
   version: 2.0.0
   resolution: "astral-regex@npm:2.0.0"
   checksum: 10c0/f63d439cc383db1b9c5c6080d1e240bd14dae745f15d11ec5da863e182bbeca70df6c8191cffef5deba0b566ef98834610a68be79ac6379c95eeb26e1b310e25
-  languageName: node
-  linkType: hard
-
-"async-mutex@npm:^0.5.0":
-  version: 0.5.0
-  resolution: "async-mutex@npm:0.5.0"
-  dependencies:
-    tslib: "npm:^2.4.0"
-  checksum: 10c0/9096e6ad6b674c894d8ddd5aa4c512b09bb05931b8746ebd634952b05685608b2b0820ed5c406e6569919ff5fe237ab3c491e6f2887d6da6b6ba906db3ee9c32
   languageName: node
   linkType: hard
 
@@ -1140,7 +1149,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tslib@npm:^2.0.1, tslib@npm:^2.1.0, tslib@npm:^2.4.0, tslib@npm:^2.6.2, tslib@npm:^2.8.1":
+"tslib@npm:^2.0.1, tslib@npm:^2.1.0, tslib@npm:^2.6.2, tslib@npm:^2.8.1":
   version: 2.8.1
   resolution: "tslib@npm:2.8.1"
   checksum: 10c0/9c4759110a19c53f992d9aae23aac5ced636e99887b51b9e61def52611732872ff7668757d4e4c61f19691e36f4da981cd9485e869b4a7408d689f6bf1f14e62

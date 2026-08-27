@@ -11,6 +11,15 @@ import { AgentMemoryEntity, type AgentMemory } from '../entities/AgentMemoryEnti
 import { AgentMemoryCreatedEvent, AgentMemoryRemovedEvent } from '../events';
 
 export interface CreateAgentMemoryDto {
+  /**
+   * Caller-supplied primary key. Omitted (the `POST /memory/write` path) a
+   * fresh uuid7 is minted. A producer that can be replayed — the chat-turn
+   * cron, which re-reads a window it may already have written — passes a
+   * deterministic id instead and checks {@link AgentMemoryService.findByIds}
+   * first, so a crash between read and write replays into the same row rather
+   * than duplicating the fragment.
+   */
+  id?: string;
   content: string;
   source?: string | null;
   title?: string | null;
@@ -33,7 +42,7 @@ export class AgentMemoryService {
     const title = data.title ?? (source ? `[${source}]` : null);
 
     const entity = this.repository.create({
-      id: uuidv7(),
+      id: data.id ?? uuidv7(),
       userId: context.userId,
       content: data.content,
       source,

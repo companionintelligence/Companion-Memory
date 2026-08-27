@@ -117,8 +117,8 @@ half way, because a partial purge leaves an account both unusable and undeleted.
 - **Idempotent** — every statement is scoped by "belongs to this account", so a
   re-run finds nothing. There is no cursor to corrupt; resumability and idempotency
   are the same property here.
-- **Hypertable-aware** — TimescaleDB targets (`ci.position`, `ci.user_snapshots`,
-  `hbpe.prediction_log`) expand to their chunks and are batched per chunk. `ctid` is
+- **Hypertable-aware** — TimescaleDB targets (`ci.position`, `hbpe.prediction_log`)
+  expand to their chunks and are batched per chunk. `ctid` is
   only unique inside one physical table, so batching against a hypertable's parent
   would match tuple addresses collected from one chunk against the rows of another.
 

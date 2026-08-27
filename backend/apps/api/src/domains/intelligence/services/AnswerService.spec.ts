@@ -43,11 +43,17 @@ function makeService() {
 
   const save = jest.fn(async (entity: AnswerEntity) => entity);
   const find = jest.fn(async () => created);
+  // Enough of a row for AnswerService.update to take its "found" branch, so an
+  // edit is exercised end-to-end rather than bailing out at the lookup.
+  const findOne = jest.fn(async () =>
+    Object.assign(new AnswerEntity(), { id: 'a1', answer: 'yes', answerSource: 'inferred' }),
+  );
 
   const repository = {
     create,
     save,
     find,
+    findOne,
     // 16 scalar columns + the user_id and question_id relation-join columns =
     // 18, matching repository.metadata.columns.length; drives computeChunkSize
     // in createMany.
@@ -59,7 +65,14 @@ function makeService() {
 
   const removeFromFeedQueue = jest.fn<Promise<void>, [string, string]>(async () => {});
   const removeManyFromFeedQueue = jest.fn<Promise<void>, [string, string[]]>(async () => {});
-  const questionService = { removeFromFeedQueue, removeManyFromFeedQueue };
+  const recordQuestionAnswered = jest.fn<Promise<void>, [string]>(async () => {});
+  const recordManyQuestionsAnswered = jest.fn<Promise<void>, [string[]]>(async () => {});
+  const questionService = {
+    removeFromFeedQueue,
+    removeManyFromFeedQueue,
+    recordQuestionAnswered,
+    recordManyQuestionsAnswered,
+  };
 
   const service = new AnswerService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -70,7 +83,16 @@ function makeService() {
     questionService as any,
   );
 
-  return { service, send, insert: insertRecord, save, removeFromFeedQueue, removeManyFromFeedQueue };
+  return {
+    service,
+    send,
+    insert: insertRecord,
+    save,
+    removeFromFeedQueue,
+    removeManyFromFeedQueue,
+    recordQuestionAnswered,
+    recordManyQuestionsAnswered,
+  };
 }
 
 describe('AnswerService bulk createMany', () => {
@@ -141,6 +163,112 @@ describe('AnswerService single create still emits', () => {
 });
 
 /**
+ * `ci.questions.times_answered` had no writer at all: it was selected into the
+ * catalogue DTO (QuestionService.getCatalogue) and typed all the way through to
+ * the frontend's `CatalogueEntry.timesAnswered`, while sitting at its `DEFAULT
+ * 0` forever.
+ *
+ * There is no database here, so what these tests pin is the *bookkeeping*: which
+ * paths ask for a bump and with what. Whether the SQL is a lost-update-proof
+ * relative UPDATE is pinned separately, in QuestionService.spec.ts. The two
+ * together are what "answering twice gives 2" rests on.
+ */
+describe('AnswerService counts the answer against its question', () => {
+  /** Replay the recorded calls into the counter they describe. */
+  function tally(mocks: {
+    recordQuestionAnswered: jest.Mock;
+    recordManyQuestionsAnswered: jest.Mock;
+  }): Map<string, number> {
+    const counts = new Map<string, number>();
+    const bump = (id: string) => counts.set(id, (counts.get(id) ?? 0) + 1);
+
+    for (const [id] of mocks.recordQuestionAnswered.mock.calls as Array<[string]>) {
+      bump(id);
+    }
+
+    for (const [ids] of mocks.recordManyQuestionsAnswered.mock.calls as Array<[string[]]>) {
+      for (const id of ids) {
+        bump(id);
+      }
+    }
+
+    return counts;
+  }
+
+  it('bumps the answered question exactly once per answer — and twice for two answers', async () => {
+    const mocks = makeService();
+
+    await mocks.service.create(CONTEXT, { id: 'a1', text: 'yes', question: { id: 'q1' } });
+
+    expect(mocks.recordQuestionAnswered.mock.calls).toStrictEqual([['q1']]);
+    expect(tally(mocks).get('q1')).toBe(1);
+
+    await mocks.service.create(CONTEXT, { id: 'a2', text: 'still yes', question: { id: 'q1' } });
+
+    expect(mocks.recordQuestionAnswered).toHaveBeenCalledTimes(2);
+    expect(tally(mocks).get('q1')).toBe(2);
+  });
+
+  it('bumps on the bulk path too, in ONE batched call that keeps duplicates', async () => {
+    const mocks = makeService();
+
+    await mocks.service.createMany(CONTEXT, [
+      { id: 'a1', text: 'yes', question: { id: 'q1' } },
+      { id: 'a2', text: 'no', question: { id: 'q2' } },
+      { id: 'a3', text: 'maybe', question: { id: 'q1' } },
+    ]);
+
+    // One call, not three: the batch is folded into a single UPDATE downstream.
+    expect(mocks.recordQuestionAnswered).not.toHaveBeenCalled();
+    expect(mocks.recordManyQuestionsAnswered).toHaveBeenCalledTimes(1);
+
+    // Duplicates SURVIVE, unlike the feed-queue cleanup's de-duplicated id set:
+    // two answers to q1 are two answers.
+    const [ids] = mocks.recordManyQuestionsAnswered.mock.calls[0] as [string[]];
+    expect(ids).toHaveLength(3);
+    expect([...ids].sort()).toStrictEqual(['q1', 'q1', 'q2']);
+
+    const counts = tally(mocks);
+    expect(counts.get('q1')).toBe(2);
+    expect(counts.get('q2')).toBe(1);
+  });
+
+  it('bumps even when the created event is suppressed (the import path)', async () => {
+    const mocks = makeService();
+
+    await mocks.service.create(
+      CONTEXT,
+      { id: 'a1', text: 'yes', question: { id: 'q1' } },
+      { emitCreated: false },
+    );
+
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.recordQuestionAnswered).toHaveBeenCalledWith('q1');
+  });
+
+  it('does not bump for an empty bulk batch', async () => {
+    const mocks = makeService();
+
+    await mocks.service.createMany(CONTEXT, []);
+
+    expect(mocks.recordQuestionAnswered).not.toHaveBeenCalled();
+    expect(mocks.recordManyQuestionsAnswered).not.toHaveBeenCalled();
+  });
+
+  it('does NOT bump when an existing answer is merely edited', async () => {
+    const mocks = makeService();
+
+    // AnswerService.update is how the smart-rotation inference listener
+    // overwrites an answer the user already gave — the same answer rewritten,
+    // not a second one, so the counter must not move.
+    await mocks.service.update(CONTEXT, 'a1', { text: 'corrected' });
+
+    expect(mocks.recordQuestionAnswered).not.toHaveBeenCalled();
+    expect(mocks.recordManyQuestionsAnswered).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * A minimal in-memory fake that actually HONORS the `where` clause it is given
  * (id / user.id / question.id equality), the way Postgres row filtering would.
  * This lets the tenancy tests below prove the service's SYSTEM_USER-conditional
@@ -207,7 +335,12 @@ function makeStoreRepository(rows: AnswerEntity[]) {
 function makeServiceWithStore(rows: AnswerEntity[]) {
   const { repository, findOne, find, delete: deleteFn, save } = makeStoreRepository(rows);
   const send = jest.fn(async () => []);
-  const questionService = { removeFromFeedQueue: jest.fn(), removeManyFromFeedQueue: jest.fn() };
+  const questionService = {
+    removeFromFeedQueue: jest.fn(),
+    removeManyFromFeedQueue: jest.fn(),
+    recordQuestionAnswered: jest.fn(),
+    recordManyQuestionsAnswered: jest.fn(),
+  };
 
   const service = new AnswerService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

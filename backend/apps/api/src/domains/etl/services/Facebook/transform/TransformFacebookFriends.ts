@@ -95,7 +95,6 @@ export class FacebookFriendsTransformService {
 
             await this.personService.update({ userId }, existingEntity.id, {
               properties: mergedProperties,
-              lastAccessed: new Date(),
             });
           } else {
             const newPerson = await this.personService.create(

@@ -42,6 +42,14 @@ export interface RoutingRequest {
   /** Caller asserts the task needs a large context window. */
   requiresLargeContext?: boolean;
   /**
+   * The on-device model's real usable context window, when the caller knows it.
+   * {@link TierProfile.maxContextTokens} for `on_device` is an *estimate* mirroring
+   * Apple's split, not a measured property of whatever the appliance serves — a
+   * caller that knows the truth passes it here so the escalation threshold (and the
+   * `on_device` profile in the returned decision) reflect the real deployment.
+   */
+  onDeviceContextTokens?: number;
+  /**
    * Privacy pin: this task must NOT leave the appliance, even if that means a
    * weaker on-device model. Set this for sensitive data (mirrors the
    * `IntentPrivacy` sensitivity/external labels in the intent catalog).

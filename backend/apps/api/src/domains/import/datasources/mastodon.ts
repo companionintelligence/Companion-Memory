@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -115,32 +116,6 @@ function isMastodonActor(parsed: unknown, outboxId: unknown): boolean {
   return typeof outboxId !== 'string' || a.outbox === outboxId;
 }
 
-function stripTags(h: string): string {
-  // Turn block/line breaks into newlines first so paragraph structure survives.
-  return h
-    .replace(/<\/p\s*>/gi, '\n\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '');
-}
-
-function decodeHtml(h: string): string {
-  return h
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, d) => String.fromCharCode(parseInt(d, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-}
-
-function htmlToText(html: string): string {
-  return decodeHtml(stripTags(html))
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
 
 export class MastodonFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {

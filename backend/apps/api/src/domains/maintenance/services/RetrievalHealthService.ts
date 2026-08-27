@@ -44,6 +44,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RetrievalHealthAlertReason =
   /** Source rows exist, vectors do not: the type answers no search at all. */
   | 'vector_zero'
+  /**
+   * A materially large share of the user's REAL retrieval calls came back
+   * empty over the recent window. Unlike every other reason here, this one is
+   * measured from `ci.retrieval_query_log` — answers rather than index rows —
+   * and is raised by {@link RetrievalQueryLogService}, not by
+   * {@link buildRetrievalHealthAlerts}.
+   */
+  | 'zero_result_rate'
   /** Source rows exist, embeddings do not: retrieval falls back to lexical only. */
   | 'embed_zero'
   /** A coverage ratio fell materially against the ~week-old baseline. */
@@ -53,24 +61,39 @@ export type RetrievalHealthAlertReason =
 
 const ALERT_SEVERITY: Record<RetrievalHealthAlertReason, number> = {
   vector_zero: 0,
-  embed_zero: 1,
-  coverage_regression: 2,
-  index_divergence: 3,
+  // Above the coverage reasons below it: a coverage ratio is a proxy for
+  // whether searches can be answered, and this is the thing itself.
+  zero_result_rate: 1,
+  embed_zero: 2,
+  coverage_regression: 3,
+  index_divergence: 4,
 };
 
-export interface RetrievalHealthAlert {
-  entityType: string;
+/**
+ * The shape `RetrievalHealthCron` can turn into a `ci.actions` card, whatever
+ * measured it. Named separately from {@link RetrievalHealthAlert} because the
+ * zero-result-rate alert is about a USER's queries rather than an entity type,
+ * so it has no `entityType` to carry — and inventing a placeholder one would
+ * put a lie in the card's metadata.
+ */
+export interface RaisableAlert {
   reason: RetrievalHealthAlertReason;
   /**
    * Stable dedupe key, written to `ci.actions.metadata.key`. One open card per
-   * (type, reason) until the user dismisses it — a nightly cron that re-raises
-   * the same card every night is a cron nobody reads.
+   * subject until the repeat window elapses — a nightly cron that re-raises the
+   * same card every night is a cron nobody reads.
    */
   key: string;
   title: string;
   text: string;
   /** The numbers behind the card, kept on the action so the claim is checkable. */
   detail: Record<string, unknown>;
+  /** The search entity type this is about, where there is one. */
+  entityType?: string;
+}
+
+export interface RetrievalHealthAlert extends RaisableAlert {
+  entityType: string;
 }
 
 /** The ~week-old reading a run is compared against, per type. */
