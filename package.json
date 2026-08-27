@@ -32,7 +32,7 @@
     "form-data": "^4.0.6",
     "glob@npm:11.0.1": "11.1.0",
     "immutable@npm:~3.7.6": "3.8.3",
-    "ip-address": "^10.1.1",
+    "ip-address": "^10.5.0",
     "js-yaml": "^4.2.0",
     "markdown-it": "^14.2.0",
     "mdast-util-to-hast": "^13.2.1",
@@ -43,9 +43,12 @@
     "serialize-javascript": "^7.0.5",
     "shell-quote": "^1.8.4",
     "smol-toml": "^1.6.1",
-    "tar": "^7.5.16",
+    "tar": "^7.5.22",
+    "minimatch/brace-expansion": "^2.1.4",
     "tmp": "^0.2.6",
-    "undici": "^8.5.0",
+    "undici": "^8.10.0",
+    "fast-uri": "^3.1.5",
+    "lodash": "^4.18.1",
     "ws": "^8.21.0"
   },
   "dependenciesMeta": {

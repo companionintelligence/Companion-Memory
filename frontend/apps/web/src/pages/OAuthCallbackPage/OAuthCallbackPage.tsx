@@ -17,12 +17,18 @@ export function OAuthCallbackPage() {
 
   const initialRequestRef = useRef<boolean>(false);
 
-  // CI Cloud proxy callback params (when OAuth is proxied through CI Cloud)
-  const accessToken = searchParams.get('access_token');
-  const refreshToken = searchParams.get('refresh_token');
+  // CI Cloud proxy callback params (when OAuth is proxied through CI Cloud).
+  // CI Cloud puts the tokens in the URL FRAGMENT so they never reach the
+  // appliance's web server or its access log; the query string is still read
+  // as a fallback for a CI Cloud that predates that change. `connectionId` is
+  // ours and stays in the query.
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const proxyParam = (name: string) => hashParams.get(name) ?? searchParams.get(name);
+  const accessToken = proxyParam('access_token');
+  const refreshToken = proxyParam('refresh_token');
   const connectionId = searchParams.get('connectionId');
-  const userProviderId = searchParams.get('user_provider_id');
-  const expiresIn = searchParams.get('expires_in');
+  const userProviderId = proxyParam('user_provider_id');
+  const expiresIn = proxyParam('expires_in');
 
   // Direct OAuth callback params
   const code = searchParams.get('code');
@@ -73,7 +79,13 @@ export function OAuthCallbackPage() {
 
   // Redirect to login if session was lost during the OAuth redirect.
   if (!authLoading && !authToken) {
-    return <Navigate to="/login" state={{ from: `/oauth/callback?${searchParams.toString()}` }} replace />;
+    return (
+      <Navigate
+        to="/login"
+        state={{ from: `/oauth/callback?${searchParams.toString()}${window.location.hash}` }}
+        replace
+      />
+    );
   }
 
   useEffect(() => {
