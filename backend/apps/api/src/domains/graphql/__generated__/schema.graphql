@@ -203,6 +203,16 @@ type AskAuditType {
   responderId: ID
 }
 
+type AskBroadcastType {
+  answered: Int!
+  createdAt: DateTime!
+  expiresAt: DateTime
+  id: ID!
+  query: AskQueryType!
+  recipients: Int!
+  waiting: Int!
+}
+
 type AskChannelType {
   covered: [String!]!
   keyThumbprint: String!
@@ -305,6 +315,7 @@ enum AskStatus {
 
 type AskType {
   askerId: ID
+  broadcastId: ID
   channel: AskChannelType
   consentBasis: String
   createdAt: DateTime!
@@ -576,6 +587,13 @@ type ContentType implements Node & Taggable {
 input CreateAnswerInput {
   answer: String!
   questionId: String!
+}
+
+input CreateAskBroadcastInput {
+  query: AskQueryInput!
+
+  """2–25 recipients."""
+  responderIds: [ID!]!
 }
 
 input CreateAskGrantInput {
@@ -1915,6 +1933,7 @@ type Mutation {
   createAnswer(input: CreateAnswerInput!): AnswerType!
   createAnswers(input: [CreateAnswerInput!]!): [AnswerType!]!
   createAsk(input: CreateAskInput!): CreateAskPayload!
+  createAskBroadcast(input: CreateAskBroadcastInput!): AskBroadcastType!
   createAskGrant(input: CreateAskGrantInput!): AskGrantPayload!
   createBrowserActivities(input: [CreateBrowserActivityInput!]!): [BrowserActivityType!]!
   createCommunications(input: [CreateCommunicationInput!]!): [CommunicationType!]!
@@ -2836,6 +2855,7 @@ type Query {
   Evidence-linked suggestions. Findings persist even when derivation.engines is off.
   """
   metricSuggestions(includeDismissed: Boolean): [MetricSuggestionType!]!
+  myAskBroadcasts: [AskBroadcastType!]!
   myAskGrantHistory: [AskGrantType!]!
   myAskGrants: [AskGrantType!]!
   myHouseholdTiers: [HouseholdTierType!]!

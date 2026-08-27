@@ -240,6 +240,8 @@ export interface CreateAskDto {
    */
   peerLinkId?: string | null;
   direction?: AskDirection;
+  /** Correlates this ask with the others the asker sent as one question. */
+  broadcastId?: string | null;
   /**
    * Set when the request that produced this ask carried a verified RFC 9421
    * signature. Omitted means it did not — an unsigned channel, which the ask

@@ -66,6 +66,7 @@ function makeResolver(enabled = true) {
       listForOwner: jest.fn(),
       setTier: jest.fn(),
     } as never,
+    { listForAsker: jest.fn(), asksForBroadcasts: jest.fn(), create: jest.fn() } as never,
     featureService as never,
   );
 

@@ -139,6 +139,7 @@ export class AskService {
       id: data.id ?? uuidv7(),
       askerUserId: isInbound ? null : context.userId,
       peerLinkId: data.peerLinkId ?? null,
+      broadcastId: data.broadcastId ?? null,
       direction,
       responderUserId: data.responderUserId,
       query: data.query,

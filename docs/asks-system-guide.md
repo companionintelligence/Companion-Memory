@@ -316,6 +316,28 @@ the field and every call site inherited the wrong answer in silence.
 
 ---
 
+### 2.9 Broadcasts — one question, several people
+
+`ci.asks` names exactly ONE responder, so every use case that is really *"ask the group"* was inexpressible: **F9** (pool everyone's photos from the reunion), **W7** (anyone from the '19 cohort now in climate?), and asking a household rather than a housemate.
+
+**A broadcast is N independent asks, not one ask with N responders.** That is the whole design, and the alternative is worse in a way that is easy to miss. A single ask row with several responders would mean **one** consent decision, **one** ceiling and **one** audit row covering several people's memories — so the strictest person's posture would either be overridden by the group's, or would silently cap everybody else's. There is no version of that which is not somebody's consent being decided by somebody else.
+
+Instead the broadcast is a **correlation**. Each responder gets their own `ci.asks` row: their own grants decide it, their own tier caps it, their own inbox reviews it, their own hand redacts it, their own history audits it.
+
+Three privacy properties, each pinned by a test:
+
+| | |
+|---|---|
+| **A responder never learns who else was asked** | `AskType.broadcastId` is **asker-only** — the mirror image of `consentBasis` being responder-only. Who else was asked is a fact about the *asker's* relationships, and telling a responder is a third-party disclosure nobody consented to. An omitted viewer lands on the safe projection, as everywhere else. |
+| **The aggregate is not a per-recipient oracle** | Declined, expired, in-review and never-heard-from are **one** `waiting` number. Splitting them would hand the asker a read on each responder's consent posture — the oracle `askerVisibleStatus` collapses for a single ask. A broadcast must not be a cheaper way to run the same probe N times. |
+| **`ci.ask_broadcasts` holds no member list** | The asks *are* the list, and they are already scoped per party. There is nothing there for a responder-scoped read to accidentally return. |
+
+`MAX_BROADCAST_RECIPIENTS` (25) is an **abuse control, not a cost bound**: every recipient is an ask in a human's review inbox, and the per-asker rate limit counts *requests*, of which a broadcast is one. [#2364](https://github.com/companionintelligence/CI-Server/issues/2364)'s pend budget is the general form; until it exists, the cap is what stops one submit filling N inboxes.
+
+One failure does not sink the rest — a stale recipient id is dropped and logged rather than cancelling a question the asker meant to put to everybody else. If *nobody* could be asked, the grouping row is deleted rather than left naming a question nobody received.
+
+**Not reachable through the product yet:** the composer is single-recipient. `createAskBroadcast` is complete, tested and unwired — which is the same shape as G2/G4 and should be read the same way.
+
 ## 3. The lifecycle of an ask
 
 ### 3.1 Statuses and legal transitions

@@ -13,6 +13,7 @@ import {
   AskExecutorService,
   AskRateLimitService,
   AskService,
+  AskBroadcastService,
   GrantService,
   HouseholdTierService,
   applyDisclosureCeiling,
@@ -55,12 +56,14 @@ import {
 } from '../types/AskPayloads';
 import {
   AskAuditType,
+  AskBroadcastType,
   AskDisclosureHistoryPayload,
   AskDisclosureSummaryPayload,
   AskDisclosureSummaryType,
   AskGrantType,
   AskType,
 } from '../types/AskType';
+import { CreateAskBroadcastInput } from '../types/CreateAskBroadcastInput';
 import { GlobalUID } from '../types/GlobalUID';
 import { HouseholdTierType, SetHouseholdTierInput } from '../types/HouseholdTierType';
 
@@ -97,6 +100,7 @@ export class AskResolver {
     private readonly peerLinkService: PeerLinkService,
     private readonly outboundAskService: OutboundAskService,
     private readonly householdTierService: HouseholdTierService,
+    private readonly broadcastService: AskBroadcastService,
     private readonly featureService: FeatureService,
   ) {}
 
@@ -825,6 +829,67 @@ export class AskResolver {
     const found = await this.askService.findById(serviceContext, id);
 
     return found ? this.toAskType(serviceContext, found) : null;
+  }
+
+  /**
+   * Put ONE question to several people at once.
+   *
+   * Each recipient gets their own independent ask — their own grants decide it,
+   * their own tier caps it, their own inbox reviews it. The broadcast is only
+   * a correlation, so nothing about the group changes what any one of them
+   * discloses. See {@link AskBroadcastService}.
+   *
+   * ═══ THE N DECISIONS DO NOT LEAVE THIS METHOD ═══
+   *
+   * `submit` makes one grant decision per recipient, and each is a read on that
+   * responder's grant matrix. `createAsk` returns the constant
+   * {@link ASK_ACCEPTED} for exactly this reason; a broadcast returning N
+   * decisions would hand back N probes for the price of one request. They are
+   * used here to run the auto-answer pipeline and then dropped.
+   */
+  @Mutation(() => AskBroadcastType)
+  async createAskBroadcast(
+    @Context() context: RequestContext,
+    @Args('input') input: CreateAskBroadcastInput,
+  ): Promise<AskBroadcastType> {
+    if (!(await this.enabled())) {
+      throw new BadRequestException('Asks are not enabled');
+    }
+
+    const serviceContext = toServiceContext(context);
+    // Rate-limited as ONE ask, because it is one request — and then bounded
+    // again by MAX_BROADCAST_RECIPIENTS, which is what actually stops one
+    // request filling N inboxes. See that constant.
+    this.rateLimitService.consume(serviceContext.userId);
+
+    const { broadcast, members } = await this.broadcastService.create(serviceContext, {
+      responderUserIds: input.responderIds.map((id) => GlobalUID.parse('user', id)),
+      query: parseAskQueryInput(input.query),
+    });
+
+    // Sequentially, for the same reason `create` submits sequentially: each
+    // auto-answer runs a search in a responder's memory.
+    const asks = [];
+    for (const member of members) {
+      asks.push(member.decision === 'auto' ? await this.autoAnswer(member.ask) : member.ask);
+    }
+
+    return AskBroadcastType.toType(broadcast, asks);
+  }
+
+  /** The caller's own broadcasts, newest first. Asker-scoped in the service. */
+  @Query(() => [AskBroadcastType])
+  async myAskBroadcasts(@Context() context: RequestContext): Promise<AskBroadcastType[]> {
+    if (!(await this.enabled())) {
+      return [];
+    }
+
+    const serviceContext = toServiceContext(context);
+    const broadcasts = await this.broadcastService.listForAsker(serviceContext);
+    // ONE read for every child ask, rather than a query per broadcast.
+    const asks = await this.broadcastService.asksForBroadcasts(broadcasts.map((b) => b.id));
+
+    return broadcasts.map((broadcast) => AskBroadcastType.toType(broadcast, asks.get(broadcast.id) ?? []));
   }
 
   /**

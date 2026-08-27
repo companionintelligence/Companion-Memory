@@ -90,6 +90,14 @@ function makeResolver(enabled: boolean) {
       listForOwner: jest.fn().mockResolvedValue([]),
       setTier: jest.fn(),
     } as never,
+    {
+      // The broadcast service. `createAskBroadcast` / `myAskBroadcasts` are the
+      // only callers; every other operation here never touches it.
+      create: jest.fn(),
+      listForAsker: jest.fn().mockResolvedValue([]),
+      asksForBroadcasts: jest.fn().mockResolvedValue(new Map()),
+      findForAsker: jest.fn(),
+    } as never,
     featureService as never,
   );
 

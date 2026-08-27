@@ -4,6 +4,7 @@ type ResourceType =
   | 'ask'
   | 'ask-grant'
   | 'household-tier'
+  | 'ask-broadcast'
   | 'ask-audit'
   | 'ask-answer'
   | 'browser-activity'

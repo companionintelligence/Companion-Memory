@@ -83,6 +83,14 @@ function makeResolver(options: { links?: Record<string, unknown>[] } = {}) {
       listForOwner: jest.fn().mockResolvedValue([]),
       setTier: jest.fn(),
     } as never,
+    {
+      // The broadcast service. `createAskBroadcast` / `myAskBroadcasts` are the
+      // only callers; every other operation here never touches it.
+      create: jest.fn(),
+      listForAsker: jest.fn().mockResolvedValue([]),
+      asksForBroadcasts: jest.fn().mockResolvedValue(new Map()),
+      findForAsker: jest.fn(),
+    } as never,
     featureService as never,
   );
 
@@ -203,6 +211,14 @@ describe('exactly one grantee, refused at the input layer', () => {
         tierFor: jest.fn().mockResolvedValue('household'),
         listForOwner: jest.fn().mockResolvedValue([]),
         setTier: jest.fn(),
+      } as never,
+      {
+        // The broadcast service. `createAskBroadcast` / `myAskBroadcasts` are the
+        // only callers; every other operation here never touches it.
+        create: jest.fn(),
+        listForAsker: jest.fn().mockResolvedValue([]),
+        asksForBroadcasts: jest.fn().mockResolvedValue(new Map()),
+        findForAsker: jest.fn(),
       } as never,
       { isFeatureEnabled: jest.fn().mockResolvedValue(false) } as never,
     );

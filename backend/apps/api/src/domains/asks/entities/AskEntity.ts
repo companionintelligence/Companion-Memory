@@ -21,6 +21,17 @@ export class AskEntity {
   @Column({ type: 'uuid', name: 'asker_user_id', nullable: true })
   askerUserId!: string | null;
 
+  /**
+   * Correlates asks the asker sent as ONE question to several people.
+   *
+   * Projected to the ASKER only. Who else was asked is a fact about the asker's
+   * relationships, and telling a responder would be a third-party disclosure
+   * nobody consented to — the same reasoning that keeps `consentBasis`
+   * responder-only, pointed the other way.
+   */
+  @Column({ type: 'uuid', name: 'broadcast_id', nullable: true })
+  broadcastId!: string | null;
+
   /** The peer this ask came from (inbound) or was sent to (outbound). */
   @Column({ type: 'uuid', name: 'peer_link_id', nullable: true })
   peerLinkId!: string | null;
@@ -95,6 +106,7 @@ export class AskEntity {
     return {
       id: entity.id,
       askerUserId: entity.askerUserId,
+      broadcastId: entity.broadcastId ?? null,
       peerLinkId: entity.peerLinkId,
       direction: entity.direction,
       responderUserId: entity.responderUserId,

@@ -8,6 +8,7 @@ import {
   type AskQuery,
   type DisclosureSummary,
   type GrantUsage,
+  type AskBroadcast,
 } from '@ci/domains/asks';
 
 import { GlobalUID } from './GlobalUID';
@@ -210,6 +211,18 @@ export class AskType {
   channel!: AskChannelType | null;
 
   /**
+   * Correlates asks the ASKER sent as one question to several people.
+   *
+   * ASKER-ONLY, and that is the mirror image of {@link consentBasis} being
+   * responder-only. Who else was asked is a fact about the ASKER's
+   * relationships — a responder learning it would be a third-party disclosure
+   * nobody consented to, of the same shape as the peer handle and the decline
+   * oracle this domain closes elsewhere.
+   */
+  @Field(() => ID, { nullable: true })
+  broadcastId!: string | null;
+
+  /**
    * `viewerUserId` decides whether the responder's private reasoning is
    * included. Callers that omit it get the safe projection — an omitted argument
    * must never be the disclosing case.
@@ -240,6 +253,12 @@ export class AskType {
       updatedAt: isResponder ? ask.updatedAt : askerVisibleUpdatedAt(ask),
       expiresAt: ask.expiresAt,
       channel: isResponder ? AskChannelType.toType(ask) : null,
+      // The ONE field on this type that is asker-only rather than
+      // responder-only. `isResponder` is not simply negated: a viewer who is
+      // neither party gets null from both branches, which is the safe default
+      // an omitted `viewerUserId` must always land on.
+      broadcastId:
+        viewerUserId != null && viewerUserId === ask.askerUserId ? ask.broadcastId : null,
     };
   }
 }
@@ -533,6 +552,64 @@ export class AskDisclosureSummaryPayload {
   /** True when the fold ran over a truncated read — so the totals are floors. */
   @Field(() => Boolean)
   truncated!: boolean;
+}
+
+/**
+ * One question the asker put to several people, as the ASKER sees it.
+ *
+ * The counts fold each child through the same `askerVisibleStatus` an
+ * individual ask goes through — so a broadcast reveals nothing per-recipient
+ * that a single ask would not. `waiting` is every child that is not answered:
+ * declined, expired, still in review and never-heard-from are one number, for
+ * exactly the reason `PEER_ASK_PENDING` is one word.
+ */
+@ObjectType()
+export class AskBroadcastType {
+  @Field(() => ID)
+  id!: string;
+
+  @Field(() => AskQueryType)
+  query!: AskQueryType;
+
+  /** How many people were actually asked. */
+  @Field(() => Int)
+  recipients!: number;
+
+  /** How many have an answer waiting. */
+  @Field(() => Int)
+  answered!: number;
+
+  /**
+   * Everyone else, as ONE number.
+   *
+   * Declined, expired, still in review and never-heard-from are deliberately
+   * not separated: splitting them would hand the asker a per-recipient read on
+   * each responder's consent posture, which is the oracle
+   * `askerVisibleStatus` collapses for a single ask. A broadcast must not be a
+   * cheaper way to run the same probe N times.
+   */
+  @Field(() => Int)
+  waiting!: number;
+
+  @Field(() => GraphQLISODateTime)
+  createdAt!: Date;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  expiresAt!: Date | null;
+
+  static toType(broadcast: AskBroadcast, asks: readonly Ask[]): AskBroadcastType {
+    const answered = asks.filter((ask) => ask.status === 'answered').length;
+
+    return {
+      id: GlobalUID.encode('ask-broadcast', broadcast.id),
+      query: AskQueryType.toType(broadcast.query),
+      recipients: asks.length,
+      answered,
+      waiting: asks.length - answered,
+      createdAt: broadcast.createdAt,
+      expiresAt: broadcast.expiresAt,
+    };
+  }
 }
 
 /** A disclosure-history entry (one terminal ask outcome). */

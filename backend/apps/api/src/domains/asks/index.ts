@@ -25,11 +25,13 @@ import { UserEntity } from '@ci/domains/user';
 import { AskExpiryCron } from './cron/AskExpiryCron';
 import { AskAnswerEntity } from './entities/AskAnswerEntity';
 import { AskAuditEntity } from './entities/AskAuditEntity';
+import { AskBroadcastEntity } from './entities/AskBroadcastEntity';
 import { AskEntity } from './entities/AskEntity';
 import { AskGrantEntity } from './entities/AskGrantEntity';
 import { HouseholdTierEntity } from './entities/HouseholdTierEntity';
 import { AskAnswerService } from './services/AskAnswerService';
 import { AskAuditService } from './services/AskAuditService';
+import { AskBroadcastService } from './services/AskBroadcastService';
 import { AskExecutorService } from './services/AskExecutorService';
 import { AskExpiryService } from './services/AskExpiryService';
 import { AskRateLimitService } from './services/AskRateLimitService';
@@ -52,6 +54,7 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
       AskAuditEntity,
       AskAnswerEntity,
       HouseholdTierEntity,
+      AskBroadcastEntity,
       UserEntity,
     ]),
     SearchNextModule,
@@ -66,6 +69,7 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
     AskExpiryService,
     SharedSearchConsentService,
     HouseholdTierService,
+    AskBroadcastService,
     // Registered as a provider so its @Cron method is discovered by the
     // scheduler; nothing injects it, so it is deliberately NOT exported.
     AskExpiryCron,
@@ -80,11 +84,19 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
     AskExpiryService,
     SharedSearchConsentService,
     HouseholdTierService,
+    AskBroadcastService,
   ],
 })
 export class AsksModule {}
 
-export { AskEntity, AskGrantEntity, AskAuditEntity, AskAnswerEntity, HouseholdTierEntity };
+export {
+  AskEntity,
+  AskGrantEntity,
+  AskAuditEntity,
+  AskAnswerEntity,
+  HouseholdTierEntity,
+  AskBroadcastEntity,
+};
 export {
   AskService,
   GrantService,
@@ -95,7 +107,15 @@ export {
   AskExpiryService,
   SharedSearchConsentService,
   HouseholdTierService,
+  AskBroadcastService,
 };
+export {
+  MAX_BROADCAST_RECIPIENTS,
+  MIN_BROADCAST_RECIPIENTS,
+  normalizeRecipients,
+} from './services/AskBroadcastService';
+export type { BroadcastMember } from './services/AskBroadcastService';
+export type { AskBroadcast } from './entities/AskBroadcastEntity';
 export { DEFAULT_HOUSEHOLD_TIER } from './services/HouseholdTierService';
 export type { HouseholdTier } from './entities/HouseholdTierEntity';
 export {
