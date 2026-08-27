@@ -17,7 +17,33 @@ import { TaskService } from './TaskService';
 // under real load needs far more than 15s for a first token, and this
 // service shares that failure mode with TodoScanService and InboxScanService
 // (all three independently invented their own too-tight abort budget).
+//
+// The budget is headroom, not the fix. On the UTILITY tier a single
+// enum-shaped answer returns in seconds; on the operator's chat model prompt
+// evaluation alone exceeded even 60s, which is why widening this never helped
+// by itself. If this call is ever re-pointed at `PROMPT_MODEL`, the constant is
+// wrong rather than generous.
 export const PROCESS_TIMEOUT_MS = 60_000;
+
+/**
+ * Output cap for one suggestion (Ollama `options.num_predict`).
+ *
+ * A suggestion is a single small object — an enum plus a few short strings —
+ * so a legitimate answer is well under this. The cap exists only so a model
+ * that starts rambling cannot run until the context window fills, which is
+ * generation this caller pays for and then discards.
+ */
+const PROCESS_MAX_OUTPUT_TOKENS = 600;
+
+/**
+ * Keep the utility model resident across the run (Ollama `keep_alive`).
+ *
+ * This service makes MANY sequential calls per run — one per candidate task —
+ * so without this the model can be evicted mid-run and reloaded inside a later
+ * call's 15s budget. An hour also spans the every-30-minutes inbox scan, which
+ * shares the tier.
+ */
+const PROCESS_KEEP_ALIVE = '1h';
 
 const CANCEL_PHRASES = [
   'cancelled',
@@ -81,6 +107,39 @@ const suggestionSchema = z.object({
   parentTitle: z.string().optional(),
   rationale: z.string().optional(),
 });
+
+/**
+ * The same shape as {@link suggestionSchema}, sent to the backend so generation
+ * is grammar-constrained rather than merely asked to be JSON.
+ *
+ * `format: 'json'` alone only buys syntactic validity — the model stays free to
+ * invent key names or return a value outside the `action` enum, and a small
+ * model reliably does. Every such answer fails `suggestionSchema.safeParse`,
+ * which returns null and is indistinguishable downstream from "the model saw
+ * nothing to do", so the task is silently left untouched.
+ *
+ * That was survivable while this call was aimed at a large model, because a
+ * large model mostly guesses the keys right. It is NOT survivable now that the
+ * call runs on the utility tier: the shape has to be enforced rather than
+ * requested. The two must ship together — moving the model without this turns a
+ * loud timeout into a silent no-op, which is strictly harder to notice.
+ *
+ * Kept beside `suggestionSchema` deliberately: the `action` values are the
+ * contract with `applySuggestion`, so a value added there and not here is a
+ * suggestion the model can never make.
+ */
+const SUGGESTION_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    action: { type: 'string', enum: ['none', 'append', 'revise', 'reparent', 'complete'] },
+    confidence: { type: 'number' },
+    notes: { type: 'string' },
+    title: { type: 'string' },
+    parentTitle: { type: 'string' },
+    rationale: { type: 'string' },
+  },
+  required: ['action'],
+};
 
 type RecallHit = {
   type: string;
@@ -363,8 +422,10 @@ export class TodoProcessService {
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
         model: UTILITY_MODEL,
         enableTools: false,
-        format: 'json',
+        format: SUGGESTION_JSON_SCHEMA,
         signal: controller.signal,
+        maxOutputTokens: PROCESS_MAX_OUTPUT_TOKENS,
+        keepAlive: PROCESS_KEEP_ALIVE,
       });
 
       const parsed = suggestionSchema.safeParse(JSON.parse(response.message.content || '{}'));

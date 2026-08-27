@@ -41,13 +41,18 @@ export const SCAN_TIMEOUT_MS = 60_000;
 const SCAN_MAX_OUTPUT_TOKENS = 1_500;
 
 /**
- * Keep the chat model resident between scans (Ollama `keep_alive`).
+ * Keep the utility model resident (Ollama `keep_alive`).
  *
- * The scan runs on a daily cron while the backend evicts after 5 minutes by
- * default, so without this every single run pays a cold load of a
- * multi-gigabyte model — and pays it INSIDE the scan's own timeout, which is
- * what turned a fast call into a guaranteed abort on a busy host. An hour
- * outlives a scan and its retries without pinning the model indefinitely.
+ * Note what this does NOT do. This scan is daily, and no keep-alive shorter
+ * than a day holds a model across that gap, so the first call of a run still
+ * pays whatever load is due; the value is not chosen for this scan alone.
+ *
+ * What an hour buys is the rest of the tier. `InboxScanService` runs every 30
+ * minutes and `TodoProcessService` makes many sequential calls per run, all on
+ * the same utility model — an hour keeps it warm across that traffic, and keeps
+ * this scan's own pg-boss retries from each reloading it inside their budget.
+ * Cold start on an otherwise idle appliance is a separate problem and wants a
+ * separate fix (a warm-up outside the timed section), not a longer keep-alive.
  */
 const SCAN_KEEP_ALIVE = '1h';
 const MEMORY_LOOKBACK_QUERY =
